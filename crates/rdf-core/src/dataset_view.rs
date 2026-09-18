@@ -1087,6 +1087,10 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         (**self).annotations_of_with_graph(reifier)
     }
 
+    /// Forwarded per the impl-level doc above: whatever narrowing `T` provides for its
+    /// own [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) override is
+    /// inherited unchanged, so an `Arc`-wrapped paged backend keeps skipping the same
+    /// pages it would skip unwrapped.
     #[inline]
     fn reifier_quads_in_graph(
         &self,
@@ -1095,6 +1099,8 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         (**self).reifier_quads_in_graph(g)
     }
 
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same unconditional forward, over the ANNOTATION stream.
     #[inline]
     fn annotation_quads_in_graph(
         &self,

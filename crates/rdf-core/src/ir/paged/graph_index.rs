@@ -223,6 +223,10 @@ mod tests {
         TermValue::iri(format!("http://example.org/{name}"))
     }
 
+    /// `GraphPageIndex::derive` keeps the three page-record streams (base, reifier,
+    /// annotation) as SEPARATE postings and includes a graph a page declares but
+    /// leaves empty (graph C) among its keys, even though that graph owns no
+    /// postings in any stream.
     #[test]
     fn derive_indexes_every_stream_and_declared_empty_graphs() {
         // Page 0: a base row in graph A.
@@ -301,6 +305,10 @@ mod tests {
         );
     }
 
+    /// The index is rebuilt, not merely renumbered, across both id-changing
+    /// operations: `compact()` resolves to the same graph VALUES despite renumbered
+    /// ids, and `with_pages` names surviving pages by their NEW `PageId`, never a
+    /// stale one from before the subsetting.
     #[test]
     fn derive_survives_compaction_and_page_subsetting() {
         let page0 = {
@@ -378,6 +386,10 @@ mod tests {
         );
     }
 
+    /// A warm-restarted `PagedDataset` built `from_parts` derives its `GraphPageIndex`
+    /// from the sealed `PagePart` summaries alone — a counting provider records zero
+    /// hits before the first real query, proving no page is pulled just to build the
+    /// index.
     #[test]
     fn derive_materializes_no_page() {
         let page = {

@@ -1881,6 +1881,10 @@ impl DatasetView for CompositeDatasetView {
         )
         .map(|q| (q.p, q.o, q.g))
     }
+    /// Narrows to sources whose own handle space can name `g` before any of them is
+    /// touched, then applies each survivor's own graph seam through `metadata_rows` —
+    /// see [`DatasetView::reifier_quads_in_graph`] for the trait contract this
+    /// satisfies. The trait default would probe every source's whole reifier table.
     fn reifier_quads_in_graph(
         &self,
         g: GraphMatch<Self::Id>,
@@ -1901,6 +1905,8 @@ impl DatasetView for CompositeDatasetView {
             (None, None, None, g),
         )
     }
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same per-source narrowing, over the ANNOTATION stream.
     fn annotation_quads_in_graph(
         &self,
         g: GraphMatch<Self::Id>,

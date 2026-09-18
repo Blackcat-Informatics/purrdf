@@ -399,6 +399,11 @@ fn cross_page_cost_model_is_per_page_sum() {
     assert!(expected >= 7, "skewed corpus totals at least 5 + 1 + 1");
 }
 
+/// Beyond the seal pass's one unavoidable pull per page, `cardinality_estimate`
+/// must charge zero additional materializations on both surfaces that offer it —
+/// `PagedDataset` (planning before any query view exists) and `PagedQueryView`
+/// (planning inside one fallible operation) — and must leave the view's
+/// operational status untouched.
 #[test]
 fn cardinality_estimate_materializes_no_page() {
     // Two pages, both carrying predicate `p`: the estimate must read only sealed
@@ -449,6 +454,10 @@ fn cardinality_estimate_materializes_no_page() {
     );
 }
 
+/// `cardinality_estimate` must return the identical number whether it is asked
+/// before or after the same pattern has been read for real — cold against warm,
+/// on both `PagedDataset`'s per-page cache and `PagedQueryView`'s per-operation
+/// cache — and the two surfaces must agree with each other on the cold answer.
 #[test]
 fn cardinality_estimate_is_residency_independent() {
     // Page 0 carries two `p` rows, page 1 carries one — both pages are candidates for
@@ -494,6 +503,12 @@ fn cardinality_estimate_is_residency_independent() {
     );
 }
 
+/// `pages_for_pattern`'s predicted candidate set must equal the pages a real
+/// `quads_for_pattern` scan actually consumes: over four pages, only the two that
+/// admit on BOTH the predicate and the graph axis may be named — a page owning a
+/// row on just one axis (wrong predicate in the right graph, or the right
+/// predicate in a different graph) must be excluded by either the summary check
+/// or the graph-index posting list itself.
 #[test]
 fn pages_for_pattern_predicts_actual_consumption() {
     // Four pages. Only pages 0 and 3 can possibly match `(?, p, ?, Named(g))`:
@@ -1013,14 +1028,21 @@ struct GraphDriftProvider {
 }
 
 impl PageProvider for GraphDriftProvider {
+    /// Always one page — the fixture only needs a single page to drift underneath.
     fn page_count(&self) -> usize {
         1
     }
 
+    /// The fixed generation stamped at construction; drifting the CONTENT a
+    /// generation claims to back is exactly the scenario this provider exists to
+    /// simulate, so the generation itself never changes across calls.
     fn generation(&self) -> PageGeneration {
         self.generation
     }
 
+    /// Returns the honest content on the first call and the drifted content on
+    /// every call after that, tracked by `calls` — modeling a warm-restart provider
+    /// whose backing bytes changed after the index that trusts them was sealed.
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
         if page != PageId(0) {
             return Err(PageFault::provider(page, "page out of range"));
@@ -1783,6 +1805,10 @@ fn reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every
 /// genuinely owns a reifier row for the same term is admitted and still yields it.
 #[test]
 fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owning_page() {
+    /// The trap fixture: `r` occurs on this page ONLY as a base-quad subject, so a
+    /// role-agnostic term-table presence check (`PageTranslation::to_local` alone)
+    /// would wrongly pass it as a reifier candidate. It owns no reifier row at all
+    /// and must be skipped by `reifier_quads_of` without ever being materialized.
     fn mentions_only_page() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let r = b.intern_iri("http://example.org/r");
@@ -1792,6 +1818,9 @@ fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owni
         b.push_quad(r, p, o, None);
         b.freeze().expect("mentions-only page freeze")
     }
+    /// The neighbouring valid fixture: an unrelated triple reified under the SAME
+    /// term `r` the trap page merely mentions, so `reifier_quads_of(r)` must admit
+    /// this page and yield its genuine reifier row.
     fn owning_page() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let a = b.intern_iri("http://example.org/a");
@@ -1844,6 +1873,10 @@ fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owni
 #[test]
 fn annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_reifier_table_and_admits_the_owning_page()
  {
+    /// The trap fixture: `r` occurs on this page ONLY in the reifier side-table's own
+    /// reifier column, so a role-agnostic term-table presence check would wrongly
+    /// pass it as an annotation candidate. It owns no annotation row at all and must
+    /// be skipped by `annotations_of_with_graph` without ever being materialized.
     fn reifier_only_page() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let a = b.intern_iri("http://example.org/a");
@@ -1856,6 +1889,9 @@ fn annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_rei
         b.push_reifier(r, triple);
         b.freeze().expect("reifier-only page freeze")
     }
+    /// The neighbouring valid fixture: a genuine annotation declared under the SAME
+    /// term `r` the trap page merely mentions, so `annotations_of_with_graph(r)` must
+    /// admit this page and yield its real annotation row.
     fn owning_page() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let r = b.intern_iri("http://example.org/r");

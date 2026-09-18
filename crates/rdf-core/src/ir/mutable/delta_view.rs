@@ -663,6 +663,11 @@ impl DatasetView for DeltaDatasetView {
             )
     }
 
+    /// Narrows each layer through its OWN [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph)
+    /// before the overlay's masks (`suppressed` on the base, `duplicate_reifiers` on
+    /// the delta) are applied, so a layer that can skip storage units for `g` still
+    /// does; a layer whose dictionary cannot name `g` drops that whole arm via
+    /// `local_graph`. The trait default would scan both layers' whole reifier tables.
     fn reifier_quads_in_graph(
         &self,
         g: GraphMatch<Self::Id>,
@@ -710,6 +715,9 @@ impl DatasetView for DeltaDatasetView {
             )
     }
 
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same layer-local narrowing and masks, over the ANNOTATION stream — including the
+    /// middle arm for base quads promoted to annotations by a delta-added reifier.
     fn annotation_quads_in_graph(
         &self,
         g: GraphMatch<Self::Id>,

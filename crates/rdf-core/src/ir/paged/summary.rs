@@ -69,6 +69,8 @@ pub(crate) struct SummaryDefect {
 }
 
 impl fmt::Display for SummaryDefect {
+    /// Writes the diagnostic sentence [`SummaryDefect::message`] already carries,
+    /// verbatim — the type never needs formatting beyond that one prepared string.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }

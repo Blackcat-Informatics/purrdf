@@ -785,6 +785,11 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
         self.0.annotation_quads().filter(|q| self.keeps(q.g))
     }
 
+    /// Hands `g` to the wrapped view's own [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph)
+    /// — so a paged carrier underneath still skips whole pages for `g` — then
+    /// re-applies `keeps` to every row the narrowed stream yields. Taking the trait
+    /// default here would silently reinstate a whole-table scan for every wrapped
+    /// carrier.
     fn reifier_quads_in_graph(
         &self,
         g: GraphMatch<Self::Id>,
@@ -800,6 +805,8 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
         self.0.reifier_quads_in_graph(g).filter(|q| self.keeps(q.g))
     }
 
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same composition, over the ANNOTATION stream.
     fn annotation_quads_in_graph(
         &self,
         g: GraphMatch<Self::Id>,
@@ -2627,6 +2634,9 @@ mod residue_graph_seam_tests {
         b.freeze().expect("statement-layer page freezes")
     }
 
+    /// The blank-named graph fixture shared by [`residue_pages`]: distinct from the
+    /// IRI-named graph the residue drops, so the two graph-name flavours the residue
+    /// has to tell apart never collide on this test's fixed label.
     fn blank_graph() -> TermValue {
         TermValue::Blank {
             label: BLANK_GRAPH.into(),
@@ -2663,6 +2673,9 @@ mod residue_graph_seam_tests {
         (rows, provider.hits() - sealed)
     }
 
+    /// Resolves a fixture's graph `TermValue` to the `GlobalTermId` the SEALED carrier
+    /// interned it under, so a test can name a `GraphMatch::Named` target without
+    /// hard-coding an id that would drift if page-arrival order changed.
     fn graph_id(paged: &PagedDataset, value: &TermValue) -> GlobalTermId {
         paged
             .term_id_by_value(value)

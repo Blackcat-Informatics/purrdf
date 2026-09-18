@@ -36,6 +36,8 @@ const CONFIDENCE: &str = "http://example.org/confidence";
 const HIGH: &str = "http://example.org/high";
 const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
+/// An `example.org` IRI value, for terms this file's fixtures need to name but do
+/// not otherwise intern through a builder.
 fn iri(local: &str) -> TermValue {
     TermValue::iri(format!("http://example.org/{local}"))
 }

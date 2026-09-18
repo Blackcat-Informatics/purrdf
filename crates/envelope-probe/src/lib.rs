@@ -688,6 +688,9 @@ mod tests {
         profile, run,
     };
 
+    /// Every `WORKLOADS` entry owns a non-empty, duplicate-free `EXPECTED_METRICS`
+    /// roster, and every roster names a workload that is actually run — a stray
+    /// roster entry would silently stop tracking anything.
     #[test]
     fn every_workload_declares_a_distinct_metric_roster() {
         for workload in WORKLOADS {
@@ -711,6 +714,9 @@ mod tests {
         }
     }
 
+    /// `check_metric_roster` accepts the full declared roster and refuses all three
+    /// ways it can drift from it: a metric dropped from the emitted list, a stray
+    /// metric the roster never declared, and a metric repeated under the same name.
     #[test]
     fn the_roster_refuses_a_dropped_or_stray_metric() {
         let declared = expected_metrics("pack_paged").expect("pack_paged declares metrics");

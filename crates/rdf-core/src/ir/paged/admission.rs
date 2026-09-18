@@ -206,6 +206,10 @@ pub(crate) enum PageCandidates<'a> {
 impl Iterator for PageCandidates<'_> {
     type Item = PageId;
 
+    /// Pulls the next candidate in ascending `PageId` order regardless of which
+    /// variant this is: `All` advances the range, `Listed` advances the posting-list
+    /// slice — both already ascending by construction, so this adds no reordering of
+    /// its own.
     #[inline]
     fn next(&mut self) -> Option<PageId> {
         match self {
@@ -260,6 +264,9 @@ mod tests {
     use super::*;
     use crate::ir::{GlobalDictionary, RdfDatasetBuilder};
 
+    /// Subject-axis admission boundary. The invalid case is `b`, present on the page
+    /// only as an object and bound as the subject — must skip; the neighbouring valid
+    /// case is `a`, which genuinely occurs as a subject — must admit.
     #[test]
     fn subject_bound_skips_when_term_never_a_subject_and_admits_when_it_is() {
         let mut builder = RdfDatasetBuilder::new();
@@ -287,6 +294,9 @@ mod tests {
         ));
     }
 
+    /// Predicate-axis admission boundary. The invalid case is `a`, present on the page
+    /// only as a subject and bound as the predicate — must skip; the neighbouring
+    /// valid case is `p`, which genuinely occurs as a predicate — must admit.
     #[test]
     fn predicate_bound_skips_when_term_never_a_predicate_and_admits_when_it_is() {
         let mut builder = RdfDatasetBuilder::new();
@@ -313,6 +323,9 @@ mod tests {
         ));
     }
 
+    /// Object-axis admission boundary. The invalid case is `p`, present on the page
+    /// only as the predicate and bound as the object — must skip; the neighbouring
+    /// valid case is `b`, which genuinely occurs as an object — must admit.
     #[test]
     fn object_bound_skips_when_term_never_an_object_and_admits_when_it_is() {
         let mut builder = RdfDatasetBuilder::new();
@@ -339,6 +352,11 @@ mod tests {
         ));
     }
 
+    /// Named-graph admission boundary against the role-agnostic presence trap the
+    /// module docs warn about. The invalid case is `g`, present on the page only as a
+    /// base-quad SUBJECT and bound as the graph — a mere `to_local` presence check
+    /// would wrongly pass it, but the page owns no row IN `g`, so it must skip; the
+    /// neighbouring valid case is `g1`, which genuinely owns a base row — must admit.
     #[test]
     fn named_graph_bound_skips_a_term_known_only_as_a_subject_and_admits_a_graph_the_page_owns_rows_in()
      {
@@ -370,6 +388,10 @@ mod tests {
         ));
     }
 
+    /// Named-graph admission boundary against a DECLARED but empty graph. The invalid
+    /// case is `g2`, present in the page's term table (`declare_named_graph` makes
+    /// `to_local` succeed) but owning zero rows — must skip; the neighbouring valid
+    /// case is `g1`, which genuinely owns a base row — must admit.
     #[test]
     fn named_graph_bound_skips_when_page_owns_no_rows_in_it_and_admits_when_it_does() {
         let mut builder = RdfDatasetBuilder::new();
@@ -402,6 +424,10 @@ mod tests {
         ));
     }
 
+    /// Default-graph admission boundary. The invalid case is a page holding only a
+    /// named-graph row — no default-graph row at all — bound to `GraphMatch::Default`;
+    /// must skip. The neighbouring valid case is a second, independent page with a
+    /// genuine default-graph row; must admit.
     #[test]
     fn default_graph_bound_skips_when_page_has_no_default_rows_and_admits_when_it_does() {
         // Page with only a named-graph row: no default-graph rows at all.
@@ -435,6 +461,9 @@ mod tests {
         ));
     }
 
+    /// `GraphMatch::Any` pins the graph axis as a non-refusal: a page holding only a
+    /// named-graph row and no default rows must still admit under `Any`, because only
+    /// the s/p/o axes — never an unconstrained graph axis — may prove a skip.
     #[test]
     fn graph_match_any_never_skips_on_the_graph_axis() {
         // A page with only a named-graph row and no default rows: on the graph

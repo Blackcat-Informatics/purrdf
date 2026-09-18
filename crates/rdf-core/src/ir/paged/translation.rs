@@ -65,8 +65,8 @@ impl PageTranslation {
     /// Panics if `page`'s own rows name a term or a named graph absent from its own
     /// frozen tables — structurally impossible for an `RdfDataset`, whose only
     /// producer is `RdfDatasetBuilder::freeze`. Callers holding PROVIDER-supplied
-    /// content use [`try_build`](Self::try_build) instead and report the typed
-    /// refusal on their own surface.
+    /// content use `try_build` instead and report the typed refusal on their own
+    /// surface.
     #[must_use]
     pub fn build(page: &RdfDataset, dict: &mut GlobalDictionary) -> Self {
         match Self::try_build(page, dict) {

@@ -259,6 +259,9 @@ fn every_named_graph() -> Vec<TermValue> {
 
 // ── A — enumeration: `?g` ranges over every named graph ─────────────────────────
 
+/// Guard A — enumeration. `GRAPH ?g {}` must bind `?g` to all four named graphs
+/// this fixture declares: the one with base quads, both declared-empty ones, and
+/// the one named only by a reifier/annotation row.
 #[test]
 fn graph_var_binds_every_named_graph_including_empty_and_side_table_only() {
     let (vars, rows) = rows_agreeing_across_backends(
@@ -278,6 +281,10 @@ fn graph_var_binds_every_named_graph_including_empty_and_side_table_only() {
 
 // ── B — parity on the whole-graph scan ──────────────────────────────────────────
 
+/// Guard B — parity. `GRAPH ?g { ?s ?p ?o }` must be byte-identical between the
+/// paged and single-dataset backends, and must contribute only the graphs that
+/// hold an unconstrained-triple-pattern row: the declared-empty graphs answer
+/// nothing here even though they still enumerate under guard A.
 #[test]
 fn graph_var_whole_graph_scan_agrees_across_backends() {
     let (vars, rows) = rows_agreeing_across_backends(
@@ -298,6 +305,10 @@ fn graph_var_whole_graph_scan_agrees_across_backends() {
 
 // ── C — the over-skip trap: a graph whose only rows are side-table rows ─────────
 
+/// Guard C — the over-skip trap. `:gside` owns zero base quads, so "no quads in
+/// this graph" would wrongly skip the one graph that can answer through its
+/// annotation row (matched by `<...certainty>`) and, separately, its reifier row
+/// (matched through `rdf:reifies`); both must still bind `?g` to `:gside`.
 #[test]
 fn graph_var_answers_from_a_graph_whose_only_rows_are_statement_layer_rows() {
     // The annotation row, matched by its own predicate. `:gside` owns ZERO base quads,
@@ -328,6 +339,11 @@ fn graph_var_answers_from_a_graph_whose_only_rows_are_statement_layer_rows() {
 
 // ── D — shapes that answer with no data underneath them ─────────────────────────
 
+/// Guard D — the shapes that answer with no data underneath them: an unkeyed
+/// aggregate, `BIND` over the empty group pattern, inline `VALUES`, and a
+/// zero-length property path each produce a row with no data probe at all, so
+/// every named graph — including the declared-empty ones — must still answer each
+/// of the four.
 #[test]
 fn graph_var_keeps_evaluating_shapes_that_answer_without_any_row() {
     // An UNKEYED aggregate: `COUNT` over zero rows is one row holding zero, so every
@@ -397,6 +413,8 @@ struct ProbeCountingView {
 }
 
 impl ProbeCountingView {
+    /// Wraps `inner` with the counter zeroed, so every measurement starts from a
+    /// known baseline of zero planned probes.
     fn new(inner: Arc<RdfDataset>) -> Self {
         Self {
             inner,
@@ -404,6 +422,8 @@ impl ProbeCountingView {
         }
     }
 
+    /// The number of `quads_for_pattern_with_plan` calls so far — one per inner
+    /// pattern evaluation that actually reached the quad table, per the type doc.
     fn planned_probes(&self) -> usize {
         self.planned_probes.load(Ordering::Relaxed)
     }
@@ -413,18 +433,25 @@ impl DatasetView for ProbeCountingView {
     type Id = TermId;
     type ProbePlan = QuadProbePlan;
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         DatasetView::quads(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
         DatasetView::quad_refs(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn resolve(&self, id: TermId) -> TermRef<'_> {
         DatasetView::resolve(&*self.inner, id)
     }
 
+    /// Forwards to the inner view unchanged and deliberately UNCOUNTED — per the
+    /// type doc, the narrowing's own emptiness probe goes through this method, and
+    /// `planned_probes` must answer "how many graphs were evaluated", not "how many
+    /// iterators were made".
     fn quads_for_pattern(
         &self,
         s: Option<TermId>,
@@ -435,18 +462,22 @@ impl DatasetView for ProbeCountingView {
         DatasetView::quads_for_pattern(&*self.inner, s, p, o, g)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
         DatasetView::term_id_by_value(&*self.inner, value)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn capabilities(&self) -> RdfStoreCapabilities {
         DatasetView::capabilities(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn len_hint(&self) -> Option<usize> {
         DatasetView::len_hint(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn probe_plan(
         &self,
         s_bound: bool,
@@ -457,6 +488,10 @@ impl DatasetView for ProbeCountingView {
         DatasetView::probe_plan(&*self.inner, s_bound, p_bound, o_bound, g)
     }
 
+    /// The ONE counted call: increments `planned_probes` before forwarding, because
+    /// this is the method the BGP matcher calls once it has committed to actually
+    /// reading data for the current graph — see the type doc for why this, and not
+    /// `quads_for_pattern`, is the right method to count.
     fn quads_for_pattern_with_plan(
         &self,
         plan: &QuadProbePlan,
@@ -469,6 +504,7 @@ impl DatasetView for ProbeCountingView {
         DatasetView::quads_for_pattern_with_plan(&*self.inner, plan, s, p, o, g)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn cardinality_estimate(
         &self,
         s: Option<TermId>,
@@ -479,26 +515,32 @@ impl DatasetView for ProbeCountingView {
         DatasetView::cardinality_estimate(&*self.inner, s, p, o, g)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn term_count(&self) -> usize {
         DatasetView::term_count(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn stats_fingerprint(&self) -> u64 {
         DatasetView::stats_fingerprint(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         DatasetView::reifier_quads(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
         DatasetView::reifier_quads_of(&*self.inner, reifier)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         DatasetView::annotation_quads(&*self.inner)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn annotations_of_with_graph(
         &self,
         reifier: TermId,
@@ -506,6 +548,7 @@ impl DatasetView for ProbeCountingView {
         DatasetView::annotations_of_with_graph(&*self.inner, reifier)
     }
 
+    /// Forwards to the inner view unchanged; not part of what this type measures.
     fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
         DatasetView::named_graphs(&*self.inner)
     }
@@ -539,6 +582,11 @@ fn counting_fixture() -> Fixture {
     }
 }
 
+/// Guard E — evaluation count. Over twenty declared-empty graphs plus two with
+/// data, a pattern needing a row drives exactly `GRAPHS_WITH_DATA` graphs through
+/// `quads_for_pattern_with_plan` — never the declared-empty ones — while the same
+/// fixture's `GRAPH ?g {}` enumeration is untouched and still binds all
+/// twenty-two.
 #[test]
 fn a_row_free_graph_costs_no_data_probe_yet_still_enumerates() {
     let view = ProbeCountingView::new(build(&counting_fixture()));
@@ -642,6 +690,10 @@ fn a_result_whose_every_graph_was_row_free_still_carries_the_right_columns() {
 
 // ── F — page touches: only the pages owning a named graph are pulled ────────────
 
+/// Guard F — page touches. Over six pages, three carrying one named graph each and
+/// three carrying default-graph-only content, `GRAPH ?g { ... }` must pull only
+/// the three pages that own a named graph — the per-graph page index proves the
+/// other three can be skipped without materializing them to find out.
 #[test]
 fn graph_var_materializes_only_the_pages_that_own_a_named_graph() {
     // Six pages: three carry one named graph each, three carry default-graph content

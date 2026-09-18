@@ -64,6 +64,8 @@ fn two_page_dataset() -> (PagedDataset, Arc<dyn PageProvider>) {
 // added, or removed field fails to compile here instead of being silently carried
 // through a `..extracted` or a bare move.
 #[allow(clippy::unnecessary_struct_initialization)]
+/// Pins `PagePart`'s 2.0.2 field set (`translation`, `capabilities`, `quad_count`,
+/// `byte_len`) by both exhaustive construction and exhaustive destructure.
 fn pagepart_field_shape_is_pinned() {
     let (dataset, _provider) = two_page_dataset();
     let (_dictionary, _generation, mut parts) = dataset.to_parts();
@@ -167,6 +169,10 @@ fn describe_freeze_error(error: &PagedFreezeError) -> String {
     }
 }
 
+/// Pins `PagedFreezeError` by triggering a real, easy-to-reach `PageCountMismatch`
+/// (a dropped `PagePart` against an unchanged provider) and matching it by name
+/// through `describe_freeze_error`, exercising the same exhaustive-by-name arms
+/// this file's compile-time pin above relies on.
 #[test]
 fn pagedfreezeerror_variant_shapes_are_pinned() {
     let (dataset, provider) = two_page_dataset();
@@ -219,6 +225,10 @@ fn describe_query_error(error: &PagedQueryError) -> String {
     }
 }
 
+/// Pins `PagedQueryError` by triggering a real, easy-to-reach `PageBudgetExceeded`
+/// (a zero-page limit refusing the first page request) and matching it by name
+/// through `describe_query_error`, the same exhaustive-by-name discipline
+/// `pagedfreezeerror_variant_shapes_are_pinned` applies to the freeze-error enum.
 #[test]
 fn pagedqueryerror_variant_shapes_are_pinned() {
     let (dataset, _provider) = two_page_dataset();

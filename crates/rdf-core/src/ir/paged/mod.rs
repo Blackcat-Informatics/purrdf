@@ -64,7 +64,7 @@
 //! holds matching rows and return a short answer wrapped in a completeness
 //! certificate. Every page that is materialized is therefore certified as it is
 //! admitted, in EVERY build profile, by comparing the `O(1)` digest sealed into its
-//! [`PageSummary`] against the digest re-derived from the materialized content; a
+//! `PageSummary` against the digest re-derived from the materialized content; a
 //! drift in either direction changes that digest and is refused as typed invalid
 //! data. [`PagedDataset::verify_parts`] remains the explicitly paid pass: it reaches
 //! the pages a pruning decision would have skipped, and it re-derives the whole
@@ -1340,6 +1340,12 @@ impl DatasetView for PagedDataset {
         })
     }
 
+    /// Narrows the candidate page set to the REIFIER stream's graph postings BEFORE
+    /// any page is materialized — see [`DatasetView::reifier_quads_in_graph`] for the
+    /// contract this satisfies (an optimization seam, not a new obligation). A page
+    /// absent from `g`'s reifier posting list is proven empty for that graph and is
+    /// never touched; a page that IS admitted may still hold rows in other graphs, so
+    /// the per-row filter still runs after materialization.
     fn reifier_quads_in_graph(
         &self,
         g: GraphMatch<GlobalTermId>,
@@ -1371,6 +1377,8 @@ impl DatasetView for PagedDataset {
         })
     }
 
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same page-postings narrowing, over the ANNOTATION stream instead.
     fn annotation_quads_in_graph(
         &self,
         g: GraphMatch<GlobalTermId>,
@@ -1396,6 +1404,11 @@ impl DatasetView for PagedDataset {
         })
     }
 
+    /// Every named graph any page declares, including ones a page leaves empty or
+    /// names only from a reifier/annotation row — see [`DatasetView::named_graphs`]
+    /// for why this membership widening over the trait default matters for `GRAPH
+    /// ?g`. Materializes no page: the answer is folded from each page's sealed
+    /// `PageSummary` alone, ascending by [`GlobalTermId`] intern order.
     fn named_graphs(&self) -> impl Iterator<Item = GlobalTermId> + '_ {
         // O(1) charge, no page materialized: `GraphPageIndex::keys` is already every
         // named graph any page knows about (declared-empty graphs included), ascending

@@ -824,6 +824,10 @@ impl DatasetView for PagedQueryView<'_> {
         })
     }
 
+    /// Narrows the candidate page set to the REIFIER stream's graph postings before
+    /// any page is requested — see [`DatasetView::reifier_quads_in_graph`] for the
+    /// contract this satisfies. Goes through `self.page`, so the sticky-failure gate
+    /// and the page/byte budget still charge for every page this actually visits.
     fn reifier_quads_in_graph(
         &self,
         g: GraphMatch<GlobalTermId>,
@@ -856,6 +860,9 @@ impl DatasetView for PagedQueryView<'_> {
         })
     }
 
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: same
+    /// narrowing and the same sticky-gate/budget discipline, over the ANNOTATION
+    /// stream's graph postings instead.
     fn annotation_quads_in_graph(
         &self,
         g: GraphMatch<GlobalTermId>,
@@ -881,6 +888,12 @@ impl DatasetView for PagedQueryView<'_> {
         })
     }
 
+    /// Every named graph any page declares, including ones a page leaves empty or
+    /// names only from a reifier/annotation row — see [`DatasetView::named_graphs`]
+    /// for why this membership widening over the trait default matters for `GRAPH
+    /// ?g`. On a healthy view this costs an O(1) charge and materializes no page: the
+    /// answer is folded from each page's sealed `PageSummary` alone. The sticky-
+    /// failure gate still applies on a view already carrying a fault.
     fn named_graphs(&self) -> impl Iterator<Item = GlobalTermId> + '_ {
         // O(1) charge, no page materialized on a healthy view: `GraphPageIndex::keys`
         // is already every named graph any page knows about (declared-empty graphs
