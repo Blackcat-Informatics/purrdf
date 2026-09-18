@@ -1170,8 +1170,8 @@ const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
 /// instance id **omitted**, digested as a [`ContentDigest`].
 ///
 /// This is the one fold of a property-function registry's declarations in this
-/// crate. [`registry_fingerprint`] renders it in hex behind the instance id rather
-/// than walking the descriptors a second time, and
+/// crate. The crate-internal plan-cache fingerprint renders it in hex behind the
+/// instance id rather than walking the descriptors a second time, and
 /// [`PropertyFunctionRegistry::content_fingerprint`] hands hosts the same hex, so
 /// "which declared fields make two registries different?" has exactly one answer
 /// and cannot drift into two.
