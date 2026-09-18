@@ -266,14 +266,12 @@ impl RdfCodec for JsonLdCodec {
         graph: &SerGraph,
         out: &mut TextSink<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        // Built whole, then appended. Unlike the four text formats, this one's document
-        // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
-        // cannot emit a prefix before it knows what follows, and appending would mean
-        // rebuilding the construction itself rather than redirecting its output. The
-        // sink still earns its place here: the caller's buffer is the only one that
-        // outlives the call, and this is the seam a streaming writer replaces.
-        out.push_str(&serialize_ser_graph(graph)?);
-        Ok(())
+        // Emitted through the sink. `serde_json` already writes into an `io::Write`,
+        // so the only thing that ever made this document whole was the buffer the
+        // byte limit was being counted against; that buffer is gone and the limit is
+        // now a running total. What remains resident is the carrier — the JSON-LD
+        // document model, which compaction is defined over — not the output text.
+        write_ser_graph(graph, out)
     }
 }
 
@@ -404,12 +402,18 @@ pub fn derive_jsonld_context<D: DatasetView>(
 /// the JSON-LD 1.1 §4.1.4 spelling rules to document-position `@id`s. No second
 /// relativization path is introduced: the context compiler's existing candidate selection
 /// (itself built on `purrdf_iri::BaseIri::relativize`) is the only one.
-fn serialize_ser_graph(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+fn write_ser_graph(graph: &SerGraph, out: &mut TextSink<'_>) -> Result<(), RdfDiagnostic> {
     let carrier = build_carrier(graph, false)?;
     match base_only_context(graph)? {
-        None => serialize_carrier_expanded(&carrier),
-        Some(context) => serialize_carrier_compacted(&carrier, &context),
+        None => write_carrier_expanded(&carrier, out),
+        Some(context) => write_carrier_compacted(&carrier, &context, out),
     }
+}
+
+fn serialize_ser_graph(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    write_ser_graph(graph, &mut out)?;
+    finish_json_output(out)
 }
 
 pub(crate) fn serialize_ser_graph_with_options(
@@ -480,58 +484,90 @@ fn base_context_value(iri: &str) -> Value {
     )]))
 }
 
-fn serialize_carrier_expanded(carrier: &CarrierDocument) -> Result<String, RdfDiagnostic> {
-    let mut output = BoundedJsonOutput::new(MAX_JSON_LD_DOCUMENT_BYTES);
-    carrier.write_expanded_json(&mut output, &build_context())?;
-    finish_json_output(output)
+fn write_carrier_expanded(
+    carrier: &CarrierDocument,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    carrier.write_expanded_json(&mut bounded, &build_context())
 }
 
+fn write_carrier_compacted(
+    carrier: &CarrierDocument,
+    context: &CompiledJsonLdContext,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    carrier.write_compacted_json(&mut bounded, context)
+}
+
+/// The whole-`String` spelling of [`write_carrier_expanded`], for the entry points
+/// that hand a document back. It is the same writer over an in-memory sink.
+fn serialize_carrier_expanded(carrier: &CarrierDocument) -> Result<String, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    write_carrier_expanded(carrier, &mut out)?;
+    finish_json_output(out)
+}
+
+/// The whole-`String` spelling of [`write_carrier_compacted`].
 fn serialize_carrier_compacted(
     carrier: &CarrierDocument,
     context: &CompiledJsonLdContext,
 ) -> Result<String, RdfDiagnostic> {
-    let mut output = BoundedJsonOutput::new(MAX_JSON_LD_DOCUMENT_BYTES);
-    carrier.write_compacted_json(&mut output, context)?;
-    finish_json_output(output)
+    let mut out = TextSink::in_memory();
+    write_carrier_compacted(carrier, context, &mut out)?;
+    finish_json_output(out)
 }
 
-fn finish_json_output(output: BoundedJsonOutput) -> Result<String, RdfDiagnostic> {
-    String::from_utf8(output.into_bytes())
+fn finish_json_output(out: TextSink<'_>) -> Result<String, RdfDiagnostic> {
+    let bytes = out
+        .finish()
+        .map_err(|error| decode(format!("JSON-LD output: {error}")))?;
+    String::from_utf8(bytes)
         .map_err(|source| decode(format!("JSON-LD output is not UTF-8: {source}")))
 }
 
-struct BoundedJsonOutput {
-    bytes: Vec<u8>,
+/// Enforces the JSON-LD document byte limit while passing bytes STRAIGHT THROUGH to
+/// the caller's sink.
+///
+/// It holds no document. The bound is checked against a running count, so enforcing
+/// a limit on the output costs one `u64` rather than a copy of the thing being
+/// limited — which is the difference between a bound that can be enforced on a
+/// document larger than memory and one that cannot.
+///
+/// The running total is `u64`, not `usize`, deliberately: the limit is 4 GiB and
+/// `usize` is 32 bits on `wasm32-unknown-unknown`, where `usize` arithmetic would
+/// wrap at exactly the value being enforced.
+struct BoundedJsonOutput<'a, 'sink> {
+    out: &'a mut TextSink<'sink>,
+    written: u64,
     limit: ByteLimit,
 }
 
-impl BoundedJsonOutput {
-    fn new(limit: ByteLimit) -> Self {
+impl<'a, 'sink> BoundedJsonOutput<'a, 'sink> {
+    fn new(out: &'a mut TextSink<'sink>, limit: ByteLimit) -> Self {
         Self {
-            bytes: Vec::new(),
+            out,
+            written: 0,
             limit,
         }
     }
-
-    fn into_bytes(self) -> Vec<u8> {
-        self.bytes
-    }
 }
 
-impl IoWrite for BoundedJsonOutput {
+impl IoWrite for BoundedJsonOutput<'_, '_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let next = self
-            .bytes
-            .len()
-            .checked_add(bytes.len())
+            .written
+            .checked_add(usize_to_u64(bytes.len()))
             .ok_or_else(|| std::io::Error::other("JSON-LD output length overflow"))?;
-        if !self.limit.admits_usize(next) {
+        if !self.limit.admits_u64(next) {
             return Err(std::io::Error::other(format!(
                 "JSON-LD output exceeds {} bytes",
                 self.limit
             )));
         }
-        self.bytes.extend_from_slice(bytes);
+        self.out.push_bytes(bytes);
+        self.written = next;
         Ok(bytes.len())
     }
 
@@ -2070,12 +2106,19 @@ mod carrier_law_tests {
             32_u64 * 1024 * 1024 * 1024
         );
 
-        let mut output = BoundedJsonOutput::new(ByteLimit::new(4));
-        output.write_all(b"null").expect("exact output boundary");
-        let error = output
-            .write_all(b" ")
-            .expect_err("one byte over output boundary");
-        assert!(error.to_string().contains("exceeds 4 bytes"));
+        // The limit is now a running total over a pass-through sink rather than a
+        // length check on an accumulated buffer, so it is exercised against one.
+        let mut sink = TextSink::in_memory();
+        {
+            let mut output = BoundedJsonOutput::new(&mut sink, ByteLimit::new(4));
+            output.write_all(b"null").expect("exact output boundary");
+            let error = output
+                .write_all(b" ")
+                .expect_err("one byte over output boundary");
+            assert!(error.to_string().contains("exceeds 4 bytes"));
+        }
+        // The admitted bytes reached the sink; the refused byte did not.
+        assert_eq!(sink.finish().expect("in-memory never fails"), b"null");
     }
 
     #[test]
