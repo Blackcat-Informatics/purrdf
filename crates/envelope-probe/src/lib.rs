@@ -175,8 +175,9 @@ fn roundtrip(profile: &Profile) -> Result<Vec<Metric>, String> {
         // The round-trip conservation check, on the eager bytes. This is the
         // workload's integrity obligation and it is NOT weakened to make a memory
         // number move: every format still round-trips at full profile scale.
-        let reparsed = parse_dataset(&outcome.bytes, media_type, None)
-            .map_err(|d| format!("{label} reparse: {d}"))?;
+        let (reparsed, reparse_peak) =
+            metered(|| parse_dataset(&outcome.bytes, media_type, None));
+        let reparsed = reparsed.map_err(|d| format!("{label} reparse: {d}"))?;
         let back = reparsed.rdf_row_count() as u64;
         if back + dropped != rows {
             return Err(format!(
@@ -215,6 +216,11 @@ fn roundtrip(profile: &Profile) -> Result<Vec<Metric>, String> {
             "nquads" => ("nquads_eager_peak_bytes", eager_peak),
             "trig" => ("trig_eager_peak_bytes", eager_peak),
             _ => ("jsonld_eager_peak_bytes", eager_peak),
+        });
+        metrics.push(match *label {
+            "nquads" => ("nquads_reparse_peak_bytes", reparse_peak),
+            "trig" => ("trig_reparse_peak_bytes", reparse_peak),
+            _ => ("jsonld_reparse_peak_bytes", reparse_peak),
         });
         metrics.push(match *label {
             "nquads" => ("nquads_streamed_peak_bytes", streamed_peak),
