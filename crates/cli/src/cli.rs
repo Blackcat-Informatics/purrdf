@@ -797,8 +797,72 @@ pub(crate) enum Command {
     /// the verdict were interleaved into it.
     Validate {
         /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
-        #[arg(long, value_name = "FILE")]
-        shapes: String,
+        /// Exactly one of this and `--shapes-product` is required: they are two spellings of
+        /// the same input, a document to parse or a preparation to restore.
+        #[arg(
+            long,
+            value_name = "FILE",
+            required_unless_present = "shapes_product",
+            conflicts_with = "shapes_product"
+        )]
+        shapes: Option<String>,
+        /// A PREPARED SHACL product `FILE` written by `purrdf shacl pack`, restored instead of
+        /// parsing a shapes document. The product carries its own shapes graph, the base it was
+        /// parsed under, its prefix map, its `sh:shapesGraph` IRI and its box-role vocabulary, so
+        /// `--shapes-from`, `--shapes-graph`, `--import` and `--box-role-vocab` name a parse
+        /// that does not happen here and are refused by name rather than accepted and ignored.
+        ///
+        /// The bytes are UNTRUSTED: the product's stage id, profile and full input binding are
+        /// checked before any of it reaches the validator, and a mismatch is refused on a named
+        /// dimension (written to stderr as `shacl dimension <label>`) rather than validated
+        /// under the wrong configuration. `purrdf shacl explain` reads that binding back
+        /// without admitting it.
+        #[arg(long = "shapes-product", value_name = "FILE")]
+        shapes_product: Option<String>,
+        /// Require `--shapes-product` to be the product whose INPUT BINDING is `HEX` — the
+        /// 64 hexadecimal digits `purrdf shacl explain` prints on its `identity-digest`
+        /// line, passed back unchanged. The restore is refused before anything is decoded
+        /// when the product carries a different binding, so a consumer that names the
+        /// wrong file learns it here instead of receiving a well-formed report about a
+        /// shapes graph nobody asked about.
+        ///
+        /// Everything else `--shapes-product` checks is a question about THIS PROCESS —
+        /// its build, its registries, its class analysis. This is the one question about
+        /// the artifact, and only the caller can ask it: the product cannot know which
+        /// product was wanted. Without it the wrong product validates silently.
+        ///
+        /// Refused against `--shapes`: a shapes DOCUMENT has no prepared binding to
+        /// require, and a flag whose whole job is to fail closed must never be the flag
+        /// that silently did nothing.
+        #[arg(long = "expect-identity", value_name = "HEX")]
+        expect_identity: Option<String>,
+        /// Restore `--shapes-product` from its carried shapes DATASET, re-deriving the
+        /// preparation rather than admitting its memo — the forward-compatibility path
+        /// for a stage id this build does not recognize.
+        ///
+        /// Without this flag, `--shapes-product` refuses such a product on `shacl
+        /// dimension stage-id` and names this flag as the remedy on stderr. With it, no
+        /// RDF text is parsed and no file other than the product itself is read: the
+        /// shapes dataset travels inside the product under its own digests, and this
+        /// re-derives the shapes graph from it.
+        ///
+        /// Also accepted, and does the identical work, when the product's stage id IS
+        /// one this build knows — rebuilding a CURRENT product re-derives from the same
+        /// carried dataset admission would restore a memo of, so the two routes reach
+        /// the byte-identical report. This flag is a second DOOR onto one product, never
+        /// a second, divergent answer.
+        ///
+        /// Composes with `--expect-identity`: the two ask different questions — which
+        /// restore strategy to use, and which artifact was meant — and both are
+        /// answered in full. The expectation is still checked FIRST, exactly as it is
+        /// without this flag, so a product that is not the one required is refused on
+        /// `shapes-graph` before anything is re-derived; `--rebuild` bypasses the memo,
+        /// never the binding a caller required.
+        ///
+        /// Refused against `--shapes`: a shapes DOCUMENT has no memo to skip and no
+        /// carried dataset to re-derive from — it is parsed on this run either way.
+        #[arg(long)]
+        rebuild: bool,
         /// Shapes-graph format override; inferred from the shapes path's extension when
         /// omitted. Turtle is read through `purrdf_shapes::engine::parse_shapes`, the exact
         /// boundary every other host uses, which additionally recovers the shapes DOCUMENT's
@@ -828,6 +892,20 @@ pub(crate) enum Command {
         /// and the shapes graph validates alone, exactly as it did before this flag existed.
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
+        /// The caller-supplied graph-box role vocabulary NAMESPACE — the SAME namespace
+        /// `purrdf shacl pack --box-role-vocab` records, deriving the six term IRIs
+        /// `purrdf_shapes::model::BoxRoleVocab::for_namespace` mints by concatenation
+        /// (`graphBoxRole`, `boxABox`, `boxTBox`, `boxRBox`, `boxCBox`, `boxConfigBox`).
+        /// PurRDF mints no vocabulary IRIs, so there is no default: without this flag
+        /// the box-role annotation feature is simply INACTIVE — shapes parse fine, and
+        /// no role annotation is collected or stamped on a validation result.
+        ///
+        /// Refused against `--shapes-product`: a product already recorded the
+        /// vocabulary (or its deliberate absence) it was packed under, which its
+        /// identity binds, so it cannot be changed without re-preparing. Pass
+        /// `--box-role-vocab` to `purrdf shacl pack` instead, and re-pack.
+        #[arg(long = "box-role-vocab", value_name = "NS")]
+        box_role_vocab: Option<String>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -989,6 +1067,20 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: PackCommand,
     },
+    /// Prepared SHACL shapes-product utilities.
+    ///
+    /// A shapes graph is parsed, analyzed and compiled before a single focus node is
+    /// looked at, and that work is identical on every validation of the same document.
+    /// `shacl pack` does it once and writes the result as a prepared product; `validate
+    /// --shapes-product` restores it instead of re-parsing. `verify` and `explain` are the
+    /// admission surface for those bytes — a product that comes back from disk is
+    /// untrusted, and both verbs report a refusal's DIMENSION so a caller can tell a
+    /// corrupt cache from a stale artifact from their own misconfiguration.
+    Shacl {
+        /// The shacl subcommand to run.
+        #[command(subcommand)]
+        command: ShaclCommand,
+    },
 }
 
 /// The `--format` choices `validate` accepts: the nine native RDF syntaxes, which serialize
@@ -1104,6 +1196,142 @@ pub(crate) enum PackCommand {
         /// Pack path `IN`, or `-` for stdin.
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
+    },
+}
+
+/// The `shacl` subcommands: write a prepared shapes product, corroborate one, and read
+/// back what one says it was compiled from.
+#[derive(Subcommand, Debug)]
+pub(crate) enum ShaclCommand {
+    /// Parse a Turtle shapes graph, fold its `owl:imports` closure, prepare the result, and
+    /// write the prepared product.
+    ///
+    /// The product carries the compiled model AND the shapes dataset it was derived from —
+    /// the ROOT graph merged with every document `--import` resolved — both under the
+    /// container's per-section SHA-256 and whole-container digest, plus the binding of every
+    /// input it was compiled against: the base, the prefix map, the `sh:shapesGraph` IRI, the
+    /// vocabulary configuration, the function/aggregate/property registries and the class
+    /// catalog. Restoring it under different ones is REFUSED, not silently executed against a
+    /// shapes graph nobody asked about.
+    ///
+    /// Byte-deterministic: two runs over the same document, base and import table produce
+    /// identical bytes — no hash-iteration order, no wall clock and no randomness reach the
+    /// writer.
+    Pack {
+        /// The Turtle shapes graph `FILE`. Turtle because it is the one syntax carrying a
+        /// `@prefix`/`PREFIX` map recoverable from source text, which is the fallback
+        /// prefix environment every SHACL-AF `sh:select` body resolves against and which
+        /// the product records.
+        #[arg(long, value_name = "FILE", required = true)]
+        shapes: String,
+        /// Base IRI the shapes document's relative IRI references resolve against, RECORDED
+        /// in the product so a restore resolves them identically without the document.
+        /// Omitted, the document's own `file://` retrieval IRI is derived — the same base
+        /// `validate --shapes` parses it under.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document: the ontology
+        /// IRI the shapes document imports, then the file that is it. Repeatable, and
+        /// followed transitively — an imported document's own `owl:imports` are resolved
+        /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
+        /// import is only ever the document the operator named. Naming any pair makes the
+        /// closure MANDATORY: an `owl:imports` no pair resolves is then refused by name
+        /// rather than folded in as an empty graph, and a pair the closure never reaches is
+        /// refused as unused. With no `--import` at all the imports are reported on stderr
+        /// and the shapes graph packs alone, exactly as `validate --shapes` with no
+        /// `--import` validates it alone.
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
+        /// RECORD the shapes graph as exposed under this IRI to SHACL-SPARQL paths,
+        /// overriding a `sh:shapesGraph` the shapes document declares. PurRDF mints no
+        /// vocabulary IRIs, so there is no default: without this flag and without a
+        /// `sh:shapesGraph` declaration the product simply records no shapes graph, and
+        /// `GRAPH $shapesGraph { … }` in a `sh:select` body binds no rows, exactly as it
+        /// would restoring `validate --shapes` with neither. A relative value resolves
+        /// against the shapes document's own base — the same base `--shapes-graph` resolves
+        /// against on `validate --shapes`, and the same base a `sh:shapesGraph` declared in
+        /// the document itself would resolve against — and is refused when the shapes
+        /// graph's base cannot be derived (`--shapes -`).
+        ///
+        /// This is the ONE way to make a packed product and `validate --shapes
+        /// --shapes-graph IRI` reach the identical verdict over a shapes graph whose
+        /// SHACL-SPARQL bodies read `$shapesGraph`: the product's identity binds the IRI it
+        /// was packed with, and `validate --shapes-product` restores exactly that binding —
+        /// it has no `--shapes-graph` of its own to disagree with it.
+        #[arg(long = "shapes-graph", value_name = "IRI")]
+        shapes_graph: Option<String>,
+        /// RECORD the caller-supplied graph-box role vocabulary NAMESPACE, deriving the
+        /// six term IRIs `purrdf_shapes::model::BoxRoleVocab::for_namespace` mints by
+        /// concatenation (`graphBoxRole`, `boxABox`, `boxTBox`, `boxRBox`, `boxCBox`,
+        /// `boxConfigBox`). PurRDF mints no vocabulary IRIs of its own, so there is no
+        /// default: without this flag the box-role annotation feature is simply
+        /// INACTIVE — the shapes graph packs fine, and the product's `box-role-vocab`
+        /// identity component records ABSENT, exactly as it always has.
+        ///
+        /// RECORDED into the product's identity, the same way `--shapes-graph` and
+        /// `--base` are: a restore under a DIFFERENT namespace, or under none, is
+        /// refused rather than silently validated with a different role feature than
+        /// the one this product was packed under. This is the ONE way to make a packed
+        /// product and `validate --shapes --box-role-vocab NS` reach the identical
+        /// verdict over a shapes graph whose validation results the vocabulary
+        /// annotates.
+        #[arg(long = "box-role-vocab", value_name = "NS")]
+        box_role_vocab: Option<String>,
+        /// Product path `OUT`, or `-` for stdout.
+        #[arg(long, value_name = "OUT", required = true)]
+        out: String,
+    },
+    /// Corroborate a prepared product's shapes dataset against the identity it claims.
+    ///
+    /// The codec's COLD path, and deliberately not reachable from a restore: it
+    /// canonicalizes the shapes graph's blank nodes, which can cost more than the shapes
+    /// parse the product exists to eliminate. Prints the product's identity digest and
+    /// exits 0; a refusal names its dimension on stderr and exits 1.
+    Verify {
+        /// Product path `IN`, or `-` for stdin.
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+    },
+    /// Print what a prepared product says it was compiled from, WITHOUT admitting it.
+    ///
+    /// Deterministic `key value` lines on stdout: the container format version, the
+    /// preparation stage id and whether this build knows it, the identity digest and every
+    /// labelled identity component, and the recorded parse inputs (base, `sh:shapesGraph`
+    /// IRI, prefix map). This is what makes a named refusal actionable — a restore refused
+    /// on `prefixes` is answered by reading which prefix map the product actually carries.
+    Explain {
+        /// Product path `IN`, or `-` for stdin.
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+    },
+    /// Compare two prepared products' declared identities, WITHOUT admitting either.
+    ///
+    /// `explain` answers "what does THIS product say it was compiled from"; `diff` is
+    /// the same question over TWO products, answered once instead of by running
+    /// `explain` twice and comparing the rendering by eye. This is what makes a
+    /// restore refused on a named dimension actionable when the operator's next
+    /// question is "which of these two products actually carries the input that
+    /// changed" — printed as deterministic `key value` lines (`diff-count N`, then
+    /// `diff <label> <value-in-a> <value-in-b>` for each differing component, in `A`'s
+    /// own component order).
+    ///
+    /// Like `explain`, this never admits either product: it decodes each one's
+    /// self-described identity and compares the two, so it works even when `A`, `B`,
+    /// or both carry a preparation stage id this build does not recognize — the
+    /// exact situation an operator reaches for a diff to make sense of.
+    ///
+    /// Exit codes: **0** when the two identities are identical (a decided, useful
+    /// answer, the same way `verify` exits 0 when a product certifies). **1** when
+    /// they differ — mirroring `verify`'s 0/success vs. 1/refused split, so a script
+    /// can branch on `purrdf shacl diff A B` without parsing stdout, and a genuine
+    /// non-difference stays the only exit that is silent. **2** for a usage error.
+    Diff {
+        /// The first product `A`.
+        #[arg(value_name = "A")]
+        a: String,
+        /// The second product `B`.
+        #[arg(value_name = "B")]
+        b: String,
     },
 }
 

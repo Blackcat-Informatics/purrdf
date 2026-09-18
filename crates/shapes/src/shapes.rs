@@ -23,10 +23,21 @@ use crate::components::{ComponentRegistry, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::NodeExpr;
 use crate::model::{BoxRoleVocab, rdf, rdfs, sh};
+use crate::provenance::ParseProvenance;
 use crate::report::Severity;
 use crate::term::{NamedNode, Term};
 
+pub(crate) mod link;
 mod parser;
+
+/// Re-derive a shapes graph's `sh:SPARQLFunction` declarations from the shapes
+/// dataset it carries.
+///
+/// Re-exported here because the prepared-product codec (`crate::product`) is not a
+/// descendant of this module and so cannot name `parser`, which stays private: the
+/// sub-parsers are this module's internals, and exactly one of them is a published
+/// step that a restore has to re-run.
+pub(crate) use parser::functions::register_declared_sparql_functions;
 
 // ── Public types ───────────────────────────────────────────────────────────────
 
@@ -434,6 +445,18 @@ pub struct Shapes {
     /// The original frozen shapes dataset, retained so validation can expose it
     /// as a named graph to SHACL-SPARQL paths.
     pub(crate) shapes_dataset: Arc<RdfDataset>,
+    /// The caller-supplied inputs this parse ran with, recorded by the parser
+    /// that consumed them.
+    ///
+    /// Not public, and readable outside the crate only through
+    /// [`Shapes::provenance`], because an identity a caller can assign is a claim
+    /// rather than a fact about the parse — see [`ParseProvenance`] for the
+    /// forgery that prevents. `pub(crate)` rather than fully private for the same
+    /// reason [`Self::shapes_dataset`] is: in-crate construction uses functional
+    /// update from [`Shapes::default`], which requires every field to be nameable
+    /// at the construction site. The visibility is identical from outside the
+    /// crate, where `Shapes` has been unconstructible by struct literal all along.
+    pub(crate) parse_provenance: ParseProvenance,
 }
 
 impl Shapes {
@@ -451,6 +474,19 @@ impl Shapes {
     pub const fn dataset(&self) -> &Arc<RdfDataset> {
         &self.shapes_dataset
     }
+
+    /// The caller-supplied inputs these shapes were parsed with.
+    ///
+    /// Paired with [`Self::dataset`] this is everything needed to re-derive the
+    /// shapes: the dataset is the RDF, the provenance is the configuration that
+    /// decided what the RDF means. A consumer that serializes a `Shapes` reads
+    /// its identity from here rather than accepting it as an argument, so the
+    /// recorded identity is the parse that happened and not the one the caller
+    /// remembers — see [`ParseProvenance`].
+    #[must_use]
+    pub const fn provenance(&self) -> &ParseProvenance {
+        &self.parse_provenance
+    }
 }
 
 impl Default for Shapes {
@@ -465,6 +501,7 @@ impl Default for Shapes {
             shapes_dataset: ::purrdf::RdfDatasetBuilder::new()
                 .freeze()
                 .expect("empty shapes dataset"),
+            parse_provenance: ParseProvenance::default(),
         }
     }
 }
@@ -536,8 +573,43 @@ pub fn from_dataset_with_config_and_graph(
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
 ) -> Result<Shapes, String> {
+    from_dataset_with_base(dataset, None, doc_prefixes, box_role_vocab, shapes_graph)
+}
+
+/// [`from_dataset_with_config_and_graph`] plus the base the source document's
+/// relative IRI references were resolved against, recorded into the parsed
+/// [`Shapes::provenance`].
+///
+/// A dataset is already resolved — by the time the IR exists every relative
+/// reference has become an absolute IRI — so the base changes nothing about THIS
+/// parse. It is threaded anyway because it is the one parse input that only a
+/// caller who read the SOURCE TEXT itself can supply: dropping it here would make
+/// a shapes graph that resolved `<PersonShape>` against `https://example.org/`
+/// indistinguishable from one that resolved it against anything else, and nothing
+/// downstream could recover which.
+///
+/// Published rather than `pub(crate)`, because a caller who first materializes a
+/// dataset from text it read itself — folding an `owl:imports` closure at the
+/// dataset level, say, the way `purrdf-validate`'s prepared-shapes-product writer
+/// does — DOES hold a real base at that point, and a parameter it could only
+/// answer `None` to would be the fabricated default this crate refuses to invent
+/// everywhere else. A caller with no base to give still has every narrower
+/// overload above, each of which spends `None` on this parameter for it.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on any unsupported SHACL construct or missing
+/// structural data — see [`from_dataset`].
+pub fn from_dataset_with_base(
+    dataset: &Arc<RdfDataset>,
+    base: Option<&str>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+    shapes_graph: Option<String>,
+) -> Result<Shapes, String> {
     let mut parser = Parser::new(
         dataset.as_ref(),
+        base.map(ToOwned::to_owned),
         doc_prefixes,
         box_role_vocab,
         Arc::clone(dataset),
@@ -570,6 +642,10 @@ pub(crate) struct Parser<'s> {
     /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
     /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
     in_flight: FastSet<InFlight>,
+    /// The base the source document's relative IRI references were resolved
+    /// against, carried only so [`Shapes::provenance`] can report it; `None` when
+    /// the caller supplied none or entered with an already-resolved dataset.
+    base: Option<String>,
     /// The shapes document's `@prefix` map (prefix → namespace), used as the
     /// fallback PREFIX header for SHACL-AF `sh:select` queries.
     doc_prefixes: Vec<(String, String)>,
@@ -730,6 +806,7 @@ pub(crate) fn build_prefix_header(
 impl<'s> Parser<'s> {
     fn new(
         data: &'s RdfDataset,
+        base: Option<String>,
         doc_prefixes: &[(String, String)],
         box_role_vocab: Option<BoxRoleVocab>,
         shapes_dataset: Arc<RdfDataset>,
@@ -738,6 +815,7 @@ impl<'s> Parser<'s> {
         Self {
             data,
             in_flight: FastSet::default(),
+            base,
             doc_prefixes: doc_prefixes.to_vec(),
             box_role_vocab,
             component_registry: ComponentRegistry::default(),
@@ -843,52 +921,30 @@ impl<'s> Parser<'s> {
 
         // The custom functions' own bodies. Deferred to here because a body is a
         // node expression that may call any declared function — itself included —
-        // so it can only be parsed once every declaration is interned.
+        // so it can only be parsed once every declaration is interned. They are
+        // INSTALLED by the linking pass below, together with the shape index.
         let custom_fns = self.custom_fns.clone();
-        self.install_custom_function_bodies(&custom_fns)?;
+        let bodies = self.parse_custom_function_bodies(&custom_fns)?;
 
-        let functions = self.parse_sparql_functions()?;
+        let mut functions = UserFunctionRegistry::new();
+        self.parse_sparql_functions(&mut functions)?;
 
-        // Fill the shared `sh:nodeByExpression` resolution table (§7.2) now that
-        // every top-level shape is parsed. The handle was created before parsing
-        // began and every such constraint already holds a clone of it, so this one
-        // write makes the shapes visible to all of them at once.
-        //
-        // A shapes graph WITHOUT any `sh:nodeByExpression` never hands the handle
-        // out, so the extra reference count is exactly the "is anyone going to read
-        // this?" test — and the shape clones are skipped entirely in that (normal)
-        // case rather than being built and thrown away.
-        if Arc::strong_count(&self.node_shape_index) > 1 {
-            let index: FastMap<String, Shape> = node_shapes
-                .iter()
-                .map(|shape| (shape.id.to_string(), shape.clone()))
-                .collect();
-            if self.node_shape_index.set(index).is_err() {
-                return Err(
-                    "internal error: the sh:nodeByExpression shape index was already filled"
-                        .to_owned(),
-                );
-            }
-            // Resolve NOW every shape IRI a `sh:nodeByExpression` already names.
-            // The constraint otherwise resolves per value node during validation,
-            // so a shape that targets nothing — or whose path yields no value node
-            // — would ship a constraint naming a shape that does not exist: green
-            // load, green report, nothing checked. Against the very index the
-            // validator uses, so this refuses only what validation would refuse.
-            let index = self.node_shape_index.get().ok_or_else(|| {
-                "internal error: the shape index vanished after being set".to_owned()
-            })?;
-            for (shape_id, named) in &self.node_by_expr_constants {
-                if !index.contains_key(&named.to_string()) {
-                    return Err(format!(
-                        "sh:nodeByExpression on shape {shape_id} names {named}, which is not a \
-                         shape of this shapes graph; the constraint would resolve it only when a \
-                         value node reached it, so a shape with no targets would load and \
-                         validate green while checking nothing"
-                    ));
-                }
-            }
-        }
+        // The post-tree linking pass: install the bodies, fill the one shared
+        // `sh:nodeByExpression` resolution table (§7.2), register the
+        // expression-bodied functions — and PROVE the sharing topology, which is
+        // the part no downstream test could observe. See `shapes::link`.
+        let declarations: Vec<Arc<crate::expression::CustomFunction>> =
+            custom_fns.iter().map(Arc::clone).collect();
+        link::link_shapes(
+            &node_shapes,
+            &self.node_shape_index,
+            &declarations,
+            bodies,
+            &mut functions,
+        )
+        .map_err(|error| error.to_string())?;
+
+        self.check_node_by_expression_constants()?;
 
         Ok(Shapes {
             node_shapes,
@@ -902,7 +958,52 @@ impl<'s> Parser<'s> {
                 .collect(),
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
+            // Recorded HERE, at the only site that has all four values in hand,
+            // so the identity a `Shapes` reports is the one its parse used. The
+            // prefix map goes out in the parser's own order — the fact, not a
+            // normalization of it.
+            parse_provenance: ParseProvenance::new(
+                self.base.clone(),
+                self.doc_prefixes.clone(),
+                self.box_role_vocab.clone(),
+                self.shapes_graph.clone(),
+            ),
         })
+    }
+
+    /// Resolve NOW every shape IRI a `sh:nodeByExpression` already names, against
+    /// the index [`link::link_shapes`] has just filled.
+    ///
+    /// The constraint otherwise resolves per value node during validation, so a
+    /// shape that targets nothing — or whose path yields no value node — would ship
+    /// a constraint naming a shape that does not exist: green load, green report,
+    /// nothing checked. The check runs against the very index the validator uses, so
+    /// it refuses only what validation would refuse.
+    ///
+    /// An UNFILLED index means no live constraint ever took a handle, so there is
+    /// nothing a recorded constant could be checked for — the constraint that
+    /// recorded it was discarded during parsing and will never fire. Refusing there
+    /// would be over-refusal of a shapes graph that is correct.
+    ///
+    /// # Errors
+    ///
+    /// Hard-fails when a constant names a node that is not a top-level shape of this
+    /// shapes graph.
+    fn check_node_by_expression_constants(&self) -> Result<(), String> {
+        let Some(index) = self.node_shape_index.get() else {
+            return Ok(());
+        };
+        for (shape_id, named) in &self.node_by_expr_constants {
+            if !index.contains_key(&named.to_string()) {
+                return Err(format!(
+                    "sh:nodeByExpression on shape {shape_id} names {named}, which is not a shape \
+                     of this shapes graph; the constraint would resolve it only when a value node \
+                     reached it, so a shape with no targets would load and validate green while \
+                     checking nothing"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A handle on the shared top-level-shape index for a `sh:nodeByExpression`
@@ -2820,7 +2921,14 @@ mod tests {
     /// `ex:expr` object as a node expression.
     fn parse_expr(ttl: &str) -> Result<NodeExpr, String> {
         let dataset = load_store(ttl);
-        let mut parser = Parser::new(dataset.as_ref(), &[], None, Arc::clone(&dataset), None);
+        let mut parser = Parser::new(
+            dataset.as_ref(),
+            None,
+            &[],
+            None,
+            Arc::clone(&dataset),
+            None,
+        );
         let root = Term::NamedNode(NamedNode::from("http://example.org/ns#root"));
         let expr_obj = parser
             .first_object_of(&root, "http://example.org/ns#expr")

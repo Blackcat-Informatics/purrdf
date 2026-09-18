@@ -309,6 +309,23 @@ pub trait DatasetView {
     /// The number of distinct interned terms this view addresses.
     fn term_count(&self) -> usize;
 
+    /// The total UTF-8 byte length of the term strings this view would hand back —
+    /// the size a destination's string arena has to reach to hold a full replay of
+    /// it, if the view can say cheaply.
+    ///
+    /// A SIZING HINT and nothing else. It never bounds a replay, is never a content
+    /// identity, and is never a cache key: a caller reserves against it and keeps
+    /// working if the replay overruns it. The default is `None` — "cannot say" — so a
+    /// view that would have to walk its own terms to answer stays silent rather than
+    /// paying an O(n) scan to save an O(log n) number of reallocations.
+    ///
+    /// A backend that already stores its strings in one arena (an [`RdfDataset`], a
+    /// pack dictionary) answers with that arena's length, which is exact for the
+    /// terms it owns.
+    fn term_bytes_hint(&self) -> Option<usize> {
+        None
+    }
+
     /// A cheap, deterministic size fingerprint for a dataset-aware cache key (e.g. a
     /// join-order cache). A *cache discriminator*, not a content digest. The default
     /// is `0` (no discrimination); [`RdfDataset`] hashes its quad and term counts.
@@ -868,6 +885,13 @@ impl DatasetView for RdfDataset {
     }
 
     #[inline]
+    fn term_bytes_hint(&self) -> Option<usize> {
+        // The frozen dataset stores every term string in ONE arena, so its length is
+        // exactly the figure the hint asks for.
+        Some(self.rdf_text_bytes())
+    }
+
+    #[inline]
     fn stats_fingerprint(&self) -> u64 {
         Self::stats_fingerprint(self)
     }
@@ -955,6 +979,11 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     #[inline]
     fn len_hint(&self) -> Option<usize> {
         (**self).len_hint()
+    }
+
+    #[inline]
+    fn term_bytes_hint(&self) -> Option<usize> {
+        (**self).term_bytes_hint()
     }
 
     #[inline]

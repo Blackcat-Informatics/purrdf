@@ -616,22 +616,24 @@ impl<'a> SideTablesRef<'a> {
     /// Every statement annotation as a `(reifier, predicate, object, graph)` row
     /// of unified ids — the unified-id twin of `RdfDataset::annotation_quads`
     /// (see the exact mapping in the [module docs](self)).
+    ///
+    /// The returned iterator is EXACT-SIZED. That is not cosmetic: a consumer that
+    /// replays these rows into another store reserves against `size_hint`, and a
+    /// group-then-row nesting reports a zero lower bound, so the destination's
+    /// annotation table would double its way through the whole overlay. Walking the
+    /// rows directly and tracking the group is the same sequence — `from_bytes`
+    /// validates that the offsets are an exact prefix sum of the counts, so the
+    /// groups tile `[0, annotation_rows)` in ascending order and a row-order walk
+    /// visits exactly what a group-order walk does, in the same order.
     pub fn annotation_quads(
         &self,
-    ) -> impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)> + '_ {
-        (0..self.local_reifier.len()).flat_map(move |g| {
-            let reifier = self.local_reifier.get(g);
-            let start = self.annotation_offsets.get(g) as usize;
-            let count = self.annotation_counts.get(g) as usize;
-            (start..start + count).map(move |i| {
-                (
-                    reifier,
-                    self.annotation_pred.get(i),
-                    self.annotation_obj.get(i),
-                    decode_graph(self.annotation_graph.get(i)),
-                )
-            })
-        })
+    ) -> impl ExactSizeIterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)> + '_
+    {
+        AnnotationRows {
+            side: self,
+            row: 0,
+            group: 0,
+        }
     }
 
     /// The `(predicate, object, graph)` annotations attached to `reifier` — the
@@ -670,6 +672,71 @@ impl<'a> SideTablesRef<'a> {
             || (0..self.annotation_graph.len()).any(|i| self.annotation_graph.get(i) != 0)
     }
 }
+
+/// [`SideTablesRef::annotation_quads`]'s iterator: a row-order walk of the annotation
+/// columns that carries the `local_reifier` group each row belongs to.
+///
+/// A named type rather than a `flat_map` chain purely so [`Iterator::size_hint`] can
+/// be EXACT — see `annotation_quads` for why that matters to a consumer. `group` is a
+/// monotone cursor, never a search: consecutive rows are in the same group or the
+/// next non-empty one, so the whole walk advances it a total of
+/// `distinct_reifiers` times.
+struct AnnotationRows<'s, 'a> {
+    side: &'s SideTablesRef<'a>,
+    /// The next annotation row to yield, indexing the annotation columns directly.
+    row: usize,
+    /// The `local_reifier` group `row` belongs to (or the first group at or after it,
+    /// once empty groups are skipped).
+    group: usize,
+}
+
+impl Iterator for AnnotationRows<'_, '_> {
+    type Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.row >= self.side.annotation_pred.len() {
+            return None;
+        }
+        // Skip past every group whose rows are already behind the cursor, including
+        // groups with no rows at all. `from_bytes` proved the offsets are the exact
+        // prefix sum of the counts, so the LAST group's `offset + count` is the row
+        // total and the cursor is inside some group — but the loop stops one short of
+        // the end regardless, so `group` indexes `local_reifier` by the loop's own
+        // condition rather than by trusting that proof at an array access.
+        while self.group + 1 < self.side.local_reifier.len()
+            && self.row
+                >= (self.side.annotation_offsets.get(self.group)
+                    + self.side.annotation_counts.get(self.group)) as usize
+        {
+            self.group += 1;
+        }
+        debug_assert!(
+            self.row >= self.side.annotation_offsets.get(self.group) as usize
+                && self.row
+                    < (self.side.annotation_offsets.get(self.group)
+                        + self.side.annotation_counts.get(self.group))
+                        as usize,
+            "side: an annotation row landed outside its local_reifier group, which \
+             from_bytes' prefix-sum check rules out",
+        );
+        let reifier = self.side.local_reifier.get(self.group);
+        let row = self.row;
+        self.row += 1;
+        Some((
+            reifier,
+            self.side.annotation_pred.get(row),
+            self.side.annotation_obj.get(row),
+            decode_graph(self.side.annotation_graph.get(row)),
+        ))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.side.annotation_pred.len() - self.row;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for AnnotationRows<'_, '_> {}
 
 /// Compute the pack's [`RdfStoreCapabilities`] flags for the four fields the
 /// side-table + dictionary determine — mirrors `RdfDataset`'s own

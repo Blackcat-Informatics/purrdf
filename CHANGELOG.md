@@ -352,6 +352,137 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   this suite's rule, not a MAJOR one, because no existing call can compile to a
   different answer.
 
+### Features
+
+- **shapes:** Prepared SHACL products. `PreparedShapes::to_product` writes a
+  parsed shapes graph out as a deterministic, versioned, authenticated byte
+  artifact carrying the declarative model, the shapes dataset it was derived
+  from, and the binding of every input it was compiled against; a later process
+  restores a prepared validator instead of re-parsing Turtle. The bytes come
+  back untrusted, so decoding is admission rather than parsing: the reader has
+  two entry points at one boundary — `admit`, the common path, which re-derives
+  nothing expensive, and `rebuild`, which ignores the model memo and re-derives
+  the shapes from the carried dataset when the preparation stage is one this
+  build does not know. `rebuild` parses no RDF text and reads no file. The
+  writer has one path and always emits every section. The preparation stage
+  identity is a content-derived digest over the declarative model and the tables
+  its meaning depends on, never a hand-incremented counter. The shipped profile
+  is `purrdf-shacl-core-v1`, named explicitly with no default and no fallback.
+  Targets are deliberately not carried: they are data-dependent and resolved per
+  bound dataset.
+- **shapes:** `ShapesProduct::certify` independently corroborates a product's
+  shapes dataset against the canonical identity its binding claims. It is a cold
+  path and is unreachable from either restore seam by construction, because
+  canonicalizing a shapes graph's blank nodes can cost more than the shapes
+  parse a prepared product exists to eliminate.
+- **shapes:** `ProductDimension`, a closed set of twenty admission refusal
+  dimensions ordered from the outside of the container inward, each with a
+  stable kebab-case label and a prescriptive message naming the fix. A caller
+  branches on the dimension; the label set is a pinned contract recorded by a
+  frozen corpus, and matching on message text is not supported.
+- **core:** A generic authenticated artifact envelope
+  (`purrdf_core::artifact`): one fixed-layout, self-verifying container that a
+  prepared-product codec instantiates with a magic, a format version and a
+  section count. Fixed header, section directory in canonical kind order with
+  per-section SHA-256, zero-verified alignment padding, a decodable identity
+  region under its own digest, and a sealed trailer restating the total length.
+  The reader fails closed at the first inconsistency. The section directory is
+  total: every declared kind is present in every artifact, possibly
+  zero-length.
+- **shapes:** `Shapes` retains its parse provenance — the base, the document
+  prefix map, the box-role vocabulary and the `sh:shapesGraph` IRI the parse
+  actually used — so a shapes graph in hand can answer what it was parsed from
+  rather than relying on a caller to remember.
+- **sparql-eval:** Content-only fingerprints for the user-function, custom
+  aggregate and property-function registries, with the user-function table
+  reported per population so a product can state the declarations it rebuilds
+  separately from the bindings only a host can wire.
+- **validate:** A shared prepared-product boundary (`pack_shapes_product`,
+  `admit_shapes_product`, `rebuild_shapes_product`, `certify_shapes_product`,
+  `explain_shapes_product`, `validate_with_shapes_product`) that the CLI,
+  Python, WebAssembly and C surfaces all route through, so those sequences exist
+  once. `ShapesProductRefusal` keeps a refusal's dimension where there is one
+  and reports `None` for a shapes document that never reached the admission
+  boundary.
+- **cli:** `purrdf shacl pack`, `purrdf shacl verify` and `purrdf shacl explain`,
+  plus `purrdf validate --shapes-product`, which is mutually exclusive with
+  `--shapes`. A refusal writes `shacl dimension <label>` to stderr and exits 1.
+  The shapes-parse flags `--shapes-from`, `--shapes-graph` and `--import` are
+  refused by name against a product rather than accepted and ignored.
+- **python:** `PreparedShapes.to_product()` and a `ShapesProduct` class with
+  `open`, `explain`, `format_version`, `stage_id`, `stage_known`,
+  `identity_digest`, `identity_components`, `admit`, `rebuild` and `certify`.
+  Refusals raise `ShapesProductError`, whose `.dimension` carries the label.
+- **wasm:** `shaclPackProduct`, `shaclProductExplain`, `shaclProductCertify` and
+  `shaclProductValidateToSarif`, rejecting with a refusal that carries its
+  dimension.
+- **capi:** `purrdf_shapes_product_encode`, `purrdf_shapes_product_open`,
+  `purrdf_shapes_product_admit`, `purrdf_shapes_product_certify` and
+  `purrdf_shapes_product_error_dimension`.
+- **shapes/validate/cli/python/wasm/capi:** A restore can now be BOUND to the
+  product the consumer meant. Every other admission check asks about the
+  executing process — its build, its registries, its class analysis — and none
+  of them asks whether the bytes in hand are the ones the caller wanted, because
+  nothing in a product states which product was meant; an unbound restore of the
+  wrong artifact therefore succeeded and returned a well-formed report about a
+  shapes graph nobody asked about. `ShapesProductView::admit_expecting` takes the
+  32-byte digest of the input binding the caller requires and refuses on
+  `shapes-graph` when the product carries another, ahead of every other check and
+  before anything is decoded; `admit` is the unbound case of the same body.
+  `purrdf-validate` exposes `admit_shapes_product_expecting`,
+  `validate_with_shapes_product_expecting` and `parse_identity_digest`, and every
+  surface routes through it: `purrdf validate --shapes-product FILE
+  --expect-identity HEX` on the command line, `ShapesProduct.admit_expecting` in
+  Python, `shaclProductValidateToSarifExpecting` in JavaScript, and
+  `purrdf_shapes_product_admit_expecting` in C. The selector is the 64
+  hexadecimal digits `shacl explain` prints on its `identity-digest` line and
+  `shacl verify` prints on stdout, accepted back unchanged; a satisfied
+  expectation produces the byte-identical report the unbound call produces.
+
+### Performance
+
+- **core/iri:** Restoring a dataset pack allocates 21 times for the prepared
+  product fixture's 3.8 KB section, down from 523, and requests 43,411 bytes
+  down from 104,527. The largest single cause was a double parse across a crate
+  boundary: every dictionary IRI was parsed once to check absoluteness during
+  decode and again at the builder's store-once boundary. The IRI parser is now
+  an allocation-free scan plus owned materialization, which benefits every
+  intern miss in the workspace. Dictionary records decode into a borrowed view,
+  front-coding buffers are hoisted and swapped, reserves are exact and clamped
+  by buffer length so a hostile header cannot over-reserve, and replay is sized
+  from the source's own counts. No emitted bytes change; every frozen pack
+  vector and the frozen product golden are unaffected.
+
+### Documentation
+
+- **design:** `docs/design/purrdf-prepared-products.md` records the decisions
+  behind the prepared-product surface — admission rather than parsing, why there
+  are three seams instead of one flag, the derived stage identity, the census
+  closure, the pinned refusal label set, the bounded guarantee that excludes
+  targets, the standing tension of three authenticated containers in one
+  workspace, and the measured allocation profile.
+- **book:** A `Prepared Shapes Products` chapter under Validation covering
+  producing, shipping, restoring, corroborating and explaining a product, what
+  each refusal dimension means and how to answer it, and the command-line verbs.
+
+### Tests
+
+- **shapes:** A product-model census reads the declarative model out of the
+  crate sources and checks it against the transitive closure reachable from
+  `Shapes`, so the covered set cannot go stale in either direction; the closure
+  found the `sh:SPARQLTargetType` declaration types and the SHACL-AF
+  `Rule`/`RuleBody`/`RuleSchedule` family that a hand-written enumeration had
+  missed. The preparation stage identity is derived from that census. Self-tests
+  prove the scan is not asleep and that a reworded doc comment does not move the
+  identity.
+- **shapes:** The refusal matrix executes every admission dimension alongside a
+  neighbouring valid case, because over-refusal is the mirror of a silent drop
+  and hides behind tests that all pass. Determinism, RDF 1.2 term identity
+  across a round trip, and the whole product lifecycle on
+  `wasm32-unknown-unknown` against a golden written by a native build are pinned
+  separately. `open` is proved not to certify: a product whose stored canonical
+  digest is tampered with must admit and must fail certification.
+
 ## [2.0.2] - 2026-09-14
 
 ### Bug Fixes
@@ -1745,7 +1876,6 @@ called out below with what a consumer must do.
   as real query text through the public engine end to end, including the substitution document's
   own worked examples, every solution modifier inside the body, the `HAVING`-position scope pin,
   and quoted-triple/blank-node outer bindings.
-
 
 - **conformance:** Bring `scripts/conformance-baseline.json`'s free-text `note:` prose under the
   same gate as its `ledgered` integer. Only the integer was ever machine-checked, and the OWL 2

@@ -503,9 +503,21 @@ fn a_tripped_governor_writes_no_report_and_exits_three() {
     );
 
     let receipt = stderr(&out);
+    // The banner is a LINE of the receipt rather than its first byte. `validate` writes its
+    // own `shacl ` receipt lines to the same stream before the engine is reached — the
+    // `shapes-provenance` line naming where these shapes came from, and a `shacl warning`
+    // for each unresolved `owl:imports` — and a trip must not suppress the answer to "which
+    // shapes were we validating against when the budget ran out?", which is the first thing
+    // an operator needs in order to re-run with a bigger budget.
     assert!(
-        receipt.starts_with("purrdf-governor-report 1\n"),
+        receipt
+            .lines()
+            .any(|line| line == "purrdf-governor-report 1"),
         "the shared governor-report banner:\n{receipt}"
+    );
+    assert!(
+        receipt.starts_with("shacl shapes-provenance parsed\npurrdf-governor-report 1\n"),
+        "the only thing ahead of the banner here is the provenance receipt:\n{receipt}"
     );
     assert!(
         receipt.contains("\noutcome budget-exhausted\n"),

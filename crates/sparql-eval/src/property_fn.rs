@@ -1079,7 +1079,8 @@ impl PropertyFunctionRegistry {
 
     /// A durable, instance-independent fingerprint of this registry's *declared*
     /// contents: every registered IRI's subject/object arity, its declared
-    /// volatility, and each declared mode with its row bound, IRI-sorted.
+    /// volatility, each declared mode with its row bound, and its ranked-retrieval
+    /// declaration, IRI-sorted — rendered as the lowercase hex of a SHA-256 digest.
     ///
     /// # Durable and cross-process, unlike [`Self::instance_id`]
     ///
@@ -1097,29 +1098,42 @@ impl PropertyFunctionRegistry {
     ///
     /// This is a pure function of [`Self::describe`]'s output, which is already
     /// IRI-sorted, so it does not depend on registration order. It captures the
-    /// declarations a plan's rewrite and an execution's parallel-safety depend on.
-    /// It does **not** capture which trait-object implementation answers an IRI —
-    /// two registries registering the same IRI to different implementations with
-    /// identical declarations share a content fingerprint by design, and only
+    /// declarations a plan's rewrite and an execution's parallel-safety depend on,
+    /// plus the ranked-retrieval declaration that decides whether a request may
+    /// draw fused candidates from an IRI at all. It does **not** capture which
+    /// trait-object implementation answers an IRI — two registries registering the
+    /// same IRI to different implementations with identical declarations share a
+    /// content fingerprint by design, and only
     /// `property_fn_plan::registry_fingerprint` (which folds the instance id in
     /// ahead of this content digest, and is what the plan cache and governed
     /// receipts use) can tell them apart.
     ///
+    /// # Compare it, do not parse it
+    ///
+    /// The value is a digest rendering, not a description: it answers "do these two
+    /// registries declare the same shape?" by equality and nothing else. Nothing in
+    /// it can be read back, and a caller must not try — the declared contents are
+    /// available in structured form from [`Self::describe`], which is what this
+    /// digests.
+    ///
     /// # The empty registry
     ///
-    /// Returns the empty string when no relation is registered — matching
-    /// `property_fn_plan::registry_fingerprint`'s own empty short-circuit, so the
-    /// canonical [`Self::EMPTY`] and a freshly built [`Self::new`] registry
-    /// fingerprint identically (they are observationally interchangeable; see
-    /// [`RegistryId`](crate::registry_id::RegistryId)).
+    /// A registry with no relations is not special-cased: it digests the
+    /// property-function domain separator alone, so the canonical [`Self::EMPTY`]
+    /// and a freshly built [`Self::new`] registry fingerprint identically (they are
+    /// observationally interchangeable; see
+    /// [`RegistryId`](crate::registry_id::RegistryId)). The value is a fixed
+    /// constant rather than an empty string, which is what lets a consumer
+    /// distinguish "this registry declares nothing" from "no fingerprint was
+    /// recorded".
     ///
     /// # Errors
     ///
     /// [`EvalError::Function`] if any registered relation's declaration methods
     /// panic — [`Self::describe`]'s own failure, propagated unchanged. Never
-    /// raised for an empty registry, which returns before any declaration is read.
+    /// raised for an empty registry, which has no declaration to read.
     pub fn content_fingerprint(&self) -> Result<String, EvalError> {
-        crate::property_fn_plan::content_fingerprint(self)
+        Ok(crate::property_fn_plan::content_fingerprint(self)?.to_hex())
     }
 
     /// Describe every registered relation, sorted by IRI.

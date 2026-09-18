@@ -4,7 +4,7 @@
 //! Typed, memoized transfer from one read view into a native dataset builder.
 
 use crate::hash::FastMap;
-use crate::{DatasetView, RdfDatasetBuilder, RdfLiteral, TermId, TermRef};
+use crate::{DatasetView, RdfDatasetBuilder, TermId, TermRef};
 
 /// Resolve a source term in another native dictionary without an owned term
 /// tree. The memo belongs to this exact source/target/scope translation.
@@ -96,12 +96,27 @@ impl<D: DatasetView> core::fmt::Debug for DatasetImporter<'_, '_, D> {
 }
 
 impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
-    /// Bind a new import. No source rows or terms are copied at construction.
+    /// Bind a new import. No source rows or terms are copied at construction — the
+    /// only work done here is RESERVING the destination tables and this import's own
+    /// memo against the source's self-reported size.
+    ///
+    /// Every figure comes from the view seam itself ([`DatasetView::term_count`],
+    /// [`DatasetView::term_bytes_hint`] and [`DatasetView::len_hint`]), so they are
+    /// the source's own counts rather than a guess, and a view that declines to
+    /// answer simply reserves nothing for that table. A replay that overruns any
+    /// figure still grows normally; the reserve removes the doubling walk, it does
+    /// not bound the import.
     pub fn new(builder: &'builder mut RdfDatasetBuilder, view: &'view D) -> Self {
+        let terms = view.term_count();
+        builder.reserve_for_replay(
+            terms,
+            view.term_bytes_hint().unwrap_or(0),
+            view.len_hint().unwrap_or(0),
+        );
         Self {
             builder,
             view,
-            terms: FastMap::default(),
+            terms: FastMap::with_capacity_and_hasher(terms, crate::hash::FastHasher::default()),
             stats: DatasetImportStats::default(),
         }
     }
@@ -113,7 +128,13 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
             self.stats.reused_terms += 1;
             return *mapped;
         }
-        let mapped = match self.view.resolve(id) {
+        // The source outlives this importer, so its resolved strings can be handed to
+        // the destination interner BORROWED: the interner keys on `&str` and owns the
+        // bytes in its own arena, so an owned `RdfLiteral` here would allocate a
+        // lexical form, a datatype IRI and a language tag per literal for the interner
+        // to immediately copy and drop.
+        let view = self.view;
+        let mapped = match view.resolve(id) {
             TermRef::Iri(iri) => self.builder.intern_iri(iri),
             TermRef::Blank { label, scope } => self.builder.intern_blank(label, scope),
             TermRef::Literal {
@@ -122,15 +143,11 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
                 language,
                 direction,
             } => {
-                let TermRef::Iri(datatype) = self.view.resolve(datatype) else {
+                let TermRef::Iri(datatype) = view.resolve(datatype) else {
                     unreachable!("a literal datatype must resolve to an IRI");
                 };
-                self.builder.intern_literal(RdfLiteral {
-                    lexical_form: lexical.to_owned(),
-                    datatype: Some(datatype.to_owned()),
-                    language: language.map(str::to_owned),
-                    direction,
-                })
+                self.builder
+                    .intern_literal_parts(lexical, Some(datatype), language, direction)
             }
             TermRef::Triple { s, p, o } => {
                 let s = self.term(s);
@@ -161,14 +178,22 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
             self.builder.push_quad(s, p, o, g);
             self.stats.quads += 1;
         }
-        for quad in view.reifier_quads() {
+        // The RDF 1.2 overlay has no count on the view seam, but its own iterator
+        // states one: a backend reading columns off a side-table knows its row count
+        // before it yields a row. A source that cannot say reports a zero lower bound
+        // and the tables grow as they always did.
+        let reifiers = view.reifier_quads();
+        self.builder.reserve_reifiers(reifiers.size_hint().0);
+        for quad in reifiers {
             let reifier = self.term(quad.s);
             let triple = self.term(quad.o);
             let graph = quad.g.map(|g| self.term(g));
             self.builder.push_reifier_in_graph(reifier, triple, graph);
             self.stats.reifiers += 1;
         }
-        for quad in view.annotation_quads() {
+        let annotations = view.annotation_quads();
+        self.builder.reserve_annotations(annotations.size_hint().0);
+        for quad in annotations {
             let reifier = self.term(quad.s);
             let predicate = self.term(quad.p);
             let object = self.term(quad.o);

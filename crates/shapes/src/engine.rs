@@ -16,6 +16,7 @@ use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, Trippe
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
+use crate::provenance::ValidatorProvenance;
 use crate::report::ValidationReport;
 use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
@@ -124,12 +125,69 @@ impl ValidationPlan {
 /// Dataset-independent class references from the complete, cycle-aware shape walk.
 /// Dataset bindings retain only resolved IDs; class names are owned here once.
 #[derive(Debug)]
-struct ClassCatalog {
+pub(crate) struct ClassCatalog {
     indices: FastMap<NamedNode, usize>,
 }
 
 impl ClassCatalog {
-    fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
+    /// Every planned class with the position its resolved [`TermId`] occupies in a
+    /// [`ValidationPlan`]'s binding row, in unspecified order.
+    ///
+    /// `pub(crate)` for the prepared-product codec, which both WRITES these pairs
+    /// into the artifact (`crate::product::ast`) and digests them into the
+    /// product's identity (`crate::product::identity::class_catalog_digest`), so a
+    /// restore can prove the body it carried is the analysis the identity pinned.
+    /// The order is the backing map's and is therefore NOT a fact about the
+    /// catalog — every consumer sorts.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&NamedNode, usize)> {
+        self.indices
+            .iter()
+            .map(|(class, &position)| (class, position))
+    }
+
+    /// Rebuild a catalog from `(class, position)` pairs a prepared product carried,
+    /// or `None` when those pairs are not a catalog any walk could have produced.
+    ///
+    /// This is the codec's re-entry point for the reusable analysis, and it is
+    /// deliberately the narrowest possible gate: it checks only what the TYPE's own
+    /// invariants require, and leaves the question of whether these are the RIGHT
+    /// classes to the identity digest that already binds them.
+    ///
+    /// Two conditions are structural rather than a matter of taste, because
+    /// [`ValidationPlan::bind`] indexes a `Vec` of exactly `indices.len()` slots by
+    /// the position it reads back out, and [`ValidationPlan::class_id`] expects
+    /// every class it is asked about to be present:
+    ///
+    /// * a class IRI may appear **once**, because a repeat would silently collapse
+    ///   two entries into one and leave the binding row short by a slot; and
+    /// * the positions must be a **permutation of `0..len`**, because a position at
+    ///   or past the row's length is an out-of-bounds index — a panic, which is an
+    ///   abort no caller of a decoder could handle, arriving from bytes a caller
+    ///   supplied.
+    ///
+    /// What it deliberately does NOT check is that each class sits at the rank
+    /// [`Self::for_shapes`] would have given it. That rule belongs to the
+    /// derivation, and re-stating it here would be a second transcription of the
+    /// reachability rule inside the reader — the drift this codec spends a stage id
+    /// preventing. A permutation that is not the derivation's own is caught where
+    /// every other content claim is caught: the position is folded into
+    /// `class_catalog_digest`, so a product carrying one is refused on the
+    /// class-catalog dimension rather than restored.
+    pub(crate) fn from_entries(entries: Vec<(NamedNode, usize)>) -> Option<Self> {
+        let mut seen = vec![false; entries.len()];
+        for &(_, position) in &entries {
+            let slot = seen.get_mut(position)?;
+            if std::mem::replace(slot, true) {
+                return None;
+            }
+        }
+        let indices: FastMap<NamedNode, usize> = entries.into_iter().collect();
+        // A duplicate class IRI collapses in the map and is visible only as a
+        // shortfall against the slots just proven to be a permutation.
+        (indices.len() == seen.len()).then_some(Self { indices })
+    }
+
+    pub(crate) fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
         let mut scan = ClassScan::default();
         for shape in shapes {
             collect_shape_classes(shape, &mut scan);
@@ -768,18 +826,129 @@ where
 /// exact dataset. No target set, validation answer or negative dependency proof
 /// is reused across bindings. Keep this value for a batch of related validations;
 /// its storage is bounded by the supplied shape tree and released with its owners.
+///
+/// Every one carries the [`ValidatorProvenance`] of the route that built it, so a
+/// report can be attributed to the artifact behind it rather than to whichever file
+/// the caller remembers opening — read it with [`Self::provenance`].
 #[derive(Debug, Clone)]
 pub struct PreparedShapes {
     shapes: Arc<Shapes>,
     classes: Arc<ClassCatalog>,
+    /// Where this preparation came from, recorded by the expression that built it.
+    ///
+    /// Shared rather than owned so that binding a preparation to a dataset — the
+    /// hot, repeated operation this whole type exists for — costs a reference-count
+    /// bump instead of deep-copying an [`Identity`](purrdf_core::artifact::Identity)
+    /// and every labelled component inside it, once per bind.
+    provenance: Arc<ValidatorProvenance>,
 }
 
 impl PreparedShapes {
     /// Analyze the complete parsed shape tree once, without inspecting any data.
+    ///
+    /// The resulting preparation reports [`ValidatorProvenance::Parsed`]: these
+    /// shapes were analyzed from a value this process holds, not restored from an
+    /// artifact. That is stated HERE, at the construction site, rather than left for
+    /// a caller to assert later — see [`ValidatorProvenance`] for why an accessor
+    /// with an "unknown" answer would be worse than none.
     #[must_use]
     pub fn new(shapes: Arc<Shapes>) -> Self {
+        Self::with_provenance(shapes, ValidatorProvenance::Parsed)
+    }
+
+    /// Analyze a shape tree and record a provenance other than a local parse.
+    ///
+    /// `pub(crate)` on purpose, and the reason is the one [`ParseProvenance`] gives:
+    /// a provenance a caller can assign is a CLAIM about a preparation rather than a
+    /// fact about it. The only expressions that may state "this came from product
+    /// X" are the codec's own admission seams, which have the product in hand and
+    /// have already checked what they are about to claim.
+    ///
+    /// [`ParseProvenance`]: crate::provenance::ParseProvenance
+    pub(crate) fn with_provenance(shapes: Arc<Shapes>, provenance: ValidatorProvenance) -> Self {
         let classes = Arc::new(ClassCatalog::for_shapes(shapes.node_shapes.iter()));
-        Self { shapes, classes }
+        Self::with_carried_analysis(shapes, provenance, classes)
+    }
+
+    /// Assemble a preparation around an analysis that was NOT derived here.
+    ///
+    /// This is the constructor the prepared-product admit seam uses, and it is the
+    /// whole point of the product carrying the class catalog: a consumer restoring a
+    /// product is promised "no RDF reparsing, no shape extraction, **no repeated
+    /// shared analysis**", and a restore that ended at
+    /// [`with_provenance`](Self::with_provenance) would honour the first two and
+    /// quietly break the third — the walk would run again on every restore, for
+    /// every process, forever, while every test still passed.
+    ///
+    /// `classes` is therefore a fact the caller has, not a value this constructor
+    /// may second-guess. `pub(crate)` for exactly the reason
+    /// [`with_provenance`](Self::with_provenance) is: an analysis a caller can
+    /// supply is a CLAIM about a preparation rather than a derivation from it, and
+    /// the only expression in the crate allowed to make that claim is the admission
+    /// seam, which has the product in hand and proves the claim against the
+    /// identity digest the product pinned before any preparation escapes
+    /// (`crate::product::certified`).
+    pub(crate) fn with_carried_analysis(
+        shapes: Arc<Shapes>,
+        provenance: ValidatorProvenance,
+        classes: Arc<ClassCatalog>,
+    ) -> Self {
+        Self {
+            shapes,
+            classes,
+            provenance: Arc::new(provenance),
+        }
+    }
+
+    /// Where this preparation came from: parsed in this process, or restored from a
+    /// named prepared product.
+    ///
+    /// TOTAL — every preparation has an answer, and none of them is "unknown". A
+    /// report is only attributable to the artifact that produced it if the
+    /// preparation can be asked, so this is the accessor a consumer pairs with a
+    /// verdict when the shapes arrived as bytes.
+    #[must_use]
+    pub fn provenance(&self) -> &ValidatorProvenance {
+        &self.provenance
+    }
+
+    /// The cycle-safe class analysis this preparation holds: derived from its shape
+    /// tree by [`Self::new`], or carried in from a prepared product by
+    /// [`Self::with_carried_analysis`].
+    ///
+    /// `pub(crate)` and shared rather than public: the catalog is a PURE derivation
+    /// of the shapes, so handing it out publicly would offer callers a second,
+    /// forgeable spelling of something they can always re-derive. The in-crate
+    /// consumers are `crate::product::ast`, which writes it into the artifact so a
+    /// restore does not have to walk the shape tree again, and
+    /// `crate::product::identity`, which digests it so what a product carried can be
+    /// checked against the digest the same product pinned.
+    pub(crate) fn class_catalog(&self) -> Arc<ClassCatalog> {
+        Arc::clone(&self.classes)
+    }
+
+    /// The parsed shapes this preparation analyzed.
+    ///
+    /// Public because of where a preparation can now come FROM. A caller that
+    /// built one with [`Self::new`] already owns the `Arc<Shapes>` it passed in,
+    /// so for that caller this is a second spelling of a value they hold — which
+    /// is why it used to be `pub(crate)`. A caller that obtained one from
+    /// [`ShapesProductView::admit`] holds no such value: the shapes graph was
+    /// restored from bytes inside the codec and this accessor is its ONLY
+    /// spelling. Without it an admitted product could be restored and then not
+    /// handed to [`validate_dataset_with_shapes_graph`] or
+    /// [`validate_dataset_with_governors`], which is the entire reason the product
+    /// exists.
+    ///
+    /// The borrow is immutable and `Shapes` is immutable, so this hands out no
+    /// authority to change a preparation after the fact.
+    /// `class_catalog` stays `pub(crate)`: it is a PURE derivation of these
+    /// shapes, so it really is re-derivable by anyone holding this.
+    ///
+    /// [`ShapesProductView::admit`]: crate::product::ShapesProductView::admit
+    #[must_use]
+    pub fn shapes(&self) -> &Arc<Shapes> {
+        &self.shapes
     }
 
     /// Bind shared shape analysis to a new data holder. All dataset-dependent
@@ -951,6 +1120,10 @@ impl PreparedShapes {
 pub struct PreparedValidator {
     data: ShaclData,
     shapes: Arc<Shapes>,
+    /// The provenance of the [`PreparedShapes`] this binding came from, shared with
+    /// it and with every sibling binding — a bind copies a reference count, never an
+    /// identity.
+    provenance: Arc<ValidatorProvenance>,
     plan: ValidationPlan,
     targets: Vec<PreparedTargets>,
 }
@@ -985,9 +1158,21 @@ impl PreparedValidator {
         Ok(Self {
             data,
             shapes,
+            provenance: Arc::clone(&prepared.provenance),
             plan,
             targets,
         })
+    }
+
+    /// Where the shapes this validator executes came from: parsed in this process,
+    /// or restored from a named prepared product.
+    ///
+    /// The same answer [`PreparedShapes::provenance`] gives — literally the same
+    /// shared value — so a caller holding only a binding can attribute its reports
+    /// without keeping the preparation beside it.
+    #[must_use]
+    pub fn provenance(&self) -> &ValidatorProvenance {
+        &self.provenance
     }
 
     /// Operational measurements for the retained Core and SPARQL carriers.
@@ -1574,7 +1759,19 @@ pub fn parse_shapes_with_config(
         .map_err(|errors| errors.join("\n"))?;
     let doc_prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
 
-    crate::shapes::from_dataset_with_config(&shapes_dataset, &doc_prefixes, box_role_vocab)
+    // `base` and `doc_prefixes` are handed on rather than consumed and dropped:
+    // this is the only seam that ever sees them, and both decided what the source
+    // text means (the base resolved its relative IRI references; the prefix map is
+    // baked into every SHACL-AF query body below). A `Shapes` that could not report
+    // them would force any consumer needing its identity to accept that identity as
+    // an argument, which makes it a caller's claim instead of a fact about the parse.
+    crate::shapes::from_dataset_with_base(
+        &shapes_dataset,
+        base,
+        &doc_prefixes,
+        box_role_vocab,
+        None,
+    )
 }
 
 /// Validate data (N-Triples) against shapes (Turtle), returning a [`ValidationReport`].

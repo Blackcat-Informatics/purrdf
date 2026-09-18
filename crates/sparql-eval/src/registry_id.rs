@@ -1,19 +1,48 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! An unforgeable per-process identity for a registry **instance** — as opposed to
-//! its contents.
+//! Registry identity in two tiers: an unforgeable per-process identity for a
+//! registry **instance**, and the framing every content-only fingerprint of a
+//! registry's **declarations** is built from.
 //!
 //! [`crate::agg_fn::AggregateRegistry`] and
-//! [`crate::property_fn::PropertyFunctionRegistry`] both fold this into their
-//! `registry_fingerprint`, ahead of the declaration digest, because the declaration
-//! digest alone cannot do the one job a plan's identity needs: two registries built
-//! independently can register the SAME IRI to two DIFFERENT trait-object
-//! implementations that happen to declare identical arity, volatility, and every
-//! other observable metadata — indistinguishable by declaration, yet computing
-//! different answers. A [`RegistryId`] gives every registry instance a value no
-//! OTHER instance can ever share, so a plan prepared against one instance refuses
-//! to run against any other, regardless of how similar the two describe themselves.
+//! [`crate::property_fn::PropertyFunctionRegistry`] both fold [`RegistryId`] into
+//! their `registry_fingerprint`, ahead of the declaration digest, because the
+//! declaration digest alone cannot do the one job a plan's identity needs: two
+//! registries built independently can register the SAME IRI to two DIFFERENT
+//! trait-object implementations that happen to declare identical arity, volatility,
+//! and every other observable metadata — indistinguishable by declaration, yet
+//! computing different answers. A [`RegistryId`] gives every registry instance a
+//! value no OTHER instance can ever share, so a plan prepared against one instance
+//! refuses to run against any other, regardless of how similar the two describe
+//! themselves.
+//!
+//! # The two tiers, and which one crosses a process boundary
+//!
+//! - The **instance** id ([`RegistryId`]) is a process-lifetime counter. It is
+//!   strictly process-local and deliberately unpersistable: writing one down and
+//!   reading it back in another process compares two counters that were never
+//!   drawn from the same sequence, so the comparison carries no information at
+//!   all. It answers exactly one question — "is this the same live registry
+//!   object the plan in my hand was prepared against?" — and that question only
+//!   exists within one process.
+//!
+//! - The **content** fingerprint (`content_fingerprint`, one per registry module:
+//!   `crate::property_fn_plan`, `crate::agg_fn`, `crate::user_fn`) folds the same
+//!   declared descriptor fields through [`append_framed_part`]'s injective framing
+//!   with the instance id OMITTED, and digests the result. Being a pure function
+//!   of declarations, it reproduces byte-for-byte in any process from any
+//!   equivalently-declared registry — so it, not the instance id, is the identity
+//!   a persisted artifact binds itself to when it must name the host registries it
+//!   requires.
+//!
+//! The two tiers are not interchangeable and neither subsumes the other: the
+//! instance id is strictly stronger in-process (it distinguishes implementations
+//! that declare identically) and worthless across one; the content fingerprint is
+//! the reverse. A caller crossing a process boundary therefore binds declarations,
+//! and must pair that binding with whatever separately identifies the
+//! implementations behind those declarations — for a registry built from a shapes
+//! graph, the content digest of that graph.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -28,14 +57,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// value within one process's lifetime, so two [`RegistryId`]s can never collide
 /// no matter what the allocator does with freed memory.
 ///
-/// # Why per-process monotonicity is sufficient
+/// # Why per-process monotonicity is sufficient — and what it is NOT sufficient for
 ///
 /// A prepared plan is validated against a registry only within the SAME process
-/// that prepared it — nothing here is serialized, persisted, or compared across a
-/// process boundary. A [`crate::engine::PreparedQuery`] is itself an in-memory
+/// that prepared it. A [`crate::engine::PreparedQuery`] is itself an in-memory
 /// object that cannot outlive the process that built it, so an identity that is
 /// merely unique among every registry constructed during this process's lifetime
 /// is exactly as strong a guarantee as the plan it protects ever needs.
+///
+/// This value must therefore never be serialized, persisted, or compared across a
+/// process boundary. The counter restarts at `1` in every process, so two ids from
+/// two processes are two readings of two unrelated sequences: they can collide
+/// between registries that share nothing, and they differ between registries that
+/// declare identically. Neither outcome means anything. An artifact that must name
+/// the registries it requires across a process boundary binds their
+/// `content_fingerprint` instead — see this module's own docs for the two tiers.
 ///
 /// # wasm32
 ///
@@ -132,9 +168,37 @@ impl Default for RegistryId {
     }
 }
 
+/// Append one `label`/`value` pair to a content fingerprint's byte buffer under an
+/// **injective** framing: each half is written as its length (big-endian `u64`)
+/// followed by its bytes.
+///
+/// Every `content_fingerprint` in this crate builds its pre-digest bytes solely
+/// through this function, so the encoding of a registry's declarations can never be
+/// ambiguous: length-prefixing both halves means no combination of field values can
+/// forge the byte sequence another combination produces. Without it, a delimiter- or
+/// concatenation-based encoding lets two different registries digest identically the
+/// moment a declared string contains the delimiter — a silent collision between two
+/// registries that answer differently, which is precisely what a fingerprint exists
+/// to make impossible.
+///
+/// This is the same framing `append_key_part` uses in `purrdf-shapes`' JSON-Schema
+/// compilation key; it is duplicated rather than shared because `purrdf-sparql-eval`
+/// does not depend on that crate (and must not: the dependency runs the other way).
+///
+/// It lives here, with [`RegistryId`], because this module owns registry identity:
+/// the instance tier and the content tier are two encodings of the same question,
+/// and keeping both spellings in one file is what stops them drifting into two
+/// different answers.
+pub(crate) fn append_framed_part(out: &mut Vec<u8>, label: &str, value: &[u8]) {
+    out.extend_from_slice(&(label.len() as u64).to_be_bytes());
+    out.extend_from_slice(label.as_bytes());
+    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    out.extend_from_slice(value);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::RegistryId;
+    use super::{RegistryId, append_framed_part};
 
     #[test]
     fn fresh_ids_never_collide() {
@@ -142,6 +206,30 @@ mod tests {
         let b = RegistryId::fresh();
         assert_ne!(a, b, "two fresh ids must never collide");
         assert_ne!(a.stable_encoding(), b.stable_encoding());
+    }
+
+    /// The framing is injective across a field boundary: moving a byte from the
+    /// end of one value to the start of the next must change the encoding, or two
+    /// registries whose declarations differ only in where an IRI ends would digest
+    /// identically.
+    #[test]
+    fn framing_is_injective_across_a_field_boundary() {
+        let mut left = Vec::new();
+        append_framed_part(&mut left, "iri", b"http://example.org/ns#ab");
+        append_framed_part(&mut left, "iri", b"c");
+        let mut right = Vec::new();
+        append_framed_part(&mut right, "iri", b"http://example.org/ns#a");
+        append_framed_part(&mut right, "iri", b"bc");
+        assert_ne!(left, right);
+    }
+
+    /// An empty value is distinguishable from an absent field: the label is still
+    /// framed, with a zero length.
+    #[test]
+    fn framing_records_an_empty_value() {
+        let mut with_empty = Vec::new();
+        append_framed_part(&mut with_empty, "datatype", b"");
+        assert_ne!(with_empty, Vec::<u8>::new());
     }
 
     #[test]

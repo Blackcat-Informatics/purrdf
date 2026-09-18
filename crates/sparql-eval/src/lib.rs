@@ -192,6 +192,15 @@ pub use property_fn::{
     PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration,
     RequestFacet, TermKind, TermPattern, TermPlacement,
 };
+// The property-function registry's CONTENT-only identity. It lives in the private
+// planning module beside the instance-bearing fingerprint, which renders it rather
+// than re-walking the declarations: one fold means the durable identity and the
+// plan-cache key can never come to disagree about which declared fields matter. A
+// caller binding a persisted artifact to the registries it requires needs to reach
+// the digest itself, so it is re-exported here under a name that says which registry
+// kind it covers. Its two siblings need no re-export: `agg_fn` and `user_fn` are
+// already public modules.
+pub use property_fn_plan::content_fingerprint as property_function_content_fingerprint;
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries
 // apart even when they declare identically (`PropertyFunctionRegistry::instance_id`),

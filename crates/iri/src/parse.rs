@@ -138,7 +138,60 @@ enum Mode {
     Uri,
 }
 
+/// Whether a VALIDATED IRI reference carries a scheme — the one bit of [`Iri`] a
+/// caller that only needs to accept-or-reject actually reads.
+///
+/// Returned by [`classify`], which runs the identical grammar [`parse`] runs and
+/// stops before the owned [`Iri`] is built.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum IriForm {
+    /// The reference has a scheme, so it IS an IRI (RFC-3986 §4.3).
+    Absolute,
+    /// The reference has no scheme and means nothing without a base (§4.2).
+    Relative,
+}
+
+/// Validate `s` against the RFC-3987 IRI grammar and report only whether it is
+/// absolute, WITHOUT materializing the parsed [`Iri`].
+///
+/// [`parse`] owns a copy of `s` so its component accessors can hand back slices; a
+/// caller that asks nothing but "is this acceptable, and is it absolute" pays for
+/// that copy and drops it unread. The store-once term tables of a dataset do exactly
+/// that once per distinct IRI, which is once per IRI in a whole pack. Same grammar,
+/// same errors — [`scan`] is the single body both entry points run.
+pub(crate) fn classify(s: &str) -> Result<IriForm> {
+    let spans = scan(s, Mode::Iri)?;
+    Ok(if spans.scheme.is_some() {
+        IriForm::Absolute
+    } else {
+        IriForm::Relative
+    })
+}
+
+/// The component spans [`scan`] computes: [`Iri`] without its owned text.
+struct Spans {
+    scheme: Option<Range<usize>>,
+    authority: Option<Range<usize>>,
+    path: Range<usize>,
+    query: Option<Range<usize>>,
+    fragment: Option<Range<usize>>,
+}
+
 fn parse_inner(s: &str, mode: Mode) -> Result<Iri> {
+    let spans = scan(s, mode)?;
+    Ok(Iri {
+        text: s.to_owned(),
+        scheme: spans.scheme,
+        authority: spans.authority,
+        path: spans.path,
+        query: spans.query,
+        fragment: spans.fragment,
+    })
+}
+
+/// Split and validate `s`'s components, returning their spans. The whole grammar
+/// lives here; [`parse_inner`] adds the owned text and nothing else.
+fn scan(s: &str, mode: Mode) -> Result<Spans> {
     if s.is_empty() {
         return Err(IriError::Empty);
     }
@@ -205,8 +258,7 @@ fn parse_inner(s: &str, mode: Mode) -> Result<Iri> {
         None
     };
 
-    Ok(Iri {
-        text: s.to_owned(),
+    Ok(Spans {
         scheme,
         authority,
         path,
