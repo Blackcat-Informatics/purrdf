@@ -76,23 +76,28 @@ pub fn to_tsv(
             .saturating_mul(variables.len().saturating_mul(16).saturating_add(1)),
     );
 
+    // Every structural refusal is decided BEFORE the first byte. Eagerly a rejected
+    // variable name or over-wide row left a partial document to be discarded; an
+    // incremental sink has already sent those bytes. The scans below pick the same
+    // first offender in the same order the interleaved checks did, so the reported
+    // error is unchanged.
+    for var in variables {
+        check_var_header(var)?;
+    }
+    for row in rows {
+        check_row_width(row.len(), variables.len())?;
+    }
+
     // Header: `?`-prefixed variable names, tab-separated, LF-terminated.
     for (i, var) in variables.iter().enumerate() {
         if i > 0 {
             out.push('\t');
         }
-        push_var_header(var, &mut out)?;
+        push_var_header(var, &mut out);
     }
     out.push('\n');
 
     for row in rows {
-        if row.len() > variables.len() {
-            return Err(Error::MalformedTerm(format!(
-                "solution row has {} bindings but only {} variables are projected",
-                row.len(),
-                variables.len()
-            )));
-        }
         for column in 0..variables.len() {
             if column > 0 {
                 out.push('\t');
@@ -122,16 +127,34 @@ pub fn to_tsv(
 /// distinguish from the caller's intended column/row boundary. This mirrors
 /// the XML/JSON writers, which reject/escape the same class of caller-
 /// controlled structural character rather than splicing it in unescaped.
-fn push_var_header(var: &str, out: &mut String) -> Result<(), Error> {
+fn check_var_header(var: &str) -> Result<(), Error> {
     if var.contains(['\t', '\n', '\r']) {
         return Err(Error::Format(format!(
             "variable name {var:?} contains a tab/CR/LF, which SPARQL Results TSV \
              has no way to escape in the header"
         )));
     }
+    Ok(())
+}
+
+/// Refuse a row carrying more bindings than the projection has variables.
+///
+/// Split out of the emission loop for the same reason as [`check_var_header`]: the
+/// refusal has to precede byte one.
+fn check_row_width(row_len: usize, variable_count: usize) -> Result<(), Error> {
+    if row_len > variable_count {
+        return Err(Error::MalformedTerm(format!(
+            "solution row has {row_len} bindings but only {variable_count} variables are projected"
+        )));
+    }
+    Ok(())
+}
+
+/// Emit one `?`-prefixed header field. Validity was decided by
+/// [`check_var_header`] before emission began.
+fn push_var_header(var: &str, out: &mut String) {
     out.push('?');
     out.push_str(var);
-    Ok(())
 }
 
 #[cfg(test)]

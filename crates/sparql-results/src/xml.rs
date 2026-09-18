@@ -152,12 +152,24 @@ pub fn to_xml(
 }
 
 /// Write the full SRX document (root + head + body + optional provenance).
+/// The one wording for the CONSTRUCT-graph refusal, so the pre-emission check and
+/// the (now unreachable) match arm cannot report it differently.
+const GRAPH_IS_UNDEFINED_IN_SRX: &str =
+    "SPARQL Results XML is undefined for CONSTRUCT graphs; serialize the graph as RDF";
+
 fn write_srx(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: Option<&ProvenanceNamespace>,
     out: &mut String,
 ) -> Result<(), Error> {
+    // Decided BEFORE the declaration and root element are emitted. Eagerly the
+    // partial document was discarded on refusal; an incremental sink has already
+    // sent those bytes downstream, so a kind-level refusal must precede byte one.
+    if matches!(result, SparqlResult::Graph(_)) {
+        return Err(Error::Format(GRAPH_IS_UNDEFINED_IN_SRX.to_string()));
+    }
+
     out.push_str("<?xml version=\"1.0\"?>\n");
     if result_has_directional_literal(result) {
         // The spec's DEFAULT (root-declared) style — see the module docs.
@@ -184,11 +196,10 @@ fn write_srx(
             out.push_str(if *value { "true" } else { "false" });
             out.push_str("</boolean>\n");
         }
+        // Refused above, before any byte was emitted. Retained so the match stays
+        // exhaustive without a panic site, and so both spellings cannot drift.
         SparqlResult::Graph(_) => {
-            return Err(Error::Format(
-                "SPARQL Results XML is undefined for CONSTRUCT graphs; serialize the graph as RDF"
-                    .to_string(),
-            ));
+            return Err(Error::Format(GRAPH_IS_UNDEFINED_IN_SRX.to_string()));
         }
     }
 

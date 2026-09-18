@@ -81,6 +81,20 @@ pub fn to_csv(
             .saturating_mul(variables.len().saturating_mul(16).saturating_add(2)),
     );
 
+    // The over-wide-row refusal is decided BEFORE the first byte. Eagerly the partial
+    // document was discarded; an incremental sink has already sent it. The scan picks
+    // the same first offending row the interleaved check did — iteration order is
+    // unchanged — so the reported error is identical.
+    for row in rows {
+        if row.len() > variables.len() {
+            return Err(Error::MalformedTerm(format!(
+                "solution row has {} bindings but only {} variables are projected",
+                row.len(),
+                variables.len()
+            )));
+        }
+    }
+
     // Header: bare variable names, comma-separated, CRLF-terminated.
     for (i, var) in variables.iter().enumerate() {
         if i > 0 {
@@ -91,13 +105,6 @@ pub fn to_csv(
     out.push_str("\r\n");
 
     for row in rows {
-        if row.len() > variables.len() {
-            return Err(Error::MalformedTerm(format!(
-                "solution row has {} bindings but only {} variables are projected",
-                row.len(),
-                variables.len()
-            )));
-        }
         for column in 0..variables.len() {
             if column > 0 {
                 out.push(',');
