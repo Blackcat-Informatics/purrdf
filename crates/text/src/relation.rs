@@ -44,8 +44,7 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
     AcceptedTerm, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    RankOrdering, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
-    Volatility,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -590,10 +589,12 @@ impl TextSearchRelation {
     /// * **No depth placement.** This relation takes no `k` argument; a consumer
     ///   bounds it with `LIMIT`, which is what "bounded by the consumer's row
     ///   ceiling" means in [`RankedDeclaration::depth_placement`].
-    /// * **[`RankOrdering::StrictlyDescending`] and [`DuplicatePolicy::Unique`]**
-    ///   — true within one partition, where rows are ordered by score with a
-    ///   total tie-break on document number, and where a subject occurs at most
-    ///   once. Which is exactly why a multi-partition index is refused below.
+    /// * **[`DuplicatePolicy::Unique`]** — true within one partition, where a
+    ///   subject occurs at most once. The rank law every ranked producer owes
+    ///   its consumer holds there too: rows leave in descending score order
+    ///   under a total tie-break on document number, so their ranks are 1-based,
+    ///   contiguous and ascending. Which is exactly why a multi-partition index
+    ///   is refused below.
     ///
     /// # Errors
     ///
@@ -602,9 +603,12 @@ impl TextSearchRelation {
     /// one, so a multi-partition index emits rows partition-major: the answer
     /// opens with one rank-1 row per partition, the positions a consumer would
     /// fuse are not a ranking of anything, and one subject can appear in two
-    /// partitions and so twice in one stream. Neither available
-    /// [`RankOrdering`] describes that, so this method declines to make a claim
-    /// rather than making a false one. It is not a limit on the relation —
+    /// partitions and so twice in one stream. Ranks that restart at 1 once per
+    /// partition are neither contiguous nor ascending, so such a stream breaks
+    /// the one rank law a ranked producer owes its consumer
+    /// ([`RankedDeclaration`]) before it breaks anything else, and this method
+    /// declines to declare a producer it knows cannot keep it. It is not a limit
+    /// on the relation —
     /// [`TextSearchRelation`] answers a multi-partition index perfectly well
     /// from query text — only on what can be declared about its *rank* column.
     ///
@@ -648,7 +652,6 @@ impl TextSearchRelation {
             }],
             depth_placement: None,
             candidate_position: Self::DOC,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         })

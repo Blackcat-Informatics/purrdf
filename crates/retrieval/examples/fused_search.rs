@@ -58,8 +58,8 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, parse_iri,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, Fixed, FusionProfile, Iri, ProducerStatus, RequestTerm, RetrievalRequest,
-    SearchResult, Statistics, Term, TopK, search,
+    AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus, RequestTerm,
+    RetrievalRequest, SearchResult, Statistics, Term, TopK, search,
 };
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry, TermKind,
@@ -335,7 +335,8 @@ fn profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
     weights.insert(iri(TEXT_STRATUM), Fixed::ONE);
     weights.insert(iri(KNN_STRATUM), Fixed::ONE);
-    FusionProfile::new(weights, K).expect("the host's profile is valid")
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the host's profile is valid")
 }
 
 /// A statistics provider that reports nothing.
@@ -437,6 +438,28 @@ fn report(result: &SearchResult) {
             ProducerStatus::TermsRejected => "declined the terms it was handed".to_owned(),
         };
         println!("  {}: {rendered}", short(stratum));
+    }
+
+    // What the depths this plan records were going to cost in rank resolution,
+    // as the admission waist measured them before a single row was read. A host
+    // that wants this and nothing else never has to run the search at all:
+    // `compile` against an environment naming the profile answers it on its own.
+    println!("\nplanned rank resolution (known before anything ran)");
+    for (stratum, planned) in &result.planned_resolution {
+        let separation = planned.separation.rank().map_or_else(
+            || "no depth a plan can express".to_owned(),
+            |rank| format!("rank {rank}"),
+        );
+        let verdict = if planned.fully_separated() {
+            "every planned rank is ordered by score alone"
+        } else {
+            "the deepest planned ranks fall to the declared tie-break"
+        };
+        println!(
+            "  {}: planned to read {} ranks; this law separates to {separation} — {verdict}",
+            short(stratum),
+            planned.requested_depth
+        );
     }
 
     println!("\nrequest terms nothing served");

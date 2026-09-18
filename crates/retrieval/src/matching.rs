@@ -711,8 +711,8 @@ mod tests {
     use crate::request::{Metric, RequestTerm};
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
-        AcceptedTerm, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode, RankOrdering,
-        RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+        AcceptedTerm, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode, RankedDeclaration,
+        RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
     };
 
     fn ex(suffix: &str) -> String {
@@ -745,7 +745,6 @@ mod tests {
             accepted_terms: accepted,
             depth_placement: depth,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         }

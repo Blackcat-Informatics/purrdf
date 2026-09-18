@@ -17,7 +17,10 @@
 //!   term that reached no producer at all. No weights: those are the fusion
 //!   law's, chosen at `search` time and deliberately not a planning input.
 //! * [`compile`] — semantic admission plus emission. Returns the per-stratum
-//!   SPARQL a host can read, run or log verbatim.
+//!   SPARQL a host can read, run or log verbatim, and — when the call names the
+//!   fusion law it means to fuse under — what the plan's depths will cost in
+//!   rank resolution, which is the question a host asks *before* paying to
+//!   execute anything.
 //! * [`search`] — `fuse ∘ execute ∘ compile ∘ plan`. Returns the fused ranking
 //!   with per-row, per-stratum provenance, every applicable producer's own
 //!   terminal status, the unserved-term evidence, and both identities that name
@@ -50,6 +53,7 @@
 //!     weights={"https://example.org/stratum/lexical": retrieval.SCALE},
 //!     statistics={"source": "host-statistics", "revision": "r1"},
 //!     k=60,
+//!     decay="reciprocal_rank",
 //!     top_k=10,
 //! )
 //! assert answer["rows"][0]["entity"] == "<https://example.org/a>"
@@ -78,8 +82,27 @@
 //!
 //! Producers, strata, weights and the statistics provider's own identity are all
 //! caller-supplied. There is no default producer IRI, no default stratum, no
-//! default weight, and no invented statistics revision: `k` and `top_k` are
-//! required keywords for the same reason.
+//! default weight, and no invented statistics revision: `k`, `decay` and `top_k`
+//! are required keywords for the same reason.
+//!
+//! `decay` is the one of those that looks most like it could have a default and
+//! least can. It names the rank-decay rule the fusion law runs under, and the two
+//! rules compute **different numbers** from the same weights:
+//!
+//! * `"reciprocal_rank"` truncates the reciprocal to the layer's declared scale
+//!   *before* the weight is applied. The inner truncation is a ceiling no weight
+//!   can lift, so this rule stops separating adjacent ranks at the same depth —
+//!   just past a million — for every weight at or above one.
+//! * `"weighted_reciprocal_rank"` folds the weight into the numerator as one
+//!   exactly-rounded division. Its value is never below the other's, and its
+//!   reachable depth grows with the weight, so a heavier stratum is legitimately
+//!   readable deeper.
+//!
+//! A host that needs rank resolution past the first rule's wall names the second,
+//! and [`weight_for_depth`] quotes the weight that buys the depth under whichever
+//! of the two it was asked about. Choosing one on the caller's behalf would fuse
+//! under arithmetic the caller never wrote, so an omitted `decay` is refused and
+//! an unknown spelling is refused by name.
 //!
 //! # The ranked producer a Python host configures
 //!
@@ -135,9 +158,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::retrieval::{
-    AdmissionEnvironment, CompiledRetrieval, Fixed, FusionProfile, Iri, Metric, Plan,
-    ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, SearchResult,
-    Statistics, Term, TopK, UnservedReason,
+    AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
+    Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason,
+    RequestTerm, RetrievalRequest, SearchResult, Statistics, Term, ToleratedDepth, TopK,
+    UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
@@ -341,11 +365,16 @@ fn build_registry(
     Ok(registry)
 }
 
-/// Build the fusion law from the host's weights and smoothing constant.
+/// Build the fusion law from the host's weights and the decay rule it named.
+///
+/// The rule arrives already resolved, carrying the smoothing constant it was
+/// read alongside, because the two are never independently chosen: `K` means
+/// something different in each rule's arithmetic, so a profile is built from the
+/// pair or from neither.
 ///
 /// How many contributions a candidate may receive is not an argument: it is the
 /// number of weighted strata, because a candidate surfaces at most once in each.
-fn build_profile(weights: &[(String, i128)], k: u32) -> Result<FusionProfile, String> {
+fn build_profile(weights: &[(String, i128)], decay: DecayRule) -> Result<FusionProfile, String> {
     let mut declared = BTreeMap::new();
     for (stratum, raw) in weights {
         declared.insert(
@@ -353,7 +382,7 @@ fn build_profile(weights: &[(String, i128)], k: u32) -> Result<FusionProfile, St
             Fixed::from_raw(*raw),
         );
     }
-    FusionProfile::new(declared, k).map_err(|e| e.to_string())
+    FusionProfile::with_decay(declared, decay).map_err(|e| e.to_string())
 }
 
 /// Plan the call's request against a registry built from its producers.
@@ -366,12 +395,23 @@ fn run_plan(call: &Call) -> Result<(Arc<RdfDataset>, PropertyFunctionRegistry, P
 }
 
 /// Plan, then admit and emit the per-stratum SPARQL units.
-fn run_compile(call: &Call) -> Result<(Plan, CompiledRetrieval), String> {
+///
+/// `profile` is the fusion law the host means to fuse under, when it has named
+/// one. It is not a planning input and never becomes one — the plan is already
+/// built when it is read — but admission is the one stage that holds the plan
+/// and the law at the same time, so it is where each planned depth can be
+/// measured against the rank resolution that law delivers. A host that has not
+/// chosen a law passes `None` and is told nothing about resolution, rather than
+/// being handed evidence measured against a law it never named.
+fn run_compile(
+    call: &Call,
+    profile: Option<&FusionProfile>,
+) -> Result<(Plan, CompiledRetrieval), String> {
     let (_, registry, planned) = run_plan(call)?;
     let environment = AdmissionEnvironment {
         registry: &registry,
         statistics: &call.statistics,
-        fusion_profile: None,
+        fusion_profile: profile,
     };
     let compiled = crate::retrieval::compile(&planned, &environment).map_err(|e| e.to_string())?;
     Ok((planned, compiled))
@@ -608,6 +648,67 @@ fn metric_field(index: usize, value: &Bound<'_, PyAny>) -> PyResult<Metric> {
              \"dot\", or \"euclidean\""
         ))),
     }
+}
+
+/// Read the fusion law's decay rule, with the smoothing constant it carries.
+///
+/// Spelled as a string tag, which is how this binding names every closed set it
+/// exposes: a vector term's `metric`, a producer's `graph` and the call's own
+/// `data_format` are all chosen by their spelling, and an unknown one is refused
+/// by a message that names the accepted ones. There is deliberately no spelling
+/// meaning "whichever" — the two rules compute different numbers and reach
+/// different depths, so a rule is something a caller states, never something
+/// this binding resolves on its behalf.
+///
+/// `k` belongs to the rule rather than beside it: the same constant is used
+/// differently by each, so the two are read together and carried together.
+fn decay_rule(spelling: &str, k: u32) -> Result<DecayRule, String> {
+    match spelling {
+        "reciprocal_rank" => Ok(DecayRule::ReciprocalRank { k }),
+        "weighted_reciprocal_rank" => Ok(DecayRule::WeightedReciprocalRank { k }),
+        other => Err(format!(
+            "unknown decay rule {other:?}; a rule is \"reciprocal_rank\" (the reciprocal is \
+             truncated to the declared scale before the weight is applied, so the depth it \
+             separates to is the same for every weight) or \"weighted_reciprocal_rank\" (the \
+             weight is folded into the numerator as one exactly-rounded division, so the depth \
+             it separates to grows with the weight)"
+        )),
+    }
+}
+
+/// The refusal for a call that named part of a fusion law and not the rest.
+///
+/// A law is three things together — the per-stratum `weights`, the smoothing
+/// constant `k`, and the `decay` rule saying how a contribution falls off with
+/// rank — and any subset of them names no law at all. Supplying the absent part
+/// here would report resolution measured against arithmetic the host never
+/// wrote, so the refusal says which parts arrived and which did not.
+fn partial_fusion_law(weights: bool, k: bool, decay: bool) -> String {
+    let parts = [
+        ("`weights`", weights),
+        ("the smoothing constant `k`", k),
+        ("the `decay` rule", decay),
+    ];
+    // A fixed array in a fixed order, so the two lists a message carries are a
+    // pure function of which arguments arrived.
+    let list = |supplied: bool| {
+        parts
+            .iter()
+            .filter(|(_, present)| *present == supplied)
+            .map(|(label, _)| *label)
+            .collect::<Vec<_>>()
+            .join(" and ")
+    };
+    format!(
+        "a fusion law is three things together: `weights`, the smoothing constant `k`, and the \
+         `decay` rule naming how a contribution falls off with rank. This call named {}, and left \
+         {} unnamed. Pass all three to learn what the planned depths cost in rank resolution, or \
+         none of them to compile without naming a law — the missing part is not filled in here, \
+         because a resolution measured against arithmetic the caller never wrote is evidence \
+         about nothing",
+        list(true),
+        list(false)
+    )
 }
 
 /// Collect the request term list.
@@ -887,6 +988,61 @@ fn unserved_list(
     Ok(out)
 }
 
+/// Render what a plan's recorded depths will cost in rank resolution, per
+/// stratum, as the admission waist measured it before anything ran.
+///
+/// Keyed by stratum IRI in ascending order, which is the order the engine's own
+/// map carries, so the dict a host reads is a pure function of the plan and the
+/// law. `separates_to` is `None` when the law never stops separating inside any
+/// depth a plan can express — a saturation, deliberately not a very large number
+/// a caller could mistake for a measurement — and `fully_separated` is the one
+/// bit that follows from comparing it with `requested_depth`, answered here so a
+/// host does not re-derive the comparison (and the saturating case) itself.
+fn planned_resolution_dict<'py>(
+    py: Python<'py>,
+    planned: &BTreeMap<Iri, PlannedResolution>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (stratum, entry) in planned {
+        let rendered = PyDict::new(py);
+        rendered.set_item("separates_to", entry.separation.rank())?;
+        rendered.set_item("requested_depth", entry.requested_depth)?;
+        rendered.set_item("fully_separated", entry.fully_separated())?;
+        out.set_item(stratum.as_str(), rendered)?;
+    }
+    Ok(out)
+}
+
+/// Render one compiled plan as a dict: the plan document, the per-stratum
+/// SPARQL, the two identities that pin the units, and what the plan's depths
+/// will cost in rank resolution under the law the caller named.
+fn compile_dict<'py>(
+    py: Python<'py>,
+    planned: &Plan,
+    compiled: &CompiledRetrieval,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("plan", plan_dict(py, planned)?)?;
+    let units = PyList::empty(py);
+    for unit in &compiled.units {
+        let entry = PyDict::new(py);
+        entry.set_item("stratum", unit.stratum.as_str())?;
+        entry.set_item("sparql", &unit.sparql)?;
+        units.append(entry)?;
+    }
+    out.set_item("units", units)?;
+    out.set_item("plan_id", compiled.plan_id.to_hex())?;
+    out.set_item("registry_fingerprint", &compiled.registry_fingerprint)?;
+    // The waist's whole point: the cost of the plan's depths, readable here,
+    // without executing a single unit. Empty when the call named no fusion law,
+    // because resolution is measured against one and this binding invents none.
+    out.set_item(
+        "planned_resolution",
+        planned_resolution_dict(py, &compiled.resolution)?,
+    )?;
+    Ok(out)
+}
+
 /// Render one fused answer as a dict.
 fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
@@ -936,6 +1092,31 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         statuses.set_item(stratum.as_str(), entry)?;
     }
     out.set_item("statuses", statuses)?;
+
+    // Rank resolution at two altitudes, kept apart by name because they answer
+    // two different questions. `planned_resolution` is what the admission waist
+    // said the plan's depths would cost, knowable before any row was read;
+    // `observed_resolution` is what the rows this run actually pulled did cost.
+    // They legitimately disagree — a top-k that certified early never reaches
+    // its planned depth — and neither corrects the other.
+    out.set_item(
+        "planned_resolution",
+        planned_resolution_dict(py, &result.planned_resolution)?,
+    )?;
+
+    // `separates_to` is `None` when the profile's contributions never collide
+    // inside any expressible depth — a saturation, deliberately not a very large
+    // number a caller could mistake for a measurement.
+    let observed = PyDict::new(py);
+    for (stratum, measured) in &result.trailer.resolution {
+        let entry = PyDict::new(py);
+        entry.set_item("separates_to", measured.separation.rank())?;
+        entry.set_item("ranks_pulled", measured.ranks_pulled)?;
+        entry.set_item("collisions_observed", measured.collisions_observed)?;
+        observed.set_item(stratum.as_str(), entry)?;
+    }
+    out.set_item("observed_resolution", observed)?;
+    out.set_item("cut_on_a_tie", result.trailer.cut_on_a_tie)?;
 
     out.set_item(
         "unserved_terms",
@@ -993,36 +1174,91 @@ fn plan<'py>(
 /// host that logs a unit can say exactly which plan and which registry it came
 /// from. A host can read, log or execute those units itself; [`search`] is what
 /// runs them and fuses their rows.
+///
+/// `"planned_resolution"` is what those depths will cost in rank resolution,
+/// per stratum, **before** anything is executed: each entry names the
+/// `"separates_to"` depth this law still tells adjacent ranks apart at (`None`
+/// when it never stops inside a depth a plan can express), the
+/// `"requested_depth"` the plan recorded, and `"fully_separated"` — whether
+/// every rank the plan reads is still ordered by score alone. A `False` there is
+/// not an error: past that depth the declared tie-break is total, so the answer
+/// stays correct and deterministic at a coarser resolution, and
+/// `retrieval.weight_for_depth` says what a finer one costs.
+///
+/// Resolution is measured against a fusion law, so it is reported only when the
+/// call names one: pass `weights`, `k` and `decay` together, exactly as
+/// [`search`] takes them, and `"planned_resolution"` carries an entry per
+/// weighted stratum. Omit all three and it is empty — this binding invents no law
+/// to measure against, and a resolution attributed to a law the host never chose
+/// would be evidence about nothing. Naming some of them and not the rest is a
+/// `ValueError` that says which part is missing, because the three are one law
+/// between them.
+///
+/// `decay` is `"reciprocal_rank"` or `"weighted_reciprocal_rank"`, and it is the
+/// part of the law that most changes the answer here: the depth a plan is fully
+/// separated to is a property of the rule first and of the weight second. A
+/// stratum the truncated rule reports as coarse may be fully separated under the
+/// folded one at the same weight, so the rule the measurement is taken under is
+/// the caller's to name and is never assumed.
 #[pyfunction]
-#[pyo3(signature = (data, request, *, text_producers, statistics, data_format="turtle", base=None))]
+#[pyo3(signature = (
+    data,
+    request,
+    *,
+    text_producers,
+    statistics,
+    weights=None,
+    k=None,
+    decay=None,
+    data_format="turtle",
+    base=None,
+))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the waist's inputs are named, not bundled"
+)]
 fn compile<'py>(
     py: Python<'py>,
     data: &str,
     request: &Bound<'py, PyAny>,
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
+    weights: Option<&Bound<'py, PyDict>>,
+    k: Option<u32>,
+    decay: Option<&str>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    // A law is its weights, its smoothing constant *and* its decay rule; any
+    // part of one names no law at all, and silently supplying the rest would
+    // report a resolution measured against arithmetic the host never wrote.
+    let law = match (weights, k, decay) {
+        (Some(weights), Some(k), Some(decay)) => Some((
+            collect_weights(weights)?,
+            decay_rule(decay, k).map_err(PyValueError::new_err)?,
+        )),
+        (None, None, None) => None,
+        (weights, k, decay) => {
+            return Err(PyValueError::new_err(partial_fusion_law(
+                weights.is_some(),
+                k.is_some(),
+                decay.is_some(),
+            )));
+        }
+    };
     // Parsing, index construction, planning and admission run detached.
     let (planned, compiled) = py
-        .detach(|| run_compile(&call))
+        .detach(|| {
+            let profile = law
+                .as_ref()
+                .map(|(declared, decay)| build_profile(declared, *decay))
+                .transpose()?;
+            run_compile(&call, profile.as_ref())
+        })
         .map_err(PyValueError::new_err)?;
 
-    let out = PyDict::new(py);
-    out.set_item("plan", plan_dict(py, &planned)?)?;
-    let units = PyList::empty(py);
-    for unit in &compiled.units {
-        let entry = PyDict::new(py);
-        entry.set_item("stratum", unit.stratum.as_str())?;
-        entry.set_item("sparql", &unit.sparql)?;
-        units.append(entry)?;
-    }
-    out.set_item("units", units)?;
-    out.set_item("plan_id", compiled.plan_id.to_hex())?;
-    out.set_item("registry_fingerprint", &compiled.registry_fingerprint)?;
-    Ok(out)
+    compile_dict(py, &planned, &compiled)
 }
 
 /// Run the whole retrieval ladder and return one fused answer.
@@ -1034,14 +1270,54 @@ fn compile<'py>(
 /// `"unweighted_strata"` the profile declined to score, and the `"plan_id"` /
 /// `"profile_id"` pair that names exactly which plan and which law produced it.
 ///
+/// It also carries what rank resolution cost, at both altitudes and under two
+/// distinct keys. `"planned_resolution"` is the admission waist's own map —
+/// exactly what [`compile`] reports for the same request under the same law,
+/// carried onto the answer so the one call that plans and executes together is
+/// not the one call that cannot see it: per weighted stratum, the
+/// `"separates_to"` depth, the `"requested_depth"` the plan recorded, and
+/// `"fully_separated"`. `"observed_resolution"` is what the rows this run really
+/// pulled cost, with an entry for every weighted stratum a stream was fused for
+/// — including one that ended without emitting a row, whose `"ranks_pulled"` is
+/// zero, because a stream that yielded nothing was still pulled from: the same
+/// `"separates_to"` depth
+/// (`None` when this law never stops separating inside an expressible depth),
+/// the `"ranks_pulled"` this run reached, and the `"collisions_observed"` —
+/// adjacent ranks the fused score could not tell apart, counted by observation
+/// rather than inferred. The two disagree whenever a top-k certified before
+/// reaching its planned depth, and that gap is the point: a depth a fusion never
+/// reached cost it nothing.
+///
+/// `"cut_on_a_tie"` says whether the last row in the answer beat a *settled*
+/// rival it tied with exactly, so the final place was settled by the declared
+/// tie-break rather than by relevance. Only rivals already final when that row
+/// was emitted are counted, so `False` means "no settled rival tied with it" and
+/// not "the cut was decided on a strict score difference" — a rival still live
+/// could have risen to the same score had fusion read past the top-k, and
+/// reading that far would move the `"ranks_pulled"` this same answer reports.
+/// None of these is an error: past its separating depth a law still answers
+/// correctly and deterministically, only more coarsely.
+/// `retrieval.weight_for_depth` says what a finer answer costs.
+///
 /// `weights` maps a stratum IRI to its weight in raw fixed-point units, where
 /// `retrieval.SCALE` is one whole unit; see this module's own documentation for
 /// why every weight in one dict must be written in the same spelling.
 ///
-/// `k` and `top_k` are required: fused enumeration is top-k by construction and
-/// the fusion law is the caller's, so neither has a value this binding could
-/// supply on the host's behalf. How many contributions a candidate may receive
-/// is *not* a parameter — it is the number of weighted strata.
+/// `k`, `decay` and `top_k` are required: fused enumeration is top-k by
+/// construction and the fusion law is the caller's, so none of them has a value
+/// this binding could supply on the host's behalf. How many contributions a
+/// candidate may receive is *not* a parameter — it is the number of weighted
+/// strata.
+///
+/// `decay` names the rank-decay rule the whole answer is computed under, and it
+/// reaches every number in that answer rather than only the law's identity.
+/// `"reciprocal_rank"` truncates the reciprocal to the declared scale before the
+/// weight is applied; `"weighted_reciprocal_rank"` folds the weight into the
+/// numerator as one exactly-rounded division. The two produce different
+/// contributions from the same weights, different `"planned_resolution"` and
+/// `"observed_resolution"` maps, and different `"profile_id"` values, because
+/// the rule is part of what the law's content identity fixes. An unknown
+/// spelling is a `ValueError` naming both accepted ones.
 #[pyfunction]
 #[pyo3(signature = (
     data,
@@ -1051,6 +1327,7 @@ fn compile<'py>(
     weights,
     statistics,
     k,
+    decay,
     top_k,
     data_format="turtle",
     base=None,
@@ -1067,21 +1344,233 @@ fn search<'py>(
     weights: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
     k: u32,
+    decay: &str,
     top_k: usize,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
     let declared = collect_weights(weights)?;
+    // Read before the GIL is released, with every other Python-side argument:
+    // the rule is owned Rust data by the time the ladder runs.
+    let decay = decay_rule(decay, k).map_err(PyValueError::new_err)?;
     // The whole ladder runs detached (GIL released): parse, index, plan, admit,
     // execute and fuse. The answer dict is built after the GIL is reacquired.
     let result = py
         .detach(|| {
-            let profile = build_profile(&declared, k)?;
+            let profile = build_profile(&declared, decay)?;
             run_search(&call, &profile, TopK::new(top_k))
         })
         .map_err(PyValueError::new_err)?;
     search_dict(py, &result)
+}
+
+/// The smallest stratum weight, in raw fixed-point units, that still separates
+/// every adjacent pair of ranks up to `depth` **under the rule `decay` names**.
+///
+/// The design calculus read in the direction a profile author needs: name the
+/// depth you must read to, get the weight that buys it. The answer is the true
+/// minimum rather than a safe over-estimate: whether a weight reaches a depth
+/// oscillates from one raw unit to the next, so the search walks the exact
+/// candidate weights each adjacent-rank constraint admits instead of bisecting a
+/// predicate that is not monotone. Weights are read as ratios, and an
+/// over-estimate here would silently re-scale the stratum's share of every fused
+/// score.
+///
+/// The rule is the caller's, because the two rules answer this question
+/// differently and one of them cannot answer it at all past a point. `decay` is
+/// `"reciprocal_rank"` or `"weighted_reciprocal_rank"`; an unknown spelling
+/// raises `ValueError` naming both.
+///
+/// Raises `ValueError` for four further reasons, and the message says which.
+///
+/// A `k` of zero describes no law at all — the rule is refused before `depth` is
+/// read, including at a `depth` of one, which has no adjacent pair to separate
+/// and would otherwise hand back a real price under a rule that cannot be
+/// evaluated. `retrieval.class_width` and `retrieval.deepest_rank_within_width`
+/// refuse it identically, and none of the three reports it as the decay rule
+/// running out of separation: switching rules is the remedy for a rule that
+/// saturated, and it does nothing for a constant of zero.
+///
+/// A `depth` of zero names no rank to separate, so it is rejected rather than
+/// answered. A `depth` past `2**32 - 1` is deeper than a plan can record — a
+/// plan carries a per-stratum depth as a 32-bit rank — which is a limit of that
+/// encoding and not of the arithmetic, and of the two walls below it is the only
+/// one `"weighted_reciprocal_rank"` ever meets. And no weight at all reaches the
+/// depth, which only `"reciprocal_rank"` raises and which is a real wall rather
+/// than a budget: that rule rounds the reciprocal before the weight is applied,
+/// so once two adjacent ranks collide there no weight can part them again. The
+/// message reports the exact depth it does reach — the deepest any weight
+/// reaches, not the depth of some particular one — and the remedy it points at
+/// is reachable from right here: ask the same depth again under
+/// `"weighted_reciprocal_rank"`, whose reachable depth grows with the weight.
+///
+/// Remember that weights are read as *ratios*. Raising one stratum to reach a
+/// depth changes its share of every fused score; this reports what the depth
+/// costs, not whether to pay it.
+#[pyfunction]
+#[pyo3(signature = (depth, k, *, decay))]
+fn weight_for_depth(depth: u64, k: u32, decay: &str) -> PyResult<i128> {
+    decay_rule(decay, k)
+        .map_err(PyValueError::new_err)?
+        .weight_for_depth(depth)
+        .map(Fixed::into_raw)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// How many consecutive ranks around `rank` a weight of `weight_raw` cannot tell
+/// apart **under the rule `decay` names**.
+///
+/// One means the rank is still separated from both neighbours by score alone. A
+/// width of `w` means `w` consecutive ranks share a contribution, so their order
+/// in the answer is settled by the declared tie-break rather than by relevance.
+///
+/// The answer is `None` when the class is still running at the deepest rank a
+/// plan can express, exactly as `retrieval.deepest_rank_within_width` reports
+/// its own saturation. A plan records a per-stratum depth as a 32-bit rank, so
+/// there is no end inside its reach to count to, and `2**32 - 1` would be the
+/// search's ceiling wearing a width's shape: under `"reciprocal_rank"` with a
+/// raw weight of one every contribution truncates to zero and rank one's class
+/// is the whole expressible range, and at a raw weight of fifty — fifty times
+/// heavier — it still is. An `int` there would say those two classes are the
+/// same size and invite a caller to log it, plot it, or divide by it.
+///
+/// This is the resolution curve, not the single point where it first exceeds
+/// one: knowing a depth is coarse by four ranks rather than ten thousand is the
+/// difference between an answer that is usable and one that is not. The curve
+/// belongs to the rule, so the width the two rules report at one weight and one
+/// rank legitimately differs, and `decay` — `"reciprocal_rank"` or
+/// `"weighted_reciprocal_rank"` — says which curve was read.
+///
+/// This asks a question about arithmetic and takes no stratum, because a width
+/// is a property of the rule, its smoothing constant, the weight and the rank and
+/// of nothing else. `weight_raw` is in raw fixed-point units, where
+/// `retrieval.SCALE` is one whole unit.
+///
+/// An operand the law cannot evaluate raises `ValueError` rather than returning
+/// a width: a rank of zero, which is not a rank; a smoothing constant of zero;
+/// an unknown `decay` spelling; and a weight that is not strictly positive,
+/// which a fusion law refuses where it is declared and which therefore has no
+/// resolution to report here either. A width of one is the claim that a rank is
+/// perfectly separated from its neighbours, and returning it where nothing was
+/// measured would report the most favourable resolution there is at exactly the
+/// point no resolution was computed.
+#[pyfunction]
+#[pyo3(signature = (weight_raw, k, rank, *, decay))]
+fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<Option<u64>> {
+    if weight_raw <= 0 {
+        return Err(PyValueError::new_err(format!(
+            "a stratum weight is strictly positive, and {weight_raw} raw fixed-point units is \
+             not; a fusion law refuses a non-positive weight where it is declared, so there is \
+             no rank resolution to report for one here"
+        )));
+    }
+    decay_rule(decay, k)
+        .map_err(PyValueError::new_err)?
+        .class_width(Fixed::from_raw(weight_raw), rank)
+        // The saturating case is rendered the way every other wall on this
+        // surface is: `None`, because the class has no end inside any plan's
+        // reach to count to, not an enormous width.
+        .map(ClassWidth::width)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// The deepest depth that can be read with every rank in it sitting in a
+/// class no wider than `max_width`, for a weight of `weight_raw` **under the
+/// rule `decay` names**.
+///
+/// This inverts [`class_width`]: name the tolerance you can live with, get the
+/// depth it buys. `max_width` of one is the separating depth itself — the
+/// deepest depth a read can stop at with every rank it *actually read*
+/// separated from both of its neighbours within that read. It is a depth, not a
+/// rank property, and the difference is one call away: `retrieval.class_width`
+/// at that rank never reports the one a "still separated from both neighbours"
+/// reading would predict, because the unbounded curve it walks also looks at the
+/// one rank the bounded read never reaches. Where it counts a width at all that
+/// width is at least `max_width + 1`, and it is exactly `max_width + 1` only
+/// where the run that ends the walk is one rank longer than the tolerance — the
+/// smooth case, not the rule. A light weight is where the difference shows:
+/// under `"reciprocal_rank"` with `k` of 60 and a raw weight of `10**2`, a
+/// tolerance of one lands on depth one, whose class is forty ranks wide. Where
+/// that run reaches the end of the expressible range `retrieval.class_width` is
+/// `None` there, having no width to compare. The two agree; they are answering
+/// a depth question and a rank question. Larger tolerances
+/// answer the question a caller reading deeply actually has: not "where does
+/// this stop being exact" but "how far can I read and still have ranks ordered
+/// to within the resolution I can live with".
+///
+/// The answer is `None` when no depth a plan can express ever exceeds the
+/// tolerance, exactly as `"separates_to"` is `None` on a `retrieval.search`
+/// answer for a law that never stops separating. A plan records a per-stratum
+/// depth as a 32-bit rank, so there is no bound inside its reach to report, and
+/// `2**32 - 1` is a saturation point rather than a reading: two weights fifty
+/// times apart both land on it, and an `int` there would say they reach the
+/// same depth and invite a caller to log it, plot it, or divide by it.
+///
+/// This asks a question about arithmetic and takes no stratum, exactly as
+/// [`class_width`] does: the answer is a property of the rule, its smoothing
+/// constant, the weight and the tolerance, and of nothing else. `weight_raw`
+/// is in raw fixed-point units, where `retrieval.SCALE` is one whole unit.
+///
+/// The curve belongs to the rule, so the depth the two rules report at one
+/// weight and one tolerance legitimately differs, and `decay` —
+/// `"reciprocal_rank"` or `"weighted_reciprocal_rank"` — says which curve was
+/// read.
+///
+/// An operand the law cannot evaluate raises `ValueError` rather than
+/// returning a depth: a smoothing constant of zero; a `max_width` of zero,
+/// because a class always contains its own rank and so a tolerance of zero is
+/// not a tolerance; an unknown `decay` spelling; and a weight that is not
+/// strictly positive, which a fusion law refuses where it is declared and which
+/// therefore has no resolution to report here either. The constant and the
+/// tolerance are both checked before anything is measured, so neither refusal
+/// depends on the other argument — a tolerance of one does no walking, and
+/// letting it answer where a larger tolerance refuses would make the same
+/// unusable rule usable or not according to a question asked of it.
+///
+/// # What it costs to ask
+///
+/// The answer is walked rank by rank, because the class width is not monotone
+/// in the rank and bisecting it would silently over-report. The walk starts at
+/// the separating depth `retrieval.weight_for_depth` prices — every class below
+/// that is a singleton by definition — and stops at the first run of
+/// `max_width + 1` ranks sharing one contribution. The answer lands near
+/// `sqrt(max_width)` times the separating depth, so the walk is about
+/// `sqrt(max_width) - 1` times that depth, one integer division per step. A
+/// `max_width` of one does no walking at all and a small tolerance costs a
+/// fraction of the separating depth; a large tolerance at a heavy weight under
+/// `"weighted_reciprocal_rank"`, where the separating depth itself grows with
+/// the weight, walks very far.
+///
+/// The walk stops at the deepest depth a plan can record — reporting `None`
+/// there rather than that ceiling — which bounds it at fewer than `2^32` steps
+/// however it is asked; it cannot fail to terminate, and the GIL is not
+/// released while it runs. It is a design-time question all the same — price a
+/// depth budget once while choosing weights — and not something to put in a hot
+/// loop.
+#[pyfunction]
+#[pyo3(signature = (weight_raw, k, max_width, *, decay))]
+fn deepest_rank_within_width(
+    weight_raw: i128,
+    k: u32,
+    max_width: u64,
+    decay: &str,
+) -> PyResult<Option<u64>> {
+    if weight_raw <= 0 {
+        return Err(PyValueError::new_err(format!(
+            "a stratum weight is strictly positive, and {weight_raw} raw fixed-point units is \
+             not; a fusion law refuses a non-positive weight where it is declared, so there is \
+             no rank resolution to report for one here"
+        )));
+    }
+    decay_rule(decay, k)
+        .map_err(PyValueError::new_err)?
+        .deepest_rank_within_width(Fixed::from_raw(weight_raw), max_width)
+        // The saturating case is rendered the way `"separates_to"` renders it
+        // on a `search` answer: `None`, because there is no bound inside any
+        // plan's reach to report, not an enormous one.
+        .map(ToleratedDepth::rank)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 /// Register the `purrdf-retrieval` surface on a Python module. Called by the
@@ -1093,6 +1582,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(plan, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(search, m)?)?;
+    m.add_function(wrap_pyfunction!(weight_for_depth, m)?)?;
+    m.add_function(wrap_pyfunction!(class_width, m)?)?;
+    m.add_function(wrap_pyfunction!(deepest_rank_within_width, m)?)?;
     Ok(())
 }
 
@@ -1106,6 +1598,12 @@ mod tests {
     const TITLE_PRODUCER: &str = "https://example.org/pf/title";
     const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
     const TITLE_STRATUM: &str = "https://example.org/stratum/title";
+
+    /// The fixture law's rule: the reciprocal truncated before the weight lands.
+    const TRUNCATED: DecayRule = DecayRule::ReciprocalRank { k: 60 };
+    /// The other rule, at the same smoothing constant: the weight folded into
+    /// the numerator.
+    const FOLDED: DecayRule = DecayRule::WeightedReciprocalRank { k: 60 };
 
     const DATA: &str = concat!(
         "<https://example.org/a> <https://example.org/note> \"the quick brown fox\" ;\n",
@@ -1164,7 +1662,7 @@ mod tests {
                 producer(TITLE_PRODUCER, TITLE_STRATUM, TITLE),
             ],
         );
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM, TITLE_STRATUM]), 60)
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM, TITLE_STRATUM]), TRUNCATED)
             .expect("the fixture profile is valid");
         let result = run_search(&call, &profile, TopK::new(10)).expect("the producers answer");
 
@@ -1214,7 +1712,7 @@ mod tests {
             ],
             vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
         );
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), 60)
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), TRUNCATED)
             .expect("the fixture profile is valid");
         let result = run_search(&call, &profile, TopK::new(10)).expect("the producer answers");
 
@@ -1238,7 +1736,7 @@ mod tests {
             vec![lexical("quick fox", NOTE)],
             vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
         );
-        let (planned, compiled) = run_compile(&call).expect("a fresh plan is admitted");
+        let (planned, compiled) = run_compile(&call, None).expect("a fresh plan is admitted");
         assert_eq!(compiled.units.len(), 1);
         assert_eq!(compiled.units[0].stratum.as_str(), TEXT_STRATUM);
         assert!(
@@ -1252,6 +1750,40 @@ mod tests {
             compiled.units[0].sparql
         );
         assert_eq!(planned.statistics_snapshot.source, "host-statistics");
+        assert!(
+            compiled.resolution.is_empty(),
+            "a call that named no fusion law is told nothing about resolution, rather than being \
+             handed evidence measured against a law it never chose"
+        );
+    }
+
+    /// The waist answers what a plan will cost, without executing it: a call
+    /// that names the law it means to fuse under gets the resolution evidence
+    /// back from `compile`, not only from `search`.
+    #[test]
+    fn compile_reports_what_the_planned_depths_cost_under_a_named_law() {
+        let call = call(
+            vec![lexical("quick fox", NOTE)],
+            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
+        );
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), TRUNCATED)
+            .expect("the fixture profile is valid");
+        let (planned, compiled) =
+            run_compile(&call, Some(&profile)).expect("a fresh plan is admitted under a law");
+        let stratum = Iri::parse(TEXT_STRATUM).expect("fixture stratum");
+        let recorded = compiled
+            .resolution
+            .get(&stratum)
+            .copied()
+            .expect("a weighted stratum's resolution is recorded at the waist");
+        assert!(
+            recorded.fully_separated(),
+            "a unit weight separates every rank this small plan reads"
+        );
+        assert_eq!(
+            recorded.requested_depth, planned.stratum_depths[&stratum],
+            "the evidence names the depth the plan recorded"
+        );
     }
 
     /// Statistics are the host's, recorded verbatim, and a measured cardinality
@@ -1326,7 +1858,7 @@ mod tests {
             vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
         );
         call.data = TAGGED.to_owned();
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), 60)
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), TRUNCATED)
             .expect("the fixture profile is valid");
         let result = run_search(&call, &profile, TopK::new(10)).expect("one partition answers");
         assert_eq!(result.rows.len(), 2, "both documents hold the needle");
@@ -1336,7 +1868,7 @@ mod tests {
     /// the fusion law rather than silently ordering nothing.
     #[test]
     fn weights_are_exact_and_a_non_positive_one_is_refused() {
-        let profile = build_profile(&[(TEXT_STRATUM.to_owned(), SCALE / 2)], 60)
+        let profile = build_profile(&[(TEXT_STRATUM.to_owned(), SCALE / 2)], TRUNCATED)
             .expect("half a unit is a valid weight");
         assert_eq!(
             profile
@@ -1346,7 +1878,7 @@ mod tests {
             Some("0.500000000000")
         );
         assert!(
-            build_profile(&[(TEXT_STRATUM.to_owned(), 0)], 60).is_err(),
+            build_profile(&[(TEXT_STRATUM.to_owned(), 0)], TRUNCATED).is_err(),
             "a zero weight is not a weight"
         );
     }
@@ -1368,6 +1900,93 @@ mod tests {
             GraphSpec::Named("https://example.org/g".to_owned())
         );
         assert!(GraphSpec::parse(TEXT_PRODUCER, "every").is_err());
+    }
+
+    /// Decay rules route by their spelling, and an unknown one is a typed
+    /// refusal naming both accepted ones — there being no spelling that means
+    /// "whichever".
+    #[test]
+    fn decay_rules_route_by_spelling() {
+        assert_eq!(
+            decay_rule("reciprocal_rank", 60).expect("the truncated rule"),
+            TRUNCATED
+        );
+        assert_eq!(
+            decay_rule("weighted_reciprocal_rank", 60).expect("the folded rule"),
+            FOLDED
+        );
+        let error = decay_rule("rrf", 60).expect_err("an unknown rule is refused");
+        assert!(error.contains("unknown decay rule"), "got {error}");
+        assert!(
+            error.contains("\"reciprocal_rank\"") && error.contains("\"weighted_reciprocal_rank\""),
+            "the refusal names both accepted spellings: {error}"
+        );
+    }
+
+    /// The rule reaches the arithmetic, not only the profile's identity: the two
+    /// rules compute different contributions from the same weight and rank.
+    #[test]
+    fn the_two_rules_fuse_the_same_corpus_to_different_scores() {
+        let call = call(
+            vec![lexical("quick fox", NOTE)],
+            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
+        );
+        // A weight of one and a half units: the folded rule's single division
+        // keeps a raw unit the truncated rule's inner rounding discards.
+        let weights = [(TEXT_STRATUM.to_owned(), SCALE + SCALE / 2)];
+        let under = |decay| {
+            let profile = build_profile(&weights, decay).expect("the fixture profile is valid");
+            let result = run_search(&call, &profile, TopK::new(10)).expect("the producer answers");
+            (
+                profile.id(),
+                result.rows[0].score.to_decimal_lexical(),
+                result.profile_id,
+            )
+        };
+        let (truncated_id, truncated_score, truncated_answer_id) = under(TRUNCATED);
+        let (folded_id, folded_score, folded_answer_id) = under(FOLDED);
+
+        assert_ne!(
+            truncated_score, folded_score,
+            "the rule decides the number, so naming it has to change the answer"
+        );
+        assert_ne!(
+            truncated_id, folded_id,
+            "the rule is part of what the law's content identity fixes"
+        );
+        assert_eq!(truncated_answer_id, truncated_id);
+        assert_eq!(folded_answer_id, folded_id);
+    }
+
+    /// The refusal for a half-named law says which part arrived and which did
+    /// not, for every partial combination, and never fills the absent one in.
+    #[test]
+    fn a_partly_named_fusion_law_names_the_part_that_is_missing() {
+        let message = partial_fusion_law(true, true, false);
+        assert!(
+            message.contains("named `weights` and the smoothing constant `k`"),
+            "got {message}"
+        );
+        assert!(
+            message.contains("left the `decay` rule unnamed"),
+            "got {message}"
+        );
+
+        let message = partial_fusion_law(false, true, false);
+        assert!(
+            message.contains("named the smoothing constant `k`"),
+            "got {message}"
+        );
+        assert!(
+            message.contains("left `weights` and the `decay` rule unnamed"),
+            "got {message}"
+        );
+
+        let message = partial_fusion_law(true, false, false);
+        assert!(
+            message.contains("left the smoothing constant `k` and the `decay` rule unnamed"),
+            "got {message}"
+        );
     }
 
     /// Data format names route to media types, and an unknown one is refused.

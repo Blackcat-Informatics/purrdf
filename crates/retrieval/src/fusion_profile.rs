@@ -20,7 +20,10 @@ use crate::canonical::{Reader, Writer};
 use crate::error::FusionError;
 use crate::id::{FUSION_PROFILE_VERSION, FusionProfileId};
 use crate::iri::Iri;
-use crate::reciprocal_rank::monotone_depth;
+use crate::reciprocal_rank::{
+    ClassWidth, MonotoneDepth, ToleratedDepth, class_width, deepest_rank_within_width,
+    minimum_weight_for_depth, monotone_depth,
+};
 
 // Canonical discriminators. One tag space per enum, never reused.
 const DECAY_RECIPROCAL_RANK: u8 = 0;
@@ -79,6 +82,186 @@ impl DecayRule {
         match self {
             Self::ReciprocalRank { k } | Self::WeightedReciprocalRank { k } => k,
         }
+    }
+
+    /// The smallest stratum weight that still separates every adjacent pair of
+    /// ranks up to `depth` under this rule.
+    ///
+    /// This is the profile-design calculus read in reverse. Rather than build a
+    /// profile, read its [`FusionProfile::monotone_depth`] and adjust, a caller
+    /// that knows how deep it must read asks for the weight that buys it.
+    ///
+    /// The answer is the true minimum, not a sufficient over-estimate, and it is
+    /// **not** bisected: whether a weight reaches a depth is not monotone in the
+    /// weight, so a binary search over it would land on whichever side of an
+    /// oscillation its probes happened to sample. Instead each adjacent-rank
+    /// constraint names the next weight that could satisfy it, and the search
+    /// walks those candidates without ever skipping one — so it never names a
+    /// heavier weight than the arithmetic actually requires. Remember that
+    /// weights are read as **ratios**, so raising one stratum to reach a depth
+    /// changes its share of every fused score — this reports what the depth
+    /// costs, and whether to pay it is the caller's.
+    ///
+    /// # Errors
+    ///
+    /// Four refusals, and they are four different facts.
+    ///
+    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero.
+    /// That is the rule being unusable rather than the depth being unreachable,
+    /// and it is refused before `depth` is read at all — including at a depth of
+    /// one, which has no adjacent pair to separate and would otherwise answer
+    /// the lightest weight there is, quoting a real price under a law that
+    /// cannot be evaluated. [`FusionProfile::with_decay`] refuses such a rule
+    /// where a profile is declared; this is the same fact reached one level
+    /// lower, and it is deliberately *not* told as the rule saturating at depth
+    /// one, because the rule's arithmetic never ran.
+    ///
+    /// [`FusionError::InvalidRank`] when `depth` is zero. A depth counts 1-based
+    /// ranks read from rank one, so zero names no rank to separate.
+    ///
+    /// [`FusionError::DepthUnreachable`] when no weight reaches `depth`. Under
+    /// [`Self::ReciprocalRank`] that is a real wall and not a conservative one:
+    /// the reciprocal is truncated before the weight is applied, so once two
+    /// adjacent ranks collide there they are equal for every weight. The error
+    /// carries the exact rank where the rule saturates.
+    /// [`Self::WeightedReciprocalRank`] has no such wall at all — its reachable
+    /// depth grows with the weight — so it never raises this, and that is a
+    /// proof rather than an expectation: the folded rule's own arithmetic is the
+    /// single division `trunc(w_raw / D)`, whose adjacent values differ by
+    /// `w_raw / (D · (D + 1))`, so the weight `(K + depth)²` this search bounds
+    /// itself by separates every pair in the range outright. The saturation
+    /// condition the other rule meets — two ranks equal *before* the weight
+    /// arrives — has no counterpart here to detect.
+    ///
+    /// [`FusionError::DepthBeyondPlanRange`] when `depth` is deeper than a plan
+    /// can record, which a plan does as a `u32`. Of the two walls, this is the
+    /// only one [`Self::WeightedReciprocalRank`] ever meets, and it is a limit of
+    /// that encoding rather than of the rule: the folded arithmetic separates ranks
+    /// past `u32::MAX` given a heavy enough weight, and at `u32::MAX` itself it
+    /// answers. Nothing downstream could carry a deeper depth, so quoting a
+    /// weight for one would price a plan that cannot be written.
+    pub fn weight_for_depth(self, depth: u64) -> Result<Fixed, FusionError> {
+        minimum_weight_for_depth(self, depth)
+    }
+
+    /// How many consecutive ranks around `rank` a stratum weighted `weight`
+    /// cannot be told apart at under this rule.
+    ///
+    /// The resolution algebra with no stratum in it. A width is a property of
+    /// four numbers — the rule, its smoothing constant, the weight and the rank
+    /// — and of nothing else, so a caller asking about *arithmetic* rather than
+    /// about a configured stratum asks here, exactly as it asks
+    /// [`Self::weight_for_depth`] here. [`FusionProfile::class_width`] is the
+    /// same answer looked up by stratum, for a caller that already holds a law
+    /// and means one of the strata that law weights.
+    ///
+    /// [`ClassWidth::SpansTo`] of one means `rank` is still separated from both
+    /// its neighbours by score alone. A width of `w` means `w` consecutive ranks
+    /// share a contribution, so their relative order in a fused answer falls
+    /// through to the declared tie-break's later keys rather than being decided
+    /// by relevance. This is the resolution curve, of which
+    /// [`Self::weight_for_depth`] prices a single point.
+    ///
+    /// [`ClassWidth::ExceedsAnyPlan`] is a class still running at the deepest
+    /// rank a plan can express, which has no width to report rather than a huge
+    /// one. Under this rule at a raw weight of one every contribution truncates
+    /// to zero and rank one's class is the whole expressible range; at a raw
+    /// weight of fifty, fifty times heavier, it still is. A number there would
+    /// say those two classes are the same width.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidRank`] when `rank` is zero. Ranks are 1-based, so
+    /// there is no rank zero for a class to form around.
+    ///
+    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero,
+    /// and [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. A refusal is reported and never rendered as a width: a width of
+    /// one is the most favourable claim this algebra can make about a
+    /// resolution, and making it where the arithmetic produced nothing would be
+    /// a false claim at exactly the point no answer exists.
+    pub fn class_width(self, weight: Fixed, rank: u64) -> Result<ClassWidth, FusionError> {
+        class_width(self, weight, rank)
+    }
+
+    /// The deepest depth that can be read with every rank in it sitting in a
+    /// class no wider than `max_width`.
+    ///
+    /// The resolution algebra with no stratum in it, exactly as
+    /// [`Self::class_width`] is: this arithmetic is a property of the rule,
+    /// its smoothing constant, the weight and the tolerance, and of nothing
+    /// else, so a caller asking about arithmetic rather than about a
+    /// configured stratum asks here. [`FusionProfile::deepest_rank_within_width`]
+    /// is the same answer looked up by stratum, for a caller that already
+    /// holds a law and means one of the strata that law weights.
+    ///
+    /// `max_width` of one is the separating depth itself — the deepest depth a
+    /// read can stop at with every rank it **actually read** separated from
+    /// both of its neighbours *within that read*. It is a depth, not a rank
+    /// property, and the difference is visible one call away:
+    /// [`Self::class_width`] at that rank never reports the one a "still
+    /// separated from both neighbours" reading would predict, because the
+    /// unbounded curve it walks also looks at the one rank the bounded read
+    /// never reaches. Where it counts a width at all that width is at least
+    /// `max_width + 1`, and it is exactly `max_width + 1` only where the run
+    /// that ends the walk is one rank longer than the tolerance — the smooth
+    /// case, not the rule. A light weight is where the difference shows: under
+    /// [`Self::ReciprocalRank`] with `k` of 60 at a raw weight of `10^2`, a
+    /// tolerance of one lands on depth one, whose class is forty ranks wide.
+    /// Where the run reaches the end of the expressible range there is no width
+    /// at all and the answer is [`ClassWidth::ExceedsAnyPlan`]. The two agree in
+    /// every such case; they are answering a depth question and a rank
+    /// question. Larger tolerances answer the question a caller reading deeply
+    /// actually has — not "where does this stop being exact" but "how far can I
+    /// read and still have ranks ordered to within the resolution I can live
+    /// with".
+    ///
+    /// # What it costs to ask
+    ///
+    /// The answer is found by walking rank by rank, because the class width is
+    /// not monotone in the rank and a bisection over it silently over-reports.
+    /// The walk starts at the separating depth [`Self::weight_for_depth`]
+    /// prices rather than at rank one — every class below that point is a
+    /// singleton by definition — and runs until the first run of
+    /// `max_width + 1` ranks sharing one contribution.
+    ///
+    /// A class at depth `D` is about `D²/B` ranks wide for the rule's own `B`
+    /// — `min(w, 1) · S` under [`Self::ReciprocalRank`] and `w · S` under
+    /// [`Self::WeightedReciprocalRank`], where `S` is the fixed-point scale
+    /// [`SCALE_DIGITS`](purrdf_text::SCALE_DIGITS) declares — and the separating
+    /// depth is about `sqrt(B)`. So the answer lands near `sqrt(max_width)`
+    /// times that depth and the walk is about `sqrt(max_width) - 1` times it,
+    /// one integer division per step. A `max_width` of one does not walk at
+    /// all; a small tolerance costs a fraction of the separating depth; a large
+    /// tolerance at a heavy weight under the folded rule — where the separating
+    /// depth itself grows as `sqrt(w)` — walks very far.
+    ///
+    /// The walk stops at the deepest depth a plan can record, so it is bounded
+    /// by fewer than `2^32` steps however it is asked and cannot fail to
+    /// terminate. A walk that gets there has found no bound inside the range a
+    /// plan can express, and says so as
+    /// [`ToleratedDepth::ReadsBeyondAnyPlan`] rather than quoting the ceiling
+    /// as a reading. It is a design-time question all the same — price a depth
+    /// budget once while choosing weights — and not something to put in a hot
+    /// loop.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero
+    /// and [`FusionError::InvalidWidth`] when `max_width` is zero — a class
+    /// always contains its own rank, so a tolerance of zero is not a tolerance
+    /// — both refused before anything is measured, and
+    /// [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. A refusal is reported and never rendered as a depth: the rank the
+    /// walk stopped at is where the arithmetic gave out, not a depth this rule
+    /// was measured to deliver, and returning it as one would quote a
+    /// resolution nothing established.
+    pub fn deepest_rank_within_width(
+        self,
+        weight: Fixed,
+        max_width: u64,
+    ) -> Result<ToleratedDepth, FusionError> {
+        deepest_rank_within_width(self, weight, max_width)
     }
 
     /// The canonical discriminator byte for this rule.
@@ -193,9 +376,11 @@ impl TieBreak {
 /// Either way the guarantee is only sufficient, never necessary — two
 /// contributions often differ when it fails, because a truncation can straddle
 /// an integer — so the exact first-collision rank is what
-/// [`FusionProfile::monotone_depth`] reports, and the refusal at admission is
-/// against that exact value rather than against a conservative closed form that
-/// would refuse legitimate depths.
+/// [`FusionProfile::monotone_depth`] reports, and every quantity derived from it
+/// is measured against that exact value rather than against a conservative
+/// closed form. A conservative bound here would understate the depth a profile
+/// really orders, and nothing in this layer is entitled to refuse or discourage
+/// a depth its own arithmetic in fact delivers.
 ///
 /// # A deep stratum requires a heavy one — the coupling read the other way
 ///
@@ -215,11 +400,13 @@ impl TieBreak {
 /// Squaring it gives the requirement directly: a stratum that
 /// must be read `depth` ranks deep needs `w ≳ (depth / 10^6)²`. A weight is
 /// therefore not only "how much this stratum counts relative to its neighbours";
-/// under this rule it is also the budget that buys ordered depth, and a profile
-/// that weights a deep stratum lightly will have its plans **refused** at
-/// admission with
-/// [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)
-/// rather than quietly returning rows the fusion cannot separate.
+/// under this rule it is also the budget that buys ordered depth. A profile that
+/// weights a deep stratum lightly answers at a coarser rank resolution there,
+/// and says so — on the compiled plan as
+/// [`PlannedResolution`](crate::PlannedResolution) before anything runs, and in
+/// the fused trailer afterwards — rather than quietly returning rows the fusion
+/// cannot separate. [`DecayRule::weight_for_depth`] reads the relation in the
+/// direction a profile author actually needs: name the depth, get the weight.
 ///
 /// The two readings do not conflict, because weights are only ever compared with
 /// each other: scaling every stratum's weight by one hundred leaves every
@@ -274,8 +461,15 @@ pub struct FusionProfile {
 }
 
 impl FusionProfile {
-    /// Build a profile from explicit weights and smoothing constant, with the
-    /// canonical tie-break.
+    /// Build a profile that names its decay rule explicitly, with explicit
+    /// weights and smoothing constant, and the canonical tie-break.
+    ///
+    /// A caller that needs a stratum read deeper than the truncated reciprocal
+    /// can order — see this type's own documentation for the `depth ≲ 10^6 ·
+    /// sqrt(w)` relation — names [`DecayRule::WeightedReciprocalRank`] here.
+    /// The choice is part of the profile's canonical bytes, so it is part of
+    /// its identity and never changes the numbers under a name already in
+    /// circulation.
     ///
     /// # `weights` is read as ratios only — mind which constructor made them
     ///
@@ -361,25 +555,6 @@ impl FusionProfile {
     /// * [`FusionError::Overflow`] when the admitted maximum fused score does
     ///   not fit the fixed-point range, or the stratum count does not fit the
     ///   `u32` the canonical encoding writes.
-    pub fn new(weights: BTreeMap<Iri, Fixed>, k: u32) -> Result<Self, FusionError> {
-        Self::with_decay(weights, DecayRule::ReciprocalRank { k })
-    }
-
-    /// Build a profile that names its decay rule explicitly.
-    ///
-    /// [`new`](Self::new) is this constructor with
-    /// [`DecayRule::ReciprocalRank`] supplied, and is kept because that rule is
-    /// what every profile issued so far runs under. A caller that needs a
-    /// stratum read deeper than the truncated reciprocal can order — see this
-    /// type's own documentation for the `depth ≲ 10^6 · sqrt(w)` relation —
-    /// names [`DecayRule::WeightedReciprocalRank`] here. The choice is part of
-    /// the profile's canonical bytes, so it is part of its identity and never
-    /// changes the numbers under a name already in circulation.
-    ///
-    /// # Errors
-    ///
-    /// The same refusals [`new`](Self::new) makes, and its `weights` paragraph
-    /// applies here unchanged.
     pub fn with_decay(
         weights: BTreeMap<Iri, Fixed>,
         decay: DecayRule,
@@ -408,10 +583,17 @@ impl FusionProfile {
         // Derived once, here, rather than on every admission: a profile is
         // immutable and is routinely reused across many searches, and the search
         // is bounded but not free.
+        //
+        // The derivation carries the decay rule's own refusal rather than
+        // rendering one as a depth. The two operands that could provoke one are
+        // already refused above — a zero smoothing constant and a non-positive
+        // weight — so no profile this constructor accepts reaches it; it is
+        // propagated so that relaxing either check surfaces the failure instead
+        // of quoting a separation nothing measured.
         let monotone_depths = weights
             .iter()
-            .map(|(stratum, weight)| (stratum.clone(), monotone_depth(decay, *weight)))
-            .collect();
+            .map(|(stratum, weight)| Ok((stratum.clone(), monotone_depth(decay, *weight)?)))
+            .collect::<Result<BTreeMap<Iri, u64>, FusionError>>()?;
         Ok(Self {
             decay,
             weights,
@@ -455,6 +637,17 @@ impl FusionProfile {
 
     /// The admitted maximum fused score: the largest weight times the number of
     /// strata, which is the true bound on a candidate's sum.
+    ///
+    /// It is a bound the arithmetic already guarantees, so fusion enforces it by
+    /// construction rather than by testing each sum against it. A candidate
+    /// receives at most one contribution per stratum — that count is what fusion
+    /// checks, as
+    /// [`FusionError::MaxContributionsExceeded`](crate::FusionError::MaxContributionsExceeded)
+    /// — and `K >= 1` with a 1-based rank makes every reciprocal at most one
+    /// half, so every contribution is at most half its stratum's weight. The
+    /// largest sum a fusion can reach is therefore exactly half of this value,
+    /// never this value, whichever decay rule is in force. A runtime refusal for
+    /// crossing it would be a branch no profile and no stream could take.
     #[must_use]
     pub const fn ceiling(&self) -> Fixed {
         self.ceiling
@@ -479,17 +672,154 @@ impl FusionProfile {
     /// This is the exact first-collision rank, not a conservative estimate: at
     /// this depth every adjacent pair of ranks still produces a distinct
     /// contribution, and at one rank more the first pair collides. See this
-    /// type's own documentation for the coupling it reports on, and
-    /// [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)
-    /// for where a plan is held to it.
+    /// type's own documentation for the coupling it reports on.
+    ///
+    /// Reading past it is **permitted and reports itself**. The answer stays
+    /// correct and deterministic — the declared tie-break is total — at a
+    /// coarser rank resolution, and the fused trailer says per stratum how deep
+    /// the answer in hand was actually read. Use [`Self::class_width`] to ask
+    /// how coarse, rather than only whether.
     ///
     /// `None` is the honest answer for an unweighted stratum rather than zero:
     /// a profile that says nothing about a stratum has said nothing about how
     /// deep it may be read either, and that stratum contributes nothing to a
     /// fusion under this profile.
     #[must_use]
-    pub fn monotone_depth(&self, stratum: &Iri) -> Option<u64> {
-        self.monotone_depths.get(stratum).copied()
+    pub fn monotone_depth(&self, stratum: &Iri) -> Option<MonotoneDepth> {
+        self.monotone_depths
+            .get(stratum)
+            .copied()
+            .map(MonotoneDepth::from_rank)
+    }
+
+    /// How many consecutive ranks around `rank` this profile cannot tell apart
+    /// in `stratum`.
+    ///
+    /// [`ClassWidth::SpansTo`] of one means `rank` is still separated from both
+    /// neighbours. A width of `w` means `w` consecutive ranks share a
+    /// contribution, so their relative order in the fused answer is decided by
+    /// the tie-break's later keys — best stratum rank ascending, then canonical
+    /// term bytes — rather than by score.
+    ///
+    /// This is the resolution curve [`Self::monotone_depth`] reports a single
+    /// point of. Past that point the width grows rather than jumping to
+    /// nonsense, and knowing it is four ranks rather than ten thousand is the
+    /// difference between an answer a caller can use and one it cannot.
+    ///
+    /// The growth ends at the range a plan can express, and a class still
+    /// running there is [`ClassWidth::ExceedsAnyPlan`] rather than the ceiling
+    /// counted as a width. Two weights fifty times apart both arrive there under
+    /// a light enough stratum — where every contribution has truncated to the
+    /// same value — and a bare number would say their classes are the same size.
+    ///
+    /// The width itself is [`DecayRule::class_width`], which takes a weight
+    /// rather than a stratum. This is the same arithmetic reached by the name a
+    /// law gave the weight, so a caller holding a profile need not restate a
+    /// weight the profile already carries; a caller with no stratum in hand asks
+    /// the rule directly instead of inventing one to ask through.
+    ///
+    /// `Ok(None)` is a stratum this profile declares no weight for. That is an
+    /// absence and not a failure — a profile silent about a stratum has said
+    /// nothing about its resolution either, and that stratum contributes
+    /// nothing to a fusion under this profile — so it is kept distinct from the
+    /// refusal below rather than folded into it.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidRank`] when `rank` is zero. Ranks are 1-based, so
+    /// there is no rank zero for a class to form around.
+    ///
+    /// [`FusionError::InvalidK`] when the profile's smoothing constant is zero,
+    /// and [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. Neither is reachable through a profile this type built —
+    /// [`Self::with_decay`] refuses a zero constant, and no contribution
+    /// exceeds its own weight in magnitude — and both are carried rather than
+    /// assumed away, because the alternative is to report the most favourable
+    /// width there is at exactly the point the arithmetic produced no width at
+    /// all.
+    pub fn class_width(&self, stratum: &Iri, rank: u64) -> Result<Option<ClassWidth>, FusionError> {
+        let Some(weight) = self.weights.get(stratum) else {
+            return Ok(None);
+        };
+        self.decay.class_width(*weight, rank).map(Some)
+    }
+
+    /// The deepest rank in `stratum` whose indifference class is still no wider
+    /// than `max_width`.
+    ///
+    /// `max_width` of one is [`Self::monotone_depth`]: the separating depth
+    /// itself, the deepest depth a read can stop at with every rank it
+    /// **actually read** separated from both of its neighbours within that
+    /// read. [`Self::class_width`] at that rank never reports one, because the
+    /// unbounded curve it walks also looks at the one rank the bounded read
+    /// never reaches. Where it counts a width at all that width is at least
+    /// `max_width + 1`; it is exactly `max_width + 1` only where the run that
+    /// ends the walk is one rank longer than the tolerance, and it is wider —
+    /// forty ranks at a tolerance of one, for a stratum light enough that its
+    /// separating depth is rank one — wherever that run is longer still. Where
+    /// the run reaches the end of the expressible range there is no width to
+    /// compare and the answer is [`ClassWidth::ExceedsAnyPlan`]. The two are
+    /// answering a depth question and a rank question, and they agree. Larger tolerances answer
+    /// the question a caller reading deeply actually has: not "where does this
+    /// stop being exact" but "how far can I read and still have ranks ordered
+    /// to within the resolution I can live with".
+    ///
+    /// `Ok(None)` is a stratum this profile declares no weight for, exactly as
+    /// in [`Self::class_width`], and it is an absence rather than a failure.
+    ///
+    /// # What it costs to ask
+    ///
+    /// The answer is walked rank by rank — the class width is not monotone in
+    /// the rank, so bisecting it would silently over-report — starting at this
+    /// stratum's separating depth ([`Self::monotone_depth`]) rather than at rank
+    /// one, and stopping at the first run of `max_width + 1` ranks that share a
+    /// contribution. The answer lands near `sqrt(max_width)` times the
+    /// separating depth, so the walk is about `sqrt(max_width) - 1` times that
+    /// depth, one integer division per step: a `max_width` of one does no
+    /// walking at all, a small tolerance costs a fraction of the separating
+    /// depth, and a large tolerance at a heavy weight under
+    /// [`DecayRule::WeightedReciprocalRank`] — the case whose separating depth
+    /// itself grows with the weight — walks very far.
+    ///
+    /// The walk stops at the deepest depth a plan can record, which bounds it
+    /// at fewer than `2^32` steps however it is asked; it cannot fail to
+    /// terminate. Getting there means no depth a plan can express ever exceeds
+    /// the tolerance, which is reported as
+    /// [`ToleratedDepth::ReadsBeyondAnyPlan`] and not as the ceiling wearing a
+    /// measurement's shape — two weights fifty times apart both arrive there,
+    /// and a bare number would say they reach the same depth. It is a
+    /// design-time question all the same — price a depth budget once while
+    /// choosing weights — and not something to put in a hot loop. See
+    /// [`DecayRule::deepest_rank_within_width`] for the arithmetic behind the
+    /// estimate.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidWidth`] when `max_width` is zero: a class always
+    /// contains its own rank, so a tolerance of zero is not a tolerance and no
+    /// depth is walked for one. A stratum this profile does not weight is still
+    /// `Ok(None)` whatever the tolerance, exactly as in [`Self::class_width`] —
+    /// "this profile says nothing about that stratum" is true before the
+    /// tolerance is read, and turning an absence into a refusal would answer a
+    /// question about arithmetic that was never reached.
+    ///
+    /// [`FusionError::InvalidK`] when the profile's smoothing constant is zero,
+    /// and [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. Neither is reachable through a profile this type built, and both
+    /// are carried rather than assumed away: the rank the walk stopped at is
+    /// where the arithmetic gave out, not a depth this profile was measured to
+    /// deliver.
+    pub fn deepest_rank_within_width(
+        &self,
+        stratum: &Iri,
+        max_width: u64,
+    ) -> Result<Option<ToleratedDepth>, FusionError> {
+        let Some(weight) = self.weights.get(stratum) else {
+            return Ok(None);
+        };
+        self.decay
+            .deepest_rank_within_width(*weight, max_width)
+            .map(Some)
     }
 
     /// The profile's canonical, length-framed bytes.

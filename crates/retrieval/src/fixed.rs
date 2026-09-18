@@ -24,7 +24,7 @@ pub use purrdf_text::Fixed;
 /// operators this layer was extracted from converged on, and naming it here
 /// spares a caller from re-deriving where it came from.
 ///
-/// It is not a fallback and nothing substitutes it. [`FusionProfile::new`]
+/// It is not a fallback and nothing substitutes it. [`FusionProfile::with_decay`]
 /// takes `k` as a required argument, so a profile is impossible to build
 /// without stating its own smoothing constant, and the value that governs a
 /// fusion is always the one that profile carries — covered by the profile's
@@ -33,5 +33,5 @@ pub use purrdf_text::Fixed;
 /// that, and neither path reads a value nobody chose.
 ///
 /// [`FusionProfile`]: crate::FusionProfile
-/// [`FusionProfile::new`]: crate::FusionProfile::new
+/// [`FusionProfile::with_decay`]: crate::FusionProfile::with_decay
 pub const RECIP_K: i128 = 60;
