@@ -275,12 +275,22 @@ pub fn serialize_dataset_with<D: DatasetView>(
         // line/Turtle family walks the shared `ser_model` writers, and RDF/XML, TriX and
         // HexTuples walk the SAME `SerGraph` through their in-repo emitters.
         None => super::codec::codec_for(format).serialize(&graph)?,
-        Some(configured) if format == NativeRdfFormat::JsonLd => {
-            super::jsonld::serialize_ser_graph_with_options(&graph, configured)?
-        }
-        Some(configured) => {
-            super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, configured)?
-        }
+        Some(configured) => match format {
+            NativeRdfFormat::JsonLd => {
+                super::jsonld::serialize_ser_graph_with_options(&graph, configured)?
+            }
+            NativeRdfFormat::YamlLd => {
+                super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, configured)?
+            }
+            // Unreachable: the guard at the top of this function already refused
+            // every other format. It is spelled out rather than left as a catch-all
+            // because the arm it replaces sent every OTHER format down the YAML-LD
+            // writer — so if that guard were ever moved or loosened, a Turtle request
+            // carrying a JSON-LD context would have silently produced a YAML
+            // document rather than failing. Routed through the same constructor as
+            // the guard, so one condition keeps one wording.
+            other => return Err(jsonld_options_unused(other)),
+        },
     };
 
     // A `Named` selection emits NO statement rows whatever the format can carry (the
