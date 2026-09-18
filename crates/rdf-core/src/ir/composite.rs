@@ -457,10 +457,21 @@ impl CompositeSource {
             }
         }
     }
+    /// The statement-layer rows this source exposes, optionally keyed by `subject`
+    /// and scoped to `g`.
+    ///
+    /// `g` is a NARROWING key, never the only row predicate: the caller still applies
+    /// `matches_pattern` to everything this yields. Its job is to reach each carrier's
+    /// own graph seam — `reifier_quads_in_graph` / `annotation_quads_in_graph` — so a
+    /// carrier able to skip storage units for `g` does so BEFORE any row is built,
+    /// and so a carrier that cannot name `g` at all is skipped whole. Because every
+    /// seam yields exactly the rows its unkeyed twin yields filtered by `g`, in the
+    /// same order, threading `g` changes how much is visited and nothing else.
     fn metadata_rows(
         &self,
         table: Table,
         subject: Option<LocalId>,
+        g: GraphMatch<LocalId>,
     ) -> impl Iterator<Item = QuadIds<LocalId>> + '_ {
         let reifiers = matches!(table, Table::Reifier);
         let annotations = matches!(table, Table::Annotation);
@@ -471,8 +482,9 @@ impl CompositeSource {
         let native = self
             .native()
             .filter(move |_| !matches!(subject, Some(LocalId::Delta(_))))
+            .zip(local_native_graph(g))
             .into_iter()
-            .flat_map(move |ds| {
+            .flat_map(move |(ds, graph)| {
                 native_subject
                     .into_iter()
                     .filter(move |_| reifiers)
@@ -480,7 +492,7 @@ impl CompositeSource {
                     .chain(
                         std::iter::once(ds)
                             .filter(move |_| reifiers && subject.is_none())
-                            .flat_map(RdfDataset::reifier_quads),
+                            .flat_map(move |ds| ds.reifier_quads_in_graph(graph)),
                     )
                     .chain(
                         native_subject
@@ -494,7 +506,7 @@ impl CompositeSource {
                     .chain(
                         std::iter::once(ds)
                             .filter(move |_| annotations && subject.is_none())
-                            .flat_map(RdfDataset::annotation_quads),
+                            .flat_map(move |ds| ds.annotation_quads_in_graph(graph)),
                     )
                     .map(|q| map_quad(q, LocalId::Base))
             });
@@ -506,7 +518,7 @@ impl CompositeSource {
                 .chain(
                     std::iter::once(ds)
                         .filter(move |_| reifiers && subject.is_none())
-                        .flat_map(DeltaDatasetView::reifier_quads),
+                        .flat_map(move |ds| ds.reifier_quads_in_graph(g)),
                 )
                 .chain(
                     subject
@@ -520,7 +532,7 @@ impl CompositeSource {
                 .chain(
                     std::iter::once(ds)
                         .filter(move |_| annotations && subject.is_none())
-                        .flat_map(DeltaDatasetView::annotation_quads),
+                        .flat_map(move |ds| ds.annotation_quads_in_graph(g)),
                 )
         });
         // ONE selection over both statement layers: a row is visible exactly when
@@ -532,34 +544,42 @@ impl CompositeSource {
         // a transparent pull here would put the composite's opaque iterator
         // inside itself.
         type ErasedRows<'a> = Box<dyn Iterator<Item = QuadIds<CompositeViewId>> + 'a>;
-        let selected = self.selected().into_iter().flat_map(move |selection| {
-            let view: &CompositeDatasetView = &selection.view;
-            let narrowed = subject.and_then(|id| selection.inner(id));
-            narrowed
-                .into_iter()
-                .filter(move |_| reifiers)
-                .flat_map(move |s| -> ErasedRows<'_> { Box::new(view.reifier_quads_of(s)) })
-                .chain(
-                    std::iter::once(view)
-                        .filter(move |_| reifiers && subject.is_none())
-                        .flat_map(|view| -> ErasedRows<'_> { Box::new(view.reifier_quads()) }),
-                )
-                .chain(narrowed.into_iter().filter(move |_| annotations).flat_map(
-                    move |s| -> ErasedRows<'_> {
-                        Box::new(
-                            view.annotations_of_with_graph(s)
-                                .map(move |(p, o, g)| QuadIds { s, p, o, g }),
-                        )
-                    },
-                ))
-                .chain(
-                    std::iter::once(view)
-                        .filter(move |_| annotations && subject.is_none())
-                        .flat_map(|view| -> ErasedRows<'_> { Box::new(view.annotation_quads()) }),
-                )
-                .filter(move |q| q.g.is_some_and(|graph| selection.graphs.contains(&graph)))
-                .map(move |q| map_quad(q, |id| selection.local(id)))
-        });
+        let selected = self
+            .selected()
+            .and_then(|selection| Some((selection, selection.graph_match(g)?)))
+            .into_iter()
+            .flat_map(move |(selection, graph)| {
+                let view: &CompositeDatasetView = &selection.view;
+                let narrowed = subject.and_then(|id| selection.inner(id));
+                narrowed
+                    .into_iter()
+                    .filter(move |_| reifiers)
+                    .flat_map(move |s| -> ErasedRows<'_> { Box::new(view.reifier_quads_of(s)) })
+                    .chain(
+                        std::iter::once(view)
+                            .filter(move |_| reifiers && subject.is_none())
+                            .flat_map(move |view| -> ErasedRows<'_> {
+                                Box::new(view.reifier_quads_in_graph(graph))
+                            }),
+                    )
+                    .chain(narrowed.into_iter().filter(move |_| annotations).flat_map(
+                        move |s| -> ErasedRows<'_> {
+                            Box::new(
+                                view.annotations_of_with_graph(s)
+                                    .map(move |(p, o, g)| QuadIds { s, p, o, g }),
+                            )
+                        },
+                    ))
+                    .chain(
+                        std::iter::once(view)
+                            .filter(move |_| annotations && subject.is_none())
+                            .flat_map(move |view| -> ErasedRows<'_> {
+                                Box::new(view.annotation_quads_in_graph(graph))
+                            }),
+                    )
+                    .filter(move |q| q.g.is_some_and(|graph| selection.graphs.contains(&graph)))
+                    .map(move |q| map_quad(q, |id| selection.local(id)))
+            });
         native.chain(delta).chain(selected)
     }
     fn probe(
@@ -607,7 +627,7 @@ impl CompositeSource {
                     .map(move |q| map_quad(q, |id| selection.local(id)))
             });
         native.chain(delta).chain(selected).chain(
-            self.metadata_rows(table, s)
+            self.metadata_rows(table, s, g)
                 .filter(move |q| matches_pattern(*q, s, p, o, g)),
         )
     }
@@ -907,6 +927,27 @@ impl SelectedGraphs {
             .term_id_by_value(value)
             .and_then(|id| self.index.get(&id).copied())
             .map(LocalId::Base)
+    }
+
+    /// One graph constraint translated into the retained view's handles, or `None`
+    /// when this projection can hold no row in it: a handle the projection does not
+    /// carry, a graph outside the selection, or the default graph, which selection by
+    /// graph name never admits.
+    ///
+    /// The narrowing twin of [`probe_pattern`](Self::probe_pattern) for the statement
+    /// layer, which reads the retained composite whole rather than one selected graph
+    /// at a time.
+    fn graph_match(&self, g: GraphMatch<LocalId>) -> Option<GraphMatch<CompositeViewId>> {
+        match g {
+            GraphMatch::Any => Some(GraphMatch::Any),
+            GraphMatch::Default => None,
+            GraphMatch::Named(id) => {
+                let graph = self.inner(id)?;
+                self.graphs
+                    .contains(&graph)
+                    .then_some(GraphMatch::Named(graph))
+            }
+        }
     }
 
     /// One pattern translated into the retained view's handles, paired with the
@@ -1840,6 +1881,38 @@ impl DatasetView for CompositeDatasetView {
         )
         .map(|q| (q.p, q.o, q.g))
     }
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // The composition is per source and per row, so it composes with the graph
+        // seam rather than erasing it: this is `reifier_quads` with the graph axis
+        // BOUND instead of `Any`, which is exactly how `quads` and
+        // `quads_for_pattern` already relate. The same `probe` performs the same
+        // per-source placement rewrite and the same earlier-source deduplication, in
+        // the same source order, so the result is the unkeyed stream filtered by `g`.
+        // What the bound axis adds is narrowing at two depths: a source whose handle
+        // space cannot name `g` is dropped by `pattern` before it is touched, and the
+        // survivors reach their carrier's own graph seam through `metadata_rows`.
+        // Taking the trait default here would scan every source's whole side table.
+        self.probe(
+            Table::Reifier,
+            physical_plan([false, false, false, !matches!(g, GraphMatch::Any)]),
+            (None, None, None, g),
+        )
+    }
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // See `reifier_quads_in_graph` above: the same narrowing over the ANNOTATION
+        // stream.
+        self.probe(
+            Table::Annotation,
+            physical_plan([false, false, false, !matches!(g, GraphMatch::Any)]),
+            (None, None, None, g),
+        )
+    }
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
         self.sources[..self.user_sources]
             .iter()
@@ -1938,13 +2011,22 @@ fn local_native_pattern(
         Some(LocalId::Base(id)) => Some(Some(id)),
         Some(LocalId::Delta(_)) => None,
     };
-    let g = match g {
-        GraphMatch::Any => GraphMatch::Any,
-        GraphMatch::Default => GraphMatch::Default,
-        GraphMatch::Named(LocalId::Base(id)) => GraphMatch::Named(id),
-        GraphMatch::Named(LocalId::Delta(_)) => return None,
-    };
-    Some((local(s)?, local(p)?, local(o)?, g))
+    Some((local(s)?, local(p)?, local(o)?, local_native_graph(g)?))
+}
+/// One graph constraint translated into a native carrier's own handle space, or
+/// `None` when that carrier can hold no row in it.
+///
+/// `None` is a proof of emptiness, not an error: every row a native carrier yields
+/// carries a graph slot drawn from its own dictionary, spelled `LocalId::Base`, so a
+/// delta-only handle names a graph it can never have written. A caller may therefore
+/// skip the carrier whole instead of scanning it.
+fn local_native_graph(g: GraphMatch<LocalId>) -> Option<GraphMatch<TermId>> {
+    match g {
+        GraphMatch::Any => Some(GraphMatch::Any),
+        GraphMatch::Default => Some(GraphMatch::Default),
+        GraphMatch::Named(LocalId::Base(id)) => Some(GraphMatch::Named(id)),
+        GraphMatch::Named(LocalId::Delta(_)) => None,
+    }
 }
 fn lookup_source_term(
     source: &CompositeSource,
