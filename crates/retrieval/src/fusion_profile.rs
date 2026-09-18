@@ -178,6 +178,32 @@ impl DecayRule {
     /// stop being exact" but "how far can I read and still have ranks ordered
     /// to within the resolution I can live with".
     ///
+    /// # What it costs to ask
+    ///
+    /// The answer is found by walking rank by rank, because the class width is
+    /// not monotone in the rank and a bisection over it silently over-reports.
+    /// The walk starts at the separating depth [`Self::weight_for_depth`]
+    /// prices rather than at rank one — every class below that point is a
+    /// singleton by definition — and runs until the first run of
+    /// `max_width + 1` ranks sharing one contribution.
+    ///
+    /// A class at depth `D` is about `D²/B` ranks wide for the rule's own `B`
+    /// — `min(w, 1) · S` under [`Self::ReciprocalRank`] and `w · S` under
+    /// [`Self::WeightedReciprocalRank`], where `S` is the fixed-point scale
+    /// [`SCALE_DIGITS`](purrdf_text::SCALE_DIGITS) declares — and the separating
+    /// depth is about `sqrt(B)`. So the answer lands near `sqrt(max_width)`
+    /// times that depth and the walk is about `sqrt(max_width) - 1` times it,
+    /// one integer division per step. A `max_width` of one does not walk at
+    /// all; a small tolerance costs a fraction of the separating depth; a large
+    /// tolerance at a heavy weight under the folded rule — where the separating
+    /// depth itself grows as `sqrt(w)` — walks very far.
+    ///
+    /// The walk stops at the deepest depth a plan can record, saturating there
+    /// and returning it, so it is bounded by fewer than `2^32` steps however it
+    /// is asked and cannot fail to terminate. It is a design-time question all
+    /// the same — price a depth budget once while choosing weights — and not
+    /// something to put in a hot loop.
+    ///
     /// # Errors
     ///
     /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero,
@@ -677,6 +703,27 @@ impl FusionProfile {
     ///
     /// `Ok(None)` is a stratum this profile declares no weight for, exactly as
     /// in [`Self::class_width`], and it is an absence rather than a failure.
+    ///
+    /// # What it costs to ask
+    ///
+    /// The answer is walked rank by rank — the class width is not monotone in
+    /// the rank, so bisecting it would silently over-report — starting at this
+    /// stratum's separating depth ([`Self::monotone_depth`]) rather than at rank
+    /// one, and stopping at the first run of `max_width + 1` ranks that share a
+    /// contribution. The answer lands near `sqrt(max_width)` times the
+    /// separating depth, so the walk is about `sqrt(max_width) - 1` times that
+    /// depth, one integer division per step: a `max_width` of one does no
+    /// walking at all, a small tolerance costs a fraction of the separating
+    /// depth, and a large tolerance at a heavy weight under
+    /// [`DecayRule::WeightedReciprocalRank`] — the case whose separating depth
+    /// itself grows with the weight — walks very far.
+    ///
+    /// The walk saturates at the deepest depth a plan can record and returns
+    /// it, which bounds it at fewer than `2^32` steps however it is asked; it
+    /// cannot fail to terminate. It is a design-time question all the same —
+    /// price a depth budget once while choosing weights — and not something to
+    /// put in a hot loop. See [`DecayRule::deepest_rank_within_width`] for the
+    /// arithmetic behind the estimate.
     ///
     /// # Errors
     ///

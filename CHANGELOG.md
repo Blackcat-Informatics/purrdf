@@ -68,9 +68,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **retrieval:** Rank-resolution evidence on the answer. `CompiledRetrieval`
   carries a `PlannedResolution` per weighted stratum, so the cost of a planned
   depth is knowable before executing anything, and `FusionTrailer` carries a
-  `StratumResolution` per stratum actually read -- where the profile stops
-  separating ranks, how deep this run reached, and how many adjacent ranks its
-  score could not separate, counted by direct observation rather than inferred.
+  `StratumResolution` for every weighted stratum it was handed a stream for --
+  where the profile stops separating ranks, how deep this run reached (zero for
+  a stream that ended without emitting a row, which was still pulled from), and
+  how many adjacent ranks its score could not separate, counted by direct
+  observation rather than inferred.
   The trailer also reports whether the last row in a top-k beat a *settled*
   rival it tied with exactly, which is the case where the final place was
   decided by the declared tie-break rather than by relevance. Only rivals

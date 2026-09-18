@@ -1967,7 +1967,9 @@ class retrieval:
     # `"planned_resolution"` is the admission waist's map, identical to what
     # `compile` reports for the same request under the same law: what the plan's
     # depths were going to cost, knowable before any row was read.
-    # `"observed_resolution"` is what the rows this run actually pulled did cost:
+    # `"observed_resolution"` is what the rows this run actually pulled did cost,
+    # with an entry per weighted stratum a stream was fused for — including one
+    # that yielded no rows, whose `"ranks_pulled"` is zero rather than absent:
     # `"separates_to"`, the `"ranks_pulled"` reached, and the
     # `"collisions_observed"`. The two legitimately disagree — a top-k that
     # certified early never reaches its planned depth — and neither is a
@@ -2040,6 +2042,17 @@ class retrieval:
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a depth: a smoothing constant of zero, an unknown `decay`
     # spelling, or a weight that is not strictly positive.
+    #
+    # The answer is walked rank by rank — the class width is not monotone in the
+    # rank, so bisecting it would silently over-report — from the separating
+    # depth `weight_for_depth` prices, not from rank one. It lands near
+    # `sqrt(max_width)` times that depth, so the walk is about
+    # `sqrt(max_width) - 1` times it: a `max_width` of one does not walk at all
+    # and a small tolerance is cheap, while a large tolerance at a heavy weight
+    # under `"weighted_reciprocal_rank"` walks very far. The walk saturates at
+    # the deepest depth a plan can record rather than running on, so it is
+    # bounded at fewer than `2**32` steps and always terminates, and the GIL is
+    # held throughout. It is a design-time query, not a hot-loop one.
     @staticmethod
     def deepest_rank_within_width(
         weight_raw: int, k: int, max_width: int, *, decay: str

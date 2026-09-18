@@ -1276,7 +1276,10 @@ fn compile<'py>(
 /// not the one call that cannot see it: per weighted stratum, the
 /// `"separates_to"` depth, the `"requested_depth"` the plan recorded, and
 /// `"fully_separated"`. `"observed_resolution"` is what the rows this run really
-/// pulled cost: per stratum actually read, the same `"separates_to"` depth
+/// pulled cost, with an entry for every weighted stratum a stream was fused for
+/// — including one that ended without emitting a row, whose `"ranks_pulled"` is
+/// zero, because a stream that yielded nothing was still pulled from: the same
+/// `"separates_to"` depth
 /// (`None` when this law never stops separating inside an expressible depth),
 /// the `"ranks_pulled"` this run reached, and the `"collisions_observed"` —
 /// adjacent ranks the fused score could not tell apart, counted by observation
@@ -1474,6 +1477,26 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
 /// spelling; and a weight that is not strictly positive, which a fusion law
 /// refuses where it is declared and which therefore has no resolution to
 /// report here either.
+///
+/// # What it costs to ask
+///
+/// The answer is walked rank by rank, because the class width is not monotone
+/// in the rank and bisecting it would silently over-report. The walk starts at
+/// the separating depth `retrieval.weight_for_depth` prices — every class below
+/// that is a singleton by definition — and stops at the first run of
+/// `max_width + 1` ranks sharing one contribution. The answer lands near
+/// `sqrt(max_width)` times the separating depth, so the walk is about
+/// `sqrt(max_width) - 1` times that depth, one integer division per step. A
+/// `max_width` of one does no walking at all and a small tolerance costs a
+/// fraction of the separating depth; a large tolerance at a heavy weight under
+/// `"weighted_reciprocal_rank"`, where the separating depth itself grows with
+/// the weight, walks very far.
+///
+/// The walk saturates at the deepest depth a plan can record and returns it,
+/// which bounds it at fewer than `2^32` steps however it is asked; it cannot
+/// fail to terminate, and the GIL is not released while it runs. It is a
+/// design-time question all the same — price a depth budget once while
+/// choosing weights — and not something to put in a hot loop.
 #[pyfunction]
 #[pyo3(signature = (weight_raw, k, max_width, *, decay))]
 fn deepest_rank_within_width(

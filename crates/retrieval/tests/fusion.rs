@@ -2922,10 +2922,15 @@ fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
 
 #[test]
 fn a_zero_top_k_still_reports_one_rank_pulled() {
-    // A trailer asserts a terminal status per producer, which requires reading
-    // each stream's first row. So `ranks_pulled` is one even here, never zero —
-    // surprising enough that a caller testing `== 0` for "untouched" would be
-    // wrong, and therefore worth pinning.
+    // A trailer asserts a terminal status per producer, which requires pulling
+    // from each stream until it yields its first row or its receipt. This stream
+    // has a first row, so `ranks_pulled` is one even under a bound of zero:
+    // a caller reading `== 0` as "this stream was never touched" would be wrong
+    // here, and that is worth pinning.
+    //
+    // Zero is nonetheless reachable, and it means something narrower than
+    // "untouched" — see `an_empty_stream_reports_zero_ranks_pulled` below, which
+    // is the case this one does not cover.
     let decay = DecayRule::ReciprocalRank { k: K };
     let weight = Fixed::from_raw(1_000);
     let profile = deep_profile(decay, weight);
@@ -2941,6 +2946,122 @@ fn a_zero_top_k_still_reports_one_rank_pulled() {
         fused.trailer.resolution[&stratum("deep")].collisions_observed,
         0,
         "one row has no adjacent pair to collide with"
+    );
+}
+
+#[test]
+fn an_empty_stream_reports_zero_ranks_pulled() {
+    // The other end of the counter, and the case `ranks_pulled`'s own
+    // documentation has to be true at: a producer that ran, found nothing and
+    // said so. `next_ranks` advances only when a row arrives, so nothing
+    // advances it here and the reported depth is zero.
+    //
+    // Zero therefore reports "this stream yielded no rows", not "this stream was
+    // never asked" — it was asked, and it answered with its receipt.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000);
+    let profile = deep_profile(decay, weight);
+
+    let empty = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("deep"), MockStream::new(Vec::new(), exhausted(0)))],
+        &profile,
+        TopK::new(10),
+    ))
+    .expect("a producer with nothing to return is not a protocol violation");
+    assert!(empty.rows.is_empty(), "no rows in, no rows out");
+    let measured = empty.trailer.resolution[&stratum("deep")];
+    assert_eq!(measured.ranks_pulled, 0, "no row arrived, so no rank did");
+    assert_eq!(
+        measured.collisions_observed, 0,
+        "no row has no adjacent pair to collide with"
+    );
+    // The witness that the stream really was read rather than skipped, and it
+    // does not come from the counter under test: the producer's own receipt,
+    // which fusion only holds because it pulled until the stream ended.
+    assert_eq!(
+        empty.trailer.statuses[&stratum("deep")],
+        ProducerStatus::Exhausted { rows_emitted: 0 }
+    );
+
+    // THE NEIGHBOURING CASE, so the zero above means something: the same
+    // profile, the same bound, one row on the stream. Everything that differs
+    // between the two is that row.
+    let one_row = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("deep"), deep_stream(decay, weight, 1))],
+        &profile,
+        TopK::new(10),
+    ))
+    .expect("a one-row stream fuses");
+    assert_eq!(one_row.rows.len(), 1);
+    assert_eq!(
+        one_row.trailer.resolution[&stratum("deep")].ranks_pulled,
+        1,
+        "one row pulled is one rank pulled"
+    );
+    assert_eq!(
+        one_row.trailer.resolution[&stratum("deep")].separation,
+        measured.separation,
+        "separation is a property of the law and does not depend on what arrived"
+    );
+}
+
+#[test]
+fn the_resolution_map_keys_every_weighted_stream_including_one_that_yielded_nothing() {
+    // The key set, pinned exactly. Two weighted strata, one of which returns
+    // nothing: both are keyed, because `separation` is the plan's resolution for
+    // a stratum whether or not rows arrived and `ranks_pulled` of zero is how a
+    // caller learns none did. An absent key would have to be told apart from a
+    // stratum the profile never weighted, which is a different fact entirely.
+    let profile = profile(&[("dense", Fixed::ONE), ("barren", Fixed::ONE)], K);
+    let streams = vec![
+        (
+            stratum("dense"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                exhausted(2),
+            ),
+        ),
+        (stratum("barren"), MockStream::new(Vec::new(), exhausted(0))),
+    ];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams,
+        &profile,
+        TopK::new(10),
+    ))
+    .expect("one empty stratum does not stop a fusion");
+
+    let keys: Vec<&str> = result.trailer.resolution.keys().map(Iri::as_str).collect();
+    assert_eq!(
+        keys,
+        vec![stratum("barren").as_str(), stratum("dense").as_str()],
+        "every weighted stream is keyed, in canonical stratum order"
+    );
+    assert_eq!(
+        result.trailer.resolution[&stratum("barren")].ranks_pulled,
+        0,
+        "and the one that yielded nothing says so in its own entry"
+    );
+    assert_eq!(
+        result.trailer.resolution[&stratum("dense")].ranks_pulled,
+        2,
+        "while the one that yielded rows reports them"
+    );
+
+    // And the one direction the two maps really do differ in: `statuses` grows
+    // by the producers that never became streams, and `resolution` does not,
+    // because a producer that was never read from has no read to report.
+    let completed = result
+        .trailer
+        .completed_with([(stratum("absent"), ProducerStatus::TermsRejected)]);
+    assert_eq!(
+        completed.statuses.keys().collect::<Vec<_>>(),
+        vec![&stratum("absent"), &stratum("barren"), &stratum("dense")],
+        "a producer that never became a stream still gets a status"
+    );
+    assert_eq!(
+        completed.resolution.keys().collect::<Vec<_>>(),
+        vec![&stratum("barren"), &stratum("dense")],
+        "but not a resolution entry, so the key set stays a subset of the statuses'"
     );
 }
 

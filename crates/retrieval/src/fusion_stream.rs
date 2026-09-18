@@ -198,10 +198,19 @@ pub struct StratumResolution {
     /// [`DuplicatePolicy::Allowed`] a row discarded as a repeat still advances
     /// the rank counter, so this is not the number of contributions merged.
     ///
-    /// It is at least one for every stream, never zero. Producing a trailer
-    /// requires a terminal status per producer, which requires reading each
-    /// stream's first row — so even a [`TopK`](crate::TopK) of zero pulls rank
-    /// one from every stream.
+    /// Zero means exactly one thing: this stream ended without ever emitting a
+    /// row. It does not mean the stream went unread. Producing a trailer
+    /// requires a terminal status per producer, which requires pulling from
+    /// every stream until it yields either its first row or its receipt — so a
+    /// [`TopK`](crate::TopK) of zero still reports one here for every stream
+    /// that has a first row to give, and a stream that has none is reported at
+    /// zero after being asked.
+    ///
+    /// A caller reading this as "how much did fusion spend on this stratum"
+    /// therefore gets the honest answer at both ends, and one reading zero as
+    /// "untouched" is wrong in the same way at both: the stream was pulled from
+    /// either way, and what differs is only whether it had anything to hand
+    /// back.
     pub ranks_pulled: u64,
     /// Adjacent ranks whose contributions this fusion could not tell apart.
     ///
@@ -229,11 +238,28 @@ pub struct FusionTrailer {
     pub profile_id: crate::id::FusionProfileId,
     /// What each stream's rank resolution cost this fusion, keyed by stratum.
     ///
-    /// Keyed only by the strata this fusion actually pulled from, which is a
-    /// deliberately different key set from [`Self::statuses`]. That map answers
-    /// "what happened to this producer" and includes producers fusion never saw;
-    /// this one answers "what did fusion read from this stream", and a stream
-    /// that never existed read nothing. Neither is an omission from the other.
+    /// Keyed by every stream this fusion was handed whose stratum the profile
+    /// weights — *including* one that ended without emitting a row, which is
+    /// reported with [`StratumResolution::ranks_pulled`] of zero. That is the
+    /// more useful answer than omitting it: [`StratumResolution::separation`] is
+    /// the plan's resolution for that stratum whether or not rows arrived, and
+    /// the caller learns none arrived from the zero rather than from an absent
+    /// key it would have to interpret.
+    ///
+    /// A stratum the profile declares no weight for is absent, because a profile
+    /// silent about a stratum has said nothing about its resolution either. No
+    /// such stream can have contributed anyway — the first row of one is refused
+    /// as [`FusionError::UnknownStratum`](crate::FusionError::UnknownStratum),
+    /// and [`fuse`](crate::fuse) refuses one before pulling at all — so this
+    /// absence is reachable only by driving this type directly over a stream
+    /// that had no rows to offer.
+    ///
+    /// The key set is a subset of [`Self::statuses`]', never the other way
+    /// round. That map answers "what happened to this producer" and additionally
+    /// names producers fusion never saw at all, which
+    /// [`FusionTrailer::completed_with`] adds; this one answers "what did fusion
+    /// read from this stream", and a producer that never became a stream was
+    /// never read from.
     pub resolution: BTreeMap<Iri, StratumResolution>,
     /// Whether the last row in the answer ties on score with a *settled* rival
     /// left outside it.

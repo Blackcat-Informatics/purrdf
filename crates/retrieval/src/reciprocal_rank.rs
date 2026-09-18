@@ -434,6 +434,35 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
 /// `max_width`. A `max_width` below one is read as one: a class always contains
 /// its own rank.
 ///
+/// # How long the walk is
+///
+/// It is a walk over ranks, so its length is the answer itself minus the depth
+/// it started from, and both ends are known in closed form up to the straddling
+/// the exact count exists to resolve.
+///
+/// Under either rule adjacent contributions differ by about `B / (D · (D + 1))`
+/// for that rule's own `B` (`min(w, 1) · S` for the truncated rule, `w · S` for
+/// the folded one, as [`monotone_depth`] sets out), so a class at depth `D` is
+/// about `D² / B` ranks wide and the separating depth is about `sqrt(B)`.
+/// Setting `D² / B = max_width` puts the answer at about `sqrt(max_width)`
+/// times the separating depth, and the walk at about `sqrt(max_width) - 1`
+/// times it — measured across both rules and four weights, the ratio of answer
+/// to separating depth tracks `sqrt(max_width)` to three digits. A tolerance of
+/// one walks not at all, four costs one separating depth's worth of steps,
+/// 4096 costs about sixty-three. Each step is one integer division.
+///
+/// The separating depth is therefore what sets the scale, and it is near `10^6`
+/// under the truncated rule at every weight but near `10^6 · sqrt(w)` under the
+/// folded one — so a large tolerance at a heavy folded weight is where this
+/// walks farthest.
+///
+/// It never walks past [`MAX_DEPTH`]: above that the answer saturates and is
+/// returned as `MAX_DEPTH`, which bounds the whole walk at fewer than `2^32`
+/// steps no matter what it is asked. A saturating call is the slowest one
+/// there is and it terminates; none of this is a hazard to be guarded against,
+/// but it is a cost worth knowing before putting the call somewhere it runs
+/// more than once.
+///
 /// # Errors
 ///
 /// Whatever [`contribution_under`] refuses at any rank the walk reads:
@@ -1609,6 +1638,41 @@ mod tests {
                 > 1,
             "and tolerating a class of four reads deeper than a single rank"
         );
+    }
+
+    /// The cost `deepest_rank_within_width` documents, checked rather than
+    /// asserted in prose: the answer is about `sqrt(max_width)` times the
+    /// separating depth, so the walk behind it is about `sqrt(max_width) - 1`
+    /// times that depth.
+    ///
+    /// A caller's only handle on what this call costs is that relation, and a
+    /// documented cost nothing measures is a claim like any other. The
+    /// tolerances here are perfect squares so the expected ratio is exact, and
+    /// the assertion allows one part in a thousand for the straddling floors —
+    /// tight enough that a walk with a different shape fails it, loose enough
+    /// that the exact first-collision rank may move within a class.
+    #[test]
+    fn the_tolerance_walk_lands_near_the_square_root_of_the_tolerance() {
+        for decay in [truncated(60), folded(60)] {
+            let weight = Fixed::from_raw(SCALE);
+            let separating = measured_bound(decay, weight);
+            assert_eq!(
+                deepest_rank_within_width(decay, weight, 1).expect("a unit weight measures"),
+                separating,
+                "{decay:?}: a tolerance of one is the separating depth and walks not at all"
+            );
+            for (tolerance, root) in [(4_u64, 2_u64), (16, 4), (64, 8)] {
+                let depth = deepest_rank_within_width(decay, weight, tolerance)
+                    .expect("a unit weight measures");
+                let expected = separating * root;
+                let slack = expected / 1_000;
+                assert!(
+                    depth.abs_diff(expected) <= slack,
+                    "{decay:?}: a tolerance of {tolerance} should land near {expected}, \
+                     {root} times the separating depth {separating}, and landed at {depth}"
+                );
+            }
+        }
     }
 
     /// The other operand either walk can be handed: a rank of zero, which is
