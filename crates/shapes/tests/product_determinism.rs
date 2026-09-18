@@ -40,8 +40,8 @@
 //! [`frozen_product_bytes`] fails, and the artifact and [`GOLDEN_LEN`] are updated
 //! together in the same reviewable commit as the format change.
 //!
-//! `fixtures/prepared-shapes-core-v2.0.2.product` is NOT that file and is never
-//! regenerated — see [`the_committed_release_product_stays_readable`].
+//! `fixtures/prepared-shapes-core-format-v1-frozen.product` is NOT that file and
+//! is never regenerated — see [`the_frozen_format_epoch_product_stays_readable`].
 
 mod product_fixture;
 
@@ -54,9 +54,11 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 /// the build checks rather than a figure quoted from a run nobody can reproduce.
 const GOLDEN_LEN: usize = 4_536;
 
-/// The product artifact committed as the 2.0.2 release's, for the forward-
-/// compatibility proof. See [`the_committed_release_product_stays_readable`].
-const RELEASE_GOLDEN: &[u8] = include_bytes!("fixtures/prepared-shapes-core-v2.0.2.product");
+/// The product artifact frozen by the commit that introduced the prepared-product
+/// format, for the forward-compatibility proof. See
+/// [`the_frozen_format_epoch_product_stays_readable`].
+const FORMAT_EPOCH_GOLDEN: &[u8] =
+    include_bytes!("fixtures/prepared-shapes-core-format-v1-frozen.product");
 
 /// Assert two byte strings are equal, naming the first offset that differs.
 ///
@@ -226,7 +228,8 @@ fn frozen_golden_admits() {
 
 // ── The cross-version reader proof ─────────────────────────────────────────────
 
-/// **A product written by the 2.0.2 release stays readable by every later build.**
+/// **A product frozen by the format's introducing commit stays readable by every
+/// later build.**
 ///
 /// # Why this artifact is never regenerated
 ///
@@ -235,18 +238,27 @@ fn frozen_golden_admits() {
 /// witness: a file that is rewritten by the build it is meant to test can only
 /// ever say that today's encoder agrees with today's encoder. Forward
 /// compatibility is a claim about a product written by a build that no longer
-/// exists, so the only way to check it is to keep such a product — frozen, from a
-/// dated release, with nothing in the repository authorized to rewrite it.
+/// exists, so the only way to check it is to keep such a product — frozen, from
+/// the change that introduced the format, with nothing in the repository
+/// authorized to rewrite it.
 ///
-/// `fixtures/prepared-shapes-core-v2.0.2.product` is that file. It was written by
-/// the 2.0.2 release and must never be regenerated: regenerating it converts this
-/// test from a verification back into the argument it replaced, and does so
-/// silently, because it would keep passing.
+/// `fixtures/prepared-shapes-core-format-v1-frozen.product` is that file. It was
+/// frozen by the commit that introduced the prepared-product format, and it must
+/// never be regenerated: regenerating it converts this test from a verification
+/// back into the argument it replaced, and does so silently, because it would
+/// keep passing.
 ///
 /// Today it is a byte-identical copy of the regenerable golden, because today's
-/// build is the build that wrote both. That is the intended starting state, not a
-/// redundancy: the two files have different *lifetimes*, and the first format
-/// change is what separates them — one is re-prepared, this one is not.
+/// build is the build that wrote both — the format has not moved since it was
+/// introduced, so there has not yet been a second build for the two files to
+/// disagree about. That is the honest starting state, not a redundancy: the two
+/// files differ in *lifetime*, not content, and the first format change is what
+/// separates them — the regenerable golden is re-prepared to match the new
+/// format, this one stays exactly as it is. Until that first change happens,
+/// forward compatibility across a real format change has not been witnessed, only
+/// set up to be witnessed; this test exists so the day it is needed, it already
+/// runs, instead of being invented under pressure with no frozen artifact to
+/// prove it against.
 ///
 /// # What every future reader owes it
 ///
@@ -264,11 +276,11 @@ fn frozen_golden_admits() {
 /// broke rather than the model moving), `rebuild` refusing, or either path
 /// restoring to a validator that answers differently.
 #[test]
-fn the_committed_release_product_stays_readable() {
+fn the_frozen_format_epoch_product_stays_readable() {
     let expected = product_fixture::expected_report_nt();
 
-    let view = ShapesProduct::open(RELEASE_GOLDEN).expect(
-        "the frozen release product must still OPEN; the envelope's framing, magic and version \
+    let view = ShapesProduct::open(FORMAT_EPOCH_GOLDEN).expect(
+        "the frozen format-epoch product must still OPEN; the envelope's framing, magic and version \
          are the layer that was never allowed to move",
     );
 
@@ -277,7 +289,7 @@ fn the_committed_release_product_stays_readable() {
             assert_eq!(
                 product_fixture::report_nt(&restored),
                 expected,
-                "the frozen release product admitted but answers differently from a fresh parse \
+                "the frozen format-epoch product admitted but answers differently from a fresh parse \
                  of the same shapes graph",
             );
             return;
@@ -288,7 +300,7 @@ fn the_committed_release_product_stays_readable() {
     assert_eq!(
         refusal.dimension(),
         ProductDimension::StageId,
-        "the frozen release product was refused on `{}`, and the ONLY refusal a later build may \
+        "the frozen format-epoch product was refused on `{}`, and the ONLY refusal a later build may \
          answer it with is `StageId` — the memo describing a model this build no longer has. \
          Any other dimension means the envelope, the profile or the identity binding stopped \
          accepting a product this project promised to keep reading: {}",
@@ -296,8 +308,8 @@ fn the_committed_release_product_stays_readable() {
         refusal.message(),
     );
 
-    let rebuilt = ShapesProduct::open(RELEASE_GOLDEN)
-        .expect("the frozen release product opens")
+    let rebuilt = ShapesProduct::open(FORMAT_EPOCH_GOLDEN)
+        .expect("the frozen format-epoch product opens")
         .rebuild(&ShapesProfile::CORE, &product_fixture::host())
         .expect(
             "`admit` refused on the stage id, so `rebuild` is the seam that exists for exactly \
@@ -308,33 +320,33 @@ fn the_committed_release_product_stays_readable() {
     product_fixture::assert_non_vacuous(&rebuilt_nt);
     assert_eq!(
         rebuilt_nt, expected,
-        "the frozen release product rebuilt into a validator that answers differently from a \
+        "the frozen format-epoch product rebuilt into a validator that answers differently from a \
          fresh parse of the same shapes graph, which is the quiet failure `rebuild` exists to \
          avoid: it restored, and it restored the wrong shapes graph",
     );
 }
 
-/// The frozen release product rebuilds correctly TODAY, whether or not it has to.
+/// The frozen format-epoch product rebuilds correctly TODAY, whether or not it has to.
 ///
-/// [`the_committed_release_product_stays_readable`] only reaches `rebuild` on the
+/// [`the_frozen_format_epoch_product_stays_readable`] only reaches `rebuild` on the
 /// day the stage id moves, so on every day before that the branch this project is
 /// relying on for forward compatibility is never executed — and an escape hatch
 /// that has never been opened is a plan, not a seam. This runs it unconditionally
 /// against the same frozen artifact, so the path is proven working now rather than
 /// discovered broken on the one day it is needed.
 #[test]
-fn the_committed_release_product_rebuilds() {
-    let rebuilt = ShapesProduct::open(RELEASE_GOLDEN)
-        .expect("the frozen release product opens")
+fn the_frozen_format_epoch_product_rebuilds() {
+    let rebuilt = ShapesProduct::open(FORMAT_EPOCH_GOLDEN)
+        .expect("the frozen format-epoch product opens")
         .rebuild(&ShapesProfile::CORE, &product_fixture::host())
-        .expect("the frozen release product re-derives from the dataset it carries");
+        .expect("the frozen format-epoch product re-derives from the dataset it carries");
 
     let rebuilt_nt = product_fixture::report_nt(&rebuilt);
     product_fixture::assert_non_vacuous(&rebuilt_nt);
     assert_eq!(
         rebuilt_nt,
         product_fixture::expected_report_nt(),
-        "rebuilding the frozen release product yielded a validator that answers differently \
+        "rebuilding the frozen format-epoch product yielded a validator that answers differently \
          from a fresh parse of the same shapes graph",
     );
 }

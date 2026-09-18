@@ -1404,12 +1404,15 @@ mod content_fingerprint_tests {
     use super::{content_fingerprint, registry_fingerprint};
     use crate::error::EvalError;
     use crate::property_fn::{
-        PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+        DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+        PropertyFunctionRegistry, RankOrdering, RankedDeclaration,
     };
     use crate::user_fn::Volatility;
 
     const EX_REL: &str = "http://example.org/ns#rel";
     const EX_OTHER: &str = "http://example.org/ns#other";
+    const EX_STRATUM: &str = "http://example.org/stratum/a";
+    const EX_STRATUM_B: &str = "http://example.org/stratum/b";
 
     /// A relation that declares exactly what its constructor was handed and nothing
     /// else, so a test can vary ONE declared field at a time and watch the content
@@ -1478,6 +1481,104 @@ mod content_fingerprint_tests {
         registry.register(
             iri,
             Arc::new(DeclaredRelation::new(subject, object, volatility)),
+        );
+        registry
+    }
+
+    /// A minimal, valid ranked declaration claiming `stratum` and nothing else —
+    /// no accepted terms, no depth placement, and its candidate at position `0`,
+    /// which every relation registered through [`one_ranked`] declares (both
+    /// arguments are always present). The only field a test varies across two
+    /// calls is `stratum`, passed explicitly.
+    fn minimal_ranked_declaration(stratum: &str) -> RankedDeclaration {
+        RankedDeclaration {
+            stratum: purrdf_core::parse_iri(stratum).expect("fixture IRI"),
+            accepted_terms: Vec::new(),
+            depth_placement: None,
+            candidate_position: 0,
+            ordering: RankOrdering::StrictlyDescending,
+            duplicates: DuplicatePolicy::Unique,
+            mandatory: false,
+        }
+    }
+
+    /// A registry holding one [`DeclaredRelation`] under `iri`, wired up as a
+    /// ranked producer under `stratum` — the ranked counterpart to [`one`], built
+    /// from the SAME relation constructor so only the ranked declaration differs.
+    fn one_ranked(
+        iri: &str,
+        subject: usize,
+        object: usize,
+        volatility: Volatility,
+        stratum: &str,
+    ) -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            iri,
+            Arc::new(DeclaredRelation::new(subject, object, volatility)),
+            minimal_ranked_declaration(stratum),
+        );
+        registry
+    }
+
+    /// A relation like [`DeclaredRelation`] but with an explicit, caller-chosen
+    /// mode list and row bound, so a test can vary the declared MODES (or their
+    /// row bounds) alone while the IRI, arity and volatility stay fixed. Never
+    /// dispatched, exactly like [`DeclaredRelation`].
+    #[derive(Debug)]
+    struct ModedRelation {
+        arity: PfArity,
+        modes: Vec<BindingPattern>,
+        rows_per_invocation: u64,
+    }
+
+    impl ModedRelation {
+        fn new(arity: PfArity, modes: Vec<BindingPattern>, rows_per_invocation: u64) -> Self {
+            Self {
+                arity,
+                modes,
+                rows_per_invocation,
+            }
+        }
+    }
+
+    impl PropertyFunction for ModedRelation {
+        fn volatility(&self) -> Volatility {
+            Volatility::Stable
+        }
+
+        fn arity(&self) -> PfArity {
+            self.arity
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            self.rows_per_invocation
+        }
+
+        fn open(
+            &self,
+            _args: &PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    /// A registry holding one [`ModedRelation`] under `iri`.
+    fn one_moded(
+        iri: &str,
+        arity: PfArity,
+        modes: Vec<BindingPattern>,
+        rows_per_invocation: u64,
+    ) -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            iri,
+            Arc::new(ModedRelation::new(arity, modes, rows_per_invocation)),
         );
         registry
     }
@@ -1575,6 +1676,48 @@ mod content_fingerprint_tests {
             content_fingerprint(&one(EX_REL, 1, 1, Volatility::Volatile)).expect("ok"),
             "volatility decides whether a call may run on a fork-join worker, so two \
              registries that disagree about it are two configurations"
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_ranked() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one_ranked(EX_REL, 1, 1, Volatility::Stable, EX_STRATUM))
+                .expect("ok"),
+            "a relation's ranked-retrieval declaration decides whether a request can draw \
+             ranked candidates from it at all, so a plainly registered relation and the SAME \
+             relation wired up as a ranked producer must never share a digest"
+        );
+        assert_ne!(
+            content_fingerprint(&one_ranked(EX_REL, 1, 1, Volatility::Stable, EX_STRATUM))
+                .expect("ok"),
+            content_fingerprint(&one_ranked(EX_REL, 1, 1, Volatility::Stable, EX_STRATUM_B))
+                .expect("ok"),
+            "two ranked declarations that differ only in the stratum they claim must still \
+             produce different digests: the whole declaration is folded, not merely its \
+             presence"
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_modes() {
+        let arity = PfArity::new(1, 1);
+        let all_free = arity.all_free_mode();
+        let subject_bound = BindingPattern::from_bound_positions(arity.total(), [0]);
+
+        assert_ne!(
+            content_fingerprint(&one_moded(EX_REL, arity, vec![all_free], 0)).expect("ok"),
+            content_fingerprint(&one_moded(EX_REL, arity, vec![subject_bound], 0)).expect("ok"),
+            "two relations declaring the SAME arity and volatility but DIFFERENT access \
+             patterns must never share a digest"
+        );
+        assert_ne!(
+            content_fingerprint(&one_moded(EX_REL, arity, vec![all_free], 0)).expect("ok"),
+            content_fingerprint(&one_moded(EX_REL, arity, vec![all_free], 5)).expect("ok"),
+            "a mode's declared row bound is folded independently of its code, so two \
+             relations serving the SAME access pattern with different declared bounds must \
+             never share a digest"
         );
     }
 
