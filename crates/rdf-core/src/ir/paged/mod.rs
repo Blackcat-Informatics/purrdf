@@ -40,6 +40,32 @@
 //! [`FallibleDatasetView`](crate::FallibleDatasetView). Only its final ready status is
 //! a completeness certificate; iterator exhaustion alone is not.
 //!
+//! # Page admission (G10)
+//!
+//! A page is materialized only when it can PROVABLY contribute a row, and the
+//! decision is made from sealed metadata before any provider call. Each page's
+//! [`PageTranslation`] carries an exact summary — per-term occurrence counts for the
+//! base-quad subject, predicate and object positions and for each side table's
+//! reifier column, plus per-graph row counts for all three composed streams — keyed
+//! in that page's own LOCAL [`TermId`] space. Local keying is what makes the summary
+//! invariant under [`compact`](PagedDataset::compact), which renumbers only the
+//! global side.
+//!
+//! `admission::admit_pattern` applies the law and reports a named reason when it
+//! refuses, so a refusal can be asserted against the clause that produced it. Each
+//! clause is EXACT — it refuses only when no base quad on that page can match that
+//! axis — and their conjunction is a sound but not complete filter: an admitted page
+//! may still yield nothing, which is correct. Graph-constrained reads additionally
+//! walk a dataset-level graph-to-page index rather than every page; that index is
+//! derived at every constructor and never persisted, so page and global renumbering
+//! are both picked up automatically.
+//!
+//! The summary authorizes SKIPPING, and a skipped page is never materialized, so a
+//! check at admission can only ever observe the harmless over-reporting direction.
+//! Admission therefore carries a `debug_assertions` re-derivation, and
+//! [`PagedDataset::verify_parts`] is the explicitly paid pass that reads every page
+//! and is the only place the check is complete.
+//!
 //! # Determinism
 //!
 //! Pages iterate in ascending [`PageId`] order and each page yields in its frozen
@@ -47,7 +73,9 @@
 //! annotation views) is deterministic. Pages are quad-disjoint (G3, enforced at
 //! freeze), so no cross-page dedup is needed. A [`PagedQueryView`] additionally
 //! records first page requests in evaluation order and charges each admitted page
-//! exactly once.
+//! exactly once. Cardinality estimation reads the same sealed counts on both
+//! surfaces and never consults page residency, so plan choice — and therefore the
+//! recorded request sequence — is a function of the snapshot and the pattern alone.
 
 pub(crate) mod admission;
 pub(crate) mod graph_index;

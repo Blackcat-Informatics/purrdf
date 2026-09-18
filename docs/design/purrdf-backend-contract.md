@@ -281,6 +281,10 @@ incrementally at ingest and reaches the evaluator either through `from_parts` (a
 restart from that persisted index) or by implementing `DatasetView` directly (C1) —
 the id-agnostic read seam serves the evaluator over any backend, not only this one.
 
+A `PagePart` carries its page's `PageTranslation`, and the sealed page summary (G10)
+is a private field of that translation. A warm restart therefore prunes identically to
+an eager seal, reading no page, and `PagePart`'s own shape is unchanged.
+
 ### G7 — infallible and operationally fallible query surfaces are distinct
 
 The ordinary `DatasetView` query entry points are for views whose reads cannot fail
@@ -329,6 +333,12 @@ The view checks the page ceiling, then the byte ceiling, before asking the provi
 to materialize a first-seen page. A cached re-read consumes no additional page or
 bytes.
 
+A page refused by the admission law (G10) is **not requested**, so it appears in no
+evidence at all — that is what makes a graph-selective budget match the query's real
+footprint rather than the dataset's size. The page set that law will admit is also
+computable ahead of execution from sealed metadata, so a prediction can be asserted
+against this receipt.
+
 `PagedQueryEvidence` records the sealed generation, every first page request in
 evaluation order (including a refused or failed request), the number of pages
 successfully validated and admitted, and the sum of their sealed byte charges.
@@ -369,6 +379,10 @@ before and after materialization and verifies the returned generation, byte char
 term layout and values, quad count, and capabilities against the seal metadata.
 Status checkpoints also verify generation even when a query reads no page.
 
+Under debug assertions the admission also re-derives and compares the page's whole
+sealed summary (G10); the explicitly paid certification pass that reads every page,
+including those the admission law would skip, is the only place that check is complete.
+
 The first operational failure is sticky and no later read yields data. Provider,
 stale-generation, cancellation, deadline, and invalid-data failures remain distinct;
 page-budget and byte-budget exhaustion are separate query errors.
@@ -394,6 +408,136 @@ short-circuits on. What that wall-clock reader deliberately does **not** carry i
 determinism claim: only its trip and named cause are pinned. A test-injected deadline
 can report the same cause while remaining deterministic when its input is a poll count;
 the profile keeps those two cases distinct.
+
+### G10 — page admission is decided by an exact sealed summary, in local id space
+
+A page is materialized only when it can **provably contribute a row**. The decision is
+made from sealed metadata, before any provider call, on every read surface of the
+paged layer.
+
+#### What is sealed, and where it lives
+
+Each page carries a `PageSummary`: the exact occurrence count of every local term id
+in the base-quad subject, predicate and object positions and in each side table's
+reifier column, the exact row count per named graph for all three composed streams,
+and the same three counts for the default graph. Every count is a `u64`. A truncating
+counter that wrapped to zero would authorize skipping a page that holds rows, which is
+the failure this structure exists to prevent, so the width is part of the clause and
+not an implementation detail.
+
+The summary is a private field of `PageTranslation`, and `PageSummary::seal` is its
+**sole producer**. That is deliberate: a summary authorizes skipping, so a hand-built
+or mismatched one would be a silent-drop vector. Privacy plus a single producer makes
+a wrong summary *unrepresentable* rather than merely validated after the fact. `seal`
+additionally reconciles every accumulated count against the page's own independent
+totals and fails hard on a mismatch. Because `PagePart` carries the translation, a
+warm restart (G6) carries the summary with it and prunes identically to an eager seal,
+with no page read and no change to `PagePart` itself.
+
+#### Why local id space
+
+Every count is keyed by the page's own **local** `TermId`, never by `GlobalTermId`.
+Compaction (G2) renumbers only the global side of a translation; local id spaces and
+quad tables are untouched. A locally-keyed summary is therefore invariant under
+compaction, page subsetting and page eviction — it is carried verbatim, with no remap
+pass and so no second numbering that can drift out of step with the first.
+
+#### Why exact rather than probabilistic
+
+The classical structure here is the zone map or the bloom filter, and every such
+structure is approximate because a storage layer does not know the value dictionary
+and must hash. This layer does: G1 already re-interns every page term by value at the
+seal, so the exact positional occurrence set is known for free. The paged layer
+therefore ships what a filter approximates — **zero false positives on any single
+bound axis**, no hashing, no RNG, and no tuning parameter anywhere near a
+byte-deterministic engine whose hashers are fixed-key by law.
+
+#### The admission law
+
+A page is skipped, and so never materialized and never charged, when any of:
+
+- a bound subject is absent from the page **or** its exact subject-position count is zero;
+- likewise for a bound predicate or object;
+- `GraphMatch::Named(g)` and the page owns no base rows in `g`;
+- `GraphMatch::Default` and the page owns no default-graph base rows.
+
+`GraphMatch::Any` never skips on the graph axis, which is what leaves whole-dataset
+scans byte-identical. Each clause is **exact**: it refuses only when no base quad on
+that page can match that axis. Their conjunction is a **sound but not complete**
+filter, as every zone map is — an admitted page may still yield nothing, which is
+correct. The admission decision is reported as a named reason rather than a bare
+absence, so a refusal can be asserted against the clause that produced it.
+
+The predecessor predicate tested only whether a bound term appeared *anywhere* in a
+page's term table. That is role-agnostic: a page mentioning a graph solely as a
+subject, owning no row in it, was materialized for nothing.
+
+#### Stream scoping is part of the law
+
+Graph row counts are recorded **per stream**, and the base-quad count governs only
+`quads_for_pattern`, which surfaces the base table exclusively. The reifier and
+annotation streams carry their own graph slots and their own counts. A graph-scoped
+read of either narrows on its own postings; sharing the base list would drop rows.
+`reifier_quads` and `annotation_quads` are never graph-pruned, so a page whose only
+content in `g` is a reifier row is correctly skipped for `quads_for_pattern` while
+that row still reaches the evaluator through its own stream.
+
+#### The dataset-level graph index
+
+Alongside the per-page summaries, the layer derives an ascending graph-to-page index
+in `GlobalTermId` space, with per-stream posting lists and default-graph lists. It is
+**derived, never persisted**: every constructor rebuilds it as its last step from the
+completed page slots, so page renumbering and global renumbering are both picked up
+automatically and there is no second copy to fall out of step. Deriving it reads only
+metadata the translations already carry, so a warm restart keeps its `O(page count)`
+cost. A graph declared empty is a key with no postings rather than an absent key —
+that distinction is what lets the composed `named_graphs` match a single dataset.
+
+`named_graphs` is answered from this index, reading no page. On the operation-scoped
+view it charges no page and no bytes, and it re-asserts the sticky-failure gate
+explicitly: every other egress funnels through the page accessor, which refuses once a
+terminal error has latched, so a metadata-only path must refuse too or it would leak
+rows past exactly the barrier G9 establishes. Its order is ascending `GlobalTermId`,
+which is intern order — page-arrival order, then within-page local order — and equals
+canonical `TermValue` order only after a compaction. It is deterministic for a fixed
+page presentation order and generation; it is not canonical, and this clause does not
+claim it is.
+
+#### Cost estimation is a function of the snapshot alone
+
+Cardinality estimation reads the same sealed counts on both surfaces and materializes
+nothing. It does **not** consult page residency. A residency-dependent estimate would
+make plan choice depend on cache warmth, so the request sequence G8 treats as evidence
+could differ between two runs of the same query against the same snapshot; the
+estimate must be a function of `(snapshot, pattern)` and of nothing else. For a single
+bound axis the result is exact rather than an upper bound.
+
+The page set a pattern will admit is also available ahead of execution, computed from
+sealed metadata with no materialization. That prediction pairs with the G8 receipt: a
+consumer can size a budget before paying it, and a measurement can assert predicted
+against actual rather than inferring narrowing from a low consumption count — which on
+its own is indistinguishable from a query that simply found nothing.
+
+#### Certification, and the asymmetry that places it
+
+The summary authorizes skipping, so an under-reporting summary would skip a page
+holding matching rows and return a short answer wrapped in a completeness certificate.
+The asymmetry that decides how to guard this: **a skipped page is never materialized**,
+so a check running at admission can only ever observe the over-reporting direction,
+where the page is admitted and yields nothing — the harmless one. Guarding only there
+would place the check exactly where it is not needed.
+
+Admission therefore keeps the cheap sealed-metadata checks of G9 and adds a
+debug-assertion that re-derives the whole summary and compares. The gate compiles with
+debug assertions on, so that full check runs across the entire test and conformance
+surface while release admission stays on its existing cost path. The explicitly paid
+counterpart materializes every page and certifies every summary, and it is the only
+thing that can reach a page the admission law skips. A consumer reloading a persisted
+warm restart calls it once, out of band, to prove the index honest rather than paying
+a full scan on every restart — the same split the P-clauses draw between opening a
+pack and verifying one. A consumer that warm-restarts from an index it does not
+control and never certifies it retains the under-reporting risk in release builds;
+that is a stated term of this clause, not an oversight.
 
 ---
 
