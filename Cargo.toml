@@ -5,6 +5,7 @@
 resolver = "2"
 members = [
     "bindings/python",
+    "crates/bench",
     "crates/cdt",
     "crates/cli",
     "crates/columnar",

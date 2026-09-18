@@ -12,8 +12,9 @@
 # A crate present in one copy and absent from another is what made the preflight
 # necessary in the first place; there is now only one copy.
 #
-# `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`
-# and `purrdf-envelope-probe` are deliberately NOT here — see docs/RELEASE.md.
+# `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`,
+# `purrdf-envelope-probe` and `purrdf-bench` are deliberately NOT here — see
+# docs/RELEASE.md.
 #
 # ORDERING CONTRACT, enforced by scripts/check-publish-order.py on every
 # `make check`. This list must be a topological order of BOTH edge kinds:

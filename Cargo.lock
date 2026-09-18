@@ -1311,6 +1311,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-bench"
+version = "2.0.2"
+dependencies = [
+ "purrdf-rdf",
+]
+
+[[package]]
 name = "purrdf-capi"
 version = "2.0.2"
 dependencies = [
