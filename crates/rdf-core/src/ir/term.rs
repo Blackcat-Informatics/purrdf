@@ -263,7 +263,7 @@ pub(crate) enum InternedTerm {
 /// Unlike [`crate::ir::TermRef`] (whose literal-datatype and triple-component slots carry
 /// dataset-local [`TermId`]s), `TermValue` expresses every component **by value** —
 /// the literal datatype is its IRI string, triple terms recurse by value. This is
-/// the issue's core correctness rule: keying value→id lookup on `TermRef` would
+/// the core correctness rule: keying value→id lookup on `TermRef` would
 /// smuggle ids local to *another* dataset and silently return wrong answers, so the
 /// key carries no `TermId` at all. A `&TermValue` is the spec's "TermValueRef".
 #[derive(Clone, PartialEq, Eq, Debug)]

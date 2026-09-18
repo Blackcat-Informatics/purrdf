@@ -13,6 +13,7 @@ members = [
     "crates/envelope-probe",
     "crates/geo",
     "crates/gts",
+    "crates/hnsw",
     "crates/iri",
     "crates/json",
     "crates/markdown",
@@ -41,6 +42,9 @@ exclude = [
     # digests can be compared. Never published, depended on by nothing,
     # and built only by scripts/check-geo-determinism.sh.
     "crates/geo/determinism",
+    # The same pattern for purrdf-hnsw's cross-target determinism check,
+    # built only by scripts/check-hnsw-determinism.sh.
+    "crates/hnsw/determinism",
 ]
 
 [workspace.package]
@@ -67,6 +71,7 @@ purrdf-entail = { path = "crates/entail", version = "2.0.2" }
 purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
 purrdf-geo = { path = "crates/geo", version = "2.0.2" }
 purrdf-gts = { path = "crates/gts", version = "2.0.2" }
+purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
 purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }

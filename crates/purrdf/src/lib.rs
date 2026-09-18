@@ -258,6 +258,16 @@ pub mod text {
     pub use purrdf_text::*;
 }
 
+/// A deterministic HNSW index ([`purrdf_hnsw`]): an approximate nearest-neighbour
+/// graph over a PURREMB embedding matrix, byte-identical across thread counts and
+/// across `wasm32`, registered on [`sparql`]'s property-function seam under the
+/// caller's own IRI. It stands beside the exact kNN relation and never replaces
+/// it: every answer carries a declared approximation naming its oracle, and an
+/// empty offer is never evidence of absence.
+pub mod hnsw {
+    pub use purrdf_hnsw::*;
+}
+
 /// The composition layer over the ranked producers ([`purrdf_retrieval`]): one
 /// request planned, admitted, executed and fused into one ordered answer across
 /// every ranked relation a caller registered on [`sparql`]'s property-function

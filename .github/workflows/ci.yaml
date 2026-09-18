@@ -227,7 +227,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 24 publishable crates with rustdoc lints promoted
+      # Document exactly the 25 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -307,6 +307,7 @@ jobs:
             -p purrdf-sparql-algebra \
             -p purrdf-sparql-results \
             -p purrdf-sparql-eval \
+            -p purrdf-hnsw \
             -p purrdf-rdf \
             -p purrdf-markdown \
             -p purrdf-json \
@@ -326,6 +327,13 @@ jobs:
         # targets because every computation is integer arithmetic. This RUNS the
         # same digest on both and compares, rather than trusting the argument.
         run: make geo-determinism
+
+      - name: Prove purrdf-hnsw's native and wasm32 canonical bytes are identical
+        # purrdf-hnsw claims its canonical index image is a pure function of the
+        # input, so a native build and a wasm32 build must produce the same bytes.
+        # This RUNS the same FNV-1a digest of the canonical payload on both targets
+        # and compares, rather than trusting the argument.
+        run: make hnsw-determinism
 
       - name: Build the optimized wasm package
         # Builds the +simd128 release artifact, runs wasm-bindgen + wasm-opt -Oz,

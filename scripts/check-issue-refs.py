@@ -38,6 +38,18 @@ and these are the same debt spelled differently — which is why ``// ---
 task 28: the reasoner façade ---`` sailed through a lint that was already
 meant to stop it.
 
+**Issue-provenance phrasing** — ``the issue``, ``this issue``, ``the issue's``,
+and ``the issue-author('s)``, naming the GitHub issue that requested a design or
+measured a prototype without ever printing its number. This is the same debt as
+the bare ``#NNN`` shape wearing prose instead of a symbol, and it shipped past
+every family above: ``the issue's own width``, ``the issue that offered this
+crate``, and ``the issue-author's prototype digests`` all read as ordinary
+prose to the ``#NNN``/``Task``/``EPIC`` patterns, none of which this shape
+resembles. A trailing hyphen is excluded from the match, so ``the issue-named
+function``, ``the issue-reference ban``, and the ``issue-normative`` phrase
+above are left alone as the unrelated compound words they are; only the bare
+phrase and its ``'s``/``-author`` forms are rejected.
+
 **Hazard / finding labels** — a bare ``H12``, or an ``F6``/``N3``-shaped token
 used AS A LABEL (``F6:`` at the start of a clause, or wrapped alone in
 parentheses, ``(F1)``). These are identifiers from a review thread — meaningful
@@ -213,6 +225,15 @@ none of them.
 The "issue-normative" pattern is that literal phrase, case-sensitive, since it
 has exactly one spelling in this repository's history and any capitalized
 variant would already read as a proper noun rather than as this phrase.
+
+The issue-provenance pattern is ``the``/``this`` (either case) followed by
+``issue``, with an optional ``-author`` and an optional ``'s`` (matching either
+the ASCII or the typographic apostrophe), rejected only when nothing
+alphanumeric or a hyphen immediately follows. The trailing-hyphen exclusion is
+load-bearing: without it, ``the issue-named function`` and ``the
+issue-reference ban`` — unrelated compound words — would also match, because a
+hyphen is not a word character and would otherwise satisfy the same boundary
+the bare phrase needs.
 """
 
 from __future__ import annotations
@@ -262,6 +283,8 @@ TOKEN_RE = re.compile(
     rf"|(?P<epic>{_NOT_AFTER_WORD}EPIC{_NOT_BEFORE_WORD})"
     rf"|(?P<branch>(?i:{_NOT_AFTER_WORD}this\ branch{_NOT_BEFORE_WORD}))"
     rf"|(?P<history_ref>{_NOT_AFTER_WORD}on\s+`?origin/main`?{_NOT_BEFORE_WORD})"
+    rf"|(?P<issue_prose>(?i:{_NOT_AFTER_WORD}(?:the|this)\ issue(?:-author)?"
+    r"(?:['’]s)?(?![A-Za-z0-9_-])))"
     rf"|(?P<issue_normative>{_NOT_AFTER_WORD}issue-normative{_NOT_BEFORE_WORD})"
     rf"|(?P<hazard>{_NOT_AFTER_WORD}H\d{{1,3}}{_NOT_BEFORE_WORD})"
     rf"|(?P<hazard_label>{_NOT_AFTER_WORD}[FN]\d{{1,3}}:|\([FHN]\d{{1,3}}\))"
@@ -296,6 +319,10 @@ PROCESS_REMEDY: dict[str, str] = {
     "history_ref": (
         "state the constraint or behaviour itself rather than where in the "
         "repository's history it was introduced, fixed, or scoped"
+    ),
+    "issue_prose": (
+        "state the fact, design, or measurement itself, with no reference to "
+        "the tracker issue that requested or produced it"
     ),
     "issue_normative": (
         "restate as the grammar/behaviour choice itself, with no reference to the "
@@ -1398,6 +1425,32 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         "an ordinary IRI fragment that merely looks like an issue number",
         ".ttl",
         "ex:a <http://example.org/ns#123> ex:b .\n",
+        None,
+    ),
+    # Issue-provenance phrasing: the shape that got past every other family here,
+    # because it is prose rather than a symbol.
+    (
+        "a possessive issue-provenance reference, spelled the issue's",
+        ".rs",
+        "/// This crate ships the issue's own width, not a value it picked.\n",
+        "the issue's",
+    ),
+    (
+        "a bare issue-provenance reference, spelled this issue",
+        ".rs",
+        "/// No consumer exists in this issue, so the parameter is not added.\n",
+        "this issue",
+    ),
+    (
+        "an issue-author possessive reference",
+        ".rs",
+        "// The issue-author's prototype numbers are not this crate's evidence.\n",
+        "The issue-author's",
+    ),
+    (
+        "an issue-derived compound word that is a different phrase (spared)",
+        ".rs",
+        "/// Local name (the issue-named function): listLength.\n",
         None,
     ),
     # The process-token families glued to CJK prose. Each is a token this gate

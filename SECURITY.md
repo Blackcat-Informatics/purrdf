@@ -24,7 +24,7 @@ Instead:
 - email <security@blackcatinformatics.ca>
 - include `SECURITY` in the subject line
 - name the affected crate(s) or binding (Rust / Python / WebAssembly / C) and version(s)
-- describe the issue, impact, and affected versions
+- describe the vulnerability, impact, and affected versions
 - provide reproduction steps, a proof-of-concept input document or `.gts` file, or
   patches when possible
 
@@ -59,7 +59,7 @@ conformance corpus.
 
 ## Responsible disclosure process
 
-1. Report the issue privately.
+1. Report the vulnerability privately.
 2. Maintainers validate and triage the report.
 3. A fix is developed, reviewed, and tested (across affected crates and bindings).
 4. A release or advisory is prepared.

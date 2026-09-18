@@ -1045,6 +1045,38 @@ def native_suites() -> list[SuiteResult]:
                 "measures the native target only"
             ),
         ),
+        _suite_cargo(
+            "HNSW approximate kNN (first-party)",
+            "purrdf-hnsw (first-party)",
+            ["cargo", "test", "-p", "purrdf-hnsw", "--locked",
+             "--test", "conformance", "--test", "invariants",
+             "--test", "oracle_contract", "--test", "sparql_e2e",
+             "--test", "purremb_roundtrip", "--test", "adversarial_payload",
+             "--test", "vector_query", "--test", "determinism",
+             "--test", "corpus_geometry"],
+            detail=(
+                "the approximate half of the retrieval pair, graded against the exact "
+                "path as its oracle: every offered row compared to the exact scan's "
+                "own `(distance, row)` order, the graph invariants that make an offer "
+                "possible at all (every row reachable from the entry point, degree "
+                "bounds, sorted adjacency, the fixed level formula), the approximation "
+                "contract (an offer is never a proof of absence), the PURREMB guard "
+                "round-trip through the real INDEX_GUARDS and INDEX_PAYLOAD sections, "
+                "the SPARQL property-function seam from query text, and the "
+                "decoder-hostility cases. It also grades the CORPUS the recall figures "
+                "are taken over, because on this crate the distribution decides the "
+                "recall, so a generator that drifted toward uniform would quietly turn "
+                "every recall number into a statement about the fixture: effective "
+                "dimension against a uniform control, and the achieved within-cluster "
+                "cosine -- measured against the centroid each row was drawn around, "
+                "pinned across a ladder of intended values, pinned again for the default "
+                "shape every figure in this crate uses, and held flat across a sixty-fourfold "
+                "range of widths, which is the property that separates an intended cosine "
+                "from a fixed noise amplitude whose tightness collapses as the width "
+                "grows. The cross-target digest is a separate gate "
+                "(`make hnsw-determinism`), so this row measures the native target only"
+            ),
+        ),
         _suite_geo_determinism(),
         _suite_entailment(),
         _suite_entailment_rl(),

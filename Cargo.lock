@@ -1293,6 +1293,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-geo",
  "purrdf-gts",
+ "purrdf-hnsw",
  "purrdf-iri",
  "purrdf-json",
  "purrdf-markdown",
@@ -1470,6 +1471,17 @@ dependencies = [
  "structured-zstd",
  "time",
  "visual-hashing",
+]
+
+[[package]]
+name = "purrdf-hnsw"
+version = "2.0.2"
+dependencies = [
+ "purrdf-core",
+ "purrdf-sparql-eval",
+ "purrdf-xsd",
+ "rayon",
+ "serde_json",
 ]
 
 [[package]]
