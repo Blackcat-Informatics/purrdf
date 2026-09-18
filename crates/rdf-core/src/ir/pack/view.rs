@@ -274,6 +274,13 @@ impl DatasetView for PackView<'_> {
         self.dict().n_terms() as usize
     }
 
+    fn term_bytes_hint(&self) -> Option<usize> {
+        // The dictionary decoded its strings into ONE arena at open time, so the
+        // figure is already sitting there — exact for the terms this view resolves,
+        // and read in O(1).
+        Some(self.dict().arena_len())
+    }
+
     fn stats_fingerprint(&self) -> u64 {
         // Mirror `RdfDataset`/`PagedDataset`'s coarse fingerprint: hash (quad count,
         // distinct term count). A cache discriminator only, not a content digest.

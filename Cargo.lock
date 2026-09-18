@@ -1355,6 +1355,7 @@ dependencies = [
  "purrdf-gts",
  "purrdf-iri",
  "purrdf-rdf",
+ "purrdf-shapes",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
@@ -1593,6 +1594,7 @@ version = "2.0.2"
 dependencies = [
  "boon",
  "criterion",
+ "proc-macro2",
  "proptest",
  "purrdf-core",
  "purrdf-gts",
@@ -1608,6 +1610,8 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "smallvec",
+ "syn 2.0.118",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -1742,6 +1746,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
+ "purrdf-sparql-eval",
  "serde",
  "serde_json",
 ]

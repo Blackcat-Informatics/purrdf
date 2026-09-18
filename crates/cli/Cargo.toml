@@ -81,6 +81,12 @@ sha2 = { workspace = true }
 [dev-dependencies]
 # Isolated temp files/dirs for the integration tests that drive the built binary.
 tempfile = { workspace = true }
+# Constructs the ONE test fixture the built binary cannot: a well-formed prepared
+# product carrying a stage id no build wrote, by repacking a real product's
+# sections (the same technique `purrdf-shapes`' own refusal-matrix tests use) so
+# every digest still checks out. Test-only: the CLI never links the SHACL
+# product codec directly, it calls through `purrdf-validate`.
+purrdf-shapes = { workspace = true }
 # Authors the `.gts` fixtures the GTS-ingestion integration tests feed to the binary.
 # Test-only: the CLI reads GTS through `purrdf_rdf::import_gts_events` and never links
 # the container engine itself.

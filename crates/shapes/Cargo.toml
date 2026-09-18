@@ -83,6 +83,39 @@ purrdf-slice = { workspace = true }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }
+# Rust parser for the structural source census (`tests/product_model_census.rs`).
+# The declarative SHACL model's totality guarantee — a codec covers every variant
+# and every field — is only mechanical if the variant/field set is READ from the
+# source rather than enumerated by hand, and the reachability closure that keeps
+# that set honest needs an AST, not a regex. Dev-only; never enters the
+# release/wasm build. Version and the `full`/`visit` feature set are pinned once
+# in the root `[workspace.dependencies]`.
+syn = { workspace = true }
+# `syn`'s token substrate, used by the census for two things. It refuses a field
+# type it cannot read structurally (a macro type, a `verbatim` type), and quoting
+# the raw `TokenStream` is the only way that refusal can name the field it refused
+# — a silent skip there is the exact defect the census exists to stop. And the
+# class-analysis half of the stage id digests ALGORITHM rather than declaration, so
+# it renders those function bodies as normalized tokens: the lexer drops `//`
+# comments and folds `///` into attributes the scrape discards, which is what keeps
+# a reformat or a reworded comment from moving a digest products are written under.
+# Dev-only.
+proc-macro2 = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The three native-only harness dependencies.
+#
+# Target-gated, not plain dev-dependencies, because `make wasm-test` builds ONE test
+# target of this crate for wasm32 (`tests/product_wasm.rs`) and cargo builds every
+# declared dev-dependency of the package for any test target it builds. None of these
+# three is wasm32-clean, and none is wanted there: proptest reaches for OS entropy and
+# a terminal, criterion for wall-clock timing and processes, and boon pulls a hasher
+# whose default random-seed backend has no wasm32 implementation — which is the whole
+# reason `purrdf-core` pins its own hashers to a fixed key. Same target-gated shape, and
+# the same reason, as `crates/sparql-eval`.
+#
+# Property-based generation for the never-panic, monotonicity and product-refusal
+# harnesses.
 proptest = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
@@ -91,6 +124,15 @@ criterion = { workspace = true }
 # instance nodes, rather than asserting the schema's JSON shape. Dev-only; never
 # enters the release/wasm build.
 boon = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# The wasm32 test harness, for `tests/product_wasm.rs` — the one test in this crate
+# that must EXECUTE on wasm32-unknown-unknown rather than merely compile for it. A
+# prepared product is written by a build tool on a host and restored months later in a
+# browser, so "the same bytes on every target" is a claim two runs on one target cannot
+# check: they cannot distinguish a codec that is target-independent from one that merely
+# agrees with wherever it was last compiled. Run by `make wasm-test`.
+wasm-bindgen-test = { workspace = true }
 
 [[bench]]
 name = "validate"
@@ -122,4 +164,23 @@ harness = false
 # (matching only), across focus-node and values-per-focus scales. Report-only;
 # `make bench` lane only — excluded from `make check`.
 name = "pattern_validate"
+harness = false
+
+[[bench]]
+# Phase separation for the prepared-shapes product: the cold parse-and-prepare
+# path, the producer's encode, the three restore tiers (structural open, memo
+# admit, memo-free rebuild), the reusable class-catalog derivation, and the
+# per-dataset bind and validate. Public API only, so the identical file measures
+# a base revision. Report-only; `make bench` lane only — excluded from
+# `make check`. No speedup, ratio or threshold is asserted anywhere in it.
+name = "shacl_product_reuse"
+harness = false
+
+[[bench]]
+# Allocation traffic, retained bytes and peak working set for the same phases,
+# plus the encoded artifact's length. A separate process from the timed target
+# above so the tracking allocator's atomics cannot distort its latencies
+# (mirrors `purremb_alloc` / `pack_input_alloc`). Report-only; `make bench` lane
+# only — excluded from `make check`.
+name = "shacl_product_alloc"
 harness = false

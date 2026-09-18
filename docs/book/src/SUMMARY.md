@@ -36,6 +36,7 @@ SPDX-License-Identifier: CC-BY-4.0
 # Validation
 
 - [SHACL](validation/shacl.md)
+  - [Prepared Shapes Products](validation/shapes-products.md)
 - [ShEx](validation/shex.md)
 
 # Reasoning & Transport

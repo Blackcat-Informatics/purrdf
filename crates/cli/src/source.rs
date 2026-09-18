@@ -389,6 +389,29 @@ fn sniff_nothing<R: Read>(reader: R) -> purrdf_rdf::SniffedStream<R> {
 /// fresh buffer would discard exactly the property the lane exists for, so a gzip/zstd
 /// pack is a request this pipeline declines rather than one it silently re-routes.
 pub(crate) fn acquire_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
+    acquire_sealed_input(path, "pack container")
+}
+
+/// Acquire a prepared SHACL shapes product `path` (or stdin when `path` is `-`) as an
+/// immutable byte owner, **without** admitting it.
+///
+/// A product is the same KIND of input a pack is — a digest-chained container whose
+/// integrity is checked over the bytes in hand — so it is acquired through the same
+/// [`ImmutableInput`] authority, for the same reason: a hostile concurrent pathname
+/// writer must not be able to move the bytes out from under the verification. The
+/// `purrdf_shapes::product::ShapesProductView` a caller opens borrows this owner's
+/// bytes, so the owner has to stay alive for the whole operation.
+pub(crate) fn acquire_product_input(path: &str) -> Result<ImmutableInput, CliError> {
+    acquire_sealed_input(path, "prepared shapes product")
+}
+
+/// The one sealed-acquisition body both container inputs share, with `what` naming the
+/// container in the transport refusal.
+///
+/// Parameterizing the noun rather than copying the function is what keeps the two lanes
+/// from drifting apart on the property that matters — every byte a container check runs
+/// over is acquired immutably — while still naming the right thing in the diagnostic.
+fn acquire_sealed_input(path: &str, what: &str) -> Result<ImmutableInput, CliError> {
     let input = if path == "-" {
         ImmutableInput::from_stdin()?
     } else {
@@ -396,8 +419,8 @@ pub(crate) fn acquire_pack_input(path: &str) -> Result<ImmutableInput, CliError>
     };
     if let Some(encoding) = detect_transport(input.as_bytes(), transport_name(path)) {
         return Err(CliError::Usage(format!(
-            "{}: the pack container cannot be read through a {encoding} transport wrapper. A \
-             pack is acquired as immutable bytes and verified in place; decoding it into a \
+            "{}: the {what} cannot be read through a {encoding} transport wrapper. A \
+             {what} is acquired as immutable bytes and verified in place; decoding it into a \
              fresh buffer would discard that guarantee. Decompress it first",
             display_path(path)
         )));

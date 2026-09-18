@@ -48,8 +48,8 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the criterion numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 47 `[[bench]]`
-targets in total; this section and the inventory table below document 20 of
+They live under `crates/*/benches/`. The workspace registers 71 `[[bench]]`
+targets in total; this section and the inventory table below document 22 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -91,6 +91,19 @@ simply not narrated here:
   LinkML import/lowering throughput and one-operation allocation traffic.
 - `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
   compilation for shaped-only, sparse, and dense property surfaces.
+- `crates/shapes/benches/shacl_product_reuse.rs` — the prepared-shapes product,
+  phase by phase: the cold parse-and-prepare path a product replaces, the
+  producer's encode, the three restore tiers (structural open, memo admit,
+  memo-free rebuild), the reusable class-catalog derivation on its own, and the
+  per-dataset bind and validate. Public API only, so the same file measures an
+  earlier revision. Nothing in it compares two ids or asserts a speedup — a
+  prepared product is a structural change and needs no threshold.
+- `crates/shapes/benches/shacl_product_alloc.rs` — allocation traffic, retained
+  bytes and peak working set for those same phases, plus the encoded artifact's
+  length (the pipeline's intermediate bytes). The determinism fixture's artifact
+  length is additionally an asserted constant in
+  `crates/shapes/tests/product_determinism.rs`, so that byte-count fact does not
+  live only in a bench log.
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling
   (`materialize(ds, Regime::Rdfs)` end to end, so the declared clause program and
   `purrdf-datalog`'s semi-naive fixpoint are both inside the timed loop).
@@ -113,7 +126,7 @@ Additional benches are run package-by-package, e.g.
 
 ### Native criterion benchmark inventory
 
-This table documents 20 of the 47 `[[bench]]` targets registered across the
+This table documents 22 of the 71 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -136,6 +149,8 @@ here.
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
+| `crates/shapes/benches/shacl_product_reuse.rs` | Prepared-shapes product phases reported separately: cold parse-and-prepare, producer encode, structural open, memo admit, memo-free rebuild, the reusable class-catalog derivation, per-dataset binding, and evaluation. Report-only; no ratio or threshold is asserted. |
+| `crates/shapes/benches/shacl_product_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for those same prepared-shapes-product phases, plus the encoded artifact's byte length. |
 | `crates/entail/benches/chase.rs` | RDFS materialization scaling on subclass chains, measured through the whole `materialize` path: clause-program lowering plus `purrdf-datalog`'s semi-naive fixpoint. |
 | `crates/entail/benches/classify.rs` | OWL-Direct classification latency over a synthetic `EL` terminology at three signature sizes; classification cost is superlinear in the signature rather than the axiom count. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |

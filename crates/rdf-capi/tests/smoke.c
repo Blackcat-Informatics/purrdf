@@ -450,7 +450,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.7.0` is pinned in tests/abi.rs. */
+     * literal `0.8.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");

@@ -13,11 +13,22 @@ use purrdf_core::RdfDiagnostic;
 
 use crate::status::PurrdfStatus;
 
-/// An owned error: a status code plus a NUL-terminated message. Opaque to C.
+/// An owned error: a status code plus a NUL-terminated message, and — for the one
+/// boundary that has one — a named DIMENSION. Opaque to C.
 #[derive(Debug)]
 pub struct PurrdfError {
     pub(crate) code: PurrdfStatus,
     pub(crate) message: CString,
+    /// The prepared-shapes-product admission dimension this refusal names, when it
+    /// names one.
+    ///
+    /// A slot on the shared error rather than a second error type, because the C ABI
+    /// has exactly one error channel and every entry point routes through it. It is
+    /// `None` for every error that is not a product refusal, and
+    /// `purrdf_shapes_product_error_dimension` returns NULL for those — an honest
+    /// "this refusal names no dimension" rather than an empty string a caller could
+    /// mistake for a label.
+    pub(crate) dimension: Option<CString>,
 }
 
 impl PurrdfError {
@@ -25,11 +36,25 @@ impl PurrdfError {
     /// message are replaced with spaces so the `CString` construction never
     /// fails.
     pub(crate) fn new(code: PurrdfStatus, message: impl Into<String>) -> Self {
-        let raw = message.into().replace('\0', " ");
-        let message = CString::new(raw).unwrap_or_else(|_| {
-            CString::new("libpurrdf error (unprintable message)").expect("static message")
-        });
-        Self { code, message }
+        Self {
+            code,
+            message: sanitized(&message.into()),
+            dimension: None,
+        }
+    }
+
+    /// Build a prepared-shapes-product refusal, carrying the pinned kebab-case
+    /// dimension label alongside the message.
+    ///
+    /// The label is taken from the codec's own `ProductDimension::label`, never
+    /// re-spelled here: a second transcription of a twenty-entry pinned contract is
+    /// exactly how a renamed dimension would reach C hosts under its old name.
+    pub(crate) fn product(dimension: Option<&'static str>, message: impl Into<String>) -> Self {
+        Self {
+            code: PurrdfStatus::ShapesProductError,
+            message: sanitized(&message.into()),
+            dimension: dimension.map(sanitized),
+        }
     }
 
     /// Map a kernel [`RdfDiagnostic`] to a `PurrdfError` under the given C status,
@@ -40,6 +65,14 @@ impl PurrdfError {
             format!("[{}] {}", diagnostic.code, diagnostic.message),
         )
     }
+}
+
+/// Render `raw` as a C string, replacing interior NUL bytes with spaces so the
+/// construction never fails.
+fn sanitized(raw: &str) -> CString {
+    CString::new(raw.replace('\0', " ")).unwrap_or_else(|_| {
+        CString::new("libpurrdf error (unprintable message)").expect("static message")
+    })
 }
 
 /// Store `err` at `*out` (heap-owned), or drop it if `out` is null.

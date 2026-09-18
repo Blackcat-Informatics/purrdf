@@ -1385,4 +1385,150 @@ export function shaclValidateToSarif(
   dataNt: string,
   shapesBase?: string,
 ): string;
+
+/**
+ * A refusal from the prepared-shapes-product admission boundary, thrown by every
+ * `shaclProduct*` function and by `shaclPackProduct`.
+ *
+ * `dimension` is the stable, matchable half — one of the codec's pinned kebab-case
+ * labels — and `undefined` when the failure happened before any product existed (a
+ * shapes or data document that did not parse was never admitted). Branch on it:
+ * `stage-id` means re-pack, `container-digest` means the bytes are corrupt in place,
+ * and `function-registry` means the caller's own configuration differs from the one
+ * the product was prepared against, which re-packing will not fix.
+ *
+ * `message` is prose that names the fix; do not match on it. Like every other class
+ * in this package the instance owns wasm memory — call `free()` when done.
+ */
+export class ShaclProductRefusal {
+  readonly dimension: string | undefined;
+  readonly message: string;
+  toString(): string;
+  free(): void;
+}
+
+/**
+ * Compile a Turtle shapes graph into a prepared product: the parse-and-analyze work
+ * `shaclValidateToSarif` performs on every call, done ONCE and written to a
+ * digest-chained container that `shaclProductValidateToSarif` restores.
+ *
+ * `shapesBase` is recorded in the product, so a restore resolves the document's
+ * relative IRI references identically without the document. Byte-deterministic:
+ * identical inputs produce identical bytes, so a content-addressed cache key over
+ * the result is stable.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclPackProduct(
+  shapesTtl: string,
+  shapesBase?: string,
+): Uint8Array;
+
+/**
+ * What a prepared product says it was compiled from, as deterministic `key value`
+ * lines, WITHOUT admitting it: the format version, the stage id and whether this
+ * build knows it, the identity digest and every labelled identity component, then
+ * the recorded base, `sh:shapesGraph` IRI and prefix map.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductExplain(product: Uint8Array): string;
+
+/**
+ * Corroborate a prepared product's carried shapes dataset against the canonical
+ * identity its own binding claims. The codec's COLD path — canonicalization over
+ * blank nodes can cost more than the shapes parse a product exists to eliminate — so
+ * call it from a build step or a test, never before each validation.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductCertify(product: Uint8Array): void;
+
+/**
+ * Restore a prepared product and validate an N-Triples data graph with it, returning
+ * the SARIF 2.1.0 log `shaclValidateToSarif` would have returned for the shapes graph
+ * the product was packed from.
+ *
+ * Admission runs first and in full: framing, every section digest, the whole-container
+ * digest, then the stage id, profile and complete input binding. A product prepared
+ * under a different prefix map, base, vocabulary or registry is refused rather than
+ * validated into a report about a shapes graph nobody asked for.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductValidateToSarif(
+  product: Uint8Array,
+  dataNt: string,
+): string;
+
+/**
+ * The forward-compatibility twin of `shaclProductValidateToSarif`: restore a
+ * prepared product by RE-DERIVING its preparation from the shapes dataset it
+ * carries, rather than admitting its memo, and validate an N-Triples data graph
+ * with it.
+ *
+ * `shaclProductValidateToSarif` refuses a product whose stage id this guest does
+ * not know with `dimension === "stage-id"`; this is the remedy it names. No RDF
+ * text is parsed and no file is read — the dataset travels inside the product
+ * under the envelope's own digests.
+ *
+ * Also correct, and does the identical work, over a CURRENT product whose stage
+ * id this guest already knows: rebuilding re-derives from the SAME carried
+ * dataset `shaclProductValidateToSarif` restores a memo of, so the two reach the
+ * byte-identical report. This is a second door onto one product, never a
+ * second, divergent answer.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductValidateToSarifRebuild(
+  product: Uint8Array,
+  dataNt: string,
+): string;
+
+/**
+ * `shaclProductValidateToSarifRebuild`, bound to the product you meant.
+ *
+ * The forward-compatibility rescue is not a reason to stop asking *is this the
+ * product the host meant?* — a product fetched over the network or read out of
+ * a cache under a stage id this guest does not recognize is still just bytes
+ * that could be the wrong ones. The 32-byte comparison runs FIRST, ahead of the
+ * re-derivation, exactly as it does on `shaclProductValidateToSarifExpecting`.
+ *
+ * `expectIdentity` carries the same meaning it does there — the 64 hexadecimal
+ * digits `shaclProductExplain` prints on its `identity-digest` line, passed
+ * back unchanged.
+ *
+ * Throws a `ShaclProductRefusal`: `dimension === "shapes-graph"` when the
+ * product carries a different binding, and `dimension === undefined` when
+ * `expectIdentity` is not 64 hexadecimal digits, because no product was
+ * inspected in that case.
+ */
+export function shaclProductValidateToSarifRebuildExpecting(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+): string;
+
+/**
+ * `shaclProductValidateToSarif`, bound to the product you meant.
+ *
+ * Everything the unbound call checks is a question about the executing guest — its
+ * build, its registries, its class analysis. None of them asks whether these are the
+ * bytes the host wanted, because nothing in a product states which product was meant.
+ * A host that fetches a product, reads one out of a cache, or builds its path from
+ * configuration has no other way to say so, and the wrong product validates silently.
+ *
+ * `expectIdentity` is the 64 hexadecimal digits `shaclProductExplain` prints on its
+ * `identity-digest` line, passed back unchanged.
+ *
+ * Throws a `ShaclProductRefusal`: `dimension === "shapes-graph"` when the product
+ * carries a different binding, and `dimension === undefined` when `expectIdentity` is
+ * not 64 hexadecimal digits, because no product was inspected in that case.
+ */
+export function shaclProductValidateToSarifExpecting(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+): string;
+
 export function version(): string;
