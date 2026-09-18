@@ -24,6 +24,10 @@
 //! * every stratum depth respects the registry's declared row bound, and — when
 //!   the environment names the fusion profile the answer will be composed under
 //!   — the depth at which that profile's own arithmetic stops ordering ranks;
+//! * every stratum depth is at least one ([`AdmissionError::ZeroDepth`]): a
+//!   stratum bounded at nothing invokes no relation and would still be reported
+//!   exhausted, so the one thing a depth may never be is a claim of emptiness
+//!   that no producer made;
 //! * every bound producer can actually be *invoked* for the request terms the
 //!   plan gives it — every declared placement renders, no two contend for one
 //!   position, and some declared access pattern serves the result;
@@ -322,6 +326,37 @@ pub enum AdmissionError {
         request_term: u32,
     },
 
+    /// A stratum's recorded depth is zero, so the plan asks for a stratum that
+    /// reads nothing.
+    ///
+    /// The planner cannot write this. It records a depth only for a stratum a
+    /// surviving producer ranks under, and the depth it derives is floored at
+    /// one: an estimate narrows a read and never eliminates one, because
+    /// emptiness is the **producer's** to report through a receipt fusion
+    /// verifies against the rows it pulled. A zero here is therefore a plan that
+    /// was hand-built or edited, and admitting it would compile a `LIMIT 0`,
+    /// invoke no relation, and then report the stratum exhausted with no rows —
+    /// the strongest completeness claim this layer has, made about a query that
+    /// never ran.
+    ///
+    /// Distinct from [`Self::DepthBoundViolation`], and in the opposite
+    /// direction: that one refuses a depth *above* what the registry declared,
+    /// this one refuses a depth below what any real read can be. A stratum a
+    /// caller wants left out of the answer is left out by dropping its entry —
+    /// absence is how a plan says a stratum does not run, and it is a fact
+    /// [`Plan::unserved_evidence`](crate::Plan::unserved_evidence) can still read
+    /// back — not by bounding it at nothing.
+    ///
+    /// The stratum IRI is boxed for the reason
+    /// [`Self::MissingMandatoryProducer`] boxes its producer: [`Iri`] carries
+    /// five parsed spans, and a large error variant is paid for on every
+    /// `Result` this module returns.
+    #[error("stratum {stratum} declares a depth of zero, which reads nothing and proves nothing")]
+    ZeroDepth {
+        /// The stratum whose depth was recorded as zero.
+        stratum: Box<Iri>,
+    },
+
     /// A stratum's recorded depth exceeds the registry's declared row bound.
     #[error(
         "stratum {stratum} declares depth {requested}, but the registry bounds it at {declared}"
@@ -434,6 +469,7 @@ impl AdmissionError {
             Self::MissingMandatoryProducer { .. } => "missing_mandatory_producer",
             Self::InsufficientBindings { .. } => "insufficient_bindings",
             Self::HollowBinding { .. } => "hollow_binding",
+            Self::ZeroDepth { .. } => "zero_depth",
             Self::DepthBoundViolation { .. } => "depth_bound_violation",
             Self::StaleStatistics { .. } => "stale_statistics",
             Self::RegistryMismatch { .. } => "registry_instance_mismatch",
@@ -885,23 +921,39 @@ pub(crate) fn admit_plan<'a>(
         }
     }
 
-    // 7. Per-stratum depth bounds: the plan may lower a depth (statistics do not
-    //    raise it), never raise it above the registry's declared row bound. A
-    //    stratum no ranked producer emits under is bounded at zero — nothing
-    //    ranks there, so no depth is fillable — but a stratum whose producers
-    //    declared no row count at all is bounded by nothing, and is refused for
-    //    nothing.
+    // 7. Per-stratum depth bounds, from both sides. A recorded depth may be
+    //    lower than the registry's declared row bound (statistics narrow a read)
+    //    and never higher, and it may never be zero, because a read of nothing
+    //    is not a read.
     for (stratum, depth) in &plan.stratum_depths {
+        // Checked before anything is looked up, and for every recorded stratum,
+        // because the reason has nothing to do with what the registry declared:
+        // the planner records a depth only for a stratum a surviving producer
+        // ranks under, and the depth it derives is floored at one, so a zero is
+        // an edited plan whatever the registry says about that stratum. Admitted
+        // it would emit `LIMIT 0`, invoke no relation, and report the stratum
+        // exhausted with nothing — a completeness claim about a query that never
+        // ran. A stratum that is to read nothing carries no entry at all.
+        if *depth == 0 {
+            return Err(AdmissionError::ZeroDepth {
+                stratum: Box::new(stratum.clone()),
+            });
+        }
         let declared = match strata.get(stratum) {
             // Declared nothing, so it bounds nothing: there is no number here
             // for a depth to exceed, and inventing zero would refuse a plan the
-            // registry never spoke against.
+            // registry never spoke against. This is a producer that declared no
+            // access mode, which is not a producer that declared zero rows — the
+            // latter never reaches a plan, because the planner rejects it with
+            // `RejectionReason::DeclaresNoRows` and binds it nowhere.
             Some(RowBound::Undeclared) => continue,
             // `u64::MAX` is the seam's spelling of "genuinely unbounded", and it
             // admits every `u32` depth by arithmetic rather than by a rule.
             Some(&RowBound::Declared(bound)) => bound,
             // No ranked producer emits under this stratum at all, so nothing can
-            // rank there and no positive depth is fillable.
+            // rank there and no positive depth is fillable. Every depth reaching
+            // here is positive, so this bound of zero is now reported only as a
+            // `DepthBoundViolation` — the zero-depth case above already returned.
             None => 0,
         };
         if u64::from(*depth) > declared {

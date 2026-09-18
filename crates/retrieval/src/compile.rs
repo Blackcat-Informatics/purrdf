@@ -87,8 +87,20 @@
 //! received the depth as an argument and bounds itself, so its branch carries no
 //! `LIMIT`; the outer one still applies.
 //!
-//! A stratum whose depth is zero emits `LIMIT 0`. That is an honest empty
-//! stratum — the statistics said there is nothing to rank — and not a failure.
+//! No admitted plan carries a depth of zero, so nothing here emits `LIMIT 0`.
+//! That bound reads no rows: it invokes no relation, and the stratum is then
+//! reported exhausted having emitted nothing — the strongest completeness claim
+//! this layer makes, about a query that never ran. An estimate may narrow a read
+//! and must never eliminate one, so the planner floors every derived depth at
+//! one and admission refuses a zero outright
+//! ([`AdmissionError::ZeroDepth`]). Emptiness is reported by the producer, in
+//! the receipt fusion verifies against the rows it actually pulled, and a
+//! stratum that is to run at all runs deep enough to ask.
+//!
+//! A stratum that is to read nothing is expressed by carrying no depth entry —
+//! which is also how the planner expresses it, since it records a depth only for
+//! a stratum a surviving producer ranks under. Absence emits no unit and claims
+//! nothing; a zero would have claimed everything.
 
 use std::collections::BTreeMap;
 

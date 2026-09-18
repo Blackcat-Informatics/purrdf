@@ -1642,7 +1642,7 @@ fn a_declared_row_bound_still_refuses_a_raised_depth() {
 }
 
 #[test]
-fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
+fn a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero() {
     // The third case, pinned so it stays distinguishable from the two above: a
     // stratum the registry ranks nothing under declared a bound — of zero —
     // because nothing can rank there. That is not the same fact as a stratum
@@ -1671,11 +1671,102 @@ fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
 
-    // A depth of zero for the same stratum is an honest empty stratum, not a
-    // violation, which is the neighbour that keeps the bound from being read as
-    // "this stratum may not appear".
+    // A depth of zero for the same stratum is refused on the other dimension,
+    // and refused it must be: a zero reads no rows, invokes no relation, and
+    // would still be reported as an exhausted stratum — a completeness claim
+    // about a query that never ran. A caller that wants this stratum left out of
+    // the answer leaves out its entry.
     plan.stratum_depths.insert(iri(&ex("stratum/ghost")), 0);
-    compile(&plan, &env).expect("a zero depth is within a zero bound");
+    let error = compile(&plan, &env).expect_err("a depth of zero reads nothing");
+    match error {
+        AdmissionError::ZeroDepth { stratum } => {
+            assert_eq!(*stratum, iri(&ex("stratum/ghost")));
+        }
+        other => panic!("expected ZeroDepth, got {other:?}"),
+    }
+
+    // The neighbour that must still admit, in the same plan: drop the ghost and
+    // hold a stratum the registry really ranks under at a depth of one.
+    plan.stratum_depths.remove(&iri(&ex("stratum/ghost")));
+    plan.stratum_depths.insert(iri(&ex("stratum/text")), 1);
+    compile(&plan, &env).expect("a depth of one over a ranked stratum admits");
+}
+
+#[test]
+fn a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under() {
+    // The same refusal where the registry has plenty of room for the depth: the
+    // ground is not the declared bound (100 rows would admit any of these), it
+    // is that zero is not a read. The planner cannot produce this value — it
+    // floors every depth it derives at one — so a plan carrying it was edited.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let mut plan = fresh_plan(&registry, &stats);
+    assert_eq!(
+        plan.stratum_depths[&iri(&ex("stratum/text"))],
+        100,
+        "the planner's own depth for this stratum is nowhere near zero"
+    );
+    plan.stratum_depths.insert(iri(&ex("stratum/text")), 0);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let error = compile(&plan, &env).expect_err("a zero depth is not a read");
+    match error {
+        AdmissionError::ZeroDepth { ref stratum } => {
+            assert_eq!(**stratum, iri(&ex("stratum/text")));
+        }
+        ref other => panic!("expected ZeroDepth, got {other:?}"),
+    }
+    assert_eq!(error.dimension(), "zero_depth");
+
+    // The neighbour: one row deep is a real read and admits, and its unit says
+    // so in the emitted bound.
+    plan.stratum_depths.insert(iri(&ex("stratum/text")), 1);
+    let compiled = compile(&plan, &env).expect("a depth of one admits");
+    let unit = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == iri(&ex("stratum/text")))
+        .expect("the stratum emits a unit");
+    assert!(
+        unit.sparql.ends_with("LIMIT 1"),
+        "the shallowest honest read is one row: {}",
+        unit.sparql
+    );
+}
+
+#[test]
+fn a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all() {
+    // Absence, not a zero. The planner records a depth only for a stratum a
+    // surviving producer ranks under, which is what makes a recorded zero
+    // diagnosable as an edit rather than as something the planner might have
+    // written. `pf/modeless` is declared under its own stratum and rejected at
+    // placement, so that stratum reaches step 6 with nothing to bound.
+    let registry = registry_with_a_modeless_producer();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&registry, &stats);
+    assert!(
+        plan.producer_decisions.iter().any(|decision| matches!(
+            decision,
+            ProducerDecision::Rejected { producer, .. } if producer == &ex("pf/modeless")
+        )),
+        "the modeless producer is rejected: {:?}",
+        plan.producer_decisions
+    );
+    assert!(
+        !plan
+            .stratum_depths
+            .contains_key(&iri(&ex("stratum/modeless"))),
+        "its stratum carries no entry, rather than an entry of zero: {:?}",
+        plan.stratum_depths
+    );
+    assert!(
+        plan.stratum_depths
+            .contains_key(&iri(&ex("stratum/universal"))),
+        "while the stratum a surviving producer ranks under does carry one"
+    );
 }
 
 // ---------------------------------------------------------------------------

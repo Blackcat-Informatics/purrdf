@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Iri, Metric, Plan, PlanError, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
-    UnservedReason, UnservedTerm, plan,
+    Iri, Metric, Plan, PlanError, RegistryId, RejectionReason, RequestTerm, RetrievalRequest,
+    Statistics, Term, UnservedReason, UnservedTerm, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -381,6 +381,49 @@ fn canonical_json(plan: &Plan) -> String {
 // 1. Golden tests
 // ---------------------------------------------------------------------------
 
+/// The identity of the plan the mixed-request golden records.
+///
+/// Pinned as a literal beside the golden document rather than read back out of
+/// it. A golden compared only as rendered text answers "did the text move"; the
+/// identity answers "did the plan move", over the canonical bytes every later
+/// stage keys on, and a change that altered the identity while leaving the
+/// rendering alone would otherwise pass unnoticed.
+const MIXED_REQUEST_PLAN_ID: &str =
+    "e14708a211f9945e6fdb033f985e2c71f3fdb94d31adb15b6a31194f3ac08e8a";
+
+/// The identity of the plan the lexical-request golden records, pinned for the
+/// reason [`MIXED_REQUEST_PLAN_ID`] is.
+const LEXICAL_REQUEST_PLAN_ID: &str =
+    "c0cb3ef40fa435a831c67f0b73f7c8062479e956b09ccd1ced07e8c8eb97497f";
+
+/// A plan's content identity, with the per-process registry instance counter
+/// pinned exactly as [`canonical_json`] pins it.
+///
+/// [`Plan::id`] digests the canonical bytes, and those bytes carry
+/// [`Plan::registry_instance_id`] — a counter minted per registry per process,
+/// so the live value differs from run to run and from test order to test order.
+/// Pinning it to zero is what makes the identity a property of the *plan* rather
+/// than of the process that happened to build it, and leaves every durable field
+/// covered.
+fn pinned_id(plan: &Plan) -> String {
+    let mut pinned = plan.clone();
+    pinned.registry_instance_id = RegistryId::from_raw(0);
+    pinned.id().to_hex()
+}
+
+/// A plan's per-stratum depths, keyed by stratum IRI in a deterministic order.
+///
+/// The recorded map is a `HashMap`, so it is collected into an ordered one here
+/// to be compared whole: asserting the map rather than one key at a time is what
+/// makes an *extra* stratum depth a failure, and an extra depth licenses reading
+/// rows in a stratum the assertion never mentioned.
+fn depths_of(plan: &Plan) -> BTreeMap<String, u32> {
+    plan.stratum_depths
+        .iter()
+        .map(|(stratum, depth)| (stratum.as_str().to_owned(), *depth))
+        .collect()
+}
+
 /// NOT part of the normal test run (`#[ignore]`): (re)writes both committed
 /// planner goldens from the planner's current output.
 ///
@@ -426,6 +469,16 @@ fn golden_mixed_request_matches() {
         "planner output drifted from the golden; update {} if intended",
         golden_path("mixed_request.json").display()
     );
+    assert_eq!(
+        depths_of(&plan),
+        BTreeMap::from([
+            (ex("stratum/graph"), 50),
+            (ex("stratum/text"), 100),
+            (ex("stratum/universal"), 200),
+        ]),
+        "the depths this fixture derives, named rather than eyeballed out of the golden"
+    );
+    assert_eq!(pinned_id(&plan), MIXED_REQUEST_PLAN_ID);
 }
 
 #[test]
@@ -438,6 +491,12 @@ fn golden_lexical_request_matches() {
         "planner output drifted from the golden; update {} if intended",
         golden_path("lexical_request.json").display()
     );
+    assert_eq!(
+        depths_of(&plan),
+        BTreeMap::from([(ex("stratum/text"), 100), (ex("stratum/universal"), 200),]),
+        "the depths this fixture derives, named rather than eyeballed out of the golden"
+    );
+    assert_eq!(pinned_id(&plan), LEXICAL_REQUEST_PLAN_ID);
 }
 
 #[test]
@@ -1271,14 +1330,32 @@ fn a_selectivity_rounds_up_and_never_raises_a_declared_depth() {
         );
     }
 
-    // Zero is a measurement, not an absence: the provider says no row under
-    // this stratum matches, and the plan records the depth that follows.
+    // Zero is a measurement, not an absence, and it is also not a verdict. The
+    // provider says no row under this stratum matches; the planner narrows the
+    // read to one row and lets the producer be the thing that reports the
+    // emptiness, because a depth of zero invokes no relation and would still be
+    // reported as an exhausted stratum. An estimate narrows a read; it never
+    // eliminates one.
     let none = selectivity_statistics(vec![(iri(&ex("stratum/text")), lexical_term(), 0)]);
     assert_eq!(
         plan(&lexical_request(), &mixed_registry(), &none)
             .expect("plans")
             .stratum_depths[&iri(&ex("stratum/text"))],
-        0
+        1
+    );
+
+    // The snapshot still records what the provider actually said. The floor is
+    // the planner's decision about the depth, not an edit of the measurement.
+    assert_eq!(
+        plan(&lexical_request(), &mixed_registry(), &none)
+            .expect("plans")
+            .statistics_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.subject == ex("stratum/text"))
+            .and_then(|entry| entry.selectivity_ppm),
+        Some(0),
+        "the provider reported zero and the plan says so"
     );
 }
 

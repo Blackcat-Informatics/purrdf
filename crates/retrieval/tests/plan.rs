@@ -185,6 +185,48 @@ fn canonical_bytes_and_decode_round_trip() {
     assert_eq!(decoded.canonical_bytes(), bytes);
 }
 
+/// Every rejection reason survives the canonical round trip under its own
+/// discriminator byte.
+///
+/// A reason is the evidence a caller reads to find out why its answer is
+/// narrower than it asked for, and the byte it is written as lands in the plan's
+/// identity. A reason that decoded as a *different* reason would be a plan that
+/// reads back as blaming the wrong dimension while still carrying an identity
+/// the caller recognises, so every variant is encoded and decoded here rather
+/// than only the ones a fixture happens to produce.
+#[test]
+fn every_rejection_reason_round_trips_under_its_own_tag() {
+    let reasons = [
+        RejectionReason::NotRanked,
+        RejectionReason::NoAcceptedTerm,
+        RejectionReason::DepthExceeded,
+        RejectionReason::UnsatisfiedConstraint,
+        RejectionReason::DeclaresNoRows,
+    ];
+    let mut ids = Vec::with_capacity(reasons.len());
+    for reason in reasons {
+        let mut plan = baseline();
+        plan.producer_decisions = vec![ProducerDecision::Rejected {
+            producer: "http://example.org/pf/knn".to_owned(),
+            reason,
+        }];
+        let bytes = plan.canonical_bytes();
+        let decoded = Plan::from_canonical_bytes(&bytes).expect("canonical decode");
+        assert_eq!(
+            decoded.producer_decisions, plan.producer_decisions,
+            "{reason:?} decoded as something else"
+        );
+        assert_eq!(decoded.canonical_bytes(), bytes);
+        ids.push(plan.id());
+    }
+    let distinct: std::collections::BTreeSet<_> = ids.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        ids.len(),
+        "each reason takes its own byte, so each plan takes its own identity"
+    );
+}
+
 /// Every interval shape the two new arms admit, so the canonical encoding's new
 /// tags are exercised in both directions and the arms' hand-written equality is
 /// held to the same standard the existing ones are.

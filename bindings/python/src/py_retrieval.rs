@@ -891,6 +891,7 @@ const fn rejection_reason(reason: RejectionReason) -> &'static str {
         RejectionReason::NoAcceptedTerm => "no_accepted_term",
         RejectionReason::DepthExceeded => "depth_exceeded",
         RejectionReason::UnsatisfiedConstraint => "unsatisfied_constraint",
+        RejectionReason::DeclaresNoRows => "declares_no_rows",
     }
 }
 

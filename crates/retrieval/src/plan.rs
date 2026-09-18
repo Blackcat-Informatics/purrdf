@@ -71,6 +71,7 @@ const REJECT_NOT_RANKED: u8 = 0;
 const REJECT_NO_ACCEPTED_TERM: u8 = 1;
 const REJECT_DEPTH_EXCEEDED: u8 = 2;
 const REJECT_UNSATISFIED_CONSTRAINT: u8 = 3;
+const REJECT_DECLARES_NO_ROWS: u8 = 4;
 
 const UNSERVED_NO_PRODUCER_ACCEPTS: u8 = 0;
 const UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED: u8 = 1;
@@ -187,6 +188,29 @@ pub enum RejectionReason {
     DepthExceeded,
     /// A registry-declared constraint the producer requires was not satisfied.
     UnsatisfiedConstraint,
+    /// The producer declares at least one access mode and **every** one of them
+    /// promises zero rows per invocation, so its own declaration says nothing
+    /// ranks in its stratum.
+    ///
+    /// This is a statement the registry made, not one a statistics provider
+    /// made, and that is why it is a rejection rather than a depth of zero. A
+    /// statistic may narrow a read and never eliminate one — emptiness is the
+    /// producer's to report, through a receipt fusion verifies against the rows
+    /// it pulled. A declaration of zero rows is the producer saying in advance
+    /// that it will have no rows to report, and the honest answer to that is to
+    /// leave it out of the plan, where the decision is visible here, rather than
+    /// to emit a call bounded at nothing and read its silence back as an
+    /// exhausted stratum.
+    ///
+    /// It is deliberately **not** the same fact as a producer that declares no
+    /// access mode at all. That producer declared no row count — a row count is
+    /// declared per mode — and "declared nothing" is not "declared zero": it
+    /// admits no invocation, which placement refuses as
+    /// [`Self::UnsatisfiedConstraint`], and its stratum bounds no depth at
+    /// admission rather than bounding one at zero. Collapsing the two would tell
+    /// a host that its registry promises emptiness when what its registry
+    /// actually did was decline to say.
+    DeclaresNoRows,
 }
 
 /// The planner's decision for one producer.
@@ -561,6 +585,7 @@ fn reason_tag(reason: RejectionReason) -> u8 {
         RejectionReason::NoAcceptedTerm => REJECT_NO_ACCEPTED_TERM,
         RejectionReason::DepthExceeded => REJECT_DEPTH_EXCEEDED,
         RejectionReason::UnsatisfiedConstraint => REJECT_UNSATISFIED_CONSTRAINT,
+        RejectionReason::DeclaresNoRows => REJECT_DECLARES_NO_ROWS,
     }
 }
 
@@ -576,6 +601,7 @@ fn reason_from_tag(tag: u8) -> Result<RejectionReason, PlanError> {
         REJECT_NO_ACCEPTED_TERM => Ok(RejectionReason::NoAcceptedTerm),
         REJECT_DEPTH_EXCEEDED => Ok(RejectionReason::DepthExceeded),
         REJECT_UNSATISFIED_CONSTRAINT => Ok(RejectionReason::UnsatisfiedConstraint),
+        REJECT_DECLARES_NO_ROWS => Ok(RejectionReason::DeclaresNoRows),
         tag => Err(PlanError::InvalidTag {
             what: "rejection reason",
             tag,

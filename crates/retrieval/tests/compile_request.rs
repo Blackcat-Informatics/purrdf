@@ -24,8 +24,8 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, Iri, Metric, Plan, PlanError, ProducerStatus,
-    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, compile,
-    execute, plan,
+    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
+    UnservedReason, UnservedTerm, compile, execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DepthPlacement, DuplicatePolicy, EvalError, NativeSparqlEngine,
@@ -193,6 +193,13 @@ impl Spec {
         self.candidate = candidate;
         self
     }
+
+    /// Declare the producer mandatory, which is the registry promising that it
+    /// serves every request it accepts anything of.
+    const fn mandatory(mut self) -> Self {
+        self.mandatory = true;
+        self
+    }
 }
 
 /// One accepted alternative: `pattern`, with `facet` bound at `position`.
@@ -254,6 +261,14 @@ struct MockStatistics {
     source: String,
     revision: String,
     cardinalities: BTreeMap<Iri, u64>,
+    /// Reported for every `(subject, term)` pair the planner asks about, or
+    /// `None` for a provider that measured no selectivity at all.
+    ///
+    /// Blanket rather than per-pair because the claims here are about what the
+    /// planner does with a reported ratio, not about which pair it was reported
+    /// under; a provider that answers every question with one number is the
+    /// smallest fixture that exercises the arithmetic.
+    selectivity: Option<u64>,
 }
 
 impl Statistics for MockStatistics {
@@ -270,12 +285,18 @@ impl Statistics for MockStatistics {
     }
 
     fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
-        None
+        self.selectivity
     }
 }
 
 /// Statistics that bound the named strata and nothing else.
 fn statistics(bounds: &[(&str, u64)]) -> MockStatistics {
+    statistics_reporting(bounds, None)
+}
+
+/// Statistics that bound the named strata and report `selectivity` parts per
+/// million for every term they are asked about.
+fn statistics_reporting(bounds: &[(&str, u64)], selectivity: Option<u64>) -> MockStatistics {
     MockStatistics {
         source: "compile-request-statistics".to_owned(),
         revision: "r1".to_owned(),
@@ -283,6 +304,7 @@ fn statistics(bounds: &[(&str, u64)]) -> MockStatistics {
             .iter()
             .map(|(stratum, cardinality)| (iri(&ex(&format!("stratum/{stratum}"))), *cardinality))
             .collect(),
+        selectivity,
     }
 }
 
@@ -291,6 +313,19 @@ fn lexical(text: &str, language: Option<&str>) -> RequestTerm {
         text: text.to_owned(),
         language: language.map(ToOwned::to_owned),
         predicate: None,
+    }
+}
+
+/// A needle carrying the predicate it is to be matched under.
+///
+/// A predicate is how one producer's declaration is narrowed to a term another
+/// producer's declaration cannot take, which is what a claim about a term only
+/// one producer accepts needs.
+fn lexical_under(text: &str, predicate: &str) -> RequestTerm {
+    RequestTerm::Lexical {
+        text: text.to_owned(),
+        language: None,
+        predicate: Some(iri(&ex(predicate))),
     }
 }
 
@@ -561,9 +596,19 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
     assert_eq!(rows.len(), 3, "the depth bounds the rows the stratum emits");
 }
 
+/// The governing invariant, executed end to end: a bound on the read never
+/// becomes a value.
+///
+/// A provider that measured an empty stratum is reporting honestly, and the
+/// plan still asks. The old behaviour scaled the declared bound to zero,
+/// compiled `LIMIT 0`, invoked no relation, and reported the stratum exhausted
+/// having emitted nothing — the strongest completeness claim this layer makes,
+/// minted from an estimate. Both halves are asserted here: the depth is one,
+/// and the emptiness that comes back is the *producer's*, because the producer
+/// was actually opened.
 #[test]
-fn depth_zero_is_an_honest_empty_stratum_and_depth_one_emits_one_row() {
-    for (cardinality, expected) in [(0_u64, 0_usize), (1, 1)] {
+fn a_zero_statistic_still_plans_one_row_and_the_producer_reports_the_emptiness() {
+    for cardinality in [0_u64, 1] {
         let (registry, _) = registry_of(vec![(
             "text",
             Spec::new(
@@ -582,6 +627,11 @@ fn depth_zero_is_an_honest_empty_stratum_and_depth_one_emits_one_row() {
             &stats,
         )
         .expect("plans");
+        assert_eq!(
+            planned.stratum_depths[&iri(&ex("stratum/text"))],
+            1,
+            "a measured cardinality of {cardinality} narrows the read to one row, never to none"
+        );
         let env = AdmissionEnvironment {
             registry: &registry,
             statistics: &stats,
@@ -589,31 +639,461 @@ fn depth_zero_is_an_honest_empty_stratum_and_depth_one_emits_one_row() {
         };
         let compiled = compile(&planned, &env).expect("admits");
         assert!(
-            compiled.units[0]
-                .sparql
-                .ends_with(&format!("LIMIT {cardinality}")),
-            "the unit carries its own depth: {}",
+            compiled.units[0].sparql.ends_with("LIMIT 1"),
+            "the unit carries the floored depth: {}",
             compiled.units[0].sparql
         );
+    }
 
-        let execution = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
-            .expect("the unit runs");
+    // The producer that has nothing: it declares ten rows and holds none. The
+    // emptiness in the trailer is therefore its own report, not a bound.
+    let (registry, logs) = registry_of(vec![(
+        "text",
+        Spec::new(
+            "text",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Literal),
+                value_at(1),
+            )],
+        )
+        .rows(10, 0),
+    )]);
+    let stats = statistics(&[("text", 0)]);
+    let planned = plan(
+        &request(vec![lexical("quick brown fox", None)]),
+        &registry,
+        &stats,
+    )
+    .expect("plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&iri(&ex("stratum/text"))],
+        ProducerStatus::Exhausted { rows_emitted: 0 },
+        "the producer was asked and had nothing, which is what exhausted means"
+    );
+    assert_eq!(
+        invocations(&logs, "text"),
+        1,
+        "the relation was opened: the emptiness is the producer's report, not a LIMIT 0"
+    );
+}
+
+/// How many times a fixture producer's relation was actually opened.
+///
+/// The claim "the producer reported the emptiness" is only true if the producer
+/// ran, and an emitted `LIMIT 0` produces the identical trailer without ever
+/// reaching the relation. The log the `Recorder` keeps is the only witness that
+/// distinguishes them.
+fn invocations(logs: &BTreeMap<String, Log>, name: &str) -> usize {
+    logs.get(&ex(&format!("pf/{name}")))
+        .expect("the fixture producer is registered")
+        .lock()
+        .expect("the fixture log is never poisoned")
+        .len()
+}
+
+/// A selectivity of zero is the provider saying no row under this stratum
+/// matches. It narrows the read as far as a statistic may narrow anything — to
+/// one row — and the producer then answers.
+#[test]
+fn a_zero_selectivity_narrows_to_one_row_and_the_relation_is_still_invoked() {
+    // A producer holding rows: the floored depth is a real read, and exactly one
+    // row comes back.
+    let (holding, holding_logs) = registry_of(vec![(
+        "text",
+        Spec::new(
+            "text",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Literal),
+                value_at(1),
+            )],
+        )
+        .rows(10, 10),
+    )]);
+    let stats = statistics_reporting(&[("text", 10)], Some(0));
+    let terms = vec![lexical("quick brown fox", None)];
+    let planned = plan(&request(terms.clone()), &holding, &stats).expect("plans");
+    assert_eq!(
+        planned.stratum_depths[&iri(&ex("stratum/text"))],
+        1,
+        "zero parts per million narrows the ten-row bound to one row, never to none"
+    );
+    let env = AdmissionEnvironment {
+        registry: &holding,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("admits");
+    assert!(
+        compiled.units[0].sparql.ends_with("LIMIT 1"),
+        "the floored depth is the emitted bound: {}",
+        compiled.units[0].sparql
+    );
+    let execution =
+        block_on(execute(&compiled, &holding, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&iri(&ex("stratum/text"))],
+        ProducerStatus::Exhausted { rows_emitted: 1 },
+        "the read the provider would have eliminated returns a row"
+    );
+    assert_eq!(invocations(&holding_logs, "text"), 1);
+    let rows = drain(
+        execution
+            .streams
+            .into_iter()
+            .next()
+            .expect("the stratum streamed")
+            .stream,
+    );
+    assert_eq!(rows.len(), 1, "one row on the stream, not none");
+
+    // The same plan over a producer that holds nothing: the trailer says
+    // exhausted-with-nothing, and the relation was opened to find that out.
+    let (empty, empty_logs) = registry_of(vec![(
+        "text",
+        Spec::new(
+            "text",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Literal),
+                value_at(1),
+            )],
+        )
+        .rows(10, 0),
+    )]);
+    let planned = plan(&request(terms), &empty, &stats).expect("plans");
+    assert_eq!(planned.stratum_depths[&iri(&ex("stratum/text"))], 1);
+    let env = AdmissionEnvironment {
+        registry: &empty,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&compiled, &empty, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&iri(&ex("stratum/text"))],
+        ProducerStatus::Exhausted { rows_emitted: 0 }
+    );
+    assert_eq!(
+        invocations(&empty_logs, "text"),
+        1,
+        "the producer was asked and had nothing; a LIMIT 0 would have faked this trailer"
+    );
+}
+
+/// Both roads to a bound of zero are floored, including the one that reaches it
+/// before the ratio is applied.
+#[test]
+fn a_cardinality_of_zero_is_floored_with_or_without_a_selectivity() {
+    for selectivity in [None, Some(0)] {
+        let (registry, _) = registry_of(vec![(
+            "text",
+            Spec::new(
+                "text",
+                vec![alternative(
+                    TermPattern::of_kind(TermKind::Literal),
+                    value_at(1),
+                )],
+            )
+            .rows(10, 10),
+        )]);
+        let stats = statistics_reporting(&[("text", 0)], selectivity);
+        let planned = plan(
+            &request(vec![lexical("quick brown fox", None)]),
+            &registry,
+            &stats,
+        )
+        .expect("plans");
         assert_eq!(
-            execution.statuses[&iri(&ex("stratum/text"))],
-            ProducerStatus::Exhausted {
-                rows_emitted: cardinality
+            planned.stratum_depths[&iri(&ex("stratum/text"))],
+            1,
+            "a cardinality of zero with selectivity {selectivity:?} still reads one row"
+        );
+    }
+}
+
+/// The over-refusal guard for the floor: every neighbouring statistic that was
+/// already correct still derives exactly the depth it derived before.
+///
+/// A floor is a refusal of one input, and the failure mode of getting it wrong
+/// is invisible — a depth that is quietly one instead of five looks like a
+/// working plan until a caller counts the rows. So the arithmetic either side of
+/// zero is executed rather than reasoned about.
+#[test]
+fn the_floor_leaves_every_other_selectivity_exactly_where_it_was() {
+    for (ppm, expected) in [(1_u64, 1_u32), (500_000, 5), (1_000_000, 10)] {
+        let (registry, _) = registry_of(vec![(
+            "text",
+            Spec::new(
+                "text",
+                vec![alternative(
+                    TermPattern::of_kind(TermKind::Literal),
+                    value_at(1),
+                )],
+            )
+            .rows(10, 10),
+        )]);
+        let stats = statistics_reporting(&[("text", 10)], Some(ppm));
+        let planned = plan(
+            &request(vec![lexical("quick brown fox", None)]),
+            &registry,
+            &stats,
+        )
+        .expect("plans");
+        assert_eq!(
+            planned.stratum_depths[&iri(&ex("stratum/text"))],
+            expected,
+            "{ppm} ppm of a ten-row bound is {expected}"
+        );
+    }
+
+    // A producer that genuinely declares one row, with nothing measured about
+    // it: the depth is one because the registry said so, not because a floor
+    // rescued it.
+    let (registry, _) = registry_of(vec![(
+        "text",
+        Spec::new(
+            "text",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Literal),
+                value_at(1),
+            )],
+        )
+        .rows(1, 1),
+    )]);
+    let silent = statistics(&[]);
+    let planned = plan(
+        &request(vec![lexical("quick brown fox", None)]),
+        &registry,
+        &silent,
+    )
+    .expect("plans");
+    assert_eq!(planned.stratum_depths[&iri(&ex("stratum/text"))], 1);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &silent,
+        fusion_profile: None,
+    };
+    compile(&planned, &env).expect("a one-row stratum admits");
+}
+
+/// The mandatory case, which is where an over-refusal would be loudest: the
+/// registry promises this producer answers every request it accepts anything of,
+/// and a provider reporting zero must not be what takes it out of the plan.
+#[test]
+fn a_mandatory_producer_under_a_zero_selectivity_plans_admits_and_runs() {
+    let (registry, logs) = registry_of(vec![(
+        "text",
+        Spec::new(
+            "text",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Literal),
+                value_at(1),
+            )],
+        )
+        .rows(10, 10)
+        .mandatory(),
+    )]);
+    let stats = statistics_reporting(&[("text", 10)], Some(0));
+    let planned = plan(
+        &request(vec![lexical("quick brown fox", None)]),
+        &registry,
+        &stats,
+    )
+    .expect("a mandatory producer is planned, not estimated away");
+    assert_eq!(planned.stratum_depths[&iri(&ex("stratum/text"))], 1);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("the mandatory producer is bound, so it admits");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&iri(&ex("stratum/text"))],
+        ProducerStatus::Exhausted { rows_emitted: 1 }
+    );
+    assert_eq!(invocations(&logs, "text"), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 2b. A producer that declares no rows is refused at placement
+// ---------------------------------------------------------------------------
+
+/// The registry side of the same invariant: a producer whose every declared
+/// access mode promises zero rows has said nothing ranks in its stratum, and the
+/// honest answer is to leave it out rather than to plan it at a depth of zero.
+///
+/// `rows` is the row count each declared mode reports, so the same two
+/// producers can be built promising nothing and promising one row.
+fn split_registry(rows: u64, mandatory: bool) -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
+    let under = |predicate: &str| TermPattern {
+        kind: TermKind::Literal,
+        datatype: None,
+        language: None,
+        predicate: Some(ex(predicate)),
+    };
+    let narrow = Spec::new("narrow", vec![alternative(under("secret"), value_at(1))]).rows(rows, 3);
+    registry_of(vec![
+        (
+            "text",
+            Spec::new("text", vec![alternative(under("body"), value_at(1))]).rows(10, 3),
+        ),
+        (
+            "narrow",
+            if mandatory {
+                narrow.mandatory()
+            } else {
+                narrow
             },
-            "an empty stratum is exhausted with zero rows, never failed"
-        );
-        let rows = drain(
-            execution
-                .streams
-                .into_iter()
-                .next()
-                .expect("the stratum streamed")
-                .stream,
-        );
-        assert_eq!(rows.len(), expected);
+        ),
+    ])
+}
+
+/// The request the split registry divides: one term each producer's declaration
+/// is the only acceptor of.
+fn split_request() -> Vec<RequestTerm> {
+    vec![
+        lexical_under("quick brown fox", "body"),
+        lexical_under("hidden", "secret"),
+    ]
+}
+
+#[test]
+fn a_producer_declaring_no_rows_is_rejected_and_its_term_reports_the_rejection() {
+    let (registry, _) = split_registry(0, false);
+    let stats = statistics(&[("text", 10), ("narrow", 10)]);
+    let planned =
+        plan(&request(split_request()), &registry, &stats).expect("the other producer plans");
+
+    assert_eq!(
+        rejection(&planned, &ex("pf/narrow")),
+        Some(RejectionReason::DeclaresNoRows),
+        "the decision names the declaration that promised nothing: {:?}",
+        planned.producer_decisions
+    );
+    assert!(
+        !planned
+            .stratum_depths
+            .contains_key(&iri(&ex("stratum/narrow"))),
+        "a rejected producer's stratum records no depth at all, not a depth of zero"
+    );
+    assert_eq!(
+        planned.stratum_depths[&iri(&ex("stratum/text"))],
+        10,
+        "and the other producer plans exactly as it would have"
+    );
+
+    // The term only the rejected producer accepts: something accepted it and was
+    // then rejected, which is not the same fact as nothing accepting it.
+    assert_eq!(
+        planned.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::EveryAcceptingProducerRejected,
+        }],
+        "the rejected acceptor is the reason the term went unserved"
+    );
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("the surviving producer still admits");
+    assert_eq!(compiled.units.len(), 1, "one stratum emits: {compiled:?}");
+}
+
+#[test]
+fn the_same_producer_declaring_one_row_plans_and_serves_its_term() {
+    // The neighbour that must still succeed. Nothing about the shape changed;
+    // only the row count the declaration promises did.
+    let (registry, _) = split_registry(1, false);
+    let stats = statistics(&[("text", 10), ("narrow", 10)]);
+    let planned = plan(&request(split_request()), &registry, &stats).expect("both producers plan");
+
+    assert_eq!(
+        rejection(&planned, &ex("pf/narrow")),
+        None,
+        "a producer promising one row is not rejected: {:?}",
+        planned.producer_decisions
+    );
+    assert_eq!(
+        planned.stratum_depths[&iri(&ex("stratum/narrow"))],
+        1,
+        "its stratum records the one row it declared"
+    );
+    assert!(
+        planned.producer_bindings.iter().any(|binding| {
+            binding.producer == ex("pf/narrow") && binding.request_terms == vec![1]
+        }),
+        "and it receives the term only it accepts: {:?}",
+        planned.producer_bindings
+    );
+    assert!(
+        planned.unserved_terms.is_empty(),
+        "so nothing goes unserved: {:?}",
+        planned.unserved_terms
+    );
+}
+
+#[test]
+fn a_mandatory_producer_that_declares_no_rows_is_a_registry_contradiction() {
+    // A producer the registry insists must answer, whose own declaration
+    // promises it never will. The plan records why it was dropped, and the
+    // waist — which is where every coverage claim is enforced — refuses the
+    // plan by name rather than emitting a stratum bounded at nothing.
+    let (registry, _) = split_registry(0, true);
+    let stats = statistics(&[("text", 10), ("narrow", 10)]);
+    let planned =
+        plan(&request(split_request()), &registry, &stats).expect("the other producer still plans");
+    assert_eq!(
+        rejection(&planned, &ex("pf/narrow")),
+        Some(RejectionReason::DeclaresNoRows)
+    );
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let error = compile(&planned, &env).expect_err("a mandatory producer is missing");
+    match error {
+        AdmissionError::MissingMandatoryProducer { producer } => {
+            assert_eq!(*producer, iri(&ex("pf/narrow")));
+        }
+        other => panic!("expected MissingMandatoryProducer, got {other:?}"),
+    }
+
+    // And where it is the registry's only producer, the request reaches nothing
+    // at all, which is the planner's own refusal.
+    let (alone, _) = registry_of(vec![(
+        "narrow",
+        Spec::new(
+            "narrow",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Literal),
+                value_at(1),
+            )],
+        )
+        .rows(0, 3)
+        .mandatory(),
+    )]);
+    match plan(
+        &request(vec![lexical("quick brown fox", None)]),
+        &alone,
+        &statistics(&[("narrow", 10)]),
+    ) {
+        Err(PlanError::NoApplicableProducers) => {}
+        other => panic!("expected NoApplicableProducers, got {other:?}"),
     }
 }
 

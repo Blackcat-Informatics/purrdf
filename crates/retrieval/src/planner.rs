@@ -129,6 +129,15 @@
 //! Nothing here refuses a plan: the whole step is a `min` over a bound the
 //! registry already set, and a stratum no provider spoke about keeps exactly
 //! the depth it had.
+//!
+//! And no statistic narrows a depth to nothing. A bound on the read never
+//! becomes a value: an estimate may narrow a read, but only the producer can
+//! report that there was nothing to read, through a receipt fusion checks
+//! against the rows it pulled. So the derived depth is floored at one — see
+//! [`capped`] — and a stratum planned at depth one over a provider that
+//! measured zero is a stratum whose relation is still invoked and still asked.
+//! What promises nothing is a registry declaration, not a statistic, and that
+//! is refused at placement rather than compiled into a `LIMIT 0`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -297,6 +306,27 @@ pub fn plan(
                 ..
             } => (*descriptor, *declaration, stratum, carried),
         };
+        // A producer whose every declared mode promises zero rows has said, in
+        // its own declaration, that nothing ranks in its stratum. Rejected here
+        // and not bound: a bound producer's stratum records a depth, and the
+        // floor in `capped` would record a depth of one over a declaration that
+        // promised none, while removing the floor would record zero and read the
+        // producer's silence back as an exhausted stratum. Refusing the
+        // declaration is the only answer that keeps the emptiness the producer's
+        // own claim.
+        //
+        // This is the placement pass and not the first one, and the position
+        // matters: `unserved_terms` reads the accepted and carried sets off a
+        // matched candidate, so a term only this producer accepts is reported
+        // `EveryAcceptingProducerRejected` — something accepted it and was then
+        // rejected — rather than the false `NoProducerAccepts`.
+        if declares_no_rows(descriptor) {
+            decisions.push(ProducerDecision::Rejected {
+                producer: candidate.producer.clone(),
+                reason: RejectionReason::DeclaresNoRows,
+            });
+            continue;
+        }
         let depth = provisional.get(stratum).copied().unwrap_or(u32::MAX);
         if place(
             &candidate.producer,
@@ -455,6 +485,11 @@ enum Outcome<'a> {
 /// records. Reading the accepted set instead would let a stratum's provisional
 /// depth be narrowed by a selectivity its final depth is not, which is the one
 /// direction the invariant above forbids.
+///
+/// Every finite depth here carries [`capped`]'s floor of one, which matters
+/// more at this step than at the final one: this is the depth [`place`] renders
+/// into a producer's declared depth argument, so a zero would hand a relation a
+/// literal instruction to return nothing before anything had read a row.
 fn depth_bounds(
     candidates: &[Candidate<'_>],
     terms: &[RequestTerm],
@@ -582,7 +617,8 @@ fn unserved_terms(
         .collect()
 }
 
-/// A declared row bound, lowered (never raised) by what the provider measured.
+/// A declared row bound, lowered (never raised) by what the provider measured,
+/// and never lowered past the first row.
 ///
 /// Two independent statistics narrow one number. A measured cardinality says
 /// how many rows the stratum holds at all; a measured selectivity says what
@@ -590,6 +626,36 @@ fn unserved_terms(
 /// stratum cannot be read a stratum-deep. Each is applied as a `min`, so the
 /// result never exceeds the registry's own declaration and a provider that
 /// measured nothing changes nothing.
+///
+/// # The finite bound is floored at one
+///
+/// An estimate narrows a read; it never eliminates one. Emptiness is the
+/// **producer's** to report, through a receipt fusion verifies against the rows
+/// it actually pulled — so a statistic must never be the thing that decides a
+/// stratum is empty. A bound of zero would: it compiles to `LIMIT 0`, the
+/// relation is never invoked, and the stratum is then reported exhausted with
+/// no rows, which is the strongest completeness claim this layer has, minted
+/// from a number nobody checked against the data.
+///
+/// A tiny non-zero selectivity already lands on one row through `div_ceil`;
+/// zero was the one input that escaped that protection, and it arrives by two
+/// roads — a provider honestly reporting `selectivity_ppm` of zero, and a
+/// measured cardinality of zero, which lands in the bound before the ratio is
+/// applied. Both are floored here, so both narrow the read to a single probing
+/// row and leave the verdict to the producer.
+///
+/// The floor is unconditional, and it cannot manufacture a read the registry
+/// did not declare: a producer whose every declared access mode promises zero
+/// rows is rejected at placement with
+/// [`RejectionReason::DeclaresNoRows`], and a producer that declares no access
+/// mode at all cannot be invoked and is rejected there too. Neither reaches
+/// this function, so every zero it can see is the provider's estimate rather
+/// than the registry's declaration.
+///
+/// The genuinely unbounded case returns before the floor and keeps returning
+/// [`u64::MAX`]: the caller turns that into
+/// [`PlanError::StatisticsUnavailable`], and flooring it would be flooring an
+/// absent bound rather than a derived one.
 fn capped(
     declared: u64,
     stratum: &Iri,
@@ -606,15 +672,18 @@ fn capped(
     if bound == u64::MAX {
         return bound;
     }
-    let Some(ppm) = combined_selectivity_ppm(stratum, terms, statistics) else {
-        return bound;
+    let narrowed = match combined_selectivity_ppm(stratum, terms, statistics) {
+        // Rounded up, in an intermediate wide enough that the product cannot
+        // wrap: a bound derived from a ratio must never fall below the rows the
+        // ratio describes, because a depth below a stratum's real answer
+        // truncates its ranked list with nothing anywhere saying so.
+        Some(ppm) => {
+            let scaled = (u128::from(bound) * u128::from(ppm)).div_ceil(u128::from(PPM_UNIT));
+            u64::try_from(scaled).unwrap_or(bound).min(bound)
+        }
+        None => bound,
     };
-    // Rounded up, in an intermediate wide enough that the product cannot wrap:
-    // a bound derived from a ratio must never fall below the rows the ratio
-    // describes, because a depth below a stratum's real answer truncates its
-    // ranked list with nothing anywhere saying so.
-    let scaled = (u128::from(bound) * u128::from(ppm)).div_ceil(u128::from(PPM_UNIT));
-    u64::try_from(scaled).unwrap_or(bound).min(bound)
+    narrowed.max(1)
 }
 
 /// The selectivity the provider reports for `subject` across `terms`, in parts
@@ -724,6 +793,32 @@ fn declared_row_bound(descriptor: &PfDescriptor) -> u64 {
         .map(|mode| mode.rows_per_invocation)
         .max()
         .unwrap_or(0)
+}
+
+/// Whether the producer's own declaration promises that nothing ranks in its
+/// stratum.
+///
+/// True only when the descriptor declares **at least one** access mode and every
+/// declared mode reports zero rows per invocation. The two halves of that
+/// condition are both load-bearing, and the empty case is the one that is easy
+/// to get wrong: a producer declaring no mode at all declared no row count —
+/// `rows_per_invocation` is reported per mode, so there was nowhere for it to
+/// say a number — and reading its absent declaration back as a promise of zero
+/// would tell a host its registry guarantees emptiness when its registry in fact
+/// said nothing. That producer is refused on a different ground (it admits no
+/// invocation, so placement cannot render one) and its stratum bounds no depth
+/// at admission. `max() == Some(0)` says exactly this: `None` for no modes,
+/// `Some(0)` only when every mode declared zero.
+///
+/// Read from the registry's own descriptor, like [`declared_row_bound`] beside
+/// it; the planner keeps no parallel copy of the seam's cost declaration.
+fn declares_no_rows(descriptor: &PfDescriptor) -> bool {
+    descriptor
+        .modes
+        .iter()
+        .map(|mode| mode.rows_per_invocation)
+        .max()
+        == Some(0)
 }
 
 /// The predicate a request term names, when it names one.

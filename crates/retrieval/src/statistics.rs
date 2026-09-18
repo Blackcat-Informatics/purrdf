@@ -26,7 +26,21 @@
 //! measured empty": the former falls back to the producer's declared row bound
 //! (except where that bound is genuinely unbounded — see
 //! [`PlanError::StatisticsUnavailable`](crate::PlanError::StatisticsUnavailable)),
-//! the latter caps the stratum at zero.
+//! the latter narrows the stratum as far as a statistic is allowed to narrow
+//! anything, which is to one row and no further.
+//!
+//! # A statistic narrows a read; it never eliminates one
+//!
+//! Every bound derived here is floored at one. A measurement of zero — a
+//! cardinality of zero, a selectivity of zero, or both — is an honest report and
+//! is taken as one, but what follows from it is the shallowest read there is,
+//! not the absence of a read. A depth of zero would compile to `LIMIT 0`, invoke
+//! no relation at all, and then report the stratum exhausted with no rows, which
+//! is the strongest completeness claim this layer can make and would have been
+//! minted from an estimate rather than from data. Emptiness is the producer's to
+//! report, in the receipt fusion verifies against the rows it actually pulled,
+//! so the planner's job is to ask the shallowest honest question and let the
+//! producer answer it.
 //!
 //! # Why selectivity is an integer, in parts per million
 //!
@@ -94,6 +108,16 @@ pub trait Statistics {
     /// The bound is applied the way a cardinality is — it lowers a depth, never
     /// raises one — and it is rounded **up**, so a bound derived from a ratio
     /// can never fall below the row count the ratio describes.
+    ///
+    /// Zero is where that rounding stops helping, so the derived depth is also
+    /// floored at one. Reporting zero is not a provider fault: it is the correct
+    /// answer for a provider that measured no matching rows, and the plan records
+    /// the value verbatim in its snapshot. What the planner declines to do is
+    /// turn it into a depth of zero, because that depth compiles to `LIMIT 0`,
+    /// invokes no relation, and reports the stratum exhausted having emitted
+    /// nothing — an emptiness claim the provider's estimate would have made on
+    /// the producer's behalf. Floored at one, the relation is still invoked,
+    /// still asked, and still the thing that says whether anything was there.
     ///
     /// A provider is free to report under a request predicate instead, or as
     /// well; a plan records every selectivity it was told, whatever the subject
