@@ -135,23 +135,34 @@
 //! active over a vocabulary of empty IRIs" are not the same parse, and an encoding
 //! that conflated them would let one product open against the other's inputs.
 //!
-//! # Row 10 carries a digest and no body, deliberately
+//! # Row 10 is a digest over a body the product CARRIES
 //!
-//! `crate::engine::ClassCatalog` is a PURE DERIVATION of the shape tree: a
-//! cycle-safe walk that collects every reachable `sh:class` / `sh:targetClass` /
-//! `shnex:instancesOf` IRI and assigns each a position. So the product pins its
-//! [`class_catalog_digest`] and carries no catalog section at all. A restore
-//! re-derives the catalog from the AST it has already decoded and compares.
+//! `crate::engine::ClassCatalog` is a derivation of the shape tree: a cycle-safe
+//! walk that collects every reachable `sh:class` / `sh:targetClass` /
+//! `shnex:instancesOf` IRI and assigns each a position. The product carries that
+//! walk's RESULT — in the AST section, as field 7 (`super::ast`) — and row 10 pins
+//! its [`class_catalog_digest`]. A restore reads the body and checks it here.
 //!
-//! That choice is free on the common path and strictly better on the cold one. The
-//! walk is O(shapes), in memory, with no I/O and no SPARQL, and it is dominated by
-//! the AST decode that has to happen on the same path anyway — so the recompute
-//! costs nothing measurable. Carrying the body instead would add bytes, add a second
-//! decoder, and — the actual defect — make a STALE ANALYSIS SERVABLE: a product
-//! written by a build whose class walk had a bug (or simply a different reachability
-//! rule) would restore that build's catalog and validate against it, verified and
-//! wrong. Pinning the digest means a product whose analysis no longer matches this
-//! build's walk is unservable, which is the outcome worth having.
+//! The body travels because "restore without repeated shared analysis" is what a
+//! prepared product is FOR, and the class walk is that shared analysis. An earlier
+//! arrangement pinned the digest and carried nothing, on the argument that the walk
+//! is cheap and that carrying a body makes a STALE ANALYSIS SERVABLE — a product
+//! written by a build whose walk had a bug, or simply a different reachability rule,
+//! would restore that build's catalog and validate against it, verified and wrong.
+//! The hazard is real; the conclusion was not, because pinning-only does not avoid
+//! the work, it only proves the work agreed after doing it again. What actually
+//! closes the hazard is a pair of checks, and they cover two different halves:
+//!
+//! * the STAGE ID covers the DERIVATION. `super::STAGE_ID` is digested from the
+//!   class walk's own source, so a build whose reachability rule differs cannot
+//!   share a stage id with the writer's, its products are refused by `admit`, and
+//!   `rebuild` re-derives the analysis rather than reading the carried one. Note
+//!   which way this cuts: before the body travelled, that hazard was OPEN and
+//!   unguarded — the walk is an algorithm and not a model type, so changing the
+//!   rule moved the meaning while leaving the stage id exactly where it was.
+//! * row 10 covers the BODY. The digest folds in each class IRI and the position it
+//!   was given, so a carried catalog that is not the one the writer wrote is refused
+//!   on [`ClassCatalog`] before any preparation exists.
 //!
 //! # Encoding
 //!
@@ -403,9 +414,10 @@ const CLASS_CATALOG_DOMAIN: &str = "purrdf-shapes/product/class-catalog";
 /// A content digest over `catalog`'s key-sorted entries: every planned class IRI and
 /// the position it was assigned.
 ///
-/// The product carries THIS and no catalog body — see the [module docs](self) for
-/// why re-deriving is free and why pinning the digest is what keeps a stale analysis
-/// unservable.
+/// The product carries the catalog BODY too (`super::ast` field 7); this is what
+/// binds that body to the product it arrived in — see the [module docs](self) for
+/// which half of the stale-analysis hazard this closes and which half the stage id
+/// closes.
 ///
 /// The position is folded in, not just the IRI set: the position is what a
 /// `ValidationPlan` indexes its resolved-`TermId` row by, so two catalogs over the
@@ -872,9 +884,11 @@ fn fix_for(dimension: ProductDimension) -> &'static str {
              identity is what says which build of the native code stands behind them"
         }
         ProductDimension::ClassCatalog => {
-            "this product pinned a class analysis this build does not re-derive from the same \
-             shape tree, so the analysis it compiled its class-membership decisions against is \
-             stale; re-prepare the product with the PurRDF build that will execute it"
+            "the class analysis this product carries is not the one its own identity pins, so the \
+             analysis a restore would compile its class-membership decisions against is not the \
+             analysis the product was written with; discard this product and re-prepare it from \
+             its shapes graph, because the section and the binding over it no longer describe one \
+             analysis"
         }
         // The residual. Reached only through the `#[non_exhaustive]` fallback in
         // `mismatch_position` or a position past the last known component, both of

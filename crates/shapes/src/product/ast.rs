@@ -101,8 +101,9 @@
 //! | 4 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
 //! | 5 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
 //! | 6 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
+//! | 7 | `class_catalog` | `seq<(str, uint)>` | the REUSABLE ANALYSIS: every planned class IRI and its binding-row position, **sorted by IRI** |
 //!
-//! Any byte after field 6 is [`Malformed`]: trailing bytes are a structure the
+//! Any byte after field 7 is [`Malformed`]: trailing bytes are a structure the
 //! writer did not produce, and skipping them is how a silent truncation passes
 //! for a successful load.
 //!
@@ -175,11 +176,33 @@
 //! * `Shapes::shapes_dataset`, `Shapes::parse_provenance` — the retained RDF and
 //!   the recorded parse inputs. Both belong to other sections of the product.
 //!
+//! # Why field 7 is here and not in a section of its own
+//!
+//! The class catalog is ANALYSIS, not model, so a fourth container section would
+//! describe it better. It cannot have one. The section directory is TOTAL — the
+//! declared section count is part of the [`ArtifactSpec`], checked before a product
+//! opens at all — so adding a fourth kind makes every product ever written fail to
+//! OPEN rather than merely fail to admit, and the forward-compatibility seam this
+//! codec is built around (`admit` refuses an unknown stage, `rebuild` rescues it
+//! from the carried dataset) never gets the chance to run. Extending this stream
+//! instead leaves the directory and the container format version exactly where they
+//! are, so an older product stays rescuable.
+//!
+//! That extension is safe for the same reason this stream carries no version byte of
+//! its own: the section has exactly ONE reader, and that reader is gated.
+//! [`super::ShapesProductView::admit`] verifies the stage id before it decodes
+//! anything here, [`super::ShapesProductView::rebuild`] never touches this section
+//! at all, and carrying the analysis MOVES the stage id, because the class walk
+//! behind field 7 is digested into it. So no product written before field 7 existed
+//! is ever handed to a decoder that expects it: such a product is refused on
+//! `stage-id` and rebuilt.
+//!
 //! Nothing here touches the filesystem, a clock, a thread or a source of
 //! randomness: `wasm32-unknown-unknown`-clean by construction.
 //!
 //! [`Malformed`]: ProductDimension::Malformed
 //! [`UnsupportedCapability`]: ProductDimension::UnsupportedCapability
+//! [`ArtifactSpec`]: purrdf_core::artifact::ArtifactSpec
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
@@ -187,6 +210,7 @@ use std::sync::{Arc, OnceLock};
 use ::purrdf::{FastMap, RdfTextDirection};
 use purrdf_core::ir::pack::bits::{PackBitsError, read_varint, write_varint};
 
+use crate::engine::ClassCatalog;
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
 };
@@ -411,6 +435,14 @@ pub(crate) struct AstParts {
     /// computed [`ShapeArg`] in [`Self::node_shapes`] was decoded against, left
     /// empty for the assembling stage to fill.
     pub(crate) shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
+    /// The REUSABLE ANALYSIS: the cycle-aware class walk's result, carried rather
+    /// than recomputed.
+    ///
+    /// This is the one field here that is not model. It is the product's answer to
+    /// "restore without repeated shared analysis" — see [`encode_classes`] for why
+    /// it travels in this section and what still has to be proven about it before a
+    /// preparation may use it.
+    pub(crate) classes: ClassCatalog,
 }
 
 // ---------------------------------------------------------------------------
@@ -2363,7 +2395,10 @@ pub(crate) fn custom_functions(
 /// inconsistent (two declarations of one custom function, a non-finite
 /// `sh:order`); [`ProductDimension::UnsupportedCapability`] for a
 /// SPARQL-based node expression spelled under a key this build does not know.
-pub(crate) fn encode_ast(shapes: &Shapes) -> Result<Vec<u8>, ShapesProductError> {
+pub(crate) fn encode_ast(
+    shapes: &Shapes,
+    classes: &ClassCatalog,
+) -> Result<Vec<u8>, ShapesProductError> {
     let functions = custom_functions(shapes)?;
     let fn_index: BTreeMap<String, u64> = functions
         .iter()
@@ -2417,8 +2452,125 @@ pub(crate) fn encode_ast(shapes: &Shapes) -> Result<Vec<u8>, ShapesProductError>
     }
     // 6. The shapes-graph IRI.
     writer.opt_text(shapes.shapes_graph.as_deref());
+    // 7. The reusable class analysis.
+    encode_classes(&mut writer, classes);
 
     Ok(writer.out)
+}
+
+/// Write the reusable class analysis: every planned class IRI and the position its
+/// resolved term id occupies in a validation plan's binding row, sorted by IRI.
+///
+/// # Why the product carries this at all
+///
+/// A prepared product exists so a consumer can restore a validator without RDF
+/// reparsing, without shape extraction and without repeating the shared analysis.
+/// The class walk IS that shared analysis: a cycle-aware traversal of every shape,
+/// every nested property shape, every constraint and every node expression in the
+/// graph. A product that carried only the walk's DIGEST would let a restore prove
+/// its own walk agreed — after running it, on every restore, in every process,
+/// forever. Proving the analysis is right is not the same as not having to do it,
+/// and only the second is what the artifact was for.
+///
+/// # Why carrying it is not a stale-analysis hazard
+///
+/// It would be, if nothing bound the body to the build that reads it. The argument
+/// against carrying a body was never about bytes: a product written by a build whose
+/// reachability rule differed — a bug, or simply a later refinement — would restore
+/// THAT build's catalog and validate against it, verified and wrong, with every
+/// digest agreeing because the digest was written by the same wrong walk.
+///
+/// Two checks close that, and they close different halves of it:
+///
+/// * the STAGE ID covers the derivation. It is digested from the class walk's own
+///   source — `ClassCatalog::for_shapes` and the four `collect_*_classes`
+///   functions — so a build whose reachability rule differs at all cannot share a
+///   stage id with this one, and its products are refused by `admit` and sent to
+///   `rebuild`, which re-derives and ignores what was carried. Before the analysis
+///   travelled, that hazard was open in the other direction and unguarded: the walk
+///   is an algorithm, not a type, so changing the rule without touching a model type
+///   left the stage id standing while the meaning moved.
+/// * the IDENTITY DIGEST covers the body. Row 10 of a product's identity is
+///   `class_catalog_digest` over these same pairs, positions included, and the
+///   admit seam checks the carried body against it before any preparation exists.
+///   A body that is not the one this product was written with is refused on the
+///   class-catalog dimension.
+///
+/// Byte-deterministic: the pairs go out sorted by class IRI, never in the backing
+/// map's iteration order, which is not a fact about the catalog at all.
+fn encode_classes(writer: &mut AstWriter, classes: &ClassCatalog) {
+    let mut entries: Vec<(&str, usize)> = classes
+        .entries()
+        .map(|(class, position)| (class.as_str(), position))
+        .collect();
+    entries.sort_unstable();
+
+    writer.count(entries.len());
+    for (class, position) in entries {
+        writer.text(class);
+        // `uint`, not `count`: a position is an INDEX into the binding row, not a
+        // count of elements that follow it, and the count reader's "every element
+        // occupies at least one byte" bound is false of an index. The last entry's
+        // position sits at the very end of the section with nothing behind it, so
+        // reading it as a count refuses every catalog whose largest position
+        // exceeds the bytes left — which is every catalog of more than one class.
+        writer.uint(position as u64);
+    }
+}
+
+/// Read the reusable class analysis back — see [`encode_classes`] for why it is
+/// carried and what still binds it.
+///
+/// # Errors
+///
+/// [`ProductDimension::Truncated`] when the section ends inside the table;
+/// [`ProductDimension::Malformed`] when the pairs are not a catalog any walk could
+/// have produced — see [`ClassCatalog::from_entries`] for the two conditions and
+/// for why the rank each class would have been GIVEN is deliberately not one of
+/// them.
+fn decode_classes(reader: &mut AstReader<'_>) -> Result<ClassCatalog, ShapesProductError> {
+    let declared = reader.count()?;
+    let mut entries = Vec::with_capacity(speculative_capacity(declared));
+    for _ in 0..declared {
+        let class = reader.named_node()?;
+        // Read as a bare integer and let `from_entries` decide whether it is a
+        // position at all. Bounding it here would be a second, weaker transcription
+        // of the permutation rule, and the one thing an unchecked value could do —
+        // drive an allocation — it cannot: the only vector it indexes is already
+        // sized by `declared`, which the count reader bounded.
+        let position = usize::try_from(reader.uint()?).unwrap_or(usize::MAX);
+        entries.push((class, position));
+    }
+    ClassCatalog::from_entries(entries).ok_or_else(|| {
+        malformed(format!(
+            "this product carries a class analysis of {declared} entries whose positions are not \
+             one arrangement of the {declared} slots a validation plan's binding row has, or whose \
+             class IRIs are not distinct; re-prepare the product from its shapes graph, because \
+             every class a plan resolves needs exactly one slot and a plan indexed past its own \
+             row would abort rather than refuse"
+        ))
+    })
+}
+
+/// Encode a shapes graph alongside the class analysis its OWN shape tree derives.
+///
+/// The pairing [`PreparedShapes::to_product`](crate::engine::PreparedShapes::to_product)
+/// makes, hoisted for the tests that are about this stream rather than about a
+/// product: those hold a bare [`Shapes`] and no preparation, and re-deriving the
+/// catalog at each call site would be dozens of transcriptions of the one line that
+/// says what field 7 holds.
+///
+/// Test-only, and that is the point — production has a preparation in hand and must
+/// write the catalog THAT preparation carries. A non-test helper that derived one
+/// here would be a second way to answer the question, sitting next to the writer
+/// that must not use it.
+///
+/// # Errors
+///
+/// Every dimension [`encode_ast`] refuses on.
+#[cfg(test)]
+pub(crate) fn encode_ast_derived(shapes: &Shapes) -> Result<Vec<u8>, ShapesProductError> {
+    encode_ast(shapes, &ClassCatalog::for_shapes(shapes.node_shapes.iter()))
 }
 
 /// Decode the declarative half of a prepared product.
@@ -2491,6 +2643,9 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
     }
     let shapes_graph = reader.opt_text()?;
 
+    // 7. The reusable class analysis, after the model it was derived from.
+    let classes = decode_classes(&mut reader)?;
+
     if reader.pos != bytes.len() {
         return Err(malformed(format!(
             "this product carries {} bytes after the end of its shapes AST; re-prepare the \
@@ -2508,6 +2663,7 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
         shapes_graph,
         custom_functions: reader.functions,
         shape_index: reader.shape_index,
+        classes,
     })
 }
 

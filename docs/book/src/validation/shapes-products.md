@@ -185,7 +185,7 @@ A product carries three sections, always all three:
 | --- | --- |
 | identity | the preparation stage id, the profile id, and the parse inputs (base, prefix map, `sh:shapesGraph` IRI, box-role vocabulary) |
 | dataset | the shapes dataset itself, in PurRDF's succinct pack container |
-| model | the declarative SHACL model — node shapes, constraints, paths, node expressions, SHACL-AF rules, `sh:SPARQLTargetType` declarations |
+| model | the declarative SHACL model — node shapes, constraints, paths, node expressions, SHACL-AF rules, `sh:SPARQLTargetType` declarations — and, as its last field, the reusable class analysis derived from it |
 
 Each section carries its own SHA-256; the envelope adds an identity-region
 digest and a whole-container digest in a sealed trailer that also restates the
@@ -207,6 +207,23 @@ was written is simply absent. Targets are resolved per bound dataset, every
 time. What a product removes from the restore path is the parse, the model
 construction and the shape analysis — reusable preparation and per-dataset
 binding are different lines in the budget.
+
+**The shape analysis really is removed, not merely checked.** The class analysis —
+a cycle-safe walk collecting every reachable `sh:class`, `sh:targetClass` and
+`shnex:instancesOf` IRI and assigning each a binding-row position — is carried as
+the last field of the model section, and `admit` reads it rather than walking the
+shape tree again. It is bound rather than trusted: the `class-catalog` component of
+the identity is the digest of exactly those pairs, positions included, so a carried
+analysis that is not the one the product was packed with is refused. And it cannot
+go stale across builds, because the preparation stage id is digested from the class
+walk's own source — a build whose reachability rule differs cannot share a stage id
+with the one that packed the product, so `admit` refuses it and `rebuild` re-derives
+instead.
+
+It shares the model section rather than taking a fourth section of its own so that
+the section directory and the container format version did not have to move when it
+started travelling; a fourth section would have made every product ever packed fail
+to *open*, which is the one state `rebuild` cannot rescue.
 
 **Nor is the provenance of a restore carried, for the same kind of reason.** A
 product records the inputs that decided what its shapes *mean*; how a particular
@@ -344,8 +361,9 @@ afterwards, looking at a verdict in a log.
 ### Binding a restore to the product you meant
 
 Every check above asks about **this process** — is this the build that wrote the
-memo, are these the registries the product was prepared against, does this build
-re-derive the pinned class analysis. Not one of them asks whether the file named
+memo, are these the registries the product was prepared against, is the class
+analysis the product carries the one its own identity pins. Not one of them asks
+whether the file named
 on the command line is the product you wanted, because nothing in a product states
 which product was meant. So naming the wrong one is not an error:
 
@@ -407,12 +425,14 @@ are two entry points at one boundary rather than a flag on one:
 
 - **`admit`** — the common path. It re-derives nothing expensive: verify the
   profile, verify the stage id, check the host-supplied registries, restore the
-  dataset, decode the model, link it, re-derive the class catalog, and check the
-  complete input binding.
+  dataset, decode the model and the class analysis carried with it, link it, and
+  check the complete input binding — the carried analysis included.
 - **`rebuild`** — the forward-compatibility path, taken when the stage id is one
-  this build does not know. It ignores the model section and re-derives the
-  shapes from the dataset the product carries, under the product's own recorded
-  parse inputs.
+  this build does not know. It ignores the model section entirely — the carried
+  class analysis with it — and re-derives the shapes, and their analysis, from the
+  dataset the product carries, under the product's own recorded parse inputs. That
+  is what makes it the remedy: a product it must rescue is by definition one whose
+  carried analysis came from a different reachability rule.
 
 Every binding reaches both paths, not only Rust: the CLI's `validate
 --shapes-product --rebuild`, Python's `ShapesProduct.rebuild()`, the C ABI's
@@ -557,7 +577,7 @@ exits `0`. A refusal names its dimension on stderr and exits `1`.
 ```console
 $ purrdf shacl explain shapes.purrshp
 format-version 1
-stage-id 5b7a53e6…
+stage-id f87a082c…
 stage-known true
 identity-digest 9f2c…
 identity-components 11
@@ -679,7 +699,7 @@ which opens the product before it certifies anything.
 | `function-registry` | prepared against a different SPARQL function registry, or against a different build of the host implementations behind it | wire the same functions into the executing host, under the same implementation identity |
 | `aggregate-registry` | prepared against a different custom-aggregate registry, or against a different build of the host implementations behind it | wire the same aggregates into the executing host, under the same implementation identity |
 | `property-function-registry` | prepared against a different property-function registry, or against a different build of the host implementations behind it | wire the same relations into the executing host, under the same implementation identity |
-| `class-catalog` | the pinned class analysis is not the one this build re-derives | re-pack with the build that will execute it |
+| `class-catalog` | the class analysis the product carries is not the one its own identity pins | discard and re-pack from the shapes graph — the section and the binding over it no longer describe one analysis |
 | `unsupported-capability` | well-formed bytes asking for something this build cannot honour, or a preparation this build will not write a product for | see the message — a declared function nothing in the model reaches, a decode larger than the scratch ceiling in force, or host implementations the packer was given no identity for |
 | `depth-limit` | a structure nests past the decoder's fixed ceiling | re-pack from a shapes graph this build parses; the ceiling is a stack guard, not a semantic limit |
 | `malformed` | structurally invalid in a way no other dimension names | discard and re-pack |

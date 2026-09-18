@@ -33,8 +33,16 @@
 //!
 //! | Constructor | What it re-derives | What it proves, beyond [`install`]'s own check |
 //! |-------------|--------------------|-----------------------------------------------|
-//! | [`from_admitted`] | nothing expensive | the product's declared [`Identity`] is the identity of the environment about to execute it |
-//! | [`from_rebuilt`] | the whole shapes graph, from the carried dataset | nothing further — the derivation from the authenticated dataset IS the binding |
+//! | [`from_admitted`] | nothing — the class analysis travels in the product | the product's declared [`Identity`], the carried analysis included, is the identity of the environment about to execute it |
+//! | [`from_rebuilt`] | the whole shapes graph, from the carried dataset, and the class analysis with it | nothing further — the derivation from the authenticated dataset IS the binding |
+//!
+//! The asymmetry over the class analysis is deliberate and it is what makes
+//! [`from_rebuilt`] a remedy. A rebuild exists for the reader that meets a
+//! preparation stage it does not know, and the stage id covers the class walk's own
+//! source, so a product it must rescue is by definition one whose carried analysis
+//! was produced by a different reachability rule. Reading that body would be
+//! serving a stale analysis; re-deriving it is the only answer, and it is free
+//! here because the rebuild is already re-deriving the entire shape tree.
 //!
 //! They are two entry points at ONE boundary, not a mode flag on one entry point —
 //! see the [module docs](super) for why the writer stays single-path.
@@ -63,7 +71,7 @@ use purrdf_core::artifact::Identity;
 use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{UserFunctionRegistry, user_fn};
 
-use crate::engine::PreparedShapes;
+use crate::engine::{ClassCatalog, PreparedShapes};
 use crate::provenance::{ProductRestore, ValidatorProvenance};
 use crate::shapes::{Shapes, link};
 
@@ -80,34 +88,40 @@ pub(super) struct CertifiedParts {
 }
 
 impl CertifiedParts {
-    /// The ADMIT seam's final check: install the host's bindings, re-derive the
-    /// class catalog, and prove the product's declared [`Identity`] is the identity
-    /// of the environment about to execute it.
+    /// The ADMIT seam's final check: install the host's bindings and prove the
+    /// product's declared [`Identity`] is the identity of the environment about to
+    /// execute it — including that the class analysis the product CARRIED is the
+    /// analysis that identity pins.
     ///
-    /// The class-catalog recompute is not a separate step: it is row 10 of the
-    /// identity, so deriving the catalog from the restored shapes and handing it to
-    /// the check IS the comparison against the digest the product pinned.
+    /// `classes` arrives decoded from the product's own AST section rather than
+    /// derived here, and that is the point of the section carrying it: the class
+    /// walk is the "repeated shared analysis" a prepared product exists to
+    /// eliminate. It is checked, not trusted — it is row 10 of the identity, so
+    /// handing the carried catalog to [`identity::check_restored_identity`] IS the
+    /// comparison against the digest the product pinned, and a body that is not the
+    /// one written refuses on [`ProductDimension::ClassCatalog`].
+    ///
+    /// The check runs BEFORE a [`PreparedShapes`] is assembled around the catalog,
+    /// not after. Nothing partial escapes either way — this constructor's result is
+    /// the only way out — but building a preparation over an analysis that has not
+    /// been bound yet is the shape of the defect this gate exists to rule out, and
+    /// the order costs nothing.
     ///
     /// # Errors
     ///
-    /// The [`ProductDimension`] of the first identity component that disagrees, or
-    /// the installation refusals [`install`] reports.
+    /// The [`ProductDimension`] of the first identity component that disagrees,
+    /// [`ProductDimension::ClassCatalog`] when the carried analysis is not the one
+    /// the identity pins, or the installation refusals [`install`] reports.
     pub(super) fn from_admitted(
         declared: &Identity,
         mut shapes: Shapes,
         host: &HostBindings<'_>,
+        classes: ClassCatalog,
     ) -> Result<Self, ShapesProductError> {
         install(&mut shapes, host)?;
 
         let shapes = Arc::new(shapes);
-        let prepared = PreparedShapes::with_provenance(
-            Arc::clone(&shapes),
-            ValidatorProvenance::Restored {
-                identity: declared.clone(),
-                restore: ProductRestore::Admitted,
-            },
-        );
-        let classes = prepared.class_catalog();
+        let classes = Arc::new(classes);
         identity::check_restored_identity(
             declared,
             &shapes,
@@ -115,7 +129,16 @@ impl CertifiedParts {
             host.implementation_identity(),
             &classes,
         )?;
-        Ok(Self { prepared })
+        Ok(Self {
+            prepared: PreparedShapes::with_carried_analysis(
+                shapes,
+                ValidatorProvenance::Restored {
+                    identity: declared.clone(),
+                    restore: ProductRestore::Admitted,
+                },
+                classes,
+            ),
+        })
     }
 
     /// The REBUILD seam's final check: install the host's bindings into a shapes
@@ -135,6 +158,15 @@ impl CertifiedParts {
     /// recorded identity and a verified one is carried in the type rather than left
     /// to prose: this seam records [`ProductRestore::Rebuilt`], whose documentation
     /// states exactly what has and has not been proven about the value beside it.
+    ///
+    /// The class analysis the product carried is ignored here for the same reason,
+    /// and it is the one place in the codec where ignoring a carried value is the
+    /// correct move: [`PreparedShapes::with_provenance`] re-derives it from the
+    /// shapes this seam just re-derived, so the analysis is a function of the
+    /// authenticated dataset exactly like everything else on this path. A rebuild
+    /// that read the carried body would take an analysis from the build whose stage
+    /// it could not recognise and execute against it — the stale-analysis failure,
+    /// arriving through the door that exists to prevent it.
     ///
     /// # Errors
     ///

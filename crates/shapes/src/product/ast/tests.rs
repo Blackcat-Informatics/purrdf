@@ -20,7 +20,7 @@ use super::{
     AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ARG_KEY,
     TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR,
     TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG,
-    TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast, speculative_capacity, write_varint,
+    TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast_derived, speculative_capacity, write_varint,
 };
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -531,7 +531,7 @@ fn shapes_of(node_shapes: Vec<Shape>) -> Shapes {
 /// [`Constraint`], [`Path`] and [`NodeExpr`] are deliberately not `PartialEq`, so
 /// the bytes ARE the equality relation — see this module's parent documentation.
 fn round_trip(shapes: &Shapes) -> (Vec<u8>, Vec<u8>, Shapes) {
-    let bytes = encode_ast(shapes).expect("the fixture encodes");
+    let bytes = encode_ast_derived(shapes).expect("the fixture encodes");
     let parts = decode_ast(&bytes).expect("the fixture decodes");
     let rebuilt = Shapes {
         node_shapes: parts.node_shapes,
@@ -540,7 +540,7 @@ fn round_trip(shapes: &Shapes) -> (Vec<u8>, Vec<u8>, Shapes) {
         shapes_graph: parts.shapes_graph,
         ..Shapes::default()
     };
-    let again = encode_ast(&rebuilt).expect("the decoded parts re-encode");
+    let again = encode_ast_derived(&rebuilt).expect("the decoded parts re-encode");
     (bytes, again, rebuilt)
 }
 
@@ -909,7 +909,8 @@ fn unknown_variant_tag_is_unsupported_capability() {
 
     // The SAME shape at the whole-product level, so the refusal is reachable from
     // the public surface and not only from the private decoders.
-    let bytes = encode_ast(&shapes_of(vec![leaf_shape("Only")])).expect("the fixture encodes");
+    let bytes =
+        encode_ast_derived(&shapes_of(vec![leaf_shape("Only")])).expect("the fixture encodes");
     decode_ast(&bytes).expect("the unmodified product decodes");
     let mut corrupted = bytes;
     // Byte 0 is the declaration count (0), byte 1 the node-shape count (1), byte 2
@@ -1069,7 +1070,7 @@ fn deep_nesting_refuses_with_depth_limit() {
     // And from the public surface, over the mutually recursive shape/constraint
     // cycle rather than a single-type chain.
     let deep = shapes_of(vec![nested_shape(4 * ceiling)]);
-    let error = encode_ast(&deep).expect_err("a deeply nested shapes graph must refuse");
+    let error = encode_ast_derived(&deep).expect_err("a deeply nested shapes graph must refuse");
     assert_eq!(error.dimension(), ProductDimension::DepthLimit);
 }
 
@@ -1131,10 +1132,10 @@ fn shapes_with_order(order: Option<OrderKey>) -> Shapes {
 /// `-0.0` and `+0.0` are one number, so they must be one byte form.
 #[test]
 fn order_key_negative_zero_is_canonical() {
-    let negative = encode_ast(&shapes_with_order(Some(OrderKey::new(-0.0))))
+    let negative = encode_ast_derived(&shapes_with_order(Some(OrderKey::new(-0.0))))
         .expect("a negative-zero order encodes");
-    let positive =
-        encode_ast(&shapes_with_order(Some(OrderKey::new(0.0)))).expect("a zero order encodes");
+    let positive = encode_ast_derived(&shapes_with_order(Some(OrderKey::new(0.0))))
+        .expect("a zero order encodes");
     assert_eq!(
         negative, positive,
         "`-0.0` and `+0.0` are two IEEE-754 encodings of ONE number; two byte forms would make one \
@@ -1150,13 +1151,14 @@ fn order_key_negative_zero_is_canonical() {
 
     // Neighbouring values are still distinct — canonicalizing zero must not
     // collapse anything else.
-    let one = encode_ast(&shapes_with_order(Some(OrderKey::new(1.0)))).expect("encodes");
-    let minus_one = encode_ast(&shapes_with_order(Some(OrderKey::new(-1.0)))).expect("encodes");
+    let one = encode_ast_derived(&shapes_with_order(Some(OrderKey::new(1.0)))).expect("encodes");
+    let minus_one =
+        encode_ast_derived(&shapes_with_order(Some(OrderKey::new(-1.0)))).expect("encodes");
     assert_ne!(one, minus_one);
     assert_ne!(one, positive);
 
     // Absent encodes distinctly from present-and-zero.
-    let absent = encode_ast(&shapes_with_order(None)).expect("encodes");
+    let absent = encode_ast_derived(&shapes_with_order(None)).expect("encodes");
     assert_ne!(absent, positive);
     assert!(
         decode_ast(&absent).expect("decodes").node_shapes[0].rules[0]
@@ -1165,10 +1167,10 @@ fn order_key_negative_zero_is_canonical() {
     );
 
     // The invalid neighbour: a key with no ordering value at all.
-    let error = encode_ast(&shapes_with_order(Some(OrderKey::new(f64::NAN))))
+    let error = encode_ast_derived(&shapes_with_order(Some(OrderKey::new(f64::NAN))))
         .expect_err("a non-finite order must be refused");
     assert_eq!(error.dimension(), ProductDimension::Malformed);
-    let error = encode_ast(&shapes_with_order(Some(OrderKey::new(f64::INFINITY))))
+    let error = encode_ast_derived(&shapes_with_order(Some(OrderKey::new(f64::INFINITY))))
         .expect_err("a non-finite order must be refused");
     assert_eq!(error.dimension(), ProductDimension::Malformed);
 }
@@ -1205,7 +1207,7 @@ fn custom_function_cycle_encodes_as_dag() {
 
     // Terminating at all is the claim: a tree walk over this value would recurse
     // until the stack was gone.
-    let bytes = encode_ast(&shapes).expect("a cyclic function graph encodes");
+    let bytes = encode_ast_derived(&shapes).expect("a cyclic function graph encodes");
     let parts = decode_ast(&bytes).expect("it decodes");
 
     assert_eq!(
@@ -1236,7 +1238,7 @@ fn custom_function_cycle_encodes_as_dag() {
         ..Shapes::default()
     };
     assert_eq!(
-        encode_ast(&rebuilt).expect("re-encodes"),
+        encode_ast_derived(&rebuilt).expect("re-encodes"),
         bytes,
         "the DAG is byte-stable",
     );
@@ -1253,10 +1255,10 @@ fn custom_function_cycle_encodes_as_dag() {
         }],
         ..leaf_shape("Bodiless")
     }]);
-    let bytes = encode_ast(&bodiless).expect("a bodiless declaration encodes");
+    let bytes = encode_ast_derived(&bodiless).expect("a bodiless declaration encodes");
     let parts = decode_ast(&bytes).expect("it decodes");
     assert!(parts.custom_functions[0].body.get().is_none());
-    assert_ne!(bytes, encode_ast(&shapes).expect("encodes"));
+    assert_ne!(bytes, encode_ast_derived(&shapes).expect("encodes"));
 }
 
 /// Two SEPARATE declarations of one function IRI are refused rather than unified,
@@ -1281,7 +1283,8 @@ fn two_declarations_of_one_function_iri_are_refused() {
         constraints: vec![call(first), call(second)],
         ..leaf_shape("Clashing")
     }]);
-    let error = encode_ast(&clashing).expect_err("two declarations of one IRI must be refused");
+    let error =
+        encode_ast_derived(&clashing).expect_err("two declarations of one IRI must be refused");
     assert_eq!(error.dimension(), ProductDimension::Malformed);
 
     // VALID: the same two call sites sharing ONE declaration — which is what the
@@ -1291,7 +1294,7 @@ fn two_declarations_of_one_function_iri_are_refused() {
         constraints: vec![call(Arc::clone(&shared)), call(shared)],
         ..leaf_shape("Sharing")
     }]);
-    let bytes = encode_ast(&sharing).expect("shared declarations encode");
+    let bytes = encode_ast_derived(&sharing).expect("shared declarations encode");
     assert_eq!(
         decode_ast(&bytes).expect("decodes").custom_functions.len(),
         1
@@ -1304,7 +1307,7 @@ fn two_declarations_of_one_function_iri_are_refused() {
 #[test]
 fn sparql_target_type_round_trips() {
     let shapes = full_fixture();
-    let bytes = encode_ast(&shapes).expect("encodes");
+    let bytes = encode_ast_derived(&shapes).expect("encodes");
     let parts = decode_ast(&bytes).expect("decodes");
 
     assert_eq!(parts.target_types.len(), 2);
@@ -1341,7 +1344,7 @@ fn sparql_target_type_round_trips() {
         target_types: reversed,
         ..full_fixture()
     };
-    assert_eq!(encode_ast(&same).expect("encodes"), bytes);
+    assert_eq!(encode_ast_derived(&same).expect("encodes"), bytes);
 
     // A target type with no parameters is a distinct, legal declaration.
     let empty_key = ex("TargetTypeB").as_str().to_owned();
@@ -1371,7 +1374,7 @@ fn rule_schedule_round_trips() {
             }],
             ..leaf_shape("Scheduled")
         }]);
-        let bytes = encode_ast(&shapes).expect("encodes");
+        let bytes = encode_ast_derived(&shapes).expect("encodes");
         let parts = decode_ast(&bytes).expect("decodes");
         assert_eq!(
             parts.node_shapes[0].rules[0].schedule, schedule,
@@ -1411,9 +1414,9 @@ fn box_role_vocab_round_trips() {
         ..shapes_of(vec![leaf_shape("S")])
     };
 
-    let absent_bytes = encode_ast(&absent).expect("encodes");
-    let empty_bytes = encode_ast(&present_empty).expect("encodes");
-    let populated_bytes = encode_ast(&populated).expect("encodes");
+    let absent_bytes = encode_ast_derived(&absent).expect("encodes");
+    let empty_bytes = encode_ast_derived(&present_empty).expect("encodes");
+    let populated_bytes = encode_ast_derived(&populated).expect("encodes");
 
     assert_ne!(
         absent_bytes, empty_bytes,
@@ -1579,7 +1582,7 @@ fn select_key_round_trips_and_a_third_spelling_refuses() {
 #[test]
 fn trailing_bytes_are_malformed() {
     let shapes = full_fixture();
-    let bytes = encode_ast(&shapes).expect("encodes");
+    let bytes = encode_ast_derived(&shapes).expect("encodes");
 
     // VALID: the exact bytes.
     decode_ast(&bytes).expect("the exact byte string decodes");
@@ -1614,7 +1617,7 @@ fn an_impossible_sequence_length_is_refused_but_an_honest_one_is_not() {
     // VALID: a genuinely large-ish sequence that the bytes DO carry. A ceiling
     // that refused this would be over-refusal, not strictness.
     let shapes = shapes_of((0..512).map(|i| leaf_shape(&format!("S{i}"))).collect());
-    let bytes = encode_ast(&shapes).expect("encodes");
+    let bytes = encode_ast_derived(&shapes).expect("encodes");
     assert_eq!(
         decode_ast(&bytes).expect("decodes").node_shapes.len(),
         512,
@@ -1677,7 +1680,7 @@ fn an_oversized_sequence_count_does_not_reserve_for_itself() {
     // VALID: a sequence LONGER than the clamp that the bytes really do carry.
     let honest = MAX_SPECULATIVE_ELEMENTS + 1;
     let shapes = shapes_of((0..honest).map(|i| leaf_shape(&format!("S{i}"))).collect());
-    let bytes = encode_ast(&shapes).expect("the fixture encodes");
+    let bytes = encode_ast_derived(&shapes).expect("the fixture encodes");
     assert_eq!(
         decode_ast(&bytes).expect("decodes").node_shapes.len(),
         honest,
@@ -1739,7 +1742,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
         ..leaf_shape("Indexed")
     }]);
 
-    let bytes = encode_ast(&shapes).expect("encodes");
+    let bytes = encode_ast_derived(&shapes).expect("encodes");
     let parts = decode_ast(&bytes).expect("decodes");
 
     let mut handles: Vec<&Arc<OnceLock<::purrdf::FastMap<String, Shape>>>> = Vec::new();
@@ -1785,7 +1788,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
 #[test]
 fn an_empty_shapes_graph_round_trips() {
     let shapes = Shapes::default();
-    let bytes = encode_ast(&shapes).expect("an empty shapes graph encodes");
+    let bytes = encode_ast_derived(&shapes).expect("an empty shapes graph encodes");
     let parts = decode_ast(&bytes).expect("it decodes");
     assert!(parts.node_shapes.is_empty());
     assert!(parts.target_types.is_empty());
@@ -1797,5 +1800,5 @@ fn an_empty_shapes_graph_round_trips() {
         node_shapes: parts.node_shapes,
         ..Shapes::default()
     };
-    assert_eq!(encode_ast(&rebuilt).expect("re-encodes"), bytes);
+    assert_eq!(encode_ast_derived(&rebuilt).expect("re-encodes"), bytes);
 }

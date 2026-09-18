@@ -42,6 +42,11 @@
 //!
 //! `fixtures/prepared-shapes-core-format-v1-frozen.product` is NOT that file and
 //! is never regenerated — see [`the_frozen_format_epoch_product_stays_readable`].
+//! As of the preparation stage that made the reusable class analysis travel inside
+//! the artifact, that file is a genuine older-stage product, so forward
+//! compatibility is now WITNESSED rather than merely set up: `admit` refuses it and
+//! `rebuild` rescues it, executed on every run by
+//! [`the_frozen_format_epoch_product_is_refused_then_rebuilt`].
 
 mod product_fixture;
 
@@ -52,7 +57,7 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 ///
 /// This is the "intermediate bytes" measurement for the fixture, pinned as a fact
 /// the build checks rather than a figure quoted from a run nobody can reproduce.
-const GOLDEN_LEN: usize = 4_536;
+const GOLDEN_LEN: usize = 4_568;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See
@@ -248,33 +253,47 @@ fn frozen_golden_admits() {
 /// back into the argument it replaced, and does so silently, because it would
 /// keep passing.
 ///
-/// Today it is a byte-identical copy of the regenerable golden, because today's
-/// build is the build that wrote both — the format has not moved since it was
-/// introduced, so there has not yet been a second build for the two files to
-/// disagree about. That is the honest starting state, not a redundancy: the two
-/// files differ in *lifetime*, not content, and the first format change is what
-/// separates them — the regenerable golden is re-prepared to match the new
-/// format, this one stays exactly as it is. Until that first change happens,
-/// forward compatibility across a real format change has not been witnessed, only
-/// set up to be witnessed; this test exists so the day it is needed, it already
-/// runs, instead of being invented under pressure with no frozen artifact to
-/// prove it against.
+/// # This is now a witness, not a rehearsal
+///
+/// The artifact began as a byte-identical copy of the regenerable golden, because
+/// one build had written both and the preparation had not yet moved. That was the
+/// honest starting state and it proved nothing: the two files differed in
+/// *lifetime*, not content, and forward compatibility across a real change had only
+/// been set up to be witnessed.
+///
+/// The preparation has since moved. A prepared product now CARRIES the reusable
+/// class analysis rather than pinning only its digest, and the stage id — which is
+/// derived from the model and from the class walk's own source — moved with it. So
+/// this artifact is, for the first time, a genuine product of an earlier
+/// preparation stage, and the seam it was frozen to test is executed rather than
+/// described: the file this build cannot admit is the file this build rebuilds.
+///
+/// It remains READABLE rather than merely refusable because the container format
+/// version did not move with the preparation. The class analysis travels inside the
+/// existing AST section instead of a fourth section of its own, precisely so the
+/// section directory and the format version stay where they are; a fourth section
+/// would have made this product fail to OPEN, and a product that cannot open cannot
+/// be rescued by anything.
 ///
 /// # What every future reader owes it
 ///
 /// Two outcomes are acceptable, and they are the two seams the reader documents:
 ///
-/// * the stage id is still one this build knows, so `admit` succeeds; or
-/// * the stage id has moved on — the model this memo describes is not this
-///   build's — so `admit` refuses with [`ProductDimension::StageId`] and
-///   `rebuild` re-derives the shapes graph from the dataset the product carries.
+/// * the stage id has moved on — the preparation this memo describes is not this
+///   build's — so `admit` refuses with [`ProductDimension::StageId`] and `rebuild`
+///   re-derives the shapes graph from the dataset the product carries; or
+/// * some later change returns this build to the frozen artifact's own stage id, so
+///   `admit` succeeds again.
 ///
-/// Either way the product must `open`, and either way the restored validator must
-/// produce the same report as a fresh parse of the same shapes graph. Every third
-/// outcome fails here: opening at all failing, `admit` refusing on some *other*
-/// dimension (which would mean the envelope, the profile or the identity binding
-/// broke rather than the model moving), `rebuild` refusing, or either path
-/// restoring to a validator that answers differently.
+/// The first is what happens today and the assertions below take that path. The
+/// second is left acceptable on purpose: it is a fact about which stage this build
+/// is at, not a weaker promise, and a test that forbade it would fail on a correct
+/// revert. Either way the product must `open`, and either way the restored
+/// validator must produce the same report as a fresh parse of the same shapes
+/// graph. Every third outcome fails here: opening at all failing, `admit` refusing
+/// on some *other* dimension (which would mean the envelope, the profile or the
+/// identity binding broke rather than the preparation moving), `rebuild` refusing,
+/// or either path restoring to a validator that answers differently.
 #[test]
 fn the_frozen_format_epoch_product_stays_readable() {
     let expected = product_fixture::expected_report_nt();
@@ -326,20 +345,58 @@ fn the_frozen_format_epoch_product_stays_readable() {
     );
 }
 
-/// The frozen format-epoch product rebuilds correctly TODAY, whether or not it has to.
+/// **The frozen format-epoch product is refused by `admit` and rescued by
+/// `rebuild`, TODAY.**
 ///
-/// [`the_frozen_format_epoch_product_stays_readable`] only reaches `rebuild` on the
-/// day the stage id moves, so on every day before that the branch this project is
-/// relying on for forward compatibility is never executed — and an escape hatch
-/// that has never been opened is a plan, not a seam. This runs it unconditionally
-/// against the same frozen artifact, so the path is proven working now rather than
-/// discovered broken on the one day it is needed.
+/// [`the_frozen_format_epoch_product_stays_readable`] states the durable contract,
+/// which is total over both stages a future build could be at. This states the
+/// FACT, and the difference matters: a total contract is satisfied by whichever
+/// branch happens to run, so it would keep passing if the frozen artifact quietly
+/// stopped being an older-stage product and the rescue path went back to never
+/// being executed. An escape hatch that has never been opened is a plan, not a
+/// seam.
+///
+/// So this is written unconditionally. The frozen artifact was minted at a
+/// preparation stage that pinned the class analysis by digest and carried no body;
+/// this build carries the body, and the stage id moved accordingly, so `admit` must
+/// refuse it on [`ProductDimension::StageId`] and `rebuild` must re-derive the whole
+/// shapes graph from the dataset the product carries and answer exactly as a fresh
+/// parse does.
+///
+/// A build that legitimately returns to the frozen artifact's own stage id will
+/// fail here, and that is correct rather than brittle: on that day this test has
+/// stopped being a witness to anything, and it should be rewritten deliberately
+/// against whatever artifact IS then an older stage — not left passing while
+/// proving nothing.
 #[test]
-fn the_frozen_format_epoch_product_rebuilds() {
+fn the_frozen_format_epoch_product_is_refused_then_rebuilt() {
+    let refusal = ShapesProduct::open(FORMAT_EPOCH_GOLDEN)
+        .expect("the frozen format-epoch product opens")
+        .admit(&ShapesProfile::CORE, &product_fixture::host())
+        .expect_err(
+            "the frozen format-epoch product was minted at an earlier preparation stage — before \
+             the reusable class analysis travelled inside the artifact — so `admit` must refuse \
+             it rather than execute a memo written against a preparation this build no longer \
+             performs",
+        );
+    assert_eq!(
+        refusal.dimension(),
+        ProductDimension::StageId,
+        "the frozen format-epoch product was refused on `{}`, and the only refusal an earlier \
+         preparation stage may draw is `StageId`; any other dimension means the envelope, the \
+         profile or the identity binding stopped accepting a product this project promised to \
+         keep reading: {}",
+        refusal.dimension().label(),
+        refusal.message(),
+    );
+
     let rebuilt = ShapesProduct::open(FORMAT_EPOCH_GOLDEN)
         .expect("the frozen format-epoch product opens")
         .rebuild(&ShapesProfile::CORE, &product_fixture::host())
-        .expect("the frozen format-epoch product re-derives from the dataset it carries");
+        .expect(
+            "`admit` refused on the stage id, so `rebuild` is the seam that exists for exactly \
+             this product; a refusal here means the forward-compatibility path is not one",
+        );
 
     let rebuilt_nt = product_fixture::report_nt(&rebuilt);
     product_fixture::assert_non_vacuous(&rebuilt_nt);

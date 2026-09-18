@@ -91,10 +91,15 @@ purrdf-gts = { workspace = true }
 # release/wasm build. Version and the `full`/`visit` feature set are pinned once
 # in the root `[workspace.dependencies]`.
 syn = { workspace = true }
-# `syn`'s token substrate. The census refuses a field type it cannot read
-# structurally (a macro type, a `verbatim` type), and quoting the raw
-# `TokenStream` is the only way that refusal can name the field it refused —
-# a silent skip there is the exact defect the census exists to stop. Dev-only.
+# `syn`'s token substrate, used by the census for two things. It refuses a field
+# type it cannot read structurally (a macro type, a `verbatim` type), and quoting
+# the raw `TokenStream` is the only way that refusal can name the field it refused
+# — a silent skip there is the exact defect the census exists to stop. And the
+# class-analysis half of the stage id digests ALGORITHM rather than declaration, so
+# it renders those function bodies as normalized tokens: the lexer drops `//`
+# comments and folds `///` into attributes the scrape discards, which is what keeps
+# a reformat or a reworded comment from moving a digest products are written under.
+# Dev-only.
 proc-macro2 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

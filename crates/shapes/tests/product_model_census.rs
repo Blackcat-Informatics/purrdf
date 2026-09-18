@@ -74,7 +74,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::str::FromStr as _;
 
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::visit::{self, Visit};
 
 // ── The declared census ─────────────────────────────────────────────────────────
@@ -455,7 +457,7 @@ fn render_type(ty: &syn::Type, out: &mut String, mentions: &mut Vec<String>) {
 /// that `syn` declined to interpret; quoting the tokens is the only way the
 /// diagnostic can point at the actual field.
 fn opaque_description(ty: &syn::Type) -> String {
-    let tokens = |stream: &proc_macro2::TokenStream| stream.to_string();
+    let tokens = |stream: &TokenStream| stream.to_string();
     match ty {
         syn::Type::Macro(mac) => format!(
             "{}!({})",
@@ -993,6 +995,226 @@ pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
     table
 }
 
+/// The source file the class-analysis derivation lives in.
+const CLASS_ANALYSIS_SOURCE: &str = "crates/shapes/src/engine.rs";
+
+/// THE CLASS-ANALYSIS DERIVATION: every item that decides which classes a prepared
+/// product's reusable analysis contains and which binding-row position each gets.
+///
+/// Each row is `(impl scope, item keyword, item name)`; an empty scope means a free
+/// item at file scope.
+///
+/// # Why an ALGORITHM is censused here when nothing else is
+///
+/// Every other input to the stage id is a declaration: a type, a variant, a field,
+/// a table entry. This one is a walk. It is here because a prepared product now
+/// CARRIES the walk's result — a restore reads the class catalog instead of
+/// recomputing it — and a carried analysis is only safe while the build that reads
+/// it is the build that wrote it.
+///
+/// Nothing else could establish that. The walk's meaning lives entirely in function
+/// bodies: `collect_shape_classes` could stop descending into reifier shapes, or
+/// `collect_expression_classes` could stop collecting `shnex:instancesOf`, and not
+/// one model type, variant, field or table entry would move. The census would be
+/// identical, the stage id would be identical, and every product written by the
+/// older build would still `admit` — serving that build's analysis to this build's
+/// validator, verified and wrong. That hazard predates the catalog travelling; what
+/// carrying the body changes is that it can no longer be left open.
+///
+/// # What is deliberately NOT in this table
+///
+/// `ClassCatalog::from_entries` (the decoder) and `class_catalog_digest` (the
+/// binding) are both algorithms whose meaning matters, and neither is here, because
+/// neither can go stale silently: the writer and the reader of a single product run
+/// one build's copy of each, so a change to either makes an older product refuse
+/// loudly on the class-catalog dimension rather than restore wrongly.
+/// `ValidationPlan::bind` is excluded for the same reason — it consumes a catalog
+/// rather than deciding one.
+const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 6] = [
+    ("", "struct", "ClassScan"),
+    ("ClassCatalog", "fn", "for_shapes"),
+    ("", "fn", "collect_shape_classes"),
+    ("", "fn", "collect_property_classes"),
+    ("", "fn", "collect_constraints_classes"),
+    ("", "fn", "collect_expression_classes"),
+];
+
+/// The class-analysis derivation of the live repository sources.
+///
+/// # Panics
+///
+/// Panics when the source cannot be read — see [`class_analysis_table_from`] for
+/// every other way a scrape refuses.
+#[must_use]
+pub fn class_analysis_table() -> Vec<(String, String)> {
+    let path = repo_root().join(CLASS_ANALYSIS_SOURCE);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    class_analysis_table_from(&text)
+}
+
+/// Every [`CLASS_ANALYSIS_SITES`] row of `source`, rendered as normalized tokens.
+///
+/// The rendering is a token stream rather than source text, and that is what makes
+/// it safe to digest. Rust's lexer drops `//` comments outright and folds `///`
+/// into `#[doc = "…"]` attributes, which this scrape then discards, so reformatting
+/// the walk or rewriting its commentary CANNOT move the stage id — a gate that
+/// fired on prose would be re-pinned reflexively and stop being read. Attributes
+/// that are not documentation are KEPT, because `#[derive]` on the scan
+/// accumulator and `#[cfg]` on any of these items really do change what the walk
+/// does.
+///
+/// # Panics
+///
+/// Panics when `source` does not tokenize, when a census row names an item that is
+/// not there or is there more than once, or when a rendering comes back
+/// implausibly small — every one of those is the scrape reading something other
+/// than the derivation it claims to read, and a silent skip here would leave the
+/// hazard this table exists to close wide open while the gate stayed green.
+#[must_use]
+pub fn class_analysis_table_from(source: &str) -> Vec<(String, String)> {
+    let file: Vec<TokenTree> = TokenStream::from_str(source)
+        .unwrap_or_else(|error| panic!("{CLASS_ANALYSIS_SOURCE} tokenizes: {error}"))
+        .into_iter()
+        .collect();
+    let class_catalog = impl_body(&file, "ClassCatalog");
+
+    CLASS_ANALYSIS_SITES
+        .iter()
+        .map(|&(scope, keyword, name)| {
+            let (key, tokens) = if scope.is_empty() {
+                (name.to_owned(), &file)
+            } else {
+                (format!("{scope}::{name}"), &class_catalog)
+            };
+            let rendered = item_tokens(tokens, keyword, name, &key);
+            assert!(
+                rendered.len() > 40,
+                "the class-analysis scrape rendered `{key}` as {} characters, which cannot be the \
+                 item it names; the scrape is reading something other than the derivation",
+                rendered.len()
+            );
+            (key, rendered)
+        })
+        .collect()
+}
+
+/// The token trees inside `impl <type_name> { … }`, which must appear exactly once.
+///
+/// Scoping is not a nicety: `for_shapes` is the name of two different functions in
+/// `engine.rs` — `ValidationPlan`'s, which binds a catalog to a dataset, and
+/// `ClassCatalog`'s, which derives one — and a scrape that digested whichever it met
+/// first would be pinning the wrong algorithm.
+///
+/// # Panics
+///
+/// Panics when the impl block is absent or duplicated.
+fn impl_body(tokens: &[TokenTree], type_name: &str) -> Vec<TokenTree> {
+    let mut found: Option<Vec<TokenTree>> = None;
+    for window in tokens.windows(3) {
+        let [
+            TokenTree::Ident(keyword),
+            TokenTree::Ident(name),
+            TokenTree::Group(body),
+        ] = window
+        else {
+            continue;
+        };
+        if keyword != "impl" || name != type_name || body.delimiter() != Delimiter::Brace {
+            continue;
+        }
+        assert!(
+            found.replace(body.stream().into_iter().collect()).is_none(),
+            "{CLASS_ANALYSIS_SOURCE} declares `impl {type_name}` more than once, so a scrape of it \
+             cannot say which block it read"
+        );
+    }
+    found.unwrap_or_else(|| {
+        panic!(
+            "{CLASS_ANALYSIS_SOURCE} no longer declares `impl {type_name}`; the class-analysis \
+             census is reading nothing"
+        )
+    })
+}
+
+/// One `<keyword> <name> … { … }` item of `tokens`, rendered as normalized tokens
+/// with its documentation stripped and its other attributes kept.
+///
+/// The item must occur exactly once at this nesting level. A call to a function
+/// does not match, because the match requires the declaring keyword immediately
+/// ahead of the name.
+///
+/// # Panics
+///
+/// Panics when the item is absent, duplicated, or never closes a braced body.
+fn item_tokens(tokens: &[TokenTree], keyword: &str, name: &str, key: &str) -> String {
+    let mut found: Option<String> = None;
+    for index in 0..tokens.len().saturating_sub(1) {
+        let (TokenTree::Ident(found_keyword), TokenTree::Ident(found_name)) =
+            (&tokens[index], &tokens[index + 1])
+        else {
+            continue;
+        };
+        if found_keyword != keyword || found_name != name {
+            continue;
+        }
+        let body = tokens[index..]
+            .iter()
+            .position(|token| {
+                matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
+            })
+            .unwrap_or_else(|| {
+                panic!("`{key}` in {CLASS_ANALYSIS_SOURCE} never opens a braced body")
+            });
+        let rendered: TokenStream = undocumented_attributes(tokens, index)
+            .into_iter()
+            .chain(tokens[index..=index + body].iter().cloned())
+            .collect();
+        assert!(
+            found.replace(rendered.to_string()).is_none(),
+            "`{key}` is declared more than once in {CLASS_ANALYSIS_SOURCE}, so a scrape of it \
+             cannot say which declaration it read"
+        );
+    }
+    found.unwrap_or_else(|| {
+        panic!(
+            "{CLASS_ANALYSIS_SOURCE} no longer declares `{keyword} {name}`; the class-analysis \
+             census is reading nothing where the derivation used to be"
+        )
+    })
+}
+
+/// The attribute tokens immediately ahead of `index`, minus the `#[doc = "…"]`
+/// pairs a `///` comment lexes into.
+fn undocumented_attributes(tokens: &[TokenTree], index: usize) -> Vec<TokenTree> {
+    let mut start = index;
+    while start >= 2
+        && matches!(&tokens[start - 2], TokenTree::Punct(punct) if punct.as_char() == '#')
+        && matches!(
+            &tokens[start - 1],
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Bracket
+        )
+    {
+        start -= 2;
+    }
+    tokens[start..index]
+        .chunks(2)
+        .filter(|pair| !is_doc_attribute(&pair[1]))
+        .flat_map(|pair| pair.iter().cloned())
+        .collect()
+}
+
+/// Whether an attribute's bracketed body opens with `doc`.
+fn is_doc_attribute(body: &TokenTree) -> bool {
+    let TokenTree::Group(group) = body else {
+        return false;
+    };
+    matches!(
+        group.stream().into_iter().next(),
+        Some(TokenTree::Ident(ident)) if ident == "doc"
+    )
+}
+
 /// The exact bytes [`stage_id`] digests, one line per fact.
 ///
 /// Kept separate from the digest so a failing gate can diff the PREIMAGE and say
@@ -1002,6 +1224,7 @@ pub fn stage_id_preimage(
     types: &[ModelType],
     builtins: &[(String, String)],
     components: &[(String, String)],
+    analysis: &[(String, String)],
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "purrdf-shacl-product-model-census/1");
@@ -1033,6 +1256,9 @@ pub fn stage_id_preimage(
     for (key, value) in components {
         let _ = writeln!(out, "parameter {key} = {value}");
     }
+    for (key, value) in analysis {
+        let _ = writeln!(out, "analysis {key} = {value}");
+    }
     out
 }
 
@@ -1040,14 +1266,16 @@ pub fn stage_id_preimage(
 ///
 /// Content-derived on purpose. Nobody has to remember to bump it, so nobody can
 /// forget to, and a prepared product minted under one id cannot be verified under
-/// a build whose model, built-in table, component table or profile has moved.
+/// a build whose model, built-in table, component table, class-analysis derivation
+/// or profile has moved.
 #[must_use]
 pub fn stage_id(
     types: &[ModelType],
     builtins: &[(String, String)],
     components: &[(String, String)],
+    analysis: &[(String, String)],
 ) -> String {
-    let preimage = stage_id_preimage(types, builtins, components);
+    let preimage = stage_id_preimage(types, builtins, components, analysis);
     purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(preimage.as_bytes()))
 }
 
@@ -1058,6 +1286,7 @@ pub fn live_stage_id() -> String {
         &census(),
         &builtin_function_table(),
         &constraint_component_parameter_table(),
+        &class_analysis_table(),
     )
 }
 
@@ -1205,10 +1434,10 @@ fn stage_id_matches_shipped_constant() {
     assert_eq!(
         computed, shipped,
         "the SHACL prepared-product stage id moved. Something in the declarative model, the \
-         SPARQL built-in table, the constraint-component parameter table or the profile id \
-         changed, which means every product written under `{shipped}` describes a model this \
-         build no longer has. Update STAGE_ID in the product module to `{computed}` ONLY after \
-         confirming the codec covers the change."
+         SPARQL built-in table, the constraint-component parameter table, the class-analysis \
+         derivation or the profile id changed, which means every product written under \
+         `{shipped}` describes a preparation this build no longer performs. Update STAGE_ID in \
+         the product module to `{computed}` ONLY after confirming the codec covers the change."
     );
 }
 
@@ -1222,6 +1451,7 @@ fn stage_id_is_reproducible_and_its_preimage_is_readable() {
         &census(),
         &builtin_function_table(),
         &constraint_component_parameter_table(),
+        &class_analysis_table(),
     );
     assert!(preimage.starts_with("purrdf-shacl-product-model-census/1\n"));
     assert!(preimage.contains(&format!("profile {PROFILE_ID}\n")));
@@ -1232,6 +1462,23 @@ fn stage_id_is_reproducible_and_its_preimage_is_readable() {
          http://www.w3.org/ns/shacl#MinCountConstraintComponent\n"
     ));
     assert!(preimage.contains("SINGLETON_PREDICATES[0] sh::DATATYPE = "));
+    assert!(preimage.contains("analysis ClassCatalog::for_shapes = fn for_shapes"));
+    assert!(preimage.contains("analysis collect_shape_classes = fn collect_shape_classes"));
+    // A non-documentation attribute survives, because `#[derive(Default)]` on the
+    // scan accumulator really is part of how the walk starts.
+    assert!(preimage.contains("analysis ClassScan = # [derive (Default)] struct ClassScan"));
+    // The walk's own commentary does NOT, in either comment form — a census that
+    // fired on prose would be re-pinned reflexively and stop being read.
+    for prose in [
+        "The accumulator the class-planning walk carries",
+        "A SPARQL-based node expression",
+    ] {
+        assert!(
+            !preimage.contains(prose),
+            "the commentary `{prose}` reached the stage-id preimage, so the class-analysis scrape \
+             is digesting prose rather than the derivation"
+        );
+    }
 }
 
 /// The profile id is mixed in: two builds that agree on every table but describe
@@ -1241,7 +1488,8 @@ fn stage_id_depends_on_the_profile_id() {
     let types = census();
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
-    let real = stage_id_preimage(&types, &builtins, &components);
+    let analysis = class_analysis_table();
+    let real = stage_id_preimage(&types, &builtins, &components, &analysis);
     let other = real.replace(
         &format!("profile {PROFILE_ID}"),
         "profile purrdf-shacl-core-v2",
@@ -1267,15 +1515,18 @@ fn stage_id_changes_when_a_variant_is_added() {
     );
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
+    let analysis = class_analysis_table();
     let before = stage_id(
         &scan_sources(&real).rows(&CENSUS_TYPES),
         &builtins,
         &components,
+        &analysis,
     );
     let after = stage_id(
         &scan_sources(&patched).rows(&CENSUS_TYPES),
         &builtins,
         &components,
+        &analysis,
     );
     assert_eq!(before, shipped_stage_id());
     assert_ne!(
@@ -1298,15 +1549,18 @@ fn stage_id_changes_when_a_rule_variant_is_added() {
     );
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
+    let analysis = class_analysis_table();
     let before = stage_id(
         &scan_sources(&real).rows(&CENSUS_TYPES),
         &builtins,
         &components,
+        &analysis,
     );
     let after = stage_id(
         &scan_sources(&patched).rows(&CENSUS_TYPES),
         &builtins,
         &components,
+        &analysis,
     );
     assert_eq!(before, shipped_stage_id());
     assert_ne!(
@@ -1322,20 +1576,24 @@ fn stage_id_changes_when_a_capability_table_changes() {
     let types = census();
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
-    let real = stage_id(&types, &builtins, &components);
+    let analysis = class_analysis_table();
+    let real = stage_id(&types, &builtins, &components, &analysis);
     assert_eq!(real, shipped_stage_id());
 
     let mut fewer_builtins = builtins.clone();
     fewer_builtins
         .pop()
         .expect("the built-in table is nonempty");
-    assert_ne!(real, stage_id(&types, &fewer_builtins, &components));
+    assert_ne!(
+        real,
+        stage_id(&types, &fewer_builtins, &components, &analysis)
+    );
 
     let mut renamed = builtins.clone();
     renamed[0].1 = "SOMETHING_ELSE".to_owned();
     assert_ne!(
         real,
-        stage_id(&types, &renamed, &components),
+        stage_id(&types, &renamed, &components, &analysis),
         "a built-in resolving to a different keyword must move the stage id"
     );
 
@@ -1343,7 +1601,7 @@ fn stage_id_changes_when_a_capability_table_changes() {
     moved_iri[0].1 = "http://example.org/moved".to_owned();
     assert_ne!(
         real,
-        stage_id(&types, &builtins, &moved_iri),
+        stage_id(&types, &builtins, &moved_iri, &analysis),
         "a constraint component changing IRI must move the stage id"
     );
 
@@ -1351,7 +1609,100 @@ fn stage_id_changes_when_a_capability_table_changes() {
     fewer_components
         .pop()
         .expect("the component table is nonempty");
-    assert_ne!(real, stage_id(&types, &builtins, &fewer_components));
+    assert_ne!(
+        real,
+        stage_id(&types, &builtins, &fewer_components, &analysis)
+    );
+}
+
+/// **Changing the class walk's reachability rule moves the stage id, with every
+/// model type held fixed.**
+///
+/// This is the case no other check here can reach, and the reason
+/// [`CLASS_ANALYSIS_SITES`] exists. The patch below stops `collect_property_classes`
+/// descending into a property shape's REIFIER shapes — a genuine change to which
+/// classes a prepared product's analysis contains — and it touches no type, no
+/// variant, no field, no vocabulary constant and no parameter table. Before the
+/// class walk was censused, a build carrying this patch produced a byte-identical
+/// census and therefore the identical stage id, so a product written by the other
+/// build would `admit` and validate against an analysis that disagreed about the
+/// shapes graph. Every test in this file passed on both sides.
+///
+/// The patch is applied to a copy of `engine.rs` held in memory. Nothing on disk is
+/// touched, so this cannot rot into "the test that passed once".
+#[test]
+fn stage_id_changes_when_the_class_reachability_rule_changes() {
+    let path = repo_root().join(CLASS_ANALYSIS_SOURCE);
+    let real = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+    let patched = real.replacen(
+        "collect_shape_classes(reifier_shape, scan);",
+        "let _ = reifier_shape;",
+        1,
+    );
+    assert_ne!(
+        patched, real,
+        "the class walk no longer descends into reifier shapes by that spelling; the probe is \
+         patching nothing and would pass vacuously"
+    );
+
+    let types = census();
+    let builtins = builtin_function_table();
+    let components = constraint_component_parameter_table();
+    let before = stage_id(
+        &types,
+        &builtins,
+        &components,
+        &class_analysis_table_from(&real),
+    );
+    let after = stage_id(
+        &types,
+        &builtins,
+        &components,
+        &class_analysis_table_from(&patched),
+    );
+
+    assert_eq!(before, shipped_stage_id());
+    assert_ne!(
+        before, after,
+        "a changed class-reachability rule left the stage id unchanged, so a product carrying one \
+         build's class analysis would still be admitted by a build that computes a different one"
+    );
+}
+
+/// **Reformatting the class walk does NOT move the stage id.**
+///
+/// The mandatory mirror of the check above, and not a formality: the whole value of
+/// a derived stage id is that it moves when the MEANING moves. One that also moved
+/// on a reflow or a reworded comment would fire on changes that mean nothing, get
+/// re-pinned without being read, and stop being evidence of anything the day it
+/// mattered. The scrape digests tokens for exactly this reason, so the proof is
+/// available: rewrite the walk's whitespace and its commentary, in both comment
+/// forms, and the digest must be unmoved.
+#[test]
+fn reformatting_the_class_walk_does_not_move_the_stage_id() {
+    let path = repo_root().join(CLASS_ANALYSIS_SOURCE);
+    let real = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+    let reworded = real.replacen(
+        "/// The accumulator the class-planning walk carries.",
+        "/// An entirely different sentence about the accumulator.\n// And a line comment.\n\n",
+        1,
+    );
+    assert_ne!(
+        reworded, real,
+        "the scan accumulator's doc comment no longer opens with that sentence; the probe is \
+         patching nothing and would pass vacuously"
+    );
+
+    assert_eq!(
+        class_analysis_table_from(&real),
+        class_analysis_table_from(&reworded),
+        "rewording the class walk's commentary changed its census rendering, so the stage id \
+         fires on prose and will be re-pinned without being read"
+    );
 }
 
 /// Read the live sources, and return them alongside a copy in which exactly one
@@ -1459,7 +1810,10 @@ mod detector_self_tests {
             ["MinCount", "Uncovered"],
             "the census rows must carry the new variant, or a codec-coverage gate cannot see it"
         );
-        assert_ne!(stage_id(&before, &[], &[]), stage_id(&after, &[], &[]));
+        assert_ne!(
+            stage_id(&before, &[], &[], &[]),
+            stage_id(&after, &[], &[], &[])
+        );
     }
 
     /// The digest reads the field TYPES, not just the names: a narrowing that keeps
@@ -1470,8 +1824,14 @@ mod detector_self_tests {
         let wide = synthetic("pub enum Constraint { MinCount { n: u64 } }").rows(&names);
         let narrow = synthetic("pub enum Constraint { MinCount { n: u32 } }").rows(&names);
         let boxed = synthetic("pub enum Constraint { MinCount { n: Box<u64> } }").rows(&names);
-        assert_ne!(stage_id(&wide, &[], &[]), stage_id(&narrow, &[], &[]));
-        assert_ne!(stage_id(&wide, &[], &[]), stage_id(&boxed, &[], &[]));
+        assert_ne!(
+            stage_id(&wide, &[], &[], &[]),
+            stage_id(&narrow, &[], &[], &[])
+        );
+        assert_ne!(
+            stage_id(&wide, &[], &[], &[]),
+            stage_id(&boxed, &[], &[], &[])
+        );
     }
 
     /// Variant ORDER is part of the digest: reordering arms changes any codec that
@@ -1481,7 +1841,7 @@ mod detector_self_tests {
         let names = ["Constraint"];
         let one = synthetic("pub enum Constraint { A(u64), B(String) }").rows(&names);
         let two = synthetic("pub enum Constraint { B(String), A(u64) }").rows(&names);
-        assert_ne!(stage_id(&one, &[], &[]), stage_id(&two, &[], &[]));
+        assert_ne!(stage_id(&one, &[], &[], &[]), stage_id(&two, &[], &[], &[]));
     }
 
     /// Prose does not move the digest. The mirror of the checks above: a census
@@ -1506,7 +1866,10 @@ mod detector_self_tests {
         ",
         )
         .rows(&names);
-        assert_eq!(stage_id(&plain, &[], &[]), stage_id(&documented, &[], &[]));
+        assert_eq!(
+            stage_id(&plain, &[], &[], &[]),
+            stage_id(&documented, &[], &[], &[])
+        );
     }
 
     /// `#[cfg(test)]` items describe no product and must not be censused — nor may

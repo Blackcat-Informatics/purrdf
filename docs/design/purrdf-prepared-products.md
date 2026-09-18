@@ -14,9 +14,9 @@ for deciding what a product in hand actually is.
 
 This document records the decisions behind that surface which a reader would
 otherwise take for oversights — three entry points where one flag would have
-done, a version constant that is not a constant, a catalog carried as a digest
-with no body, a section that will never exist — and states the limits of the
-guarantees it makes.
+done, a version constant that is not a constant, a reusable analysis riding inside
+the model's section rather than its own, a section that will never exist — and
+states the limits of the guarantees it makes.
 
 All example IRIs use `example.org`. PurRDF mints no vocabulary IRIs.
 
@@ -178,10 +178,20 @@ with nothing emitted. Writing a product no `admit` could ever accept would move 
 writer-side defect into a reader-side mystery, at some later date, on some other
 machine.
 
+The class-analysis derivation is the one input to the stage id that is not a
+declaration, and it is there for a specific reason: a product carries that walk's
+*result*, and its meaning lives entirely in function bodies. A build could stop
+descending into reifier shapes, or stop collecting `shnex:instancesOf`, without
+touching a single model type, variant, field or table entry — so a stage id that
+read only declarations would stand still while the analysis a product carries came
+to mean something else. The census digests the walk's own source, normalized to
+tokens so that reformatting it or rewriting its commentary cannot move the digest.
+
 ## 3. The stage identity is derived, and that is what a hand-bumped constant gets wrong
 
-`STAGE_ID` is a content-derived capability digest over the whole declarative model
-plus the tables the model's meaning depends on. It is **never hand-incremented**.
+`STAGE_ID` is a content-derived capability digest over the whole declarative model,
+the tables the model's meaning depends on, and the class-analysis derivation whose
+result a product carries. It is **never hand-incremented**.
 `crates/shapes/tests/product_model_census.rs` computes it from the live sources
 with `syn` and pins the result; the shipped constant is that digest, read from the
 one place products are actually written under rather than transcribed beside it.
@@ -390,21 +400,52 @@ different lines in the budget.** What a product moves off the restore path is th
 parse, the model construction and the shape analysis. What stays is everything
 that depends on the data.
 
-The class catalog sits exactly on that line and is handled accordingly. It is a
-pure derivation of the shape tree — a cycle-safe walk collecting every reachable
-`sh:class`, `sh:targetClass` and `shnex:instancesOf` IRI and assigning each a
-position — so the product pins its **digest and carries no catalog body at all**.
-A restore re-derives the catalog from the model it has already decoded and
-compares. The walk is in memory, with no I/O and no SPARQL, and it is dominated by
-the model decode that has to happen on the same path anyway. Carrying the body
-instead would add bytes, add a second decoder, and — the actual defect — make a
-stale analysis servable: a product written by a build whose class walk had a bug,
-or simply a different reachability rule, would restore *that build's* catalog and
-validate against it, verified and wrong. Pinning the digest makes a product whose
-analysis no longer matches this build's walk unservable, which is the outcome
-worth having. The position is folded into the digest as well as the IRI, because
-the position is what a validation plan indexes its resolved row by, so two
-catalogs over the same classes with different assignments are different analyses.
+The class catalog sits exactly on that line, and it is on the *reusable* side of
+it: the walk it performs — cycle-safe, collecting every reachable `sh:class`,
+`sh:targetClass` and `shnex:instancesOf` IRI and assigning each a position — is
+precisely the "shape analysis" the sentence above says a product moves off the
+restore path. So the product **carries the catalog body**, as the last field of
+the model section, and a restore reads it.
+
+An earlier arrangement pinned the catalog's digest and carried no body, on the
+argument that the walk is cheap and that carrying a body makes a **stale analysis
+servable**: a product written by a build whose class walk had a bug, or simply a
+different reachability rule, would restore *that build's* catalog and validate
+against it, verified and wrong. The hazard is real. The conclusion did not follow,
+because pinning-only does not avoid the work — it performs the walk and then
+proves the walk agreed. Proving an analysis is right and not having to compute it
+are different properties, and a restore that does the second is what the artifact
+was for.
+
+What closes the hazard is a pair of checks covering two different halves:
+
+- **The stage id covers the derivation.** `STAGE_ID` is digested from the class
+  walk's own source — `ClassCatalog::for_shapes` and the `collect_*_classes`
+  functions it drives — so a build whose reachability rule differs cannot share a
+  stage id with the writer's. Its products are refused by `admit` on `stage-id`
+  and rescued by `rebuild`, which re-derives the analysis from the carried dataset
+  and never reads the carried body. Note which way this cuts: *before* the body
+  travelled, that hazard was open and unguarded. The walk is an algorithm, not a
+  model type, so a build could change which classes it reaches without moving a
+  single type, variant, field or table entry — leaving the stage id exactly where
+  it was while the meaning moved underneath it.
+- **The identity covers the body.** Component `class-catalog` is the digest of the
+  carried pairs, and the admit seam checks the carried body against it before any
+  preparation exists. The position is folded in as well as the IRI, because the
+  position is what a validation plan indexes its resolved row by, so two catalogs
+  over the same classes with different assignments are different analyses and
+  neither may pass for the other.
+
+The body travels inside the **model section** rather than a fourth section of its
+own, and that is a constraint rather than a preference. The section count is part
+of the artifact spec and is checked before a product opens at all, so a fourth
+kind would make every product ever written fail to *open* — putting them past the
+reach of `rebuild`, the seam that exists to rescue exactly those products. Sharing
+the model section leaves the directory and the container format version where they
+are. It is safe because that section has exactly one reader: `admit` verifies the
+stage id before decoding it, `rebuild` never touches it, and carrying the analysis
+moved the stage id — so no product written before the field existed is ever handed
+to a decoder that expects it.
 
 The two kinds of function a shapes graph declares are both carried, and they are
 carried by different halves of the product, because that is where each one

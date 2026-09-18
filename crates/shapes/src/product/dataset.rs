@@ -302,7 +302,7 @@ mod tests {
     use ::purrdf::{RdfDataset, pack_digest, try_canonicalize};
 
     use super::{ProductDimension, certify_dataset, encode_dataset, open_dataset};
-    use crate::product::ast::encode_ast;
+    use crate::product::ast::encode_ast_derived;
     use crate::shapes::Shapes;
 
     /// The pack container header's `rdfc_digest` field: 32 bytes at offset 32.
@@ -625,12 +625,14 @@ mod tests {
             ("shapes-graph query", SHAPES_GRAPH_QUERY_SHAPES),
         ] {
             let direct = shapes_of(ttl);
-            let direct_bytes = encode_ast(&direct).expect("encode the directly parsed shapes");
+            let direct_bytes =
+                encode_ast_derived(&direct).expect("encode the directly parsed shapes");
 
             let section = encode_dataset(direct.dataset()).expect("encode the dataset section");
             let restored = open_dataset(&section).expect("open the dataset section");
             let reparsed = shapes_from(&restored, ttl);
-            let reparsed_bytes = encode_ast(&reparsed).expect("encode the re-parsed shapes");
+            let reparsed_bytes =
+                encode_ast_derived(&reparsed).expect("encode the re-parsed shapes");
 
             assert_eq!(
                 direct_bytes, reparsed_bytes,
@@ -706,8 +708,9 @@ mod tests {
         // that survived the bytes but broke the parse would be no use.
         let reparsed = shapes_from(&restored, RDF12_SHAPES);
         assert_eq!(
-            encode_ast(&reparsed).expect("encode the re-parsed shapes"),
-            encode_ast(&shapes_of(RDF12_SHAPES)).expect("encode the directly parsed shapes"),
+            encode_ast_derived(&reparsed).expect("encode the re-parsed shapes"),
+            encode_ast_derived(&shapes_of(RDF12_SHAPES))
+                .expect("encode the directly parsed shapes"),
         );
     }
 

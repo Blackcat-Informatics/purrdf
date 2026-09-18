@@ -110,7 +110,14 @@
 //! |------|---------|---------|
 //! | 0 | `SECTION_IDENTITY` | the stage id, the profile id and the parse provenance |
 //! | 1 | `SECTION_DATASET` | the shapes dataset, in the pack container (`dataset`) |
-//! | 2 | `SECTION_AST` | the declarative model (`ast`) |
+//! | 2 | `SECTION_AST` | the declarative model, and the reusable class analysis derived from it (`ast`) |
+//!
+//! The analysis shares the model's section rather than taking a fourth of its own,
+//! and that is a constraint rather than a preference: the section count is part of
+//! the [`ArtifactSpec`], so a fourth kind would stop every product ever written
+//! from OPENING — which would put them past the reach of [`rebuild`], the seam that
+//! exists to rescue exactly those products. The `ast` module carries the full
+//! argument and the reason extending that stream is safe.
 //!
 //! The envelope's own identity REGION carries the [`Identity`] — which inputs the
 //! product was compiled from (`identity`). That is a different fact from the
@@ -125,6 +132,7 @@
 //! [`FormatVersion`]: error::ProductDimension::FormatVersion
 //! [`FunctionRegistry`]: error::ProductDimension::FunctionRegistry
 //! [`stage_id`]: ShapesProductView::stage_id
+//! [`rebuild`]: ShapesProductView::rebuild
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -186,7 +194,19 @@ const SECTION_AST: u32 = 2;
 const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 
 /// The PREPARATION STAGE ID: a content-derived capability digest over the whole
-/// declarative model plus the tables the model's meaning depends on.
+/// declarative model, the tables the model's meaning depends on, and the CLASS
+/// ANALYSIS DERIVATION a product carries the result of.
+///
+/// The last of those is the one that is not a declaration. The class walk is an
+/// algorithm, so its meaning lives in function bodies: a build could stop
+/// descending into reifier shapes, or stop collecting `shnex:instancesOf`, without
+/// touching a single model type, variant, field or table entry. A stage id that
+/// read only declarations would stand perfectly still while the analysis a product
+/// carries came to mean something else — and since `admit` hands the carried
+/// analysis straight to the validator, that is the stale-but-verified answer this
+/// whole codec is built to rule out. The census digests the walk's own source, so
+/// the two builds cannot share an id and the older product is sent to `rebuild`,
+/// which re-derives.
 ///
 /// Derived, never hand-incremented. `crates/shapes/tests/product_model_census.rs`
 /// computes it from the live sources with `syn` and pins the result as
@@ -197,8 +217,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x5b, 0x7a, 0x53, 0xe6, 0x12, 0xe1, 0xa0, 0xe6, 0x63, 0x6f, 0xb0, 0xeb, 0xe8, 0x38, 0x68, 0xd7,
-    0x9d, 0x25, 0x0a, 0xa7, 0x21, 0x99, 0x4b, 0x0e, 0xd3, 0x75, 0x86, 0x99, 0x0c, 0x9c, 0xc2, 0x7c,
+    0xf8, 0x7a, 0x08, 0x2c, 0xfe, 0x54, 0x5c, 0xdf, 0x4e, 0x96, 0x12, 0xdc, 0x8b, 0xae, 0xb1, 0x88,
+    0x98, 0x99, 0x6b, 0xf4, 0xa8, 0x8d, 0x43, 0x06, 0x4a, 0xc6, 0xec, 0x62, 0x14, 0x95, 0x6b, 0x69,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -842,7 +862,13 @@ impl PreparedShapes {
             ));
         }
 
-        let ast_bytes = ast::encode_ast(shapes)?;
+        // The reusable analysis, derived ONCE here and used twice: written into the
+        // AST section so a restore never has to walk the shape tree again, and
+        // digested into row 10 of the identity so what was written can be checked
+        // against what the product claims. Two derivations for those two uses would
+        // be two chances to disagree about one analysis.
+        let classes = self.class_catalog();
+        let ast_bytes = ast::encode_ast(shapes, &classes)?;
         let dataset_bytes = dataset::encode_dataset(shapes.dataset())?;
         // The PRODUCER certifies; the consumer trusts the digest chain. This is the
         // one canonicalization in the whole codec that is not on a cold path, and it
@@ -856,7 +882,7 @@ impl PreparedShapes {
             // `ShapesProfile::CORE`.
             &EMPTY_PROPERTY_FUNCTIONS,
             implementation_identity,
-            &self.class_catalog(),
+            &classes,
         )?;
 
         let mut builder = ArtifactBuilder::new(SPEC);
@@ -995,9 +1021,19 @@ impl<'a> ShapesProductView<'a> {
     /// id, check the host-supplied half of the identity, refuse an oversized decode
     /// against the governor in force, restore the dataset (cheap tier only), decode
     /// the model, re-derive the shapes graph's own SPARQL function declarations from
-    /// that dataset, link it, then hand the assembled shapes graph to the type gate
-    /// that installs the host's bindings, re-derives the class catalog, and checks
-    /// the whole identity before any [`PreparedShapes`] exists (`certified`).
+    /// that dataset, link it, then hand the assembled shapes graph and the class
+    /// analysis the product CARRIED to the type gate that installs the host's
+    /// bindings and checks the whole identity before any [`PreparedShapes`] exists
+    /// (`certified`).
+    ///
+    /// The class analysis is read, never recomputed: it is the "repeated shared
+    /// analysis" a prepared product exists to eliminate, so a restore that proved
+    /// its own walk agreed — after running that walk, every time — would have
+    /// verified the right thing and done the work anyway. What binds the carried
+    /// body is row 10 of the identity, which is the digest of exactly those
+    /// `(class, position)` pairs, and the stage id above it, which is digested from
+    /// the class walk's own source so a build with a different reachability rule
+    /// cannot reach this path at all.
     ///
     /// The canonicalization [`certify`](Self::certify) performs is NOT reachable
     /// from here, by construction: the identity's dataset component is taken from
@@ -1029,8 +1065,8 @@ impl<'a> ShapesProductView<'a> {
     ///
     /// Everything [`admit`](Self::admit) checks is a question about the EXECUTING
     /// ENVIRONMENT: is this build the one that wrote the memo, are these the
-    /// registries the product was prepared against, does this build's class walk
-    /// re-derive the analysis the product pinned. Not one of them asks the
+    /// registries the product was prepared against, is the class analysis the
+    /// product carried the one its own identity pins. Not one of them asks the
     /// question a consumer holding a product actually has, which is *is this the
     /// product I asked for?* A caller that hands the loader the wrong file gets a
     /// perfectly successful restore and a well-formed report about a shapes graph
@@ -1168,7 +1204,7 @@ impl<'a> ShapesProductView<'a> {
             parse_provenance: self.provenance.clone(),
         };
 
-        CertifiedParts::from_admitted(self.declared_identity(), shapes, host)
+        CertifiedParts::from_admitted(self.declared_identity(), shapes, host, parts.classes)
             .map(CertifiedParts::into_prepared)
     }
 

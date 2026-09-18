@@ -133,18 +133,61 @@ impl ClassCatalog {
     /// Every planned class with the position its resolved [`TermId`] occupies in a
     /// [`ValidationPlan`]'s binding row, in unspecified order.
     ///
-    /// `pub(crate)` for the prepared-product identity
-    /// (`crate::product::identity::class_catalog_digest`), which pins the catalog
-    /// by digest so a restore can prove its own re-derivation matches. The order is
-    /// the backing map's and is therefore NOT a fact about the catalog — every
-    /// consumer sorts.
+    /// `pub(crate)` for the prepared-product codec, which both WRITES these pairs
+    /// into the artifact (`crate::product::ast`) and digests them into the
+    /// product's identity (`crate::product::identity::class_catalog_digest`), so a
+    /// restore can prove the body it carried is the analysis the identity pinned.
+    /// The order is the backing map's and is therefore NOT a fact about the
+    /// catalog — every consumer sorts.
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&NamedNode, usize)> {
         self.indices
             .iter()
             .map(|(class, &position)| (class, position))
     }
 
-    fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
+    /// Rebuild a catalog from `(class, position)` pairs a prepared product carried,
+    /// or `None` when those pairs are not a catalog any walk could have produced.
+    ///
+    /// This is the codec's re-entry point for the reusable analysis, and it is
+    /// deliberately the narrowest possible gate: it checks only what the TYPE's own
+    /// invariants require, and leaves the question of whether these are the RIGHT
+    /// classes to the identity digest that already binds them.
+    ///
+    /// Two conditions are structural rather than a matter of taste, because
+    /// [`ValidationPlan::bind`] indexes a `Vec` of exactly `indices.len()` slots by
+    /// the position it reads back out, and [`ValidationPlan::class_id`] expects
+    /// every class it is asked about to be present:
+    ///
+    /// * a class IRI may appear **once**, because a repeat would silently collapse
+    ///   two entries into one and leave the binding row short by a slot; and
+    /// * the positions must be a **permutation of `0..len`**, because a position at
+    ///   or past the row's length is an out-of-bounds index — a panic, which is an
+    ///   abort no caller of a decoder could handle, arriving from bytes a caller
+    ///   supplied.
+    ///
+    /// What it deliberately does NOT check is that each class sits at the rank
+    /// [`Self::for_shapes`] would have given it. That rule belongs to the
+    /// derivation, and re-stating it here would be a second transcription of the
+    /// reachability rule inside the reader — the drift this codec spends a stage id
+    /// preventing. A permutation that is not the derivation's own is caught where
+    /// every other content claim is caught: the position is folded into
+    /// `class_catalog_digest`, so a product carrying one is refused on the
+    /// class-catalog dimension rather than restored.
+    pub(crate) fn from_entries(entries: Vec<(NamedNode, usize)>) -> Option<Self> {
+        let mut seen = vec![false; entries.len()];
+        for &(_, position) in &entries {
+            let slot = seen.get_mut(position)?;
+            if std::mem::replace(slot, true) {
+                return None;
+            }
+        }
+        let indices: FastMap<NamedNode, usize> = entries.into_iter().collect();
+        // A duplicate class IRI collapses in the map and is visible only as a
+        // shortfall against the slots just proven to be a permutation.
+        (indices.len() == seen.len()).then_some(Self { indices })
+    }
+
+    pub(crate) fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
         let mut scan = ClassScan::default();
         for shape in shapes {
             collect_shape_classes(shape, &mut scan);
@@ -824,6 +867,32 @@ impl PreparedShapes {
     /// [`ParseProvenance`]: crate::provenance::ParseProvenance
     pub(crate) fn with_provenance(shapes: Arc<Shapes>, provenance: ValidatorProvenance) -> Self {
         let classes = Arc::new(ClassCatalog::for_shapes(shapes.node_shapes.iter()));
+        Self::with_carried_analysis(shapes, provenance, classes)
+    }
+
+    /// Assemble a preparation around an analysis that was NOT derived here.
+    ///
+    /// This is the constructor the prepared-product admit seam uses, and it is the
+    /// whole point of the product carrying the class catalog: a consumer restoring a
+    /// product is promised "no RDF reparsing, no shape extraction, **no repeated
+    /// shared analysis**", and a restore that ended at
+    /// [`with_provenance`](Self::with_provenance) would honour the first two and
+    /// quietly break the third — the walk would run again on every restore, for
+    /// every process, forever, while every test still passed.
+    ///
+    /// `classes` is therefore a fact the caller has, not a value this constructor
+    /// may second-guess. `pub(crate)` for exactly the reason
+    /// [`with_provenance`](Self::with_provenance) is: an analysis a caller can
+    /// supply is a CLAIM about a preparation rather than a derivation from it, and
+    /// the only expression in the crate allowed to make that claim is the admission
+    /// seam, which has the product in hand and proves the claim against the
+    /// identity digest the product pinned before any preparation escapes
+    /// (`crate::product::certified`).
+    pub(crate) fn with_carried_analysis(
+        shapes: Arc<Shapes>,
+        provenance: ValidatorProvenance,
+        classes: Arc<ClassCatalog>,
+    ) -> Self {
         Self {
             shapes,
             classes,
@@ -843,13 +912,17 @@ impl PreparedShapes {
         &self.provenance
     }
 
-    /// The cycle-safe class analysis this preparation derived from its shape tree.
+    /// The cycle-safe class analysis this preparation holds: derived from its shape
+    /// tree by [`Self::new`], or carried in from a prepared product by
+    /// [`Self::with_carried_analysis`].
     ///
     /// `pub(crate)` and shared rather than public: the catalog is a PURE derivation
     /// of the shapes, so handing it out publicly would offer callers a second,
-    /// forgeable spelling of something they can always re-derive. The one in-crate
-    /// consumer is `crate::product::identity`, which digests it so a restored
-    /// product's re-derivation can be checked against the digest the product pinned.
+    /// forgeable spelling of something they can always re-derive. The in-crate
+    /// consumers are `crate::product::ast`, which writes it into the artifact so a
+    /// restore does not have to walk the shape tree again, and
+    /// `crate::product::identity`, which digests it so what a product carried can be
+    /// checked against the digest the same product pinned.
     pub(crate) fn class_catalog(&self) -> Arc<ClassCatalog> {
         Arc::clone(&self.classes)
     }
