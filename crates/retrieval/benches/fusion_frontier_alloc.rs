@@ -233,6 +233,9 @@ struct LazyStream {
     emitted: u64,
     total: u64,
     pulls: Arc<AtomicUsize>,
+    /// The stratum weight this stream's contributions are computed at, so the
+    /// rows always carry the value the fixture's own profile re-derives.
+    weight: Fixed,
 }
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
@@ -248,7 +251,7 @@ impl RankedStream for LazyStream {
         self.emitted += 1;
         self.pulls.fetch_add(1, Ordering::Relaxed);
         let rank = self.emitted;
-        let value = contribution(Fixed::ONE, rank, K).expect("the contribution fits");
+        let value = contribution(self.weight, rank, K).expect("the contribution fits");
         let index = permuted_index(self.stream_index, rank);
         Ok(Some((
             rank,
@@ -271,11 +274,12 @@ impl RankedStream for LazyStream {
 }
 
 /// The profile and its three streams, each `total` rows long.
-fn fixture(total: u64, pulls: &Arc<AtomicUsize>) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = STRATA
-        .iter()
-        .map(|name| (stratum(name), Fixed::ONE))
-        .collect();
+fn fixture(
+    total: u64,
+    pulls: &Arc<AtomicUsize>,
+    weight: Fixed,
+) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
+    let weights: BTreeMap<Iri, Fixed> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
     let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
         .expect("the fixture profile is valid");
     let streams = STRATA
@@ -289,6 +293,7 @@ fn fixture(total: u64, pulls: &Arc<AtomicUsize>) -> (FusionProfile, Vec<(Iri, La
                     emitted: 0,
                     total,
                     pulls: Arc::clone(pulls),
+                    weight,
                 },
             )
         })
@@ -299,8 +304,20 @@ fn fixture(total: u64, pulls: &Arc<AtomicUsize>) -> (FusionProfile, Vec<(Iri, La
 /// Certify `rows` rows from three streams of `total` rows each, reporting the
 /// peak heap and the resident-set delta across the certifying window.
 fn phase(label: &str, total: u64, rows: usize) {
+    phase_at_weight(label, total, rows, Fixed::ONE);
+}
+
+/// The same phase at a stratum weight whose adjacent ranks collide, so the
+/// frontier is driven through the plateau regime.
+///
+/// Certification needs a score strictly above the threshold over the stream
+/// heads; on a plateau the next head carries the same contribution, so nothing
+/// certifies until the plateau ends. At a unit weight that regime begins past a
+/// million ranks — beyond `PULL_BUDGET`, so every phase above stops short of it
+/// and this bench has never once reported on it.
+fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
     let pulls = Arc::new(AtomicUsize::new(0));
-    let (profile, streams) = fixture(total, &pulls);
+    let (profile, streams) = fixture(total, &pulls, weight);
     let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
@@ -341,6 +358,23 @@ fn main() {
             &format!("strata=3 rows={rows} stream=1000000"),
             1_000_000,
             rows,
+        );
+    }
+    // The regime a removed refusal made reachable. One thousand raw units is
+    // `10^-9`, at which adjacent ranks collide from the first pair, so every row
+    // certified here is decided inside a plateau rather than by a strict score
+    // difference. Report-only, like every phase above: what matters is that the
+    // peak does not follow the stream length here either.
+    println!(
+        "[fusion_frontier_alloc] --- collided regime (weight 1e-9), rows fused fixed at 32 ---"
+    );
+    let colliding = Fixed::from_raw(1_000);
+    for total in [1_000_u64, 10_000, 100_000, 1_000_000] {
+        phase_at_weight(
+            &format!("strata=3 rows=32 stream={total} collided"),
+            total,
+            32,
+            colliding,
         );
     }
 }

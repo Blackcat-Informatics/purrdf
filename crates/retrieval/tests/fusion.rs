@@ -2848,3 +2848,109 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
         "a tolerance of one is the separating bound itself"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 24. A golden for the collided regime
+//
+// `order.golden` pins a fusion at weights that separate every rank it reads, so
+// the fused score alone decides the order and the tie-break's later keys are
+// never exercised. Past the separating depth they decide everything — and the
+// claim that the answer stays deterministic there rests entirely on them. Until
+// now nothing pinned their bytes.
+//
+// This fixture fuses two strata at a weight whose adjacent ranks collide from
+// the first pair, so every row in it is ordered by best stratum rank and then by
+// canonical term, and it renders the resolution evidence alongside the rows so
+// that channel is pinned too.
+// ---------------------------------------------------------------------------
+
+fn collided_golden_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fusion/collided.golden")
+}
+
+async fn collided_fusion() -> FusionResult<Term> {
+    // One thousand raw units is `10^-9`: ranks one and two already share a
+    // contribution, so every row below is decided by the tie-break.
+    let weight = Fixed::from_raw(1_000);
+    let profile = profile(&[("text", weight), ("vector", weight)], K);
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let scripted = |names: [&str; 4]| {
+        MockStream::new(
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    let rank = u64::try_from(index + 1).expect("four rows");
+                    Step::Row(
+                        rank,
+                        contribution_under(decay, weight, rank).expect("fits"),
+                        Term::new(*name),
+                    )
+                })
+                .collect(),
+            exhausted(4),
+        )
+    };
+    // The two strata disagree about the order of the same four candidates, so
+    // some candidates sum two contributions and some one, and several land on
+    // exactly equal scores.
+    let streams = vec![
+        (
+            stratum("text"),
+            scripted(["alpha", "beta", "gamma", "delta"]),
+        ),
+        (
+            stratum("vector"),
+            scripted(["delta", "gamma", "beta", "alpha"]),
+        ),
+    ];
+    purrdf_retrieval::fuse::<MockStream, Term>(streams, &profile, TopK::new(8))
+        .await
+        .expect("a collided fusion answers")
+}
+
+/// The rows, the statuses, the resolution evidence and both identities.
+fn render_collided(result: &FusionResult<Term>) -> String {
+    use std::fmt::Write as _;
+    let mut out = render(result);
+    for (stratum, measured) in &result.trailer.resolution {
+        let _ = writeln!(
+            out,
+            "resolution {} separates_to={:?} ranks_pulled={} collisions={}",
+            stratum.as_str(),
+            measured.separation.rank(),
+            measured.ranks_pulled,
+            measured.collisions_observed
+        );
+    }
+    let _ = writeln!(out, "cut_on_a_tie {}", result.trailer.cut_on_a_tie);
+    out
+}
+
+#[test]
+fn the_collided_regime_has_a_byte_identical_golden() {
+    let result = block_on(collided_fusion());
+
+    // Non-vacuity: if this fixture stopped colliding it would silently become a
+    // second copy of `order.golden` and pin nothing new.
+    let collisions: u64 = result
+        .trailer
+        .resolution
+        .values()
+        .map(|measured| measured.collisions_observed)
+        .sum();
+    assert!(
+        collisions > 0,
+        "this golden must fuse inside the collided regime, or it pins the wrong thing"
+    );
+
+    let rendered = render_collided(&result);
+    let expected =
+        std::fs::read_to_string(collided_golden_path()).expect("the golden fixture is checked in");
+    assert_eq!(
+        rendered,
+        expected,
+        "collided fusion drifted from the golden; if the change is intended, update {}",
+        collided_golden_path().display()
+    );
+}
