@@ -690,8 +690,9 @@ impl StratumUnit {
     /// `query` is carried verbatim and is bounded by this layer only on the outside:
     /// [`Self::sparql`] is that text as a sub-`SELECT` of a query bounded at
     /// `LIMIT depth + 1`. It wraps rather than follows, because a text carrying a
-    /// top-level bound of its own can hold no second one — see [`supplied_text`], which
-    /// is where that argument lives. Whatever else the text
+    /// top-level bound of its own can hold no second one, and wrapped, both bounds
+    /// stand — the caller's over the pattern it was written against, this layer's over
+    /// whatever that resolves to. Whatever else the text
     /// bounds — a sub-`SELECT` of its own, a pattern that matches less — is the
     /// caller's and is not visible from here, so the read it describes is **never**
     /// certified [`Exhausted`](crate::ProducerStatus::Exhausted); see this type's
@@ -792,8 +793,9 @@ impl StratumUnit {
     /// parts with both bounds — the branch's row ceiling and the unit's own — computed
     /// from [`Self::depth()`]. For a query a caller supplied, it is that text wrapped in
     /// a query carrying the unit's own bound, which is the only bound this layer can
-    /// write over a text it did not assemble; [`supplied_text`] has the argument for why
-    /// it wraps rather than follows.
+    /// write over a text it did not assemble. It wraps rather than follows because a
+    /// text carrying a top-level bound of its own can hold no second one after it, and
+    /// wrapping needs to know nothing about the text.
     ///
     /// Derived rather than stored, so the bounds the read is taken under and the depth
     /// the ending is judged against cannot be different numbers. The probe row is
@@ -893,7 +895,9 @@ impl UnitAttribution {
 /// starts at [`execute`](crate::execute) — and records the attribution above each unit
 /// as it is handed over. `execute` refuses a unit list that is no longer that one, so
 /// re-tagging, swapping or dropping a unit after the fact is a named refusal rather than
-/// an answer served under a real plan identity. See [`UnitAttribution`].
+/// an answer served under a real plan identity. What is compared is the unit count and
+/// then each position's stratum, count first, because a removal shifts every position
+/// after it and reporting the first shifted tag would name a unit nothing was done to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRetrieval {
     /// Per-stratum query units, ordered by stratum IRI.
@@ -903,8 +907,9 @@ pub struct CompiledRetrieval {
     /// the bundle answers for, and which read each one's evidence describes, is fixed
     /// when the bundle is assembled. [`execute`](crate::execute) refuses a unit list
     /// that is not the one this bundle was built from
-    /// ([`ExecutionError::UnitsNotAsAssembled`](crate::ExecutionError::UnitsNotAsAssembled));
-    /// see [`UnitAttribution`] for what is compared and what is deliberately not.
+    /// ([`ExecutionError::UnitsNotAsAssembled`](crate::ExecutionError::UnitsNotAsAssembled)).
+    /// The count and each position's stratum are what is compared; a unit's own numbers
+    /// are not, because its constructor already refuses a dishonest pair of those.
     pub units: Vec<StratumUnit>,
     /// The canonical identity of the admitted plan.
     pub plan_id: PlanId,
