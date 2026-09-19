@@ -87,6 +87,38 @@
 //! `sh:shapesGraph` IRI and box-role vocabulary, bound by its identity. They are refused by
 //! name rather than accepted and ignored — see [`refuse_parse_flags_against_a_product`].
 //!
+//! # `--changes` validates a CHANGE, not a graph
+//!
+//! `--changes FILE` and `--changes-removed FILE` describe rows joining and leaving `IN`, and
+//! naming either takes this run down the incremental lane in [`validate_change`]: the base is
+//! branched into a copy-on-write mutation, the change is applied, and the engine is asked
+//! which focus nodes that change can move — `delta` →
+//! [`affected_focus_node_ids`](purrdf_shapes::engine::PreparedValidator::affected_focus_node_ids)
+//! →
+//! [`validate_focus_node_ids`](purrdf_shapes::engine::PreparedValidator::validate_focus_node_ids).
+//! Only those nodes are re-validated. No CLI-local decision about conformance is made on this
+//! route any more than on the other one: the expansion, the fallback condition and both
+//! reports come from one `PreparedValidator` bound to one mutation snapshot.
+//!
+//! That changes what the report DESCRIBES, and the receipt says so rather than leaving it to
+//! be inferred. `shacl change-expansion bounded N` means the report covers the N affected
+//! focus nodes — for those nodes it is identical, results and ordering alike, to what a full
+//! validation of the mutated graph reports about them, and it is silent about a pre-existing
+//! violation the change cannot reach. `shacl conforms true` under that line means the change
+//! introduced no violation, which is a weaker statement than "the graph conforms" and is the
+//! whole saving.
+//!
+//! `shacl change-expansion everything <reason>` means the opposite happened: a shapes graph
+//! whose reads hide inside SPARQL query text has no footprint anyone can bound from the
+//! shapes graph alone, so the run validated the mutated graph in FULL and the line names the
+//! construct that cost it the bound. The fallback is not optional — an under-approximated
+//! change set and a clean bill of health produce the same report — and it is why the engine
+//! reports an unbounded footprint instead of returning a short answer.
+//!
+//! The execution governors bound this lane exactly as they bound the other, over the same
+//! one-per-validation state; see [`validate_change`] for where that matters and where there
+//! is honestly nothing for them to charge.
+//!
 //! # Reading the two graphs
 //!
 //! The DATA graph is read through the pipeline's own format resolution into the frozen IR —
@@ -151,7 +183,8 @@ use purrdf::shapes::engine::{self, GovernedValidation};
 use purrdf::shapes::provenance::ValidatorProvenance;
 use purrdf::shapes::report::ValidationReport;
 use purrdf::shapes::shapes::Shapes;
-use purrdf_core::RdfDataset;
+use purrdf_core::ir::{MutableDataset, QuadValues, ViewLimits};
+use purrdf_core::{DatasetMut, RdfDataset};
 use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat};
 use purrdf_validate::SarifOptions;
 
@@ -204,6 +237,15 @@ pub(crate) struct ValidateOptions<'a> {
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base IRI relative IRIs in the DATA graph resolve against.
     pub(crate) base: Option<&'a str>,
+    /// `--changes`: the document whose rows are ADDED to [`Self::input`], or `-`.
+    /// `Some` here or on [`Self::changes_removed`] selects the incremental lane — see
+    /// [`ChangePlan`].
+    pub(crate) changes: Option<&'a str>,
+    /// `--changes-removed`: the document whose rows are REMOVED from [`Self::input`],
+    /// or `-`.
+    pub(crate) changes_removed: Option<&'a str>,
+    /// `--changes-from`: the format override both change documents are read under.
+    pub(crate) changes_from: Option<CliRdfFormat>,
     /// `--format`: which artifact the report is serialized as.
     pub(crate) format: ValidateFormat,
     /// The five execution governors this subcommand carries.
@@ -241,6 +283,25 @@ impl ShapesSource {
         }
     }
 
+    /// The shape PREPARATION the incremental lane binds its mutation snapshot against.
+    ///
+    /// The change path needs a `PreparedShapes` rather than a `&Shapes`, because
+    /// `bind_delta_with_shapes_graph` is a method on the preparation: the shape lowering
+    /// and the class analysis are what a preparation holds across bindings, and binding a
+    /// delta is exactly the operation that wants them already derived.
+    ///
+    /// The restored arm hands back the preparation the PRODUCT carried — the memo, with
+    /// its provenance and its carried analysis intact — rather than re-deriving one, so
+    /// `--shapes-product --changes` keeps the point of the product. The parsed arm has no
+    /// preparation to hand back and builds one here, which is the same analysis
+    /// `validate_dataset_with_shapes_graph` performs internally on the full-graph route.
+    fn prepared(&self) -> engine::PreparedShapes {
+        match self {
+            Self::Parsed(shapes) => engine::PreparedShapes::new(Arc::new(shapes.as_ref().clone())),
+            Self::Restored(prepared) => prepared.clone(),
+        }
+    }
+
     /// Where these shapes came from, rendered as the receipt token an operator reads.
     ///
     /// Total across both arms, because "which shapes did this verdict come from?" has an
@@ -271,19 +332,28 @@ pub(crate) fn run(
     ledger_target: &LedgerTarget,
 ) -> Result<CliOutcome, CliError> {
     refuse_two_stdins(options)?;
+    refuse_a_change_document_sharing_stdin(options)?;
+    refuse_a_changes_format_with_no_change_document(options)?;
     refuse_inapplicable_flags(options, ledger_target)?;
     refuse_parse_flags_against_a_product(options)?;
     refuse_an_expectation_with_no_product(options)?;
     refuse_a_rebuild_with_no_product(options)?;
 
     let data_format = format::resolve(options.from, options.input)?;
+    // Decided before a byte of anything is read, for the reason `ShapesPlan::decide` is:
+    // an unresolvable `--changes-from` is a malformed request about the command line.
+    let change_plan = ChangePlan::decide(options)?;
     // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
     // its own retrieval IRI, and the validation report is a fresh graph `emit` serializes
     // with no base at all (it passes `None`). So a data syntax that admits no relative IRI
     // leaves the flag with nowhere to go.
+    //
+    // A change document is a leg of that same DATA graph — its rows join or leave `IN` —
+    // so it is listed here rather than given a base of its own, and `--base` is consumable
+    // when ANY of the three legs can carry one.
     format::refuse_unconsumable_base(
         options.base,
-        &[format::BaseUse::parse(data_format, "the --from data graph")],
+        &change_plan.base_legs(format::BaseUse::parse(data_format, "the --from data graph")),
     )?;
 
     // Every DECISION about the shapes side is made here, before a byte of either document
@@ -302,7 +372,13 @@ pub(crate) fn run(
     eprintln!("shacl shapes-provenance {}", source.provenance());
     let shapes = source.shapes();
 
-    let Some(report) = validate(&data, shapes, options, plan.shapes_graph())? else {
+    let outcome = match change_plan {
+        ChangePlan::WholeGraph => validate(&data, shapes, options, plan.shapes_graph())?,
+        ChangePlan::Incremental { added, removed } => {
+            validate_change(&data, &source, options, plan.shapes_graph(), added, removed)?
+        }
+    };
+    let Some(report) = outcome else {
         // A tripped governor: the receipt is already on stderr and there is no report to
         // write, by the engine's own design. Exit 3 carries that to the shell.
         return Ok(CliOutcome::BudgetExhausted);
@@ -349,6 +425,226 @@ fn validate(
             Ok(None)
         }
     }
+}
+
+/// Everything DECIDED about the change side of this run, before a document is read.
+///
+/// Two arms because `--changes`/`--changes-removed` select between two genuinely
+/// different runs, not between two spellings of one: the whole-graph route validates
+/// `IN` as it stands, and the incremental route validates a MUTATION of it and reports
+/// about the focus nodes that mutation can move. Deciding which here, off the command
+/// line alone, is what keeps [`run`] from carrying the question any further.
+#[derive(Clone, Copy)]
+enum ChangePlan<'a> {
+    /// Neither half of a change set was named: validate `IN` exactly as this command
+    /// did before the flags existed.
+    WholeGraph,
+    /// At least one half was named. Each is a path and the syntax it is read as.
+    Incremental {
+        /// `--changes`: rows to ADD, or `None`.
+        added: Option<(&'a str, SourceFormat)>,
+        /// `--changes-removed`: rows to REMOVE, or `None`.
+        removed: Option<(&'a str, SourceFormat)>,
+    },
+}
+
+impl<'a> ChangePlan<'a> {
+    /// Decide the change side from the command line, reading no document.
+    ///
+    /// # Errors
+    ///
+    /// Any usage error in `--changes-from` or in either change path.
+    fn decide(options: &ValidateOptions<'a>) -> Result<Self, CliError> {
+        let resolve = |path: Option<&'a str>| -> Result<Option<(&'a str, SourceFormat)>, CliError> {
+            path.map(|path| format::resolve(options.changes_from, path).map(|f| (path, f)))
+                .transpose()
+        };
+        let added = resolve(options.changes)?;
+        let removed = resolve(options.changes_removed)?;
+        if added.is_none() && removed.is_none() {
+            return Ok(Self::WholeGraph);
+        }
+        Ok(Self::Incremental { added, removed })
+    }
+
+    /// `data` plus a `--base` leg for each change document this plan reads.
+    ///
+    /// A change document parses under the same `--base` the data graph does, because its
+    /// rows are rows OF that graph. So `--base turtle-data.ttl --changes patch.ttl` has
+    /// two legs that consume the base and one flag that reaches both; listing them all is
+    /// what stops [`format::refuse_unconsumable_base`] from calling a base unconsumable
+    /// because the leg it was actually written for is the one it did not know about.
+    fn base_legs(self, data: format::BaseUse<'a>) -> Vec<format::BaseUse<'a>> {
+        let mut legs = vec![data];
+        if let Self::Incremental { added, removed } = self {
+            if let Some((_, format)) = added {
+                legs.push(format::BaseUse::parse(format, "the --changes document"));
+            }
+            if let Some((_, format)) = removed {
+                legs.push(format::BaseUse::parse(
+                    format,
+                    "the --changes-removed document",
+                ));
+            }
+        }
+        legs
+    }
+}
+
+/// Run the INCREMENTAL lane: expand the change, then validate only what it can move.
+///
+/// The `delta` → `affected_focus_node_ids` → `validate_focus_node_ids` loop, driven from
+/// the command line through the engine's own [`engine::validate_change`]. Nothing about
+/// validation is decided here — not the expansion, not the fallback condition, not the
+/// governor arrangement — so this lane cannot reach a verdict the engine would not, and
+/// the three other surfaces that drive the change path run the same code rather than a
+/// second copy of it.
+///
+/// # The `Everything` arm is not optional
+///
+/// A shapes graph that reads through SPARQL query text has no footprint anyone can bound,
+/// and the engine says so rather than returning a short answer. It honours that with a
+/// full validation of the mutated graph, which is what keeps this lane from silently
+/// under-validating — a short expansion and a clean bill of health are indistinguishable
+/// in a report. Which of the two happened is written to stderr either way, by
+/// [`render_expansion`].
+///
+/// # Governors bound this lane too
+///
+/// `engine::validate_change_with_governors` installs the same one-per-validation governor
+/// state `engine::validate_with_governors` installs, so a `--fuel`/`--deadline`/`--max-*`
+/// ceiling means here what it means on the full-graph route. It matters most on the
+/// `Everything` fallback, which is precisely the case where the shapes graph runs SPARQL;
+/// a bounded expansion executes no query text at all (that is *why* it could be bounded)
+/// and so consumes nothing, which is the honest answer rather than an oversight. The
+/// scope is reported even when a budget trips, because it is settled before the first
+/// query runs.
+///
+/// # Errors
+///
+/// A failed read of either change document, a change row that carries a relative IRI, a
+/// snapshot the retention limits refuse, or a hard validation failure.
+fn validate_change(
+    data: &Arc<RdfDataset>,
+    source: &ShapesSource,
+    options: &ValidateOptions<'_>,
+    shapes_graph: Option<&str>,
+    added: Option<(&str, SourceFormat)>,
+    removed: Option<(&str, SourceFormat)>,
+) -> Result<Option<ValidationReport>, CliError> {
+    let mutation = apply_changes(data, options.base, added, removed)?;
+    let snapshot = Arc::new(
+        mutation
+            .snapshot_view()
+            .map_err(|error| CliError::Runtime(error.to_string()))?,
+    );
+    let validator = source
+        .prepared()
+        .bind_delta_with_shapes_graph(Arc::clone(&snapshot), shapes_graph, ViewLimits::default())
+        .map_err(CliError::Runtime)?;
+
+    if !options.governors.is_engaged() {
+        let validation =
+            engine::validate_change(&validator, &snapshot).map_err(CliError::Runtime)?;
+        render_expansion(validation.scope);
+        return Ok(Some(validation.report));
+    }
+
+    let governed = engine::validate_change_with_governors(
+        &validator,
+        &snapshot,
+        &options.governors.to_governors(),
+    )
+    .map_err(CliError::Runtime)?;
+    // Before the trip or the report, so an operator reading a run that stopped still
+    // learns the scope the verdict was about to describe.
+    render_expansion(governed.scope);
+    match governed.outcome {
+        GovernedValidation::BudgetExhausted { tripped, evidence } => {
+            eprint!("{}", governors::render_validation_trip(tripped, &evidence));
+            Ok(None)
+        }
+        GovernedValidation::Complete { report, .. } => Ok(Some(report)),
+    }
+}
+
+/// Write the change-expansion receipt to stderr.
+///
+/// Load-bearing rather than decorative: a bounded report describes the affected focus
+/// nodes and the fallback report describes the whole graph, so a conforming verdict means
+/// two different things on the two arms, and a verdict whose scope has to be inferred is
+/// a verdict nobody can act on. It goes to stderr so `OUT` stays the report alone.
+fn render_expansion(scope: engine::ChangeScope) {
+    match scope {
+        engine::ChangeScope::Bounded { focus_nodes } => {
+            eprintln!("shacl change-expansion bounded {focus_nodes}");
+        }
+        engine::ChangeScope::Everything { reason } => {
+            eprintln!("shacl change-expansion everything {reason}");
+        }
+    }
+}
+
+/// Apply both halves of the change set to `base`, returning the mutation to snapshot.
+///
+/// Reads each change document through the pipeline's own format resolution — any of the
+/// nine native syntaxes or a verified pack, exactly as `IN` is read — and applies its
+/// whole RDF 1.2 SURFACE: the plain rows and both statement tables, which is the set an
+/// RDF 1.2 consumer actually reads. Taking `quads()` alone would silently drop a reifier
+/// declaration or an annotation from the change set, and a change set short by a row
+/// cannot be told from a graph that did not change.
+///
+/// Additions are applied before removals so a change set that names the same row on both
+/// halves settles on "removed", which is the order `MutableDataset` itself would reach by
+/// replaying an insert then a delete.
+///
+/// # Errors
+///
+/// A failed read of either document, or a change row carrying a relative IRI — which the
+/// COW layer refuses at the call that introduced it rather than at freeze, and which is
+/// reported here with the shared `iri-relative-no-base` diagnostic the parser uses.
+fn apply_changes(
+    base: &Arc<RdfDataset>,
+    base_iri: Option<&str>,
+    added: Option<(&str, SourceFormat)>,
+    removed: Option<(&str, SourceFormat)>,
+) -> Result<MutableDataset, CliError> {
+    let mut mutation = MutableDataset::new(Arc::clone(base));
+    if let Some((path, format)) = added {
+        let document = source::load_dataset(path, format, base_iri)?;
+        for row in surface_rows(&document) {
+            mutation.insert(row).map_err(|error| {
+                CliError::Runtime(format!("--changes {path}: {}", error.diagnostic_code()))
+            })?;
+        }
+    }
+    if let Some((path, format)) = removed {
+        let document = source::load_dataset(path, format, base_iri)?;
+        for row in surface_rows(&document) {
+            // A row the data graph does not carry retracts nothing. That is the
+            // `DatasetMut::remove` contract everywhere else in PurRDF, and it is right
+            // here: a change set is a description of what moved, not an assertion about
+            // what `IN` contained.
+            mutation.remove(&row);
+        }
+    }
+    Ok(mutation)
+}
+
+/// Every row of `document`'s RDF surface — the plain rows and BOTH statement tables — as
+/// the owned value-quads the COW layer is mutated with.
+fn surface_rows(document: &RdfDataset) -> Vec<QuadValues> {
+    document
+        .quads()
+        .chain(document.reifier_quads())
+        .chain(document.annotation_quads())
+        .map(|quad| QuadValues {
+            s: document.term_value(quad.s),
+            p: document.term_value(quad.p),
+            o: document.term_value(quad.o),
+            g: quad.g.map(|g| document.term_value(g)),
+        })
+        .collect()
 }
 
 /// Serialize `report` to `--format` and write it to `OUT`.
@@ -637,6 +933,74 @@ fn refuse_two_stdins(options: &ValidateOptions<'_>) -> Result<(), CliError> {
         ));
     }
     Ok(())
+}
+
+/// Refuse a command line in which a CHANGE document shares standard input.
+///
+/// The twin of [`refuse_two_stdins`], extended to the two halves of a change set: a
+/// process has one standard input, and `IN`, `--shapes`/`--shapes-product`, `--changes`
+/// and `--changes-removed` are four documents that may each name it. At most one may.
+///
+/// Separate from [`refuse_two_stdins`] rather than folded into it, and it runs second, so
+/// the pairs that command line already refused keep the message they always had — this one
+/// only ever speaks about a combination involving a change document.
+fn refuse_a_change_document_sharing_stdin(options: &ValidateOptions<'_>) -> Result<(), CliError> {
+    let mut readers: Vec<&str> = Vec::new();
+    if options.input == "-" {
+        readers.push("IN");
+    }
+    if options.shapes == Some("-") {
+        readers.push("--shapes");
+    }
+    if options.shapes_product == Some("-") {
+        readers.push("--shapes-product");
+    }
+    if options.changes == Some("-") {
+        readers.push("--changes");
+    }
+    if options.changes_removed == Some("-") {
+        readers.push("--changes-removed");
+    }
+    let names_a_change = readers
+        .iter()
+        .any(|role| *role == "--changes" || *role == "--changes-removed");
+    if readers.len() < 2 || !names_a_change {
+        return Ok(());
+    }
+    // `A and B`, `A, B and C` — grammatical at every length this can reach, because a
+    // refusal an operator has to re-read is a refusal that reads as a bug.
+    let named = match readers.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => readers.join(", "),
+    };
+    Err(CliError::Usage(format!(
+        "{named} read standard input, and there is only one: a process has a single stdin \
+         stream, so each of those documents would get part of one byte stream. Give all but \
+         one of them a path"
+    )))
+}
+
+/// Refuse `--changes-from` when there is no change document for it to label.
+///
+/// The flag names the SYNTAX the two halves of a change set are read as, and a run that
+/// named neither half reads no change document at all. Accepting it and silently ignoring
+/// it is the no-op this pipeline refuses everywhere else, and here it would hide the
+/// likeliest reason it was written: an operator who meant to pass `--changes` and did not.
+fn refuse_a_changes_format_with_no_change_document(
+    options: &ValidateOptions<'_>,
+) -> Result<(), CliError> {
+    if options.changes_from.is_none()
+        || options.changes.is_some()
+        || options.changes_removed.is_some()
+    {
+        return Ok(());
+    }
+    Err(CliError::Usage(
+        "--changes-from names the syntax the two halves of a CHANGE SET are read as, and this \
+         run names neither half: without `--changes FILE` or `--changes-removed FILE` there is \
+         no change document to label. Pass one of them, or drop the flag"
+            .to_owned(),
+    ))
 }
 
 /// Refuse `--expect-identity` when there is no product for it to bind.

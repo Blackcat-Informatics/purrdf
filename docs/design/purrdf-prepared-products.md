@@ -210,6 +210,19 @@ deliberately. A second hand-maintained counter would reintroduce exactly the
 defect the derivation removes. The container framing carries the one format
 version this format needs.
 
+Because the stage id is derived, moving it is a consequence of a source change
+rather than an act, and it invalidates every product this build writes — including
+the committed fixture `crates/shapes/tests/fixtures/prepared-shapes-core.product`.
+Re-preparing that fixture is a **supported command**, not something each change
+improvises: the `#[ignore]`d `regenerate_the_prepared_product_fixture` in
+`crates/shapes/tests/product_determinism.rs`, run by name, which re-encodes the
+fixture, checks that what it wrote opens, admits and validates identically to a
+fresh parse before writing it, and prints the new byte length to put in
+`GOLDEN_LEN`. The census test's failure message names that command, so the path is
+discovered at the moment it is needed. It writes one file and never touches the
+frozen format-epoch artifact, which is the cross-version reader proof's only
+evidence and is never regenerated.
+
 The stage id sits *below* the profile id in coarseness. The profile moves only
 when the profile's meaning is redefined, at which point every product written
 under the old meaning must stop opening — which is exactly what changing it does.
@@ -548,13 +561,40 @@ workspace. The remaining floor is one allocation per retained structure rather
 than per term, so it is flat in pack size. No emitted bytes changed: the frozen
 product golden and every pack vector are untouched.
 
-The whole `admit` path over the same fixture moved from **1046 allocations to
-544**. What remains is dominated by the model decode, which sits at **333
-allocations — its structural floor**: the declarative model is an owned-string term
+The whole `admit` path over the same fixture was recorded here as having moved
+from **1046 allocations to 544**. That second figure is stale, and saying so is
+the point of this paragraph. Re-measured on the revision that added the change
+path's stage discipline, the shipped probe reports:
+
+```text
+[shacl_product_alloc] stage=0 restore/open:  allocations=48  requested_bytes=5189   retained_bytes=1589  peak_working_bytes=2101
+[shacl_product_alloc] stage=0 restore/admit: allocations=603 requested_bytes=136066 retained_bytes=87558 peak_working_bytes=90483
+```
+
+**603, not 544.** The drift is not a regression the stage work introduced —
+nothing on the change path runs inside `admit`, and 603 is what the probe printed
+before any of that work — it is a measured number that moved with the model and
+the fixture underneath prose nobody re-ran. It drifted unnoticed because it is not
+among the claims `scripts/check-doc-claims.py` derives from a manifest; only
+claims with a generated source are gated, and a figure copied out of a bench log
+has none. Reproduce it in one command:
+
+```text
+cargo bench -p purrdf-shapes --bench shacl_product_alloc -- --test
+```
+
+The structural reading is unchanged, and it is now stated from two lines the same
+run prints rather than from a sub-figure with no seam to re-derive it at: `admit`
+adds **555 allocations** over the structural `restore/open`, and that remainder is
+dominated by the model decode. The declarative model is an owned-string term
 model, so decoding it allocates once per owned string it materializes, and that
-term is not removable without changing what the model *is*. The honest reading is
-that the container, the dataset restore and the linking are no longer where the
-allocations are; the term representation is.
+term is not removable without changing what the model *is*. The container, the
+dataset restore and the linking are no longer where the allocations are; the term
+representation is. (An earlier revision of this section split that remainder out
+as 333 allocations for the model decode alone. There is no public seam that
+isolates the model decode from the rest of admission, so that split cannot be
+re-derived from the shipped probe, and it is not restated here as though it
+could.)
 
 Four quantities are reported separately and should not be conflated: allocation
 *count*, requested bytes (allocator traffic, including memory freed again within
@@ -569,6 +609,129 @@ One byte-count fact deliberately does not live only in a bench log. The encoded
 artifact's length for the determinism fixture is an **asserted constant** in
 `crates/shapes/tests/product_determinism.rs`, so a codec change that doubled the
 artifact fails the build rather than quietly changing a number nobody re-reads.
+
+## 11. The stage discipline, and the change path's allocation invariant
+
+A preparation is only worth caching if what it saves is real, and the measurement
+above says where the cost of restoring one sits. This section says where the cost
+of *using* one sits, because the two are answered by different machinery and
+conflating them is how a product that restores cheaply ends up feeding a
+validator that does not.
+
+### 11.1 Three binding times, named
+
+`crates/shapes/src/plan.rs` names three stages, and every derivation in SHACL
+validation belongs to exactly one of them:
+
+| Stage | Depends on | Paid |
+| --- | --- | --- |
+| **0** | the shapes graph alone | once per preparation, however many datasets it binds |
+| **1** | stage 0 × one dataset | once per bind |
+| **2** | × one focus node | once per focus node examined |
+
+The defect this discipline replaces was not a wrong answer. It was
+shape-constant work running at stage 2 — asymptotically correct, and quietly
+costing exactly what the incremental change path exists to avoid. Nothing fails
+when a derivation sits at the wrong stage; the route simply stops being cheaper
+than the whole-graph validation it was meant to replace, and no test that checks
+answers can see it.
+
+The stage a product carries is therefore worth stating precisely. A product
+carries the reusable **class analysis** (§7) but not the lowered constraint tree,
+so a restored preparation derives that tree on whichever bind comes first and
+memoizes it. That is a stage-0 cost paid once, not a stage-1 cost that grew, and
+`shacl_product_alloc.rs` reports it on its own line — `lower/first_bind` — for
+that reason. Every line that target prints now carries its stage, because a figure
+whose binding time is unstated cannot be compared to anything.
+
+### 11.2 The invariant
+
+**Validating a conforming graph through the change path
+(`PreparedValidator::validate_focus_node_ids` and
+`PreparedValidator::validate_focus_nodes`) allocates a constant amount,
+independent of the focus-node count.** Cost is proportional to the violations
+found, not to the focus nodes examined: a focus node is carried as its interned
+identity and materialized as an owned term only where a result is built.
+
+The growth term is gone — a slope of zero, not a smaller slope — across the **36**
+measured constraint and path cases, all but one of which are held to exact
+equality (`sh:pattern` is the exception, for the reason below, and is held to the
+same slope on one thread). Measured on the revision that removed it, a conforming
+validation costs the same six or seven allocations at 2,048 and at 4,096 focus
+nodes, where it cost 6,171 and 12,320 before; binding the seam dataset costs 59
+either way, where it cost 94 against 97 — flat in the data graph beyond the class
+catalog. `PreparedShapes::bind_dataset` is the one deliberate exception, and it is
+excluded by construction rather than by tolerance: it projects the graph into an
+owned snapshot before binding, so it is linear in the graph and always will be,
+and asserting otherwise over it would be asserting that a copy is free.
+
+Two residuals remain. Both are inside third-party crates, both were located by
+tracing the backtrace of every allocation inside the measurement window rather
+than by inference, and neither is a per-focus-node term:
+
+* **`rayon`'s job injector.** Submitting work from a non-worker thread pushes onto
+  a `crossbeam_deque::Injector`, a linked list of fixed blocks whose `BLOCK_CAP`
+  is 63: every 63rd push allocates the next block and the other 62 allocate
+  nothing. It is removed by taking a **minimum over three repetitions**, and the
+  repetition count is derived rather than tuned — two executions make well under
+  63 pushes between them, so at least one cannot straddle a block boundary. A
+  minimum is not a tolerance: a real per-focus-node term is charged to every
+  execution and therefore to the minimum too.
+* **The `regex` crate's cache pool**, reachable under `sh:pattern` above the
+  parallel threshold, where a worker that finds its thread shard empty builds a
+  fresh scratch cache. `sh:pattern` is held out of the two exact-equality
+  comparisons **and only out of those** — it still runs, still has to conform,
+  still has to produce its violations, and is still pinned byte for byte by the
+  report golden. The exclusion is not taken on trust: a companion test drives the
+  same shape below the parallel threshold, where the pool is never contended, and
+  measures a slope of exactly 0.
+
+### 11.3 Where the invariant lives, and where the figures live
+
+The invariant is a **test**, in `crates/shapes/tests/change_path_alloc.rs`: two
+conforming validations differing only in focus count, through both entry points,
+with their allocation deltas required to be equal. A conforming-only assertion is
+satisfied perfectly by a validator that has stopped validating, so a companion
+test holds the violation count fixed while the conforming population doubles and
+the conforming population fixed while the violations double, and a pinned report
+golden catches validation that got cheaper by producing fewer results.
+
+The **benches are report-only**, exactly as in §10: `validate.rs`,
+`shared_views.rs` and `shacl_product_alloc.rs` assert no threshold, no ratio and
+no comparison against a baseline, and no allocation invariant is gated in any of
+them. They illustrate; the tests oblige. The illustration each adds:
+
+* `validate.rs` / `shacl_change_path_contrast` — the conforming and violating
+  rows side by side over ONE dataset and ONE binding, so the only thing differing
+  between two rows at the same size is whether the focus nodes conform. Measured
+  over a 1,000,000-focus-node graph, the conforming probe reports **5 allocations
+  at 1, 8, 64 and 512 focus nodes** — flat, to the allocation — while the
+  violating probe reports 13, 145, 1,100 and 8,719 for the same sizes. The
+  conforming row steps at 4,096 because that is above the parallel threshold and
+  the fixture's shape carries `sh:pattern`: the second residual above, showing up
+  in a log exactly where the test documents it.
+* `shared_views.rs` / `shacl_shared_carriers` — bind and validate reported as
+  separate rows per carrier (`stage1_bind`, `stage2_validate`) rather than as one
+  end-to-end number, because the trade this discipline made moves work from stage
+  2 into stage 1 and a single row reports that as one figure moving slightly.
+* `shacl_product_alloc.rs` — the four quantities of §10 (allocation *count*,
+  requested bytes, retained bytes, peak live bytes), still kept strictly separate
+  and still not conflated, now reported per stage: `lower/first_bind` at stage 0,
+  `bind/dataset` at stage 1, `eval/validate` at stage 2.
+
+That separation is the same discipline §10 states, applied to a second surface: a
+phase that allocates and frees a large buffer repeatedly has high traffic and a
+modest peak, a phase that assembles one large structure has the reverse, and one
+blended number would say neither.
+
+One last asymmetry is worth naming, because §10 already names its mirror image.
+The artifact's byte length does not live only in a bench log — it is an asserted
+constant in `crates/shapes/tests/product_determinism.rs`, "so a codec change that
+doubled the artifact fails the build rather than quietly changing a number nobody
+re-reads." The change-path allocation figures have the same property for the same
+reason: the counts are asserted in `change_path_alloc.rs`, and what appears in a
+bench log is the illustration. The figure in §10 that *was* only prose is the one
+that drifted.
 
 ## What this document does not claim
 

@@ -43,71 +43,14 @@
 //! Report-only. Nothing here is a gate and nothing asserts a bound; the numbers are
 //! whatever this machine produced when it ran.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::io::Read;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
 
+use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_rdf::{
     RdfDataset, SerializeGraph, parse_dataset, parse_dataset_from_reader, serialize_dataset,
 };
-
-static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
-static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-
-fn to_i64(value: usize) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-fn record_allocation(size: usize) {
-    let size = to_i64(size);
-    let live = LIVE_BYTES
-        .fetch_add(size, Ordering::Relaxed)
-        .saturating_add(size);
-    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(observed) => peak = observed,
-        }
-    }
-}
-
-fn record_deallocation(size: usize) {
-    LIVE_BYTES.fetch_sub(to_i64(size), Ordering::Relaxed);
-}
-
-struct CountingAllocator;
-
-// SAFETY: every operation delegates to `System` with the exact incoming pointer and
-// layout; the atomic accounting does not affect allocator ownership.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact layout.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        record_deallocation(layout.size());
-        // SAFETY: delegated with the caller's exact pointer/layout.
-        unsafe { System.dealloc(pointer, layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact pointer/layout/size.
-        let fresh = unsafe { System.realloc(pointer, layout, new_size) };
-        if !fresh.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        fresh
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -221,22 +164,24 @@ struct Arm {
     retained: i64,
 }
 
-/// Run one parse with the allocator counters zeroed, reporting its peak and the bytes
+/// Run one parse inside a fresh measurement window, reporting its peak and the bytes
 /// its result retains.
+///
+/// The window is the whole-process one because the default parse path is
+/// chunk-parallel above 1 MiB: a per-thread window would miss every worker and report
+/// the arm this bench exists to compare as the cheapest of the three.
 ///
 /// `body` must return the SOLE reference to the dataset, because the retained figure is
 /// obtained by dropping it: a surviving `Arc` clone elsewhere would free nothing and
 /// report zero.
 fn measure(body: impl FnOnce() -> Arc<RdfDataset>) -> Arm {
-    LIVE_BYTES.store(0, Ordering::Relaxed);
-    PEAK_BYTES.store(0, Ordering::Relaxed);
+    let window = WholeProcessWindow::open();
     let dataset = body();
-    let peak = PEAK_BYTES.load(Ordering::Relaxed);
-    let before_drop = LIVE_BYTES.load(Ordering::Relaxed);
+    let parsed = window.sample();
     drop(dataset);
     Arm {
-        peak,
-        retained: before_drop - LIVE_BYTES.load(Ordering::Relaxed),
+        peak: parsed.peak_working_bytes,
+        retained: parsed.retained_bytes - window.close().retained_bytes,
     }
 }
 

@@ -88,7 +88,9 @@ simply not narrated here:
 - `crates/sparql-eval/benches/lateral_service.rs` — variable-endpoint
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
-  LinkML import/lowering throughput and one-operation allocation traffic.
+  LinkML import/lowering throughput and one-operation allocation traffic,
+  including the change path's conforming-versus-violating contrast over one
+  dataset and one binding.
 - `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
   compilation for shaped-only, sparse, and dense property surfaces.
 - `crates/shapes/benches/shacl_product_reuse.rs` — the prepared-shapes product,
@@ -272,7 +274,7 @@ memory thresholds.
 
 ### SHACL validation hot paths
 
-The `validate` benchmark contains four deterministic SHACL workloads:
+The `validate` benchmark contains five deterministic SHACL workloads:
 
 | Group | Fixed fixture and measured boundary |
 | --- | --- |
@@ -280,6 +282,7 @@ The `validate` benchmark contains four deterministic SHACL workloads:
 | `shacl_focus_core` | 512, 1,024, 2,048, 3,000, 100,000, and 1,000,000 target nodes. Each node contributes four quads; the shapes exercise a 40-level asserted subclass hierarchy, pattern, datatype, and class constraints. |
 | `shacl_focus_sparql` | 64, 512, and 4,096 target nodes with two quads per node and a caller-declared SHACL-SPARQL function. |
 | `shacl_focus_realtime` | One prepared 1,000,000-node snapshot (4,000,079 quads and 3,000,088 terms), a compatibility focus filter over one node, and id-native prepared requests containing 1, 8, 64, 512, or 4,096 focus nodes. Dataset and shapes preparation stays outside each request's timed loop. |
+| `shacl_change_path_contrast` | One 1,000,000-node snapshot carrying both a conforming and a disjoint violating focus population, one binding, and id-native requests of 1, 8, 64, 512, or 4,096 focus nodes from each. Conformance is the only thing that differs between the two rows at a given size, so the deferred-materialization trade — a conforming request costs a constant, a violating one pays per violation — is visible as two columns. The violating side asserts one result per focus node, so a cheap row cannot be a row that stopped producing results. |
 
 Run the complete suite, one group, one large bulk case, or the largest bounded
 request with:
@@ -300,7 +303,8 @@ estimates.
 projected snapshot and parsed shapes, precomputes class closures and target
 identities, and evaluates SHACL-SPARQL targets once. Callers that already hold
 the projected snapshot should use `from_projected_dataset` and pass that exact
-snapshot's dataset-local `TermId` values to `validate_focus_node_ids`. The
+snapshot's own `FocusId` values — minted by that binding through `term_id` or
+`affected_focus_node_ids` — to `validate_focus_node_ids`. The
 compatibility focus-filter entry point must enumerate whole target sets before
 discarding unrelated nodes and is intentionally retained as a comparison, not
 as the realtime path. Publishing an overlay or replacement snapshot requires a

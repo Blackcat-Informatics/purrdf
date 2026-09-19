@@ -70,13 +70,14 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
+use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
 use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
+use purrdf_sparql_eval::Prebinding;
 
-use crate::constraints::conforms;
+use crate::constraints::conforms_with_plan;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
-use crate::engine::{FocusNode, ValidationPlan, resolve_focus_nodes};
-use crate::expression::{NodeExpr, RecursionGuard, eval_node_expr};
+use crate::engine::resolve_focus_nodes;
+use crate::expression::{NodeExpr, RecursionGuard, eval_planned_node_expr};
 use crate::shapes::{Shape, Shapes};
 use crate::term::{Term, term_id_to_native};
 
@@ -770,16 +771,24 @@ fn triple_rule_producer(
     conditions: &[Shape],
     rule_id: &str,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let focus_nodes = focus_nodes(data, shape)?;
+    let plan = RulePlan::of(data, shape, conditions);
+    let focus_nodes = plan.focus_nodes(data)?;
+    // The head's three node expressions are rule constants: the same expressions
+    // are evaluated at every focus node the rule fires on, so each is lowered and
+    // bound ONCE here rather than once per focus node. That is the same staging the
+    // rule's own shape and its `sh:condition` shapes already get.
+    let subject_plan = ExprPlan::of(data, subject);
+    let predicate_plan = ExprPlan::of(data, predicate);
+    let object_plan = ExprPlan::of(data, object);
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
-        if !conditions_hold(data, focus, conditions)? {
+        if !conditions_hold(data, focus, &plan)? {
             continue;
         }
         let mut guard = RecursionGuard::new();
-        let subjects = eval_node_expr(data, focus, subject, &mut guard)?;
-        let predicates = eval_node_expr(data, focus, predicate, &mut guard)?;
-        let objects = eval_node_expr(data, focus, object, &mut guard)?;
+        let subjects = subject_plan.eval(data, focus, &mut guard)?;
+        let predicates = predicate_plan.eval(data, focus, &mut guard)?;
+        let objects = object_plan.eval(data, focus, &mut guard)?;
         for s in &subjects {
             if !s.is_subject() {
                 return Err(format!(
@@ -813,13 +822,25 @@ fn sparql_rule_producer(
     rule_id: &str,
     shapes_graph_iri: Option<&str>,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let focus_nodes = focus_nodes(data, shape)?;
+    let plan = RulePlan::of(data, shape, conditions);
+    let focus_nodes = plan.focus_nodes(data)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
+    // SHACL-AF pre-binds `$this`, `$shapesGraph` and `$currentShape` for a
+    // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path. Two
+    // of the three are constants of the RULE and so is every NAME, so the list is
+    // built once here and only `$this` is overwritten per focus node.
+    const THIS_SLOT: usize = 0;
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3);
+    subs.push(Prebinding {
+        variable: "this",
+        value: TermValue::Iri(String::new()),
+    });
+    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, Some(&shape.id));
     for focus in &focus_nodes {
-        if !conditions_hold(data, focus, conditions)? {
+        if !conditions_hold(data, focus, &plan)? {
             continue;
         }
-        let subs = [("this".to_owned(), focus.to_term_value())];
+        subs[THIS_SLOT].value = focus.to_term_value();
         // A CONSTRUCT template blank is minted from a per-evaluation counter that
         // resets each call, so two focus nodes would both mint `_:c1` and
         // conflate. The evaluation therefore mints under a per-focus prefix
@@ -835,14 +856,10 @@ fn sparql_rule_producer(
         // the serializable BLANK_NODE_LABEL alphabet, or the entailed dataset
         // cannot round-trip.
         let tag = focus_tag(focus);
-        // SHACL-AF pre-binds `$this`, `$shapesGraph`, and `$currentShape` for a
-        // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path.
         let graph = crate::sparql::run_construct_with_shacl_prebinding_view(
             data.sparql_view(),
             construct,
             &subs,
-            shapes_graph_iri,
-            Some(&shape.id),
             Some(tag.as_str()),
         )?;
         for quad in quads_for_pattern_ids(graph.as_ref(), None, None, None, GraphFilter::AnyGraph) {
@@ -867,11 +884,102 @@ fn sparql_rule_producer(
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
-/// Resolve the focus nodes of `shape` against the current dataset.
-fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
-    let plan = ValidationPlan::for_shape(data.core_view(), shape);
-    resolve_focus_nodes(data, &shape.targets, &plan)
-        .map(|nodes| nodes.into_iter().map(FocusNode::into_term).collect())
+/// The one lowering a rule firing needs: the rule's own shape AND every
+/// `sh:condition` shape it will check, lowered and bound once.
+///
+/// Both uses are per-firing invariants — the targets are resolved once and the
+/// conditions are then checked against the SAME shapes for every focus node — so
+/// building the plan here is what keeps the shape walk off the per-focus path.
+///
+/// The conditions follow the rule's shape in the lowering, so condition `i` is
+/// plan position `i + 1`.
+struct RulePlan<'a> {
+    lowered: crate::plan::LoweredShapes,
+    binding: crate::plan::DatasetBinding,
+    shape: &'a Shape,
+    conditions: &'a [Shape],
+}
+
+impl<'a> RulePlan<'a> {
+    fn of(data: &ShaclData, shape: &'a Shape, conditions: &'a [Shape]) -> Self {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions));
+        let binding = lowered.bind(data.core_view(), lowered.classes());
+        Self {
+            lowered,
+            binding,
+            shape,
+            conditions,
+        }
+    }
+
+    /// Resolve the focus nodes of the rule's shape against the current dataset.
+    fn focus_nodes(&self, data: &ShaclData) -> Result<Vec<Term>, String> {
+        resolve_focus_nodes(
+            data,
+            &self.shape.targets,
+            &self.binding,
+            self.lowered.classes(),
+        )
+        .map(|nodes| {
+            // The rules engine drives the owned-term SHACL-AF surfaces, so this
+            // is one of the boundaries that really does need every focus node
+            // materialized.
+            nodes
+                .into_iter()
+                .map(|node| node.to_term(data.core_view()))
+                .collect()
+        })
+    }
+
+    /// The plan of the `position`-th `sh:condition` shape.
+    fn condition(&self, position: usize) -> Result<crate::plan::ShapePlan<'_>, String> {
+        self.lowered.plan(
+            &self.conditions[position],
+            position + 1,
+            &self.binding,
+            self.lowered.classes(),
+            self.lowered.no_targets(),
+        )
+    }
+}
+
+/// One node expression of a rule head, lowered and bound once per firing.
+///
+/// A rule's head expressions do not depend on the focus node, so nothing they name
+/// has to be resolved again at each one. Holding the lowering and its binding here
+/// is what keeps that resolution off the per-focus path.
+struct ExprPlan<'a> {
+    expr: &'a NodeExpr,
+    lowering: crate::plan::StandaloneLowering,
+    binding: crate::plan::DatasetBinding,
+}
+
+impl<'a> ExprPlan<'a> {
+    fn of(data: &ShaclData, expr: &'a NodeExpr) -> Self {
+        let lowering = crate::plan::lower_standalone_expression(expr);
+        let binding = lowering.bind(data.core_view());
+        Self {
+            expr,
+            lowering,
+            binding,
+        }
+    }
+
+    fn eval(
+        &self,
+        data: &ShaclData,
+        focus: &Term,
+        guard: &mut RecursionGuard,
+    ) -> Result<Vec<Term>, String> {
+        eval_planned_node_expr(
+            data,
+            focus,
+            self.expr,
+            self.lowering.expr(),
+            self.lowering.plan(&self.binding),
+            guard,
+        )
+    }
 }
 
 /// Whether `focus` conforms to every `sh:condition` shape.
@@ -882,9 +990,9 @@ fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
 /// non-conforming one stops the rule. An error from the conformance check itself
 /// propagates rather than being read as "the condition did not hold" — a rule must
 /// never fire, or decline to fire, on a verdict that was not computed.
-fn conditions_hold(data: &ShaclData, focus: &Term, conditions: &[Shape]) -> Result<bool, String> {
-    for shape in conditions {
-        if !conforms(data, focus, shape)? {
+fn conditions_hold(data: &ShaclData, focus: &Term, plan: &RulePlan<'_>) -> Result<bool, String> {
+    for position in 0..plan.conditions.len() {
+        if !conforms_with_plan(data, focus, plan.condition(position)?)? {
             return Ok(false);
         }
     }

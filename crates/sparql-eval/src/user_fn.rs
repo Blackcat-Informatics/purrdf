@@ -946,8 +946,11 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     let Some(mut child) = ctx.child_for_user_fn()? else {
         return Ok(None);
     };
-    let substituted = crate::substitute::apply_substitutions((*func.body).clone(), &substitutions)
-        .map_err(|d| EvalError::function(d.to_string()))?;
+    let substituted = crate::substitute::apply_substitutions(
+        (*func.body).clone(),
+        crate::substitute::Prebindings::Owned(&substitutions),
+    )
+    .map_err(|d| EvalError::function(d.to_string()))?;
     let outcome = match evaluate_query_evaluated(&substituted, &mut child)? {
         EvaluatedOutcome::Complete(outcome) => outcome,
         EvaluatedOutcome::Truncated { certificate, .. } => {

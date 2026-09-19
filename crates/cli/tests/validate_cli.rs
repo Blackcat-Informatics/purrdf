@@ -1744,3 +1744,315 @@ fn malformed_shapes_import_pairs_are_usage_errors() {
         "the duplicate is refused by name: {err}"
     );
 }
+
+// ── The incremental change lane ─────────────────────────────────────────────────────
+
+/// A conforming base: nothing here violates [`SHAPES`], so anything the incremental lane
+/// reports came out of the CHANGE rather than out of the graph it started from.
+const CHANGE_BASE: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:bob a ex:Person ; ex:age 42 .\n",
+    "ex:carol a ex:Person ; ex:age 31 .\n",
+);
+
+/// One row added on top of [`CHANGE_BASE`], introducing one violation.
+const CHANGE_ADDED: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:alice a ex:Person ; ex:age \"nope\" .\n",
+);
+
+/// [`CHANGE_BASE`] merged with [`CHANGE_ADDED`] — the graph a FULL validation of the
+/// change's result reads, and the oracle the incremental report is compared against.
+const CHANGE_MERGED: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:bob a ex:Person ; ex:age 42 .\n",
+    "ex:carol a ex:Person ; ex:age 31 .\n",
+    "ex:alice a ex:Person ; ex:age \"nope\" .\n",
+);
+
+/// **The claim the whole lane rests on.** `--changes` re-validates only the focus nodes the
+/// change can move, and the report it writes is byte-identical — content AND ordering — to a
+/// full validation of the merged graph.
+///
+/// Byte-identical rather than "equivalent": a SHACL report is a deterministic artifact, blank
+/// labels and all, and a lane that reached the same verdict through a differently-ordered
+/// report would still have changed what this command emits.
+#[test]
+fn the_change_lane_reports_exactly_what_a_full_validation_of_the_merged_graph_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
+    let added = write_file(dir.path(), "added.ttl", CHANGE_ADDED);
+    let merged = write_file(dir.path(), "merged.ttl", CHANGE_MERGED);
+
+    let incremental = run(&["validate", "--shapes", &shapes, "--changes", &added, &base]);
+    let full = run(&["validate", "--shapes", &shapes, &merged]);
+
+    let err = stderr(&incremental);
+    assert_eq!(code(&incremental), 0, "{err}");
+    assert_eq!(code(&full), 0, "{}", stderr(&full));
+    assert!(
+        err.contains("shacl change-expansion bounded 1\n"),
+        "the expansion is BOUNDED and names its size, so the scope of the verdict below it is \
+         never guessed at: {err}"
+    );
+    assert_eq!(
+        stdout(&incremental),
+        stdout(&full),
+        "the incremental report must be the full report, byte for byte"
+    );
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the added row's violation is found: {err}"
+    );
+}
+
+/// The retract half is a real half: a row LEAVING the graph moves a verdict exactly as a row
+/// joining it does, and the same identity against a full validation holds.
+#[test]
+fn removing_a_row_moves_a_verdict_and_reports_what_a_full_validation_would() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
+    let retracted = write_file(
+        dir.path(),
+        "retracted.ttl",
+        "@prefix ex: <http://example.org/> .\nex:bob ex:age 42 .\n",
+    );
+    // `ex:bob` keeps its type and loses its age, which is what `sh:datatype` no longer has
+    // anything to say about — so this pair proves the lane tracks a removal, not that a
+    // removal happens to violate something.
+    let remaining = write_file(
+        dir.path(),
+        "remaining.ttl",
+        "@prefix ex: <http://example.org/> .\nex:bob a ex:Person .\nex:carol a ex:Person ; \
+         ex:age 31 .\n",
+    );
+
+    let incremental = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--changes-removed",
+        &retracted,
+        &base,
+    ]);
+    let full = run(&["validate", "--shapes", &shapes, &remaining]);
+    let err = stderr(&incremental);
+    assert_eq!(code(&incremental), 0, "{err}");
+    assert!(
+        err.contains("shacl change-expansion bounded "),
+        "a removal expands too: {err}"
+    );
+    assert_eq!(
+        stdout(&incremental),
+        stdout(&full),
+        "removing a row reports what validating the graph without it reports"
+    );
+}
+
+/// A shapes graph whose reads hide inside SPARQL query text has NO bounded change footprint,
+/// so the lane validates the merged graph in full rather than under-reporting — and says on
+/// stderr that it did.
+///
+/// The fallback is the half of this lane that cannot be skipped: a short expansion and a
+/// clean bill of health are the same report.
+#[test]
+fn an_unbounded_change_footprint_falls_back_to_a_full_validation_and_says_so() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SPARQL_SHAPES);
+    let base = write_file(
+        dir.path(),
+        "base.ttl",
+        "@prefix ex: <http://example.org/> .\nex:bob a ex:Person ; ex:name \"Bob\" .\n",
+    );
+    let added = write_file(
+        dir.path(),
+        "added.ttl",
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person .\n",
+    );
+    let merged = write_file(
+        dir.path(),
+        "merged.ttl",
+        "@prefix ex: <http://example.org/> .\nex:bob a ex:Person ; ex:name \"Bob\" .\n\
+         ex:alice a ex:Person .\n",
+    );
+
+    let incremental = run(&["validate", "--shapes", &shapes, "--changes", &added, &base]);
+    let full = run(&["validate", "--shapes", &shapes, &merged]);
+    let err = stderr(&incremental);
+    assert_eq!(code(&incremental), 0, "{err}");
+    assert!(
+        err.contains("shacl change-expansion everything "),
+        "a SHACL-SPARQL shapes graph has no bounded footprint, and the receipt names the \
+         construct responsible: {err}"
+    );
+    assert_eq!(
+        stdout(&incremental),
+        stdout(&full),
+        "the fallback is a FULL validation of the merged graph"
+    );
+    assert!(
+        err.contains("shacl results 1\n"),
+        "the fallback still finds the violation the change introduced: {err}"
+    );
+}
+
+/// Naming neither half leaves this command exactly as it was: no expansion line, and the
+/// report of a whole-graph validation.
+#[test]
+fn a_run_with_no_change_documents_is_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+
+    let out = run(&["validate", "--shapes", &shapes, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "{err}");
+    assert!(
+        !err.contains("change-expansion"),
+        "a run that named no change set must not report an expansion it never made: {err}"
+    );
+    assert!(err.contains("shacl results 1\n"), "{err}");
+}
+
+/// The governors bound this lane too, and they bound it where there is something to bound:
+/// the `Everything` fallback runs the shapes graph's SPARQL, so `--fuel 0` trips it, writes
+/// no report and exits 3 — exactly as it does on the whole-graph route.
+///
+/// The neighbouring valid case runs beside it: the SAME command under an ample ceiling
+/// produces the ungoverned report unchanged, so this pins a governor rather than a lane that
+/// refuses everything.
+#[test]
+fn a_governor_trips_the_change_lane_and_an_ample_ceiling_leaves_it_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SPARQL_SHAPES);
+    let base = write_file(
+        dir.path(),
+        "base.ttl",
+        "@prefix ex: <http://example.org/> .\nex:bob a ex:Person ; ex:name \"Bob\" .\n",
+    );
+    let added = write_file(
+        dir.path(),
+        "added.ttl",
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person .\n",
+    );
+    let args = ["validate", "--shapes", &shapes, "--changes", &added, &base];
+
+    let tripped = run(&[args.as_slice(), &["--fuel", "0"]].concat());
+    let err = stderr(&tripped);
+    assert_eq!(code(&tripped), 3, "a tripped governor exits 3: {err}");
+    assert!(
+        stdout(&tripped).is_empty(),
+        "a trip writes NO report: {}",
+        stdout(&tripped)
+    );
+    assert!(
+        err.contains("outcome budget-exhausted"),
+        "the governor receipt reaches stderr: {err}"
+    );
+
+    let ample = run(&[args.as_slice(), &["--fuel", "100000000"]].concat());
+    let ungoverned = run(args.as_slice());
+    assert_eq!(code(&ample), 0, "{}", stderr(&ample));
+    assert_eq!(
+        stdout(&ample),
+        stdout(&ungoverned),
+        "an ample ceiling changes nothing about the answer"
+    );
+}
+
+/// `--changes-from` labels a change document, and a run that named none is refused rather
+/// than validated with a flag that silently did nothing. The neighbouring valid case — the
+/// same flag over a change document whose extension carries no syntax — runs beside it.
+#[test]
+fn a_changes_format_with_no_change_document_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
+    let added = write_file(dir.path(), "added.unknown", CHANGE_ADDED);
+
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--changes-from",
+        "turtle",
+        &base,
+    ]);
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 2, "{err}");
+    assert!(
+        err.contains("--changes-from") && err.contains("neither half"),
+        "the refusal names the flag and what is missing: {err}"
+    );
+
+    let accepted = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--changes-from",
+        "turtle",
+        "--changes",
+        &added,
+        &base,
+    ]);
+    assert_eq!(code(&accepted), 0, "{}", stderr(&accepted));
+    assert!(
+        stderr(&accepted).contains("shacl change-expansion bounded 1\n"),
+        "the override is what let an extension-less change document be read: {}",
+        stderr(&accepted)
+    );
+}
+
+/// A change document may read standard input — but only if nothing else does. Refused naming
+/// every document that asked for it, with the neighbouring valid case (exactly one of them)
+/// beside it.
+#[test]
+fn a_change_document_may_have_stdin_but_only_if_nothing_else_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let base = write_file(dir.path(), "base.ttl", CHANGE_BASE);
+
+    let refused = pipe(
+        &[
+            "validate",
+            "--shapes",
+            &shapes,
+            "--from",
+            "turtle",
+            "--changes",
+            "-",
+            "--changes-from",
+            "turtle",
+            "-",
+        ],
+        CHANGE_ADDED,
+    );
+    let err = stderr(&refused);
+    assert_eq!(code(&refused), 2, "{err}");
+    assert!(
+        err.contains("IN and --changes"),
+        "the refusal names both documents that asked for the one stdin: {err}"
+    );
+
+    let accepted = pipe(
+        &[
+            "validate",
+            "--shapes",
+            &shapes,
+            "--changes",
+            "-",
+            "--changes-from",
+            "turtle",
+            &base,
+        ],
+        CHANGE_ADDED,
+    );
+    assert_eq!(code(&accepted), 0, "{}", stderr(&accepted));
+    assert!(
+        stderr(&accepted).contains("shacl change-expansion bounded 1\n"),
+        "one stdin reader is fine: {}",
+        stderr(&accepted)
+    );
+}

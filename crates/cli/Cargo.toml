@@ -79,6 +79,11 @@ clap = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+# The workspace's shared counting allocator, for the `pack_input_alloc` bench
+# probe (which pairs its ledger with an OS resident-set reading the instrument
+# does not provide). Path-only and unpublished, and this crate is never
+# published in any case.
+purrdf-alloc-probe = { workspace = true }
 # Isolated temp files/dirs for the integration tests that drive the built binary.
 tempfile = { workspace = true }
 # Constructs the ONE test fixture the built binary cannot: a well-formed prepared

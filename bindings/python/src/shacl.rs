@@ -27,6 +27,8 @@ use purrdf_shapes::engine;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_validate::ShapesProductRefusal;
 
+use crate::py_store::PyStore;
+
 /// Validate a data graph (N-Triples) against a shapes graph (Turtle).
 ///
 /// Returns a dict with keys:
@@ -423,6 +425,84 @@ impl PyPreparedShapes {
         self.inner.provenance().to_string()
     }
 
+    /// **The incremental lane.** Validate only what `store`'s PENDING CHANGE can
+    /// move, rather than the whole graph.
+    ///
+    /// A `Store` records its mutations as a copy-on-write delta over a frozen base
+    /// (`add` / `remove` / `load` edit that delta), so a store that has been mutated
+    /// already holds the one thing incremental validation needs: a description of
+    /// what moved. This reads that delta, asks the engine which focus nodes the
+    /// change can move, and re-validates exactly those.
+    ///
+    /// ```python
+    /// store = purrdf.Store()
+    /// store.load(base_ttl, "turtle")
+    /// store.checkpoint()          # everything loaded so far is now the BASE
+    /// store.add(quad)             # ... and this is the change
+    ///
+    /// outcome = shapes.prepare().validate_store_changes(store)
+    /// if not outcome.report.conforms:
+    ///     ...                     # what THIS change broke
+    /// ```
+    ///
+    /// Call `Store.checkpoint()` first or the "change" is the whole store: a fresh
+    /// `Store` has an empty base, so everything ever loaded into it is in the delta.
+    /// `Store.change_size()` reports how large the pending change is.
+    ///
+    /// # What the returned report describes
+    ///
+    /// `ChangeValidation.bounded` is `True` when the engine could bound the change's
+    /// footprint. The report then covers the AFFECTED focus nodes — for those nodes
+    /// it is identical, results and order alike, to what a full validation of the
+    /// mutated graph reports about them — and says nothing about a pre-existing
+    /// violation the change cannot reach. `conforms` therefore means "this change
+    /// introduced no violation", not "the graph conforms".
+    ///
+    /// `bounded` is `False` when the shapes graph reads through SPARQL query text
+    /// (`sh:sparql`, a SPARQL target, a component's `sh:ask`/`sh:select` validator, a
+    /// `sh:SPARQLFunction` call, a SPARQL node expression). No bounded footprint
+    /// exists for such a graph, so this falls back to a FULL validation of the
+    /// mutated graph and `ChangeValidation.reason` names the construct responsible.
+    /// The fallback is not optional: an under-approximated change set is
+    /// indistinguishable from a clean bill of health.
+    ///
+    /// A `sh:shapesGraph` the shapes document declares is honoured, exactly as it is
+    /// on every other validation route here.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` when the store cannot be snapshotted, when the snapshot exceeds
+    /// the view's retention limits, or when constraint evaluation hard-fails.
+    fn validate_store_changes(
+        &self,
+        py: Python<'_>,
+        store: &Bound<'_, PyStore>,
+    ) -> PyResult<PyChangeValidation> {
+        // Taken under the GIL (it borrows the store), then owned — so the expansion
+        // and the validation below run detached with nothing py-bound in hand.
+        let snapshot = Arc::new(store.borrow().change_snapshot()?);
+        let prepared = &self.inner;
+        let validation = py.detach(|| {
+            let validator = prepared
+                .bind_delta_with_shapes_graph(
+                    Arc::clone(&snapshot),
+                    None,
+                    ::purrdf::ir::ViewLimits::default(),
+                )
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            // The engine's own expand-then-validate entry point, which is what the
+            // command line, the C ABI and the WebAssembly guest all drive: one
+            // implementation of the loop, so no surface can answer a question the
+            // others would not.
+            engine::validate_change(&validator, &snapshot)
+                .map_err(pyo3::exceptions::PyValueError::new_err)
+        })?;
+        Ok(PyChangeValidation {
+            report: Py::new(py, PyValidationReport::new(validation.report))?,
+            scope: validation.scope,
+        })
+    }
+
     /// Validate an N-Triples data graph against this preparation.
     ///
     /// The same verdict `Shapes.validate_nt` reaches, through the same engine entry
@@ -436,6 +516,84 @@ impl PyPreparedShapes {
                 .map_err(pyo3::exceptions::PyValueError::new_err)
         })?;
         Ok(PyValidationReport::new(report))
+    }
+}
+
+/// The outcome of `PreparedShapes.validate_store_changes`: the report, plus the
+/// SCOPE the report describes.
+///
+/// Two facts rather than one, because a `ValidationReport` alone cannot say which
+/// question it answered. An incremental run reports about the focus nodes the change
+/// could move; a run whose change footprint could not be bounded reports about the
+/// whole graph. Both are honest answers and they are not the same answer, so a caller
+/// reading `conforms` is told which one they have rather than left to assume.
+///
+/// Returning the scope beside the report is the same choice `UpdateOutcome` makes for
+/// a governed update: the outcome carries the evidence of how it was reached, and an
+/// attribute that is sometimes absent would force every caller to `getattr`.
+#[pyclass(name = "ChangeValidation")]
+#[derive(Debug)]
+pub struct PyChangeValidation {
+    /// The report, built once here rather than on each `report` read, so two reads
+    /// cannot hand back two independently-constructed objects.
+    report: Py<PyValidationReport>,
+    /// Which question the report answered, carried as the engine's own two-armed
+    /// answer rather than re-spelled as a pair of `Option`s here. A pair admits a
+    /// fourth state — neither set — that the engine cannot produce, and this class
+    /// would then have to render something for it.
+    scope: engine::ChangeScope,
+}
+
+#[pymethods]
+impl PyChangeValidation {
+    /// The SHACL validation report. See `bounded` for what it describes.
+    #[getter]
+    fn report(&self, py: Python<'_>) -> Py<PyValidationReport> {
+        self.report.clone_ref(py)
+    }
+
+    /// Whether the change's footprint could be bounded.
+    ///
+    /// `True`: the report describes the AFFECTED focus nodes only, and `conforms`
+    /// means this change introduced no violation. `False`: no bounded footprint
+    /// exists for this shapes graph, the run fell back to a FULL validation of the
+    /// mutated graph, and `conforms` means the whole graph conforms.
+    #[getter]
+    const fn bounded(&self) -> bool {
+        self.scope.is_bounded()
+    }
+
+    /// How many focus nodes the change was expanded into, or `None` when the
+    /// footprint could not be bounded and the whole graph was validated.
+    ///
+    /// `None` rather than the graph's node count on the fallback path: "every focus
+    /// node in the graph" and a number are different statements, and collapsing them
+    /// would make a fallback indistinguishable from a large bounded expansion.
+    #[getter]
+    const fn focus_nodes(&self) -> Option<usize> {
+        self.scope.focus_nodes()
+    }
+
+    /// Which construct made this shapes graph's change footprint unbounded, or
+    /// `None` when it was bounded.
+    ///
+    /// Actionable rather than decorative: it names what to change to get incremental
+    /// validation back.
+    #[getter]
+    const fn reason(&self) -> Option<&'static str> {
+        self.scope.reason()
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let conforms = self.report.borrow(py).inner.conforms;
+        match self.scope {
+            engine::ChangeScope::Bounded { focus_nodes } => {
+                format!("<ChangeValidation bounded focus_nodes={focus_nodes} conforms={conforms}>")
+            }
+            engine::ChangeScope::Everything { reason } => {
+                format!("<ChangeValidation everything reason={reason} conforms={conforms}>")
+            }
+        }
     }
 }
 
@@ -725,6 +883,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyShapes>()?;
     m.add_class::<PyValidationReport>()?;
     m.add_class::<PyPreparedShapes>()?;
+    m.add_class::<PyChangeValidation>()?;
     m.add_class::<PyShapesProduct>()?;
     m.add(
         "ShapesProductError",

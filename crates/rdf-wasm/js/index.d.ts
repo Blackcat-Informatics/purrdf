@@ -1387,6 +1387,63 @@ export function shaclValidateToSarif(
 ): string;
 
 /**
+ * The outcome of `shaclValidateChangesToSarif`: the SARIF log, and the SCOPE that
+ * log describes.
+ *
+ * Read `bounded` before the log, because it decides what the log MEANS. `true`: the
+ * log covers the focus nodes the change could move — for those nodes it is
+ * identical, results and ordering alike, to a full validation of the mutated graph
+ * — and is silent about a pre-existing violation the change cannot reach, so an
+ * empty log means *this change introduced no violation*. `false`: the shapes graph
+ * reads through SPARQL query text, no bounded footprint exists for it, the call
+ * fell back to a FULL validation of the mutated graph, and an empty log means *the
+ * graph conforms*. Handing back the log alone would leave a caller to assume one of
+ * the two, and the weaker reading is the dangerous one.
+ *
+ * Like every other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclChangeValidation {
+  free(): void;
+  /** The SARIF 2.1.0 JSON log. See `bounded` for what it describes. */
+  readonly sarif: string;
+  /** Whether the change's footprint could be bounded. */
+  readonly bounded: boolean;
+  /**
+   * How many focus nodes the change was expanded into, or `undefined` on the
+   * fallback — "every focus node in the graph" is not a number, and collapsing
+   * the two would make a fallback look like a large bounded expansion.
+   */
+  readonly focusNodes?: number;
+  /**
+   * Which construct made this shapes graph's change footprint unbounded, or
+   * `undefined` when it was bounded. It names what to change to get incremental
+   * validation back.
+   */
+  readonly reason?: string;
+}
+
+/**
+ * Validate a CHANGE to `dataNt` rather than the whole graph: `addedNt` is the rows
+ * joining it and `removedNt` the rows leaving it, each an N-Triples string or
+ * omitted. The engine expands the change into the focus nodes it can move and
+ * re-validates exactly those.
+ *
+ * Both halves are real: a verdict moves when a row leaves the graph as readily as
+ * when one joins. Additions apply before removals, so a change naming the same row
+ * on both halves settles on *removed*; a removal naming a row `dataNt` does not
+ * carry retracts nothing rather than throwing.
+ *
+ * `shapesBase` carries the same meaning it does on `shaclValidateToSarif`.
+ */
+export function shaclValidateChangesToSarif(
+  shapesTtl: string,
+  dataNt: string,
+  addedNt?: string,
+  removedNt?: string,
+  shapesBase?: string,
+): ShaclChangeValidation;
+
+/**
  * A refusal from the prepared-shapes-product admission boundary, thrown by every
  * `shaclProduct*` function and by `shaclPackProduct`.
  *

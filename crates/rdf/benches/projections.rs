@@ -5,12 +5,11 @@
 
 //! Graph, tabular, and research-object carrier benchmarks over deterministic fixed datasets.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_rdf::{
     CsvwConfig, CsvwContext, CsvwDatatype, CsvwMode, CsvwTermsCardinality, CsvwTermsColumn,
     CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn, CsvwTermsLimits,
@@ -30,33 +29,6 @@ use purrdf_rdf::{
     read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher, write_lpg_graphml,
     write_neo4j_csv,
 };
-
-thread_local! {
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
-}
-
-struct CountingAllocator;
-
-// SAFETY: every operation forwards the original pointer/layout to the system
-// allocator; thread-local counters are observational only.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + layout.size() as u64));
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + new_size as u64));
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -629,18 +601,18 @@ fn research_common(config: &ProjectionConfig) -> &ResearchObjectConfig {
     }
 }
 
-fn allocation_snapshot() -> (u64, u64) {
-    (ALLOCATIONS.with(Cell::get), ALLOCATED_BYTES.with(Cell::get))
-}
-
+/// Run `operation` inside a per-thread measurement window and print its traffic.
+///
+/// The window is the per-thread one because every projection below runs on the
+/// thread that calls it, and criterion's own machinery elsewhere in the process
+/// would otherwise land in the figure.
 fn report_allocations<T>(label: &str, operation: impl FnOnce() -> T) -> T {
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let result = operation();
-    let after = allocation_snapshot();
+    let measured = window.close();
     println!(
         "[projections] {label:24} allocations={:>7} allocated_bytes={:>10}",
-        after.0 - before.0,
-        after.1 - before.1
+        measured.allocations, measured.requested_bytes
     );
     result
 }

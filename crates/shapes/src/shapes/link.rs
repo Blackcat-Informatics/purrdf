@@ -8,7 +8,7 @@
 //! deliberately shared, and two of them close cycles:
 //!
 //! * `Constraint::NodeByExpression`'s `shapes` and `ShapeArg::Computed`'s `shapes`
-//!   are ONE `Arc<OnceLock<FastMap<String, Shape>>>` per shapes graph, and the map
+//!   are ONE `Arc<OnceLock<FastMap<Term, Shape>>>` per shapes graph, and the map
 //!   inside contains the very shapes that carry those constraints.
 //! * `CustomFunction`'s `body` is an `OnceLock<NodeExpr>` that may legitimately
 //!   call its own function (SHACL 1.2 Node Expressions §6.1/§6.2), so the value
@@ -72,12 +72,17 @@ use crate::product::{ProductDimension, ShapesProductError};
 use crate::rules::RuleBody;
 use crate::shapes::parser::functions::invoke_expression_function;
 use crate::shapes::{Constraint, PropertyShape, Shape};
+use crate::term::Term;
 
 /// The shapes graph's ONE `sh:nodeByExpression` resolution table.
 ///
 /// Named so the shared-ness is visible at every use site: this is a handle on a
 /// single cell, never a value to clone the contents of.
-pub(crate) type ShapeIndex = Arc<OnceLock<FastMap<String, Shape>>>;
+///
+/// Keyed by each shape's own identity TERM, not by a rendering of it, so the
+/// evaluator — which resolves a produced node once per value node — looks a shape
+/// up with the term it already holds instead of building a string to hash.
+pub(crate) type ShapeIndex = Arc<OnceLock<FastMap<Term, Shape>>>;
 
 // ---------------------------------------------------------------------------
 // Refusals
@@ -219,9 +224,9 @@ fn install_shape_index(
     }
 
     if Arc::strong_count(shape_index) > 1 {
-        let index: FastMap<String, Shape> = node_shapes
+        let index: FastMap<Term, Shape> = node_shapes
             .iter()
-            .map(|shape| (shape.id.to_string(), shape.clone()))
+            .map(|shape| (shape.id.clone(), shape.clone()))
             .collect();
         shape_index.set(index).map_err(|_| {
             malformed(

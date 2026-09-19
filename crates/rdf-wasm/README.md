@@ -82,6 +82,11 @@ const reparsed = Dataset.parse(nq, "nquads");
   `explainQuery` renders the metered charge ledger those budgets are sized from.
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
   graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
+  `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?)` validates a
+  CHANGE to that graph instead — both halves of the delta, expanded into the focus
+  nodes it can move — and returns the report beside the scope it describes, because
+  a shapes graph whose constraints read through SPARQL query text has no bounded
+  footprint and falls back to validating everything;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
   N-Triples.
 - **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads

@@ -28,6 +28,9 @@
 //! WASM and PyO3 callers share one implementation instead of three:
 //!
 //! * [`shacl::validate_to_sarif_string`] — SHACL validation → SARIF JSON.
+//! * [`shacl::validate_changes_to_sarif_string`] — the incremental twin: a
+//!   data graph plus both halves of a change, validated through the engine's
+//!   change path, returning the SARIF log beside the scope it describes.
 //! * [`entail::entail_to_ntriples_string`] — SHACL-AF `sh:rule` entailment →
 //!   canonical N-Triples.
 //! * [`regime`] — SPARQL entailment-regime materialization → canonical N-Quads
@@ -88,4 +91,9 @@ pub use regime::{
     regime_name, regime_plan, regime_rule_set, render_dl_proof, render_entail_error,
     render_reasoning_report, rules_string, verify_entailment_to_string,
 };
-pub use shacl::validate_to_sarif_string;
+// The engine's own change-path scope, re-exported because
+// [`shacl::validate_changes_to_sarif_string`] RETURNS one: a binding that cannot
+// name the type it is handed would have to re-spell it, and two spellings of one
+// answer is how the two arms end up collapsed.
+pub use purrdf_shapes::engine::ChangeScope;
+pub use shacl::{validate_changes_to_sarif_string, validate_to_sarif_string};

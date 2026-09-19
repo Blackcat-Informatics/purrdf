@@ -43,8 +43,10 @@ use crate::eval::{
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
 use crate::governor::{GovernorState, NonMonotoneBarrier, QueryExplanation, QueryGovernors};
+use crate::interned::{InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions};
 use crate::plan_cache::{BoundedCache, BoundedOrderCache};
 use crate::plan_memory::{PlanCharge, PlanMemoryObserver};
+use crate::substitute::Prebindings;
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
@@ -205,6 +207,18 @@ fn admit_algebra(
 pub struct PlanCache {
     entries: BoundedCache<Arc<[u8]>, Arc<PreparedQuery>>,
     memory: PlanMemoryObserver,
+    /// The buffer [`Self::prepare_with_relations`] builds its lookup key in, reused
+    /// across calls.
+    ///
+    /// The key is a pure function of the request, so on a HIT — which is every
+    /// repeat of a query text, and a SHACL validation is one query text per focus
+    /// node — nothing needs to own it past the probe. Building it into a fresh
+    /// `Vec` charged one allocation to every prepare for bytes discarded a line
+    /// later. This buffer is grown once to the largest key seen and then reused;
+    /// only the MISS path, which is already parsing and planning, allocates the
+    /// owned `Arc<[u8]>` the map retains. Its contents carry no meaning between
+    /// calls: each call clears it before writing.
+    key_scratch: Vec<u8>,
 }
 
 impl Drop for PlanCache {
@@ -249,6 +263,7 @@ impl PlanCache {
         Self {
             entries: BoundedCache::new(limits),
             memory: PlanMemoryObserver::default(),
+            key_scratch: Vec::new(),
         }
     }
 
@@ -332,10 +347,29 @@ impl PlanCache {
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
             .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
-        let key = plan_cache_key(query, base_iri, options, &fingerprint, &agg_fingerprint);
-        if let Some(prepared) = self.entries.get(key.as_slice()) {
+        // The key is built into the cache's own reusable buffer and probed as a
+        // borrowed slice, so a hit costs no allocation at all. The buffer is moved
+        // out for the duration of the build (the probe needs `&mut self.entries`)
+        // and put back before this method can return or fail, so a later call still
+        // finds its capacity.
+        let mut scratch = std::mem::take(&mut self.key_scratch);
+        scratch.clear();
+        plan_cache_key_into(
+            &mut scratch,
+            query,
+            base_iri,
+            options,
+            &fingerprint,
+            &agg_fingerprint,
+        );
+        if let Some(prepared) = self.entries.get(scratch.as_slice()) {
+            self.key_scratch = scratch;
             return Ok(prepared);
         }
+        // A miss retains the key, so here — and only here — it is copied into the
+        // owned form the map stores.
+        let key: Arc<[u8]> = Arc::from(scratch.as_slice());
+        self.key_scratch = scratch;
         let mut parser = SparqlParser::new();
         if let Some(base) = base_iri {
             parser = parser.with_base_iri(base);
@@ -356,7 +390,7 @@ impl PlanCache {
             .saturating_add(prepared.retained_size_bytes());
         if self
             .entries
-            .insert_with_eviction(key.into(), prepared.clone(), bytes, |plan| {
+            .insert_with_eviction(key, prepared.clone(), bytes, |plan| {
                 plan.memory.detach();
             })
         {
@@ -368,13 +402,18 @@ impl PlanCache {
 
 /// Length-prefixed fields cannot alias when a caller's configuration contains
 /// separator characters. List lengths distinguish namespace-set boundaries.
-fn plan_cache_key(
+///
+/// Appends to `out`, which the caller supplies already empty: the key is only
+/// needed for the lookup, so [`PlanCache`] hands its reusable buffer here rather
+/// than paying for a fresh one per prepare.
+fn plan_cache_key_into(
+    out: &mut Vec<u8>,
     query: &str,
     base_iri: Option<&str>,
     options: &ParserOptions,
     relations: &str,
     aggregates: &str,
-) -> Vec<u8> {
+) {
     fn length(out: &mut Vec<u8>, value: usize) {
         out.extend_from_slice(&(value as u64).to_le_bytes());
     }
@@ -396,19 +435,19 @@ fn plan_cache_key(
             capacity += size_of::<u64>() + value.len();
         }
     }
-    let mut key = Vec::with_capacity(capacity);
-    key.push(u8::from(base_iri.is_some()));
-    field(&mut key, base_iri.unwrap_or(""));
+    // A no-op once the buffer has seen a key this size, which is the steady state.
+    out.reserve(capacity);
+    out.push(u8::from(base_iri.is_some()));
+    field(out, base_iri.unwrap_or(""));
     for list in lists {
-        length(&mut key, list.len());
+        length(out, list.len());
         for value in list {
-            field(&mut key, value);
+            field(out, value);
         }
     }
     for value in [relations, aggregates, query] {
-        field(&mut key, value);
+        field(out, value);
     }
-    key
 }
 
 /// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6).
@@ -630,11 +669,13 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                prepared,
+                Prebindings::Owned(substitutions),
+                &mut ctx,
+            )?,
             ShaclPrebinding::None => {
-                evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
+                evaluate_with_substitutions(prepared, Prebindings::Owned(substitutions), &mut ctx)?
             }
         };
         Ok(materialize(outcome, &ctx))
@@ -678,12 +719,16 @@ impl NativeSparqlEngine {
                 let ctx = self.eval_ctx(dataset);
                 let mut ctx = apply_query_options(ctx, options)?;
                 let outcome = match options.prebinding {
-                    ShaclPrebinding::Applied => {
-                        evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
-                    }
-                    ShaclPrebinding::None => {
-                        evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
-                    }
+                    ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                        prepared,
+                        Prebindings::Owned(substitutions),
+                        &mut ctx,
+                    )?,
+                    ShaclPrebinding::None => evaluate_with_substitutions(
+                        prepared,
+                        Prebindings::Owned(substitutions),
+                        &mut ctx,
+                    )?,
                 };
                 Ok(materialize(outcome, &ctx))
             })()
@@ -843,14 +888,14 @@ impl NativeSparqlEngine {
         // just validated against `options.property_functions` above — reused rather than
         // re-derived, so this receipt's identity and the plan cache's key never disagree.
         let identity = relation_identity(prepared, options.property_functions)?;
-        if let Some(refused) = self.admit(
+        if let Some(refused) = self.admit_refusal(
             dataset,
             &prepared.query,
             options.property_functions,
             state,
             &identity,
         ) {
-            return refused;
+            return refused.map(GovernedOutcome::BudgetExhausted);
         }
         let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
         if let Some(source) = source {
@@ -858,12 +903,16 @@ impl NativeSparqlEngine {
         }
         let mut ctx = apply_query_options(ctx, options)?;
         let evaluated = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_governed_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
+                prepared,
+                Prebindings::Owned(substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_governed_with_substitutions(
+                prepared,
+                Prebindings::Owned(substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(materialize_governed(evaluated, &ctx, state, identity))
     }
@@ -1719,14 +1768,19 @@ impl NativeSparqlEngine {
     /// over-estimate therefore costs a caller an answer; it cannot hand them a wrong one.
     /// An under-estimate changes nothing: the live ceiling is still in force and still
     /// trips.
-    fn admit<D: DatasetView + Sync>(
+    ///
+    /// Returns the refusal as a bare [`BudgetExhausted`] rather than as a
+    /// [`GovernedOutcome`], because both governed egresses — the owned one and
+    /// [`Self::query_governed_interned_in_operation`] — need the same refusal and
+    /// only one of them has a `GovernedOutcome` to put it in.
+    fn admit_refusal<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         query: &Query,
         relations: &crate::property_fn::PropertyFunctionRegistry,
         state: &GovernorState,
         identity: &RelationIdentity,
-    ) -> Option<Result<GovernedOutcome, RdfDiagnostic>> {
+    ) -> Option<Result<BudgetExhausted, RdfDiagnostic>> {
         let dimension = purrdf_core::ResourceDimension::IntermediateCells;
         if !state.is_engaged_in(dimension) {
             return None;
@@ -1747,7 +1801,7 @@ impl NativeSparqlEngine {
             limit,
             estimate,
         });
-        Some(Ok(GovernedOutcome::BudgetExhausted(BudgetExhausted {
+        Some(Ok(BudgetExhausted {
             tripped,
             evidence: state.evidence(),
             relations: identity.clone(),
@@ -1756,7 +1810,7 @@ impl NativeSparqlEngine {
             // set, however; its `false` value would read as a settled answer, so the helper
             // withholds it as unknown.
             partial: certain_partial(empty_result_for(query), true),
-        })))
+        }))
     }
 
     /// The one **ungoverned** options-carrying query entry, parameterized by
@@ -1790,14 +1844,142 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_with_substitutions(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(materialize(outcome, &ctx))
+    }
+
+    /// [`Self::query_with_options_view`] on the **interned** egress: `visit` is
+    /// handed the result while this evaluation is still alive.
+    ///
+    /// Same parse, same plan cache, same options, same evaluation — the one
+    /// difference is what crosses out. [`Self::query_with_options_view`] ends the
+    /// interned id space at the return: every cell becomes an owned [`TermValue`],
+    /// every row a `Vec`, every variable a `String`, plus the auxiliary graph of
+    /// constructed list cells. This hands `visit` the rows as the evaluator holds
+    /// them, so a caller that reads two columns of a wide result pays for two
+    /// columns. The auxiliary graph is deferred rather than skipped — `visit` asks
+    /// for it at [`InternedSolutions::constructed_dataset`], and gets the graph the
+    /// owned door would have attached.
+    ///
+    /// # Why the result cannot simply be returned
+    ///
+    /// A [`SolutionTerm::Computed`](crate::SolutionTerm) cell names a term minted
+    /// into this execution's scratch arena, which dies with the context. Interned
+    /// rows therefore do not outlive the evaluation, and a callback running inside
+    /// it is the only sound way to lend them. `visit`'s own return value is
+    /// unconstrained and is what this returns.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse/evaluation errors as an [`RdfDiagnostic`].
+    pub fn query_interned_view<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        dataset: &'d D,
+        request: InternedRequest<'_>,
+        options: QueryOptions<'d>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<R, RdfDiagnostic> {
+        let prepared = self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
+        let ctx = self.eval_ctx(dataset);
+        let mut ctx = apply_query_options(ctx, options)?;
+        let outcome = match options.prebinding {
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_with_substitutions(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
+        };
+        Ok(visit(borrow_outcome(&outcome, &ctx)))
+    }
+
+    /// [`Self::query_governed_in_operation`] on the **interned** egress.
+    ///
+    /// The governed twin of [`Self::query_interned_view`], and the entry a SHACL
+    /// validation running under an operation budget uses: the budget, the
+    /// registries and the admission check are exactly
+    /// [`Self::query_governed_in_operation`]'s, and only the completed result's
+    /// shape differs. A trip is still reported as
+    /// [`InternedGoverned::BudgetExhausted`] carrying its certified partial
+    /// answers, and `visit` does not run in that case — there is no complete
+    /// result to project.
+    ///
+    /// # Errors
+    ///
+    /// Propagates parse and evaluation errors as an [`RdfDiagnostic`]. A tripped
+    /// governor is **not** an error and does not surface here.
+    pub fn query_governed_interned_in_operation<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        dataset: &'d D,
+        request: InternedRequest<'_>,
+        options: QueryOptions<'d>,
+        state: &Arc<GovernorState>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
+        let prepared = self.prepare_for(
+            request.query,
+            request.base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
+        check_plan_matches_relations(&prepared, options)?;
+        let identity = relation_identity(&prepared, options.property_functions)?;
+        if let Some(refused) = self.admit_refusal(
+            dataset,
+            &prepared.query,
+            options.property_functions,
+            state,
+            &identity,
+        ) {
+            return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
+        }
+        let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
+        let mut ctx = apply_query_options(ctx, options)?;
+        let evaluated = match options.prebinding {
+            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_governed_with_substitutions(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
+        };
+        Ok(match resolve_governed(evaluated, &ctx, state, identity) {
+            GovernedResolution::Complete {
+                outcome,
+                evidence,
+                relations,
+            } => InternedGoverned::Complete {
+                value: visit(borrow_outcome(&outcome, &ctx)),
+                evidence,
+                relations,
+            },
+            GovernedResolution::Exhausted(exhausted) => {
+                InternedGoverned::BudgetExhausted(Box::new(exhausted))
+            }
+        })
     }
 
     /// Like [`SparqlEngine::query`], but with a
@@ -1855,12 +2037,16 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset).with_remote(source);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_with_substitutions(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(materialize(outcome, &ctx))
     }
@@ -1974,7 +2160,7 @@ pub(crate) fn eval_diagnostic_code(
 /// must never poison the shared, un-substituted plan-cache entry.
 fn evaluate_with_substitutions<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
@@ -1998,7 +2184,7 @@ fn evaluate_with_substitutions<D: DatasetView + Sync>(
 /// [`evaluate_query`] refuses by contract.
 fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
@@ -2306,7 +2492,7 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
 /// [`evaluate_governed_with_substitutions`] has to [`evaluate_with_substitutions`].
 fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
     let substituted =
@@ -2321,7 +2507,7 @@ fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
 
 fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let substituted =
@@ -2360,6 +2546,33 @@ impl SparqlEngine for NativeSparqlEngine {
         // registry (or any other `QueryOptions` piece) reachable from an UPDATE's
         // `WHERE` names it at `NativeSparqlEngine::update_with_options`.
         self.update_with_options(dataset, request, QueryOptions::EMPTY)
+    }
+}
+
+/// Lend an evaluation [`Outcome`] as an [`InternedOutcome`], without leaving the
+/// interned id space.
+///
+/// The counterpart of [`materialize`], and the reason the interned egress is
+/// additive rather than a second implementation: both take the very same
+/// [`Outcome`] the evaluator produced, so the two doors cannot answer differently
+/// about what a query returned — only about who owns it.
+///
+/// That covers the auxiliary graph of constructed list cells too, which is the one
+/// part of a solution result that does not live in the [`Outcome`] but in the
+/// context beside it. [`materialize`] attaches it here, eagerly, because the owned
+/// result outlives the context and has no later chance to ask. A visitor is still
+/// inside the evaluation, so the borrowed door reaches the identical graph through
+/// [`InternedSolutions::constructed_dataset`] instead — on demand, because a query
+/// that constructs nothing (every query SHACL runs) would otherwise be charged
+/// here, per result, for an empty dataset no visitor reads.
+fn borrow_outcome<'a, 'd, D: DatasetView + Sync>(
+    outcome: &'a Outcome<D::Id>,
+    ctx: &'a EvalCtx<'d, D>,
+) -> InternedOutcome<'a, 'd, D> {
+    match outcome {
+        Outcome::Solutions(seq) => InternedOutcome::Solutions(InternedSolutions::new(seq, ctx)),
+        Outcome::Graph(graph) => InternedOutcome::Graph(graph),
+        Outcome::Boolean(value) => InternedOutcome::Boolean(*value),
     }
 }
 
@@ -2447,21 +2660,68 @@ fn materialize_governed<D: DatasetView + Sync>(
     state: &GovernorState,
     relations: RelationIdentity,
 ) -> GovernedOutcome {
+    match resolve_governed(evaluated, ctx, state, relations) {
+        GovernedResolution::Complete {
+            outcome,
+            evidence,
+            relations,
+        } => GovernedOutcome::Complete {
+            result: materialize(outcome, ctx),
+            evidence,
+            relations,
+        },
+        GovernedResolution::Exhausted(exhausted) => GovernedOutcome::BudgetExhausted(exhausted),
+    }
+}
+
+/// [`materialize_governed`], stopped one step short of the egress model.
+///
+/// The verdict — completed under budget, or stopped — is decided here, and the
+/// exhausted arm is resolved all the way (its certified partials ARE materialized,
+/// because a trip is a cold terminal path whose actionable half is those rows).
+/// What the complete arm hands back is the still-interned [`Outcome`], so the two
+/// egresses that follow — [`materialize_governed`]'s owned [`SparqlResult`] and
+/// [`NativeSparqlEngine::query_governed_interned_in_operation`]'s borrowed visit —
+/// share one reading of the evidence rather than each making their own.
+///
+/// One reading matters: `state` is shared across an operation's workers, so two
+/// `state.evidence()` calls can legitimately disagree, and a verdict derived from
+/// one and reported with the other would be self-contradictory.
+enum GovernedResolution<I: purrdf_core::ViewTermId> {
+    /// The execution completed and no governor had tripped when it did.
+    Complete {
+        /// The evaluator's own result, not yet crossed into the egress model.
+        outcome: Outcome<I>,
+        /// This execution's resource receipt, read exactly once.
+        evidence: purrdf_core::GovernorEvidence,
+        /// The registry identity the plan was admitted under.
+        relations: RelationIdentity,
+    },
+    /// A governor stopped the execution; the partial answers are already resolved.
+    Exhausted(BudgetExhausted),
+}
+
+/// Decide a governed execution's verdict, materializing only a trip's partials.
+fn resolve_governed<D: DatasetView + Sync>(
+    evaluated: EvaluatedOutcome<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+    state: &GovernorState,
+    relations: RelationIdentity,
+) -> GovernedResolution<D::Id> {
     match evaluated {
         EvaluatedOutcome::Complete(outcome) => {
-            let result = materialize(outcome, ctx);
             let evidence = state.evidence();
             match evidence.tripped {
-                None => GovernedOutcome::Complete {
-                    result,
+                None => GovernedResolution::Complete {
+                    outcome,
                     evidence,
                     relations,
                 },
-                Some(tripped) => GovernedOutcome::BudgetExhausted(BudgetExhausted {
+                Some(tripped) => GovernedResolution::Exhausted(BudgetExhausted {
                     tripped,
                     evidence,
                     relations,
-                    partial: certain_partial(result, true),
+                    partial: certain_partial(materialize(outcome, ctx), true),
                 }),
             }
         }
@@ -2492,7 +2752,7 @@ fn materialize_governed<D: DatasetView + Sync>(
                     }
                 }
             };
-            GovernedOutcome::BudgetExhausted(BudgetExhausted {
+            GovernedResolution::Exhausted(BudgetExhausted {
                 tripped: certificate.tripped(),
                 evidence: state.evidence(),
                 relations,
@@ -2676,6 +2936,90 @@ mod tests {
         );
         assert_eq!(got.len(), 1, "exactly one row for the blank focus: {got:?}");
         assert!(got[0].contains("http://ex/z"), "?o = :z : {got:?}");
+    }
+
+    // ── where the pre-binding pushdown stops, and why ─────────────────────────
+    //
+    // `crate::substitute` pushes a pre-bound constant into the triple-pattern
+    // positions it can match, so the pattern probes the index instead of being
+    // scanned and filtered by the seed join afterwards. That rewrite is only sound
+    // where restricting an OPERAND restricts the node's output the same way, and
+    // the three tests below are the boundary: each is a query whose answer DIFFERS
+    // between the join the algebra actually means and the substitution it might
+    // naively be confused with, so a pushdown that overreached would change the
+    // ANSWER and not merely the cost.
+
+    #[test]
+    fn prebinding_is_not_pushed_into_an_optional_right_arm() {
+        // `?s :p ?o OPTIONAL { ?s :p ?this }` with $this := :x.
+        //
+        // The right arm binds ?this from the DATA, once per subject: a→:x, b→:y,
+        // bn→:z. Every left row therefore MATCHES, so nothing is null-padded, and
+        // the seed join then keeps only the row whose ?this is :x — one row.
+        //
+        // Restricting the right arm to `?s :p <x>` instead would leave it matching
+        // only `a`; `b` and `bn` would become OPTIONAL MISSES, be null-padded with
+        // ?this UNBOUND, and an unbound cell is compatible with the seed — so all
+        // three rows would survive. Three rows against one: the divergence is the
+        // whole answer, not a rounding of it.
+        let got = run_subst(
+            "SELECT ?s WHERE { ?s <http://ex/p> ?o OPTIONAL { ?s <http://ex/p> ?this } }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/x".to_owned()))],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "only the subject whose object IS :x survives the seed join; three rows \
+             would mean the pushdown entered the OPTIONAL and turned matches into \
+             null-padded misses: {got:?}"
+        );
+        assert!(got[0].contains("http://ex/a"), "?s = :a : {got:?}");
+    }
+
+    #[test]
+    fn prebinding_is_not_pushed_into_a_minus_right_arm() {
+        // `?s :p ?o MINUS { ?s :p ?this }` with $this := :x.
+        //
+        // The right arm produces one row per subject and shares ?s with the left, so
+        // MINUS removes EVERY left row: the answer is empty. Restricting the right
+        // arm to `?s :p <x>` would leave it matching only `a`, so `b` and `bn` would
+        // survive — two rows where the algebra says none.
+        let got = run_subst(
+            "SELECT ?s WHERE { ?s <http://ex/p> ?o MINUS { ?s <http://ex/p> ?this } }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/x".to_owned()))],
+        );
+        assert!(
+            got.is_empty(),
+            "every left row has a compatible right row, so MINUS removes all of them; \
+             a non-empty answer would mean the pushdown narrowed the right arm: {got:?}"
+        );
+    }
+
+    #[test]
+    fn prebinding_pushdown_keeps_the_variable_bound_for_an_inner_filter() {
+        // Two UNION arms, each a BGP on ?this guarded by a FILTER that reads ?this.
+        //
+        // The arms are BELOW the core pattern the seed joins onto, so the seed's
+        // binding is not in scope while they are evaluated. Writing the constant into
+        // their triple patterns removes ?this from their schema — which is exactly
+        // what the pushdown does — so each rewritten leaf carries its own single-row
+        // VALUES restoring the column. Without that restore both FILTERs would be
+        // comparing an UNBOUND ?this and the answer would be empty rather than the
+        // one row the first arm's guard admits.
+        let got = run_subst(
+            "SELECT ?o WHERE { \
+             { ?this <http://ex/p> ?o FILTER(?this = <http://ex/a>) } UNION \
+             { ?this <http://ex/p> ?o FILTER(?this = <http://ex/b>) } }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "the :a arm's guard holds and the :b arm's does not; an EMPTY answer means \
+             the inner FILTERs saw ?this unbound, so a rewritten leaf lost its binding \
+             instead of restoring it: {got:?}"
+        );
+        assert!(got[0].contains("http://ex/x"), "?o = :x : {got:?}");
     }
 
     #[test]

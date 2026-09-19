@@ -17,10 +17,16 @@
 //!
 //! It runs in a separate process from the timed `shacl_product_reuse` target and
 //! reads the same fixture module (`benches/support/product.rs`), because the
-//! global allocator installed below performs atomic accounting on every
-//! allocation and would contaminate any latency measurement sharing the process.
+//! global allocator installed below accounts for every allocation and would
+//! contaminate any latency measurement sharing the process.
 //!
 //! # What each line reports
+//!
+//! Each phase is bracketed by a [`WholeProcessWindow`] from the workspace's
+//! shared instrument, which is the window that counts **every** thread —
+//! `bind/dataset` and `eval/validate` reach SHACL validation, which fans focus
+//! nodes out over `rayon`, and a per-thread window would report those phases as
+//! nearly free. It reports four quantities and never blends them:
 //!
 //! * **`allocations`** — how many allocation calls the phase made.
 //! * **`requested_bytes`** — total bytes requested through the global allocator
@@ -36,6 +42,25 @@
 //!   the distinction between `encode/to_product` (which re-packs and
 //!   canonicalizes the shapes dataset) and the restore paths.
 //!
+//! # Every line names its binding time
+//!
+//! The figures are reported **per stage**, never as one aggregate, because the
+//! three stages `crates/shapes/src/plan.rs` names have completely different
+//! amortization and adding them up hides which one a change moved:
+//!
+//! * **stage 0** — derived from the shapes graph alone, so it is paid once per
+//!   preparation however many datasets that preparation is bound to;
+//! * **stage 1** — stage 0 × one dataset, paid once per bind;
+//! * **stage 2** — × one focus node, the only work a change path repeats.
+//!
+//! `lower/first_bind` exists to keep the memoized stage-0 lowering visible. A
+//! product carries the reusable class analysis but not the lowered constraint
+//! tree, so a RESTORED preparation derives that tree on whichever bind comes
+//! first. Folded into `bind/dataset` it would read as a stage-1 cost that grew,
+//! which is the wrong conclusion about the right number. It is therefore measured
+//! on its own, against `bind/dataset` — which runs on a locally parsed
+//! preparation whose memo is already filled — as the stage-1-only subtrahend.
+//!
 //! # The intermediate bytes
 //!
 //! The encoded product's length is printed here as `artifact_bytes`, and that is
@@ -50,127 +75,55 @@
 //! Run with `cargo bench -p purrdf-shapes --bench shacl_product_alloc` (the
 //! `make bench` lane) — excluded from `make check`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
+use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 
 #[path = "support/product.rs"]
 mod fixture;
 
-static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
-static ALLOCATION_BYTES: AtomicU64 = AtomicU64::new(0);
-static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
-static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-
-struct CountingAllocator;
-
-fn usize_to_u64(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
-
-fn usize_to_i64(value: usize) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-fn record_allocation(size: usize) {
-    ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-    ALLOCATION_BYTES.fetch_add(usize_to_u64(size), Ordering::Relaxed);
-    let size = usize_to_i64(size);
-    let live = LIVE_BYTES
-        .fetch_add(size, Ordering::Relaxed)
-        .saturating_add(size);
-    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(observed) => peak = observed,
-        }
-    }
-}
-
-fn record_deallocation(size: usize) {
-    LIVE_BYTES.fetch_sub(usize_to_i64(size), Ordering::Relaxed);
-}
-
-// SAFETY: every operation delegates to `System` with the exact incoming
-// pointer/layout. The atomic accounting does not affect allocator ownership.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: delegated with the exact layout supplied by the caller.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        record_deallocation(layout.size());
-        // SAFETY: delegated with the exact pointer/layout supplied by the caller.
-        unsafe { System.dealloc(pointer, layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: delegated with the exact pointer/layout and requested size.
-        let resized = unsafe { System.realloc(pointer, layout, new_size) };
-        if !resized.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        resized
-    }
-}
-
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// One reading of the four counters.
-#[derive(Clone, Copy)]
-struct AllocationSnapshot {
-    count: u64,
-    requested: u64,
-    live: i64,
-    peak: i64,
-}
-
-/// Set the peak high-water mark to the current live bytes and read the counters.
+/// The binding time a phase belongs to, in the vocabulary of
+/// `crates/shapes/src/plan.rs`.
 ///
-/// Returns the baseline a later [`snapshot`] is differenced against, so each phase
-/// reports its own numbers rather than the process total so far.
-fn reset_peak() -> AllocationSnapshot {
-    let live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_BYTES.store(live, Ordering::Relaxed);
-    AllocationSnapshot {
-        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        requested: ALLOCATION_BYTES.load(Ordering::Relaxed),
-        live,
-        peak: live,
+/// Carried on every reported line rather than left for a reader to infer, because
+/// the amortization differs by stage and a figure without its stage cannot be
+/// compared to anything.
+#[derive(Debug, Clone, Copy)]
+enum Stage {
+    /// The shapes graph alone: once per preparation.
+    Shapes,
+    /// Stage 0 × one dataset: once per bind.
+    Dataset,
+    /// × one focus node: the work a change path repeats.
+    FocusNode,
+}
+
+impl Stage {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Shapes => "0",
+            Self::Dataset => "1",
+            Self::FocusNode => "2",
+        }
     }
 }
 
-/// Read the counters without disturbing them.
-fn snapshot() -> AllocationSnapshot {
-    AllocationSnapshot {
-        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        requested: ALLOCATION_BYTES.load(Ordering::Relaxed),
-        live: LIVE_BYTES.load(Ordering::Relaxed),
-        peak: PEAK_BYTES.load(Ordering::Relaxed),
-    }
-}
-
-/// Print one phase's four figures.
-fn report(label: &str, before: AllocationSnapshot, after: AllocationSnapshot) {
+/// Print one phase's four figures, under the stage that pays them.
+fn report(stage: Stage, label: &str, measured: Measurement) {
     println!(
-        "[shacl_product_alloc] {label}: allocations={} requested_bytes={} retained_bytes={} \
-         peak_working_bytes={}",
-        after.count.saturating_sub(before.count),
-        after.requested.saturating_sub(before.requested),
-        after.live.saturating_sub(before.live),
-        after.peak.saturating_sub(before.peak)
+        "[shacl_product_alloc] stage={} {label}: allocations={} requested_bytes={} \
+         retained_bytes={} peak_working_bytes={}",
+        stage.label(),
+        measured.allocations,
+        measured.requested_bytes,
+        measured.retained_bytes,
+        measured.peak_working_bytes
     );
 }
 
@@ -186,24 +139,24 @@ fn main() {
     );
 
     // The cold path a product replaces: Turtle text to a reusable preparation.
-    let before = reset_peak();
+    let window = WholeProcessWindow::open();
     let prepared = fixture::prepared(&source);
-    report("cold/parse_and_prepare", before, snapshot());
+    report(Stage::Shapes, "cold/parse_and_prepare", window.close());
 
     // The reusable preparation alone, over an already-parsed shapes graph: the
     // class-catalog derivation both restore paths repeat rather than carry.
     let parsed = Arc::new(parse_shapes(&source, None).expect("the bench shapes graph parses"));
-    let before = reset_peak();
+    let window = WholeProcessWindow::open();
     let reusable = PreparedShapes::new(Arc::clone(&parsed));
-    report("prepare/reusable", before, snapshot());
+    report(Stage::Shapes, "prepare/reusable", window.close());
     drop(reusable);
 
     // The producer's cost, and the pipeline's peak-memory event: the shapes
     // dataset is re-packed and canonicalized so the product can state an identity
     // it has actually established.
-    let before = reset_peak();
+    let window = WholeProcessWindow::open();
     let product = fixture::encode(&prepared);
-    report("encode/to_product", before, snapshot());
+    report(Stage::Shapes, "encode/to_product", window.close());
     println!(
         "[shacl_product_alloc] artifact_bytes={} (the intermediate bytes; the determinism \
          fixture's equivalent is an asserted constant, not only a log line)",
@@ -212,23 +165,23 @@ fn main() {
 
     // The structural tier alone: envelope framing and digests, admitting nothing.
     {
-        let before = reset_peak();
+        let window = WholeProcessWindow::open();
         let view = ShapesProduct::open(&product).expect("the product opens");
-        let after = snapshot();
+        let measured = window.close();
         black_box(view.section_kinds());
-        report("restore/open", before, after);
+        report(Stage::Shapes, "restore/open", measured);
     }
 
     // The memo path. The open is outside the measured region so this line reports
     // admission rather than admission plus the structural tier above.
     {
         let view = ShapesProduct::open(&product).expect("the product opens");
-        let before = reset_peak();
+        let window = WholeProcessWindow::open();
         let admitted = view
             .admit(&ShapesProfile::CORE, &host)
             .expect("the product admits");
-        let after = snapshot();
-        report("restore/admit", before, after);
+        let measured = window.close();
+        report(Stage::Shapes, "restore/admit", measured);
         drop(admitted);
     }
 
@@ -237,27 +190,50 @@ fn main() {
     // whether the model section is paying for itself.
     {
         let view = ShapesProduct::open(&product).expect("the product opens");
-        let before = reset_peak();
+        let window = WholeProcessWindow::open();
         let rebuilt = view
             .rebuild(&ShapesProfile::CORE, &host)
             .expect("the product rebuilds");
-        let after = snapshot();
-        report("restore/rebuild", before, after);
+        let measured = window.close();
+        report(Stage::Shapes, "restore/rebuild", measured);
         drop(rebuilt);
+    }
+
+    // The memoized stage-0 lowering, on its own line rather than inside a stage-1
+    // one. A restored preparation carries the class analysis but not the lowered
+    // constraint tree, so its FIRST bind derives that tree and every later bind
+    // does not. Read against `bind/dataset` below — the same operation on a
+    // preparation whose memo is already filled — the difference is the lowering.
+    {
+        let view = ShapesProduct::open(&product).expect("the product opens");
+        let restored = view
+            .admit(&ShapesProfile::CORE, &host)
+            .expect("the product admits");
+        let window = WholeProcessWindow::open();
+        let first = restored
+            .bind_shared_dataset(Arc::clone(&data))
+            .expect("the bench data graph binds to a restored preparation");
+        let measured = window.close();
+        report(Stage::Shapes, "lower/first_bind", measured);
+        // Outside the measured region: a first bind that reached no constraint
+        // would report a small, tidy figure for a lowering that lowered nothing.
+        let validation = first.validate().expect("validation runs");
+        fixture::assert_non_vacuous(&validation);
+        drop(first);
     }
 
     // Per-dataset work, reported apart from every line above: paid once per
     // snapshot no matter how the preparation was obtained.
-    let before = reset_peak();
+    let window = WholeProcessWindow::open();
     let validator = prepared
         .bind_shared_dataset(Arc::clone(&data))
         .expect("the bench data graph binds");
-    report("bind/dataset", before, snapshot());
+    report(Stage::Dataset, "bind/dataset", window.close());
 
-    let before = reset_peak();
+    let window = WholeProcessWindow::open();
     let validation = validator.validate().expect("validation runs");
-    let after = snapshot();
-    report("eval/validate", before, after);
+    let measured = window.close();
+    report(Stage::FocusNode, "eval/validate", measured);
     // Outside the measured region: a phase that reached no constraint would
     // otherwise report a small, tidy, meaningless number.
     fixture::assert_non_vacuous(&validation);

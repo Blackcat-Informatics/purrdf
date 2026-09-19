@@ -86,6 +86,22 @@ impl GraphFilter {
     }
 }
 
+/// Which retained Core view a [`TermId`] is addressed against.
+///
+/// A `TermId` is dataset-local (C0.8) and carries no provenance, so an id from
+/// one binding used against another is in range, resolves, and denotes the wrong
+/// term. This is the token that says which binding an id space belongs to.
+///
+/// It is the ADDRESS of the retained [`ShaclDatasetView`], which is exactly the
+/// question being asked — "is this the same view?" — and costs nothing to mint,
+/// nothing to compare, needs no atomic (so it is identical on `wasm32`, where a
+/// 64-bit counter is not free) and cannot wrap around into a false match the way
+/// a counter can. The view is retained behind an `Arc` for the whole life of the
+/// holder, so the address is stable, and a token is only ever compared against
+/// tokens from LIVE holders, so a freed address can never alias a live one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct DatasetIdentity(usize);
+
 /// The concrete data-access holder threaded through the SHACL Core engine.
 ///
 /// Core pattern lookups read `core` (the projected data graph); SHACL-SPARQL paths
@@ -159,6 +175,16 @@ impl ShaclData {
     #[inline]
     pub fn core_view(&self) -> &ShaclDatasetView {
         &self.core
+    }
+
+    /// Which Core view this holder reads — the token an id-native focus set is
+    /// checked against.
+    ///
+    /// See [`DatasetIdentity`] for what it is and why it is this and not a
+    /// counter.
+    #[inline]
+    pub(crate) fn identity(&self) -> DatasetIdentity {
+        DatasetIdentity(Arc::as_ptr(&self.core).cast::<()>() as usize)
     }
 
     /// Retain the native validation carrier for repeated prepared bindings.

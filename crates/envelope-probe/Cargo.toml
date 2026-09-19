@@ -22,6 +22,12 @@ name = "envelope-probe"
 path = "src/main.rs"
 
 [dependencies]
+# The workspace's shared counting allocator, which this binary registers as its
+# `#[global_allocator]` and reads one whole-process window per workload from. A
+# normal dependency rather than a dev one because the measuring is what the
+# binary is for; safe because this crate is `publish = false` and so never
+# carries the probe into a released manifest.
+purrdf-alloc-probe = { workspace = true }
 # The kernel: dataset builder, pack container, paged tier, governor and
 # accounting vocabulary the envelope is stated in.
 purrdf-core = { workspace = true }

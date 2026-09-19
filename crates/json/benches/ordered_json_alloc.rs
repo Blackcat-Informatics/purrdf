@@ -2,118 +2,29 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Separate allocation and expansion probes over the timed benchmark's inputs.
+//!
+//! Each phase is bracketed by a whole-process window from the workspace's shared
+//! instrument, the window that counts every thread — the same scope the
+//! hand-rolled process counters this replaced had.
 
+use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_json::{SourceDocument, analyze, decode_document, project};
 use purrdf_rdf::{NativeRdfFormat, serialize_dataset_to_format};
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 #[path = "support/fixture.rs"]
 mod fixture;
 
-static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
-static ALLOCATION_BYTES: AtomicU64 = AtomicU64::new(0);
-static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
-static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-
-struct CountingAllocator;
-
-fn usize_to_u64(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
-
-fn usize_to_i64(value: usize) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
-}
-
-fn record_allocation(size: usize) {
-    ALLOCATION_COUNT.fetch_add(1, Ordering::Relaxed);
-    ALLOCATION_BYTES.fetch_add(usize_to_u64(size), Ordering::Relaxed);
-    let size = usize_to_i64(size);
-    let live = LIVE_BYTES
-        .fetch_add(size, Ordering::Relaxed)
-        .saturating_add(size);
-    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(observed) => peak = observed,
-        }
-    }
-}
-
-fn record_deallocation(size: usize) {
-    LIVE_BYTES.fetch_sub(usize_to_i64(size), Ordering::Relaxed);
-}
-
-// SAFETY: every operation delegates to `System` with the exact incoming
-// pointer/layout. Atomic accounting does not affect allocator ownership.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: delegated with the exact layout supplied by the caller.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        record_deallocation(layout.size());
-        // SAFETY: delegated with the exact pointer/layout supplied by the caller.
-        unsafe { System.dealloc(pointer, layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: delegated with the exact pointer/layout and requested size.
-        let resized = unsafe { System.realloc(pointer, layout, new_size) };
-        if !resized.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        resized
-    }
-}
-
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-#[derive(Clone, Copy)]
-struct Snapshot {
-    count: u64,
-    requested: u64,
-    live: i64,
-    peak: i64,
-}
-
-fn reset_peak() -> Snapshot {
-    let live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_BYTES.store(live, Ordering::Relaxed);
-    Snapshot {
-        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        requested: ALLOCATION_BYTES.load(Ordering::Relaxed),
-        live,
-        peak: live,
-    }
-}
-
-fn snapshot() -> Snapshot {
-    Snapshot {
-        count: ALLOCATION_COUNT.load(Ordering::Relaxed),
-        requested: ALLOCATION_BYTES.load(Ordering::Relaxed),
-        live: LIVE_BYTES.load(Ordering::Relaxed),
-        peak: PEAK_BYTES.load(Ordering::Relaxed),
-    }
-}
-
-fn report(label: &str, before: Snapshot, after: Snapshot, artifact_bytes: usize) {
+fn report(label: &str, measured: Measurement, artifact_bytes: usize) {
     println!(
         "[ordered_json_alloc] {label}: allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={} artifact_bytes={artifact_bytes}",
-        after.count.saturating_sub(before.count),
-        after.requested.saturating_sub(before.requested),
-        after.live.saturating_sub(before.live),
-        after.peak.saturating_sub(before.peak),
+        measured.allocations,
+        measured.requested_bytes,
+        measured.retained_bytes,
+        measured.peak_working_bytes,
     );
 }
 
@@ -124,28 +35,19 @@ fn probe(rows: usize) {
         id: fixture::SOURCE,
         bytes: text.as_bytes(),
     };
-    let before = reset_peak();
+    // The label is formatted before the window is closed, exactly as the counters
+    // this replaced were read after it: the phase owns that one allocation.
+    let window = WholeProcessWindow::open();
     let model = analyze(source, &profile).unwrap();
-    report(
-        &format!("analyze_rows_{rows}"),
-        before,
-        snapshot(),
-        text.len(),
-    );
-    let before = reset_peak();
+    report(&format!("analyze_rows_{rows}"), window.close(), text.len());
+    let window = WholeProcessWindow::open();
     let dataset = project(&model, &profile).unwrap();
-    report(
-        &format!("project_rows_{rows}"),
-        before,
-        snapshot(),
-        text.len(),
-    );
-    let before = reset_peak();
+    report(&format!("project_rows_{rows}"), window.close(), text.len());
+    let window = WholeProcessWindow::open();
     let decoded = decode_document(&dataset, model.id(), &profile).unwrap();
     report(
         &format!("decode_rows_{rows}"),
-        before,
-        snapshot(),
+        window.close(),
         decoded.len(),
     );
     let rdf = serialize_dataset_to_format(&*dataset, NativeRdfFormat::NTriples, None).unwrap();
