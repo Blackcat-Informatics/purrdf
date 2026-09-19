@@ -243,7 +243,7 @@ fn registry(
         Shape::SelfBounding => PfArity::new(1, 2),
     };
     let total = arity.total();
-    // The invoked mode: the needle at position 1 is bound by the plan's own binding,
+    // The invoked mode: the needle at position 1 is bound by the planned binding,
     // and the row request at position 2 — where there is one — by the layer.
     let invoked = BindingPattern::from_bools(
         (0..total).map(|position| position == 1 || (shape == Shape::SelfBounding && position == 2)),
