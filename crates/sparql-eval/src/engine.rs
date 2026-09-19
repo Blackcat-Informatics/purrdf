@@ -2565,6 +2565,15 @@ impl SparqlEngine for NativeSparqlEngine {
 /// [`InternedSolutions::constructed_dataset`] instead — on demand, because a query
 /// that constructs nothing (every query SHACL runs) would otherwise be charged
 /// here, per result, for an empty dataset no visitor reads.
+///
+/// Who that accessor is FOR, stated plainly so its call graph is not mistaken for
+/// an oversight: nothing in this workspace calls it outside tests. The interned
+/// door's only in-tree consumer is the SHACL egress, which runs on an engine with
+/// no extension-function namespaces registered, so the list constructors that
+/// build the auxiliary graph are unreachable from it — it never constructs, and
+/// so never needs to ask. The accessor closes a gap on the PUBLIC door for
+/// out-of-tree callers who do register those functions, and the agreement between
+/// the two doors is proved by test rather than exercised by a shipped path.
 fn borrow_outcome<'a, 'd, D: DatasetView + Sync>(
     outcome: &'a Outcome<D::Id>,
     ctx: &'a EvalCtx<'d, D>,

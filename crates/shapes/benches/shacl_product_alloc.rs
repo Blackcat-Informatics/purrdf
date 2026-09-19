@@ -8,6 +8,14 @@
 //! Allocation and peak-memory evidence for the SHACL prepared-shapes product,
 //! phase by phase.
 //!
+//! What is NOT here, said so a reader looking for it stops looking: the
+//! conforming-versus-violating change-path pair lives in `benches/validate.rs`
+//! under the `shacl_change_path_contrast` group, because it varies focus-node
+//! population over one prepared product rather than walking a product's phases,
+//! which is the axis this file exists to report. The two are read together —
+//! this file says what each phase of preparing and restoring costs, and that one
+//! says what a cheap row and an expensive row cost on the same prepared product.
+//!
 //! **Report-only. No figure here is asserted, compared against a baseline, or
 //! gated on.** A prepared product is a structural change, so it needs no invented
 //! speedup threshold; what it does need is an honest statement of what each phase
