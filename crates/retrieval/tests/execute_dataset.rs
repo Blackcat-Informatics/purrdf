@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TermValue};
+use purrdf_core::{
+    RdfDataset, RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, TermValue,
+};
 use purrdf_retrieval::{
     AdmissionEnvironment, BoundMode, CandidateDomains, CompiledRetrieval, DecayRule,
     ExecutionError, Fixed, FusionProfile, IndexGeneration, Iri, ProducerStatus, RankedStream,
@@ -29,9 +31,9 @@ use purrdf_retrieval::{
     Statistics, StratumUnit, StreamContract, Term, TopK, UnitError, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const K: u32 = 60;
@@ -1645,4 +1647,267 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
     running(&mut supplied, 0, mentions_fox());
     block_on(execute(&supplied, &registry, &*dataset_of(&[])))
         .expect("a caller's own text in a compiled unit still runs");
+}
+
+// ---------------------------------------------------------------------------
+// 11. A caller's dataset clause decides which graphs the caller's query reads
+// ---------------------------------------------------------------------------
+
+/// The named graph the cases below address, holding rows the store's default graph
+/// does not.
+fn graph() -> String {
+    ex("g")
+}
+
+/// A dataset holding one matching triple in the default graph and two more in
+/// `<http://example.org/g>`.
+///
+/// The shape is what makes a dataset clause **observable**: every `FROM` spelling
+/// below selects a different set of graphs, and each set has a different answer, so a
+/// clause that was quietly dropped cannot pass as a clause that was honoured. Two rows
+/// in the named graph rather than one, because a case further down writes a `LIMIT` of
+/// its own and a bound of one is invisible against a single row.
+fn two_graphs() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let mentions = builder.intern_iri(&ex("mentions"));
+    let fox = builder.intern_iri(&ex("topic/fox"));
+    let plain = builder.intern_iri(&ex("doc/plain"));
+    let first = builder.intern_iri(&ex("doc/graphed-1"));
+    let second = builder.intern_iri(&ex("doc/graphed-2"));
+    let named = builder.intern_iri(&graph());
+    builder.push_quad(plain, mentions, fox, None);
+    builder.push_quad(first, mentions, fox, Some(named));
+    builder.push_quad(second, mentions, fox, Some(named));
+    builder
+        .freeze()
+        .expect("the fixture dataset is structurally valid")
+}
+
+/// A caller's query: whatever `<mentions>` the fox, in IRI order, read under the
+/// dataset `clause` names and matched by `pattern`.
+///
+/// `clause` is written where a WHOLE query writes one — between the projection and the
+/// `WHERE` — because that is the only place the grammar has for it, and the whole point
+/// of the cases below is that this text is a whole query when the caller writes it and
+/// a sub-`SELECT` after the layer wraps it.
+fn reading(clause: &str, pattern: &str) -> String {
+    format!(
+        "SELECT ?candidate {clause}WHERE {{ {} {pattern} }} ORDER BY ?candidate",
+        calling(&ex("pf/alpha"))
+    )
+}
+
+/// The pattern that reads the active default graph, whatever the clause made that.
+fn in_the_default_graph() -> String {
+    format!("?candidate <{}> <{}>", ex("mentions"), ex("topic/fox"))
+}
+
+/// The same pattern, addressed through `GRAPH ?g`, which only a `FROM NAMED` graph
+/// answers.
+fn in_an_addressable_graph() -> String {
+    format!("GRAPH ?g {{ {} }}", in_the_default_graph())
+}
+
+/// One of [`two_graphs`]'s documents, spelled as a candidate column reads it back.
+fn doc(name: &str) -> String {
+    format!("<{}>", ex(&format!("doc/{name}")))
+}
+
+/// The candidate column of a solution sequence, spelled as [`candidates`] spells it.
+///
+/// Every fixture here binds that column to an IRI, and anything else is this test's own
+/// mistake rather than an answer to interpret — so it panics instead of coercing.
+fn candidate_column(rows: &[Vec<Option<TermValue>>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| match row.first() {
+            Some(Some(TermValue::Iri(value))) => format!("<{value}>"),
+            other => panic!("the candidate column of these fixtures is an IRI: {other:?}"),
+        })
+        .collect()
+}
+
+/// The caller's text run by the evaluator as the WHOLE query it is, over `held`.
+///
+/// This is the oracle the wrapped read is held to. It is the answer the caller asked
+/// for — the text as written, parsed as a whole query, with its dataset clause in the
+/// position the grammar puts one — and the whole claim the wrap makes is that putting
+/// that text inside a bounded sub-`SELECT` does not change what it means.
+fn whole_query(
+    sparql: &str,
+    registry: &PropertyFunctionRegistry,
+    held: &RdfDataset,
+) -> Vec<String> {
+    let engine = NativeSparqlEngine::new();
+    let outcome = engine
+        .query_with_options_view(
+            held,
+            SparqlRequest {
+                query: sparql,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                property_functions: registry,
+                ..QueryOptions::EMPTY
+            },
+        )
+        .expect("the caller's own text evaluates as a whole query");
+    match outcome {
+        SparqlResult::Solutions { rows, .. } => candidate_column(&rows),
+        other => panic!("expected a SELECT solution sequence, got {other:?}"),
+    }
+}
+
+/// The same text run the way a unit runs it: wrapped, bounded, through `execute`.
+fn wrapped_query(
+    sparql: &str,
+    registry: &PropertyFunctionRegistry,
+    stats: &MockStatistics,
+    held: &RdfDataset,
+) -> (Vec<String>, ProducerStatus) {
+    let mut bundle = compiled(registry, stats);
+    running(&mut bundle, 0, sparql.to_owned());
+    let alpha = iri(&ex(STRATA[0]));
+    let mut execution = block_on(execute(&bundle, registry, held)).expect("the units run");
+    let rows = candidates(&mut execution, &alpha);
+    (rows, execution.statuses[&alpha].clone())
+}
+
+/// **A caller's `FROM` / `FROM NAMED` decides the wrapped read's dataset, and decides
+/// it the same way it decides the whole query's.**
+///
+/// The wrap is a sub-`SELECT`, and `SubSelect ::= SelectClause WhereClause
+/// SolutionModifier ValuesClause` has no `DatasetClause` in it. The clause used to be
+/// carried inside that wrapper, where the parser read it and then dropped it, and this
+/// is the defect that made that unacceptable rather than merely untidy: a caller writing
+/// `FROM <a-graph-that-does-not-exist>` got **rows** — read out of the very default
+/// graph the clause excluded — under an ordinary ending, with no refusal and no
+/// diagnostic anywhere. A wrong answer is worse than a broken one.
+///
+/// Every spelling is executed twice over the same data: once as the whole query the
+/// caller wrote, and once wrapped. The pair is the assertion. Asserting only the wrapped
+/// row counts would have passed against the defect, because the defect returned rows;
+/// only the comparison with the text's own meaning can see it. And the fixture is built
+/// so the spellings disagree with each other — a graph with rows the default graph does
+/// not have, and a graph with none at all — because over a dataset where every clause
+/// selects the same triples, a dropped clause and an honoured one are the same answer.
+#[test]
+fn a_supplied_dataset_clause_reads_the_graphs_it_names_wrapped_or_whole() {
+    let registry = fixture_registry();
+    let stats = statistics();
+    let held = two_graphs();
+
+    for (shape, text, expected) in [
+        // THE CONTROL: no dataset clause at all. The store's own default dataset
+        // answers, the emitted text is byte for byte what it always was, and this is
+        // the answer every clause below has to differ from for the rest of the case to
+        // mean anything.
+        (
+            "no dataset clause",
+            reading("", &in_the_default_graph()),
+            vec![doc("plain")],
+        ),
+        // (1) A graph the dataset does not hold. The active default graph is the merge
+        //     of nothing, so the pattern matches nothing. This is the case the defect
+        //     answered with the control's row.
+        (
+            "FROM a graph that does not exist",
+            reading(
+                &format!("FROM <{}> ", ex("no-such-graph")),
+                &in_the_default_graph(),
+            ),
+            Vec::new(),
+        ),
+        // (2) A graph the dataset does hold, whose rows are NOT the default graph's.
+        //     Both directions are therefore observable at once: the named graph's rows
+        //     arrive and the default graph's row does not.
+        (
+            "FROM a named graph",
+            reading(&format!("FROM <{}> ", graph()), &in_the_default_graph()),
+            vec![doc("graphed-1"), doc("graphed-2")],
+        ),
+        // (3) `FROM NAMED` addresses rather than merges, so it takes a `GRAPH` block to
+        //     reach and leaves the active default graph empty.
+        (
+            "FROM NAMED with a GRAPH block",
+            reading(
+                &format!("FROM NAMED <{}> ", graph()),
+                &in_an_addressable_graph(),
+            ),
+            vec![doc("graphed-1"), doc("graphed-2")],
+        ),
+        // (4) A prologue AND a dataset clause: both moves in one text, to two different
+        //     positions. The prefixed names must still resolve against the caller's own
+        //     declarations while the clause still selects the caller's own graphs.
+        (
+            "PREFIX and FROM together",
+            format!(
+                "PREFIX p: <{}>\nPREFIX t: <{}>\nSELECT ?candidate FROM <{}> \
+                 WHERE {{ {} ?candidate p:mentions t:fox }} ORDER BY ?candidate",
+                ex(""),
+                ex("topic/"),
+                graph(),
+                calling(&ex("pf/alpha"))
+            ),
+            vec![doc("graphed-1"), doc("graphed-2")],
+        ),
+        // (5) The caller's own bound AND a dataset clause. The bound is why the wrap
+        //     exists; the clause is what the wrap was destroying. Both stand, and the
+        //     bound is the one that cuts, so the row it keeps says the clause chose the
+        //     graph first.
+        (
+            "FROM with the caller's own LIMIT",
+            format!(
+                "{} LIMIT 1",
+                reading(&format!("FROM <{}> ", graph()), &in_the_default_graph())
+            ),
+            vec![doc("graphed-1")],
+        ),
+    ] {
+        assert_eq!(
+            whole_query(&text, &registry, &held),
+            expected,
+            "the whole query's own answer, for {shape}"
+        );
+        let (rows, status) = wrapped_query(&text, &registry, &stats, &held);
+        assert_eq!(
+            rows, expected,
+            "and the wrapped read agrees with it, for {shape}"
+        );
+        assert_eq!(
+            status,
+            ProducerStatus::SuppliedQueryEnded {
+                rank: u64::try_from(expected.len()).expect("a fixture row count fits"),
+            },
+            "the ending names the caller's text as the stopper and reports the rank it \
+             reached, which for a clause selecting nothing is zero, for {shape}"
+        );
+    }
+
+    // What the emitted text actually is, for the one shape it matters in: the clause is
+    // written on the WRAPPER's own `SELECT`, where it scopes the whole query and
+    // therefore the body inside it, and it is cut out of the body — the one edit the
+    // wrap makes to a caller's bytes, and the only one.
+    let text = reading(&format!("FROM <{}> ", graph()), &in_the_default_graph());
+    let mut bundle = compiled(&registry, &stats);
+    running(&mut bundle, 0, text.clone());
+    let unit = &bundle.units[0];
+    assert_eq!(
+        unit.sparql(),
+        format!(
+            "SELECT * FROM <{}> WHERE {{\n  {{ SELECT ?candidate WHERE {{ {} {} }} \
+             ORDER BY ?candidate }}\n}}\nLIMIT {}",
+            graph(),
+            calling(&ex("pf/alpha")),
+            in_the_default_graph(),
+            unit.depth() + 1
+        ),
+        "the clause moves onto the wrapper and out of the body; nothing else moves"
+    );
+    assert_eq!(
+        unit.supplied_query(),
+        Some(text.as_str()),
+        "and the text read back is the whole of what the caller handed over, dataset \
+         clause included and in the caller's own position"
+    );
 }

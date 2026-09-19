@@ -843,6 +843,188 @@ fn the_emitted_request_is_the_invoked_modes_number_and_not_the_other_modes() {
 }
 
 // ---------------------------------------------------------------------------
+// D. A tie between two declared modes is broken by the mode, not by its position
+//    in the declaration
+// ---------------------------------------------------------------------------
+
+/// A registry holding one producer of `shape` that declares exactly `modes`, in that
+/// order, and promises `rows` under every one of them.
+///
+/// The constant promise is the point: it puts two declared modes at the same count so
+/// the tightest-bound rule cannot separate them, which is the only situation in which
+/// the order they were declared in could possibly be read. It holds no rows, because
+/// nothing here is executed — a tie is settled at the waist, before a producer is opened.
+fn registry_declaring(
+    shape: Shape,
+    modes: Vec<BindingPattern>,
+    rows: u64,
+) -> PropertyFunctionRegistry {
+    let arity = match shape {
+        Shape::EvaluatorBounded => PfArity::new(1, 1),
+        Shape::SelfBounding => PfArity::new(1, 2),
+    };
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex(PRODUCER),
+        Arc::new(ModedProducer {
+            arity,
+            modes,
+            bound_rows: rows,
+            free_rows: rows,
+            emitted: Vec::new(),
+            needle_position: 1,
+            depth_position: match shape {
+                Shape::EvaluatorBounded => None,
+                Shape::SelfBounding => Some(2),
+            },
+        }),
+        RankedDeclaration {
+            stratum: purrdf_core::parse_iri(&ex(DOCS)).expect("fixture IRI"),
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(TermKind::Literal),
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    datatype: None,
+                }],
+            }],
+            depth_placement: match shape {
+                Shape::EvaluatorBounded => None,
+                Shape::SelfBounding => Some(DepthPlacement {
+                    position: 2,
+                    datatype: XSD_INTEGER.to_owned(),
+                }),
+            },
+            candidate_position: 0,
+            duplicates: DuplicatePolicy::Unique,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
+            mandatory: false,
+        },
+    );
+    registry
+}
+
+/// **Two declared modes promising the same count resolve to the same one whichever
+/// order they were registered in.**
+///
+/// The bound is the tightest promise any declared mode that serves the call makes, and
+/// where two such modes make the *same* promise the count is settled but the mode is
+/// not — and the mode is what the refusals name, so something has to choose. The rule is
+/// that the choice is a function of the declaration and not of its position in a list:
+/// the invoked mode wins where it is among the tied candidates, and otherwise the lowest
+/// `BindingPattern` in its own total order does.
+///
+/// Order-independence was claimed and never executed. A tightest-bound search that
+/// compared counts alone would return whichever tied mode it happened to reach first, so
+/// registering the same two promises the other way round would have changed the mode in
+/// a refusal message while nothing about the producer changed — a diagnostic that is a
+/// fact about a registration order rather than about a registration.
+#[test]
+fn a_tie_between_two_modes_resolves_the_same_way_in_either_declaration_order() {
+    const ROWS: u64 = 4;
+    // The mode this fixture's plan invokes — the needle at position 1 bound, as
+    // everywhere in this file — and the coarser mode that leaves it free. Both serve the
+    // call: the coarser one demands strictly less, and the invoked one serves itself.
+    let invoked = BindingPattern::from_code("fb");
+    let coarser = BindingPattern::from_code("ff");
+
+    for (order, modes) in [
+        ("the invoked mode declared first", vec![invoked, coarser]),
+        ("the coarser mode declared first", vec![coarser, invoked]),
+    ] {
+        let registry = registry_declaring(Shape::EvaluatorBounded, modes, ROWS);
+        // The premise, asserted rather than assumed: this fixture really does promise the
+        // same count under both modes, so there really is a tie to break.
+        assert_eq!(
+            planned(&registry),
+            (
+                u32::try_from(ROWS).expect("a fixture count fits"),
+                Some(ROWS)
+            ),
+            "both declared modes promise {ROWS}, so the count is the same either way \
+             ({order})"
+        );
+
+        let error = admit_at_depth(&registry, u32::try_from(ROWS).expect("fits") + 1)
+            .expect_err("a depth one past the declaration is refused");
+        match &error {
+            AdmissionError::DepthBoundViolation { mode, .. } => assert_eq!(
+                *mode,
+                BoundMode::Invoked { mode: invoked },
+                "the invoked mode is among the tied candidates, so it is the one named, \
+                 with {order}"
+            ),
+            other => panic!("expected DepthBoundViolation, got {other:?}"),
+        }
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "stratum {} declares depth 5, but the registry bounds it at 4 under mode \
+                 `fb`",
+                ex(DOCS)
+            ),
+            "and the sentence a host reads is the same sentence, with {order}"
+        );
+    }
+
+    // The other rung of the same rule: a tie in which NEITHER candidate is the invoked
+    // mode, so the count and the invoked-mode preference both fall silent and the
+    // `BindingPattern` order alone decides.
+    //
+    // That rung needs an invocation binding TWO positions, because the modes that serve
+    // a call are the declared ones whose bound set is a subset of the invocation's, and a
+    // one-binding invocation has exactly one such mode that is not itself. So this half
+    // runs over the self-bounding shape, whose invocation binds the needle at 1 and the
+    // row request at 2 — and the two declared modes each drop one of the two.
+    let self_invoked = BindingPattern::from_code("fbb");
+    let lower = BindingPattern::from_code("fbf");
+    let higher = BindingPattern::from_code("ffb");
+    assert!(
+        lower < higher,
+        "the expectation below is the lower of the two in BindingPattern's own order"
+    );
+    for (order, modes) in [
+        ("lowest declared first", vec![lower, higher]),
+        ("lowest declared last", vec![higher, lower]),
+    ] {
+        let registry = registry_declaring(Shape::SelfBounding, modes, ROWS);
+        assert_eq!(
+            planned(&registry),
+            (
+                u32::try_from(ROWS).expect("a fixture count fits"),
+                Some(ROWS)
+            ),
+            "both declared modes serve this call and promise {ROWS}, so this is a tie \
+             and not a choice between two counts ({order})"
+        );
+        let error = admit_at_depth(&registry, u32::try_from(ROWS).expect("fits") + 1)
+            .expect_err("a depth one past the declaration is refused");
+        match &error {
+            AdmissionError::DepthBoundViolation { mode, .. } => assert_eq!(
+                *mode,
+                BoundMode::Subsuming {
+                    declared: lower,
+                    invoked: self_invoked,
+                },
+                "with no invoked mode among the tied candidates the lowest one is named, \
+                 with {order}"
+            ),
+            other => panic!("expected DepthBoundViolation, got {other:?}"),
+        }
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "stratum {} declares depth 5, but the registry bounds it at 4 under mode \
+                 `fbf`, which serves this call under mode `fbb`",
+                ex(DOCS)
+            ),
+            "and again one sentence, whichever order they were registered in ({order})"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // A tiny executor, so the tests need no runtime
 // ---------------------------------------------------------------------------
 

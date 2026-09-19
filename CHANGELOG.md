@@ -426,13 +426,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and "declared zero" stay different facts across the boundary: an absent
   declaration can refuse nothing, while a zero is a measurement of the producer's
   data, so the absence arrives as `None` rather than as a number nobody took.
-- **sparql-algebra:** `SparqlParser::parse_query_split`, which parses a query exactly as
-  `parse_query_with` does and also reports the byte offset its prologue ends at. For a
-  caller that has to *move* those directives -- wrapping a supplied query in a
-  sub-select, which the grammar gives no prologue -- the position is not derivable from
-  the algebra, because a prefixed name is resolved away at parse time. Positional only:
-  the offset is where the one parse was already standing when it finished the prologue,
-  so the two halves are the caller's own bytes and the algebra beside them is unchanged.
+- **sparql-algebra:** `SparqlParser::parse_query_split` and the `QuerySplit` it answers,
+  which parse a query exactly as `parse_query_with` does and also report where the two
+  clauses only a WHOLE query may write are written in the text: the byte offset its
+  prologue ends at, and the byte range its `FROM` / `FROM NAMED` run occupies. A caller
+  wrapping a supplied query in a sub-select has to *move* both, because
+  `SubSelect ::= SelectClause WhereClause SolutionModifier ValuesClause` carries neither,
+  and neither position is derivable from the algebra -- a prefixed name is resolved away
+  at parse time, and re-serialising the body would rewrite surface spellings the caller's
+  next reader depends on. Positional only: both numbers are offsets the one parse was
+  already standing at, so every piece a caller cuts out is the caller's own bytes and the
+  algebra beside them is unchanged. The dataset range ends at the token after the last
+  clause rather than at its last IRI, so excising it leaves a query that still parses.
 - **python:** `MutableDataset` answers the native validation snapshot protocol, so
   `Shapes.validate_store` accepts one for real: both quad containers on this
   surface hold a frozen dataset behind a copy-on-write overlay, and validation
@@ -518,7 +523,38 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   inside a sub-select -- and none of the three yields a solution row to rank, so no
   text of those forms could ever have run and nothing valid is refused. Every `SELECT`
   is still admitted whatever it carries: a dataset clause, a trailing `VALUES` and a
-  `VERSION` directive are each executed beside the refusal.
+  `VERSION` directive are each executed beside the refusal, over a dataset where the
+  clause selects different rows from the one the store would have answered with.
+- **retrieval:** A supplied query's dataset clause reads the graphs it names. The wrap is
+  a sub-select, `SubSelect ::= SelectClause WhereClause SolutionModifier ValuesClause`
+  has no `DatasetClause` in it, and the clause was being carried inside the wrapper --
+  where the parser read it and then discarded it. So a caller writing
+  `FROM <a-graph-that-does-not-exist>` got rows, read out of the very default graph the
+  clause excluded, under an ordinary `SuppliedQueryEnded` ending with no refusal and no
+  diagnostic anywhere. A wrong answer is worse than a broken one, and this one was
+  invisible to a suite whose supplied-text fixtures all ran over an empty dataset
+  against a registry-driven relation, where which graphs a clause selects cannot change
+  a row.
+
+  The clause is now written onto the wrapper's own `SELECT`, which is the one position
+  the grammar leaves for it and the one that scopes the body the caller wrote it around,
+  and it is excised from the body. That excision is the only edit the wrap makes to a
+  caller's bytes: it moves as *text*, split at the range the parse reported, for the
+  reason the prologue does -- re-rendering the body would rewrite a relation call's
+  argument lists into the blank-node chains they lower to, and the registry-aware parse
+  at execution would no longer see a call. A text carrying neither clause emits the bytes
+  it always emitted, at every depth.
+- **sparql-algebra:** A dataset clause inside a sub-select is refused instead of parsed
+  and discarded. `SubSelect` has no `DatasetClause`, so a `FROM` there is not a
+  production; this parser read one anyway -- one function serves both `SELECT`
+  positions -- and the sub-select site then unwrapped the `Query` with `..`, dropping the
+  clause along with the base IRI and the version. The clause is now refused as a
+  `ParseError::Syntax` at its own `FROM` keyword, naming that a dataset clause is written
+  on a whole query because that is the scope it applies to, and the site destructures
+  every field explicitly so a field added later cannot start being dropped silently.
+  Nothing valid is caught: a sub-select without the clause, a whole query with it, and a
+  whole query with it that also contains a sub-select are each executed beside the
+  refusal.
 - **retrieval:** A compiled bundle is checked against the set it was assembled with
   before any unit runs (`ExecutionError::UnitsNotAsAssembled`). The unit list and each
   unit's stratum were writable, so a unit removed from the bundle yielded a narrower
@@ -857,7 +893,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
   Driving the executor over a query of one's own stays open through
   `StratumUnit::new`, and such a unit is now a different kind of unit rather than a
-  differently-spelled one. Its query form reaches the evaluator byte for byte, this
+  differently-spelled one. Its query form reaches the evaluator byte for byte -- except
+  that a dataset clause, which the sub-select grammar has no place for, is moved to the
+  wrapper, where it scopes the same body -- this
   layer bounds only its outside, and what the text bounds inside itself is no part of
   what this layer reads of it -- so that read is never certified `Exhausted`. It reports the new ending
   `StreamEnding::SuppliedQueryEnded`, surfaced as `ProducerReceipt::SuppliedQueryEnded`

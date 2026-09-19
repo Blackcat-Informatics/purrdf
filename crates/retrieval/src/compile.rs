@@ -184,7 +184,9 @@
 //!
 //! Driving the executor over a query of a caller's own is still open, through
 //! [`StratumUnit::new`], and it is a *different* kind of unit: the caller's query form
-//! reaches the evaluator byte for byte, this layer bounds only its outside, and what
+//! reaches the evaluator byte for byte — except that a dataset clause, which the
+//! sub-`SELECT` grammar has no place for, is moved onto the wrapper, where it scopes
+//! the same body — this layer bounds only its outside, and what
 //! bounds the caller wrote inside it cannot be seen from here. Such a read therefore
 //! never ends `Exhausted` — the ending names the caller's text as the stopper instead
 //! ([`StreamEnding::SuppliedQueryEnded`](crate::StreamEnding)). That is not a refusal
@@ -202,13 +204,18 @@
 //! [`execute`](crate::execute) will run, so a text that is not a query is refused
 //! there — by name, at construction — rather than surfacing as a per-stratum failure
 //! after a plan was admitted and other strata were read; and the parse reports where
-//! the caller's **prologue** ends, which the wrapping `SELECT` has to know. A
-//! sub-`SELECT` carries no prologue, so wrapping a text that declares `PREFIX` or
-//! `BASE` without lifting those directives out first makes the whole query
-//! unparsable — and the caller then gets a parse error at a byte offset of a query it
-//! never wrote. Nothing about the *bounds* is read from that parse: the outer bound
-//! is still this layer's arithmetic over the proved depth, and what the caller's own
-//! text bounds inside itself is still not this layer's to certify.
+//! the two clauses a whole query may write and a sub-`SELECT` may not — the **prologue**
+//! and the **dataset clause** — are written, which the wrapping `SELECT` has to know.
+//! Wrapping a text that declares `PREFIX` or `BASE` without lifting those directives out
+//! first makes the whole query unparsable, and the caller then gets a parse error at a
+//! byte offset of a query it never wrote. Wrapping one that writes `FROM` or `FROM NAMED`
+//! without lifting that clause out was worse, because it parsed: the clause was read
+//! inside the wrapper and then discarded, so the caller's query ran against a dataset it
+//! had explicitly narrowed away from, and the rows came back under a perfectly ordinary
+//! ending. Both clauses are now moved to where the grammar takes them, and each still
+//! scopes the body it was written around. Nothing about the *bounds* is read from that
+//! parse: the outer bound is still this layer's arithmetic over the proved depth, and
+//! what the caller's own text bounds inside itself is still not this layer's to certify.
 //!
 //! # The declared row bound does not cap the emitted bound, at any size
 //!
@@ -316,6 +323,7 @@
 //! than re-deriving it from a registry three stages away.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 use purrdf_sparql_eval::{BindingPattern, PfDescriptor, RankedDeclaration, RegistryId};
@@ -341,8 +349,9 @@ use crate::request::ReadBound;
 /// how that unit's read ended. A query this stage rendered carries bounds this
 /// stage computed from a proved depth, so the arrival of the probe row is an
 /// observation. A query a caller supplied is text whose *bounds* this layer never
-/// reads — it parses the text once, far enough to find where the prologue it has to
-/// hoist ends and to refuse something that is not a query, and interprets nothing
+/// reads — it parses the text once, far enough to find where the two clauses it has to
+/// move sit (the prologue, and the dataset clause) and to refuse something that is not
+/// a query, and interprets nothing
 /// else — so a `LIMIT` inside a sub-`SELECT`, a `FILTER` or a pattern that simply
 /// matches less are all the caller's, and how that read ended is not this layer's to
 /// certify. See this module's header.
@@ -355,9 +364,10 @@ enum UnitQuery {
     /// A query text a caller supplied, bounded by nothing this layer wrote.
     ///
     /// The text is the caller's own bytes and is read back as such
-    /// ([`StratumUnit::supplied_query`]). What the layer holds beside it is the one
-    /// position it needs to bound the text without breaking it: where the caller's
-    /// prologue ends, as [`StratumUnit::new`]'s parse reported it.
+    /// ([`StratumUnit::supplied_query`]). What the layer holds beside it is the two
+    /// positions it needs to bound the text without breaking it or changing what it
+    /// means: where the caller's prologue ends and where its dataset clause sits, both
+    /// as [`StratumUnit::new`]'s parse reported them.
     Supplied {
         /// The caller's text, exactly as it was handed over.
         text: String,
@@ -366,6 +376,12 @@ enum UnitQuery {
         /// for a text with no prologue, which is every text this seam saw before a
         /// prefixed one reached it.
         body_at: usize,
+        /// The byte range the caller's `FROM` / `FROM NAMED` run occupies, so it can be
+        /// written onto the wrapping `SELECT` — the one place a sub-`SELECT` grammar
+        /// leaves for it — instead of being carried inside the wrapper where it parses
+        /// and then decides nothing. `None` for a text that names no graphs, which is
+        /// every text whose answer the store's own default dataset gives.
+        dataset_at: Option<Range<usize>>,
     },
 }
 
@@ -780,7 +796,8 @@ impl StratumUnit {
     /// `query` is read back verbatim through [`Self::supplied_query`], and it is
     /// bounded by this layer only on the outside: [`Self::sparql`] is the caller's
     /// query form as a sub-`SELECT` of a query bounded at `LIMIT depth + 1`, with any
-    /// prologue the caller wrote hoisted above that wrapper. It wraps rather than
+    /// prologue the caller wrote hoisted above that wrapper and any dataset clause it
+    /// wrote moved onto the wrapper's own `SELECT`. It wraps rather than
     /// follows, because a text carrying a top-level bound of its own can hold no second
     /// one, and wrapped, both bounds stand — the caller's over the pattern it was
     /// written against, this layer's over whatever that resolves to. Whatever else the
@@ -793,12 +810,17 @@ impl StratumUnit {
     ///
     /// # Why the text is parsed here
     ///
-    /// The wrap is the reason. A sub-`SELECT` has no prologue in the grammar, so a
-    /// text declaring `PREFIX` or `BASE` — which is how essentially all SPARQL is
-    /// written — cannot be wrapped as it stands: the directives have to be lifted
-    /// above the wrapping `SELECT`, and finding where they end is a question only a
+    /// The wrap is the reason, and the grammar's `SubSelect ::= SelectClause
+    /// WhereClause SolutionModifier ValuesClause` gives it two halves. A sub-`SELECT`
+    /// has no prologue, so a text declaring `PREFIX` or `BASE` — which is how
+    /// essentially all SPARQL is written — cannot be wrapped as it stands: the
+    /// directives have to be lifted above the wrapping `SELECT`. A sub-`SELECT` has no
+    /// `DatasetClause` either, so a text writing `FROM` or `FROM NAMED` cannot be
+    /// wrapped as it stands *and cannot be diagnosed* — it parsed, the clause was
+    /// discarded, and the caller's query ran against the store's whole dataset instead
+    /// of the graphs it named. Finding where either clause sits is a question only a
     /// parser can answer. So this constructor parses `query` with the same front end
-    /// [`execute`](crate::execute) will run, takes the offset its prologue ends at, and
+    /// [`execute`](crate::execute) will run, takes both positions, and
     /// refuses a text that is not a query at all ([`UnitError::NotAQuery`]) rather than
     /// carrying it to a stratum failure later. The same parse names the query form, and
     /// a form other than `SELECT` is refused too ([`UnitError::NotASelect`]): the
@@ -807,7 +829,8 @@ impl StratumUnit {
     /// any case — so no text of those forms could ever have run here, and refusing
     /// them by name loses nothing valid. The caller's own bytes are what get wrapped;
     /// nothing is re-rendered from the parse, so the body reaches the evaluator
-    /// unchanged.
+    /// unchanged but for the dataset clause cut out of it, which is re-written on the
+    /// wrapper where it scopes that same body.
     ///
     /// The parse decides nothing else, and in particular decides no bound. It is run
     /// with no relation registry, so a registered producer's predicate is an ordinary
@@ -851,12 +874,13 @@ impl StratumUnit {
         {
             return Err(UnitError::DepthBeyondDeclaration { depth, declared });
         }
-        let body_at = prologue_end(&query)?;
+        let (body_at, dataset_at) = hoistable_clauses(&query)?;
         Ok(Self::assembled(
             stratum,
             UnitQuery::Supplied {
                 text: query,
                 body_at,
+                dataset_at,
             },
             contract,
             probed,
@@ -932,8 +956,10 @@ impl StratumUnit {
     /// a query carrying the unit's own bound, which is the only bound this layer can
     /// write over a text it did not assemble. It wraps rather than follows because a
     /// text carrying a top-level bound of its own can hold no second one after it. The
-    /// caller's prologue is hoisted in front of the wrapper, because a sub-`SELECT`
-    /// cannot carry one — see [`Self::new`] for why that hoist is possible here at all.
+    /// caller's prologue is hoisted in front of the wrapper and its dataset clause onto
+    /// the wrapper's own `SELECT`, because a sub-`SELECT` can carry neither — see
+    /// [`Self::new`] for why those moves are possible here at all, and for why each
+    /// lands where it does.
     ///
     /// Derived rather than stored, so the bounds the read is taken under and the depth
     /// the ending is judged against cannot be different numbers. The probe row is
@@ -944,7 +970,11 @@ impl StratumUnit {
     pub fn sparql(&self) -> String {
         match &self.query {
             UnitQuery::Rendered(rendered) => rendered.text(self.depth, self.declared_rows),
-            UnitQuery::Supplied { text, body_at } => supplied_text(text, *body_at, self.depth),
+            UnitQuery::Supplied {
+                text,
+                body_at,
+                dataset_at,
+            } => supplied_text(text, *body_at, dataset_at.as_ref(), self.depth),
         }
     }
 
@@ -1443,20 +1473,35 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
 /// honestly bound. That is also the outer bound the type's own contract promises, so the
 /// promise is now true of the text rather than of the intention behind it.
 ///
-/// # Why the prologue is moved, and moved as text
+/// # Why the prologue and the dataset clause are moved, and moved as text
 ///
-/// The grammar's sub-`SELECT` (`SubSelect ::= SelectClause WhereClause
-/// SolutionModifier ValuesClause`) has no prologue in it: `PREFIX` and `BASE` are
-/// `Prologue`, which appears once, at the front of a whole query. So a caller's text
-/// that declares either — which is how essentially all real SPARQL is written — stops
-/// parsing the moment it is wrapped as it stands, and the diagnostic a caller then sees
-/// points at a byte offset of a query this layer wrote. Wrapping without hoisting fixed
-/// one narrow shape (a text carrying its own top-level bound) and broke a strictly
-/// larger valid class, including that same shape whenever it was prefixed.
+/// The grammar's sub-`SELECT` is `SubSelect ::= SelectClause WhereClause
+/// SolutionModifier ValuesClause`, and this wrapper inherits both of that
+/// production's omissions.
 ///
-/// Hoisted, both halves keep their meaning: the directives are in the one position the
-/// grammar accepts them, they scope the whole query and therefore the body inside it,
-/// and the prefixed names in the body resolve against the caller's own declarations.
+/// It has no prologue in it: `PREFIX` and `BASE` are `Prologue`, which appears once, at
+/// the front of a whole query. So a caller's text that declares either — which is how
+/// essentially all real SPARQL is written — stops parsing the moment it is wrapped as it
+/// stands, and the diagnostic a caller then sees points at a byte offset of a query this
+/// layer wrote. Wrapping without hoisting fixed one narrow shape (a text carrying its own
+/// top-level bound) and broke a strictly larger valid class, including that same shape
+/// whenever it was prefixed.
+///
+/// It has no `DatasetClause` in it either, and that omission failed the other way — not
+/// with a diagnostic but with an answer. A caller's `FROM` / `FROM NAMED` parsed inside
+/// the wrapper and was then discarded, so a text naming one graph was executed against
+/// the whole store: `FROM <…/no-such-graph>` returned rows read from the very default
+/// graph the caller had excluded, under a genuine ending, with nothing anywhere saying
+/// the clause had been ignored. A wrong answer under no refusal is the worse of the two
+/// failures, because the first one at least tells its caller something is wrong.
+///
+/// So both are moved, and to the one position the grammar accepts each. The directives go
+/// in front of the wrapper; the dataset clause goes onto the wrapper's own `SELECT`,
+/// where it scopes that whole query and therefore the body inside it — which is exactly
+/// the scope the caller wrote it to have, a dataset clause never having been a statement
+/// about one group. Both halves keep their meaning: the prefixed names in the body
+/// resolve against the caller's own declarations, and the body reads the caller's own
+/// dataset.
 ///
 /// It is the *text* that moves, not a re-rendering of the parsed form, and that is
 /// deliberate. A prefixed name is resolved away at parse time, so the prologue cannot be
@@ -1464,43 +1509,62 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
 /// caller's surface spelling — the argument lists a relation call is written with are
 /// collection syntax to a parser that has not been told which IRIs are relations, and
 /// re-emitting them as the blank-node chains they lower to would hand the executor a
-/// text whose registry-aware parse no longer sees a call. Splitting at the offset the
-/// parse reported moves nothing but the directives, so the body the evaluator reads is
-/// byte for byte the body the caller wrote.
+/// text whose registry-aware parse no longer sees a call. Splitting at the offsets the
+/// parse reported moves nothing but those two clauses, so the body the evaluator reads is
+/// byte for byte the body the caller wrote, **except** that the dataset clause is cut out
+/// of it — the one edit, and the only one, because the sub-select grammar has nowhere to
+/// put it. A text with neither clause emits the bytes it always emitted.
 ///
 /// The projection is `*` rather than the two columns
 /// [`execute`](crate::execute) reads, because naming them would *add* those columns to
 /// a text that did not project them: an unbound `?candidate` projected by this layer
 /// reads back as a row whose candidate column is absent, where a text that projects no
 /// candidate should be reported as exactly that.
-fn supplied_text(text: &str, body_at: usize, depth: ProbedDepth) -> String {
-    // `body_at` is a byte offset the parser reported between two of its own tokens, so
-    // it is on a character boundary of this very text and the split is total. It is
-    // zero for a text with no prologue, where `prologue` is empty and the emitted query
-    // is exactly what it was before a prefixed text reached this seam.
-    let (prologue, body) = text.split_at(body_at.min(text.len()));
+fn supplied_text(
+    text: &str,
+    body_at: usize,
+    dataset_at: Option<&Range<usize>>,
+    depth: ProbedDepth,
+) -> String {
+    // Both offsets are byte positions the parser reported between two of its own
+    // tokens, so both are on character boundaries of this very text and every split
+    // below is total. `body_at` is zero for a text with no prologue, where `prologue`
+    // is empty; `dataset_at` is `None` for a text with no dataset clause, where
+    // `dataset` is empty and the whole body is one slice — which together emit exactly
+    // the query this seam emitted before either clause reached it.
+    let (prologue, rest) = text.split_at(body_at.min(text.len()));
+    let (dataset, body) = match dataset_at {
+        // The recorded range ends at the token after the clause, so it carries its own
+        // trailing whitespace: the body rejoins as `SELECT …` + `WHERE …` with the
+        // spacing the caller wrote on either side of the excision.
+        Some(at) => (
+            &text[at.clone()],
+            format!("{}{}", &text[body_at..at.start], &text[at.end..]),
+        ),
+        None => ("", rest.to_owned()),
+    };
     format!(
-        "{prologue}SELECT * WHERE {{\n  {{ {body} }}\n}}\nLIMIT {}",
+        "{prologue}SELECT * {dataset}WHERE {{\n  {{ {body} }}\n}}\nLIMIT {}",
         emitted_limit(depth)
     )
 }
 
-/// Where a caller-supplied query's prologue ends, from the parse that also decides
-/// whether the text is a query at all, and whether it is the one form this seam can
-/// read as rows.
+/// Where a caller-supplied query's two whole-query-only clauses are written, from the
+/// parse that also decides whether the text is a query at all, and whether it is the
+/// one form this seam can read as rows.
 ///
-/// One parse, three answers, and the first is why the other two can be afforded: the
-/// wrapping [`supplied_text`] writes needs the offset, so reading the text is not an
-/// extra check bolted onto the seam but the thing the seam already had to do. The two
-/// refusals are not a policy about which queries are welcome here. A text that is not
-/// a query is refused with the parser's own words ([`UnitError::NotAQuery`]); a query
-/// that is not a `SELECT` is refused by its form name ([`UnitError::NotASelect`]),
-/// because the wrapper is a sub-`SELECT` and the grammar admits no other form inside
-/// one — an `ASK`, `CONSTRUCT` or `DESCRIBE` could never have run through this seam,
-/// so nothing valid is lost by saying so at the constructor. Every `SELECT` the parser
-/// accepts is admitted, whatever its dataset clause, `VALUES` or `VERSION` carries, and
-/// everything about the *relations* in it is left to the registry-aware parse at
-/// execution.
+/// One parse, four answers, and the first two are why the other two can be afforded:
+/// the wrapping [`supplied_text`] writes needs both positions, so reading the text is
+/// not an extra check bolted onto the seam but the thing the seam already had to do.
+/// The two refusals are not a policy about which queries are welcome here. A text that
+/// is not a query is refused with the parser's own words ([`UnitError::NotAQuery`]); a
+/// query that is not a `SELECT` is refused by its form name
+/// ([`UnitError::NotASelect`]), because the wrapper is a sub-`SELECT` and the grammar
+/// admits no other form inside one — an `ASK`, `CONSTRUCT` or `DESCRIBE` could never
+/// have run through this seam, so nothing valid is lost by saying so at the
+/// constructor. Every `SELECT` the parser accepts is admitted, whatever its dataset
+/// clause, `VALUES` or `VERSION` carries, and everything about the *relations* in it is
+/// left to the registry-aware parse at execution.
 ///
 /// Parsed with [`ParserOptions::default`], i.e. with no relation namespaces and no
 /// registered relation IRIs, for two reasons. There is no registry at this
@@ -1511,18 +1575,20 @@ fn supplied_text(text: &str, body_at: usize, depth: ProbedDepth) -> String {
 /// syntax to a parser that has not been told otherwise. The registry-aware parse stays
 /// the authority, and is strictly the narrower of the two, so this refusal cannot
 /// close the seam on a text execution would have accepted.
-fn prologue_end(text: &str) -> Result<usize, UnitError> {
-    let (query, body_at) = SparqlParser::new()
+fn hoistable_clauses(text: &str) -> Result<(usize, Option<Range<usize>>), UnitError> {
+    let split = SparqlParser::new()
         .parse_query_split(text, &ParserOptions::default())
         .map_err(|error| UnitError::NotAQuery {
             reason: error.to_string(),
         })?;
-    let form = match query {
-        Query::Select { .. } => return Ok(body_at),
+    let form = match split.query {
+        Query::Select { .. } => return Ok((split.body_at, split.dataset_at)),
         Query::Ask { .. } => "ASK",
         Query::Construct { .. } => "CONSTRUCT",
         Query::Describe { .. } => "DESCRIBE",
     };
+    // The other three forms carry a dataset clause too, and none of them reaches the
+    // wrap: each is refused here, by name, before the position could matter.
     Err(UnitError::NotASelect { form })
 }
 

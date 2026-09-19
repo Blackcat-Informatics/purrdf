@@ -1128,26 +1128,19 @@ fn a_supplied_prologue_is_hoisted_over_the_wrap_and_a_non_query_is_refused() {
             other => panic!("expected NotASelect for {form}, got {other:?}"),
         }
     }
-    // Its neighbours that must still run: every SELECT shape the grammar lets a whole
-    // query carry that a bare sub-SELECT does not spell — a dataset clause, a trailing
-    // VALUES, a VERSION directive — is still a SELECT, and the refusal must not reach
-    // any of them.
+    // Its neighbours that must still run: a trailing VALUES and a VERSION directive are
+    // shapes the grammar lets a whole query carry and a bare sub-SELECT does not spell,
+    // and each is still a SELECT, so the refusal must not reach either. Both are
+    // genuinely honoured through the wrap, and the rows say so.
+    //
+    // The third such shape — a dataset clause — is not asserted here, and deliberately
+    // not: this fixture's relation is registry-driven over an empty dataset, so which
+    // graphs a clause selects cannot change a single row of it, and an assertion here
+    // would be an oracle blind to the one thing that can go wrong with that clause. It
+    // is executed where it is observable instead, over a dataset holding different rows
+    // in different graphs, in `execute_dataset.rs`.
     let select = format!("SELECT ?candidate WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}");
     for (shape, text) in [
-        (
-            "FROM",
-            format!(
-                "SELECT ?candidate FROM <{}> WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}",
-                ex("g")
-            ),
-        ),
-        (
-            "FROM NAMED",
-            format!(
-                "SELECT ?candidate FROM NAMED <{}> WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}",
-                ex("g")
-            ),
-        ),
         ("VALUES", format!("{select} VALUES ?x {{ 1 }}")),
         ("VERSION", format!("VERSION \"1.2\"\n{select}")),
     ] {

@@ -1735,6 +1735,88 @@ fn a_declared_row_bound_still_refuses_a_raised_depth() {
     }
 }
 
+/// **A stratum with a depth and no producer to invoke is held to the widest bound its
+/// registry declares, and the refusal says that is what happened.**
+///
+/// [`BoundMode::Uninvoked`] is the arm for a stratum the plan binds no producer to. The
+/// count cannot be read at an invoked mode, because there is no invocation; it is read at
+/// the widest mode the producer declares, which is the only figure that can refuse
+/// nothing the registry did not itself speak against. Nothing is emitted for such a
+/// stratum, so no *read* is ever judged by the number — only the recorded depth is, which
+/// is exactly what happens here.
+///
+/// The whole rendered sentence is asserted rather than the variant alone. `BoundMode`
+/// exists because a bare count sends a multi-mode producer's author to whichever of its
+/// promises they think of first, and a variant that is unreachable in a message is a
+/// variant that says nothing to anybody: the clause this arm contributes has to read as
+/// English in the position it is spliced into.
+#[test]
+fn a_stratum_with_no_producer_to_invoke_is_bounded_at_its_widest_declared_mode() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let text = iri(&ex("stratum/text"));
+    let mut plan = fresh_plan(&registry, &stats);
+    assert_eq!(
+        plan.stratum_depths[&text], 100,
+        "the planner's own depth for this stratum is the registry's declaration"
+    );
+    // The binding removed, the depth left behind: a plan naming a depth for a stratum it
+    // selected no producer for. The planner does not write this, so such a plan was
+    // edited — which is precisely the class of plan the waist exists to re-derive.
+    plan.producer_bindings
+        .retain(|binding| binding.stratum != text);
+    plan.stratum_depths.insert(text.clone(), 101);
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let error = compile(&plan, &env).expect_err("a depth past the declaration is refused");
+    match &error {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+            mode,
+        } => {
+            assert_eq!(**stratum, text);
+            assert_eq!(*declared, 100);
+            assert_eq!(*requested, 101);
+            assert_eq!(
+                *mode,
+                BoundMode::Uninvoked {
+                    declared: BindingPattern::from_code("ff"),
+                },
+                "there is no invocation, so the number was read at the widest mode this \
+                 producer declares"
+            );
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "stratum {} declares depth 101, but the registry bounds it at 100 under mode \
+             `ff`, the widest mode declared, this stratum binding no producer to invoke",
+            ex("stratum/text")
+        ),
+        "the clause reads as one sentence with the count it qualifies"
+    );
+
+    // THE NEIGHBOUR. The same plan, still binding no producer for the stratum, at a
+    // depth ON the bound: the widest declared mode is a real bound rather than a
+    // pretext, so a depth it covers is admitted — and the stratum emits nothing, because
+    // there is still no producer to emit for.
+    plan.stratum_depths.insert(text.clone(), 100);
+    let compiled = compile(&plan, &env).expect("a depth at the widest declared bound admits");
+    assert!(
+        compiled.units.iter().all(|unit| unit.stratum != text),
+        "nothing is emitted for a stratum the plan binds no producer to, which is why \
+         this number judges the recorded depth and no read"
+    );
+}
+
 #[test]
 fn a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero() {
     // The third case, pinned so it stays distinguishable from the two above: a
