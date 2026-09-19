@@ -19,9 +19,10 @@
 //!
 //! # ONE evaluator
 //!
-//! There is a single recursive walk here, and it is driven by a LOWERED path
-//! ([`LoweredPath`]) whose predicate steps are binding-row slots rather than IRIs to
-//! hash. Every caller reaches it: the validation hot path and the change expansion
+//! There is a single recursive walk here, and it is driven by a LOWERED path — the
+//! crate-internal `LoweredPath`, deliberately not linked because it is not part of
+//! this crate's public surface — whose predicate steps are binding-row slots rather
+//! than IRIs to hash. Every caller reaches it: the validation hot path and the change expansion
 //! hand it a stage-0 lowering they already hold, and the public [`Path`]-driven
 //! entry points below lower their argument first — exactly as
 //! [`crate::expression`]'s public node-expression entry points do for an expression
