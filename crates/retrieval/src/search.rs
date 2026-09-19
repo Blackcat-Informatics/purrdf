@@ -21,7 +21,7 @@
 //! Every stage's semantics live in its own module: the planner is pure, admission
 //! is the narrow waist, execution isolates a stratum's failure, and fusion is the
 //! verified fixed-point law. `search` adds no policy of its own. The value it
-//! contributes is the **bridge** from the executor's `(rank, candidate)` rows to
+//! contributes is the **bridge** from the executor's `(rank, candidate, block)` rows to
 //! the fusion protocol: a ranked stream must carry the profile's reciprocal-rank
 //! contribution, and the profile is deliberately not a planning input, so the
 //! contribution is attached here — from the exact profile in force, never
@@ -198,7 +198,9 @@ use crate::id::{EvidenceId, FusionProfileId, PlanId};
 use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+use crate::ranked_stream::{
+    ProducerReceipt, ProtocolError, RankedRow, RankedStream, StreamContract,
+};
 use crate::reciprocal_rank::contribution_under;
 use crate::request::RetrievalRequest;
 use crate::statistics::Statistics;
@@ -363,7 +365,7 @@ pub enum SearchError {
 /// enumeration is top-k by construction; see [`TopK`] and §7 of the design
 /// record.
 ///
-/// The executor's `(rank, candidate)` streams are bridged to the fusion protocol
+/// The executor's `(rank, candidate, block)` streams are bridged to the fusion protocol
 /// by [`RankedStreamAdapter`], which attaches each row's reciprocal-rank
 /// contribution computed from exactly the profile in force. Nothing else is
 /// added: `search` is the composition and nothing more.
@@ -544,7 +546,7 @@ where
     })
 }
 
-/// The bridge from [`execute`]'s `(rank, candidate)` stream to the ranked fusion
+/// The bridge from [`execute`]'s `(rank, candidate, block)` stream to the ranked fusion
 /// protocol: the one piece a caller resuming at `execute` would otherwise have
 /// to write itself.
 ///
@@ -553,7 +555,8 @@ where
 /// deliberately not a planning input, and keeping the executor profile-free is
 /// what lets the unfused rung be consumed with no fusion law in the path.
 /// [`fuse`] nonetheless
-/// requires `(rank, contribution, item)`. This adapter is that conversion, and
+/// requires a [`RankedRow`], which carries the contribution beside them. This
+/// adapter is that conversion, and
 /// it is the *only* place the crate performs it.
 ///
 /// It is public because §4 of the design record makes every stage boundary a
@@ -676,8 +679,8 @@ impl RankedStreamAdapter {
 impl RankedStream for RankedStreamAdapter {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
-        let Some((rank, item)) = self.inner.next().await? else {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
+        let Some((rank, item, block)) = self.inner.next().await? else {
             return Ok(None);
         };
         // Ranks are 1-based, and a contribution at rank zero is undefined rather
@@ -706,7 +709,12 @@ impl RankedStream for RankedStreamAdapter {
                 reason: error.to_string(),
             }
         })?;
-        Ok(Some((rank, value, item)))
+        // The block travels through untouched. It is the producer's claim about
+        // where this candidate came from, and this bridge adds the contribution
+        // and nothing else: a block derived, defaulted or widened here would be
+        // this adapter answering a question only the producer can — the same rule
+        // that keeps it from inventing a contract.
+        Ok(Some(RankedRow::new(rank, value, item, block)))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {

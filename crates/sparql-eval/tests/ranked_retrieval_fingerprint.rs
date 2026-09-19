@@ -96,6 +96,7 @@ fn ranked_declaration() -> RankedDeclaration {
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory: true,
     }
 }
@@ -222,6 +223,47 @@ fn declaration_types_contain_no_function_pointers() {
     );
 }
 
+#[test]
+fn a_declared_block_column_moves_the_fingerprint() {
+    // Whether a producer's rows name the block they were drawn from decides what
+    // a consumer can VERIFY, not merely what it reads: a restriction no row backs
+    // is refused, and one every row backs is held to the rows. Two wirings that
+    // verify differently may not share a digest, for the same reason two that
+    // fuse differently may not — a plan admitted against one would run against
+    // the other.
+    // Position 1 carries this fixture's needle, so the pair below is stated over
+    // a declaration that places no request facet at all — leaving position 1 free
+    // to be read back as the block. The two still differ in exactly one field,
+    // which is what makes this a claim about that field.
+    let bare = RankedDeclaration {
+        accepted_terms: Vec::new(),
+        ..ranked_declaration()
+    };
+    let silent = registry_declaring(Some(bare.clone()));
+    let naming = registry_declaring(Some(RankedDeclaration {
+        block_position: Some(1),
+        ..bare.clone()
+    }));
+    assert_ne!(
+        silent
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        naming
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        "the block column must reach the digest"
+    );
+    assert_ne!(
+        bare.canonical_description(),
+        RankedDeclaration {
+            block_position: Some(1),
+            ..bare
+        }
+        .canonical_description(),
+        "and it reaches it through the canonical description, byte level"
+    );
+}
+
 /// The digest the fixture registry's declarations fold into, hex digit for hex
 /// digit.
 ///
@@ -237,7 +279,7 @@ fn declaration_types_contain_no_function_pointers() {
 /// framing change. Never edit it to match a run — re-run this test and record
 /// what it reports.
 const FIXTURE_FINGERPRINT: &str =
-    "9885c36f03c59cc5745845361cf8e2da32fa7c5e2b8d511ae0abad0ae7763e85";
+    "8f898041be994d883bb13bd260df377b44a614145c336cd00b171a7a73e11a4a";
 
 #[test]
 fn the_fingerprint_is_the_same_string_every_time_the_registry_is_rebuilt() {

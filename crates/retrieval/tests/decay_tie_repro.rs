@@ -42,7 +42,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, RankedStreamAdapter,
-    RankedStreamImpl, StreamContract, StreamEnding, Term, TopK, fuse,
+    RankedStreamImpl, RowBlock, StreamContract, StreamEnding, Term, TopK, fuse,
 };
 
 /// A minimal executor. The adapter's rows are already materialized, so nothing
@@ -78,8 +78,16 @@ fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
         DecayRule::ReciprocalRank { k: 60 },
     )
     .expect("a strictly positive weight is a valid profile");
-    let rows: Vec<(u64, Term)> = (1..=ranks)
-        .map(|rank| (rank, Term::new(format!("d{rank:07}"))))
+    let rows: Vec<(u64, Term, RowBlock)> = (1..=ranks)
+        .map(|rank| {
+            (
+                rank,
+                Term::new(format!("d{rank:07}")),
+                // The contract below declares `Unrestricted`, which owes no
+                // per-row block: this repro is about decay ties, not domains.
+                RowBlock::Undeclared,
+            )
+        })
         .collect();
     let contract = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
     let adapter = RankedStreamAdapter::new(

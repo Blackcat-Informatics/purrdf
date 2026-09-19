@@ -55,7 +55,7 @@ precise cost several of these declarations exist to avoid.
 | [A12](#a12--bounds-narrow-they-never-zero) | Bounds narrow; they never zero | layer, three times |
 | [A13](#a13--attest-the-generation-of-the-snapshot-that-answered) | Attest the generation of the snapshot that answered | producer declares, layer carries |
 | [A14](#a14--declare-incompleteness-rather-than-refusing-or-faking-exhaustion) | Declare incompleteness rather than refusing or faking exhaustion | producer declares, layer refuses an unrecordable one |
-| [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, and never name a candidate outside them | both |
+| [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, name each row's block, and never name a candidate outside them | both, per row |
 
 [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound),
 [A10](#a10--the-engine-pushed-ceiling-is-honoured-for-efficiency-only) and
@@ -736,6 +736,48 @@ empty: a promise to name nothing is not a narrow domain, it describes a producer
 that should not be registered, and `register_ranked` refuses it where it is
 written.
 
+**And every row backs it.** A restricted declaration is not only a set other
+declarations are compared against: each row says which block it was drawn from
+([`RowBlock`] on [`RankedRow`]), because the axiom the arithmetic below rests on —
+the tags partition the candidate universe — is a fact about the host's corpus that
+no consumer can derive, and a row that names its block is what makes it checkable
+at all. So the per-row duty, exactly:
+
+* a [`CandidateDomains::Within`] producer owes a block on **every** row, and owes
+  one its own declaration admits;
+* a [`CandidateDomains::Unrestricted`] producer owes **none**. It restricts no
+  consumer arithmetic — its head counts in every block's bound — so there is no
+  promise for a row to back, and [`RowBlock::Undeclared`] is its honest answer. It
+  may still name one, and a block it names is kept, because a block is evidence
+  about the *candidate* rather than about the stream.
+
+**Where the block comes from, for a producer registered through the seam.** Two
+places, and never a guess:
+
+* the **declaration**, when it names exactly one block. It has already said that
+  every candidate this producer names lies in that block, so the per-row fact is
+  entailed and `execute` reads it straight off the declaration. No host repeats
+  itself per row, and this is the configuration the whole mechanism exists for —
+  one producer per block, blocks that do not overlap;
+* the producer's own **block column**, named by
+  [`RankedDeclaration::block_position`](purrdf_sparql_eval::RankedDeclaration): the
+  argument position each row carries its block in. `compile` projects it beside
+  `?candidate` for exactly the producers that declare it, and `execute` reads it
+  back by name. This is how a producer restricted to **several** blocks backs its
+  promise, because a several-block declaration entails nothing about any one row
+  and no consumer may choose on the host's behalf.
+
+A several-block declaration with no column to back it is refused at the first row
+([`ProtocolError::UnbackedDomainDeclaration`]) rather than quietly read as the
+wider promise it did not make: fusion has already *used* the restriction by then.
+A host in that position has two one-line exits — declare
+[`CandidateDomains::Unrestricted`], which costs only the early certification the
+narrower claim would have bought, or register one producer per block. Neither
+shipped producer declares a block column: a text index answers with documents and
+a vector index with neighbours, and neither holds any notion of a host's
+partition, so both leave the position unset and take their domains from the host
+unchanged.
+
 **The failure it prevents.** Without a declaration, "could this stream still name
 the candidate" is true of every open stream, so strata whose candidate sets do not
 overlap are read to their ends however small the caller's top-k — a top-ten over
@@ -781,9 +823,30 @@ Pinned by `a_stream_naming_a_candidate_outside_its_declared_domains_is_refused` 
 `declared_domains_bound_the_reading_over_disjoint_strata` and the unchanged answer
 in `the_differential_holds_under_declared_domains_over_many_configurations`.
 
+The per-row duty is held to by three further refusals, each a distinct fact and
+each paired in the tests with a valid neighbour that still answers:
+
+| Refusal | The fact it reports | Pinned by |
+|---|---|---|
+| [`ProtocolError::UnbackedDomainDeclaration`] | a restricted stream's row names no block, so nothing backs the restriction | `a_several_block_declaration_no_row_backs_is_refused` (`tests/search.rs`) |
+| [`ProtocolError::BlockOutsideDeclaredDomain`] | a row names a block its **own** declaration excludes — a stream contradicting itself, needing no second stream to witness it | `a_row_naming_a_block_outside_its_own_declaration_is_refused` (`tests/search.rs`) |
+| [`ProtocolError::CandidateInTwoBlocks`] | two rows place one candidate in two blocks, so the axiom is false for that candidate | `two_streams_naming_one_candidate_from_two_blocks_are_refused` (`tests/search.rs`), `a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses` and `a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block` (`tests/fusion.rs`) |
+
+The third is the one the threshold depends on, and it is deliberately not
+`OutsideDeclaredDomain`: that refusal compares *declarations*, so it cannot see two
+overlapping declarations whose **rows** disagree — and that is exactly the case the
+per-block bound under-counts, because the streams that reach one block and the
+streams that reach the other are different sets. It names the item, both strata and
+both blocks, because either producer may be the one that tagged wrongly and this
+layer cannot know which. A row a permissive duplicate policy discards is checked
+too: a repeat may be dropped, but its claim about the candidate may not be.
+
 **The honest limit.** Verification reaches only as far as the rows actually pulled.
 A false declaration that no pulled row contradicts yields a score that declaration
-made wrong, and this layer does not claim otherwise — it is the identical trust the
+made wrong, and a candidate two streams would have placed in two blocks at ranks
+this fusion never reached leaves no trace. What that leaves unverified is stated
+rather than implied: the axiom holds over the rows read, and nothing is claimed
+about the rows below them. This layer does not claim otherwise — it is the identical trust the
 uniqueness declaration of [A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer)
 already carries, whose breach is likewise detected only when the repeat is actually
 read.

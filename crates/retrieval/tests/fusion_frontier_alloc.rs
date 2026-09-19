@@ -53,8 +53,8 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, Iri,
-    ProducerReceipt, ProducerStatus, ProtocolError, RankedStream, StreamContract, Term, TopK,
-    contribution, fuse,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankedRow, RankedStream, RowBlock,
+    StreamContract, Term, TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ struct LazyStream {
 impl RankedStream for LazyStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         if self.emitted >= self.total {
             return Ok(None);
         }
@@ -256,7 +256,16 @@ impl RankedStream for LazyStream {
             }
             Some(block) => format!("block-{block}/candidate-{rank:08}"),
         };
-        Ok(Some((rank, value, Term::new(item))))
+        // The block this row was drawn from, which a restricted stream owes on
+        // every row. It is read off this stream's own declaration rather than
+        // stored twice: the disjoint fixture declares exactly one block per
+        // stratum, so that block IS where each of its rows comes from, and the
+        // overlapping fixture declares nothing and names nothing.
+        let block = match self.domains.tags().and_then(|tags| tags.iter().next()) {
+            Some(tag) => RowBlock::Declared(tag.clone()),
+            None => RowBlock::Undeclared,
+        };
+        Ok(Some(RankedRow::new(rank, value, Term::new(item), block)))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {

@@ -249,6 +249,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 candidate_position: spec.candidate,
                 duplicates: DuplicatePolicy::Unique,
                 domains: CandidateDomains::Unrestricted,
+                block_position: None,
                 mandatory: spec.mandatory,
             },
         );
@@ -405,9 +406,13 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// one row at a time through the ranked-stream protocol, to exhaustion.
 fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
-    while let Some(row) = block_on(stream.next()).expect("a materialized stream obeys the protocol")
+    // The block each row names is not what these assertions are about — every
+    // producer here declares `Unrestricted` and so names none — so it is dropped
+    // by name rather than compared.
+    while let Some((rank, candidate, _block)) =
+        block_on(stream.next()).expect("a materialized stream obeys the protocol")
     {
-        rows.push(row);
+        rows.push((rank, candidate));
     }
     rows
 }

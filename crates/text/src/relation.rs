@@ -731,6 +731,15 @@ impl TextSearchRelation {
             candidate_position: Self::DOC,
             duplicates: DuplicatePolicy::Unique,
             domains,
+            // A text index answers with documents, a score and the matched
+            // terms; it holds no notion of a host's partition, so there is no
+            // position here a row's block could be read out of and this
+            // declaration says so rather than pointing at one. A host whose
+            // corpus spans several blocks registers one producer per block —
+            // this index is single-partition by the check above anyway — or
+            // declares `CandidateDomains::Unrestricted`. See
+            // `RankedDeclaration::block_position`.
+            block_position: None,
             mandatory: false,
         })
     }

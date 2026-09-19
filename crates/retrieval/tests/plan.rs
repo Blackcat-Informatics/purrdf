@@ -790,6 +790,7 @@ fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             domains,
+            block_position: None,
             mandatory: false,
         },
     );

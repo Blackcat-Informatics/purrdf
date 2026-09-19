@@ -41,8 +41,8 @@ use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
     ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
     Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
-    ProducerStatus, ProtocolError, RankedStream, RankedStreamAdapter, RankedStreamImpl,
-    RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics,
+    ProducerStatus, ProtocolError, RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl,
+    RequestTerm, RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult, Statistics,
     StatisticsSnapshot, StreamContract, StreamEnding, Term, TopK, UnservedReason, UnservedTerm,
     compile, contribution, execute, fuse, plan, search,
 };
@@ -124,6 +124,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -357,13 +358,13 @@ fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Optio
 
 /// A producer whose rows and terminal receipt are pre-scripted.
 struct ScriptedStream {
-    steps: VecDeque<(u64, Fixed, Term)>,
+    steps: VecDeque<RankedRow<Term>>,
     receipt: ProducerReceipt,
     emitted: u64,
 }
 
 impl ScriptedStream {
-    fn new(steps: Vec<(u64, Fixed, Term)>, receipt: ProducerReceipt) -> Self {
+    fn new(steps: Vec<RankedRow<Term>>, receipt: ProducerReceipt) -> Self {
         Self {
             steps: steps.into(),
             receipt,
@@ -379,11 +380,11 @@ impl ScriptedStream {
 impl RankedStream for ScriptedStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         match self.steps.pop_front() {
-            Some((rank, value, item)) => {
+            Some(row) => {
                 self.emitted += 1;
-                Ok(Some((rank, value, item)))
+                Ok(Some(row))
             }
             None => Ok(None),
         }
@@ -399,11 +400,17 @@ impl RankedStream for ScriptedStream {
 }
 
 /// A well-formed row at `rank` for `weight` under `k`.
-fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> (u64, Fixed, Term) {
-    (
+///
+/// It names no block, which is exactly what these fixtures' `Unrestricted`
+/// declaration owes: an unrestricted producer has made no promise for a row to
+/// back. The domain fixtures in `tests/fusion.rs` are where a named block is
+/// exercised.
+fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> RankedRow<Term> {
+    RankedRow::new(
         rank,
         contribution(weight, rank, k).expect("fixture contribution fits"),
         Term::new(item),
+        RowBlock::Undeclared,
     )
 }
 
@@ -513,7 +520,9 @@ fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
     // top-k certification can block an emission.
     let mut pulled = 0usize;
     let mut last_rank = 0u64;
-    while let Some((rank, _term)) = block_on(stream.stream.next()).expect("the stream pulls") {
+    while let Some((rank, _term, _block)) =
+        block_on(stream.stream.next()).expect("the stream pulls")
+    {
         assert_eq!(rank, last_rank + 1, "ranks are 1-based and contiguous");
         last_rank = rank;
         pulled += 1;
@@ -806,7 +815,7 @@ struct LazyStream {
 impl RankedStream for LazyStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         if self.emitted >= self.total {
             return Ok(None);
         }
@@ -814,7 +823,12 @@ impl RankedStream for LazyStream {
         self.pulls.fetch_add(1, Ordering::SeqCst);
         let rank = self.emitted;
         let value = contribution(self.weight, rank, self.k).expect("contribution fits");
-        Ok(Some((rank, value, (self.item_at)(self.stream_index, rank))))
+        Ok(Some(RankedRow::new(
+            rank,
+            value,
+            (self.item_at)(self.stream_index, rank),
+            RowBlock::Undeclared,
+        )))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -1122,7 +1136,9 @@ fn unfused_rung_applies_no_threshold_to_its_rows() {
     // stratum's own materialized result.
     let mut pulled = 0usize;
     let mut last_rank = 0u64;
-    while let Some((rank, _term)) = block_on(stream.stream.next()).expect("the stream pulls") {
+    while let Some((rank, _term, _block)) =
+        block_on(stream.stream.next()).expect("the stream pulls")
+    {
         assert_eq!(rank, last_rank + 1, "ranks stay contiguous to the end");
         last_rank = rank;
         pulled += 1;
@@ -1171,7 +1187,10 @@ fn prefix_reader_incomplete_evidence() {
 
     // A partially-read stream refuses to describe its own completeness.
     let mut partial = RankedStreamImpl::new(
-        vec![(1, Term::new("a")), (2, Term::new("b"))],
+        vec![
+            (1, Term::new("a"), RowBlock::Undeclared),
+            (2, Term::new("b"), RowBlock::Undeclared),
+        ],
         StreamEnding::Exhausted,
     );
     assert!(block_on(partial.next()).expect("pulls").is_some());
@@ -1517,7 +1536,10 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let elsewhere = crate::profile(&[("elsewhere", Fixed::ONE)], K);
     assert!(
         RankedStreamAdapter::new(
-            RankedStreamImpl::new(vec![(1, Term::new("a"))], StreamEnding::Exhausted),
+            RankedStreamImpl::new(
+                vec![(1, Term::new("a"), RowBlock::Undeclared)],
+                StreamEnding::Exhausted,
+            ),
             unique_items(),
             &elsewhere,
             &stratum("resume"),
@@ -1639,7 +1661,10 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // come back as the protocol error fusion would raise for the same row.
     let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut adapter = RankedStreamAdapter::new(
-        RankedStreamImpl::new(vec![(0, Term::new("a"))], StreamEnding::Exhausted),
+        RankedStreamImpl::new(
+            vec![(0, Term::new("a"), RowBlock::Undeclared)],
+            StreamEnding::Exhausted,
+        ),
         unique_items(),
         &profile,
         &stratum("resume"),
@@ -1659,7 +1684,10 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // The valid neighbour: a 1-based rank through the same adapter is an
     // ordinary row carrying the profile's own contribution.
     let mut adapter = RankedStreamAdapter::new(
-        RankedStreamImpl::new(vec![(1, Term::new("a"))], StreamEnding::Exhausted),
+        RankedStreamImpl::new(
+            vec![(1, Term::new("a"), RowBlock::Undeclared)],
+            StreamEnding::Exhausted,
+        ),
         unique_items(),
         &profile,
         &stratum("resume"),
@@ -1667,10 +1695,11 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     .expect("the profile weights the stratum");
     assert_eq!(
         block_on(adapter.next()).expect("a 1-based rank is well formed"),
-        Some((
+        Some(RankedRow::new(
             1,
             contribution(Fixed::ONE, 1, K).expect("fits"),
-            Term::new("a")
+            Term::new("a"),
+            RowBlock::Undeclared
         ))
     );
 }

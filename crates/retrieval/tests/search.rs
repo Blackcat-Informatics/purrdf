@@ -98,6 +98,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -200,6 +201,34 @@ fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> 
             vec![
                 TermValue::iri(format!("{}entity{index}", ex(prefix))),
                 TermValue::iri(format!("{}score{index}", ex(prefix))),
+            ]
+        })
+        .collect();
+    Arc::new(MockProducer {
+        arity,
+        mode: arity.all_free_mode(),
+        rows,
+        emitted,
+    })
+}
+
+/// A mock producer of arity (1,2) that names, in a third argument position, the
+/// block each of its rows was drawn from.
+///
+/// One row per entry in `blocks`, in that order. The extra position is what a
+/// declaration's `block_position` points at, and it is the only way a producer
+/// restricted to **several** blocks can back that restriction per row: one block
+/// per row is entailed by a one-block declaration, and several blocks are not.
+fn producer_naming_blocks(rows: u64, prefix: &str, blocks: &[&str]) -> Arc<dyn PropertyFunction> {
+    let arity = PfArity::new(1, 2);
+    let emitted = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            vec![
+                TermValue::iri(format!("{}entity{index}", ex(prefix))),
+                TermValue::iri(format!("{}score{index}", ex(prefix))),
+                TermValue::iri((*block).to_owned()),
             ]
         })
         .collect();
@@ -1835,6 +1864,15 @@ fn domain_tag(suffix: &str) -> DomainTag {
 /// declaration for a producer whose rows a host knows span the corpus. Every
 /// declaration below is a fact about these fixtures rather than a convenient
 /// label, which is what makes the answer comparable with the undeclared one.
+///
+/// The two one-block producers name no block per row and need not: their
+/// declaration entails it, because a producer that promised its candidates lie in
+/// one block has already said where every row came from. `graph` declares two
+/// blocks, so its declaration entails nothing per row, and it backs the promise
+/// the only way a several-block producer can — an argument position its rows name
+/// their own block from, declared as `block_position`. A several-block
+/// declaration with no such position is refused at the first row, which
+/// `a_several_block_declaration_no_row_backs_is_refused` executes beside this.
 fn domain_declaring_registry() -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {
@@ -1865,12 +1903,13 @@ fn domain_declaring_registry() -> PropertyFunctionRegistry {
     );
     registry.register_ranked(
         ex("pf/iri"),
-        producer(50, "graph/", 1),
+        producer_naming_blocks(50, "graph/", &[&ex("domain/universal")]),
         RankedDeclaration {
             domains: CandidateDomains::within([
                 domain_tag("domain/universal"),
                 domain_tag("domain/text"),
             ]),
+            block_position: Some(2),
             ..ranked(
                 &ex("stratum/graph"),
                 vec![TermPattern::of_kind(TermKind::Iri)],
@@ -1963,5 +2002,341 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         ]),
         "a producer that declared nothing is reported as promising everything, \
          which is what it did promise"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T6.10. The per-row block, through the shipped path.
+//
+// A restricted declaration is the premise fusion certifies early on: it skips
+// streams that provably cannot name a candidate, and it bounds every item nobody
+// has seen yet by the best single block rather than by every stream at once. Both
+// are sound only under one axiom — the host's tags partition the candidate
+// universe, so a candidate lies in exactly one block — which is a fact about the
+// host's corpus that no consumer can derive.
+//
+// So each row says which block it came from, and the three ways that can go wrong
+// are refused by name rather than folded into an order. Each is executed here
+// through `search`, the whole ladder, because the route from a registry
+// declaration to a checked row runs through all four stages: the block column is
+// projected by `compile`, read by `execute`, carried by `RankedStreamAdapter` and
+// held to the declaration by `FusionStream`. A break anywhere on it is invisible
+// from either end.
+//
+// Every refusal is paired with its valid neighbour, executed in the same test.
+// Over-refusal is as severe a defect as a silent wrong answer: a declaration a
+// host can back must keep working, or this mechanism has cost the answers it was
+// supposed to protect.
+// ---------------------------------------------------------------------------
+
+/// A one-producer registry over the universal stratum: `relation` declaring
+/// `domains`, reading each row's block from `block_position`.
+fn block_declaring_registry(
+    relation: Arc<dyn PropertyFunction>,
+    domains: CandidateDomains,
+    block_position: Option<usize>,
+) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/any"),
+        relation,
+        RankedDeclaration {
+            domains,
+            block_position,
+            ..ranked(
+                &ex("stratum/universal"),
+                vec![TermPattern::of_kind(TermKind::Any)],
+                true,
+            )
+        },
+    );
+    registry
+}
+
+/// Run the fixture request through the whole ladder against `registry`.
+fn search_against(registry: &PropertyFunctionRegistry) -> Result<SearchResult, SearchError> {
+    let stats = statistics("r1");
+    let env = fixture_env(registry, &stats);
+    block_on(search(
+        &mixed_request(),
+        registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &fixture_profile(),
+        TOP_K,
+    ))
+}
+
+/// The protocol refusal `outcome` carries, or a panic naming what it carried
+/// instead.
+fn protocol_refusal(outcome: Result<SearchResult, SearchError>) -> ProtocolError {
+    match outcome {
+        Err(SearchError::FusionError(FusionError::Protocol(protocol))) => *protocol,
+        Err(other) => panic!("expected a protocol refusal, got {other:?}"),
+        Ok(_) => panic!("expected a refusal, and the search answered"),
+    }
+}
+
+/// The entities `result` returned, in order.
+fn entities(result: &SearchResult) -> Vec<String> {
+    result
+        .rows
+        .iter()
+        .map(|row| row.entity.as_str().to_owned())
+        .collect()
+}
+
+/// **Refusal one.** A producer restricted to several blocks, whose rows name
+/// none, has declared something nothing backs.
+///
+/// A one-block declaration entails every row's block, so it needs no column; a
+/// several-block declaration entails nothing about any one row, and a consumer
+/// may not choose on the host's behalf. Fusion has already *used* the
+/// restriction by the time the row arrives, so the alternative to refusing is to
+/// keep certifying against an axiom nothing checked.
+#[test]
+fn a_several_block_declaration_no_row_backs_is_refused() {
+    let unbacked = block_declaring_registry(
+        producer(200, "universal/", 3),
+        CandidateDomains::within([domain_tag("domain/universal"), domain_tag("domain/text")]),
+        None,
+    );
+    match protocol_refusal(search_against(&unbacked)) {
+        ProtocolError::UnbackedDomainDeclaration {
+            stratum,
+            declared,
+            rank,
+        } => {
+            assert_eq!(
+                stratum,
+                ex("stratum/universal"),
+                "the refusal names the stratum whose declaration nothing backs"
+            );
+            assert_eq!(
+                declared,
+                vec![ex("domain/text"), ex("domain/universal")],
+                "and the promise itself, which is what decides between the two exits"
+            );
+            assert_eq!(rank, 1, "and the row measured against it");
+        }
+        other => panic!("expected an unbacked-declaration refusal, got {other:?}"),
+    }
+
+    // Valid neighbour one: the same producer, the same rows, restricted to ONE
+    // block. The declaration entails where every row came from, so nothing is
+    // owed per row and the search answers.
+    let entailed = block_declaring_registry(
+        producer(200, "universal/", 3),
+        CandidateDomains::within([domain_tag("domain/universal")]),
+        None,
+    );
+    let answered = search_against(&entailed).expect("a one-block declaration backs itself");
+    assert_eq!(
+        entities(&answered),
+        vec![
+            format!("<{}entity0>", ex("universal/")),
+            format!("<{}entity1>", ex("universal/")),
+            format!("<{}entity2>", ex("universal/")),
+        ],
+        "a producer whose declaration entails its rows' block answers in full"
+    );
+
+    // Valid neighbour two: the several-block declaration, backed. The host names
+    // the position its rows carry their own block in, and the identical
+    // restriction is now a promise every row supports — including one row from
+    // each of the two declared blocks.
+    let backed = block_declaring_registry(
+        producer_naming_blocks(
+            200,
+            "universal/",
+            &[
+                &ex("domain/universal"),
+                &ex("domain/text"),
+                &ex("domain/universal"),
+            ],
+        ),
+        CandidateDomains::within([domain_tag("domain/universal"), domain_tag("domain/text")]),
+        Some(2),
+    );
+    let backed = search_against(&backed).expect("a several-block declaration its rows back");
+    assert_eq!(
+        entities(&backed),
+        entities(&answered),
+        "the same rows in the same order: a backed declaration costs the answer nothing"
+    );
+}
+
+/// **Refusal two.** A row naming a block its own declaration excludes is a
+/// stream contradicting itself, and needs no second stream to witness it.
+#[test]
+fn a_row_naming_a_block_outside_its_own_declaration_is_refused() {
+    let declared =
+        || CandidateDomains::within([domain_tag("domain/universal"), domain_tag("domain/text")]);
+    let outside = block_declaring_registry(
+        producer_naming_blocks(
+            200,
+            "universal/",
+            &[&ex("domain/universal"), &ex("domain/people")],
+        ),
+        declared(),
+        Some(2),
+    );
+    match protocol_refusal(search_against(&outside)) {
+        ProtocolError::BlockOutsideDeclaredDomain {
+            item,
+            stratum,
+            block,
+            declared,
+        } => {
+            assert_eq!(
+                item,
+                format!("<{}entity1>", ex("universal/")),
+                "the refusal names the row's candidate"
+            );
+            assert_eq!(stratum, ex("stratum/universal"), "and who named it");
+            assert_eq!(
+                block,
+                ex("domain/people"),
+                "and the block the row claimed, without which the reader sees no contradiction"
+            );
+            assert_eq!(
+                declared,
+                vec![ex("domain/text"), ex("domain/universal")],
+                "and the set it fell outside"
+            );
+        }
+        other => panic!("expected an outside-declaration refusal, got {other:?}"),
+    }
+
+    // The valid neighbour, one block different: the second row names the other
+    // block the SAME declaration includes. Naming a block is not what was
+    // refused — naming one the producer never promised was.
+    let inside = block_declaring_registry(
+        producer_naming_blocks(
+            200,
+            "universal/",
+            &[&ex("domain/universal"), &ex("domain/text")],
+        ),
+        declared(),
+        Some(2),
+    );
+    let answered = search_against(&inside).expect("both blocks are declared, so both are honest");
+    assert_eq!(
+        entities(&answered),
+        vec![
+            format!("<{}entity0>", ex("universal/")),
+            format!("<{}entity1>", ex("universal/")),
+        ],
+        "a row drawn from either declared block is an ordinary row"
+    );
+}
+
+/// **Refusal three — the one that closes the gap.** Two streams naming one
+/// candidate from two different blocks have proven the axiom false for that
+/// candidate.
+///
+/// Their declarations are not contradictory: both name `domain/universal`, so
+/// `OutsideDeclaredDomain` cannot see this and does not fire. What is
+/// contradictory is the pair of *rows*, and that is exactly the case the
+/// threshold's per-block maximum under-bounds — the streams that reach one block
+/// and the streams that reach the other are different sets, so an item in two
+/// blocks can collect more than any single block's sum. Refused here rather than
+/// silently reordered.
+#[test]
+fn two_streams_naming_one_candidate_from_two_blocks_are_refused() {
+    // Both producers emit the same entity, which is the ordinary overlapping
+    // case fused enumeration exists for. What varies below is only the block
+    // each one says that entity came from.
+    let pair = |left_block: &str, right_block: &str| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            ex("pf/any"),
+            producer_naming_blocks(200, "shared/", &[left_block]),
+            RankedDeclaration {
+                domains: CandidateDomains::within([
+                    domain_tag("domain/universal"),
+                    domain_tag("domain/text"),
+                ]),
+                block_position: Some(2),
+                ..ranked(
+                    &ex("stratum/universal"),
+                    vec![TermPattern::of_kind(TermKind::Any)],
+                    true,
+                )
+            },
+        );
+        registry.register_ranked(
+            ex("pf/literal"),
+            producer_naming_blocks(100, "shared/", &[right_block]),
+            RankedDeclaration {
+                // Overlapping, not disjoint: both declarations admit
+                // `domain/universal`, so nothing about the pair of promises is
+                // contradictory and the declaration-level refusal stays silent.
+                domains: CandidateDomains::within([
+                    domain_tag("domain/universal"),
+                    domain_tag("domain/people"),
+                ]),
+                block_position: Some(2),
+                ..ranked(
+                    &ex("stratum/text"),
+                    vec![TermPattern {
+                        kind: TermKind::Literal,
+                        datatype: None,
+                        language: Some("en".to_owned()),
+                        predicate: Some(ex("body")),
+                    }],
+                    false,
+                )
+            },
+        );
+        registry
+    };
+
+    let contradicting = pair(&ex("domain/universal"), &ex("domain/people"));
+    match protocol_refusal(search_against(&contradicting)) {
+        ProtocolError::CandidateInTwoBlocks {
+            item,
+            stratum,
+            block,
+            named_by,
+            named_by_block,
+        } => {
+            assert_eq!(
+                item,
+                format!("<{}entity0>", ex("shared/")),
+                "the refusal names the candidate whose tagging cannot be true"
+            );
+            assert_eq!(
+                (stratum, block),
+                (ex("stratum/universal"), ex("domain/universal")),
+                "the stream whose row arrived last, and the block it claimed"
+            );
+            assert_eq!(
+                (named_by, named_by_block),
+                (ex("stratum/text"), ex("domain/people")),
+                "and the stream that had already placed it, with the block it placed it in — \
+                 either producer could be the one that tagged wrongly, so both are named"
+            );
+        }
+        other => panic!("expected a two-block refusal, got {other:?}"),
+    }
+
+    // The valid neighbour, one block different: the second stream says the
+    // candidate came from the block the first one placed it in. Two producers
+    // ranking one entity is the case fused enumeration is FOR, and it still
+    // fuses into a single row carrying both contributions.
+    let agreeing = pair(&ex("domain/universal"), &ex("domain/universal"));
+    let answered =
+        search_against(&agreeing).expect("two streams agreeing about a candidate's block fuse");
+    assert_eq!(
+        entities(&answered),
+        vec![format!("<{}entity0>", ex("shared/"))],
+        "one candidate, one row"
+    );
+    assert_eq!(
+        answered.rows[0].contributions.len(),
+        2,
+        "and both strata's contributions, which is what the agreement buys"
     );
 }

@@ -69,7 +69,8 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt,
-    ProducerStatus, ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
+    ProducerStatus, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract, Term, TopK,
+    contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -127,7 +128,7 @@ fn iri(text: &str) -> Iri {
 
 /// A producer whose rows are pre-scripted, in rank order.
 struct ScriptedStream {
-    steps: VecDeque<(u64, Fixed, Term)>,
+    steps: VecDeque<RankedRow<Term>>,
     emitted: u64,
 }
 
@@ -137,7 +138,7 @@ struct ScriptedStream {
 impl RankedStream for ScriptedStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         match self.steps.pop_front() {
             Some(step) => {
                 self.emitted += 1;
@@ -169,10 +170,14 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
         .enumerate()
         .map(|(index, candidate)| {
             let rank = u64::try_from(index + 1).expect("three rows");
-            (
+            // The fixture declares `Unrestricted`, which owes no per-row block
+            // and names none. That is part of the determinism claim too: an
+            // absence must read identically on every target.
+            RankedRow::new(
                 rank,
                 contribution(Fixed::ONE, rank, K).expect("the contribution fits"),
                 Term::new(*candidate),
+                RowBlock::Undeclared,
             )
         })
         .collect();
@@ -368,8 +373,18 @@ fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
 
     let stream = ScriptedStream {
         steps: VecDeque::from([
-            (1, Fixed::from_raw(COLLIDED), Term::new("alpha")),
-            (2, Fixed::from_raw(COLLIDED), Term::new("beta")),
+            RankedRow::new(
+                1,
+                Fixed::from_raw(COLLIDED),
+                Term::new("alpha"),
+                RowBlock::Undeclared,
+            ),
+            RankedRow::new(
+                2,
+                Fixed::from_raw(COLLIDED),
+                Term::new("beta"),
+                RowBlock::Undeclared,
+            ),
         ]),
         emitted: 0,
     };

@@ -37,6 +37,22 @@
 //! not overlap are read to their ends however small the caller's top-k, because
 //! no confirmation is ever coming.
 //!
+//! # The axiom under the licence, and where it is checked
+//!
+//! Both the skip and the threshold are sound under one axiom: the host's tags
+//! **partition** the candidate universe, so a candidate lies in exactly one
+//! block. That is a fact about the host's corpus, and it is checked rather than
+//! assumed. Every row of a restricted stream names the block it was drawn from
+//! ([`RowBlock`]); [`FusionStream::fetch`] holds that block against the stream's
+//! own declaration; and [`FusionStream::pull`] holds it against the block an
+//! earlier row placed the same candidate in, refusing the pair as
+//! [`ProtocolError::CandidateInTwoBlocks`]. A candidate in two blocks is exactly
+//! what would make the threshold under-count — the streams that reach one block
+//! and the streams that reach the other are different sets — so it fails the
+//! fusion instead of quietly reordering its answer. Verification reaches the rows
+//! this fusion pulled and no further, which is the same limit the duplicate and
+//! domain promises carry.
+//!
 //! The frontier is not the whole of what a fusion holds, and saying otherwise
 //! would overstate it. De-duplicating a stream that declared
 //! [`DuplicatePolicy::Allowed`] needs the set of items that stream has already
@@ -95,7 +111,7 @@ use crate::error::FusionError;
 use crate::fusion_profile::FusionProfile;
 use crate::id::{EVIDENCE_VERSION, EvidenceId, PlanId};
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock};
 use crate::reciprocal_rank::MonotoneDepth;
 
 /// A candidate's identity in the frontier: its canonical term.
@@ -717,6 +733,52 @@ struct Head {
     rank: u64,
     contribution: Fixed,
     item: Term,
+    /// The block the producer said this row was drawn from, already measured
+    /// against the stream's own declaration in [`FusionStream::fetch`].
+    ///
+    /// Carried on the head rather than checked and dropped there, because the
+    /// claim it makes is about the **candidate** and the candidate is not known
+    /// to collide with anything until [`FusionStream::pull`] looks it up. Two
+    /// streams that place one candidate in two blocks is the fact that falsifies
+    /// the axiom the threshold rests on, and it cannot be seen one row at a time.
+    block: RowBlock,
+}
+
+/// The block a candidate has been placed in, and the stream that placed it
+/// there.
+///
+/// Held per candidate rather than per stream, because a stream declared over
+/// several blocks names a different one on different rows: there is no
+/// per-stream answer to read this off. The stream index travels with the tag
+/// because it is half of what [`ProtocolError::CandidateInTwoBlocks`] reports —
+/// a reader that learns a candidate was placed in two blocks and not which two
+/// producers did it has nothing to go and fix.
+///
+/// `Option<BlockWitness>` is this crate's ordinary "not recorded yet", not a
+/// defaulted [`RowBlock`]: the absence here means *no row has named a block for
+/// this candidate*, which is a fact about the engine's own state rather than a
+/// producer's declaration. The producer-facing absence stays
+/// [`RowBlock::Undeclared`], where it is a first-class value precisely so it
+/// cannot be unwrapped into one.
+///
+/// # Why it is held behind a `Box`
+///
+/// A [`DomainTag`] carries a parsed IRI — its text and the byte ranges of five
+/// components — so it is well over a hundred bytes wide, and the value it lives
+/// in is the one structure whose size the frontier argument is about. Inline, it
+/// would be charged to **every** frontier candidate, including every candidate of
+/// a fusion where no stream declared anything at all: the measured peak of the
+/// unrestricted fixtures in `fusion_frontier_alloc` rose by tens of kilobytes on
+/// exactly that. Behind a `Box` the unplaced candidate pays one pointer and the
+/// placed one pays a single small allocation, so the cost follows the rows that
+/// actually named a block rather than the frontier's width.
+#[derive(Clone, Debug)]
+struct BlockWitness {
+    /// The stream that first named a block for the candidate, indexed exactly as
+    /// `heads` and `domains` are.
+    stream: usize,
+    /// The block it named.
+    block: DomainTag,
 }
 
 /// A candidate's accumulated NRA state.
@@ -737,6 +799,27 @@ struct CandidateState {
     /// tag set **per candidate**, in the one structure whose size the frontier
     /// argument is about.
     seen_streams: BTreeSet<usize>,
+    /// The block this candidate has been placed in, and by which stream, once
+    /// some row has named one.
+    ///
+    /// It is the axiom's per-candidate witness: every later row naming this
+    /// candidate is measured against it, and a row naming a different block is
+    /// refused as [`ProtocolError::CandidateInTwoBlocks`]. A candidate no row
+    /// has placed holds `None` and constrains nothing, which is the honest state
+    /// for a candidate only unrestricted streams have named.
+    ///
+    /// # What it costs, and why it is not derived instead
+    ///
+    /// One pointer per frontier candidate, and one small allocation for each
+    /// candidate a row actually placed — the first placement only; later rows
+    /// compare and write nothing. A candidate no row placed, which is every
+    /// candidate of a fusion that declares nothing, pays the pointer and no heap
+    /// at all. It cannot be derived from `seen_streams` the way `Dom(x)` is: `Dom(x)` is a function of
+    /// the *declarations*, which the engine already holds, whereas this is a
+    /// function of the **rows**, which are gone as soon as they are merged. A
+    /// stream declared over several blocks names a different one on different
+    /// rows, so there is nothing per-stream to recompute it from.
+    block: Option<Box<BlockWitness>>,
 }
 
 impl CandidateState {
@@ -751,6 +834,7 @@ impl CandidateState {
             lower_bound: Fixed::ZERO,
             contributions: Vec::new(),
             seen_streams: BTreeSet::new(),
+            block: None,
         }
     }
 
@@ -788,6 +872,16 @@ struct EmittedRecord {
     /// the [`DuplicatePolicy::Unique`] promise is kept past the frontier to
     /// avoid.
     named_by: BTreeSet<usize>,
+    /// The block the candidate was placed in before it certified, moved out of
+    /// the state being dropped rather than rebuilt.
+    ///
+    /// It is kept past the frontier for exactly the reason `named_by` is. A
+    /// candidate's placement is a fact about the candidate, so a stream naming it
+    /// *after* it certified is measured against the same placement a stream
+    /// naming it before would have been — otherwise the axiom would hold or not
+    /// depending on how deep the caller happened to read, which is no invariant
+    /// at all.
+    block: Option<Box<BlockWitness>>,
 }
 
 /// The lookup policy for [`FusionStream`]'s emitted map: the workspace's
@@ -1059,11 +1153,13 @@ impl<S: RankedStream> FusionStream<S> {
                     lower_bound,
                     mut contributions,
                     seen_streams,
+                    block,
                 } = state;
                 self.emitted.insert(
                     id.clone(),
                     EmittedRecord {
                         named_by: seen_streams,
+                        block,
                     },
                 );
                 contributions.sort_by(|left, right| {
@@ -1259,7 +1355,13 @@ impl<S: RankedStream> FusionStream<S> {
                 let (_, stream) = &mut self.streams[index];
                 stream.next().await
             };
-            let Some((rank, producer_contribution, item)) = pulled? else {
+            let Some(RankedRow {
+                rank,
+                contribution: producer_contribution,
+                item,
+                block,
+            }) = pulled?
+            else {
                 let receipt = {
                     let (_, stream) = &mut self.streams[index];
                     stream.receipt().await
@@ -1304,6 +1406,18 @@ impl<S: RankedStream> FusionStream<S> {
                 .into());
             }
 
+            // The row's own claim about where it came from, measured against the
+            // promise this stream made at registration and against nothing else
+            // — a candidate this row collides with is `pull`'s question, and it
+            // is asked there because it cannot be asked one row at a time.
+            //
+            // Checked on every row the producer emits, including one this
+            // function is about to drop as a declared duplicate, for the reason
+            // the rank and the contribution are: a dropped row is still a row
+            // the producer made claims about, and an unchecked claim is a hole a
+            // permissive duplicate policy could hide a false placement in.
+            self.check_declared_block(index, &block, rank, &item)?;
+
             // Ordered after the re-derivation on purpose: the collision count is
             // a claim about the *profile's* value at this rank, so it must run
             // on a value already proven to be that one. A forged contribution is
@@ -1316,7 +1430,7 @@ impl<S: RankedStream> FusionStream<S> {
             self.rows_pulled[index] += 1;
 
             let item: Term = item.into();
-            match self.seen_items[index].as_mut() {
+            let repeated = match self.seen_items[index].as_mut() {
                 // `Unique`: the producer promised no repeats, so there is no
                 // per-stream identity set to consult and none to grow — that
                 // set is exactly what this arm declines to pay for, and it is
@@ -1331,27 +1445,32 @@ impl<S: RankedStream> FusionStream<S> {
                 // to a caller: under this declaration a repeat becomes a
                 // refusal naming the item and the stratum, not a silently
                 // discarded row.
-                None => {
-                    return Ok(Some(Head {
-                        rank,
-                        contribution: expected,
-                        item,
-                    }));
-                }
+                None => false,
                 // `Allowed`: the producer said repeats happen and the consumer
                 // must de-duplicate, so the consumer de-duplicates. The insert's
                 // own answer is the test, so the repeat costs one set operation
                 // rather than a lookup and an insert.
-                Some(seen) => {
-                    if seen.insert(item.clone()) {
-                        return Ok(Some(Head {
-                            rank,
-                            contribution: expected,
-                            item,
-                        }));
-                    }
-                }
+                Some(seen) => !seen.insert(item.clone()),
+            };
+            if !repeated {
+                return Ok(Some(Head {
+                    rank,
+                    contribution: expected,
+                    item,
+                    block,
+                }));
             }
+            // The row is about to be discarded as a declared duplicate, and its
+            // placement is checked first — this is the one row whose block
+            // `pull` will never see, because a dropped row never becomes a head.
+            // Discarding the claim with the row would leave a hole exactly
+            // where a permissive duplicate policy could hide a false placement:
+            // a stream could name a candidate in one block, then name it again
+            // in another, and the second claim would vanish with the row that
+            // carried it. The candidate it collides with is looked up wherever
+            // it now lives, frontier or emitted, so the check does not lapse
+            // when the row is certified.
+            self.check_candidate_block(&item, index, &block, self.placed_block(&item))?;
         }
     }
 
@@ -1482,6 +1601,30 @@ impl<S: RankedStream> FusionStream<S> {
     /// head, and that is the answer — the identical value this function
     /// returned before domains existed, for every fusion that does not declare
     /// them.
+    ///
+    /// # The axiom is verified as far as the rows reach, not trusted
+    ///
+    /// "An item not yet in the frontier lies in exactly one block" is the axiom
+    /// this bound is sound under, and it is a fact about the host's corpus that
+    /// no consumer can derive. It is not taken on faith either: every row a
+    /// restricted stream emits names the block it was drawn from, every named
+    /// block is held against that stream's own declaration
+    /// ([`ProtocolError::UnbackedDomainDeclaration`],
+    /// [`ProtocolError::BlockOutsideDeclaredDomain`]), and two rows that place
+    /// one candidate in two blocks refuse the fusion outright
+    /// ([`ProtocolError::CandidateInTwoBlocks`]) instead of letting this bound
+    /// under-count what that candidate could still collect. A tagging that
+    /// violates the axiom therefore fails loudly rather than producing a
+    /// plausible order.
+    ///
+    /// What is **not** verified is a violation among rows nobody pulled. Two
+    /// streams that would have placed one candidate in two blocks at ranks this
+    /// fusion never reached leave no trace here, and the bound stays as sound as
+    /// the tagging was. That is the identical standard
+    /// [`ProtocolError::OutsideDeclaredDomain`] and the
+    /// [`DuplicatePolicy::Unique`] promise already meet — a promise about unread
+    /// rows is checked where the rows arrive, and reading further to check it
+    /// would spend exactly the reading the declaration exists to save.
     fn compute_threshold(&self) -> Result<Fixed, FusionError> {
         // The floor of every block's sum: a stream that may name anything may
         // name the unseen item, whichever block it is in. It is also the whole
@@ -1798,6 +1941,156 @@ impl<S: RankedStream> FusionStream<S> {
         Ok(best)
     }
 
+    /// The blocks stream `index` declared, rendered in canonical order for a
+    /// refusal to carry.
+    ///
+    /// Empty for an unrestricted stream, which declared none. Allocated only on
+    /// a refusal path: nothing on the row loop calls this.
+    fn declared_blocks(&self, index: usize) -> Vec<String> {
+        self.domains[index].tags().map_or_else(Vec::new, |tags| {
+            tags.iter().map(|tag| tag.as_str().to_owned()).collect()
+        })
+    }
+
+    /// Hold one row's block against the promise its own stream made.
+    ///
+    /// Two obligations, and they are not symmetric, because the declarations are
+    /// not:
+    ///
+    /// * a [`CandidateDomains::Within`] stream owes a block on every row. It has
+    ///   promised its candidates lie in named blocks, fusion has *already used*
+    ///   that promise — skipping streams and bounding unseen items by a single
+    ///   block — and a row that names nothing backs nothing, so the restriction
+    ///   is refused as [`ProtocolError::UnbackedDomainDeclaration`] rather than
+    ///   quietly read as the wider promise it did not make;
+    /// * a [`CandidateDomains::Unrestricted`] stream owes nothing. It restricts
+    ///   no arithmetic — its head is counted in every block's bound — so there
+    ///   is no promise for a row to back, and [`RowBlock::Undeclared`] is its
+    ///   honest answer. It may still name a block, and one it names is kept:
+    ///   `admits` is true of every tag under that declaration, so this function
+    ///   passes it through to the candidate-level check where a block is evidence
+    ///   about the candidate.
+    ///
+    /// A row naming a block its own declaration excludes is
+    /// [`ProtocolError::BlockOutsideDeclaredDomain`] — a stream contradicting
+    /// itself, which needs no second stream to witness it and is therefore not
+    /// [`ProtocolError::OutsideDeclaredDomain`].
+    ///
+    /// The item is cloned only to render a refusal. On the conforming path this
+    /// function allocates nothing and touches no state.
+    fn check_declared_block(
+        &self,
+        index: usize,
+        block: &RowBlock,
+        rank: u64,
+        item: &S::Item,
+    ) -> Result<(), FusionError> {
+        match block {
+            RowBlock::Undeclared => {
+                if self.domains[index].tags().is_some() {
+                    return Err(ProtocolError::UnbackedDomainDeclaration {
+                        stratum: self.streams[index].0.as_str().to_owned(),
+                        declared: self.declared_blocks(index),
+                        rank,
+                    }
+                    .into());
+                }
+            }
+            RowBlock::Declared(tag) => {
+                if !self.domains[index].admits(tag) {
+                    let named: Term = item.clone().into();
+                    return Err(ProtocolError::BlockOutsideDeclaredDomain {
+                        item: named.as_str().to_owned(),
+                        stratum: self.streams[index].0.as_str().to_owned(),
+                        block: tag.as_str().to_owned(),
+                        declared: self.declared_blocks(index),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Hold one row's block against the block this candidate has already been
+    /// placed in.
+    ///
+    /// This is where the axiom the whole declared-domain arithmetic rests on is
+    /// actually checked: a [`DomainTag`] names a block of a *partition*, so a
+    /// candidate lies in exactly one block, and two rows that place one candidate
+    /// in two different blocks are a proof the host's tagging does not describe
+    /// its corpus. The refusal names both strata and both blocks
+    /// ([`ProtocolError::CandidateInTwoBlocks`]), because either producer could
+    /// be the one that tagged wrongly and this layer cannot know which.
+    ///
+    /// Silence is not a disagreement. A row that named no block — every row of an
+    /// unrestricted stream — contradicts nothing, and a candidate no row has
+    /// placed yet has nothing to contradict; both are `Ok` here, and neither is
+    /// upgraded into a claim.
+    fn check_candidate_block(
+        &self,
+        item: &Term,
+        index: usize,
+        block: &RowBlock,
+        placed: Option<&BlockWitness>,
+    ) -> Result<(), FusionError> {
+        let (Some(tag), Some(witness)) = (block.tag(), placed) else {
+            return Ok(());
+        };
+        if *tag == witness.block {
+            return Ok(());
+        }
+        Err(ProtocolError::CandidateInTwoBlocks {
+            item: item.as_str().to_owned(),
+            stratum: self.streams[index].0.as_str().to_owned(),
+            block: tag.as_str().to_owned(),
+            named_by: self.streams[witness.stream].0.as_str().to_owned(),
+            named_by_block: witness.block.as_str().to_owned(),
+        }
+        .into())
+    }
+
+    /// The block some row has already placed `item` in, wherever that candidate
+    /// now lives.
+    ///
+    /// The frontier first, then the emitted map, because those are the two states
+    /// a named candidate can be in and a certified one has left the first for the
+    /// second. Consulting both is what keeps the axiom from lapsing at
+    /// certification: the placement a candidate was emitted under is still the
+    /// placement every later row is measured against.
+    fn placed_block(&self, item: &Term) -> Option<&BlockWitness> {
+        self.frontier
+            .get(item)
+            .and_then(|state| state.block.as_deref())
+            .or_else(|| {
+                self.emitted
+                    .get(item)
+                    .and_then(|record| record.block.as_deref())
+            })
+    }
+
+    /// The placement a row establishes for a candidate that had none, or `None`
+    /// where there is nothing new to record.
+    ///
+    /// A candidate is placed once and then only compared against: the first row
+    /// that names a block owns the placement, so the tag is cloned at most once
+    /// per candidate rather than on every row that names it. A row that names no
+    /// block records nothing, and never erases a placement another row made —
+    /// silence cannot overwrite evidence.
+    fn placement_for(
+        index: usize,
+        block: &RowBlock,
+        placed: Option<&BlockWitness>,
+    ) -> Option<Box<BlockWitness>> {
+        match (block.tag(), placed) {
+            (Some(tag), None) => Some(Box::new(BlockWitness {
+                stream: index,
+                block: tag.clone(),
+            })),
+            _ => None,
+        }
+    }
+
     /// The stratum to name as `named_by` in an
     /// [`ProtocolError::OutsideDeclaredDomain`], given the streams that already
     /// named the candidate and the stream that just did.
@@ -1843,7 +2136,25 @@ impl<S: RankedStream> FusionStream<S> {
     /// candidate its own declaration cannot reach, from either arm below: the
     /// candidate may still be in the frontier or may already have certified, and
     /// the refusal names the stratum whose declaration put it out of reach
-    /// through [`Self::domain_witness`].
+    /// through [`Self::domain_witness`]. [`ProtocolError::CandidateInTwoBlocks`]
+    /// when this row places the candidate in a different block from the one an
+    /// earlier row placed it in — the axiom the threshold rests on.
+    ///
+    /// # Why the placement is checked on the frontier arm and not the emitted one
+    ///
+    /// Because a row naming a *certified* candidate cannot reach a placement
+    /// disagreement: it is refused above it, every time. Suppose stream `s` names
+    /// `x` now and `x` has certified. Either `s` is in `x`'s `named_by`, in which
+    /// case the duplicate arm answers — or, under
+    /// [`DuplicatePolicy::Allowed`], [`Self::fetch`] discarded the row and checked
+    /// its placement there, which is the one place that check is reachable for a
+    /// dropped row. Or `s` is not in `named_by`, and then certification required
+    /// of `s` either a `None` head (a finished stream, never pulled again) or that
+    /// its declaration could not reach `Dom(x)` — and that second case is
+    /// [`ProtocolError::OutsideDeclaredDomain`], raised immediately below on the
+    /// same immutable declarations, which cannot have changed since. So the
+    /// placement check on this arm could only ever be dead weight, and the arm
+    /// says what it can actually observe instead.
     ///
     /// # Where a declared-`Unique` stream's promise is checked
     ///
@@ -2027,6 +2338,21 @@ impl<S: RankedStream> FusionStream<S> {
             }
             .into());
         }
+        // The second of the two questions asked of a candidate already in the
+        // frontier: the declaration check above asks whether these declarations
+        // can both be true of it, and this asks whether these *rows* can. The
+        // second is the axiom the threshold rests on, and it is checked before
+        // anything is written so a refused row leaves the frontier exactly as it
+        // found it. This is the reachable placement check for a row that becomes
+        // a head; the other is in `fetch`, for the row a permissive duplicate
+        // policy discards. See this function's docs for why a certified
+        // candidate needs no third.
+        let placed = existing.and_then(|state| state.block.as_deref());
+        self.check_candidate_block(&head.item, index, &head.block, placed)?;
+        // Derived while the immutable borrow is still live, so the entry below
+        // needs no second lookup: at most one tag clone per candidate, and none
+        // at all for a candidate already placed or a row that named no block.
+        let placement = Self::placement_for(index, &head.block, placed);
         let lower_bound = existing
             .map_or(Fixed::ZERO, |state| state.lower_bound)
             .checked_add(head.contribution)
@@ -2050,6 +2376,11 @@ impl<S: RankedStream> FusionStream<S> {
                     .contributions
                     .push((stratum, head.rank, head.contribution));
                 state.seen_streams.insert(index);
+                // The candidate's placement, where this row named one. A
+                // candidate nobody has placed keeps `None`, which constrains
+                // nothing and is what every candidate only unrestricted streams
+                // name looks like.
+                state.block = placement;
             }
             btree_map::Entry::Occupied(mut occupied) => {
                 if !occupied.get_mut().seen_streams.insert(index) {
@@ -2075,6 +2406,13 @@ impl<S: RankedStream> FusionStream<S> {
                 state
                     .contributions
                     .push((stratum, head.rank, head.contribution));
+                // Only a candidate no row had placed can gain a placement here,
+                // and `placement_for` has already decided that: a placement is
+                // established once and afterwards only compared against, so this
+                // never overwrites the witness a refusal would name.
+                if let Some(witness) = placement {
+                    state.block = Some(witness);
+                }
             }
         }
 

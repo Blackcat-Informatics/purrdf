@@ -41,7 +41,7 @@
 //!
 //! # A raw stream, not yet a fusion stream
 //!
-//! [`RankedStreamImpl`] carries `(rank, candidate)` only. A fusion contribution
+//! [`RankedStreamImpl`] carries `(rank, candidate, block)` only. A fusion contribution
 //! depends on the fusion profile's weights and smoothing constant, which are
 //! deliberately not a plan input, so the contribution is attached at `fuse` time.
 //! Keeping the executor profile-free is what lets the unfused rung be consumed
@@ -109,6 +109,27 @@
 //! the plan identity does. The attestation read off the witness travels the
 //! same way, in [`StratumStream::attestation`].
 //!
+//! # Each row says which block it was drawn from
+//!
+//! A restricted declaration is a promise about every row, and a consumer can only
+//! hold it to the rows it reads if a row says where it came from. So every row
+//! carries its block ([`RowBlock`]), from exactly one of two places and never from
+//! a guess:
+//!
+//! * the unit's own `?block` column, where the producer's declaration named the
+//!   argument position to read it from. `compile` projects that column only for
+//!   such a producer, and it is found here by name;
+//! * the **declaration itself**, where it names exactly one block. A producer that
+//!   promised all its candidates lie in one block has already answered per row, so
+//!   nothing is invented and no host repeats itself — see [`entailed_block`].
+//!
+//! Anything else is [`RowBlock::Undeclared`], which is the honest report and not a
+//! gap: an unrestricted producer owes no block, and a producer restricted to
+//! several blocks with no column to distinguish them has declared something this
+//! stage cannot back. Fusion is where that is answered — it refuses a restriction
+//! no row backs rather than certifying an order on it — because fusion is the
+//! stage that would otherwise have used it.
+//!
 //! # The unit is read one row deeper than the stratum is
 //!
 //! [`compile`](crate::compile) emits `LIMIT min(depth + 1, declared row bound)`,
@@ -125,15 +146,16 @@ use std::collections::{HashMap, VecDeque};
 
 use purrdf_core::{DatasetView, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    GovernedOutcome, NativeSparqlEngine, PfAttestation, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, RegistryId, RelationWitness, ServiceLevel,
+    CandidateDomains, DomainTag, GovernedOutcome, NativeSparqlEngine, PfAttestation,
+    PropertyFunctionRegistry, QueryGovernors, QueryOptions, RegistryId, RelationWitness,
+    ServiceLevel,
 };
 
-use crate::compile::{CANDIDATE_NAME, CompiledRetrieval};
+use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval};
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, StreamContract};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RowBlock, StreamContract};
 use crate::render::candidate_lexical;
 
 /// One stratum's ranked rows, tagged with the pinned plan they descend from and
@@ -255,11 +277,20 @@ pub enum ExecutionError {
     },
 }
 
-/// A concrete ranked stream of `(rank, candidate)` rows.
+/// A concrete ranked stream of `(rank, candidate, block)` rows.
 ///
 /// The rows are materialized by the evaluator and drained in order; `next` never
 /// pends, so the stream is usable under any executor. A caller that wants to fuse
 /// the rows wraps them with the fusion profile at `fuse` time.
+///
+/// The third element is the block of the candidate universe the row was drawn
+/// from ([`RowBlock`]) — read from the unit's own `?block` column where the
+/// producer declared a position for it, entailed from a single-block declaration
+/// where it did not, and [`RowBlock::Undeclared`] for a producer that restricted
+/// nothing. It is carried here rather than attached at `fuse` time for the reason
+/// the contract and the attestation are carried: the producer is the only party
+/// that knows it, and a consumer three stages downstream is the party that checks
+/// it.
 ///
 /// There is deliberately no bulk accessor beside [`next`](Self::next): reading
 /// the rows one at a time and then taking the [`receipt`](Self::receipt) *is*
@@ -268,7 +299,7 @@ pub enum ExecutionError {
 /// to tell a stratum that ended from a stratum it stopped reading.
 #[derive(Debug)]
 pub struct RankedStreamImpl {
-    rows: VecDeque<(u64, Term)>,
+    rows: VecDeque<(u64, Term, RowBlock)>,
     pulled: u64,
     exhausted: bool,
     ending: StreamEnding,
@@ -302,7 +333,7 @@ pub enum StreamEnding {
 }
 
 impl RankedStreamImpl {
-    /// Build a stream over pre-ranked `(rank, candidate)` rows that ends the way
+    /// Build a stream over pre-ranked `(rank, candidate, block)` rows that ends the way
     /// `ending` says.
     ///
     /// The ending is a parameter rather than something inferred from `rows`,
@@ -310,7 +341,7 @@ impl RankedStreamImpl {
     /// either way, and the whole point of the distinction is that only the
     /// reader of the underlying answer knows which one happened.
     #[must_use]
-    pub fn new(rows: Vec<(u64, Term)>, ending: StreamEnding) -> Self {
+    pub fn new(rows: Vec<(u64, Term, RowBlock)>, ending: StreamEnding) -> Self {
         Self {
             rows: rows.into(),
             pulled: 0,
@@ -329,7 +360,7 @@ impl RankedStreamImpl {
     // returning; the `async` shape is the ranked-stream contract the fusion stage
     // consumes, and a caller may compose it with genuinely asynchronous streams.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
-    pub async fn next(&mut self) -> Result<Option<(u64, Term)>, ProtocolError> {
+    pub async fn next(&mut self) -> Result<Option<(u64, Term, RowBlock)>, ProtocolError> {
         match self.rows.pop_front() {
             Some(row) => {
                 self.pulled += 1;
@@ -478,7 +509,7 @@ pub async fn execute<D: DatasetView + Sync>(
                             reason,
                         }
                     })?;
-                match rank_candidates(&variables, &rows) {
+                match rank_candidates(&variables, &rows, &unit.contract.domains) {
                     Ok(ranked) => {
                         let (ranked, ending, status) = bound_to_depth(ranked, unit.depth);
                         streams.push(StratumStream {
@@ -548,9 +579,9 @@ pub async fn execute<D: DatasetView + Sync>(
 /// The status returned is the mirror of the ending, so the terminal report and
 /// the stream's own receipt cannot say different things about the same read.
 fn bound_to_depth(
-    mut ranked: Vec<(u64, Term)>,
+    mut ranked: Vec<(u64, Term, RowBlock)>,
     depth: u32,
-) -> (Vec<(u64, Term)>, StreamEnding, ProducerStatus) {
+) -> (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus) {
     let ceiling = usize::try_from(depth).unwrap_or(usize::MAX);
     if ranked.len() > ceiling {
         ranked.truncate(ceiling);
@@ -656,7 +687,8 @@ fn sole_attestation(witness: &RelationWitness) -> Result<PfAttestation, String> 
     })
 }
 
-/// Read a unit's projected candidate column into ranked `(rank, candidate)` rows.
+/// Read a unit's projected candidate and block columns into ranked
+/// `(rank, candidate, block)` rows.
 ///
 /// # The column is found by name
 ///
@@ -675,22 +707,106 @@ fn sole_attestation(witness: &RelationWitness) -> Result<PfAttestation, String> 
 fn rank_candidates(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
-) -> Result<Vec<(u64, Term)>, String> {
+    domains: &CandidateDomains,
+) -> Result<Vec<(u64, Term, RowBlock)>, String> {
     let column = variables
         .iter()
         .position(|name| name == CANDIDATE_NAME)
         .ok_or_else(|| {
             format!("the unit's solutions project no ?{CANDIDATE_NAME} column: {variables:?}")
         })?;
+    // Present exactly when the producer declared a position to read a block out
+    // of, because that is the only case `compile` projects the column. Found by
+    // name for the reason the candidate is: reading a position instead would make
+    // the block depend on projection order.
+    let block_column = variables.iter().position(|name| name == BLOCK_NAME);
+    // The fallback for a unit with no block column, and it is a derivation rather
+    // than a default: see [`entailed_block`].
+    let entailed = entailed_block(domains);
     let mut ranked = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let rank = u64::try_from(index + 1).unwrap_or(u64::MAX);
         let value = row.get(column).and_then(Option::as_ref).ok_or_else(|| {
             format!("the projected ?{CANDIDATE_NAME} column is unbound in row {rank}")
         })?;
-        ranked.push((rank, term_candidate(value)));
+        let block = match block_column {
+            None => entailed.clone(),
+            Some(column) => row_block(row.get(column).and_then(Option::as_ref), rank)?,
+        };
+        ranked.push((rank, term_candidate(value), block));
     }
     Ok(ranked)
+}
+
+/// The block every row of a producer that names none itself lies in, read off the
+/// declaration.
+///
+/// This is an **entailment**, not a default. A producer declaring exactly one
+/// block has already said that every candidate it names lies in that block, so
+/// naming it per row states nothing the declaration did not, and a host is not
+/// asked to repeat itself on every row of every stratum. That is the common
+/// configuration and the one the whole declared-domain mechanism exists for — one
+/// producer per block, blocks that do not overlap.
+///
+/// Everything else is [`RowBlock::Undeclared`], because nothing else is derivable:
+///
+/// * [`CandidateDomains::Unrestricted`] restricts nothing, so there is no block to
+///   entail and none is owed;
+/// * a restriction naming **several** blocks has not said which of them a given
+///   row is in, and this layer may not choose — a guess would place a candidate in
+///   a block the producer never claimed and could refuse a perfectly good corpus
+///   as self-contradictory. The consequence is the honest one: fusion refuses a
+///   restriction no row backs
+///   ([`ProtocolError::UnbackedDomainDeclaration`](crate::ProtocolError)), and the
+///   host's exits are to declare a block column, to register one producer per
+///   block, or to declare `Unrestricted`.
+fn entailed_block(domains: &CandidateDomains) -> RowBlock {
+    match domains.tags() {
+        Some(tags) if tags.len() == 1 => tags
+            .iter()
+            .next()
+            .map_or(RowBlock::Undeclared, |tag| RowBlock::Declared(tag.clone())),
+        Some(_) | None => RowBlock::Undeclared,
+    }
+}
+
+/// Read one row's projected block column as the block that row was drawn from.
+///
+/// A block is a [`DomainTag`], which is an IRI, so the cell must be a bound IRI
+/// and nothing else. Both failures refuse the **whole unit** rather than the row,
+/// for the reason an unbound candidate does: a rank is a position in the stratum's
+/// answer, so dropping one row renumbers every row after it and the stratum would
+/// report a shorter, differently-ranked list that still looked complete. A
+/// producer that cannot name a block for one of its rows has not declared a
+/// narrower domain — it has declared one it cannot back, and that is refused where
+/// it is observed.
+fn row_block(value: Option<&TermValue>, rank: u64) -> Result<RowBlock, String> {
+    let value = value.ok_or_else(|| {
+        format!(
+            "the projected ?{BLOCK_NAME} column is unbound in row {rank}, so that row names \
+                 no block of the candidate universe; a producer that declares a block column owes \
+                 a block on every row"
+        )
+    })?;
+    match value {
+        // Parsed, never trusted: the tag reaches a consumer that compares it
+        // against a host's declared blocks, and a cell that is not an IRI cannot
+        // be one of those. `DomainTag::parse` is the same validation the registry
+        // applied to the declaration, so the two sides are compared after one
+        // rule rather than two.
+        TermValue::Iri(text) => DomainTag::parse(text)
+            .map(RowBlock::Declared)
+            .map_err(|error| {
+                format!(
+                    "the projected ?{BLOCK_NAME} column in row {rank} is <{text}>, which is not a \
+                 valid IRI and so names no block: {error}"
+                )
+            }),
+        other => Err(format!(
+            "the projected ?{BLOCK_NAME} column in row {rank} is {other:?}, and a block of the \
+             candidate universe is named by an IRI"
+        )),
+    }
 }
 
 /// A candidate's canonical term lexical — exactly the spelling a caller uses for
@@ -715,13 +831,15 @@ fn term_candidate(value: &TermValue) -> Term {
 #[cfg(test)]
 mod tests {
     use purrdf_core::TermValue;
-    use purrdf_sparql_eval::{IndexGeneration, PfAttestation, RelationWitness, ServiceLevel};
+    use purrdf_sparql_eval::{
+        CandidateDomains, DomainTag, IndexGeneration, PfAttestation, RelationWitness, ServiceLevel,
+    };
 
     use super::{
-        ProducerStatus, StreamEnding, bound_to_depth, rank_candidates, read_attestation,
-        sole_attestation, term_candidate,
+        ProducerStatus, RowBlock, StreamEnding, bound_to_depth, entailed_block, rank_candidates,
+        read_attestation, sole_attestation, term_candidate,
     };
-    use crate::compile::CANDIDATE_NAME;
+    use crate::compile::{BLOCK_NAME, CANDIDATE_NAME};
     use crate::iri::Term;
     use crate::render::decode_term;
 
@@ -770,13 +888,14 @@ mod tests {
                 vec![Some(TermValue::blank("b0"))],
                 vec![Some(TermValue::iri("http://example.org/other"))],
             ],
+            &CandidateDomains::Unrestricted,
         )
         .expect("a blank node among the answers is still an answer");
 
         assert_eq!(
             ranked
                 .iter()
-                .map(|(_, term)| term.as_str())
+                .map(|(_, term, _)| term.as_str())
                 .collect::<Vec<_>>(),
             vec![
                 "<http://example.org/doc>",
@@ -786,7 +905,7 @@ mod tests {
             "the blank node is named in place, and its neighbours keep their ranks"
         );
         assert_eq!(
-            ranked.iter().map(|(rank, _)| *rank).collect::<Vec<_>>(),
+            ranked.iter().map(|(rank, ..)| *rank).collect::<Vec<_>>(),
             vec![1, 2, 3],
             "ranks stay 1-based and contiguous, so no row was dropped"
         );
@@ -803,7 +922,7 @@ mod tests {
         // is a refusal, never the earlier column's term promoted into the rank.
         let variables = vec!["other".to_owned(), CANDIDATE_NAME.to_owned()];
         let rows = vec![vec![Some(TermValue::iri("http://example.org/other")), None]];
-        let reason = rank_candidates(&variables, &rows)
+        let reason = rank_candidates(&variables, &rows, &CandidateDomains::Unrestricted)
             .expect_err("an unbound candidate column is a refusal");
         assert!(reason.contains("unbound"), "{reason}");
 
@@ -813,16 +932,152 @@ mod tests {
             Some(TermValue::iri("http://example.org/doc")),
         ]];
         assert_eq!(
-            rank_candidates(&variables, &rows).expect("the candidate column ranks"),
-            vec![(1, Term::new("<http://example.org/doc>".to_owned()))]
+            rank_candidates(&variables, &rows, &CandidateDomains::Unrestricted)
+                .expect("the candidate column ranks"),
+            vec![(
+                1,
+                Term::new("<http://example.org/doc>".to_owned()),
+                RowBlock::Undeclared
+            )]
         );
     }
 
     #[test]
     fn a_unit_that_projects_no_candidate_column_is_refused() {
-        let reason = rank_candidates(&["other".to_owned()], &[vec![None]])
-            .expect_err("a unit with no candidate column cannot be ranked");
+        let reason = rank_candidates(
+            &["other".to_owned()],
+            &[vec![None]],
+            &CandidateDomains::Unrestricted,
+        )
+        .expect_err("a unit with no candidate column cannot be ranked");
         assert!(reason.contains(CANDIDATE_NAME), "{reason}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Each row's block: entailed from the declaration, or read from the column
+    // -----------------------------------------------------------------------
+
+    fn block_tag(suffix: &str) -> DomainTag {
+        DomainTag::parse(&format!("http://example.org/domain/{suffix}"))
+            .expect("fixture domain tags are valid IRIs")
+    }
+
+    /// A declaration naming exactly one block answers per row by itself, and no
+    /// other declaration answers at all. The negative halves are the point: a
+    /// guess for a several-block declaration would place a candidate in a block
+    /// its producer never claimed.
+    #[test]
+    fn a_single_block_declaration_entails_every_rows_block_and_nothing_else_does() {
+        assert_eq!(
+            entailed_block(&CandidateDomains::within([block_tag("docs")])),
+            RowBlock::Declared(block_tag("docs")),
+            "one declared block IS the block every row of this producer lies in"
+        );
+        assert_eq!(
+            entailed_block(&CandidateDomains::within([
+                block_tag("docs"),
+                block_tag("people")
+            ])),
+            RowBlock::Undeclared,
+            "two blocks entail nothing about any one row, and this layer does not choose"
+        );
+        assert_eq!(
+            entailed_block(&CandidateDomains::Unrestricted),
+            RowBlock::Undeclared,
+            "an unrestricted producer owes no block, so there is none to entail"
+        );
+    }
+
+    /// The column, when the producer declared one. An IRI is a block; an unbound
+    /// cell and a non-IRI are refusals of the whole unit rather than of the row,
+    /// because dropping a row renumbers every rank after it. The valid case is
+    /// executed beside both refusals.
+    #[test]
+    fn the_block_column_is_read_as_an_iri_or_the_unit_is_refused() {
+        let variables = vec![CANDIDATE_NAME.to_owned(), BLOCK_NAME.to_owned()];
+        let declared = CandidateDomains::within([block_tag("docs"), block_tag("people")]);
+
+        // Valid: two rows, each naming its own block out of the declared pair.
+        let ranked = rank_candidates(
+            &variables,
+            &[
+                vec![
+                    Some(TermValue::iri("http://example.org/doc")),
+                    Some(TermValue::iri("http://example.org/domain/docs")),
+                ],
+                vec![
+                    Some(TermValue::iri("http://example.org/person")),
+                    Some(TermValue::iri("http://example.org/domain/people")),
+                ],
+            ],
+            &declared,
+        )
+        .expect("a bound IRI in the block column is a block");
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|(_, _, block)| block.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                RowBlock::Declared(block_tag("docs")),
+                RowBlock::Declared(block_tag("people")),
+            ],
+            "each row carries the block it was drawn from, not the declaration's set"
+        );
+
+        // Unbound: the producer declared a column and then named no block in it.
+        let unbound = rank_candidates(
+            &variables,
+            &[vec![Some(TermValue::iri("http://example.org/doc")), None]],
+            &declared,
+        )
+        .expect_err("a declared block column that binds nothing backs nothing");
+        assert!(
+            unbound.contains(BLOCK_NAME) && unbound.contains("row 1"),
+            "the refusal names the column and the row: {unbound}"
+        );
+
+        // Not an IRI: a block is named by an IRI, and a literal is not one.
+        let literal = rank_candidates(
+            &variables,
+            &[vec![
+                Some(TermValue::iri("http://example.org/doc")),
+                Some(TermValue::simple_literal("docs")),
+            ]],
+            &declared,
+        )
+        .expect_err("a literal names no block of the candidate universe");
+        assert!(
+            literal.contains(BLOCK_NAME) && literal.contains("IRI"),
+            "the refusal says what a block is: {literal}"
+        );
+    }
+
+    /// A unit with no block column falls back to the entailment, which is how a
+    /// single-block producer backs its declaration without any host writing a
+    /// column. The neighbouring case — the same rows under a declaration that
+    /// entails nothing — reports the absence rather than inventing a block.
+    #[test]
+    fn a_unit_with_no_block_column_carries_the_entailed_block() {
+        let rows = [vec![Some(TermValue::iri("http://example.org/doc"))]];
+        let entailed = rank_candidates(
+            &variables(),
+            &rows,
+            &CandidateDomains::within([block_tag("docs")]),
+        )
+        .expect("a single-block declaration needs no column");
+        assert_eq!(
+            entailed.first().map(|(_, _, block)| block.clone()),
+            Some(RowBlock::Declared(block_tag("docs")))
+        );
+
+        let silent = rank_candidates(&variables(), &rows, &CandidateDomains::Unrestricted)
+            .expect("an unrestricted producer still answers");
+        assert_eq!(
+            silent.first().map(|(_, _, block)| block.clone()),
+            Some(RowBlock::Undeclared),
+            "silence is reported as silence, never filled in"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1009,13 +1264,19 @@ mod tests {
     fn the_probe_row_changes_the_ending_and_nothing_else() {
         let rows = |count: u64| {
             (1..=count)
-                .map(|rank| (rank, Term::new(format!("<http://example.org/doc{rank}>"))))
+                .map(|rank| {
+                    (
+                        rank,
+                        Term::new(format!("<http://example.org/doc{rank}>")),
+                        RowBlock::Undeclared,
+                    )
+                })
                 .collect::<Vec<_>>()
         };
 
         let (kept, ending, status) = bound_to_depth(rows(4), 3);
         assert_eq!(
-            kept.iter().map(|(rank, _)| *rank).collect::<Vec<_>>(),
+            kept.iter().map(|(rank, ..)| *rank).collect::<Vec<_>>(),
             vec![1, 2, 3],
             "the probe row is dropped and its neighbours keep their ranks"
         );

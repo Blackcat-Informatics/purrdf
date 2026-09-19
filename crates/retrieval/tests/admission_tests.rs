@@ -86,6 +86,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -1907,9 +1908,13 @@ fn a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all() {
 /// one row at a time through the ranked-stream protocol, to exhaustion.
 fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
-    while let Some(row) = block_on(stream.next()).expect("a materialized stream obeys the protocol")
+    // The block each row names is not what these assertions are about — every
+    // producer here declares `Unrestricted` and so names none — so it is dropped
+    // by name rather than compared.
+    while let Some((rank, candidate, _block)) =
+        block_on(stream.next()).expect("a materialized stream obeys the protocol")
     {
-        rows.push(row);
+        rows.push((rank, candidate));
     }
     rows
 }
@@ -2067,6 +2072,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }

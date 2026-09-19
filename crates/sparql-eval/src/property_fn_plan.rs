@@ -1498,6 +1498,7 @@ mod content_fingerprint_tests {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         }
     }

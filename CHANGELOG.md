@@ -274,6 +274,46 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   wrong answer. An empty restriction is refused at `register_ranked`, where the
   declaration is committed: a promise to name nothing describes a producer that
   should not be registered.
+- **retrieval:** Every ranked row now says which block of the candidate universe it
+  was drawn from, so the axiom the declared-domain arithmetic rests on is verified
+  rather than trusted. `RankedStream::next` yields a named `RankedRow` -- rank,
+  contribution, item and `RowBlock` -- and `RowBlock::Undeclared` is a first-class
+  absence beside `IndexGeneration::Undeclared` rather than an `Option` a reader
+  could unwrap into a claim. A `CandidateDomains::Within` stream owes a block on
+  every row, and owes one its own declaration admits; an `Unrestricted` stream owes
+  none, because it restricts no arithmetic at all, and a block it volunteers is
+  still honoured as evidence about the candidate. Three refusals, each a separate
+  fact: `ProtocolError::UnbackedDomainDeclaration` -- a restricted stream's row
+  names no block, so nothing backs the restriction, and fusion has already used it;
+  `ProtocolError::BlockOutsideDeclaredDomain` -- a row names a block its own
+  declaration excludes, which is a stream contradicting itself and needs no second
+  stream to witness it; and `ProtocolError::CandidateInTwoBlocks`, naming the item,
+  both strata and both blocks, because two rows that place one candidate in two
+  blocks falsify the partition the threshold's per-block maximum depends on and
+  either producer may be the one that tagged wrongly. That last case is the one
+  `OutsideDeclaredDomain` cannot see: it compares declarations, and two declarations
+  can overlap while the rows disagree -- which is exactly where the bound
+  under-counts, since the streams that reach one block and the streams that reach
+  the other are different sets. A row a permissive duplicate policy discards is
+  checked too: a repeat may be dropped, its claim about the candidate may not.
+  `compute_threshold` keeps the largest per-block sum of open heads, unweakened; a
+  tagging that violates the axiom now fails loudly instead of returning a plausible
+  order, as far as the rows pulled reach and no further.
+- **sparql-eval, retrieval:** `RankedDeclaration::block_position`, the argument
+  position a producer's rows carry their block in. A declaration naming exactly one
+  block entails every row's block and needs no column -- the common configuration,
+  one producer per block, costs a host nothing. A declaration naming several
+  entails nothing about any one row, so a producer that can say declares the
+  position its rows name it from, and one that cannot leaves it unset and is held to
+  the consequence rather than believed. `purrdf-retrieval` projects the column
+  beside `?candidate` for exactly the producers that declare it and reads it back by
+  name, so a unit for a producer that declares none is byte-identical to before. The
+  position is refused at registration when it falls outside the relation's arity or
+  collides with the candidate, a term placement or the depth, and it reaches the
+  registry's content fingerprint -- two wirings that verify differently may not
+  share a digest -- so that fingerprint and the plan identities over it move.
+  Neither shipped producer declares one: a text index answers with documents and a
+  vector index with neighbours, and neither holds any notion of a host's partition.
 - **text, sparql-eval:** Both shipped ranked producers attest a content-derived
   generation for the index that answered. The text relation declares its index
   fingerprint, which closes over the documents, the term dictionary, every

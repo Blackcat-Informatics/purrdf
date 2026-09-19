@@ -749,6 +749,7 @@ mod tests {
             // Placement is about rendering arguments, not about fusion, so
             // these fixtures make the widest promise there is.
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         }
     }

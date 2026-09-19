@@ -881,6 +881,13 @@ impl EmbeddingKnnRelation {
             candidate_position: Self::NEIGHBOUR,
             duplicates: DuplicatePolicy::Unique,
             domains,
+            // This relation projects a neighbour and a distance; it knows
+            // nothing of a host's partition, so it has no position to read a
+            // per-row block out of and says so. A host whose vector index spans
+            // several blocks declares one producer per block, or declares
+            // `CandidateDomains::Unrestricted`; see
+            // `RankedDeclaration::block_position`.
+            block_position: None,
             mandatory: false,
         }
     }

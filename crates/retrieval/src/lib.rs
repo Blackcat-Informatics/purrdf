@@ -377,7 +377,9 @@ pub use plan::{
     StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
 pub use planner::plan;
-pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+pub use ranked_stream::{
+    ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract,
+};
 pub use reciprocal_rank::{ClassWidth, MonotoneDepth, ToleratedDepth};
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
 pub use request::{Metric, RequestTerm, RetrievalRequest};

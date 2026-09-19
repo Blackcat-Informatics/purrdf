@@ -632,7 +632,7 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
 
 /// Drive `fuse ∘ execute ∘ compile ∘ plan` by hand over the real producers.
 ///
-/// The bridge from the executor's `(rank, candidate)` rows to the fusion
+/// The bridge from the executor's `(rank, candidate, block)` rows to the fusion
 /// protocol is the crate's own exported [`RankedStreamAdapter`], and the
 /// executor's statuses reach the trailer through the exported
 /// `FusionTrailer::completed_with`. That is what makes the identity below worth

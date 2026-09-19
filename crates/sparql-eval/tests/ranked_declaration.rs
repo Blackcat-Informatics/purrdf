@@ -94,6 +94,10 @@ fn declaration() -> RankedDeclaration {
         // before the term existed. The tests that are ABOUT the term state
         // their own.
         domains: CandidateDomains::Unrestricted,
+        // And it names no per-row block, which is the honest answer for a
+        // producer that restricts nothing: there is no promise for a row to
+        // back. The tests that are ABOUT the block column state their own.
+        block_position: None,
         mandatory: true,
     }
 }
@@ -308,6 +312,119 @@ fn a_candidate_that_collides_with_the_depth_is_refused() {
         ..declaration()
     };
     registry.register_ranked(EX_REL, relation(), decl);
+}
+
+/// The block column is the candidate column's sibling — a position the consumer
+/// *reads* — so it must exist and it may not share a position with a value the
+/// invocation *writes*. Each refusal is executed, and so is the valid neighbour
+/// that distinguishes "this position is wrong" from "a block column is wrong":
+/// the same declaration with the block at a free position registers, under both
+/// a restriction and none.
+#[test]
+fn a_block_position_that_cannot_be_read_back_is_refused_while_a_free_one_registers() {
+    // Outside the relation's positions: there is nothing there to read.
+    let out_of_range = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(9),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        out_of_range.contains("projects each row's block from position 9"),
+        "the refusal names the position, got: {out_of_range}"
+    );
+
+    // The candidate's own position: a candidate is not the block it lies in, and
+    // one position projects one value.
+    let candidate = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(0),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        candidate.contains("both its candidate and each row's block"),
+        "the refusal names the collision, got: {candidate}"
+    );
+
+    // A placement target: that position carries the request's needle, so reading
+    // it back as a block would measure the corpus against the query.
+    let placement = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(1),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        placement.contains("value facet") && placement.contains("row's block"),
+        "the refusal names the facet it collides with, got: {placement}"
+    );
+
+    // The depth target, refused for the same reason and named separately,
+    // because the remedy differs: move the depth, or move the block.
+    let depth = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(2),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        depth.contains("per-stratum depth at position 2")
+            && depth.contains("projects each row's block"),
+        "the refusal names the depth collision, got: {depth}"
+    );
+
+    // The valid neighbour. Position 3 is free in this relation — it is neither
+    // the candidate, a placement target nor the depth — so the declaration
+    // registers and reads back unchanged.
+    let mut free = PropertyFunctionRegistry::new();
+    let declared = RankedDeclaration {
+        block_position: Some(3),
+        ..declaration()
+    };
+    free.register_ranked(EX_REL, relation(), declared.clone());
+    assert_eq!(
+        free.ranked_declaration(EX_REL),
+        Some(&declared),
+        "a block column at a free position is a perfectly ordinary declaration"
+    );
+
+    // And beside a restriction it actually backs, which is what the column is
+    // for: several blocks, and a position each row names its own from.
+    let mut restricted = PropertyFunctionRegistry::new();
+    restricted.register_ranked(
+        EX_REL,
+        relation(),
+        RankedDeclaration {
+            domains: CandidateDomains::within([tag(EX_DOMAIN_DOCS), tag(EX_DOMAIN_PEOPLE)]),
+            block_position: Some(3),
+            ..declaration()
+        },
+    );
+    assert!(
+        restricted.ranked_declaration(EX_REL).is_some(),
+        "a several-block restriction with a column to back it is the supported configuration"
+    );
 }
 
 #[test]
@@ -653,6 +770,20 @@ fn canonical_description_is_injective_over_every_field() {
             "domains two blocks",
             RankedDeclaration {
                 domains: CandidateDomains::within([tag(EX_DOMAIN_DOCS), tag(EX_DOMAIN_PEOPLE)]),
+                ..base.clone()
+            },
+        ),
+        (
+            "block column declared",
+            RankedDeclaration {
+                block_position: Some(3),
+                ..base.clone()
+            },
+        ),
+        (
+            "block column elsewhere",
+            RankedDeclaration {
+                block_position: Some(4),
                 ..base.clone()
             },
         ),

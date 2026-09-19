@@ -112,6 +112,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -168,6 +169,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );
@@ -391,12 +393,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "3bc5bcb77883b2a06e65a287c99d3f03296938b89641d5a60d4a695c922cc8d5";
+    "0394118940fb40c7aac7a366dc925ca90a16083bdd4f4800358ed25dd7ae689e";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "55f770588e130ef79bb5e1bc6218b9deeacba5e47dc3797eb69f4f0e5890f869";
+    "a2965c9fe079865ee570c724631104757d8ad6bbd285b2fd691ded936163b73a";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -606,6 +608,7 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );
@@ -728,6 +731,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );
@@ -963,6 +967,7 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );

@@ -271,6 +271,7 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
         // promise is the honest one; the domain term is exercised where it is
         // the subject, in `fusion.rs`.
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory: true,
     }
 }
@@ -390,7 +391,8 @@ fn candidates(execution: &mut purrdf_retrieval::ExecutionResult, stratum: &Iri) 
         .unwrap_or_else(|| panic!("stratum {stratum} streamed"));
     let mut out = Vec::new();
     let mut expected_rank = 0u64;
-    while let Some((rank, term)) = block_on(stream.stream.next()).expect("the stream pulls") {
+    while let Some((rank, term, _block)) = block_on(stream.stream.next()).expect("the stream pulls")
+    {
         expected_rank += 1;
         assert_eq!(rank, expected_rank, "ranks are 1-based and contiguous");
         out.push(term.as_str().to_owned());

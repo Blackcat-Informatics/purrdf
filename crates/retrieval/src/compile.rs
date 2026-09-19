@@ -255,6 +255,19 @@ impl PlannedResolution {
 /// the executor look for a column the compiler stopped writing.
 pub(crate) const CANDIDATE_NAME: &str = "candidate";
 
+/// The name of the variable a branch projects each row's block under, without
+/// the `?` sigil.
+///
+/// Spelled once beside [`CANDIDATE_NAME`] and for the same reason: the executor
+/// finds this column by exactly this name, and a second constant could drift.
+///
+/// The column is emitted only for a producer whose declaration names the position
+/// to read it from
+/// ([`RankedDeclaration::block_position`](purrdf_sparql_eval::RankedDeclaration)),
+/// so a unit compiled for a producer that names no block per row is
+/// byte-identical to the one this compiler emitted before blocks existed.
+pub(crate) const BLOCK_NAME: &str = "block";
+
 /// Admit `plan` against `env` and emit its per-stratum SPARQL units.
 ///
 /// The admission checks are documented on [`AdmissionError`]; this function adds
@@ -418,8 +431,17 @@ fn emit_unit(
     limit: u32,
 ) -> Result<String, AdmissionError> {
     let branch = emit_branch(plan, binding, declaration, descriptors, limit)?;
+    // The block column rides beside the candidate only where the producer
+    // declared a position to read it from. A producer that names no block per row
+    // yields the identical text this function has always emitted, so nothing
+    // about an existing unit, its identity or its cost moves.
+    let projected = if declaration.block_position.is_some() {
+        format!("?{CANDIDATE_NAME} ?{BLOCK_NAME}")
+    } else {
+        format!("?{CANDIDATE_NAME}")
+    };
     Ok(format!(
-        "SELECT ?{CANDIDATE_NAME} WHERE {{\n  {branch}\n}}\nLIMIT {limit}"
+        "SELECT {projected} WHERE {{\n  {branch}\n}}\nLIMIT {limit}"
     ))
 }
 
@@ -476,6 +498,22 @@ fn emit_branch(
         ));
     }
 
+    // The block column is the candidate column's sibling: a position the unit
+    // *reads*, so it must exist and must be free for the invocation to bind
+    // anything into. The registry validates both at registration; reaching this
+    // means the registry moved under the plan, which is the same claim the
+    // candidate's own check makes.
+    let block = match declaration.block_position {
+        None => None,
+        Some(position) if position < total && !invocation.mode.is_bound(position) => Some(position),
+        Some(_) => {
+            return Err(malformed(
+                binding,
+                "projects each row's block from a position that is not a free argument",
+            ));
+        }
+    };
+
     let args = render_slots(&invocation).map_err(|error| unrenderable(binding, &error))?;
     let subject_text = args[..subject].join(" ");
     let object_text = args[subject..].join(" ");
@@ -488,8 +526,16 @@ fn emit_branch(
     } else {
         String::new()
     };
+    // One projection per position the unit reads back, in the order the executor
+    // reads them: the candidate, then the block where the producer declared one.
+    let projections = match block {
+        None => format!("(?c{candidate} AS ?{CANDIDATE_NAME})"),
+        Some(block) => {
+            format!("(?c{candidate} AS ?{CANDIDATE_NAME}) (?c{block} AS ?{BLOCK_NAME})")
+        }
+    };
     Ok(format!(
-        "{{ SELECT (?c{candidate} AS ?{CANDIDATE_NAME}) WHERE {{ ( {subject_text} ) <{}> ( {object_text} ) }}{limit} }}",
+        "{{ SELECT {projections} WHERE {{ ( {subject_text} ) <{}> ( {object_text} ) }}{limit} }}",
         binding.producer
     ))
 }
