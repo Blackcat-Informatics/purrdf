@@ -187,6 +187,7 @@
 //!   refuse the reuse it exists for.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RegistryId};
@@ -407,8 +408,14 @@ pub enum AdmissionError {
     },
 
     /// A stratum's recorded depth exceeds the registry's declared row bound.
+    ///
+    /// The bound is read at one declared access mode, and `mode` says which — the
+    /// invoked one, or the coarser one that bounds this read tighter than the invoked
+    /// one declared. A producer declaring several modes is the case the layer exists to
+    /// serve, and for that producer the refused figure is not findable from the count
+    /// alone.
     #[error(
-        "stratum {stratum} declares depth {requested}, but the registry bounds it at {declared}"
+        "stratum {stratum} declares depth {requested}, but the registry bounds it at {declared}{mode}"
     )]
     DepthBoundViolation {
         /// The stratum whose depth was raised.
@@ -417,6 +424,8 @@ pub enum AdmissionError {
         declared: u32,
         /// The depth the plan requested.
         requested: u32,
+        /// Which declared mode `declared` was read at, relative to the invocation.
+        mode: BoundMode,
     },
 
     /// The plan was planned against a different statistics revision than the one
@@ -724,8 +733,21 @@ fn ranked_stratum(descriptor: &PfDescriptor) -> Option<Iri> {
 /// would be unreachable code claiming a policy nothing enforces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RowBound {
-    /// The stratum's one producer declared a finite worst-case row count.
-    Declared(u64),
+    /// The stratum's one producer declared a finite worst-case row count, at the
+    /// declared access mode `mode`.
+    ///
+    /// The mode travels with the number because the number is a function of it: a
+    /// producer declaring three rows with its needle bound and a hundred with it free
+    /// has made two promises, and a refusal that names the figure without the mode it
+    /// was read at names a number the invocation never declared.
+    Declared {
+        /// The declared worst-case row count.
+        rows: u64,
+        /// The declared mode that count was read at, which is the invoked mode itself
+        /// only where no coarser declared mode bounds the read tighter — see
+        /// [`declared_row_bound`].
+        mode: BindingPattern,
+    },
     /// The stratum's one producer declared no worst-case row count at all, so
     /// the registry set no bound here and admission enforces none.
     Undeclared,
@@ -739,8 +761,106 @@ impl RowBound {
     /// can refuse nothing and a zero is a measurement.
     pub(crate) const fn rows(self) -> Option<u64> {
         match self {
-            Self::Declared(rows) => Some(rows),
+            Self::Declared { rows, .. } => Some(rows),
             Self::Undeclared => None,
+        }
+    }
+
+    /// How this bound's number is attributed, for an invocation made under `invoked`
+    /// (or no invocation at all).
+    ///
+    /// One spelling, called at both sites that report a bound a read broke — the
+    /// waist's own [`AdmissionError::DepthBoundViolation`] and the executor's
+    /// [`ExecutionError::RowBoundBreached`](crate::ExecutionError) — so the two cannot
+    /// describe the same declaration differently.
+    pub(crate) fn attributed(self, invoked: Option<BindingPattern>) -> BoundMode {
+        match (self, invoked) {
+            (Self::Undeclared, _) => BoundMode::Undeclared,
+            (Self::Declared { mode, .. }, None) => BoundMode::Uninvoked { declared: mode },
+            (Self::Declared { mode, .. }, Some(invoked)) if mode == invoked => {
+                BoundMode::Invoked { mode }
+            }
+            (Self::Declared { mode, .. }, Some(invoked)) => BoundMode::Subsuming {
+                declared: mode,
+                invoked,
+            },
+        }
+    }
+}
+
+/// Which declared access mode a row bound was read at, relative to the read it bounds.
+///
+/// Carried by the two refusals that name a declared row count —
+/// [`AdmissionError::DepthBoundViolation`] and
+/// [`ExecutionError::RowBoundBreached`](crate::ExecutionError) — because the count alone
+/// is not actionable for the multi-mode producers the published contract encourages. A
+/// producer that declares three rows with its needle bound and a hundred with it free
+/// has two promises registered, and "at most three rows per invocation" sends its author
+/// looking at whichever of the two they happen to think of first.
+///
+/// The [`Display`](fmt::Display) rendering is the phrase the messages embed, written
+/// once here so both say it the same way. It is a *trailing* phrase and carries its own
+/// leading space, which is what lets [`Self::Undeclared`] contribute nothing and leave
+/// the sentence around it intact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BoundMode {
+    /// Read at the very mode the invocation is made under, which is the ordinary case
+    /// and the only one for a producer that declares a single mode.
+    Invoked {
+        /// The mode, which is both the declared one and the invoked one.
+        mode: BindingPattern,
+    },
+    /// Read at a **coarser** declared mode that subsumes the invocation, because that
+    /// mode declared fewer rows than the invoked one did.
+    ///
+    /// The coarser mode demands strictly fewer bindings, so its tuples cover the
+    /// invoked mode's; its count therefore bounds this read too, and where it is the
+    /// smaller of the two it is the promise the producer actually made.
+    ///
+    /// This is the ordinary arm for a producer that declares the all-free mode alone
+    /// and serves every access pattern of its arity through it, which is the shape the
+    /// reference relation has. It is *also* how an over-declaration reads: a producer
+    /// that declares the invoked mode too, with a larger count, has promised more where
+    /// it is bound than it promised where it is free, and the smaller number is the one
+    /// it can keep.
+    Subsuming {
+        /// The declared mode the number was read at.
+        declared: BindingPattern,
+        /// The mode this read is invoked under, which `declared` serves.
+        invoked: BindingPattern,
+    },
+    /// Read at the widest mode the producer declares, because the stratum binds no
+    /// producer for an invocation to have a mode at all. Nothing is emitted for such a
+    /// stratum, so no read is judged by this number — only a recorded depth is.
+    Uninvoked {
+        /// The declared mode the number was read at.
+        declared: BindingPattern,
+    },
+    /// No declared mode stands behind the number: either no ranked producer declares
+    /// anything under the stratum, or the number arrived on a unit a caller assembled
+    /// itself ([`StratumUnit::new`](crate::StratumUnit::new)), which records a count
+    /// and no mode.
+    Undeclared,
+}
+
+impl fmt::Display for BoundMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invoked { mode } => write!(f, " under mode `{}`", mode.code()),
+            Self::Subsuming { declared, invoked } => write!(
+                f,
+                " under mode `{}`, which serves this call under mode `{}`",
+                declared.code(),
+                invoked.code()
+            ),
+            Self::Uninvoked { declared } => write!(
+                f,
+                " under mode `{}`, the widest mode declared, this stratum binding no \
+                 producer to invoke",
+                declared.code()
+            ),
+            Self::Undeclared => Ok(()),
         }
     }
 }
@@ -782,28 +902,52 @@ impl RowBound {
 /// the call with — and a producer serving an invocation through one of them emits at
 /// most that mode's declared rows, because the extra bindings only ever filter. Each
 /// such mode is therefore a valid bound and the **tightest** of them is the promise the
-/// producer actually made about this read, so that is the one taken. Where the invoked
-/// mode is itself declared, it subsumes itself and the answer is its own number
-/// exactly.
+/// producer actually made about this read, so that is the one taken. The answer is the
+/// invoked mode's own number only where no coarser declared mode bounds it tighter —
+/// the invoked mode subsumes itself, so it is one of the candidates, but it is not
+/// privileged among them.
+///
+/// A coarser declared mode promising *less* than a finer one is the producer
+/// **over-declaring the finer one**, and the `min` is the only sound reading of that
+/// pair rather than a tie-break between two opinions. The coarser mode demands strictly
+/// fewer bindings, so every tuple the finer mode can emit is one the coarser mode can
+/// emit too — the extra bindings only filter — and a promise of three rows with the
+/// needle free cannot be kept beside a hundred with it bound. So `fb = 100, ff = 3`
+/// bounds an `fb` invocation at three, and a producer that then returns four is refused
+/// against a number it did register: the refusal names the mode the three was read at
+/// ([`BoundMode`]) precisely because that mode is not the one the call was made under.
 ///
 /// `invoked` is `None` for a stratum the plan binds no producer to. There is no
 /// invocation there and so no mode to read a promise at, and the widest bound the
 /// producer declares under any mode is the most such a depth could ever describe —
 /// which is the only number that can refuse nothing the registry did not speak against.
 /// Nothing is emitted for such a stratum, so no read is judged by it.
+///
+/// Ties are broken by the mode rather than by declaration order, so the mode this
+/// reports is a function of what the registry declares and not of the order it declared
+/// it in: among modes promising the same count the invoked one wins where it is present,
+/// then the lowest [`BindingPattern`] in its own total order. The number is the same
+/// either way; the tie-break decides only which mode the diagnostic names.
 pub(crate) fn declared_row_bound(
     descriptor: &PfDescriptor,
     invoked: Option<BindingPattern>,
 ) -> RowBound {
-    let declared = descriptor.modes.iter();
+    let declared = descriptor.modes.iter().map(|declared| {
+        (
+            declared.rows_per_invocation,
+            BindingPattern::from_code(&declared.code),
+        )
+    });
     match invoked {
-        Some(mode) => declared
-            .filter(|declared| BindingPattern::from_code(&declared.code).subsumes(mode))
-            .map(|declared| declared.rows_per_invocation)
-            .min(),
-        None => declared.map(|declared| declared.rows_per_invocation).max(),
+        Some(invoked) => declared
+            .filter(|(_, mode)| mode.subsumes(invoked))
+            .min_by_key(|&(rows, mode)| (rows, mode != invoked, mode)),
+        None => declared.max_by_key(|&(rows, mode)| (rows, mode)),
     }
-    .map_or(RowBound::Undeclared, RowBound::Declared)
+    .map_or(RowBound::Undeclared, |(rows, mode)| RowBound::Declared {
+        rows,
+        mode,
+    })
 }
 
 /// Which of the plan's request terms a producer's declaration accepts, as
@@ -1272,8 +1416,8 @@ pub(crate) fn admit_plan<'a>(
         // emission on the compiled unit. `invoked` is the mode the plan's own binding
         // will be called under, or `None` for a stratum the plan binds nothing to —
         // which emits no unit and so has no read for a mode to be a property of.
+        let invoked = stratum_invocations.get(stratum).map(|held| held.mode);
         let bound = strata.get(stratum).map(|producer| {
-            let invoked = stratum_invocations.get(stratum).map(|held| held.mode);
             descriptors
                 .get(producer)
                 .map_or(RowBound::Undeclared, |descriptor| {
@@ -1303,7 +1447,7 @@ pub(crate) fn admit_plan<'a>(
             // receipt that means it. Admitting only the floor and nothing beyond
             // it, a depth of two over a declared zero is still refused below.
             // For every `declared >= 1` this changes nothing at all.
-            Some(RowBound::Declared(bound)) => bound.max(1),
+            Some(RowBound::Declared { rows, .. }) => rows.max(1),
             // No ranked producer emits under this stratum at all, so nothing can
             // rank there and no positive depth is fillable. This zero is **not**
             // floored: there is no producer here to hand a probing row to, and a
@@ -1318,6 +1462,13 @@ pub(crate) fn admit_plan<'a>(
                 stratum: Box::new(stratum.clone()),
                 declared: u32::try_from(declared).unwrap_or(u32::MAX),
                 requested: depth.get(),
+                // The mode the refused number was read at, which for a producer
+                // declaring several is routinely not the invoked one: a coarser mode
+                // that declares less bounds the read tighter, and that is the number
+                // above. Named rather than left out, because a depth refused against a
+                // figure declared somewhere the call is not made sends its author
+                // looking at the wrong declaration.
+                mode: bound.map_or(BoundMode::Undeclared, |bound| bound.attributed(invoked)),
             });
         }
     }

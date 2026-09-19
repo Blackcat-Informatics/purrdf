@@ -390,6 +390,10 @@ cannot enumerate needles for a document. Declaring narrowly is the honest move
 when the index really is directional. Declaring broadly is the honest move when it
 is not. Neither is a default.
 
+Declaring several modes also decides which row bound your read is held to, because that
+bound is a function of the mode — see
+[A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound).
+
 ---
 
 ## A9, A10 and A14 are one doctrine: stopping early and running out are the same empty cursor
@@ -481,8 +485,8 @@ nothing. A producer that declared `n` and really holds `n` returns `n` rows into
 an `n + 1`-row bound, the slot comes back empty, and `Exhausted` is *verified*
 rather than believed. A row arriving in it is the producer yielding an `n + 1`-th
 after promising there is none, and the executor refuses the run by name
-(`ExecutionError::RowBoundBreached`, carrying the stratum, the declared bound and
-the count actually returned) rather than truncating to the depth and certifying
+(`ExecutionError::RowBoundBreached`, carrying the stratum, the declared bound, the
+access mode that bound was read at and the count actually returned) rather than truncating to the depth and certifying
 the remainder as completeness.
 
 **If you declare a depth placement, the number you receive is bounded
@@ -557,8 +561,8 @@ declaration. If your index really does stop where you said, that row never
 arrives and your stratum is reported
 [`ProducerStatus::Exhausted`], now verified rather
 than assumed. If it does not, the row arrives, and the run is refused by name with
-your declared bound and the count actually returned in the message
-(`ExecutionError::RowBoundBreached`). Either way the mistake is *said*, and nothing
+your declared bound, the mode that bound was read at and the count actually returned
+in the message (`ExecutionError::RowBoundBreached`). Either way the mistake is *said*, and nothing
 is reported exhausted on the strength of a bound you got wrong.
 
 **If you declare a depth placement, that probe is not available at this depth, and
@@ -584,6 +588,14 @@ bindings only filter, so every subsuming mode is a valid bound and the smallest 
 promise you actually made about this read. The number you are handed, the depth the
 waist admits and the breach the executor refuses all use that one number, computed in
 one place — never the widest mode you happen to have declared elsewhere.
+
+So declaring `3` rows with a position free and `100` with it bound holds the bound call
+to `3`: the free mode covers it, and the `100` over-declares a read its own coarser mode
+already bounds. Because the binding number is therefore routinely declared at a mode the
+call is *not* made under, both refusals that name a row bound
+(`AdmissionError::DepthBoundViolation` and `ExecutionError::RowBoundBreached`) name the
+mode they read it at, and say so when that mode is not the invoked one — so the figure
+in the message always points at a declaration you wrote.
 
 This is what makes A8's reading of `rows_per_invocation` hold on this path rather
 than needing an exception carved out of it. The number remains an estimate in

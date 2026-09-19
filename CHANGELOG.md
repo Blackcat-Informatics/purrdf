@@ -426,6 +426,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and "declared zero" stay different facts across the boundary: an absent
   declaration can refuse nothing, while a zero is a measurement of the producer's
   data, so the absence arrives as `None` rather than as a number nobody took.
+- **sparql-algebra:** `SparqlParser::parse_query_split`, which parses a query exactly as
+  `parse_query_with` does and also reports the byte offset its prologue ends at. For a
+  caller that has to *move* those directives -- wrapping a supplied query in a
+  sub-select, which the grammar gives no prologue -- the position is not derivable from
+  the algebra, because a prefixed name is resolved away at parse time. Positional only:
+  the offset is where the one parse was already standing when it finished the prologue,
+  so the two halves are the caller's own bytes and the algebra beside them is unchanged.
 - **python:** `MutableDataset` answers the native validation snapshot protocol, so
   `Shapes.validate_store` accepts one for real: both quad containers on this
   surface hold a frozen dataset behind a copy-on-write overlay, and validation
@@ -454,15 +461,64 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Every fixture in the suite had declared a single mode and ignored the parameter,
   which is why the difference was unobservable; one now answers a different number per
   mode.
-- **retrieval:** A query text a caller supplies is wrapped rather than appended to. The
-  layer's bound was written after the caller's text, so a text carrying a top-level
-  bound of its own produced two bound clauses, of which the parser kept the last -- the
-  caller's vanished, three rows came back where two were asked for, and the ending
-  named the caller's text as the stopper of a read it had not stopped. The text is now
-  a sub-select under the layer's bound, so both stand: the caller's applies to the
-  pattern it was written against and the layer's to whatever that resolves to.
-  Wrapping rather than refusing, because refusing would mean parsing the text, which
-  this layer does not do and the seam deliberately admits text that is not SPARQL.
+
+  Both refusals that name a row bound say which mode it was read at, because for the
+  multi-mode producers the seam is built for that mode is routinely not the invoked one.
+  A coarser mode declares fewer bindings, so its tuples cover a finer mode's and its
+  count bounds the finer read too: a producer promising a hundred rows with its needle
+  bound and three with it free has over-declared the bound case, three is the sound
+  bound, and the figure appears nowhere in the declaration the call was made at.
+  `ExecutionError::RowBoundBreached` and `AdmissionError::DepthBoundViolation` therefore
+  carry `BoundMode`, which renders as the mode the number came from and, where that is
+  not the invoked one, as the call it serves -- "under mode `ff`, which serves this call
+  under mode `fb`". A bundle a caller assembled itself records a count and no mode, and
+  says that rather than attributing the caller's own number to a registry read that
+  never happened.
+- **retrieval:** A query text a caller supplies is wrapped rather than appended to, and
+  the prologue it was written with is hoisted above that wrapper. The layer's bound was
+  written after the caller's text, so a text carrying a top-level bound of its own
+  produced two bound clauses, of which the parser kept the last -- the caller's
+  vanished, three rows came back where two were asked for, and the ending named the
+  caller's text as the stopper of a read it had not stopped. The text is now a
+  sub-select under the layer's bound, so both stand: the caller's applies to the pattern
+  it was written against and the layer's to whatever that resolves to.
+
+  Wrapping alone was not enough, and the first attempt at it broke a strictly larger
+  class than it fixed. A sub-select carries no prologue in the grammar -- `PREFIX` and
+  `BASE` are `Prologue`, which appears once, at the front of a whole query -- so a text
+  declaring either, which is how essentially all SPARQL is written, stopped parsing the
+  moment it was wrapped, and the caller was handed a syntax error at a byte offset of a
+  query the layer wrote. That included the very case the wrap existed for, whenever the
+  text was prefixed. So `StratumUnit::new` now reads the text once, with the front end
+  the executor runs, and emits the caller's directives *in front of* the wrapping
+  `SELECT` with their query form inside it. It is the text that moves and nothing that
+  is re-rendered: a prefixed name is resolved away at parse time, so the prologue is not
+  recoverable from the algebra, and re-serialising the body would rewrite the argument
+  lists a relation call is spelled with into the blank-node chains a registry-unaware
+  parse lowers them to.
+
+  That parse is also the refusal the wrap was said to be an alternative to. The earlier
+  reasoning -- that refusing a text would mean parsing it, which this layer does not do
+  -- was a false choice twice over: the wrap imposed a sub-select grammar constraint
+  without parsing anything, and the parser the executor runs is a direct dependency. A
+  text that is not a query is now refused at construction by name
+  (`UnitError::NotAQuery`), carrying the parser's own diagnostic, instead of surfacing as
+  one stratum's `ExecutionFailed` after a bundle was assembled and its other strata were
+  read. The parse judges grammar and nothing else -- it runs with no relation registry,
+  so a registered predicate is an ordinary triple pattern to it, and the registry-aware
+  parse at execution stays the authority on the seam, with its refusals still reported
+  as that stratum's own status. `ProducerStatus::ExecutionFailed` for an empty supplied
+  text is gone with the condition: an empty text is not a query, so it cannot reach a
+  bundle.
+
+  The same parse names the query form, and a form the wrapper cannot hold is refused by
+  that name (`UnitError::NotASelect { form }`). An `ASK`, `CONSTRUCT` or `DESCRIBE`
+  supplied to the seam used to build a unit and fail at execution with the same
+  byte-offset diagnostic a prologue produced -- the grammar admits only a `SELECT`
+  inside a sub-select -- and none of the three yields a solution row to rank, so no
+  text of those forms could ever have run and nothing valid is refused. Every `SELECT`
+  is still admitted whatever it carries: a dataset clause, a trailing `VALUES` and a
+  `VERSION` directive are each executed beside the refusal.
 - **retrieval:** A compiled bundle is checked against the set it was assembled with
   before any unit runs (`ExecutionError::UnitsNotAsAssembled`). The unit list and each
   unit's stratum were writable, so a unit removed from the bundle yielded a narrower
@@ -751,7 +807,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `StratumUnit::depth()` and `StratumUnit::declared_rows()`, and reachable only
   through a checked constructor: `StratumUnit::new` takes both numbers and refuses a
   zero depth, a depth whose probe row is inexpressible, and a depth above the declared
-  bound as the three variants of a new `UnitError`. Who applies the depth -- the
+  bound as variants of a new `UnitError` -- joined, per the entry above, by a supplied
+  text the parser refuses. Who applies the depth -- the
   evaluator as a `LIMIT`, or a producer handed it as an argument -- is not an input
   beside them: it is read off the query the compiler assembled, because it is the same
   fact. The seam stays open, because handing the executor a query of one's own is what
@@ -800,9 +857,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
   Driving the executor over a query of one's own stays open through
   `StratumUnit::new`, and such a unit is now a different kind of unit rather than a
-  differently-spelled one. Its text is carried verbatim, this layer bounds only its
-  outside, and what the text bounds inside itself cannot be seen from here -- so that
-  read is never certified `Exhausted`. It reports the new ending
+  differently-spelled one. Its query form reaches the evaluator byte for byte, this
+  layer bounds only its outside, and what the text bounds inside itself is no part of
+  what this layer reads of it -- so that read is never certified `Exhausted`. It reports the new ending
   `StreamEnding::SuppliedQueryEnded`, surfaced as `ProducerReceipt::SuppliedQueryEnded`
   and `ProducerStatus::SuppliedQueryEnded`, which names the caller's own text as the
   stopper and claims nothing about what lies below the rank it reached. `Exhausted`

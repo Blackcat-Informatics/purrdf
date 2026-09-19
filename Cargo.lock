@@ -1581,6 +1581,7 @@ dependencies = [
  "blake3",
  "pretty_assertions",
  "purrdf-core",
+ "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-text",
  "serde",

@@ -379,15 +379,15 @@ pub enum ProducerReceipt {
     /// bound one row past the planned depth onto such a text, but only on its
     /// *outside*; a `LIMIT` on a sub-`SELECT` inside it, or a pattern that matches
     /// less than the producer holds, cuts the read before that bound is consulted and
-    /// is not visible from outside the text.
+    /// is no part of what the layer reads of that text.
     ///
     /// # Why this is none of the three endings beside it
     ///
     /// * [`Self::Exhausted`] would claim the rows ran out, on the strength of a probe
     ///   slot that may never have existed. That is this layer's strongest completeness
-    ///   claim, minted from a text it cannot read — and it is exactly the defect this
-    ///   vocabulary exists to prevent, reached through the one door that stayed open
-    ///   longest.
+    ///   claim, minted from a text whose bounds the layer never read — and it is
+    ///   exactly the defect this vocabulary exists to prevent, reached through the one
+    ///   door that stayed open longest.
     /// * [`Self::DepthReached`] would name the planned depth as the stopper and assert
     ///   that a further row existed. Neither half is known: the depth may not have
     ///   been reached at all.

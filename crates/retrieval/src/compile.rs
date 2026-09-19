@@ -183,10 +183,10 @@
 //! string between them and the reader.
 //!
 //! Driving the executor over a query of a caller's own is still open, through
-//! [`StratumUnit::new`], and it is a *different* kind of unit: the text is carried
-//! verbatim, this layer bounds only its outside, and what bounds the caller wrote
-//! inside it cannot be seen from here. Such a read therefore never ends
-//! `Exhausted` — the ending names the caller's text as the stopper instead
+//! [`StratumUnit::new`], and it is a *different* kind of unit: the caller's query form
+//! reaches the evaluator byte for byte, this layer bounds only its outside, and what
+//! bounds the caller wrote inside it cannot be seen from here. Such a read therefore
+//! never ends `Exhausted` — the ending names the caller's text as the stopper instead
 //! ([`StreamEnding::SuppliedQueryEnded`](crate::StreamEnding)). That is not a refusal
 //! of the seam and not a weaker check: it is the same rule the rest of this
 //! vocabulary follows, which is that a completeness claim is only ever made about a
@@ -196,6 +196,19 @@
 //! three times over: it re-reads a bound the layer already knows, it can only ever
 //! refuse a caller for writing the number this layer writes itself, and it sees
 //! nothing at all of the bound one line further in.
+//!
+//! This layer does read a supplied text once, at one seam and for two reasons that are
+//! the same reason. [`StratumUnit::new`] parses it with the parser
+//! [`execute`](crate::execute) will run, so a text that is not a query is refused
+//! there — by name, at construction — rather than surfacing as a per-stratum failure
+//! after a plan was admitted and other strata were read; and the parse reports where
+//! the caller's **prologue** ends, which the wrapping `SELECT` has to know. A
+//! sub-`SELECT` carries no prologue, so wrapping a text that declares `PREFIX` or
+//! `BASE` without lifting those directives out first makes the whole query
+//! unparsable — and the caller then gets a parse error at a byte offset of a query it
+//! never wrote. Nothing about the *bounds* is read from that parse: the outer bound
+//! is still this layer's arithmetic over the proved depth, and what the caller's own
+//! text bounds inside itself is still not this layer's to certify.
 //!
 //! # The declared row bound does not cap the emitted bound, at any size
 //!
@@ -304,11 +317,12 @@
 
 use std::collections::BTreeMap;
 
-use purrdf_sparql_eval::{PfDescriptor, RankedDeclaration, RegistryId};
+use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
+use purrdf_sparql_eval::{BindingPattern, PfDescriptor, RankedDeclaration, RegistryId};
 
 use crate::admission::{
-    AdmissionEnvironment, AdmissionError, MAX_READ_DEPTH, ProbedDepth, RowBound, Unprobeable,
-    admit_plan,
+    AdmissionEnvironment, AdmissionError, BoundMode, MAX_READ_DEPTH, ProbedDepth, RowBound,
+    Unprobeable, admit_plan,
 };
 use crate::execute::ExecutionError;
 use crate::fuse::TopK;
@@ -326,19 +340,33 @@ use crate::request::ReadBound;
 /// The distinction is not bookkeeping: it decides what the layer may claim about
 /// how that unit's read ended. A query this stage rendered carries bounds this
 /// stage computed from a proved depth, so the arrival of the probe row is an
-/// observation. A query a caller supplied is text this layer cannot see into — a
-/// `LIMIT` inside a sub-`SELECT`, a `FILTER`, a pattern that simply matches less —
-/// so how that read ended is not this layer's to certify. See this module's
-/// header.
+/// observation. A query a caller supplied is text whose *bounds* this layer never
+/// reads — it parses the text once, far enough to find where the prologue it has to
+/// hoist ends and to refuse something that is not a query, and interprets nothing
+/// else — so a `LIMIT` inside a sub-`SELECT`, a `FILTER` or a pattern that simply
+/// matches less are all the caller's, and how that read ended is not this layer's to
+/// certify. See this module's header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum UnitQuery {
     /// The query [`compile`] rendered, held as the parts it was assembled from so
     /// that every bound in it is arithmetic over the unit's own depth, performed
     /// when the text is asked for.
     Rendered(RenderedQuery),
-    /// A query text a caller supplied, carried verbatim and bounded by nothing this
-    /// layer wrote.
-    Supplied(String),
+    /// A query text a caller supplied, bounded by nothing this layer wrote.
+    ///
+    /// The text is the caller's own bytes and is read back as such
+    /// ([`StratumUnit::supplied_query`]). What the layer holds beside it is the one
+    /// position it needs to bound the text without breaking it: where the caller's
+    /// prologue ends, as [`StratumUnit::new`]'s parse reported it.
+    Supplied {
+        /// The caller's text, exactly as it was handed over.
+        text: String,
+        /// The byte offset the query form starts at, so the `BASE`/`PREFIX`/`VERSION`
+        /// directives in front of it can be hoisted above the wrapping `SELECT`. Zero
+        /// for a text with no prologue, which is every text this seam saw before a
+        /// prefixed one reached it.
+        body_at: usize,
+    },
 }
 
 /// One stratum's rendered query, as the parts a bound is written between.
@@ -479,7 +507,7 @@ pub(crate) enum ReadReach {
 /// than a second opinion about it.
 fn read_reach(depth: u32, declared_rows: Option<u64>, query: &UnitQuery) -> ReadReach {
     let rendered = match query {
-        UnitQuery::Supplied(_) => return ReadReach::Unknown,
+        UnitQuery::Supplied { .. } => return ReadReach::Unknown,
         UnitQuery::Rendered(rendered) => rendered,
     };
     match declared_rows {
@@ -496,7 +524,7 @@ fn read_reach(depth: u32, declared_rows: Option<u64>, query: &UnitQuery) -> Read
     }
 }
 
-/// A set of facts no unit can describe a read with.
+/// A set of facts no unit can describe a read with, and a text that is no read at all.
 ///
 /// Raised by [`StratumUnit::new`] and by nothing else: a unit [`compile`] emits
 /// carries an already-admitted depth, so the refusals below are a hand-built
@@ -505,7 +533,13 @@ fn read_reach(depth: u32, declared_rows: Option<u64>, query: &UnitQuery) -> Read
 /// [`execute`](crate::execute) decides an ending from, and a bundle that lies about
 /// them mints the same false completeness claim a hand-edited *plan* is refused for
 /// at the admission waist.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+///
+/// [`Self::NotAQuery`] is the one that is not about a number. It is here rather than
+/// left to execution time because the constructor now reads the text anyway — the
+/// wrapping bound cannot be written over a prologue without knowing where that
+/// prologue ends — so the refusal costs nothing and arrives where the caller can still
+/// act on it.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum UnitError {
     /// The unit records a depth of zero, which reads nothing and proves nothing.
@@ -546,6 +580,49 @@ pub enum UnitError {
         depth: u32,
         /// The row bound the unit says the registry declared.
         declared: u64,
+    },
+
+    /// The supplied text is not a SPARQL query: the parser
+    /// [`execute`](crate::execute) would have run refused it.
+    ///
+    /// Refused at construction rather than at execution, which is the whole of the
+    /// difference this variant makes. The text was going to be run either way, and the
+    /// diagnostic is the parser's own either way; what changes is that it names the
+    /// caller's text at the moment the caller handed it over, instead of arriving as
+    /// one stratum's [`ProducerStatus::ExecutionFailed`](crate::ProducerStatus) after a
+    /// bundle was assembled and its other strata were read.
+    ///
+    /// A text the parser accepts here can still fail at execution and still reports
+    /// that failure as its own stratum's status: this constructor parses with no
+    /// relation registry, so a registered relation's predicate is an ordinary triple
+    /// pattern to it, and the registry-aware parse the executor runs is the authority
+    /// on everything about the seam. This refusal is therefore exactly "not a query",
+    /// and never "not a query this registry likes".
+    #[error("a stratum unit's supplied text is not a SPARQL query: {reason}")]
+    NotAQuery {
+        /// The parser's own diagnostic, carried rather than summarized.
+        reason: String,
+    },
+
+    /// The supplied text is a query, but not a `SELECT`, and only a `SELECT` yields
+    /// the solution rows a stratum is read as.
+    ///
+    /// The layer's bound wraps the text as a sub-`SELECT`, and the grammar's
+    /// `SubSelect` admits exactly that form: an `ASK`, `CONSTRUCT` or `DESCRIBE`
+    /// inside the wrapper is a syntax error at a byte offset of a query the caller
+    /// never wrote. It would be a semantic refusal even if the grammar allowed it —
+    /// an `ASK` answers with one boolean and the other two with triples, none of which
+    /// is a row carrying a candidate and a rank. So there is no `ASK`, `CONSTRUCT` or
+    /// `DESCRIBE` text that could ever run through this seam, and refusing it by its
+    /// form name at the constructor costs no valid text anything.
+    #[error(
+        "a stratum unit's supplied text is a {form} query, and only a SELECT can be read as \
+         ranked rows: the layer's bound wraps the text as a sub-SELECT, which the grammar admits \
+         only for SELECT, and a {form} answers with no solution rows to rank"
+    )]
+    NotASelect {
+        /// The query form the text was written in: `ASK`, `CONSTRUCT` or `DESCRIBE`.
+        form: &'static str,
     },
 }
 
@@ -674,6 +751,19 @@ pub struct StratumUnit {
     /// supplied, and read by [`execute`](crate::execute) to tell an ending it can
     /// observe from one it cannot.
     reach: ReadReach,
+    /// Which declared access mode [`Self::declared_rows`] was read at.
+    ///
+    /// Carried for the reason the count itself is: the count is a function of the mode,
+    /// and the refusal a producer that beats it earns
+    /// ([`ExecutionError::RowBoundBreached`](crate::ExecutionError)) has to name the
+    /// declaration its author must go and fix. For a multi-mode producer that mode is
+    /// routinely *not* the invoked one — a coarser mode declaring less bounds the read
+    /// tighter — so it cannot be re-derived from the invocation at execution time, and
+    /// a number without it names a figure the invocation never declared.
+    ///
+    /// [`BoundMode::Undeclared`] for a unit a caller assembled through [`Self::new`],
+    /// which records a count and no mode.
+    declared_mode: BoundMode,
 }
 
 impl StratumUnit {
@@ -687,18 +777,44 @@ impl StratumUnit {
     /// row count; "declared nothing" and "declared zero" are different facts here
     /// for the reason they are different facts at the waist.
     ///
-    /// `query` is carried verbatim and is bounded by this layer only on the outside:
-    /// [`Self::sparql`] is that text as a sub-`SELECT` of a query bounded at
-    /// `LIMIT depth + 1`. It wraps rather than follows, because a text carrying a
-    /// top-level bound of its own can hold no second one, and wrapped, both bounds
-    /// stand — the caller's over the pattern it was written against, this layer's over
-    /// whatever that resolves to. Whatever else the text
-    /// bounds — a sub-`SELECT` of its own, a pattern that matches less — is the
+    /// `query` is read back verbatim through [`Self::supplied_query`], and it is
+    /// bounded by this layer only on the outside: [`Self::sparql`] is the caller's
+    /// query form as a sub-`SELECT` of a query bounded at `LIMIT depth + 1`, with any
+    /// prologue the caller wrote hoisted above that wrapper. It wraps rather than
+    /// follows, because a text carrying a top-level bound of its own can hold no second
+    /// one, and wrapped, both bounds stand — the caller's over the pattern it was
+    /// written against, this layer's over whatever that resolves to. Whatever else the
+    /// text bounds — a sub-`SELECT` of its own, a pattern that matches less — is the
     /// caller's and is not visible from here, so the read it describes is **never**
     /// certified [`Exhausted`](crate::ProducerStatus::Exhausted); see this type's
     /// header for what its ending is instead. There is no way to hand this
     /// constructor a query that *is* certified, deliberately: that text is
     /// [`compile`]'s to render, from parts no caller supplies.
+    ///
+    /// # Why the text is parsed here
+    ///
+    /// The wrap is the reason. A sub-`SELECT` has no prologue in the grammar, so a
+    /// text declaring `PREFIX` or `BASE` — which is how essentially all SPARQL is
+    /// written — cannot be wrapped as it stands: the directives have to be lifted
+    /// above the wrapping `SELECT`, and finding where they end is a question only a
+    /// parser can answer. So this constructor parses `query` with the same front end
+    /// [`execute`](crate::execute) will run, takes the offset its prologue ends at, and
+    /// refuses a text that is not a query at all ([`UnitError::NotAQuery`]) rather than
+    /// carrying it to a stratum failure later. The same parse names the query form, and
+    /// a form other than `SELECT` is refused too ([`UnitError::NotASelect`]): the
+    /// wrapper is a sub-`SELECT`, the grammar admits nothing else inside one, and an
+    /// `ASK`, `CONSTRUCT` or `DESCRIBE` yields no solution rows to read as ranks in
+    /// any case — so no text of those forms could ever have run here, and refusing
+    /// them by name loses nothing valid. The caller's own bytes are what get wrapped;
+    /// nothing is re-rendered from the parse, so the body reaches the evaluator
+    /// unchanged.
+    ///
+    /// The parse decides nothing else, and in particular decides no bound. It is run
+    /// with no relation registry, so a registered producer's predicate is an ordinary
+    /// triple pattern to it; the registry-aware parse at execution is still the
+    /// authority on the seam, and a text it refuses still reports that refusal as its
+    /// own stratum's
+    /// [`ProducerStatus::ExecutionFailed`](crate::ProducerStatus).
     ///
     /// # Errors
     ///
@@ -708,6 +824,10 @@ impl StratumUnit {
     /// * [`UnitError::DepthBeyondDeclaration`] when `depth` is above the declared row
     ///   bound, read — as everywhere in this layer — with a declared zero floored at
     ///   the one probing row.
+    /// * [`UnitError::NotAQuery`] when the parser refuses `query`, carrying its
+    ///   diagnostic.
+    /// * [`UnitError::NotASelect`] when `query` parses as an `ASK`, `CONSTRUCT` or
+    ///   `DESCRIBE`, naming the form.
     pub fn new(
         stratum: Iri,
         query: String,
@@ -731,12 +851,21 @@ impl StratumUnit {
         {
             return Err(UnitError::DepthBeyondDeclaration { depth, declared });
         }
+        let body_at = prologue_end(&query)?;
         Ok(Self::assembled(
             stratum,
-            UnitQuery::Supplied(query),
+            UnitQuery::Supplied {
+                text: query,
+                body_at,
+            },
             contract,
             probed,
             declared_rows,
+            // A caller's bundle records a count and no mode, so there is no
+            // declaration behind this number for a refusal to name — and inventing
+            // the invoked mode here would attribute the caller's own figure to a
+            // registry read that never happened.
+            BoundMode::Undeclared,
         ))
     }
 
@@ -759,6 +888,7 @@ impl StratumUnit {
         contract: StreamContract,
         depth: ProbedDepth,
         bound: RowBound,
+        invoked: BindingPattern,
     ) -> Self {
         Self::assembled(
             stratum,
@@ -766,6 +896,11 @@ impl StratumUnit {
             contract,
             depth,
             bound.rows(),
+            // The attribution the waist's own `RowBound` carries, resolved against the
+            // mode this very text is emitted under. Both facts are the waist's, taken
+            // together here rather than re-derived at execution, where the invocation
+            // is no longer in hand.
+            bound.attributed(Some(invoked)),
         )
     }
 
@@ -776,6 +911,7 @@ impl StratumUnit {
         contract: StreamContract,
         depth: ProbedDepth,
         declared_rows: Option<u64>,
+        declared_mode: BoundMode,
     ) -> Self {
         Self {
             stratum,
@@ -784,6 +920,7 @@ impl StratumUnit {
             contract,
             depth,
             declared_rows,
+            declared_mode,
         }
     }
 
@@ -794,8 +931,9 @@ impl StratumUnit {
     /// from [`Self::depth()`]. For a query a caller supplied, it is that text wrapped in
     /// a query carrying the unit's own bound, which is the only bound this layer can
     /// write over a text it did not assemble. It wraps rather than follows because a
-    /// text carrying a top-level bound of its own can hold no second one after it, and
-    /// wrapping needs to know nothing about the text.
+    /// text carrying a top-level bound of its own can hold no second one after it. The
+    /// caller's prologue is hoisted in front of the wrapper, because a sub-`SELECT`
+    /// cannot carry one — see [`Self::new`] for why that hoist is possible here at all.
     ///
     /// Derived rather than stored, so the bounds the read is taken under and the depth
     /// the ending is judged against cannot be different numbers. The probe row is
@@ -806,7 +944,7 @@ impl StratumUnit {
     pub fn sparql(&self) -> String {
         match &self.query {
             UnitQuery::Rendered(rendered) => rendered.text(self.depth, self.declared_rows),
-            UnitQuery::Supplied(text) => supplied_text(text, self.depth),
+            UnitQuery::Supplied { text, body_at } => supplied_text(text, *body_at, self.depth),
         }
     }
 
@@ -820,7 +958,7 @@ impl StratumUnit {
     pub fn supplied_query(&self) -> Option<&str> {
         match &self.query {
             UnitQuery::Rendered(_) => None,
-            UnitQuery::Supplied(text) => Some(text),
+            UnitQuery::Supplied { text, .. } => Some(text),
         }
     }
 
@@ -840,6 +978,14 @@ impl StratumUnit {
     /// Whether this unit's read reaches one row past its depth.
     pub(crate) const fn reach(&self) -> ReadReach {
         self.reach
+    }
+
+    /// Which declared access mode [`Self::declared_rows`] was read at, for the refusal
+    /// that names it. Not public: a caller reads the number it supplied or the number
+    /// the compiler put there, and the attribution is the executor's to *report*, not a
+    /// second dimension for a bundle to disagree about.
+    pub(crate) const fn declared_mode(&self) -> BoundMode {
+        self.declared_mode
     }
 }
 
@@ -1162,6 +1308,7 @@ pub fn compile(
             StreamContract::declared(declaration),
             *depth,
             bound,
+            invocation.mode,
         ));
     }
     units.sort_by(|left, right| left.stratum.cmp(&right.stratum));
@@ -1273,8 +1420,13 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
     depth.probe()
 }
 
-/// The whole text a unit runs over a query a caller supplied: that text as a
-/// sub-`SELECT`, with this layer's bound on the result of the whole of it.
+/// The whole text a unit runs over a query a caller supplied: the caller's prologue,
+/// then their query form as a sub-`SELECT`, with this layer's bound on the result of
+/// the whole of it.
+///
+/// `body_at` is where that prologue ends, as [`prologue_end`] read it off the parse
+/// [`StratumUnit::new`] already ran; `text[..body_at]` is hoisted in front of the
+/// wrapper and `text[body_at..]` goes inside it.
 ///
 /// The layer's bound **wraps** the caller's text rather than following it, and the
 /// difference is the difference between a query and an invalid one. Appended, the two
@@ -1291,28 +1443,87 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
 /// honestly bound. That is also the outer bound the type's own contract promises, so the
 /// promise is now true of the text rather than of the intention behind it.
 ///
-/// # Why this is a wrap and not a refusal
+/// # Why the prologue is moved, and moved as text
 ///
-/// A refusal would have to know whether a supplied text already carries a top-level
-/// solution modifier, and knowing that means parsing it. This layer does not parse
-/// SPARQL, and the seam deliberately admits a text that is not SPARQL at all —
-/// [`execute`](crate::execute) reports the parser's own diagnostic as that stratum's
-/// [`ProducerStatus::ExecutionFailed`](crate::ProducerStatus::ExecutionFailed), which
-/// is a status a caller reaches on purpose. A gate at the constructor would therefore
-/// have to refuse either every text it could not parse — closing the seam — or nothing,
-/// which is no gate. Wrapping needs to know nothing about the text and leaves every
-/// runnable text runnable.
+/// The grammar's sub-`SELECT` (`SubSelect ::= SelectClause WhereClause
+/// SolutionModifier ValuesClause`) has no prologue in it: `PREFIX` and `BASE` are
+/// `Prologue`, which appears once, at the front of a whole query. So a caller's text
+/// that declares either — which is how essentially all real SPARQL is written — stops
+/// parsing the moment it is wrapped as it stands, and the diagnostic a caller then sees
+/// points at a byte offset of a query this layer wrote. Wrapping without hoisting fixed
+/// one narrow shape (a text carrying its own top-level bound) and broke a strictly
+/// larger valid class, including that same shape whenever it was prefixed.
+///
+/// Hoisted, both halves keep their meaning: the directives are in the one position the
+/// grammar accepts them, they scope the whole query and therefore the body inside it,
+/// and the prefixed names in the body resolve against the caller's own declarations.
+///
+/// It is the *text* that moves, not a re-rendering of the parsed form, and that is
+/// deliberate. A prefixed name is resolved away at parse time, so the prologue cannot be
+/// recovered from the algebra at all; and re-serializing the body would rewrite the
+/// caller's surface spelling — the argument lists a relation call is written with are
+/// collection syntax to a parser that has not been told which IRIs are relations, and
+/// re-emitting them as the blank-node chains they lower to would hand the executor a
+/// text whose registry-aware parse no longer sees a call. Splitting at the offset the
+/// parse reported moves nothing but the directives, so the body the evaluator reads is
+/// byte for byte the body the caller wrote.
 ///
 /// The projection is `*` rather than the two columns
 /// [`execute`](crate::execute) reads, because naming them would *add* those columns to
 /// a text that did not project them: an unbound `?candidate` projected by this layer
 /// reads back as a row whose candidate column is absent, where a text that projects no
 /// candidate should be reported as exactly that.
-fn supplied_text(text: &str, depth: ProbedDepth) -> String {
+fn supplied_text(text: &str, body_at: usize, depth: ProbedDepth) -> String {
+    // `body_at` is a byte offset the parser reported between two of its own tokens, so
+    // it is on a character boundary of this very text and the split is total. It is
+    // zero for a text with no prologue, where `prologue` is empty and the emitted query
+    // is exactly what it was before a prefixed text reached this seam.
+    let (prologue, body) = text.split_at(body_at.min(text.len()));
     format!(
-        "SELECT * WHERE {{\n  {{ {text} }}\n}}\nLIMIT {}",
+        "{prologue}SELECT * WHERE {{\n  {{ {body} }}\n}}\nLIMIT {}",
         emitted_limit(depth)
     )
+}
+
+/// Where a caller-supplied query's prologue ends, from the parse that also decides
+/// whether the text is a query at all, and whether it is the one form this seam can
+/// read as rows.
+///
+/// One parse, three answers, and the first is why the other two can be afforded: the
+/// wrapping [`supplied_text`] writes needs the offset, so reading the text is not an
+/// extra check bolted onto the seam but the thing the seam already had to do. The two
+/// refusals are not a policy about which queries are welcome here. A text that is not
+/// a query is refused with the parser's own words ([`UnitError::NotAQuery`]); a query
+/// that is not a `SELECT` is refused by its form name ([`UnitError::NotASelect`]),
+/// because the wrapper is a sub-`SELECT` and the grammar admits no other form inside
+/// one — an `ASK`, `CONSTRUCT` or `DESCRIBE` could never have run through this seam,
+/// so nothing valid is lost by saying so at the constructor. Every `SELECT` the parser
+/// accepts is admitted, whatever its dataset clause, `VALUES` or `VERSION` carries, and
+/// everything about the *relations* in it is left to the registry-aware parse at
+/// execution.
+///
+/// Parsed with [`ParserOptions::default`], i.e. with no relation namespaces and no
+/// registered relation IRIs, for two reasons. There is no registry at this
+/// constructor — a bundle a caller assembles names one only at
+/// [`execute`](crate::execute) — and the parse is about grammar rather than about the
+/// seam: recognizing a predicate as a relation call changes what the query *means*, not
+/// whether it parses, and a call written with argument lists is ordinary collection
+/// syntax to a parser that has not been told otherwise. The registry-aware parse stays
+/// the authority, and is strictly the narrower of the two, so this refusal cannot
+/// close the seam on a text execution would have accepted.
+fn prologue_end(text: &str) -> Result<usize, UnitError> {
+    let (query, body_at) = SparqlParser::new()
+        .parse_query_split(text, &ParserOptions::default())
+        .map_err(|error| UnitError::NotAQuery {
+            reason: error.to_string(),
+        })?;
+    let form = match query {
+        Query::Select { .. } => return Ok(body_at),
+        Query::Ask { .. } => "ASK",
+        Query::Construct { .. } => "CONSTRUCT",
+        Query::Describe { .. } => "DESCRIBE",
+    };
+    Err(UnitError::NotASelect { form })
 }
 
 /// The number handed to a producer that declares a

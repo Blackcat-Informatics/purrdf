@@ -23,10 +23,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, ExecutionError, Fixed,
-    FusionProfile, IndexGeneration, Iri, ProducerStatus, RankedStream, RankedStreamAdapter,
-    RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel, Statistics,
-    StratumUnit, StreamContract, Term, TopK, compile, execute, plan, search,
+    AdmissionEnvironment, BoundMode, CandidateDomains, CompiledRetrieval, DecayRule,
+    ExecutionError, Fixed, FusionProfile, IndexGeneration, Iri, ProducerStatus, RankedStream,
+    RankedStreamAdapter, RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel,
+    Statistics, StratumUnit, StreamContract, Term, TopK, UnitError, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -739,18 +739,47 @@ fn a_forced_failure_isolates_to_its_stratum() {
     let registry = fixture_registry();
     let stats = statistics();
     let mut bundle = compiled(&registry, &stats);
-    running(&mut bundle, 0, "THIS IS NOT SPARQL".to_owned());
+    // A text that is not SPARQL never gets as far as a bundle: the constructor reads
+    // what it is handed, so this is refused there rather than isolated here.
+    let template = &bundle.units[0];
+    match StratumUnit::new(
+        template.stratum.clone(),
+        "THIS IS NOT SPARQL".to_owned(),
+        template.contract.clone(),
+        template.depth(),
+        template.declared_rows(),
+    )
+    .expect_err("a text that is not a query is not a unit")
+    {
+        UnitError::NotAQuery { reason } => assert!(
+            reason.contains("expected SELECT, CONSTRUCT, ASK or DESCRIBE"),
+            "the parser's own diagnostic reaches the caller: {reason}"
+        ),
+        other => panic!("expected NotAQuery, got {other:?}"),
+    }
+
+    // What is isolated here is a failure of a text that IS a query: it reaches for a
+    // user-defined function nothing registered, so the read cannot be performed at all.
+    running(
+        &mut bundle,
+        0,
+        format!(
+            "SELECT ?candidate WHERE {{ BIND(<{}>(1) AS ?candidate) }}",
+            ex("fn/absent")
+        ),
+    );
 
     let mut execution =
         block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("execution starts");
 
-    assert!(
-        matches!(
-            execution.statuses[&iri(&ex(STRATA[0]))],
-            ProducerStatus::ExecutionFailed { .. }
+    match &execution.statuses[&iri(&ex(STRATA[0]))] {
+        ProducerStatus::ExecutionFailed { reason } => assert!(
+            reason.contains(&ex("fn/absent")),
+            "the broken unit's stratum carries its own typed status, naming what it \
+             could not reach: {reason}"
         ),
-        "the broken unit's stratum carries its own typed status"
-    );
+        other => panic!("expected the failing stratum's own status, got {other:?}"),
+    }
     assert_eq!(execution.streams.len(), 1, "only the survivor streams");
     assert_eq!(
         candidates(&mut execution, &iri(&ex(STRATA[1]))).len(),
@@ -1230,6 +1259,7 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
             stratum,
             declared,
             pulled,
+            mode,
         } => {
             assert_eq!(
                 stratum.as_str(),
@@ -1238,13 +1268,28 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
             );
             assert_eq!(*declared, 3, "the promise the host has to go and fix");
             assert_eq!(*pulled, 4, "and the evidence that it is false");
+            assert_eq!(
+                *mode,
+                BoundMode::Subsuming {
+                    declared: BindingPattern::from_code("ff"),
+                    invoked: BindingPattern::from_code("fb"),
+                },
+                "this fixture declares the all-free mode alone and serves the needle \
+                 bound through it, which is the shape the reference relation has — so \
+                 the promise was read at `ff` and the refusal says which call it \
+                 served: {mode:?}"
+            );
         }
         other => panic!("the breach is refused by name, not reported as a status or as {other:?}"),
     }
     let message = error.to_string();
     assert!(
-        message.contains("at most 3 rows") && message.contains("returned 4"),
-        "both numbers reach a host that only reads the message: {message}"
+        message.contains(
+            "at most 3 rows per invocation under mode `ff`, which serves this call \
+             under mode `fb`, and the read returned 4"
+        ),
+        "both numbers and the declared mode they were read at reach a host that only \
+         reads the message: {message}"
     );
 
     // The neighbour that must stay green: the same depth, the same declaration,

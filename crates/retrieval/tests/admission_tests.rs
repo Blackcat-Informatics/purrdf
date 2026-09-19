@@ -17,10 +17,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionError,
-    FusionProfile, Iri, Metric, MonotoneDepth, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
-    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, StratumUnit,
-    Term, UnservedReason, UnservedTerm, compile, contribution, execute,
+    AdmissionEnvironment, AdmissionError, BoundMode, CompiledRetrieval, DecayRule, Fixed,
+    FusionError, FusionProfile, Iri, Metric, MonotoneDepth, Plan, PlanOrigin, ProducerDecision,
+    ProducerStatus, RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics,
+    StratumUnit, Term, UnitError, UnservedReason, UnservedTerm, compile, contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -678,10 +678,16 @@ fn admission_rejects_depth_bound_violation() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/universal")));
             assert_eq!(declared, 200);
             assert_eq!(requested, 201);
+            assert!(
+                matches!(mode, BoundMode::Invoked { .. }),
+                "this producer declares one mode and is invoked under it, so the \
+                 refused number was read where the call is made: {mode:?}"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
@@ -1714,10 +1720,16 @@ fn a_declared_row_bound_still_refuses_a_raised_depth() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/universal")));
             assert_eq!(declared, 200);
             assert_eq!(requested, 201);
+            assert!(
+                matches!(mode, BoundMode::Invoked { .. }),
+                "this producer declares one mode and is invoked under it, so the \
+                 refused number was read where the call is made: {mode:?}"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
@@ -1745,10 +1757,17 @@ fn a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/ghost")));
             assert_eq!(declared, 0);
             assert_eq!(requested, 5);
+            assert_eq!(
+                mode,
+                BoundMode::Undeclared,
+                "nothing ranks under this stratum, so there is no declaration and no \
+                 mode for the refusal to name"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
@@ -1824,10 +1843,16 @@ fn a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/empty")));
             assert_eq!(declared, 1, "the floor is the whole of the bound");
             assert_eq!(requested, 2);
+            assert!(
+                matches!(mode, BoundMode::Invoked { .. }),
+                "a declared zero is still a declaration, read at the invoked mode: \
+                 {mode:?}"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
@@ -1853,10 +1878,17 @@ fn a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/ghost")));
             assert_eq!(declared, 0, "an absent bound is not floored to one");
             assert_eq!(requested, 1);
+            assert_eq!(
+                mode,
+                BoundMode::Undeclared,
+                "nothing ranks under this stratum, so there is no declaration and no \
+                 mode for the refusal to name"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
@@ -2067,25 +2099,51 @@ fn one_stratum_failure_others_continue() {
     };
     let mut compiled = compile(&plan, &env).expect("the plan admits");
     let failing = compiled.units[1].stratum.clone();
-    // A unit running a text nobody compiled, which is the only way to reach the
-    // evaluator's parse failure from here. Everything else about the unit is the
-    // compiler's own, so the surviving strata below are unaffected — including their
-    // `Exhausted`, which they still earn because their own text is still rendered.
-    let broken = &compiled.units[1];
-    let broken = StratumUnit::new(
-        broken.stratum.clone(),
+    // A text that is not SPARQL at all never reaches a bundle: the constructor parses
+    // what it is handed, so it is refused here, by name, with the parser's own
+    // diagnostic — rather than admitted and discovered one execution later.
+    let template = &compiled.units[1];
+    let refused = StratumUnit::new(
+        template.stratum.clone(),
         "THIS IS NOT SPARQL".to_owned(),
-        broken.contract.clone(),
-        broken.depth(),
-        broken.declared_rows(),
+        template.contract.clone(),
+        template.depth(),
+        template.declared_rows(),
     )
-    .expect("the compiler's own depth and declaration are admitted");
+    .expect_err("a text that is not a query is not a unit");
+    match refused {
+        UnitError::NotAQuery { reason } => assert!(
+            reason.contains("expected SELECT, CONSTRUCT, ASK or DESCRIBE"),
+            "the parser's own diagnostic is carried rather than summarized: {reason}"
+        ),
+        other => panic!("expected NotAQuery, got {other:?}"),
+    }
+
+    // So the isolated failure below is driven by a text that IS a query and still
+    // cannot run: it reaches for a user-defined function nothing registered. Everything
+    // else about the unit is the compiler's own, so the surviving strata are unaffected
+    // — including their `Exhausted`, which they still earn because their own text is
+    // still rendered.
+    let broken = StratumUnit::new(
+        template.stratum.clone(),
+        format!(
+            "SELECT ?candidate WHERE {{ BIND(<{}>(1) AS ?candidate) }}",
+            ex("fn/absent")
+        ),
+        template.contract.clone(),
+        template.depth(),
+        template.declared_rows(),
+    )
+    .expect("a well-formed query over an unresolvable function is still a unit");
     compiled.units[1] = broken;
 
     let result = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
         .expect("execution starts");
     match result.statuses.get(&failing) {
-        Some(ProducerStatus::ExecutionFailed { .. }) => {}
+        Some(ProducerStatus::ExecutionFailed { reason }) => assert!(
+            reason.contains(&ex("fn/absent")),
+            "the failure names what could not be reached: {reason}"
+        ),
         other => panic!("the failing stratum is ExecutionFailed, got {other:?}"),
     }
     for unit in &compiled.units {

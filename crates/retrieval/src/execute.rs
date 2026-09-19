@@ -196,8 +196,10 @@
 //! and nothing else could have cut the read first. A unit built through
 //! [`StratumUnit::new`](crate::StratumUnit::new) runs a text a caller wrote, and this
 //! layer bounds only its outside — a `LIMIT` on a sub-`SELECT` inside it decides the
-//! read before the outer bound is ever consulted, and no inspection of the text from
-//! here could rule that out.
+//! read before the outer bound is ever consulted, and nothing this layer reads of that
+//! text rules it out: the one parse it runs
+//! ([`StratumUnit::new`](crate::StratumUnit::new)'s) locates the caller's prologue and
+//! interprets no bound.
 //!
 //! So such a read is executed exactly as any other, its rows are ranked exactly as
 //! any other, a row past the depth still means something further existed
@@ -219,6 +221,7 @@ use purrdf_sparql_eval::{
     ServiceLevel,
 };
 
+use crate::admission::BoundMode;
 use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, ReadReach};
 use crate::fuse::TopK;
 use crate::fusion_stream::ProducerStatus;
@@ -422,8 +425,15 @@ pub enum ExecutionError {
     /// Both numbers are carried because either alone is unactionable. `declared`
     /// is the promise a host has to go and fix in its producer, and `pulled` is
     /// the evidence that it is false.
+    ///
+    /// `mode` says *which* promise, and it is not decoration for the producers this
+    /// layer is built for. A declared row count is a function of the access mode, so an
+    /// index-backed producer has several registered, and the one that bounds a read is
+    /// the tightest among the declared modes that serve it — routinely a coarser mode
+    /// than the call was made under. Named without its mode, the figure sent an author
+    /// to a declaration the call was not made at.
     #[error(
-        "stratum {stratum}: the registry declares at most {declared} rows per invocation, and the read returned {pulled}"
+        "stratum {stratum}: the registry declares at most {declared} rows per invocation{mode}, and the read returned {pulled}"
     )]
     RowBoundBreached {
         /// The stratum whose producer beat its own declaration. Boxed for the
@@ -439,6 +449,10 @@ pub enum ExecutionError {
         /// the emitted bound asks for, except at a declared zero, where the depth is
         /// read at the floor of one and the bound therefore asks for two.
         pulled: u64,
+        /// Which declared access mode `declared` was read at, relative to the mode this
+        /// read was invoked under. [`BoundMode::Undeclared`] for a unit a caller
+        /// assembled itself, which records the count and no mode.
+        mode: BoundMode,
     },
 
     /// The bundle's units are not the units it was assembled from.
@@ -543,10 +557,11 @@ pub enum StreamEnding {
     /// [`StratumUnit::new`](crate::StratumUnit::new) that came back inside the unit's
     /// own bound. The layer bounds such a text only on the outside; what the text
     /// bounds *inside* itself — a `LIMIT` on a sub-`SELECT`, a pattern matching less
-    /// than the producer holds — is not visible from here, so the absence of the probe
-    /// row is no evidence. `Exhausted` would be this layer's strongest completeness
-    /// claim minted from a text it cannot read, which is the defect this vocabulary
-    /// exists to prevent; see [`ProducerReceipt::SuppliedQueryEnded`].
+    /// than the producer holds — is no part of what this layer reads, so the absence of
+    /// the probe row is no evidence. `Exhausted` would be this layer's strongest
+    /// completeness claim minted from a text whose bounds it never read, which is the
+    /// defect this vocabulary exists to prevent; see
+    /// [`ProducerReceipt::SuppliedQueryEnded`].
     ///
     /// A row arriving *past* the depth is still an observation, so such a read still
     /// ends [`Self::DepthReached`]: something further existed whatever the text
@@ -694,23 +709,13 @@ pub async fn execute<D: DatasetView + Sync>(
     };
 
     for unit in &compiled.units {
-        // A caller's text is what "empty" is asked about, because it is the only
-        // query that can be empty: a rendered one is assembled from a producer's own
-        // call. The text run below is never empty either way — it always carries the
-        // bound the depth renders — and a bound with no query in front of it is not a
-        // query the evaluator's diagnostic would describe usefully.
-        if unit
-            .supplied_query()
-            .is_some_and(|query| query.trim().is_empty())
-        {
-            statuses.insert(
-                unit.stratum.clone(),
-                ProducerStatus::ExecutionFailed {
-                    reason: "compiled unit is empty".to_owned(),
-                },
-            );
-            continue;
-        }
+        // There is no empty-text arm here, and there is nothing left for one to catch.
+        // An empty supplied text is not a query, so `StratumUnit::new` refuses it
+        // outright (`UnitError::NotAQuery`), and a rendered text is assembled from a
+        // producer's own call. A status with no reachable cause is a status a caller
+        // can be told about and never observe, which is why this arm was deleted rather
+        // than kept as a guard: the condition it guarded cannot reach a bundle.
+        //
         // Rendered once and run once: the depth this loop reads the ending against
         // is the depth that wrote the bound in this text.
         let sparql = unit.sparql();
@@ -769,6 +774,7 @@ pub async fn execute<D: DatasetView + Sync>(
                             ranked,
                             unit.depth(),
                             unit.declared_rows(),
+                            unit.declared_mode(),
                             unit.reach(),
                             &unit.stratum,
                         )?;
@@ -906,6 +912,7 @@ fn bound_to_depth(
     mut ranked: Vec<(u64, Term, RowBlock)>,
     depth: u32,
     declared_rows: Option<u64>,
+    declared_mode: BoundMode,
     reach: ReadReach,
     stratum: &Iri,
 ) -> Result<BoundedRead, ExecutionError> {
@@ -935,6 +942,11 @@ fn bound_to_depth(
             stratum: Box::new(stratum.clone()),
             declared,
             pulled,
+            // Read off the unit rather than re-derived: the mode the number was taken
+            // at is the waist's fact about the declaration the unit was compiled
+            // against, and the invocation it belongs to is three stages upstream of
+            // here.
+            mode: declared_mode,
         });
     }
     if ranked.len() > ceiling {
@@ -1212,12 +1224,13 @@ mod tests {
 
     use purrdf_core::TermValue;
     use purrdf_sparql_eval::{
-        CandidateDomains, DomainTag, IndexGeneration, PfAttestation, RelationWitness, ServiceLevel,
+        BindingPattern, CandidateDomains, DomainTag, IndexGeneration, PfAttestation,
+        RelationWitness, ServiceLevel,
     };
 
     use super::{
-        ExecutionError, ProducerStatus, RowBlock, StreamEnding, bound_to_depth, entailed_block,
-        rank_candidates, read_attestation, sole_attestation, term_candidate,
+        BoundMode, ExecutionError, ProducerStatus, RowBlock, StreamEnding, bound_to_depth,
+        entailed_block, rank_candidates, read_attestation, sole_attestation, term_candidate,
     };
     use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, ReadReach};
     use crate::iri::{Iri, Term};
@@ -1686,6 +1699,18 @@ mod tests {
     // The probe row is a read, never a value
     // -----------------------------------------------------------------------
 
+    /// The attribution a compiled unit over a single-mode producer carries: the bound
+    /// was read at the very mode the call is made under.
+    ///
+    /// Written once here because every case below is about the *numbers*; the mode a
+    /// refusal names is varied in `tests/per_mode_row_bound.rs`, over a producer whose
+    /// declaration really is a function of it.
+    fn invoked_mode() -> BoundMode {
+        BoundMode::Invoked {
+            mode: BindingPattern::from_code("fb"),
+        }
+    }
+
     /// The `depth + 1`-th row decides the ending and is then dropped; every row
     /// that stays keeps the rank it was given, so nothing is renumbered.
     #[test]
@@ -1706,7 +1731,14 @@ mod tests {
         // reaches one row past the depth; the self-bounding shape has its own test
         // below.
         let bounded = |count, depth, declared| {
-            bound_to_depth(rows(count), depth, declared, ReadReach::PastDepth, &stratum)
+            bound_to_depth(
+                rows(count),
+                depth,
+                declared,
+                invoked_mode(),
+                ReadReach::PastDepth,
+                &stratum,
+            )
         };
 
         let (kept, ending, status) = bounded(4, 3, Some(100)).expect("below the declaration");
@@ -1761,29 +1793,51 @@ mod tests {
         };
         let stratum = Iri::parse("http://example.org/stratum/alpha").expect("a valid fixture IRI");
 
-        let breach = bound_to_depth(rows(4), 3, Some(3), ReadReach::PastDepth, &stratum)
-            .expect_err("a fourth row from a producer that declared three is a breach");
+        let breach = bound_to_depth(
+            rows(4),
+            3,
+            Some(3),
+            invoked_mode(),
+            ReadReach::PastDepth,
+            &stratum,
+        )
+        .expect_err("a fourth row from a producer that declared three is a breach");
         match &breach {
             ExecutionError::RowBoundBreached {
                 stratum: named,
                 declared,
                 pulled,
+                mode,
             } => {
                 assert_eq!(named.as_str(), stratum.as_str());
                 assert_eq!(*declared, 3, "the promise a host has to go and fix");
                 assert_eq!(*pulled, 4, "and the evidence that it is false");
+                assert_eq!(
+                    *mode,
+                    invoked_mode(),
+                    "and the declaration the promise was read at, which is the one its \
+                     author has to go and look at"
+                );
             }
             other => panic!("the breach is reported by name, not as {other:?}"),
         }
         assert!(
             breach.to_string().contains("at most 3 rows")
-                && breach.to_string().contains("returned 4"),
-            "both numbers reach a host that only reads the message: {breach}"
+                && breach.to_string().contains("returned 4")
+                && breach.to_string().contains("under mode `fb`"),
+            "both numbers and the mode they were read at reach a host that only reads \
+             the message: {breach}"
         );
 
-        let (kept, ending, status) =
-            bound_to_depth(rows(3), 3, Some(3), ReadReach::PastDepth, &stratum)
-                .expect("a producer that declared three and holds three is not a liar");
+        let (kept, ending, status) = bound_to_depth(
+            rows(3),
+            3,
+            Some(3),
+            invoked_mode(),
+            ReadReach::PastDepth,
+            &stratum,
+        )
+        .expect("a producer that declared three and holds three is not a liar");
         assert_eq!(
             kept.len(),
             3,
@@ -1828,35 +1882,60 @@ mod tests {
 
         // Asked for three, returned three, and the fourth row could not have been
         // requested: the declaration is the stopper and the ending says so.
-        let (kept, ending, status) =
-            bound_to_depth(rows(3), 3, Some(3), ReadReach::AtDepth, &stratum)
-                .expect("a producer at its own declared bound is not a liar");
+        let (kept, ending, status) = bound_to_depth(
+            rows(3),
+            3,
+            Some(3),
+            invoked_mode(),
+            ReadReach::AtDepth,
+            &stratum,
+        )
+        .expect("a producer at its own declared bound is not a liar");
         assert_eq!(kept.len(), 3, "every row it was allowed reaches the stream");
         assert_eq!(ending, StreamEnding::RowBoundReached { rank: 3 });
         assert_eq!(status, ProducerStatus::RowBoundReached { rank: 3 });
 
         // Fewer rows than it was allowed: nothing stopped it, so this really is
         // exhaustion and it must not be reported as a bound.
-        let (kept, ending, status) =
-            bound_to_depth(rows(2), 3, Some(3), ReadReach::AtDepth, &stratum)
-                .expect("a short answer to a request for three");
+        let (kept, ending, status) = bound_to_depth(
+            rows(2),
+            3,
+            Some(3),
+            invoked_mode(),
+            ReadReach::AtDepth,
+            &stratum,
+        )
+        .expect("a short answer to a request for three");
         assert_eq!(kept.len(), 2);
         assert_eq!(ending, StreamEnding::Exhausted);
         assert_eq!(status, ProducerStatus::Exhausted { rows_emitted: 2 });
 
         // And the same producer read below its declaration: the argument carries the
         // probe there, so the ending is observable and stays `DepthReached`.
-        let (kept, ending, status) =
-            bound_to_depth(rows(4), 3, Some(9), ReadReach::PastDepth, &stratum)
-                .expect("a depth below the declaration is probed like any other");
+        let (kept, ending, status) = bound_to_depth(
+            rows(4),
+            3,
+            Some(9),
+            invoked_mode(),
+            ReadReach::PastDepth,
+            &stratum,
+        )
+        .expect("a depth below the declaration is probed like any other");
         assert_eq!(kept.len(), 3);
         assert_eq!(ending, StreamEnding::DepthReached { rank: 3 });
         assert_eq!(status, ProducerStatus::DepthReached { rank: 3 });
 
         // A self-bounding producer that beats the argument it was handed is still
         // caught by the unit's own bound rather than reported as any ending.
-        let breach = bound_to_depth(rows(4), 3, Some(3), ReadReach::AtDepth, &stratum)
-            .expect_err("a fourth row from a producer asked for three is a breach");
+        let breach = bound_to_depth(
+            rows(4),
+            3,
+            Some(3),
+            invoked_mode(),
+            ReadReach::AtDepth,
+            &stratum,
+        )
+        .expect_err("a fourth row from a producer asked for three is a breach");
         assert!(
             matches!(
                 breach,

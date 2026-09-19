@@ -393,7 +393,7 @@ mod statistics;
 #[doc = include_str!("../PRODUCER-CONTRACT.md")]
 pub mod producer_contract {}
 
-pub use admission::{AdmissionEnvironment, AdmissionError};
+pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
 pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, UnitError, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{FusionError, PlanError};

@@ -1806,6 +1806,103 @@ fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exha
     );
 }
 
+/// **A prologue survives the wrap over the self-bounding shape too, where the number
+/// the layer rendered rides inside the caller's body.**
+///
+/// The evaluator-bounded shape's version of this is in `tests/boundary.rs`. This is the
+/// other one, and it is not the same text: a producer that declares a
+/// [`DepthPlacement`] takes its row request as an *argument*, so the number the layer
+/// computed is inside the body being wrapped rather than outside it, and the body also
+/// carries a typed literal whose datatype a prologue can name. Both the relation and
+/// that datatype are spelled through prefixes here, so a hoist that moved the
+/// directives but disturbed the body would resolve one of them against nothing.
+///
+/// The valid neighbour is the same text with its IRIs absolute, executed beside it:
+/// both must report the same ending over the same producer, because the prologue is a
+/// spelling and not a change of read.
+#[test]
+fn a_prefixed_supplied_text_over_a_self_bounding_producer_reads_what_the_absolute_one_does() {
+    let knn = iri(&ex("stratum/knn"));
+    let (registry, _) = registry_of(vec![(
+        "knn",
+        knn_spec(None)
+            .obeying(DepthPlacement {
+                position: 2,
+                datatype: XSD_INTEGER.to_owned(),
+            })
+            .rows(10, 9),
+    )]);
+    let stats = statistics(&[("knn", 4)]);
+    let planned = plan(
+        &request(vec![lexical("quick brown fox", None)]),
+        &registry,
+        &stats,
+    )
+    .expect("the fixture request plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("the plan is admitted");
+    assert_eq!(
+        compiled.units[0].depth(),
+        4,
+        "the measured cardinality is the depth"
+    );
+    let status = |unit: StratumUnit| {
+        let bundle = CompiledRetrieval::new(
+            vec![unit],
+            compiled.plan_id,
+            compiled.registry_id,
+            compiled.registry_fingerprint.clone(),
+            compiled.fused_bound,
+            compiled.resolution.clone(),
+        );
+        block_on(execute(&bundle, &registry, &*common::empty_dataset()))
+            .expect("the unit runs")
+            .statuses[&knn]
+            .clone()
+    };
+
+    // The compiler's own text with this layer's outer bound taken off, so a caller can
+    // hand it back: the depth argument the layer rendered is still inside it.
+    let absolute = without_the_outer_bound(&compiled.units[0].sparql(), 5);
+    assert!(
+        absolute.contains(&format!("\"5\"^^<{XSD_INTEGER}>")),
+        "the row request rides inside the body, so the wrap has to leave it alone: \
+         {absolute}"
+    );
+    assert_eq!(
+        status(supplying(&compiled.units[0], absolute.clone())),
+        ProducerStatus::DepthReached { rank: 4 },
+        "the producer was asked for five rows, returned five, and the depth is the \
+         stopper"
+    );
+
+    // The same text with both the relation and the datatype spelled through prefixes
+    // the caller declares. Hoisted, the directives scope the whole wrapped query, so
+    // both resolve exactly as their absolute spellings did.
+    let prefixed = format!(
+        "PREFIX rel: <{}>\nPREFIX xsd: <{}>\n{}",
+        ex("pf/"),
+        "http://www.w3.org/2001/XMLSchema#",
+        absolute
+            .replace(&format!("<{}>", ex("pf/knn")), "rel:knn")
+            .replace(&format!("^^<{XSD_INTEGER}>"), "^^xsd:integer")
+    );
+    assert!(
+        prefixed.contains("rel:knn") && prefixed.contains("\"5\"^^xsd:integer"),
+        "the body under test really is prefixed: {prefixed}"
+    );
+    assert_eq!(
+        status(supplying(&compiled.units[0], prefixed)),
+        ProducerStatus::DepthReached { rank: 4 },
+        "a prefixed text reads what the absolute one read: the prologue moved and the \
+         body did not"
+    );
+}
+
 #[test]
 fn an_untagged_needle_is_refused_where_a_language_position_is_declared() {
     let (registry, _) = registry_of(vec![(

@@ -35,8 +35,8 @@ use std::task::{Context, Poll, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, ExecutionError, Iri, ProducerStatus, RequestTerm,
-    RetrievalRequest, Statistics, compile, execute, plan,
+    AdmissionEnvironment, AdmissionError, BoundMode, ExecutionError, Iri, ProducerStatus,
+    RequestTerm, RetrievalRequest, Statistics, compile, execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DuplicatePolicy, EvalError,
@@ -483,6 +483,7 @@ fn a_depth_is_planned_and_admitted_at_the_invoked_modes_declaration() {
                 stratum,
                 declared,
                 requested,
+                mode,
             } => {
                 assert_eq!(*stratum, iri(&ex(DOCS)));
                 assert_eq!(
@@ -490,6 +491,14 @@ fn a_depth_is_planned_and_admitted_at_the_invoked_modes_declaration() {
                     "the number refused against is the invoked mode's"
                 );
                 assert_eq!(requested, 9);
+                assert_eq!(
+                    mode,
+                    BoundMode::Invoked {
+                        mode: BindingPattern::from_code("fb")
+                    },
+                    "and the refusal names the mode it was read at — here the invoked \
+                     one, because no coarser mode declares less"
+                );
             }
             other => panic!("expected DepthBoundViolation, got {other:?}"),
         }
@@ -529,21 +538,37 @@ fn a_breach_of_the_invoked_modes_bound_is_refused_with_or_without_a_second_mode(
     for modes in [Modes::Both, Modes::InvokedOnly] {
         let over = registry(Shape::EvaluatorBounded, modes, 3, 100, 12);
         let error = run(&over).expect_err("twelve rows behind a declaration of three");
-        match error {
+        match &error {
             ExecutionError::RowBoundBreached {
                 stratum,
                 declared,
                 pulled,
+                mode,
             } => {
-                assert_eq!(*stratum, iri(&ex(DOCS)));
+                assert_eq!(**stratum, iri(&ex(DOCS)));
                 assert_eq!(
-                    declared, 3,
+                    *declared, 3,
                     "the promise the producer broke is its invoked mode's"
                 );
                 assert_eq!(
-                    pulled, 4,
+                    *pulled, 4,
                     "the read reaches one row past the depth, which is the probe that \
                      makes the breach observable"
+                );
+                assert_eq!(
+                    *mode,
+                    BoundMode::Invoked {
+                        mode: BindingPattern::from_code("fb")
+                    },
+                    "and the mode the broken promise was read at is the invoked one, \
+                     since the needle-free mode declares more rather than less"
+                );
+                assert!(
+                    error.to_string().contains(
+                        "declares at most 3 rows per invocation under mode `fb`, and the \
+                         read returned 4"
+                    ),
+                    "which is what a host reading only the message is told: {error}"
                 );
             }
             other => panic!("expected RowBoundBreached, got {other:?}"),
@@ -568,6 +593,152 @@ fn a_breach_of_the_invoked_modes_bound_is_refused_with_or_without_a_second_mode(
             "and a producer with less than it promised is complete, not breached"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// B2. A coarser mode declaring LESS is the bound, and the refusal names that mode
+// ---------------------------------------------------------------------------
+
+/// Where a **coarser** declared mode promises fewer rows than the invoked one, the
+/// coarser number is the bound — and the refusal it produces names the mode it was read
+/// at, because that mode is not the one the call was made under.
+///
+/// Every case above is monotone in the mode: `fb` declares three and `ff` a hundred, so
+/// the tightest promise among the modes that serve an `fb` call and the invoked mode's
+/// own number are the same three, and nothing here could tell a layer that takes the
+/// minimum from one that simply reads the invoked mode. This inverts the fixture — `fb`
+/// declares a hundred and `ff` three — which separates them.
+///
+/// The minimum is the sound reading and not a tie-break between two opinions. `ff`
+/// demands strictly fewer bindings than `fb`, so every tuple an `fb` call can emit is
+/// one an `ff` call can emit too — the extra binding only filters — and a producer
+/// promising three rows with its needle free cannot honestly promise a hundred with it
+/// bound. Such a producer has over-declared `fb`, the three bounds the read, and a
+/// producer that then returns four has broken a promise it really did register.
+///
+/// What the refusal has to say is *which* promise. Named as "at most 3 rows per
+/// invocation" alone, with no mode anywhere, the figure appears nowhere in the mode the
+/// call was made at, and its author goes looking at the `fb` declaration that says a
+/// hundred.
+///
+/// The control is the same producer with the coarser mode removed: `fb` alone declaring
+/// a hundred, where the twenty rows it holds are served and nothing is refused. That is
+/// what makes the refusal above a reading of the `ff` declaration rather than a tighter
+/// reading of anything else.
+#[test]
+fn a_coarser_mode_declaring_less_is_the_bound_and_the_refusal_names_that_mode() {
+    let inverted = registry(Shape::EvaluatorBounded, Modes::Both, 100, 3, 20);
+    assert_eq!(
+        planned(&inverted),
+        (3, Some(3)),
+        "the needle-free mode declares three and subsumes this call, so three is the \
+         depth and three is the bound — the hundred the invoked mode declares is an \
+         over-declaration of a read its own coarser mode already bounds"
+    );
+
+    // The breach, with twenty rows behind a bound of three.
+    let error = run(&inverted).expect_err("twenty rows behind a declaration of three");
+    match &error {
+        ExecutionError::RowBoundBreached {
+            stratum,
+            declared,
+            pulled,
+            mode,
+        } => {
+            assert_eq!(**stratum, iri(&ex(DOCS)));
+            assert_eq!(*declared, 3, "the tightest promise that serves this call");
+            assert_eq!(*pulled, 4, "and the probe row that falsifies it");
+            assert_eq!(
+                *mode,
+                BoundMode::Subsuming {
+                    declared: BindingPattern::from_code("ff"),
+                    invoked: BindingPattern::from_code("fb"),
+                },
+                "the mode the three was read at is the needle-free one, and the \
+                 attribution says it serves a call made with the needle bound"
+            );
+        }
+        other => panic!("expected RowBoundBreached, got {other:?}"),
+    }
+    assert!(
+        error.to_string().contains(
+            "declares at most 3 rows per invocation under mode `ff`, which serves this \
+             call under mode `fb`, and the read returned 4"
+        ),
+        "a host reading only the message is told which declaration to go and fix: \
+         {error}"
+    );
+
+    // And the waist's own refusal over the same declaration, which reads the bound
+    // through the same function and so has to name the same mode.
+    let raised = admit_at_depth(&inverted, 9).expect_err("a depth above the coarser bound");
+    match raised {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+            mode,
+        } => {
+            assert_eq!(*stratum, iri(&ex(DOCS)));
+            assert_eq!(
+                declared, 3,
+                "the coarser mode's number, not the invoked one's"
+            );
+            assert_eq!(requested, 9);
+            assert_eq!(
+                mode,
+                BoundMode::Subsuming {
+                    declared: BindingPattern::from_code("ff"),
+                    invoked: BindingPattern::from_code("fb"),
+                },
+            );
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+    assert_eq!(
+        admit_at_depth(&inverted, 9)
+            .expect_err("the message is the one a host reads")
+            .to_string(),
+        format!(
+            "stratum {} declares depth 9, but the registry bounds it at 3 under mode \
+             `ff`, which serves this call under mode `fb`",
+            ex(DOCS)
+        )
+    );
+
+    // The neighbouring depths that must still admit, so the coarser bound is a bound
+    // and not a lock.
+    for depth in 1..=3 {
+        admit_at_depth(&inverted, depth)
+            .unwrap_or_else(|error| panic!("depth {depth} is inside the bound: {error}"));
+    }
+
+    // THE CONTROL: the coarser mode removed, so nothing declares less than the invoked
+    // mode's hundred. The same twenty rows are served, nothing is refused, and the
+    // refusals above are therefore readings of the `ff` declaration rather than of
+    // anything this fixture does to `fb`.
+    let uninverted = registry(Shape::EvaluatorBounded, Modes::InvokedOnly, 100, 3, 20);
+    assert_eq!(
+        planned(&uninverted),
+        (100, Some(100)),
+        "with only the invoked mode declared, its own hundred is the bound"
+    );
+    assert_eq!(
+        status(&uninverted),
+        ProducerStatus::Exhausted { rows_emitted: 20 },
+        "and the twenty rows it holds are a verified exhaustion, not a breach"
+    );
+
+    // And the honest neighbour under the inverted declaration: three rows behind a
+    // bound of three is served and certified, so the refusal above is about the count
+    // and not about the second mode existing.
+    let honest = registry(Shape::EvaluatorBounded, Modes::Both, 100, 3, 3);
+    assert_eq!(
+        run(&honest).expect("an honest producer runs"),
+        (3, ProducerStatus::Exhausted { rows_emitted: 3 }),
+        "three rows behind the coarser mode's three is an exhaustion this layer can \
+         verify"
+    );
 }
 
 // ---------------------------------------------------------------------------

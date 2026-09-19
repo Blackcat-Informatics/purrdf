@@ -251,10 +251,44 @@ impl SparqlParser {
     /// Parse a SPARQL 1.1/1.2 query into the algebra with explicit [`ParserOptions`]
     /// (e.g. an extra extension-function namespace alias).
     pub fn parse_query_with(&self, query: &str, options: &ParserOptions) -> Result<Query> {
+        self.parse_query_split(query, options)
+            .map(|(query, _)| query)
+    }
+
+    /// [`Self::parse_query_with`], also reporting the byte offset the query's
+    /// **prologue** ends at: the start of the query form's own first token, so
+    /// `&query[..offset]` is the `BASE`/`PREFIX`/`VERSION` text (plus any comment
+    /// or whitespace between them) and `&query[offset..]` is the form itself.
+    ///
+    /// Positional only. The number is the offset the one parse below was already
+    /// standing at when it finished the prologue, so the two halves are the caller's
+    /// own bytes rather than anything re-rendered, and nothing about the algebra
+    /// returned beside it changes. It exists for a caller that must *move* the
+    /// prologue — a layer wrapping a supplied query in a sub-`SELECT`, which has no
+    /// prologue of its own, has to lift those directives above the wrapper or the
+    /// prefixed names inside the body resolve against nothing. Re-rendering the body
+    /// from the algebra cannot serve that: a prefixed name is resolved away at parse
+    /// time, so the prologue is not recoverable from a [`Query`], and re-serializing
+    /// the body would also rewrite constructs whose surface spelling the caller's
+    /// next reader depends on.
+    ///
+    /// The offset is `0` for a query with no prologue, which is the whole text.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::parse_query_with`]'s: a [`ParseError`] for an unusable base
+    /// IRI, a tokenizer refusal, a syntax error or trailing tokens after the form.
+    pub fn parse_query_split(
+        &self,
+        query: &str,
+        options: &ParserOptions,
+    ) -> Result<(Query, usize)> {
         let mut p = self.parser_for(query, options)?;
-        let q = p.parse_query()?;
+        p.parse_prologue()?;
+        let body_at = p.span();
+        let q = p.parse_query_form()?;
         p.expect_eof()?;
-        Ok(q)
+        Ok((q, body_at))
     }
 
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra, under
@@ -818,8 +852,11 @@ impl<'a> Parser<'a, '_> {
 
     // ── prologue + query form ────────────────────────────────────────────────
 
-    fn parse_query(&mut self) -> Result<Query> {
-        self.parse_prologue()?;
+    /// The query form alone, with the prologue already read: the half
+    /// [`SparqlParser::parse_query_split`] needs to start after the offset it
+    /// reports. Split out of `parse_query` rather than duplicated, so the two
+    /// entries cannot parse a form differently.
+    fn parse_query_form(&mut self) -> Result<Query> {
         let base_iri = self.base_named_node();
         if self.peek_kw("SELECT") {
             self.parse_select(base_iri)
@@ -8015,6 +8052,47 @@ mod tests {
         assert_eq!(*destination, GraphTarget::Default);
     }
 
+    /// The prologue offset is the start of the query form, so the two halves are
+    /// the caller's own bytes and the algebra is the one `parse_query_with` returns.
+    ///
+    /// Both neighbours are asserted: a text with directives splits after the last
+    /// one, and a text without them splits at zero — which is what makes the offset
+    /// a position rather than a guess about where `SELECT` tends to be written.
+    #[test]
+    fn a_prologue_splits_at_the_query_form_and_an_absent_one_splits_at_zero() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+        let prefixed = "BASE <http://example.org/>\nPREFIX ex: <http://example.org/ns#>\n# and a comment\nSELECT ?s WHERE { ?s ex:p ?o }";
+        let (query, at) = parser
+            .parse_query_split(prefixed, &options)
+            .expect("a prefixed query parses");
+        assert_eq!(
+            &prefixed[at..],
+            "SELECT ?s WHERE { ?s ex:p ?o }",
+            "the offset is the start of the query form, comments and all"
+        );
+        assert_eq!(
+            query,
+            parser
+                .parse_query_with(prefixed, &options)
+                .expect("the same text parses through the plain entry"),
+            "and the algebra beside the offset is the ordinary one"
+        );
+
+        let bare = "SELECT ?s WHERE { ?s <http://example.org/ns#p> ?o }";
+        let (_, at) = parser
+            .parse_query_split(bare, &options)
+            .expect("a query with no prologue parses");
+        assert_eq!(at, 0, "no prologue is a split at the front of the text");
+
+        assert!(
+            parser
+                .parse_query_split("PREFIX ex: <urn:x#>", &options)
+                .is_err(),
+            "a prologue with no query form is still not a query"
+        );
+    }
+
     #[test]
     fn update_sequence_of_operations() {
         let u = parse_update("CREATE GRAPH purrdf:g ; CLEAR DEFAULT ;");
@@ -8358,7 +8436,8 @@ mod tests {
             let mut p = SparqlParser::new()
                 .parser_for(query, &options)
                 .expect("tokenize");
-            p.parse_query().expect("parse");
+            p.parse_prologue().expect("prologue");
+            p.parse_query_form().expect("parse");
             p.expect_eof().expect("a full query consumes every token");
             p.debug_scope_consultations()
         }

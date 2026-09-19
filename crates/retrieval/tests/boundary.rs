@@ -634,9 +634,16 @@ fn start_at_compile_hand_built_plan() {
 /// attesting nothing did not run a query over this registry at all — and it carries no
 /// bound because the unit's own bound is the layer's to render.
 fn hand_written(producer: &str) -> String {
+    hand_written_over(&format!("<{producer}>"))
+}
+
+/// The same text with the relation named by `predicate` exactly as written — an
+/// absolute IRI in angle brackets, a prefixed name, or a relative reference — so a
+/// caller's prologue has something in the body to resolve.
+fn hand_written_over(predicate: &str) -> String {
     format!(
         "SELECT ?candidate WHERE {{ {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) \
-         <{producer}> ( ?c1 ) }} }} }}"
+         {predicate} ( ?c1 ) }} }} }}"
     )
 }
 
@@ -932,6 +939,224 @@ fn a_supplied_bound_is_not_destroyed_by_the_layers_own() {
         "with nothing of the caller's bounding it, the same text reads to the depth and \
          the probe row past it arrives"
     );
+}
+
+/// **A caller's prologue survives the wrap, and a text that is not a query never
+/// becomes a unit.**
+///
+/// The layer's bound wraps a supplied text in a sub-`SELECT`, and the grammar puts no
+/// prologue inside one: `PREFIX` and `BASE` are `Prologue`, which appears once, at the
+/// front of a whole query. So wrapping a prefixed text *as it stands* produced a query
+/// that does not parse, and the caller was handed a syntax error at a byte offset of a
+/// query this layer wrote — for a text that was perfectly good and that the seam had
+/// run before the wrap existed. One narrow shape was fixed (a text carrying its own
+/// top-level bound, which cannot hold a second one) and a strictly larger valid class
+/// was broken, including that same shape whenever it was prefixed.
+///
+/// Every shape a supplied text comes in is executed here, because the fault was
+/// invisible to a suite whose every fixture spelled its IRIs absolutely: a prologue the
+/// body uses, one it does not, a `BASE`, no prologue at all, a bound of the caller's
+/// own, a bound inside the caller's own sub-`SELECT`, and a prologue **and** a bound
+/// together — the case that failed both before the wrap and after it.
+///
+/// The refusals are executed too, and they are the reason the parse is affordable: the
+/// hoist needs to know where the prologue ends, which only a parse can say, so a text
+/// that is not a query at all is refused at the constructor rather than carried to one
+/// stratum's failure after a bundle was assembled — and, since the same parse names the
+/// form, so is a query the wrapper could never hold: an `ASK`, `CONSTRUCT` or
+/// `DESCRIBE`, refused by that name, beside every `SELECT` shape that must still run.
+#[test]
+fn a_supplied_prologue_is_hoisted_over_the_wrap_and_a_non_query_is_refused() {
+    // Three rows behind a depth of four, so every read below that the caller did not
+    // bound returns all three and ends on the caller's text — and the two that ARE
+    // bounded at two return two. The row count is therefore what says which bound
+    // applied.
+    let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 1_000, 3);
+    let stats = single_statistics(&ex("stratum/hand"), 1_000);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&plan(&request, &registry, &stats).expect("plans"), &env)
+        .expect("the plan is admitted");
+    let unit = |query: String| {
+        StratumUnit::new(
+            compiled.units[0].stratum.clone(),
+            query,
+            compiled.units[0].contract.clone(),
+            4,
+            Some(1_000),
+        )
+    };
+    let ending = |query: String| {
+        let built = unit(query).expect("a query with a prologue is a query");
+        let bundle = bundle_of(vec![built], &compiled);
+        block_on(execute(&bundle, &registry, &*common::empty_dataset()))
+            .expect("the unit runs")
+            .statuses[&stratum("hand")]
+            .clone()
+    };
+
+    // The relation's IRI, spelled three ways: absolutely, through a prefix the body
+    // uses, and relatively against a `BASE`. All three name the same producer.
+    let namespace = ex("pf/");
+    let prefix = format!("PREFIX rel: <{namespace}>\n");
+    let base = format!("BASE <{namespace}>\n");
+    let absolute = hand_written(&ex("pf/hand"));
+    let prefixed = hand_written_over("rel:hand");
+    let relative = hand_written_over("<hand>");
+
+    // (1) THE CONTROL: no prologue, absolute IRI. Unchanged by the hoist, byte for
+    //     byte — the split is at zero, so there is nothing in front of the wrapper.
+    assert_eq!(
+        ending(absolute.clone()),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "the shape the seam always ran: three rows inside a depth of four, ending on \
+         the caller's own text"
+    );
+
+    // (2) A PREFIX the body uses. This is the case the wrap broke outright: the
+    //     directives are lifted above the wrapping `SELECT`, so `rel:hand` resolves
+    //     against the caller's own declaration and the same three rows come back.
+    assert_eq!(
+        ending(format!("{prefix}{prefixed}")),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "a prefixed text names the same producer and reads the same rows"
+    );
+
+    // (3) A PREFIX the body does not use. Nothing resolves through it, and it must
+    //     still not break the query it is written in front of.
+    assert_eq!(
+        ending(format!("PREFIX unused: <{}>\n{absolute}", ex("unused#"))),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "a declaration the body never spells is carried, not tripped over"
+    );
+
+    // (4) A BASE, with the relation named relatively against it.
+    assert_eq!(
+        ending(format!("{base}{relative}")),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "a relative reference resolves against the caller's own base, which is in \
+         scope for the whole wrapped query"
+    );
+
+    // (5) The caller's own top-level bound, which is why the wrap exists: appended,
+    //     this layer's bound and the caller's would be two `LIMIT` clauses of one
+    //     solution modifier and the caller's would vanish.
+    assert_eq!(
+        ending(format!("{absolute}\nLIMIT 2")),
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "the caller asked for two rows and got two"
+    );
+
+    // (6) A bound inside the caller's own sub-`SELECT`, which this layer cannot see
+    //     from outside and does not need to: the rows say what it did.
+    assert_eq!(
+        ending(format!(
+            "SELECT ?candidate WHERE {{ {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) \
+             <{}> ( ?c1 ) }} LIMIT 2 }} }}",
+            ex("pf/hand")
+        )),
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "a bound the caller wrote inside its own sub-SELECT still decides the read"
+    );
+
+    // (7) A PREFIX **and** the caller's own bound. This shape failed before the wrap
+    //     (the two bounds collided) and after it (the prologue was wrapped into a
+    //     sub-SELECT), so it is the one case neither arrangement served.
+    assert_eq!(
+        ending(format!("{prefix}{prefixed}\nLIMIT 2")),
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "a prefixed text carrying its own bound keeps both: the prologue is hoisted \
+         and the bound is wrapped"
+    );
+
+    // What the emitted text actually looks like, for the one case the shape matters
+    // in: the directives in front, the wrapper after them, and the caller's body
+    // inside it unchanged.
+    let hoisted = unit(format!("{prefix}{prefixed}")).expect("a prefixed text is a query");
+    assert_eq!(
+        hoisted.sparql(),
+        format!("{prefix}SELECT * WHERE {{\n  {{ {prefixed} }}\n}}\nLIMIT 5"),
+        "the prologue is hoisted rather than re-rendered, so the body inside the wrap \
+         is the caller's own bytes"
+    );
+    assert_eq!(
+        hoisted.supplied_query(),
+        Some(format!("{prefix}{prefixed}").as_str()),
+        "and the text read back is the whole of what the caller handed over, prologue \
+         included"
+    );
+
+    // (8) THE REFUSAL. A text that is not a query is refused where the caller can
+    //     still act on it, carrying the parser's own diagnostic.
+    match unit("THIS IS NOT SPARQL".to_owned()).expect_err("not a query, so not a unit") {
+        UnitError::NotAQuery { reason } => assert!(
+            reason.contains("expected SELECT, CONSTRUCT, ASK or DESCRIBE"),
+            "the parser's own words, not this layer's summary of them: {reason}"
+        ),
+        other => panic!("expected NotAQuery, got {other:?}"),
+    }
+    // And its neighbour that must still build: the same text with a query in it.
+    assert!(
+        unit(absolute).is_ok(),
+        "the refusal is about the text being a query, and nothing else"
+    );
+
+    // (9) THE OTHER REFUSAL. A query that is not a SELECT is refused by its form's
+    //     name. Before this refusal each of these built a unit and failed at execution
+    //     with "syntax error at byte 21: expected an RDF term, found ASK" — the same
+    //     diagnostic-about-a-query-the-caller-never-wrote that the prologue produced,
+    //     and for the same reason: the grammar admits only a SELECT inside the wrapper.
+    //     None of these forms yields a row to rank, so no valid text is lost.
+    let producer = ex("pf/hand");
+    let pattern = format!("( ?c0 ) <{producer}> ( ?c1 )");
+    for (form, text) in [
+        ("ASK", format!("ASK WHERE {{ {pattern} }}")),
+        (
+            "CONSTRUCT",
+            format!("CONSTRUCT {{ ?c0 <{producer}> ?c1 }} WHERE {{ {pattern} }}"),
+        ),
+        ("DESCRIBE", format!("DESCRIBE ?c0 WHERE {{ {pattern} }}")),
+    ] {
+        match unit(text).expect_err("not a SELECT, so not a unit") {
+            UnitError::NotASelect { form: named } => {
+                assert_eq!(named, form, "the refusal names the form the caller wrote");
+            }
+            other => panic!("expected NotASelect for {form}, got {other:?}"),
+        }
+    }
+    // Its neighbours that must still run: every SELECT shape the grammar lets a whole
+    // query carry that a bare sub-SELECT does not spell — a dataset clause, a trailing
+    // VALUES, a VERSION directive — is still a SELECT, and the refusal must not reach
+    // any of them.
+    let select = format!("SELECT ?candidate WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}");
+    for (shape, text) in [
+        (
+            "FROM",
+            format!(
+                "SELECT ?candidate FROM <{}> WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}",
+                ex("g")
+            ),
+        ),
+        (
+            "FROM NAMED",
+            format!(
+                "SELECT ?candidate FROM NAMED <{}> WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}",
+                ex("g")
+            ),
+        ),
+        ("VALUES", format!("{select} VALUES ?x {{ 1 }}")),
+        ("VERSION", format!("VERSION \"1.2\"\n{select}")),
+    ] {
+        assert_eq!(
+            ending(text),
+            ProducerStatus::SuppliedQueryEnded { rank: 3 },
+            "a SELECT carrying {shape} is a SELECT, and reads its three rows"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
