@@ -426,6 +426,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **geo:** A GeoSPARQL index can now be built before the geometries it will hold
+  have landed. `GeoIndex::from_dataset` refused outright when a
+  `GraphSelector::Named` graph was not interned in the dataset, on the argument
+  that a configuration pointing at an absent graph is a wiring mistake. A graph
+  IRI is interned only once a quad is in that graph, so the check made a
+  graph-scoped index unbuildable until its data arrived -- and an index standing
+  ready before the load is an ordinary operating state. The same function already
+  read an absent serialization property as "an ordinary empty match, not a
+  configuration error", so the two halves of one condition were answered two
+  different ways. Graph resolution is now infallible and an absent graph yields
+  the empty index, which is the posture `purrdf-text` takes for the identical
+  selector, so a host wiring both crates from one configuration no longer gets an
+  index from one and a refusal from the other.
+
+  The empty index is a complete index, built through the ordinary steps rather
+  than a second path: no entries, one empty asserted vector per spatial relation
+  so every relation stays answerable, and a `source_fingerprint` from the same
+  digest call the populated projection uses. The configuration is digested before
+  any content, so two empty indexes under different configurations still differ,
+  and the value moves the moment the first geometry lands. `verify_binding` is
+  untouched and still compares digests over the rows actually projected.
+
+  What is not relaxed: an empty serialization list is still refused. That is a
+  configuration with no subject rather than a corpus with no rows, and this
+  toolkit mints no vocabulary to guess one. A `GraphSelector::Named` holding a
+  non-IRI is still refused at configuration time.
+
 - **text:** A text index can now be built before the documents it will hold have
   landed. A configured predicate the dataset has not interned contributes no rows
   instead of failing the build, and so does a `GraphSelector::Named` graph the
