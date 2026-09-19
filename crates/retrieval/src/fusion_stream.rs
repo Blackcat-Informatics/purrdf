@@ -777,8 +777,6 @@ struct EmittedRecord {
     /// The stream indexes that contributed to the candidate before it
     /// certified — [`CandidateState::seen_streams`], moved out of the state
     /// being dropped rather than rebuilt.
-    /// The stream indexes that contributed to the candidate before it
-    /// certified.
     ///
     /// It carries the candidate's `Dom(x)` with it, at no extra cost: the
     /// blocks a certified candidate could lie in are the intersection of the
@@ -1800,16 +1798,52 @@ impl<S: RankedStream> FusionStream<S> {
         Ok(best)
     }
 
+    /// The stratum to name as `named_by` in an
+    /// [`ProtocolError::OutsideDeclaredDomain`], given the streams that already
+    /// named the candidate and the stream that just did.
+    ///
+    /// Preference goes to a namer whose own declaration is genuinely disjoint
+    /// from the offender's, because that is the pair a reader can act on: two
+    /// declarations that directly contradict each other. `Dom(x)` is an
+    /// intersection, so a stream can fail to meet it without being disjoint
+    /// from any single namer — several narrow declarations can close a door no
+    /// one of them closed alone — and in that case the first namer is reported
+    /// as the witness that the narrowing began.
+    ///
+    /// Deterministic either way: `named_by` is an ordered set of stream
+    /// indexes, and the streams are in the order the caller handed them over,
+    /// so two runs of the same fusion name the same stratum.
+    fn domain_witness(&self, named_by: &BTreeSet<usize>, offender: usize) -> String {
+        let disjoint = named_by
+            .iter()
+            .find(|namer| !self.domains[**namer].intersects(&self.domains[offender]));
+        let witness = disjoint.or_else(|| named_by.iter().next());
+        witness.map_or_else(
+            // No namer at all cannot happen — a candidate is in the frontier or
+            // the emitted map only because some stream put it there — but the
+            // lookup is total and the total answer says exactly that rather
+            // than panicking on a library path a caller reaches with its own
+            // streams.
+            || "<none>".to_owned(),
+            |namer| self.streams[*namer].0.as_str().to_owned(),
+        )
+    }
+
     /// Process stream `index`'s head into the frontier, then advance it.
     ///
     /// # Errors
     ///
     /// [`FusionError::Overflow`] when the checked sum leaves the fixed-point
     /// range, [`FusionError::MaxContributionsExceeded`] when the candidate has
-    /// been contributed to once more than there are strata, and
+    /// been contributed to once more than there are strata,
     /// [`ProtocolError::DuplicateItem`] when this stream would name one
     /// candidate twice — whether the earlier occurrence is still a frontier
-    /// candidate or has already been certified and emitted.
+    /// candidate or has already been certified and emitted — and
+    /// [`ProtocolError::OutsideDeclaredDomain`] when this stream names a
+    /// candidate its own declaration cannot reach, from either arm below: the
+    /// candidate may still be in the frontier or may already have certified, and
+    /// the refusal names the stratum whose declaration put it out of reach
+    /// through [`Self::domain_witness`].
     ///
     /// # Where a declared-`Unique` stream's promise is checked
     ///
@@ -1911,37 +1945,6 @@ impl<S: RankedStream> FusionStream<S> {
     /// Under `Allowed` neither arm is reachable rather than merely unused: a
     /// repeat is dropped in [`Self::fetch`] and never becomes a head, so no
     /// second row from one stream ever reaches the frontier or this lookup.
-    /// The stratum to name as `named_by` in an
-    /// [`ProtocolError::OutsideDeclaredDomain`], given the streams that already
-    /// named the candidate and the stream that just did.
-    ///
-    /// Preference goes to a namer whose own declaration is genuinely disjoint
-    /// from the offender's, because that is the pair a reader can act on: two
-    /// declarations that directly contradict each other. `Dom(x)` is an
-    /// intersection, so a stream can fail to meet it without being disjoint
-    /// from any single namer — several narrow declarations can close a door no
-    /// one of them closed alone — and in that case the first namer is reported
-    /// as the witness that the narrowing began.
-    ///
-    /// Deterministic either way: `named_by` is an ordered set of stream
-    /// indexes, and the streams are in the order the caller handed them over,
-    /// so two runs of the same fusion name the same stratum.
-    fn domain_witness(&self, named_by: &BTreeSet<usize>, offender: usize) -> String {
-        let disjoint = named_by
-            .iter()
-            .find(|namer| !self.domains[**namer].intersects(&self.domains[offender]));
-        let witness = disjoint.or_else(|| named_by.iter().next());
-        witness.map_or_else(
-            // No namer at all cannot happen — a candidate is in the frontier or
-            // the emitted map only because some stream put it there — but the
-            // lookup is total and the total answer says exactly that rather
-            // than panicking on a library path a caller reaches with its own
-            // streams.
-            || "<none>".to_owned(),
-            |namer| self.streams[*namer].0.as_str().to_owned(),
-        )
-    }
-
     async fn pull(&mut self, index: usize) -> Result<(), FusionError> {
         let Some(head) = self.heads[index].take() else {
             return Ok(());
