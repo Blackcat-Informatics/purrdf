@@ -901,6 +901,13 @@ struct RulePlan<'a> {
 }
 
 impl<'a> RulePlan<'a> {
+    /// Lower the rule's shape TOGETHER WITH its conditions and bind the lot to
+    /// `data`, once per firing.
+    ///
+    /// One lowering rather than several is what fixes the plan positions the rest
+    /// of this type relies on: the conditions follow the shape, so condition `i`
+    /// is position `i + 1`. Splitting the lowering would make those positions a
+    /// coincidence instead of a consequence.
     fn of(data: &ShaclData, shape: &'a Shape, conditions: &'a [Shape]) -> Self {
         let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions));
         let binding = lowered.bind(data.core_view(), lowered.classes());
@@ -955,6 +962,12 @@ struct ExprPlan<'a> {
 }
 
 impl<'a> ExprPlan<'a> {
+    /// Lower `expr` standalone and resolve every identity it names against
+    /// `data`.
+    ///
+    /// Standalone because a rule head expression has no enclosing shape to be
+    /// lowered as part of; the lowering and its binding are held here so that
+    /// neither runs again for the next focus node.
     fn of(data: &ShaclData, expr: &'a NodeExpr) -> Self {
         let lowering = crate::plan::lower_standalone_expression(expr);
         let binding = lowering.bind(data.core_view());
@@ -965,6 +978,18 @@ impl<'a> ExprPlan<'a> {
         }
     }
 
+    /// Evaluate the expression at `focus`, reusing the lowering and binding this
+    /// plan already holds.
+    ///
+    /// `guard` is supplied rather than created here because the three head
+    /// expressions of one firing share a single budget: a recursion bound that
+    /// each expression reset for itself would bound nothing about the head as a
+    /// whole.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the expression evaluation hard-fails, including on
+    /// exhausting the recursion budget.
     fn eval(
         &self,
         data: &ShaclData,

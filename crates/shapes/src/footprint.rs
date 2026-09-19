@@ -305,6 +305,13 @@ impl FootprintWalk {
         self.declaring = saved.declaring;
     }
 
+    /// Snapshot the two chains so a later [`Self::leave`] can put them back.
+    ///
+    /// The shared half of every `enter_*`: the walk is a recursive descent whose
+    /// chains are mutated in place, so a subtree that rewrites them has to hand
+    /// its parent's state back rather than reconstruct it. The clone is the price
+    /// of that, and it is charged once per subtree ENTERED, not once per read
+    /// emitted.
     fn save(&self) -> ChainState {
         ChainState {
             chain: self.chain.clone(),

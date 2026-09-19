@@ -303,6 +303,13 @@ enum Flow {
 }
 
 impl Flow {
+    /// Whether the sink has asked this traversal to unwind.
+    ///
+    /// Every place that hands a violation onward tests the flow it got back and
+    /// returns early on [`Flow::Stop`], so the test is spelled once here rather
+    /// than as a `match` repeated at each of those sites. A site that forgets it
+    /// is not a wrong answer — it is a conformance probe that keeps evaluating
+    /// constraints whose verdict the first violation already settled.
     #[inline]
     const fn stopped(self) -> bool {
         matches!(self, Self::Stop)
@@ -744,6 +751,14 @@ struct OneShotLowering<'a> {
 }
 
 impl<'a> OneShotLowering<'a> {
+    /// Lower `shape` and bind it to `store`, paying the whole of stage 0 for one
+    /// call.
+    ///
+    /// This is precisely the work `PreparedShapes` exists to amortize — the
+    /// shapes walk, the class analysis and the resolution of every identity the
+    /// shape names all run here, again, per call. Only the entry points that are
+    /// handed a bare [`Shape`] and have nothing to memoize against should reach
+    /// it.
     fn of(store: &ShaclData, shape: &'a Shape) -> Self {
         let lowered = crate::plan::lower_shapes(std::iter::once(shape));
         let binding = lowered.bind(store.core_view(), lowered.classes());
@@ -754,6 +769,17 @@ impl<'a> OneShotLowering<'a> {
         }
     }
 
+    /// The plan for the single lowered shape, borrowing everything this holder
+    /// owns — so the holder has to outlive the plan and therefore the call.
+    ///
+    /// Position 0 and an empty target set are not simplifications: the lowering
+    /// holds exactly one shape, and these entry points are HANDED their focus
+    /// node rather than discovering it from targets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lowering and the shape it lowered disagree,
+    /// which is a defect in this crate rather than in any input.
     fn plan(&self) -> Result<ShapePlan<'_>, String> {
         self.lowered.plan(
             self.shape,
@@ -1044,6 +1070,28 @@ pub(crate) fn conforms_with_id_depth(
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
 
+/// Evaluate one property shape at `focus`, sending what it finds to `sink`.
+///
+/// Sink-polymorphic for the same reason the node-shape walk is: there is ONE
+/// property traversal, and the sink decides only what becomes of a violation
+/// once this has found it. The returned [`Flow`] is the sink's answer propagated
+/// outward, and it is propagated at three separate points — the constraint loop,
+/// the nested `sh:property` loop and the reifier shapes — so a conformance probe
+/// that has already seen a violation stops there rather than finishing a value
+/// set whose verdict is settled.
+///
+/// Nothing needed only for REPORTING is derived before a violation exists. The
+/// value nodes stay in whatever representation the lowered path produced —
+/// interned ids for everything the data graph holds — and the path term, the
+/// focus term and the box roles are rendered inside the result builder, which a
+/// conforming focus node never runs. `parent_box_roles` are the enclosing
+/// shape's roles, carried so that this shape's own path roles can be stamped on
+/// top of them, again only if something is reported.
+///
+/// # Errors
+///
+/// Returns an error when evaluating the path or one of the constraints
+/// hard-fails.
 fn eval_property_shape<'a, S: ResultSink>(
     context: ValidationContext<'a, '_>,
     focus: &FocusNode,
@@ -1176,6 +1224,17 @@ fn eval_property_shape<'a, S: ResultSink>(
     Ok(Flow::Continue)
 }
 
+/// Everything the reifier-shape evaluation needs from the `eval_property_shape`
+/// frame that invoked it, grouped so the two very different lifetimes stay
+/// visible.
+///
+/// The grouping is what makes the distinction enforceable: the shapes-graph
+/// values live as long as the lowering (`'a`), while the focus node, the value
+/// nodes and the report-only material are derived per call and die with the
+/// frame that built them (`'stamp`). Passed as loose arguments they would be ten
+/// parameters on one signature with nothing keeping a future caller from
+/// promoting a short-lived one. `Copy`, so the per-reifier helpers take it by
+/// value or by reference as they please without any of it being cloned.
 #[derive(Clone, Copy)]
 struct ReifierEvalContext<'a, 'memo, 'stamp> {
     /// The ambient traversal state, on the shapes-graph lifetime `'a`.
@@ -3094,11 +3153,6 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
 }
 
-/// Distinct comparands a [`PairComparands`] holds inline before it allocates.
-///
-/// A property-pair constraint compares against the objects of ONE predicate from
-/// ONE focus node, which in practice is a handful of terms; inline storage is what
-/// makes the conforming change path allocate nothing for the comparand set.
 /// Distinct language tags one `sh:uniqueLang` tally holds before spilling.
 ///
 /// The tally is indexed by DISTINCT tag, not by value node, so this is a bound
@@ -3107,6 +3161,11 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
 /// working; nothing about the verdict or the reported messages changes.
 const UNIQUE_LANG_INLINE: usize = 8;
 
+/// Distinct comparands a [`PairComparands`] holds inline before it allocates.
+///
+/// A property-pair constraint compares against the objects of ONE predicate from
+/// ONE focus node, which in practice is a handful of terms; inline storage is what
+/// makes the conforming change path allocate nothing for the comparand set.
 const PAIR_COMPARANDS_INLINE: usize = 4;
 
 /// Distinct comparands past which [`PairComparands`] builds a membership index.

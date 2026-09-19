@@ -291,6 +291,14 @@ struct CanonicalBytes<'a> {
 }
 
 impl<'a> CanonicalBytes<'a> {
+    /// A cursor over nothing: no parts, no resolver, every escape and envelope
+    /// cursor at rest.
+    ///
+    /// Shared by both constructors so the two differ only in what they push. The
+    /// absent resolver is the interesting half: it is what makes an owned-term
+    /// cursor structurally unable to meet a [`CanonicalPart::Id`], which is safe
+    /// exactly because the owned constructor never pushes one and never gains a
+    /// way to.
     fn empty() -> Self {
         Self {
             resolver: None,
@@ -305,6 +313,12 @@ impl<'a> CanonicalBytes<'a> {
         }
     }
 
+    /// A cursor over the canonical bytes of an owned term, borrowing it for the
+    /// cursor's whole life.
+    ///
+    /// The owned-side twin of [`CanonicalBytes::of_id`], and the reference
+    /// implementation that one is checked against: the id cursor is correct
+    /// insofar as it agrees with this, byte for byte.
     fn new(term: &'a Term) -> Self {
         let mut bytes = Self::empty();
         bytes.parts.push(CanonicalPart::Term(term));
@@ -623,6 +637,14 @@ enum RenderKind {
 }
 
 impl RenderKind {
+    /// The kind an owned term renders as.
+    ///
+    /// Paired with [`RenderKind::of_ref`], and the pair has one obligation: a
+    /// comparison may have an owned term on one side and an interned id on the
+    /// other, so the two classifications must agree for terms that render
+    /// identically. Disagreeing would not produce a wrong byte — it would produce
+    /// a cross-kind order that depends on which representation the caller
+    /// happened to hold.
     #[inline]
     fn of_term(term: &Term) -> Self {
         match term {
@@ -633,6 +655,8 @@ impl RenderKind {
         }
     }
 
+    /// The kind a borrowed IR payload renders as — the interned-side twin of
+    /// [`RenderKind::of_term`], which it must agree with.
     #[inline]
     fn of_ref(term: &TermRef<'_>) -> Self {
         match term {

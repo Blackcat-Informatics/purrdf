@@ -364,6 +364,23 @@ impl BoundShapes {
 }
 
 impl PreparedTargets {
+    /// Resolve one shape's declared targets against an already-bound dataset.
+    ///
+    /// The two target families are treated differently on purpose. A Core target
+    /// keyed by class or predicate becomes a membership index — the target NODES
+    /// are never enumerated, so a bounded request tests only the candidates it
+    /// was given instead of paying for the whole extension of `sh:targetClass`.
+    /// `sh:targetNode` and a SHACL-SPARQL `sh:target` cannot be answered by a
+    /// pattern lookup, so their results are resolved once, here.
+    ///
+    /// A class or predicate the data graph never interned yields an EMPTY target
+    /// set rather than a failure: a shapes graph naming what this data graph does
+    /// not is ordinary, and refusing it here would reject valid input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a SHACL-SPARQL target fails to evaluate — an
+    /// unanswerable target is not an empty one.
     fn for_shape(
         data: &ShaclData,
         shape: &Shape,
@@ -1956,6 +1973,25 @@ impl PreparedValidator {
         Ok(FocusExpansion::Bounded(affected))
     }
 
+    /// Admit a caller's owned terms as this binding's focus set: resolved,
+    /// deduplicated and canonically ordered.
+    ///
+    /// The owned-term counterpart of the admission loop inside
+    /// [`Self::validate_focus_node_ids`], and it has the same two obligations.
+    /// Deduplication is in ID space where the dataset interned the term and in
+    /// term space where it did not, because two `Term` values that name the same
+    /// node must not validate it twice. Ordering is applied here rather than left
+    /// to the caller so that the report a focus set produces does not depend on
+    /// the order the caller happened to list it in.
+    ///
+    /// A term the dataset never interned is kept as a FOREIGN focus node, not
+    /// dropped. Asking about a node the data graph does not mention is a valid
+    /// question with a real answer — a shape may well report a missing
+    /// `sh:minCount` against it — and silently discarding it would answer a
+    /// different question than the one asked.
+    ///
+    /// Both working sets are sized from the input, never from the graph, so this
+    /// carries no term proportional to the data.
     fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> FocusSet {
         // Both sets are INPUT-sized, from the same slice, for the same reason the
         // id-native route's is.
@@ -1977,6 +2013,26 @@ impl PreparedValidator {
         normalized
     }
 
+    /// Validate an ALREADY-ADMITTED focus set — the shared tail of both
+    /// focus-node entry points.
+    ///
+    /// The set is expected to have been through an admission step already
+    /// ([`Self::normalize_focus_nodes`], or the id loop in
+    /// [`Self::validate_focus_node_ids`]): deduplicated, ordered, and — the part
+    /// this method actually re-checks — resolved against THIS binding's dataset.
+    ///
+    /// Shape selection is inverted here. Rather than asking each shape whether it
+    /// contains each focus node, the dispatch is asked once for the whole set
+    /// which shapes claim which node, so the cost is per node rather than per
+    /// (shape, focus node) pair. Every non-deactivated shape is still PLANNED
+    /// unconditionally, before its claims are consulted: a shape whose plan
+    /// cannot be built is a defect in this crate, and a request that happened to
+    /// claim none of its nodes must not be the reason it goes unreported.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the focus set belongs to another binding, when a
+    /// shape cannot be planned, or when a constraint evaluation hard-fails.
     fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, String> {
         let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
@@ -5129,9 +5185,10 @@ mod tests {
     /// **The PUBLIC id-native entry point refuses a focus id minted by another
     /// binding, and still validates one minted by its own.**
     ///
-    /// The sibling test above drives `validate_bounded`, which is `pub(crate)`;
-    /// a guard that only ever runs behind a crate-private door is not a guard on
-    /// the door callers use. This one drives
+    /// The sibling test above drives `validate_bounded`, which carries no
+    /// visibility modifier at all and so is private to this module; a guard that
+    /// only ever runs behind a door no caller can open is not a guard on the door
+    /// callers use. This one drives
     /// [`PreparedValidator::validate_focus_node_ids`] itself.
     ///
     /// The two bindings intern the SAME IRIs in OPPOSITE orders, so an id is not

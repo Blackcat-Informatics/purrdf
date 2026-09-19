@@ -1338,12 +1338,16 @@ pub fn eval_node_expr_in_scope(
     eval_unlowered(store, focus, expr, guard, scope)
 }
 
-// Keep the class-view iterator out of the recursive expression dispatch frame.
-// Deep legal paging expressions do not enumerate classes at every nesting level.
-//
-// `class_id` was resolved at BIND: the class IRI this expression names is a shape
-// constant, so its dataset identity is not a question this evaluation asks. `None`
-// means the data graph interns no such term, which has no instances.
+/// The instances of a class, canonically ordered and deduplicated.
+///
+/// Kept out of line so the class-view iterator never lands in the recursive
+/// expression dispatch frame: a deep but legal paging expression would otherwise
+/// carry that iterator at every nesting level of a stack it does not need it on.
+///
+/// `class_id` was resolved at BIND, because the class IRI an expression names is
+/// a shape constant and its dataset identity is not a question this evaluation
+/// asks. `None` means the data graph interns no such term, which has no
+/// instances — an empty answer, not a failure.
 fn eval_instances_of(store: &ShaclData, class_id: Option<TermId>) -> Vec<Term> {
     store.prepare_class_membership();
     let Some(class_id) = class_id else {
