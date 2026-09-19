@@ -245,7 +245,33 @@ pub enum IndexGeneration {
     /// unversioned. An absence, never a claim that the index was current.
     Undeclared,
     /// The relation's own spelling of the generation that answered, recorded verbatim.
-    Declared(String),
+    ///
+    /// A shared `Arc<str>` rather than an owned `String` because of where this value is
+    /// built. [`PfCursor::generation`] is asked once per invocation, and a relation over a
+    /// frozen index knows its generation *before the first invocation* — it renders the
+    /// spelling once at construction and hands every cursor a pointer to it. With an
+    /// owned `String` here, attesting that already-known constant would copy it on every
+    /// invocation, in the per-driving-row seam; with a shared pointer, attesting is a
+    /// refcount bump. Nothing about the value changes: it is still the host's own bytes,
+    /// still recorded verbatim, still never parsed, and `Ord`/`Hash` still compare the
+    /// spelling and not the pointer, so two relations that rendered the same generation
+    /// into two separate allocations remain the same set member.
+    Declared(Arc<str>),
+}
+
+impl IndexGeneration {
+    /// [`Self::Declared`] over anything that can become a shared string — a `&str`, a
+    /// `String`, or an `Arc<str>` a relation already holds.
+    ///
+    /// The `Arc<str>` form is the one that costs nothing: it clones a pointer. The
+    /// `&str`/`String` forms allocate once, here, which is the right price for a
+    /// generation genuinely computed per invocation and the wrong one for a constant of
+    /// the relation — a relation over a frozen index should intern its spelling at
+    /// construction and pass the `Arc` in.
+    #[must_use]
+    pub fn declared(value: impl Into<Arc<str>>) -> Self {
+        Self::Declared(value.into())
+    }
 }
 
 /// Whether a relation served an invocation from a WHOLE index, said so far as it can
@@ -401,12 +427,24 @@ pub trait PfCursor {
 
     /// Which version of the backing index is answering this invocation.
     ///
-    /// Read by the evaluator **immediately after [`open_contained`] returns**, and once
-    /// per invocation. That instant is not an implementation convenience: an index-backed
-    /// relation pins its snapshot when it opens, so "which generation is answering" is
-    /// true from that moment and stays true for every row this cursor goes on to emit.
-    /// Reading it later would let a rebuild that landed mid-drain be reported as the
-    /// generation that produced rows it did not produce.
+    /// Read by the evaluator **immediately after [`open_contained`] returns**, and at most
+    /// once per invocation. That instant is not an implementation convenience: an
+    /// index-backed relation pins its snapshot when it opens, so "which generation is
+    /// answering" is true from that moment and stays true for every row this cursor goes
+    /// on to emit. Reading it later would let a rebuild that landed mid-drain be reported
+    /// as the generation that produced rows it did not produce.
+    ///
+    /// # Asked only where the answer can be carried
+    ///
+    /// *At most* once, because an entry point whose return type has no
+    /// [`RelationWitness`](crate::RelationWitness) slot — every ungoverned query and
+    /// update — never asks at all. There is nowhere for the answer to go on that lane, and
+    /// asking anyway would charge every invocation for a value the caller provably cannot
+    /// read. The consequence a host should know about is that this method's side effects,
+    /// its cost and its panics are observable only on the governed lane; the OTHER
+    /// attested fact is not like this, because [`ServiceLevel::Incomplete`] governs a
+    /// refusal ([`EvalError::RELATION_INCOMPLETE_CODE`](crate::EvalError::RELATION_INCOMPLETE_CODE))
+    /// and so [`Self::service_level`] is read on every lane, witnessed or not.
     ///
     /// # Default
     ///

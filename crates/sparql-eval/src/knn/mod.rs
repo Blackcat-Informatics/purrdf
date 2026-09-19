@@ -261,7 +261,12 @@ pub struct EmbeddingSpace {
     guard: KnnGuard,
     /// The generation every cursor over this space attests, folded once at
     /// construction — see [`space_generation`].
-    generation: String,
+    ///
+    /// Shared rather than owned: the space is immutable, so this hex is a constant
+    /// of it, and [`IndexGeneration::Declared`] holds the same `Arc<str>`. Attesting
+    /// it — which the engine asks for once per invocation, and an invocation is once
+    /// per driving row — is a refcount bump instead of a fresh copy of the digest.
+    generation: Arc<str>,
 }
 
 impl EmbeddingSpace {
@@ -583,7 +588,7 @@ fn space_generation(
     projection: ProjectionContentDigest,
     family: FamilyContractDigest,
     terms: &[TermValue],
-) -> String {
+) -> Arc<str> {
     let mut bytes = Vec::new();
     crate::registry_id::append_framed_part(
         &mut bytes,
@@ -603,7 +608,7 @@ fn space_generation(
         term.canonical_bytes(&mut term_bytes);
         crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);
     }
-    ContentDigest::of(&bytes).to_hex()
+    Arc::from(ContentDigest::of(&bytes).to_hex())
 }
 
 /// Read every row of `effective` into one row-major `f64` buffer.
@@ -1166,9 +1171,10 @@ impl PfCursor for KnnCursor {
     ///
     /// The space is immutable once built, so the reading is true for every row
     /// this cursor goes on to emit — which is exactly the property the seam
-    /// documents for the instant it takes this reading at.
+    /// documents for the instant it takes this reading at. The digest itself is
+    /// not copied out: the attestation shares the space's own `Arc<str>`.
     fn generation(&self) -> IndexGeneration {
-        IndexGeneration::Declared(self.space.generation().to_owned())
+        IndexGeneration::Declared(Arc::clone(&self.space.generation))
     }
 }
 

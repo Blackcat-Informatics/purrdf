@@ -5048,7 +5048,7 @@ fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused()
 /// A producer that names a generation and declares nothing about wholeness.
 fn attests(generation: &str) -> PfAttestation {
     PfAttestation {
-        generation: IndexGeneration::Declared(generation.to_owned()),
+        generation: IndexGeneration::declared(generation),
         service: ServiceLevel::Undeclared,
     }
 }
@@ -5056,7 +5056,7 @@ fn attests(generation: &str) -> PfAttestation {
 /// A producer that names a generation and declares that index was **not** whole.
 fn attests_short(generation: &str, reason: &str) -> PfAttestation {
     PfAttestation {
-        generation: IndexGeneration::Declared(generation.to_owned()),
+        generation: IndexGeneration::declared(generation),
         service: ServiceLevel::Incomplete {
             reason: reason.to_owned(),
         },

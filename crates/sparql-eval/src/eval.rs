@@ -756,6 +756,13 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// report it on, and must be *refused* when there is not — see
     /// [`EvalError::RelationIncomplete`](crate::EvalError::RelationIncomplete) for why
     /// handing back an unlabelled short bag is the one option that is never available.
+    ///
+    /// It also gates the WORK of witnessing, not only its effect. While this is `false`
+    /// the property-function seam neither asks a cursor for its
+    /// [`generation`](crate::PfCursor::generation) nor folds anything into
+    /// [`Self::witness`], because both would be paid once per driving row for a ledger
+    /// that dies with this context unread. The service-level read is deliberately NOT
+    /// gated: the refusal above depends on it, so it happens on every lane.
     pub(crate) witnessing: bool,
 }
 

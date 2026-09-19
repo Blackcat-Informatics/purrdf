@@ -161,7 +161,7 @@ impl PfCursor for RowCursor {
         match self.attests {
             Attests::Nothing => IndexGeneration::Undeclared,
             Attests::Generation(value) | Attests::Incomplete(value, _) => {
-                IndexGeneration::Declared(value.to_owned())
+                IndexGeneration::declared(value)
             }
         }
     }
@@ -815,7 +815,7 @@ fn a_pinned_generation_reaches_the_stream_and_the_fused_trailer() {
     let execution = run(&registry, &stats);
     assert_eq!(
         attested(&execution, &alpha).generation,
-        IndexGeneration::Declared("gen-7".to_owned()),
+        IndexGeneration::declared("gen-7"),
         "the executed stream carries the generation its own run attested"
     );
     assert_eq!(
@@ -828,7 +828,7 @@ fn a_pinned_generation_reaches_the_stream_and_the_fused_trailer() {
     let result = searched(&registry, &stats);
     assert_eq!(
         result.trailer.attestations[&alpha].generation,
-        IndexGeneration::Declared("gen-7".to_owned()),
+        IndexGeneration::declared("gen-7"),
         "and the one-call path reports it under the stratum's own key"
     );
     assert_eq!(
@@ -954,7 +954,7 @@ fn a_short_index_that_served_no_row_still_reports_its_shortfall() {
     );
     assert_eq!(
         attestation.generation,
-        IndexGeneration::Declared("gen-7".to_owned()),
+        IndexGeneration::declared("gen-7"),
         "including which generation of the index was the short one"
     );
 }

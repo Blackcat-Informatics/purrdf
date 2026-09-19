@@ -803,7 +803,7 @@ fn attested_generation(result: &SearchResult, stratum: &str) -> String {
         .get(&iri(stratum))
         .unwrap_or_else(|| panic!("{stratum} ran, so it must have an attestation"));
     match &attestation.generation {
-        purrdf_retrieval::IndexGeneration::Declared(value) => value.clone(),
+        purrdf_retrieval::IndexGeneration::Declared(value) => value.to_string(),
         purrdf_retrieval::IndexGeneration::Undeclared => panic!(
             "{stratum} is served by a shipped producer over a content-addressable index, \
              so it must declare the generation that answered rather than stay silent"

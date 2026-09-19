@@ -371,9 +371,10 @@ fn partition_keys(index: &TextIndex) -> Vec<PartitionKey> {
 /// shared [`Arc<str>`], for the same reason the row bounds beside it are
 /// measured there: the index is frozen, so the value is a constant of the
 /// relation rather than a per-invocation computation. Opening a cursor clones
-/// the pointer and nothing else; the one unavoidable allocation is the `String`
-/// [`IndexGeneration::Declared`] owns, and the engine asks for it once per
-/// invocation rather than once per row.
+/// the pointer and nothing else, and so does attesting it —
+/// [`IndexGeneration::Declared`] holds the same `Arc<str>`, so the whole path
+/// from construction to the receipt copies these 64 characters exactly once, no
+/// matter how many driving rows invoke the relation.
 ///
 /// Nothing here reads a clock, a counter or an RNG. The value is a pure
 /// function of the index's content, so two processes that built the same index
@@ -998,9 +999,11 @@ impl PfCursor for SearchCursor {
     ///
     /// The `Arc<str>` was cloned in `open`, so the reading is of the snapshot
     /// this cursor was built against and cannot drift if the host swaps its
-    /// relation for one over a rebuilt index mid-drain.
+    /// relation for one over a rebuilt index mid-drain. Attesting clones the
+    /// pointer again rather than the 64 hex characters behind it: the engine
+    /// asks this once per invocation, and an invocation is once per driving row.
     fn generation(&self) -> IndexGeneration {
-        IndexGeneration::Declared(self.generation.as_ref().to_owned())
+        IndexGeneration::Declared(Arc::clone(&self.generation))
     }
 }
 
@@ -1434,9 +1437,9 @@ impl PfCursor for OccurrenceCursor {
 
     /// The index generation these occurrences came out of — the same digest the
     /// ranked relation beside it declares, because it is the same index and the
-    /// same question.
+    /// same question, and attested the same way: by cloning the shared pointer.
     fn generation(&self) -> IndexGeneration {
-        IndexGeneration::Declared(self.generation.as_ref().to_owned())
+        IndexGeneration::Declared(Arc::clone(&self.generation))
     }
 }
 

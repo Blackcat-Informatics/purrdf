@@ -634,7 +634,20 @@ const SERVICE_INCOMPLETE: u8 = 1;
 /// over are the same bytes a holder of that answer can re-derive. Two encoders
 /// agreeing today is a property that decays; one encoder is a property that
 /// holds.
-fn evidence_canonical_bytes(attestations: &BTreeMap<Iri, PfAttestation>) -> Vec<u8> {
+///
+/// # The only canonical encoding of what the indexes attested
+///
+/// It is also the only one in the tree, and that is deliberate. The evaluator's
+/// own per-relation ledger (`purrdf_sparql_eval::RelationWitness`) mints no bytes
+/// of its own, so there is nothing here to agree with. The ledger could not be
+/// the source of these bytes even if it did: it is keyed by RELATION IRI where
+/// this is keyed by stratum, it holds sets where this holds the single generation
+/// and service level a conforming unit's run collapses to (`sole_attestation` in
+/// `crate::execute`), and it counts invocations — a quantity that follows the
+/// evaluator's chunking of driving rows rather than anything an index said. An
+/// evidence identity derived from that count would move between two runs over one
+/// unchanged index, which is the exact opposite of what this identity is for.
+pub(crate) fn evidence_canonical_bytes(attestations: &BTreeMap<Iri, PfAttestation>) -> Vec<u8> {
     let mut writer = Writer::new();
     writer.u16(EVIDENCE_VERSION);
     writer.u64(attestations.len() as u64);

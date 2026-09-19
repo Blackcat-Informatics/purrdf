@@ -830,6 +830,8 @@ fn term_candidate(value: &TermValue) -> Term {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use purrdf_core::TermValue;
     use purrdf_sparql_eval::{
         CandidateDomains, DomainTag, IndexGeneration, PfAttestation, RelationWitness, ServiceLevel,
@@ -1091,7 +1093,7 @@ mod tests {
     const ANOTHER_RELATION: &str = "http://example.org/pf/beta";
 
     fn declared(generation: &str) -> IndexGeneration {
-        IndexGeneration::Declared(generation.to_owned())
+        IndexGeneration::declared(generation)
     }
 
     fn incomplete(reason: &str) -> ServiceLevel {
@@ -1161,6 +1163,56 @@ mod tests {
                 service: ServiceLevel::Undeclared,
             }),
             "the count is read and deliberately ignored"
+        );
+    }
+
+    /// And the count is gone by the time an answer's evidence identity is taken:
+    /// the SHIPPED encoder — the only canonical encoding of what the indexes
+    /// attested — is driven here over what the collapse produced from one
+    /// invocation and from seven.
+    ///
+    /// This is the assertion that makes the ignoring load-bearing rather than
+    /// incidental. Had the evidence bytes been derived from the evaluator's
+    /// ledger instead, they would carry `invocations`, and these two runs over
+    /// one unchanged index would have been handed different `EvidenceId`s purely
+    /// because the evaluator chunked more driving rows.
+    #[test]
+    fn the_evidence_digest_does_not_move_with_the_invocation_count() {
+        let bytes_after = |invocations: usize| {
+            let mut witness = RelationWitness::default();
+            for _ in 0..invocations {
+                witness.record(ONE_RELATION, declared("gen-7"), ServiceLevel::Undeclared);
+            }
+            let attestation = sole_attestation(&witness).expect("the conforming shape");
+            let stratum =
+                crate::iri::Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
+            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
+                stratum,
+                attestation,
+            )]))
+        };
+        assert_eq!(
+            bytes_after(1),
+            bytes_after(7),
+            "seven invocations of one index are the same evidence as one"
+        );
+
+        // Not vacuous: the encoder really does move when the ATTESTATION moves.
+        let rebuilt = {
+            let mut witness = RelationWitness::default();
+            witness.record(ONE_RELATION, declared("gen-8"), ServiceLevel::Undeclared);
+            let attestation = sole_attestation(&witness).expect("the conforming shape");
+            let stratum =
+                crate::iri::Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
+            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
+                stratum,
+                attestation,
+            )]))
+        };
+        assert_ne!(
+            bytes_after(1),
+            rebuilt,
+            "a rebuilt generation is different evidence"
         );
     }
 

@@ -17,15 +17,35 @@
 //! Every field here is a SET or a COUNT, never a sequence. A query can invoke one
 //! relation thousands of times, across several forked workers, in an order the evaluator
 //! is free to choose; an ordered log of what each invocation said would be a description
-//! of the schedule as much as of the index. Unioning the declarations and summing the
-//! counts makes the record a function of *what was attested* and nothing else, which is
-//! what lets [`RelationWitness::merge`] fold a forked child's ledger back into its
-//! parent without a lock and without caring which worker finished first — see that
-//! method's own docs for the full argument.
+//! of the schedule as much as of the index. Unioning the declarations makes them a
+//! function of *what was attested* and nothing else, which is what lets
+//! [`RelationWitness::merge`] fold a forked child's ledger back into its parent without a
+//! lock and without caring which worker finished first — see that method's own docs for
+//! the full argument. The one field that is not schedule-independent is
+//! [`RelationAttestations::invocations`], and its own docs say so at the point a reader
+//! reads it.
+//!
+//! # This ledger has no canonical byte encoding, deliberately
+//!
+//! It is a value with a total order on every key, so equal ledgers compare equal and
+//! [`RelationWitness::iter`] yields the same sequence on every target — that is all the
+//! determinism a caller rendering a receipt needs, and it is checked by comparing ledgers
+//! rather than digests.
+//!
+//! Minting bytes here as well would put a SECOND canonical encoding of "what the indexes
+//! attested" in the tree beside the one that ships. `purrdf-retrieval` already has that
+//! encoder: it collapses this ledger per stratum and digests the result into its
+//! `EvidenceId`, which is the identity an answer is compared by. Those bytes cannot be
+//! derived from an encoding of this type and must not be — they are keyed by STRATUM
+//! rather than by relation IRI, they carry exactly one generation and one service level
+//! rather than the sets here, and above all they deliberately exclude `invocations`,
+//! because an answer whose evidence identity moved with the evaluator's chunk count would
+//! stop being comparable with the answer beside it. Two encodings of one fact is two
+//! chances to disagree; this crate keeps the ledger and the consumer keeps the encoding.
 
 use std::collections::{BTreeMap, BTreeSet, btree_map};
 
-use crate::property_fn::{IndexGeneration, ServiceLevel, push_canonical_field};
+use crate::property_fn::{IndexGeneration, ServiceLevel};
 
 /// Everything one relation attested across every invocation it served in one query.
 ///
@@ -46,6 +66,42 @@ pub struct RelationAttestations {
     /// would have had to run for longer than any deadline this engine can express, and
     /// wrapping to a small number is the one failure mode a count like this must not
     /// have: it would report a heavily-leaned-on relation as barely touched.
+    ///
+    /// # This count is a fact about the SCHEDULE, not about the index
+    ///
+    /// Unlike the two declaration sets beside it, this number is not a function of what
+    /// was attested, and it is **not comparable across runs** — not even across two runs
+    /// of the same query over the same data on the same machine.
+    ///
+    /// The lane where it moves is an expression-embedded `EXISTS` under the parallel row
+    /// loop. Each chunk of driving rows is evaluated on a forked child whose
+    /// `exists_inner_cache` is a snapshot taken at fork time, so the inner pattern — and
+    /// therefore any relation inside it — is re-entered once per chunk, and the chunk
+    /// count is derived from the runtime's thread count. A thousand driving rows can
+    /// charge this relation once or once per worker for exactly the same index and exactly
+    /// the same answer.
+    ///
+    /// It is the same dependence `crate::parallel`'s `expression_re_enters_evaluation`
+    /// documents for the fuel meter, which is worth reading for the measured numbers — but
+    /// the remedy recorded there does not reach this field. That rule forces the loop
+    /// sequential only while a governor is **engaged**, because what it protects is an
+    /// exact meter; a witnessed run under a budget that declines every ceiling (the
+    /// `UNBOUNDED` governors `purrdf-retrieval` runs every unit under, for one) has no
+    /// engaged governor and forks exactly as before. So this count can differ between two
+    /// runs of one query over one dataset that differ only in the budget they were given.
+    ///
+    /// What does NOT move with it is every other field of this ledger: the generation a
+    /// re-entered invocation pins is the same generation, and the reason it gives for a
+    /// missing shard is the same reason, so [`Self::generations`] and
+    /// [`Self::incompleteness`] union back to identical sets however the rows were
+    /// chunked. That is why `purrdf-retrieval` keys its per-stratum conformance rule and
+    /// its evidence identity on the sets alone and reads this count only to ignore it: a
+    /// rule keyed here would fail on an input size rather than on a defect.
+    ///
+    /// So the two readings this value supports are "did this relation run at all"
+    /// (`0` versus non-zero, which is exact and stable) and "roughly how hard did this
+    /// execution lean on it" (a magnitude, useful for a log line or a cost attribution,
+    /// never for an equality comparison between two receipts).
     pub invocations: u64,
     /// Every distinct generation any of those invocations declared, ordered.
     ///
@@ -86,39 +142,7 @@ impl RelationAttestations {
         self.generations.extend(other.generations);
         self.incompleteness.extend(other.incompleteness);
     }
-
-    /// Append this ledger's canonical, injective encoding to `out`.
-    fn push_canonical(&self, out: &mut String) {
-        push_canonical_field(out, &self.invocations.to_string());
-        push_canonical_field(out, &self.generations.len().to_string());
-        for generation in &self.generations {
-            match generation {
-                IndexGeneration::Undeclared => push_canonical_field(out, GENERATION_UNDECLARED),
-                IndexGeneration::Declared(value) => {
-                    push_canonical_field(out, GENERATION_DECLARED);
-                    push_canonical_field(out, value);
-                }
-            }
-        }
-        push_canonical_field(out, &self.incompleteness.len().to_string());
-        for reason in &self.incompleteness {
-            push_canonical_field(out, reason);
-        }
-    }
 }
-
-/// The canonical tag of an [`IndexGeneration::Undeclared`] entry. A framed tag with no
-/// following value.
-const GENERATION_UNDECLARED: &str = "u";
-
-/// The canonical tag of an [`IndexGeneration::Declared`] entry. A framed tag followed by
-/// the framed declared spelling, so the two cases can never be read as one another.
-const GENERATION_DECLARED: &str = "d";
-
-/// The version tag every [`RelationWitness::canonical_bytes`] encoding opens with, so a
-/// stored record and a freshly computed one cannot be compared across a change to the
-/// encoding without the difference showing up in the first field.
-const WITNESS_ENCODING: &str = "purrdf-relation-witness/1";
 
 /// What every relation this query invoked attested, keyed by the relation's registered
 /// IRI.
@@ -231,40 +255,6 @@ impl RelationWitness {
             }
         }
     }
-
-    /// This witness's canonical, injective byte encoding — identical on every target, in
-    /// every build, for equal witnesses, and different for unequal ones.
-    ///
-    /// # The framing discipline
-    ///
-    /// Every component is written as a **length-framed field** (`<decimal length>:<bytes>`),
-    /// the same discipline
-    /// `property_fn`'s `push_canonical_field` already gives
-    /// the registry's ranked declarations, and the same one `purrdf-retrieval`'s
-    /// `FusionProfile::canonical_bytes` and plan encoder apply with their own `Writer`.
-    /// Framing is what makes the encoding injective rather than merely deterministic:
-    /// without it, a relation IRI ending in a digit and a count beginning with one could
-    /// concatenate into the same bytes as a different pair, and two genuinely different
-    /// witnesses would hash alike. Every collection is preceded by its own element count
-    /// for the same reason.
-    ///
-    /// # Why it is deterministic
-    ///
-    /// The map and both sets are ordered ([`BTreeMap`]/[`BTreeSet`]), so the traversal
-    /// order is the values' own order and not a hasher's. Nothing here reads a clock, a
-    /// thread id, an address, or a locale, and the only integers written are rendered in
-    /// decimal, so the bytes are identical on a 32-bit wasm target and a 64-bit host.
-    #[must_use]
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut out = String::new();
-        push_canonical_field(&mut out, WITNESS_ENCODING);
-        push_canonical_field(&mut out, &self.entries.len().to_string());
-        for (iri, attestations) in &self.entries {
-            push_canonical_field(&mut out, iri);
-            attestations.push_canonical(&mut out);
-        }
-        out.into_bytes()
-    }
 }
 
 #[cfg(test)]
@@ -278,7 +268,7 @@ mod tests {
     }
 
     fn declared(value: &str) -> IndexGeneration {
-        IndexGeneration::Declared(value.to_owned())
+        IndexGeneration::declared(value)
     }
 
     #[test]
@@ -343,10 +333,37 @@ mod tests {
         let mut right_assoc_full = a;
         right_assoc_full.merge(right_assoc);
         assert_eq!(left_assoc, right_assoc_full);
-        assert_eq!(
-            left_assoc.canonical_bytes(),
-            right_assoc_full.canonical_bytes()
-        );
+    }
+
+    /// Two ledgers that differ only in where a boundary between an IRI and a declared
+    /// spelling falls are DIFFERENT ledgers, and equality says so.
+    ///
+    /// This is the property a canonical encoding of this type would have had to preserve
+    /// by framing its fields. It holds here without any encoding, because the value is a
+    /// map keyed by the whole IRI rather than a concatenation of its parts — which is why
+    /// no second encoder is needed to check it.
+    #[test]
+    fn a_boundary_that_slides_is_a_different_ledger() {
+        let mut one = RelationWitness::default();
+        one.record("ab", declared("c"), ServiceLevel::Undeclared);
+        let mut other = RelationWitness::default();
+        other.record("a", declared("bc"), ServiceLevel::Undeclared);
+        assert_ne!(one, other);
+    }
+
+    /// Silence and a declaration are different facts, whatever the declared spelling is.
+    #[test]
+    fn an_undeclared_generation_never_equals_a_declared_one() {
+        let mut undeclared = RelationWitness::default();
+        undeclared.record("r", IndexGeneration::Undeclared, ServiceLevel::Undeclared);
+        for spelling in ["", "u", "undeclared"] {
+            let mut lookalike = RelationWitness::default();
+            lookalike.record("r", declared(spelling), ServiceLevel::Undeclared);
+            assert_ne!(
+                undeclared, lookalike,
+                "a relation that said nothing must not compare equal to one that said {spelling:?}"
+            );
+        }
     }
 
     #[test]
@@ -362,49 +379,33 @@ mod tests {
         );
     }
 
-    /// Length framing is what makes the encoding injective: two witnesses that differ
-    /// only in where a boundary falls must not encode alike.
+    /// Two relations that rendered the SAME generation into two separate allocations
+    /// attest the same member of the set — the shared-pointer payload compares by
+    /// spelling, never by address, or a set would hold one entry per producer instead of
+    /// one per generation.
     #[test]
-    fn canonical_bytes_separates_values_a_concatenation_would_confuse() {
-        let mut one = RelationWitness::default();
-        one.record("ab", declared("c"), ServiceLevel::Undeclared);
-        let mut other = RelationWitness::default();
-        other.record("a", declared("bc"), ServiceLevel::Undeclared);
-        assert_ne!(one.canonical_bytes(), other.canonical_bytes());
-    }
-
-    /// A declared generation and an undeclared one are different facts, and the
-    /// encoding keeps them apart even when the declared spelling is the tag itself.
-    #[test]
-    fn canonical_bytes_separates_undeclared_from_a_lookalike_declaration() {
-        let mut undeclared = RelationWitness::default();
-        undeclared.record("r", IndexGeneration::Undeclared, ServiceLevel::Undeclared);
-        let mut lookalike = RelationWitness::default();
-        lookalike.record(
-            "r",
-            declared(GENERATION_UNDECLARED),
-            ServiceLevel::Undeclared,
+    fn two_separately_allocated_spellings_are_one_generation() {
+        let left: std::sync::Arc<str> = std::sync::Arc::from("gen-7".to_owned());
+        let right: std::sync::Arc<str> = std::sync::Arc::from(String::from("gen-7"));
+        assert!(
+            !std::sync::Arc::ptr_eq(&left, &right),
+            "the fixture really does hold two allocations, or the claim below is vacuous"
         );
-        assert_ne!(undeclared.canonical_bytes(), lookalike.canonical_bytes());
-    }
 
-    #[test]
-    fn canonical_bytes_is_stable_across_repeated_encodings() {
         let mut witness = RelationWitness::default();
+        let iri = "https://example.org/rel/a";
         witness.record(
-            "https://example.org/rel/a",
-            declared("gen-7"),
-            incomplete("x"),
-        );
-        witness.record(
-            "https://example.org/rel/b",
-            IndexGeneration::Undeclared,
+            iri,
+            IndexGeneration::Declared(left),
             ServiceLevel::Undeclared,
         );
-        assert_eq!(witness.canonical_bytes(), witness.canonical_bytes());
-        assert_eq!(
-            String::from_utf8(witness.canonical_bytes()).expect("the encoding is UTF-8"),
-            String::from_utf8(witness.clone().canonical_bytes()).expect("the encoding is UTF-8")
+        witness.record(
+            iri,
+            IndexGeneration::Declared(right),
+            ServiceLevel::Undeclared,
         );
+        let entry = witness.get(iri).expect("the relation attested");
+        assert_eq!(entry.invocations, 2);
+        assert_eq!(entry.generations, BTreeSet::from([declared("gen-7")]));
     }
 }

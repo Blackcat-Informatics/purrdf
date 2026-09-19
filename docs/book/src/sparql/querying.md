@@ -1823,8 +1823,19 @@ relation reports `{}`, which is a fact rather than an absence. `None` inside
 member of the set rather than dropped: without it, "declared one generation every
 time" and "declared it sometimes and said nothing the rest" would read
 identically. Keys and both lists are emitted in the engine's own sorted order, so
-two runs over one snapshot compare byte for byte. A tripped governor still reports
-what the relations attested before it tripped.
+the DECLARATIONS of two runs over one snapshot compare byte for byte. A tripped
+governor still reports what the relations attested before it tripped.
+
+`invocations` is the one field that does not: it counts entries into host code,
+which is a fact about the schedule rather than about the index. Under a
+`FILTER EXISTS`, the parallel row loop evaluates each chunk of driving rows on a
+worker whose `EXISTS` memo starts cold, so the inner pattern — and the relation
+inside it — is re-entered once per chunk, and the chunk count comes from the
+runtime's thread count. The same query over the same data can therefore report a
+different count while every declaration beside it is identical, including between
+two runs that differ only in the budget they were given. Read it as "did this
+relation run at all" (`0` versus non-zero) or as a rough magnitude for a log
+line; never compare it between two receipts.
 
 PurRDF's first-party **statistical set** is different, precisely because it is
 NOT an arbitrary closure: `AggregateRegistry::register_statistical_aggregates`
