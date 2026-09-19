@@ -383,6 +383,14 @@ fn an_empty_domain_restriction_is_refused_while_a_named_one_registers() {
             "a {name} declaration must register and read back verbatim"
         );
     }
+
+    // A tag reads back as the validated IRI it was built from, not only as
+    // text. A consumer holding a declaration off an answer would otherwise have
+    // to re-parse a string this type already proved well-formed, and a second
+    // parse is a second chance to disagree with the first.
+    let parsed = tag(EX_DOMAIN_DOCS);
+    assert_eq!(parsed.as_iri().as_str(), EX_DOMAIN_DOCS);
+    assert_eq!(DomainTag::new(parsed.as_iri().clone()), parsed);
 }
 
 // ---- one stratum, one producer -------------------------------------------
