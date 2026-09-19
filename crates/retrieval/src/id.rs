@@ -19,7 +19,19 @@ use core::fmt;
 /// version refuses with [`PlanError::VersionMismatch`](crate::PlanError::VersionMismatch)
 /// rather than reinterpret the bytes under a layout they were not written for.
 ///
-/// # Why this is 2
+/// # Why this is 3
+///
+/// Version 3 appends the request's [`ReadBound`](crate::ReadBound) after the
+/// per-term unserved evidence. That bound is what every stratum depth is derived
+/// *from*, so a plan that did not record it recorded depths whose derivation
+/// could not be reconstructed — and two plans that read a different number of
+/// rows shared one identity. Appending it is not the append-only change a new
+/// discriminator byte is either: a version-2 plan's bytes simply end where the
+/// bound would begin, and a decoder that read them under this layout would run
+/// off the end of a document it should have refused by name. Version 3 refuses it
+/// by name instead — `VersionMismatch { found: 2, expected: 3 }`.
+///
+/// # Why version 2 was not 1
 ///
 /// Version 1 carried a per-stratum weight map between the depths and the
 /// statistics snapshot. Nothing read it: the planner wrote the identity weight
@@ -35,10 +47,10 @@ use core::fmt;
 /// weight map sat *inside* the layout, so a version-1 plan's remaining bytes lie
 /// at different offsets under version 2: a decoder reading those bytes would
 /// take the old weight count for the statistics source's length and answer with
-/// a plan nobody wrote. The version is therefore bumped so the decoder refuses
-/// the old layout by name — `VersionMismatch { found: 1, expected: 2 }` — rather
-/// than mis-reading it.
-pub const PLAN_VERSION: u16 = 2;
+/// a plan nobody wrote. The version was therefore bumped so the decoder refuses
+/// the old layout by name rather than mis-reading it, which is the same reason it
+/// moved again above.
+pub const PLAN_VERSION: u16 = 3;
 
 /// The domain-separation prefix mixed into every [`PlanId`].
 ///

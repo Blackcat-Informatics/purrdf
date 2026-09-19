@@ -439,6 +439,14 @@ impl SearchBounds {
     ///
     /// Every step is a `min` of bounds that each hold independently, so the
     /// result is the tightest of them and can never exceed any one of them.
+    ///
+    /// **Zero is a real declaration, not a missing one.** Over an index with no
+    /// documents every field measured above is zero, so every mode declares zero,
+    /// and that is the truth about the relation: no invocation can emit a row. It
+    /// is not the "unknown" or "unbounded" value — an honest ignorance would have
+    /// to be `u64::MAX` — and a consumer reading it is entitled to invoke the
+    /// producer anyway and take the emptiness from its own receipt rather than from
+    /// this number.
     fn for_mode(self, document: bool, rank: bool, language: bool) -> u64 {
         let mut bound = self.documents;
         if document {
@@ -656,6 +664,13 @@ impl TextSearchRelation {
     ///   contiguous and ascending. Which is exactly why a multi-partition index
     ///   is refused below.
     ///
+    ///   Both claims hold trivially over an index of **no** partitions: a stream
+    ///   with no rows in it has no duplicate subject and no rank out of order, so
+    ///   there is nothing the declaration could overstate. This is not a weaker
+    ///   promise kept by having nothing to keep it over — it is the same promise,
+    ///   and the producer discharges it by reporting its own exhaustion at zero
+    ///   rows when it is invoked.
+    ///
     /// # `domains` comes from the host, and cannot come from anywhere else
     ///
     /// Which blocks of the candidate universe this index's documents lie in is
@@ -696,6 +711,17 @@ impl TextSearchRelation {
     /// [`GraphSelector::Named`](crate::GraphSelector::Named) or
     /// [`GraphSelector::Default`](crate::GraphSelector::Default) over a corpus
     /// in one language.
+    ///
+    /// **Zero partitions is served, not refused.** An index holding no documents
+    /// holds no partitions (see [`TextIndex`]), and everything this method
+    /// declares is true of it: the rank column is well defined because no row
+    /// carries one, the candidate position is the one a consumer would fuse if a
+    /// row arrived, and the declared row bound measured from the index is zero.
+    /// Refusing here would be the mirror of the multi-partition refusal rather
+    /// than an extension of it — it would make a producer over a corpus that has
+    /// not landed yet undeclarable, so a host could not register it until its data
+    /// arrived, and the emptiness a consumer is entitled to read off an invocation
+    /// would instead be an error at registration.
     pub fn ranked_declaration(
         &self,
         stratum: Iri,
@@ -704,6 +730,9 @@ impl TextSearchRelation {
         domains: CandidateDomains,
     ) -> Result<RankedDeclaration, TextError> {
         let partitions = self.index.partition_count();
+        // Strictly greater than one: zero partitions is an index with no
+        // documents, whose answer is the empty one and whose rank column
+        // therefore cannot be out of order. See the doc comment above.
         if partitions > 1 {
             return Err(TextError::config(format!(
                 "this index holds {partitions} partitions, and a rank is computed within one \
@@ -838,6 +867,13 @@ impl PropertyFunction for TextSearchRelation {
     ///
     /// A `?rank` past the end of every partition is likewise empty: asking for
     /// a row a partition does not have is a question with an answer.
+    ///
+    /// So is every invocation over an index holding no documents. It admits, it
+    /// opens, its cursor yields no row, and it attests the generation of the empty
+    /// corpus it read — the same path a needle that matches nothing takes, with no
+    /// branch of its own anywhere. `select` iterates the index's partitions and an
+    /// empty index has none, so nothing is ranked and no corpus statistic is
+    /// computed.
     fn open(
         &self,
         args: &PfArgs<'_>,
@@ -1097,6 +1133,10 @@ impl OccurrenceBounds {
     }
 
     /// The declared bound for an invocation binding the positions named.
+    ///
+    /// Zero over an index with no postings — including one with no documents at
+    /// all, where [`Self::of`] walks an empty dictionary and every maximum stays
+    /// at its zero start. That is the honest bound: no invocation can emit a row.
     fn for_mode(self, document: bool, language: bool, position: bool) -> u64 {
         let mut bound = self.occurrences;
         if position {
@@ -1497,9 +1537,11 @@ impl PfCursor for OccurrenceCursor {
 ///   built under. Digesting `dataset` under a different configuration would
 ///   compare two different questions, so the mismatch is reported instead of
 ///   producing a verdict that means nothing.
-/// * [`TextError::Data`] if `dataset` does not carry a configured predicate or
-///   the configured named graph at all — which is itself a wrong-dataset
-///   symptom — or if a term cannot be encoded.
+/// * [`TextError::Data`] if a term cannot be encoded. A `dataset` that does not
+///   carry a configured predicate, or the configured named graph, at all is not
+///   an error here: it digests to the digest of an empty row set, which is the
+///   verdict a host wants — equal to an index built over an empty corpus, and
+///   unequal to one built over any corpus with text in it.
 /// * [`TextError::Data`] if the digests differ, naming both so a host can see
 ///   which pairing it made.
 pub fn verify_binding<D: DatasetView>(
@@ -1545,8 +1587,8 @@ mod tests {
     use crate::index::{GraphSelector, TextIndex, TextIndexConfig};
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
-        CandidateDomains, DomainTag, EvalError, PfArgs, PfRow, PropertyFunction, RequestFacet,
-        TermKind, TermPattern, TermPlacement,
+        CandidateDomains, DomainTag, EvalError, IndexGeneration, PfArgs, PfRow, PropertyFunction,
+        RequestFacet, TermKind, TermPattern, TermPlacement,
     };
 
     /// The one predicate every fixture indexes.
@@ -1573,10 +1615,16 @@ mod tests {
     // ── fixtures ────────────────────────────────────────────────────────────
 
     /// A dataset of `(subject local name, text, language tag)` rows.
+    ///
+    /// The predicate is interned inside the loop, so no row means no term: an
+    /// empty row list is a genuinely empty dataset, which is the state a shipped
+    /// host reaches before its documents land. Interning it up front would leave
+    /// the empty fixture holding a term nothing uses, and the empty-index tests
+    /// below would then pass over a dataset no host ever has.
     fn dataset_of(rows: &[(&str, &str, Option<&str>)]) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
-        let note = builder.intern_iri(NOTE);
         for &(subject, text, language) in rows {
+            let note = builder.intern_iri(NOTE);
             let s = builder.intern_iri(&format!("https://example.org/{subject}"));
             let literal = builder.intern_literal(match language {
                 Some(tag) => RdfLiteral::language_tagged(text, tag),
@@ -2410,6 +2458,84 @@ mod tests {
         );
         assert_eq!(declared("bbfb"), 2, "?doc and ?position: one per partition");
         assert_eq!(declared("bbbb"), 1, "all three: one graph, one occurrence");
+    }
+
+    /// Over an index with no documents every mode of both relations declares
+    /// **zero**, and an invocation honours that declaration by emitting no rows
+    /// while still attesting the generation it read.
+    ///
+    /// Zero is the truth about such a relation, and it is a declaration rather
+    /// than the absence of one: a consumer reading it may invoke the producer
+    /// anyway, and what comes back is an exhausted cursor over the empty corpus
+    /// rather than a refusal. The pairing is what makes the number honest — a
+    /// bound of zero beside an answer of one row would be an under-declaration,
+    /// and the whole point of measuring the bound from the index is that it
+    /// cannot be.
+    #[test]
+    fn an_empty_index_declares_zero_rows_and_emits_none() {
+        let index = Arc::new(index_of(&[]));
+        assert_eq!(index.document_count(), 0);
+        assert_eq!(index.partition_count(), 0);
+
+        let search = TextSearchRelation::new(Arc::clone(&index));
+        for mode in every_pattern(6) {
+            assert_eq!(
+                search.rows_per_invocation(mode),
+                0,
+                "an index with no documents can emit no row under any mode, {mode:?}"
+            );
+        }
+        let occurrence = TermOccurrenceRelation::new(Arc::clone(&index));
+        for mode in every_pattern(4) {
+            assert_eq!(
+                occurrence.rows_per_invocation(mode),
+                0,
+                "and neither can the occurrence relation, {mode:?}"
+            );
+        }
+
+        // The answer side, through the cursor the engine drains. No panic and no
+        // division by a corpus average that does not exist: an empty index holds
+        // no partition, so nothing is ranked at all.
+        assert_eq!(
+            invoke(&search, &search_args("alpha"), None).expect("a bound needle is admissible"),
+            Vec::<PfRow>::new(),
+            "the producer answers, and the answer is empty"
+        );
+        assert_eq!(
+            invoke(&occurrence, &occurrence_args("alpha"), None).expect("a bound term"),
+            Vec::<PfRow>::new()
+        );
+
+        // And the receipt still names the index the rows came from, which is what
+        // lets a consumer tell this emptiness from emptiness over another state.
+        let needle = string("alpha");
+        let refs: Vec<Option<&TermValue>> = vec![None, Some(&needle), None, None, None, None];
+        let (subject_args, object_args) = refs.split_at(search.arity().subject);
+        let cursor = search
+            .open(&PfArgs::new(subject_args, object_args), None)
+            .expect("a bound needle is admissible");
+        assert_eq!(
+            cursor.generation(),
+            IndexGeneration::Declared(Arc::from(purrdf_core::hex::lower(&index.fingerprint()))),
+            "an empty index has an identity, so its producer attests one"
+        );
+
+        // The neighbouring non-empty case, so the zeros above are a measurement
+        // rather than a bound that reads zero for every index.
+        let golden = TextSearchRelation::new(golden());
+        assert_eq!(
+            golden.rows_per_invocation(BindingPattern::from_code("fbffff")),
+            4,
+            "four documents, so the same code path declares four"
+        );
+        assert_eq!(
+            invoke(&golden, &search_args("alpha"), None)
+                .expect("a bound needle")
+                .len(),
+            2,
+            "and it answers with rows"
+        );
     }
 
     /// The bound-document partition pushdown must be a work reduction and

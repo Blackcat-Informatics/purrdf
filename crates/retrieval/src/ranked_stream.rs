@@ -914,6 +914,30 @@ pub trait RankedStream {
         None
     }
 
+    /// The row bound this stream's depth was derived for, when the stream
+    /// descends from a plan that recorded one.
+    ///
+    /// A bounded read is only honest for the bound it was taken under. Under
+    /// declarations that let the planner narrow a depth to the caller's `k`, a
+    /// stream cut at `k` rows cannot serve a fusion for `k + 1` — the row that
+    /// would have been the `k + 1`-th was never read — and nothing about the rows
+    /// themselves says so. So the bound travels with them, exactly as
+    /// [`plan_id`](Self::plan_id) does, and [`fuse`](crate::fuse) refuses a
+    /// mismatch with its own `top_k` argument by name
+    /// ([`FusionError::ReadBoundMismatch`](crate::FusionError::ReadBoundMismatch))
+    /// rather than answering out of a read taken for a different question.
+    ///
+    /// The default is `None`, which is the honest answer for a stream whose depth
+    /// no plan bounded — a hand-built stream, or one a caller assembled outside the
+    /// ladder. Such a stream fuses at whatever bound its caller names, because
+    /// there is no other bound for that one to disagree with. This is the same
+    /// reasoning [`plan_id`](Self::plan_id) defaults on, and it is why the two are
+    /// separate answers: a stream can descend from a plan and still be re-bounded
+    /// by hand, and a stream can carry a bound while naming no plan.
+    fn fused_bound(&self) -> Option<crate::fuse::TopK> {
+        None
+    }
+
     /// What the index behind these rows attests: which generation answered, and
     /// whether that generation was whole.
     ///

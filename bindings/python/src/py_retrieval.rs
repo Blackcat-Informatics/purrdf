@@ -85,6 +85,13 @@
 //! default weight, and no invented statistics revision: `k`, `decay` and `top_k`
 //! are required keywords for the same reason.
 //!
+//! `top_k` is required on **all three** entry points, including the two that
+//! execute nothing, because the row bound is a planning input rather than a
+//! trailing preference. It is what each stratum's depth is derived from wherever
+//! the producers' own `domains` declarations make that sound, so a `plan` or
+//! `compile` call without it would report a depth, a `LIMIT` and an identity for a
+//! read nobody asked for.
+//!
 //! `decay` is the one of those that looks most like it could have a default and
 //! least can. It names the rank-decay rule the fusion law runs under, and the two
 //! rules compute **different numbers** from the same weights:
@@ -808,7 +815,7 @@ fn run_compile(
 }
 
 /// Run the whole ladder and return the fused answer.
-fn run_search(call: &Call, profile: &FusionProfile, top_k: TopK) -> Result<SearchResult, String> {
+fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, String> {
     let data = build_dataset(call)?;
     let registry = build_registry(&data, &call.producers)?;
     let environment = AdmissionEnvironment {
@@ -823,7 +830,6 @@ fn run_search(call: &Call, profile: &FusionProfile, top_k: TopK) -> Result<Searc
         &*data,
         &environment,
         profile,
-        top_k,
     ))
     .map_err(|e| e.to_string())
 }
@@ -1102,7 +1108,7 @@ fn partial_fusion_law(weights: bool, k: bool, decay: bool) -> String {
 }
 
 /// Collect the request term list.
-fn collect_request(request: &Bound<'_, PyAny>) -> PyResult<RetrievalRequest> {
+fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<RetrievalRequest> {
     let items = request
         .try_iter()
         .map_err(|_| PyTypeError::new_err("`request` must be a sequence of request-term tuples"))?;
@@ -1110,7 +1116,12 @@ fn collect_request(request: &Bound<'_, PyAny>) -> PyResult<RetrievalRequest> {
     for (index, item) in items.enumerate() {
         terms.push(request_term(index, &item?)?);
     }
-    Ok(RetrievalRequest::from_terms(terms))
+    // The bound is part of the request, not an argument of the last stage: the
+    // planner derives every stratum's depth from it, so a request that asks for a
+    // different number of rows is a different plan with different depths and a
+    // different identity. Every entry point on this surface therefore takes it,
+    // including the two that execute nothing.
+    Ok(RetrievalRequest::bounded(terms, TopK::new(top_k)))
 }
 
 /// Collect the `text_producers` dict into the ordered declarations one call
@@ -1337,15 +1348,22 @@ fn collect_statistics(
 
 /// Convert every Python argument the three entry points share into owned Rust
 /// data, so the engine call itself runs with the GIL released.
+///
+/// `top_k` is one of those shared arguments rather than `search`'s alone, because
+/// the row bound is a planning input: it decides how deep each stratum is read and
+/// therefore which plan a request is. A `plan` or `compile` call that did not carry
+/// it would report a depth, a `LIMIT` and an identity for a read nobody asked
+/// for.
 fn collect_call(
     data: &str,
     request: &Bound<'_, PyAny>,
     text_producers: &Bound<'_, PyDict>,
     statistics: &Bound<'_, PyDict>,
+    top_k: usize,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Call> {
-    let request = collect_request(request)?;
+    let request = collect_request(request, top_k)?;
     let statistics = collect_statistics(statistics, &request)?;
     Ok(Call {
         data: data.to_owned(),
@@ -1836,18 +1854,49 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
 /// statistics the planner actually consulted, and the plan's canonical identity.
 /// Nothing is executed, so this is the call a host makes to find out *why* a
 /// request would answer the way it will.
+///
+/// `top_k` is required here even though nothing runs. The bound decides how deep
+/// each stratum is read, so it decides what `"stratum_depths"` says and what
+/// `"plan_id"` is: a top-five request and a top-five-hundred request are two
+/// plans, not one plan read twice. Whether it actually narrows a depth is decided
+/// by the producers' own `domains` — over strata whose declared blocks do not
+/// overlap, each is planned to `top_k` rows and no deeper; over anything else the
+/// declared-or-measured bound stands. It never widens a depth and never changes an
+/// answer.
 #[pyfunction]
-#[pyo3(signature = (data, request, *, text_producers, statistics, data_format="turtle", base=None))]
+#[pyo3(signature = (
+    data,
+    request,
+    *,
+    text_producers,
+    statistics,
+    top_k,
+    data_format="turtle",
+    base=None,
+))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the pure stage's inputs are named, not bundled"
+)]
 fn plan<'py>(
     py: Python<'py>,
     data: &str,
     request: &Bound<'py, PyAny>,
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
+    top_k: usize,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    let call = collect_call(
+        data,
+        request,
+        text_producers,
+        statistics,
+        top_k,
+        data_format,
+        base,
+    )?;
     // Parsing, index construction and planning run detached (GIL released); the
     // result dict is built after the GIL is reacquired.
     let planned = py
@@ -1894,6 +1943,11 @@ fn plan<'py>(
 /// `ValueError` that says which part is missing, because the three are one law
 /// between them.
 ///
+/// `top_k` is required, as it is on [`plan`] and for the same reason: the depths
+/// this stage emits a `LIMIT` for were derived from it. This stage narrows nothing
+/// of its own — a `LIMIT` below `"depth"` would leave `"depth"` and
+/// `"planned_resolution"` describing a read nobody took.
+///
 /// `decay` is `"reciprocal_rank"` or `"weighted_reciprocal_rank"`, and it is the
 /// part of the law that most changes the answer here: the depth a plan is fully
 /// separated to is a property of the rule first and of the weight second. A
@@ -1907,6 +1961,7 @@ fn plan<'py>(
     *,
     text_producers,
     statistics,
+    top_k,
     weights=None,
     k=None,
     decay=None,
@@ -1923,13 +1978,22 @@ fn compile<'py>(
     request: &Bound<'py, PyAny>,
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
+    top_k: usize,
     weights: Option<&Bound<'py, PyDict>>,
     k: Option<u32>,
     decay: Option<&str>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    let call = collect_call(
+        data,
+        request,
+        text_producers,
+        statistics,
+        top_k,
+        data_format,
+        base,
+    )?;
     // A law is its weights, its smoothing constant *and* its decay rule; any
     // part of one names no law at all, and silently supplying the rest would
     // report a resolution measured against arithmetic the host never wrote.
@@ -2144,7 +2208,15 @@ fn search<'py>(
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    let call = collect_call(
+        data,
+        request,
+        text_producers,
+        statistics,
+        top_k,
+        data_format,
+        base,
+    )?;
     let declared = collect_weights(weights)?;
     // Read before the GIL is released, with every other Python-side argument:
     // the rule is owned Rust data by the time the ladder runs.
@@ -2154,7 +2226,7 @@ fn search<'py>(
     let result = py
         .detach(|| {
             let profile = build_profile(&declared, decay)?;
-            run_search(&call, &profile, TopK::new(top_k))
+            run_search(&call, &profile)
         })
         .map_err(PyValueError::new_err)?;
     search_dict(py, &result)

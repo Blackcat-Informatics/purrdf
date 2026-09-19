@@ -110,6 +110,91 @@
 //! access-pattern fields of its own; the seam's declarations are the single
 //! source, and [`Statistics`] supplies the cardinalities that bound them.
 //!
+//! # The request's own bound is the third narrowing, and it has to be proved
+//!
+//! A [`RetrievalRequest`] states how much of the answer it is for
+//! ([`ReadBound`]), and a bound on the rows is sometimes a bound on the *read*.
+//! When it is, the depth this planner records is that bound rather than the
+//! declaration — because the depth a plan records is the depth that is actually
+//! read, and narrowing only the emitted `LIMIT` would leave
+//! [`Plan::stratum_depths`](crate::Plan::stratum_depths) describing a read nobody
+//! took.
+//!
+//! Whether it is, is decided by what the producers declared about their own
+//! candidates and by nothing else. There is no caller hint and no mode:
+//!
+//! * **Every surviving stratum declares
+//!   [`CandidateDomains::Within`](purrdf_sparql_eval::CandidateDomains::Within),
+//!   and the declared block sets are pairwise disjoint.** Then depth
+//!   `min(declared, statistics-narrowed, k)` is *exact* — the proof is below.
+//! * **Anything else** — two strata that share a block, or any stratum declaring
+//!   [`Unrestricted`](purrdf_sparql_eval::CandidateDomains::Unrestricted) — and
+//!   the declared-or-statistics bound stands exactly as it does for a
+//!   [`ReadBound::Complete`] request.
+//!
+//! ## The proof, for the disjoint case
+//!
+//! Write the surviving strata `s = 1..m`, each with a declared block set `D_s`,
+//! pairwise disjoint. A candidate lies in exactly **one** block — that is the
+//! partition axiom
+//! [`DomainTag`](purrdf_sparql_eval::DomainTag) is defined by — and a producer
+//! that names a candidate outside its own declaration is refused by name
+//! ([`ProtocolError::OutsideDeclaredDomain`](crate::ProtocolError::OutsideDeclaredDomain))
+//! rather than merged. So for a candidate `x` there is at most one `s` with
+//! `block(x) ∈ D_s`, and only that stratum can name `x`.
+//!
+//! Its fused score is therefore a **single** term, `weight_s × decay(rank_s(x))`,
+//! not a sum across strata. `decay` is non-increasing in rank — the profile's own
+//! curve never rises, which fusion re-verifies per row
+//! ([`ProtocolError::ContributionMismatch`](crate::ProtocolError::ContributionMismatch))
+//! — so within one stratum the fused score is non-increasing in rank.
+//!
+//! Now take any `x` that its naming stratum `s` ranks at `r > k`. The candidates
+//! at ranks `1..r-1` of `s` are `r-1 ≥ k` distinct candidates, each with score
+//! `weight_s × decay(rank) ≥ weight_s × decay(r) = score(x)`. At least `k`
+//! candidates therefore score at or above `x`. Where a score is strictly greater,
+//! `x` loses on the first tie-break key; where the decay has saturated and the
+//! scores are equal, `x` loses on the second, which is best stratum rank
+//! ascending, and every one of those candidates has a smaller rank in `s` than
+//! `x` does. The third key is never reached. So `x` is beaten by at least `k`
+//! candidates and cannot be in the global top `k`.
+//!
+//! Contrapositive: every member of the global top `k` sits at per-stratum rank
+//! `≤ k` in its own naming stratum. Reading each stratum to depth `k` therefore
+//! materializes a superset of the answer, and the fusion over those prefixes
+//! yields the same rows, the same scores and the same order as the fusion over
+//! the whole streams — every score in the prefix is already complete, because the
+//! only stratum that could have added to it is the one the row came from.
+//!
+//! ## `k`, not `k + 1`
+//!
+//! The bound is tight at `k` and the boundary case is the tie. Rank `k + 1` of a
+//! stratum is beaten by the `k` candidates above it in that same stratum even
+//! when the decay has saturated and their scores are equal, because the tie-break
+//! is total and its next key is the stratum rank they win on. Nothing at rank
+//! `k + 1` can enter a top `k`, so nothing is gained by reading it *as a value*.
+//! One row past the depth is nonetheless read, and always has been: the probe
+//! slot [`compile`](crate::compile) emits at `min(depth, declared) + 1` is what
+//! separates "the plan stopped me" from "this is all there is", and it matters
+//! more at a tight depth than at a loose one. That row is a read and never a
+//! value, so it is the probe that supplies it and not the depth.
+//!
+//! ## Why `Unrestricted` is excluded, and why that is not an over-refusal
+//!
+//! The premise the proof runs on — each candidate has at most one naming stratum
+//! — is supplied by the declarations and by nothing else. An `Unrestricted`
+//! declaration supplies none: it says the producer may name anything, which is
+//! exactly the promise that lets two strata name one candidate and sum into it.
+//! Inferring the premise from the *shape of the plan* instead — one stratum, so
+//! there is nobody to overlap with — would rest the depth on a count rather than
+//! on a promise, and it would stop holding the moment a second producer is
+//! registered, silently.
+//!
+//! Excluding it costs nothing but reading: the fallback is the depth the registry
+//! and the statistics already set, which is the depth every such plan has always
+//! carried. No request is refused, and no answer changes — only an unrestricted
+//! stratum keeps reading as deep as it did before.
+//!
 //! # Both statistics bound the depth, and neither raises it
 //!
 //! A stratum's depth starts at the registry's declared worst-case row count and
@@ -149,7 +234,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RankedDeclaration};
+use purrdf_sparql_eval::{
+    CandidateDomains, PfDescriptor, PropertyFunctionRegistry, RankedDeclaration,
+};
 
 use crate::error::PlanError;
 use crate::iri::Iri;
@@ -158,7 +245,7 @@ use crate::plan::{
     Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
     StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
-use crate::request::{RequestTerm, RetrievalRequest};
+use crate::request::{ReadBound, RequestTerm, RetrievalRequest};
 use crate::statistics::Statistics;
 
 /// Parts per million of unity: the value "every row matches" is reported as.
@@ -174,10 +261,15 @@ const PPM_UNIT: u64 = 1_000_000;
 /// per selected producer (the stratum and which request-term indices it
 /// receives), every considered producer's decision — selected or rejected with
 /// a reason — every request term that reached no producer at all with the reason
-/// it did not, the per-stratum depth derived from the registry's row-bound
-/// declarations capped by statistics, the statistics snapshot actually
-/// consulted, and both registry identities (the ephemeral instance id and the
-/// durable content fingerprint).
+/// it did not, the request's own [`ReadBound`], the per-stratum depth derived
+/// from the registry's row-bound declarations capped by statistics **and by that
+/// bound**, the statistics snapshot actually consulted, and both registry
+/// identities (the ephemeral instance id and the durable content fingerprint).
+///
+/// When the bound narrows a depth is decided from the producers' own
+/// candidate-domain declarations and from nothing else; the rule, and the proof
+/// that the narrowed depth is exact rather than merely smaller, are in this
+/// module's header.
 ///
 /// It records no stratum weights. Planning happens before a fusion profile is
 /// chosen — the profile is deliberately not a planning input — and the weights
@@ -194,7 +286,8 @@ const PPM_UNIT: u64 = 1_000_000;
 ///   term of the request, or when every producer that does accept one cannot be
 ///   invoked for it.
 /// * [`PlanError::StatisticsUnavailable`] when a selected producer declares an
-///   unbounded row count and statistics supply no cardinality to bound it.
+///   unbounded row count, statistics supply no cardinality to bound it, and the
+///   request's own bound licenses no prefix either.
 pub fn plan(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry,
@@ -297,6 +390,12 @@ pub fn plan(
     let mut bindings: Vec<ProducerBinding> = Vec::new();
     let mut decisions: Vec<ProducerDecision> = Vec::with_capacity(candidates.len());
     let mut selected: Vec<(Iri, u64)> = Vec::new();
+    // What each surviving stratum's one producer declared about which blocks of
+    // the candidate universe it may name. Collected here, over the set that
+    // actually survives placement, because it is the premise the request's own
+    // bound is derived under and a rejected producer's declaration is not part of
+    // that premise.
+    let mut declared_domains: BTreeMap<Iri, &CandidateDomains> = BTreeMap::new();
     for candidate in &candidates {
         let (descriptor, declaration, stratum, carried) = match &candidate.outcome {
             Outcome::Rejected(reason) => {
@@ -350,6 +449,7 @@ pub fn plan(
             request_terms: carried.clone(),
         });
         selected.push((stratum.clone(), declared_row_bound(descriptor)));
+        declared_domains.insert(stratum.clone(), &declaration.domains);
     }
 
     if bindings.is_empty() {
@@ -388,12 +488,17 @@ pub fn plan(
             .or_default()
             .extend(binding.request_terms.iter().copied());
     }
+    // What the request's own bound licenses, over exactly the surviving strata's
+    // declarations: `Some(k)` when the merge argument in this module's header
+    // holds, `None` when it does not and the registry's own bound stands. Decided
+    // once, from the shape of the declarations, with no caller hint in it.
+    let prefix = licensed_prefix(request.bound, &declared_domains);
     let strata: BTreeSet<Iri> = declared_bounds.keys().cloned().collect();
     let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(strata.len());
     for stratum in &strata {
         let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
         let reached = terms_at(&request.terms, reaching.get(stratum));
-        let bound = capped(declared, stratum, &reached, statistics);
+        let bound = capped(declared, stratum, &reached, statistics, prefix);
         if bound == u64::MAX {
             return Err(PlanError::StatisticsUnavailable {
                 predicate: Box::new(stratum.clone()),
@@ -410,6 +515,7 @@ pub fn plan(
     Ok(Plan {
         version: Plan::VERSION,
         request_terms: request.terms.clone(),
+        read_bound: request.bound,
         producer_bindings: bindings,
         producer_decisions: decisions,
         unserved_terms,
@@ -482,6 +588,13 @@ enum Outcome<'a> {
 /// depth be narrowed by a selectivity its final depth is not, which is the one
 /// direction the invariant above forbids.
 ///
+/// The request's own bound ([`ReadBound`]) is deliberately **not** applied here,
+/// for that same invariant. This depth exists only so [`place`] can be run, and
+/// the one property it owes is that no producer is ever handed a depth smaller
+/// than the one its stratum finally records; the request's bound only ever lowers
+/// a depth, so applying it on this side could only push against that direction
+/// while buying nothing — the number never reaches a plan, a unit or a row.
+///
 /// Every finite depth here carries [`capped`]'s floor of one, which matters
 /// more at this step than at the final one: this is the depth [`place`] renders
 /// into a producer's declared depth argument, so a zero would hand a relation a
@@ -518,7 +631,7 @@ fn depth_bounds(
         .into_iter()
         .map(|(stratum, declared)| {
             let reached = terms_at(terms, reaching.get(&stratum));
-            let bound = capped(declared, &stratum, &reached, statistics);
+            let bound = capped(declared, &stratum, &reached, statistics, None);
             let depth = u32::try_from(bound).unwrap_or(u32::MAX);
             (stratum, depth)
         })
@@ -616,6 +729,51 @@ fn unserved_terms(
         .collect()
 }
 
+/// The per-stratum read prefix `bound` licenses over strata declaring `domains`,
+/// or `None` when it licenses none.
+///
+/// This is the whole of the decision described in this module's header, and it is
+/// shape-driven: the answer is a function of the request's bound and of the
+/// surviving producers' own candidate-domain declarations. There is no caller
+/// hint, no mode and no heuristic.
+///
+/// `Some(k)` requires **both** halves of the premise the proof runs on:
+///
+/// * every surviving stratum declares a block set — an `Unrestricted` stratum
+///   promises nothing about which candidates it will not name, so it supplies no
+///   premise at all;
+/// * no two of those sets meet, which is what makes each candidate's naming
+///   stratum unique and its fused score a single term rather than a sum.
+///
+/// [`CandidateDomains::intersects`] decides the second, and it is the right
+/// question rather than a convenient one: it is true exactly when some candidate
+/// could satisfy both declarations, which is exactly the case the merge argument
+/// cannot survive.
+///
+/// The pairwise scan is quadratic in the number of strata, which is the number of
+/// ranked producers one request reaches — a handful, fixed by the registry rather
+/// than by the corpus. Nothing here touches a row.
+fn licensed_prefix(bound: ReadBound, domains: &BTreeMap<Iri, &CandidateDomains>) -> Option<u64> {
+    let ReadBound::Bounded(top_k) = bound else {
+        return None;
+    };
+    let declared: Vec<&&CandidateDomains> = domains.values().collect();
+    if declared
+        .iter()
+        .any(|entry| matches!(entry, CandidateDomains::Unrestricted))
+    {
+        return None;
+    }
+    for (index, left) in declared.iter().enumerate() {
+        for right in &declared[index + 1..] {
+            if left.intersects(right) {
+                return None;
+            }
+        }
+    }
+    Some(top_k.get() as u64)
+}
+
 /// A declared row bound, lowered (never raised) by what the provider measured,
 /// and never lowered past the first row — nor read as zero when the declaration
 /// itself was zero.
@@ -671,6 +829,7 @@ fn capped(
     stratum: &Iri,
     terms: &[&RequestTerm],
     statistics: &impl Statistics,
+    prefix: Option<u64>,
 ) -> u64 {
     let bound = match statistics.cardinality(stratum) {
         Some(cardinality) => declared.min(cardinality),
@@ -679,8 +838,15 @@ fn capped(
     // An unbounded stratum has no row count for a ratio to be a fraction of.
     // Scaling `u64::MAX` would manufacture a finite bound out of a missing one
     // and hide the condition `StatisticsUnavailable` exists to report.
+    //
+    // The request's own bound is the exception, and it is not a manufactured
+    // bound: a stratum whose declaration promises unboundedly many rows, read for
+    // an answer that provably cannot use more than `k` of them, is a read of `k`
+    // rows and not an unbounded read. Reporting `StatisticsUnavailable` there
+    // would refuse a plan whose depth is exactly known — the over-refusal mirror
+    // of the silent truncation the rest of this function guards against.
     if bound == u64::MAX {
-        return bound;
+        return prefix.map_or(u64::MAX, |rows| rows.max(1));
     }
     let narrowed = match combined_selectivity_ppm(stratum, terms, statistics) {
         // Rounded up, in an intermediate wide enough that the product cannot
@@ -693,7 +859,17 @@ fn capped(
         }
         None => bound,
     };
-    narrowed.max(1)
+    // The request's bound is applied last, and the order is load-bearing. A
+    // selectivity is a fraction of the rows the *stratum* holds, so scaling a
+    // bound that has already been narrowed to `k` would ask for a fraction of `k`
+    // — a depth below the rows the ratio describes, which is the silent truncation
+    // this whole function is arranged to avoid. Narrowed here it is one more `min`
+    // over a bound both the registry and the provider already set.
+    let bounded = match prefix {
+        Some(rows) => narrowed.min(rows),
+        None => narrowed,
+    };
+    bounded.max(1)
 }
 
 /// The selectivity the provider reports for `subject` across `terms`, in parts

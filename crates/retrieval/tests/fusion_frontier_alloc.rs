@@ -422,7 +422,38 @@ fn measure_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measure
 
 /// Fuse `rows` rows out of three streams of `total` rows each, at `weight`,
 /// through the shipped [`fuse`], measuring the peak heap it held.
+///
+/// # The first reading on a thread is discarded
+///
+/// A peak is the high-water mark of *live* bytes, so it charges whatever is
+/// allocated inside the window whether or not the fusion is what allocated it.
+/// The first fusion a thread performs pays one-time costs the second does not,
+/// and those land inside the first measured window and nowhere else.
+///
+/// Every claim in this file is a COMPARISON between two readings, so a one-time
+/// cost charged to whichever ran first is a difference that has nothing to do
+/// with the quantity under test. It stays invisible while it is small relative
+/// to an allocator size class and becomes a failure the moment the per-row
+/// record grows enough to push the two readings onto opposite sides of one --
+/// at which point a test about stream length reports on initialisation order
+/// instead, and says so in the voice of the claim it was meant to check.
+///
+/// Discarding a first run puts both readings in the same steady state. It
+/// weakens nothing: the equalities stay exact, and a fusion that really did hold
+/// more for a longer stream still shows it, because the extra is charged to the
+/// warmed run too.
 fn measure_rows_at_weight(
+    total: u64,
+    rows: usize,
+    duplicates: DuplicatePolicy,
+    weight: Fixed,
+) -> Measurement {
+    let _warm_up = measure_rows_at_weight_once(total, rows, duplicates, weight);
+    measure_rows_at_weight_once(total, rows, duplicates, weight)
+}
+
+/// One reading, taken however warm the thread happens to be.
+fn measure_rows_at_weight_once(
     total: u64,
     rows: usize,
     duplicates: DuplicatePolicy,

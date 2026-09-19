@@ -484,6 +484,66 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **geo:** A GeoSPARQL index can now be built before the geometries it will hold
+  have landed. `GeoIndex::from_dataset` refused outright when a
+  `GraphSelector::Named` graph was not interned in the dataset, on the argument
+  that a configuration pointing at an absent graph is a wiring mistake. A graph
+  IRI is interned only once a quad is in that graph, so the check made a
+  graph-scoped index unbuildable until its data arrived -- and an index standing
+  ready before the load is an ordinary operating state. The same function already
+  read an absent serialization property as "an ordinary empty match, not a
+  configuration error", so the two halves of one condition were answered two
+  different ways. Graph resolution is now infallible and an absent graph yields
+  the empty index, which is the posture `purrdf-text` takes for the identical
+  selector, so a host wiring both crates from one configuration no longer gets an
+  index from one and a refusal from the other.
+
+  The empty index is a complete index, built through the ordinary steps rather
+  than a second path: no entries, one empty asserted vector per spatial relation
+  so every relation stays answerable, and a `source_fingerprint` from the same
+  digest call the populated projection uses. The configuration is digested before
+  any content, so two empty indexes under different configurations still differ,
+  and the value moves the moment the first geometry lands. `verify_binding` is
+  untouched and still compares digests over the rows actually projected.
+
+  What is not relaxed: an empty serialization list is still refused. That is a
+  configuration with no subject rather than a corpus with no rows, and this
+  toolkit mints no vocabulary to guess one. A `GraphSelector::Named` holding a
+  non-IRI is still refused at configuration time.
+
+- **text:** A text index can now be built before the documents it will hold have
+  landed. A configured predicate the dataset has not interned contributes no rows
+  instead of failing the build, and so does a `GraphSelector::Named` graph the
+  dataset has not interned. The limiting case is what decided it: an empty dataset
+  interns no term at all, so the presence check made an index over an empty corpus
+  impossible -- and it made the recommended single-partition configuration (one
+  named graph) the hardest one to start from, because a graph IRI is interned only
+  once something is in that graph. It also put the shipped text producer
+  permanently out of reach of the state the ranked-retrieval contract is written
+  for: a producer whose declared row bound is zero is invoked anyway and reports
+  its own exhaustion, so emptiness arrives as the producer's receipt rather than as
+  a verdict reached without asking it.
+
+  An empty index is a complete index. It holds zero documents, zero terms and zero
+  partitions -- a partition carries at least one document, so BM25's average
+  document length is never divided by a zero that does not exist -- and it still
+  attests a generation, because the configuration, the ranking law and the
+  analyzer's Unicode versions are digested before any content. Two empty indexes
+  under different configurations are therefore distinguishable, and the value moves
+  the moment the first document lands. Every relation measured over it declares a
+  row bound of zero in every mode, `ranked_declaration` serves it (the rank law
+  holds over a stream with no rows in it), and a search answers with zero rows
+  through the ordinary cursor path.
+
+  What is given up is named rather than glossed: a mistyped predicate IRI now
+  removes that predicate's share of the corpus quietly. A presence check was never
+  a sound detector of it -- it accepted any IRI the dataset interned anywhere,
+  including in an unrelated position, and said nothing about a correctly spelled
+  predicate whose objects are all IRIs, which already contributed no text and
+  already raised nothing. `verify_binding` remains the surface that answers "is
+  this the data under that index?", and it compares digests over the rows actually
+  walked. The multi-partition refusal in `ranked_declaration` is untouched.
+
 - **retrieval:** A stratum whose planned depth already equalled its producer's
   declared row bound was reported `ProducerStatus::Exhausted` -- the strongest
   completeness claim this layer has -- for a read that bound had cut, with
@@ -708,6 +768,70 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   built by this one and must be re-planned.
 
 ### Changed
+
+- **BREAKING** **retrieval:** The read bound moved into `RetrievalRequest`, so a
+  bounded answer costs a bounded *read*. `RetrievalRequest` gains a `bound` field
+  of the new `ReadBound` -- a total enum over the bounded case and the complete
+  one, because "give me the top five" and "give me everything these strata hold"
+  are both things a caller asks for and neither is the absence of the other. `plan`
+  derives each stratum's depth from it, `Plan` records it and digests it into
+  `Plan::id`, and `search` reads it from the request instead of taking a separate
+  `top_k`. The bound used to arrive at `fuse`, four stages after every depth had
+  been chosen: a fused top-five over two strata whose producers declare disjoint
+  candidate blocks walked a handful of ranks and reported so, while the compiled
+  unit was still `LIMIT <corpus>` -- so the elapsed time grew with the corpus while
+  the instrument said it had not. Only the measurement had moved.
+
+  When the bound narrows a depth is decided from the producers' own
+  `CandidateDomains` and from nothing else, with no caller hint and no mode. Where
+  every stratum declares a block set and no two of those sets meet, each candidate
+  has exactly one naming stratum, so its fused score is one weighted contribution
+  that falls with rank and the global top `k` is a merge of per-stratum prefixes:
+  nothing below per-stratum rank `k` can enter it, even where the decay has
+  saturated and the scores tie, because the tie-break's next key is the stratum
+  rank those candidates win on. The depth is therefore
+  `min(declared, statistics-narrowed, k)` and it is exact rather than merely
+  smaller. Any overlap between two declarations, and any `Unrestricted` stratum,
+  and the declared-or-measured bound stands exactly as before -- scores sum across
+  strata there and the merge argument has no premise to run on. Rows, scores and
+  provenance are identical either way.
+
+  A bound also gives a finite depth to a producer that declares unboundedly many
+  rows, where previously only a measured cardinality could: such a read, taken for
+  an answer that provably cannot use more than `k` rows, is a read of `k` rows.
+  `PlanError::StatisticsUnavailable` still refuses the same declaration asked for
+  everything.
+
+  The probe row is untouched: the emitted bound is still the depth plus one
+  wherever the declaration leaves room, and a depth *argument* is still never
+  raised past the producer's own registration. It matters more at a tight depth
+  than at a loose one.
+
+- **BREAKING** **retrieval:** `fuse` refuses a bound the streams were not planned
+  for, as `FusionError::ReadBoundMismatch`. `CompiledRetrieval::fused_bound`
+  resolves a plan's `ReadBound` once into the row count a fusion of its units must
+  run at, `execute` tags every `StratumStream` with it, and `RankedStream` gains a
+  defaulted `fused_bound` so a stream assembled outside the ladder still fuses at
+  whatever its caller names. It is a sibling of `PlanIdMismatch` rather than a case
+  of it: that one is a disagreement among the streams about their provenance, this
+  one is a disagreement between the streams and the caller's own argument, and the
+  repairs differ. It closes a latent defect -- a plan could be fused at any bound,
+  including one its depths could not honestly serve, with nothing catching it.
+
+- **BREAKING** **retrieval:** `PLAN_VERSION` is 3. The canonical plan encoding
+  appends the request's read bound after the per-term unserved evidence, which
+  every recorded depth is derived from; a version-2 plan's bytes end where the
+  bound would begin, so the decoder refuses the old layout by name instead of
+  running off the end of it. Every plan identity moves, as does the plan document's
+  JSON, which now carries `"read_bound"`.
+
+- **BREAKING** **python:** `retrieval.plan` and `retrieval.compile` take the
+  `top_k` keyword `retrieval.search` already took, and all three require it. The
+  row bound is a planning input, so a `plan` or `compile` call without one would
+  report a depth, a `LIMIT` and a `plan_id` for a read nobody asked for.
+
+  The whole ranked-retrieval declaration surface postdates the last release, so
+  every change above moves an API no published version carries.
 
 - **retrieval:** A stratum depth is floored at one row, whether the zero came from
   a statistics provider or from the registry's own declaration. A bound narrows a

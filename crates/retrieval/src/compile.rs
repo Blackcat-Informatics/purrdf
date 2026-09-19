@@ -105,6 +105,28 @@
 //! a stratum a surviving producer ranks under. Absence emits no unit and claims
 //! nothing; a zero would have claimed everything.
 //!
+//! # The depth arrives already narrowed, and this stage narrows nothing
+//!
+//! A request states how much of the answer it is for
+//! ([`ReadBound`](crate::ReadBound)), and the *planner* is what turns that into a
+//! depth — see [`plan`](crate::plan) for the rule and its proof. So by the time a
+//! plan reaches this waist the narrowing has happened, and
+//! [`Plan::stratum_depths`] is the true read.
+//!
+//! This stage deliberately does not narrow a `LIMIT` on its own. Emitting five
+//! rows for a depth the plan recorded as four hundred would make that recorded
+//! depth a fiction: every field keyed to it — [`StratumUnit::depth`],
+//! [`PlannedResolution::requested_depth`], the executor's reading of the probe row
+//! — would describe a read nobody took, and the identity a plan carries would
+//! not distinguish the two reads at all. The bound belongs where the depth is
+//! decided.
+//!
+//! What this stage does add is [`CompiledRetrieval::fused_bound`]: the request's
+//! bound resolved once, against the plan in hand, into the row count a fusion of
+//! these units must be run at. It travels with the streams so that fusing them at
+//! some other bound is refused by name rather than served out of depths derived
+//! for another question.
+//!
 //! # The emitted bound is one row deeper than the depth, and that row is a probe
 //!
 //! A unit bounded at exactly its depth cannot tell the two endings apart that
@@ -201,6 +223,7 @@ use std::collections::BTreeMap;
 use purrdf_sparql_eval::{PfDescriptor, RankedDeclaration, RegistryId};
 
 use crate::admission::{AdmissionEnvironment, AdmissionError, RowBound, admit_plan};
+use crate::fuse::TopK;
 use crate::id::PlanId;
 use crate::iri::Iri;
 use crate::matching::{PlacementError, place, render_slots};
@@ -208,6 +231,7 @@ use crate::plan::{Plan, ProducerBinding};
 use crate::ranked_stream::StreamContract;
 use crate::reciprocal_rank::MonotoneDepth;
 use crate::render::RenderError;
+use crate::request::ReadBound;
 
 /// One stratum's independently executable query text, and the contract the rows
 /// it returns will arrive under.
@@ -289,6 +313,26 @@ pub struct CompiledRetrieval {
     /// The durable content fingerprint of the registry the units were compiled
     /// against.
     pub registry_fingerprint: String,
+    /// The row bound these units' depths were derived for, as the [`TopK`] a
+    /// fusion of them must be run at.
+    ///
+    /// The plan carries a [`ReadBound`], which is a caller's request; this is that
+    /// request resolved against the plan in hand, once, at the stage that holds
+    /// both. [`ReadBound::Bounded`] resolves to its own row count.
+    /// [`ReadBound::Complete`] resolves to the sum of the depths the plan records
+    /// — the count at which a fusion of these units provably cannot truncate,
+    /// because every unit is bounded at its depth and a fused answer holds each
+    /// candidate once.
+    ///
+    /// [`execute`](crate::execute) tags every stream with it and
+    /// [`fuse`](crate::fuse) reads it back, so fusing a bundle at some other bound
+    /// is a named refusal
+    /// ([`FusionError::ReadBoundMismatch`](crate::FusionError::ReadBoundMismatch))
+    /// rather than an answer served out of depths that were derived for a
+    /// different question. It travels on the bundle for the reason
+    /// [`StratumUnit::depth`] does: `execute` is handed the bundle and nothing
+    /// else.
+    pub fused_bound: TopK,
     /// Per-stratum rank resolution this plan will fuse at, when the environment
     /// named the profile it will be fused under.
     ///
@@ -440,8 +484,32 @@ pub fn compile(
         plan_id: plan.id(),
         registry_id: admitted.instance_id,
         registry_fingerprint: admitted.fingerprint,
+        fused_bound: fused_bound(plan),
         resolution,
     })
+}
+
+/// The [`TopK`] a fusion of this plan's units must be run at.
+///
+/// [`ReadBound::Bounded`] is already that number. [`ReadBound::Complete`] asked
+/// for everything the strata hold, and what they hold is bounded by the depths the
+/// plan records: each unit contributes at most its own depth rows, a fused answer
+/// carries each candidate exactly once, so the sum over the depths is a count no
+/// fusion of these units can reach — and therefore a bound that truncates
+/// nothing. It is the honest resolution of "complete" for a bundle whose reads are
+/// themselves bounded, rather than a number picked to be large.
+///
+/// The sum saturates. A saturated sum is still a bound nothing can reach, because
+/// reaching it would need more distinct candidates than a `usize` can count.
+fn fused_bound(plan: &Plan) -> TopK {
+    match plan.read_bound {
+        ReadBound::Bounded(top_k) => top_k,
+        ReadBound::Complete => {
+            TopK::new(plan.stratum_depths.values().fold(0_usize, |total, depth| {
+                total.saturating_add(*depth as usize)
+            }))
+        }
+    }
 }
 
 /// The ranked declaration `binding`'s producer supplied at registration.

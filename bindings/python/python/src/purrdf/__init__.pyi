@@ -2243,6 +2243,15 @@ class retrieval:
     # integer of parts per million in [0, 1000000] — never a float, because the
     # value reaches the plan's canonical identity). A reported selectivity
     # lowers that stratum's planned depth; it never raises one.
+    #
+    # `top_k` is required here, on the stage that executes nothing, because the
+    # row bound is a PLANNING input: it decides how deep each stratum is read, so
+    # a top-five request and a top-five-hundred request are different plans with
+    # different `"stratum_depths"` and different `"plan_id"` values. Whether it
+    # actually narrows a depth is decided by the producers' own `domains`: over
+    # strata whose declared blocks do not overlap each stratum is planned to `k`
+    # rows and no deeper, and over anything else the declared-or-measured bound
+    # stands. It never widens a depth, and it never changes an answer.
     @staticmethod
     def plan(
         data: str,
@@ -2250,6 +2259,7 @@ class retrieval:
         *,
         text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
+        top_k: int,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -2297,6 +2307,11 @@ class retrieval:
     # three are one law between them. The rule matters most here: a stratum the
     # truncated rule reports as coarse may be fully separated under the folded
     # one at the same weight.
+    #
+    # `top_k` is required, as it is on `plan` and for the same reason: the depths
+    # this stage emits a `LIMIT` for were derived from it. This stage narrows
+    # nothing on its own — a `LIMIT` smaller than `"depth"` would make `"depth"`
+    # and `"planned_resolution"` describe a read nobody took.
     @staticmethod
     def compile(
         data: str,
@@ -2304,6 +2319,7 @@ class retrieval:
         *,
         text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
+        top_k: int,
         weights: dict[str, int] | None = None,
         k: int | None = None,
         decay: str | None = None,
@@ -2322,7 +2338,13 @@ class retrieval:
     # `k`, `decay` and `top_k` are required: the fusion law is the caller's and
     # fused enumeration is top-k by construction. How many contributions a
     # candidate may receive is not a parameter — it is the number of weighted
-    # strata, because a candidate surfaces at most once in each. `decay` reaches
+    # strata, because a candidate surfaces at most once in each.
+    #
+    # `top_k` is also a planning input, which is why `plan` and `compile` take it
+    # too: over strata whose declared `domains` do not overlap it is what each
+    # stratum's depth — and therefore its emitted `LIMIT` — is derived from, so the
+    # work a bounded search does is bounded in rows READ and not only in rows
+    # returned. The answer is identical either way; see `plan`. `decay` reaches
     # every number in the answer, not only the law's identity: the two rules
     # produce different contributions, different resolution maps and different
     # `"profile_id"` values from the same weights.

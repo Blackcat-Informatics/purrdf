@@ -61,15 +61,15 @@ fn seed_term() -> RequestTerm {
 }
 
 fn mixed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), vector_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), vector_term(), seed_term()])
 }
 
 fn lexical_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term()])
+    RetrievalRequest::complete(vec![lexical_term()])
 }
 
 fn vector_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![vector_term()])
+    RetrievalRequest::complete(vec![vector_term()])
 }
 
 /// Each accepted pattern, with the request term's value rendered into the
@@ -180,7 +180,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
 
 /// A request of two shapes one producer can hold at once.
 fn lexical_and_seed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
 }
 
 /// The mixed registry: one catch-all (`Any`) producer, one
@@ -395,12 +395,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "b1a88f829a2b67800c9113fdaffd32de93abc0667e423012c7cb36be8c403b01";
+    "42c4b236c3a0a0b5c3e81f34865a0d47925477aa85ef9b0205cb47469c7bf6a2";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "2bb66a0c3ffc409e9a0ec4e9a66c9d7f58f8bac173d40e93b58c0292869355e9";
+    "332e0510f4a7fc446a9b51c9a51f21c43ef2cb509f0cda5cc84a30d53b5fbf70";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -652,7 +652,7 @@ fn unmatched_and_unranked_producers_are_rejected() {
 
 #[test]
 fn language_and_predicate_constraints_are_enforced() {
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::Lexical {
+    let request = RetrievalRequest::complete(vec![RequestTerm::Lexical {
         text: "different".to_owned(),
         language: Some("fr".to_owned()),
         predicate: Some(iri(&ex("other"))),
@@ -743,7 +743,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
 }
 
 fn lexical_and_vector_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), vector_term()])
+    RetrievalRequest::complete(vec![lexical_term(), vector_term()])
 }
 
 #[test]
@@ -909,7 +909,7 @@ fn an_interval_term_no_registry_producer_takes_is_reported_per_term() {
     // lexical term still reaches it, so the request plans and the answer is
     // honest about what it could not serve.
     let request =
-        RetrievalRequest::from_terms(vec![lexical_term(), temporal_term(), numeric_range_term()]);
+        RetrievalRequest::complete(vec![lexical_term(), temporal_term(), numeric_range_term()]);
     let plan = plan(&request, &literal_only_registry(), &fixture_statistics())
         .expect("the lexical term still reaches a producer");
 
@@ -976,7 +976,7 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             mandatory: false,
         },
     );
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::Temporal {
+    let request = RetrievalRequest::complete(vec![RequestTerm::Temporal {
         predicate: iri(&ex("observed")),
         lower: Some("2026-01-01T00:00:00Z".to_owned()),
         upper: None,
@@ -1009,7 +1009,7 @@ fn an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans() {
             upper: None,
         },
     ] {
-        let request = RetrievalRequest::from_terms(vec![empty]);
+        let request = RetrievalRequest::complete(vec![empty]);
         let error = plan(&request, &mixed_registry(), &fixture_statistics())
             .expect_err("an interval with neither endpoint constrains nothing");
         match error {
@@ -1022,7 +1022,7 @@ fn an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans() {
     // The neighbouring valid cases: one endpoint is a half-open interval, and it
     // plans.
     for half_open in [temporal_term(), numeric_range_term()] {
-        let request = RetrievalRequest::from_terms(vec![half_open]);
+        let request = RetrievalRequest::complete(vec![half_open]);
         assert!(
             plan(&request, &mixed_registry(), &fixture_statistics()).is_ok(),
             "an interval carrying an endpoint is a question"
@@ -1032,7 +1032,7 @@ fn an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans() {
 
 #[test]
 fn an_inverted_numeric_range_is_refused_but_a_degenerate_one_plans() {
-    let inverted = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+    let inverted = RetrievalRequest::complete(vec![RequestTerm::NumericRange {
         predicate: iri(&ex("price")),
         lower: Some(purrdf_retrieval::Fixed::from_raw(2)),
         upper: Some(purrdf_retrieval::Fixed::from_raw(1)),
@@ -1047,7 +1047,7 @@ fn an_inverted_numeric_range_is_refused_but_a_degenerate_one_plans() {
     }
     // The neighbouring valid case, one raw unit away: equal endpoints are a
     // single point, which is a perfectly good question.
-    let degenerate = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+    let degenerate = RetrievalRequest::complete(vec![RequestTerm::NumericRange {
         predicate: iri(&ex("price")),
         lower: Some(purrdf_retrieval::Fixed::from_raw(1)),
         upper: Some(purrdf_retrieval::Fixed::from_raw(1)),
@@ -1063,7 +1063,7 @@ fn an_interval_predicate_reaches_the_statistics_snapshot() {
     // The interval names a predicate, so planning consults the statistics for
     // it exactly as it does for a needle's predicate; an arm the planner did not
     // teach `term_predicate` about would silently consult nothing.
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+    let request = RetrievalRequest::complete(vec![RequestTerm::NumericRange {
         predicate: iri(&ex("body")),
         lower: Some(purrdf_retrieval::Fixed::ONE),
         upper: None,
@@ -1145,7 +1145,7 @@ fn a_request_that_reaches_nothing_is_refused() {
 
 #[test]
 fn malformed_terms_are_refused_with_a_name() {
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::Lexical {
+    let request = RetrievalRequest::complete(vec![RequestTerm::Lexical {
         text: "   ".to_owned(),
         language: None,
         predicate: None,

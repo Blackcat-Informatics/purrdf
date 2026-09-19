@@ -115,7 +115,7 @@ fn seed_term() -> RequestTerm {
 }
 
 fn mixed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), vector_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), vector_term(), seed_term()])
 }
 
 /// A mock ranked producer that declares `rows` and emits `emitted`.
@@ -2300,7 +2300,7 @@ fn narrowing_a_producer_is_refused_only_when_the_registry_declared_it_mandatory(
 
 #[test]
 fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_mandatory() {
-    let request = RetrievalRequest::from_terms(vec![vector_term()]);
+    let request = RetrievalRequest::complete(vec![vector_term()]);
 
     // Not declared mandatory: the planner records why it could not be invoked
     // and drops it, and the plan is admitted on the strength of what remains.
@@ -2440,7 +2440,7 @@ fn a_plan_that_binds_two_producers_to_one_stratum_is_refused() {
 /// A lexical term beside an entity seed: the multimodal request a coverage-floor
 /// host asks for, and the one the wider quantifier refused.
 fn lexical_and_seed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
 }
 
 /// The declared-mandatory text producer's binding in `plan`, if it has one.
@@ -2464,7 +2464,7 @@ fn catch_all_binding(plan: &Plan) -> Option<&purrdf_retrieval::ProducerBinding> 
 /// `Triple`, which neither of the catch-all's alternatives names, so it is in
 /// neither the required count nor the provided one.
 fn literal_seed_and_triple_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![
+    RetrievalRequest::complete(vec![
         lexical_term(),
         seed_term(),
         RequestTerm::EntitySeed {
@@ -2709,7 +2709,7 @@ fn a_mandatory_producer_that_accepts_nothing_of_a_request_is_not_required_by_it(
         fusion_profile: None,
     };
 
-    let seed_only = RetrievalRequest::from_terms(vec![seed_term()]);
+    let seed_only = RetrievalRequest::complete(vec![seed_term()]);
     let plan = purrdf_retrieval::plan(&seed_only, &registry, &stats).expect("the seed plans");
     assert!(
         literal_binding(&plan).is_none(),

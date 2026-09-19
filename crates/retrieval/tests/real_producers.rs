@@ -347,16 +347,19 @@ fn registry() -> PropertyFunctionRegistry {
 /// The seed is what kNN accepts — it searches *from* a term whose vector the
 /// space already holds — and no producer here accepts a raw embedding.
 fn request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![
-        RequestTerm::Lexical {
-            text: "alpha beta".to_owned(),
-            language: None,
-            predicate: Some(iri(NOTE)),
-        },
-        RequestTerm::EntitySeed {
-            entity: Term::new(format!("<{}>", ex("a"))),
-        },
-    ])
+    RetrievalRequest::bounded(
+        vec![
+            RequestTerm::Lexical {
+                text: "alpha beta".to_owned(),
+                language: None,
+                predicate: Some(iri(NOTE)),
+            },
+            RequestTerm::EntitySeed {
+                entity: Term::new(format!("<{}>", ex("a"))),
+            },
+        ],
+        TOP_K,
+    )
 }
 
 /// A statistics provider that reports nothing.
@@ -479,7 +482,6 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
         &*data,
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the real producers answer");
 
@@ -721,6 +723,7 @@ async fn manual_composition(
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
         let plan_id = stream.plan_id;
+        let fused_bound = stream.fused_bound;
         let attestation = stream.attestation.clone();
         match RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum) {
             // The plan the unit was compiled from travels on with the rows; the
@@ -732,14 +735,17 @@ async fn manual_composition(
             // exact score.
             Some(adapter) => streams.push((
                 stream.stratum,
-                adapter.with_plan_id(plan_id).with_attestation(attestation),
+                adapter
+                    .with_plan_id(plan_id)
+                    .with_fused_bound(fused_bound)
+                    .with_attestation(attestation),
             )),
             None => unweighted_strata.push(stream.stratum),
         }
     }
     unweighted_strata.sort();
 
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, TOP_K)
+    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
     let trailer = fused.trailer.completed_with(execution.statuses);
@@ -775,7 +781,6 @@ fn search_equals_the_hand_composed_pipeline_over_the_real_producers() {
         &*data,
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the composed search answers");
     let manual = block_on(manual_composition(
@@ -843,7 +848,6 @@ fn answer_of_a_fresh_build() -> SearchResult {
         &*data,
         &env,
         &profile(),
-        TOP_K,
     ))
     .expect("the real producers answer")
 }
@@ -1048,15 +1052,7 @@ fn answer_under_the_declared_contract(
         statistics: &statistics,
         fusion_profile: None,
     };
-    match block_on(search(
-        request,
-        registry,
-        &statistics,
-        data,
-        &env,
-        profile,
-        TOP_K,
-    )) {
+    match block_on(search(request, registry, &statistics, data, &env, profile)) {
         Ok(result) => result,
         Err(SearchError::FusionError(FusionError::Protocol(error)))
             if matches!(&*error, ProtocolError::DuplicateItem { .. }) =>
@@ -1131,11 +1127,14 @@ fn hub_corpus() -> Vec<(&'static str, &'static str, Option<&'static str>)> {
 
 /// A lexical request for `needle` over the fixture predicate.
 fn lexical_request(needle: &str) -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![RequestTerm::Lexical {
-        text: needle.to_owned(),
-        language: None,
-        predicate: Some(iri(NOTE)),
-    }])
+    RetrievalRequest::bounded(
+        vec![RequestTerm::Lexical {
+            text: needle.to_owned(),
+            language: None,
+            predicate: Some(iri(NOTE)),
+        }],
+        TOP_K,
+    )
 }
 
 /// T10.1 — the shipped text producer keeps the `Unique` promise it declares,
@@ -1342,9 +1341,12 @@ fn the_knn_producer_names_each_target_once_when_two_rows_share_one_vector() {
     let registry = knn_only_registry(space);
     let profile = one_stratum_profile(KNN_STRATUM);
     let data = dataset();
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::EntitySeed {
-        entity: Term::new(format!("<{}>", ex("seed"))),
-    }]);
+    let request = RetrievalRequest::bounded(
+        vec![RequestTerm::EntitySeed {
+            entity: Term::new(format!("<{}>", ex("seed"))),
+        }],
+        TOP_K,
+    );
 
     let result = answer_under_the_declared_contract(&request, &registry, &data, &profile);
 
@@ -1530,16 +1532,8 @@ fn sole_producer_answer(
         unit.sparql
     );
     let profile = one_stratum_profile(TEXT_STRATUM);
-    let result = block_on(search(
-        request,
-        registry,
-        &statistics,
-        data,
-        &env,
-        &profile,
-        TOP_K,
-    ))
-    .expect("the sole producer answers rather than the request being refused");
+    let result = block_on(search(request, registry, &statistics, data, &env, &profile))
+        .expect("the sole producer answers rather than the request being refused");
     (planned, result)
 }
 

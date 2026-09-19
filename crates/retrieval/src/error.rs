@@ -227,6 +227,43 @@ pub enum FusionError {
         got: Option<crate::id::PlanId>,
     },
 
+    /// A stream's depth was planned for one row bound and the fusion was run at
+    /// another.
+    ///
+    /// # Why this is a sibling of [`PlanIdMismatch`](Self::PlanIdMismatch) and not
+    /// a case of it
+    ///
+    /// Both are refusals read off the streams before a row is pulled, and both
+    /// exist because a provenance that travels with the rows is the only one worth
+    /// having. They are different facts with different repairs, though.
+    /// `PlanIdMismatch` is a disagreement *among the streams*: two of them descend
+    /// from different plans, and the repair is to stop mixing them. This one is a
+    /// disagreement between the streams — which may agree perfectly — and the
+    /// caller's own `top_k` argument, and the repair is either to pass the bound the
+    /// plan was built for or to plan again at the bound that is wanted. Folding it
+    /// into the other variant would report a provenance conflict for a call whose
+    /// provenance is consistent, and would send a reader to inspect the streams
+    /// instead of the argument.
+    ///
+    /// # Why a smaller bound is refused too
+    ///
+    /// A `top_k` above what was planned cannot be served: under declarations that
+    /// let the planner narrow a depth to the planned bound, the rows past it were
+    /// never read. A `top_k` below it would answer correctly, but out of a read
+    /// deeper than the question needed — and the depths the bundle records, the
+    /// resolution it reports and the identity it carries would all describe a
+    /// different request. One rule, in both directions, keeps the bound the plan
+    /// recorded and the bound the answer was assembled under the same number.
+    #[error(
+        "streams were planned for a bound of {planned} fused rows and the fusion was run at {requested}; a depth derived for one bound does not serve another"
+    )]
+    ReadBoundMismatch {
+        /// The bound the streams' plan was built for.
+        planned: crate::fuse::TopK,
+        /// The bound this fusion was asked to run at.
+        requested: crate::fuse::TopK,
+    },
+
     /// A fusion profile's canonical bytes could not be decoded.
     #[error("malformed fusion profile: {0}")]
     MalformedProfile(String),

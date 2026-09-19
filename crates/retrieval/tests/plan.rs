@@ -10,8 +10,8 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
-    ProducerDecision, RankFidelity, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
-    StatisticsSnapshot, Term, UnservedReason, UnservedTerm,
+    ProducerDecision, RankFidelity, ReadBound, RegistryId, RejectionReason, RequestTerm,
+    StatisticsEntry, StatisticsSnapshot, Term, TopK, UnservedReason, UnservedTerm,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
@@ -32,6 +32,7 @@ fn baseline() -> Plan {
 
     Plan {
         version: Plan::VERSION,
+        read_bound: ReadBound::Bounded(TopK::new(25)),
         request_terms: vec![
             RequestTerm::Lexical {
                 text: "quick brown".to_owned(),

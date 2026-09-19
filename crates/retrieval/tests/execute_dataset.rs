@@ -384,9 +384,12 @@ fn fixture_profile() -> FusionProfile {
 }
 
 fn seed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![RequestTerm::EntitySeed {
-        entity: Term::new(format!("<{}>", ex("seed"))),
-    }])
+    RetrievalRequest::bounded(
+        vec![RequestTerm::EntitySeed {
+            entity: Term::new(format!("<{}>", ex("seed"))),
+        }],
+        TOP_K,
+    )
 }
 
 /// Plan and compile [`seed_request`] against `registry`: a genuine bundle, with
@@ -581,7 +584,6 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
         &*dataset,
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the fixture search answers");
     let candidate = first
@@ -593,9 +595,12 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
 
     // The consequence the executor's rendering buys: a fused row is spelled
     // exactly as a seed is, so it is a request term without any translation.
-    let follow_up = RetrievalRequest::from_terms(vec![RequestTerm::EntitySeed {
-        entity: candidate.clone(),
-    }]);
+    let follow_up = RetrievalRequest::bounded(
+        vec![RequestTerm::EntitySeed {
+            entity: candidate.clone(),
+        }],
+        TOP_K,
+    );
     let planned = plan(&follow_up, &registry, &stats).expect("a candidate plans as a seed");
     let bundle = compile(&planned, &env).expect("a candidate is admitted as a seed");
     assert!(
@@ -608,7 +613,7 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
     );
 
     let second = block_on(search(
-        &follow_up, &registry, &stats, &*dataset, &env, &profile, TOP_K,
+        &follow_up, &registry, &stats, &*dataset, &env, &profile,
     ))
     .expect("the follow-up search answers");
     assert!(
@@ -826,7 +831,6 @@ fn searched(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> Sear
         &*dataset_of(&[]),
         &env,
         &fixture_profile(),
-        TOP_K,
     ))
     .expect("the fixture search answers")
 }

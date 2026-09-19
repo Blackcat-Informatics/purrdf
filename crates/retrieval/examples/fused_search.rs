@@ -33,14 +33,19 @@
 //! producer put it there and at what rank, so the compromise is legible rather
 //! than asserted.
 //!
-//! # The bound is stated, because fused enumeration is top-k
+//! # The bound is stated in the request, because fused enumeration is top-k
 //!
-//! `search` takes a row bound rather than defaulting to one: no candidate can be
+//! A request states a row bound rather than defaulting to one: no candidate can be
 //! emitted until it is known not to reappear in another stratum and raise its
-//! total, so fusion is bounded work by construction. The bound here is above
-//! what four documents can yield, so nothing in this answer is decided by it —
-//! and the trailer reports what each producer actually did, which for a corpus
-//! this small is to run out of rows.
+//! total, so fusion is bounded work by construction. It is stated on the
+//! *request* rather than handed to `search`, because the planner derives each
+//! stratum's depth from it — over producers whose declared candidate blocks do not
+//! overlap, the bound is the depth. Both producers here rank the same four
+//! documents and so promise nothing narrower than "anything", which is exactly the
+//! shape that licenses no narrowing; the bound is also above what four documents
+//! can yield, so nothing in this answer is decided by it, and the trailer reports
+//! what each producer actually did — which for a corpus this small is to run out
+//! of rows.
 //!
 //! # The trailer is the rest of the answer
 //!
@@ -384,22 +389,29 @@ fn sample_index() -> TextIndex {
 /// already holds. The geometry is deliberate: a request may name a modality no
 /// registered producer accepts, and the answer says so per term rather than
 /// letting it vanish.
+///
+/// The bound is part of the request, because it is what the planner derives each
+/// stratum's depth from: `search` reads it from here rather than taking it as an
+/// argument of its own.
 fn request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![
-        RequestTerm::Lexical {
-            text: NEEDLE.to_owned(),
-            language: None,
-            predicate: Some(iri(NOTE)),
-        },
-        RequestTerm::EntitySeed {
-            entity: Term::new(format!("<{}>", subject(SEED))),
-        },
-        RequestTerm::Spatial {
-            geometry: "POINT(0 0)".to_owned(),
-            predicate: iri(PLACE),
-            max_distance: None,
-        },
-    ])
+    RetrievalRequest::bounded(
+        vec![
+            RequestTerm::Lexical {
+                text: NEEDLE.to_owned(),
+                language: None,
+                predicate: Some(iri(NOTE)),
+            },
+            RequestTerm::EntitySeed {
+                entity: Term::new(format!("<{}>", subject(SEED))),
+            },
+            RequestTerm::Spatial {
+                geometry: "POINT(0 0)".to_owned(),
+                predicate: iri(PLACE),
+                max_distance: None,
+            },
+        ],
+        TOP_K,
+    )
 }
 
 /// Unit weights for both strata and `K` smoothing.
@@ -698,7 +710,6 @@ fn main() {
         &*data,
         &environment,
         &profile,
-        TOP_K,
     ))
     .expect("the host's producers answer");
 

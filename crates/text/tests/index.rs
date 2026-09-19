@@ -23,7 +23,10 @@ use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
 };
-use purrdf_text::{GraphSelector, PartitionKey, TextError, TextIndex, TextIndexConfig};
+use purrdf_text::{
+    Analyzer, FINGERPRINT_BYTES, GraphSelector, PartitionFilter, PartitionKey, TextError,
+    TextIndex, TextIndexConfig, rank_partition, select, verify_binding,
+};
 
 const S: &str = "https://example.org/s";
 const O: &str = "https://example.org/o";
@@ -643,19 +646,16 @@ fn a_duplicate_predicate_is_a_config_error() {
     assert_eq!(config.predicates().len(), 2);
 }
 
-/// A configured predicate the dataset does not carry is a hard `Data` error.
+/// A configured predicate the dataset does not carry contributes **no rows**.
 ///
-/// The workspace has both postures. `DatasetView::term_id_by_value` calls an
-/// absent id "an empty match, never an error", which is right for a structural
-/// walk keyed on an incidental IRI. `MemoryRelation::from_graph` refuses an
-/// absent list head because "a head naming a list that does not exist is a
-/// configuration pointing at nothing, not an empty relation". A configured
-/// predicate is the second kind: it is the caller's whole specification of
-/// which text exists. One mistyped character would silently remove that
-/// predicate's share of the corpus, indistinguishable from those documents
-/// genuinely having no text — and silence is exactly retrieval's failure mode.
+/// The dataset holds no statement with that predicate, so there is no text under
+/// it, and that is an answer rather than a fault. The limiting case is what
+/// decides it: an empty dataset has interned no term at all, so refusing an
+/// absent predicate would mean no index could be built over one — and an index
+/// that exists before its documents land is an ordinary operating state, not an
+/// error.
 #[test]
-fn a_predicate_absent_from_the_dataset() {
+fn a_predicate_absent_from_the_dataset_contributes_no_rows() {
     let mut builder = RdfDatasetBuilder::new();
     let s = builder.intern_iri(S);
     let note = builder.intern_iri(NOTE);
@@ -663,25 +663,198 @@ fn a_predicate_absent_from_the_dataset() {
     builder.push_quad(s, note, text, None);
     let dataset = builder.freeze().expect("the fixture must validate");
 
-    let error = TextIndex::from_dataset(&*dataset, &config(&[NOTE, LABEL]))
-        .expect_err("ex:label is not in the dataset");
-    assert!(matches!(error, TextError::Data(_)), "got {error:?}");
-    let TextError::Data(message) = &error else {
-        unreachable!("matched above")
-    };
-    assert!(
-        message.contains(LABEL),
-        "the diagnostic must name the missing predicate: {message}"
+    let widened = TextIndex::from_dataset(&*dataset, &config(&[NOTE, LABEL]))
+        .expect("ex:label is absent from the dataset, which is no text rather than a fault");
+    assert_eq!(
+        widened.document_count(),
+        1,
+        "the one document ex:note yields, and nothing invented for ex:label"
+    );
+    assert_eq!(
+        widened.document_length(0),
+        Some(1),
+        "only the present predicate's single token is indexed"
     );
 
     // The neighbouring valid case, against the SAME dataset: a configuration
-    // naming only the predicate that is present must build. The refusal is a
-    // presence check on every configured predicate, so one that fired on a
-    // present predicate would empty every index in the workspace while this
-    // test still passed.
-    let index = TextIndex::from_dataset(&*dataset, &config(&[NOTE]))
+    // naming only the predicate that IS present. Its rows are identical — an
+    // absent predicate is not a filter that could have dropped anything — while
+    // its fingerprint is NOT, because the configuration is part of the index's
+    // identity. A build that quietly dropped the absent predicate from the
+    // configuration instead of from the walk would agree here and must not.
+    let narrow = TextIndex::from_dataset(&*dataset, &config(&[NOTE]))
         .expect("ex:note IS in the dataset, so this configuration must build");
-    assert_eq!(index.document_count(), 1);
+    assert_eq!(narrow.document_count(), 1);
+    assert_eq!(
+        subjects(&narrow),
+        subjects(&widened),
+        "the same rows either way"
+    );
+    assert_ne!(
+        narrow.fingerprint(),
+        widened.fingerprint(),
+        "the configuration is part of the index's identity, so the two are different indexes \
+         over the same rows"
+    );
+    assert_eq!(narrow.config().predicates().len(), 1);
+    assert_eq!(
+        widened.config().predicates().len(),
+        2,
+        "the absent predicate stays in the configuration; it is the walk that finds nothing"
+    );
+
+    // And the absent predicate is genuinely inert rather than aliased onto the
+    // present one: text that lands under ex:label later is found by the SAME
+    // configuration, which is the whole reason the widened build is allowed.
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(S);
+    let note = builder.intern_iri(NOTE);
+    let label = builder.intern_iri(LABEL);
+    let text = builder.intern_literal(RdfLiteral::simple("present"));
+    let later = builder.intern_literal(RdfLiteral::simple("arrived"));
+    builder.push_quad(s, note, text, None);
+    builder.push_quad(s, label, later, None);
+    let grown = builder.freeze().expect("the fixture must validate");
+    let grown = TextIndex::from_dataset(&*grown, &config(&[NOTE, LABEL]))
+        .expect("the same configuration builds once ex:label carries text");
+    assert_eq!(grown.document_frequency(&plain(), "arrived"), 1);
+    assert_ne!(
+        grown.fingerprint(),
+        widened.fingerprint(),
+        "the arriving document moves the generation"
+    );
+}
+
+/// An index over an **empty** dataset builds, holds nothing, still attests a
+/// generation, and answers a search with zero rows.
+///
+/// This is the case the absent-predicate refusal used to make unreachable. An
+/// empty dataset interns no term, so every configured predicate is absent from
+/// it; if that were an error, an index could never exist before the documents it
+/// will hold, and a text producer could never be in the state its own retrieval
+/// contract describes — invoked, and reporting zero rows on its own receipt.
+#[test]
+fn an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation() {
+    let empty = RdfDatasetBuilder::new()
+        .freeze()
+        .expect("a dataset with no quads is a valid dataset");
+    let over_note = config(&[NOTE]);
+
+    let index = TextIndex::from_dataset(&*empty, &over_note)
+        .expect("an index over an empty dataset is an ordinary operating state");
+    assert_eq!(index.document_count(), 0);
+    assert_eq!(
+        index.partition_count(),
+        0,
+        "a partition carries at least one document, so an empty index holds none"
+    );
+    assert_eq!(index.term_count(), 0);
+    assert_eq!(index.max_documents_in_any_partition(), 0);
+    assert!(
+        index.partitions().next().is_none(),
+        "and there is no PartitionStats to read a zero average document length out of"
+    );
+
+    // A query against it is an answer, not a panic and not a division by zero:
+    // BM25's denominator is a partition's average document length, and there is
+    // no partition to divide within.
+    assert!(
+        select(
+            &index,
+            &needle_terms("anything at all"),
+            &PartitionFilter::unconstrained(),
+            None,
+            None,
+        )
+        .expect("a search over an empty index answers")
+        .is_empty(),
+        "a needle no document holds yields no rows rather than a panic"
+    );
+    assert_eq!(index.document_frequency(&plain(), "anything"), 0);
+    assert!(
+        rank_partition(&index, &plain(), &needle_terms("anything"), None)
+            .expect("ranking a partition the index does not hold is an empty answer")
+            .is_empty(),
+        "naming a partition an empty index does not hold yields no rows"
+    );
+
+    // It attests a generation, and the generation is a real content identity:
+    // the configuration is digested before any content, so an empty index under
+    // another configuration is a different index, and the value moves the moment
+    // the first document lands.
+    let other = TextIndex::from_dataset(&*empty, &config(&[LABEL]))
+        .expect("an empty dataset indexes under any configuration");
+    assert_ne!(
+        index.fingerprint(),
+        other.fingerprint(),
+        "two empty indexes under different configurations are distinguishable"
+    );
+    assert_ne!(
+        index.fingerprint(),
+        [0; FINGERPRINT_BYTES],
+        "the generation of an empty index is a digest, not a placeholder"
+    );
+
+    // The same configuration once one document lands: a non-zero corpus, an
+    // answer, and a generation that differs from the empty index's.
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(S);
+    let note = builder.intern_iri(NOTE);
+    let text = builder.intern_literal(RdfLiteral::simple("anything at all"));
+    builder.push_quad(s, note, text, None);
+    let landed = builder.freeze().expect("the fixture must validate");
+    let landed = TextIndex::from_dataset(&*landed, &over_note)
+        .expect("the SAME configuration must build once the document lands");
+    assert_eq!(landed.document_count(), 1);
+    assert_eq!(landed.partition_count(), 1);
+    assert_eq!(
+        select(
+            &landed,
+            &needle_terms("anything at all"),
+            &PartitionFilter::unconstrained(),
+            None,
+            None,
+        )
+        .expect("a search over the landed corpus answers")
+        .len(),
+        1,
+        "the document is retrievable, so the empty answer above was emptiness rather than a \
+         search that cannot find anything"
+    );
+    assert_ne!(
+        index.fingerprint(),
+        landed.fingerprint(),
+        "the arriving document moves the attested generation"
+    );
+
+    // And the empty index is honestly bound to the empty dataset: the source
+    // digest is a value, so a host can still ask whether it is holding the data
+    // its index was built over.
+    verify_binding(&index, &*empty, &over_note)
+        .expect("the empty index is bound to the empty dataset");
+    let error = verify_binding(&index, &*landed_dataset(), &over_note)
+        .expect_err("the empty index is not bound to a dataset that has text in it");
+    assert!(matches!(error, TextError::Data(_)), "got {error:?}");
+}
+
+/// The one-document dataset the empty index must NOT verify against.
+fn landed_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(S);
+    let note = builder.intern_iri(NOTE);
+    let text = builder.intern_literal(RdfLiteral::simple("anything at all"));
+    builder.push_quad(s, note, text, None);
+    builder.freeze().expect("the fixture must validate")
+}
+
+/// The analyzed terms of `text`, as a needle for [`select`].
+fn needle_terms(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    Analyzer::new().analyze(text, &mut tokens);
+    tokens
+        .into_iter()
+        .map(|token| token.text.into_owned())
+        .collect()
 }
 
 /// A predicate may legitimately carry both literals and IRIs. A non-literal
@@ -743,12 +916,16 @@ fn a_named_graph_selector_restricts_the_walk() {
     assert_eq!(named.document_frequency(&partition, "inside"), 1);
     assert_eq!(named.document_frequency(&partition, "outside"), 0);
 
-    // A named graph the dataset does not carry is refused for the same reason
-    // an absent predicate is: the selector is the caller's assertion about what
-    // the data holds. The valid neighbour is the case just above, which names a
-    // graph that IS present and built — so the refusal is shown to discriminate
-    // rather than to reject every named selector.
-    let error = TextIndex::from_dataset(
+    // A named graph the dataset does not carry selects no quads, for the same
+    // reason an absent predicate contributes no rows: nothing is in a graph that
+    // is not there. It is the same limiting case too — the graph IRI of an
+    // otherwise valid configuration is interned only once something is *in* that
+    // graph, so refusing here would make the recommended single-partition
+    // configuration the one that cannot be built first. The valid neighbour is
+    // the case just above, which names a graph that IS present and found the one
+    // document in it, so the walk is shown to discriminate rather than to empty
+    // every named selector.
+    let absent = TextIndex::from_dataset(
         &*dataset,
         &TextIndexConfig::new(
             vec![TermValue::iri(NOTE)],
@@ -756,8 +933,14 @@ fn a_named_graph_selector_restricts_the_walk() {
         )
         .expect("a named-graph configuration is well formed"),
     )
-    .expect_err("the dataset carries no such graph");
-    assert!(matches!(error, TextError::Data(_)), "got {error:?}");
+    .expect("the dataset carries no such graph, which is an empty index");
+    assert_eq!(absent.document_count(), 0);
+    assert_eq!(absent.partition_count(), 0);
+    assert_ne!(
+        absent.fingerprint(),
+        named.fingerprint(),
+        "the two name different graphs, so they are different indexes"
+    );
 
     // And the default graph is still selectable, which is the third neighbour a
     // graph-presence check could wrongly reject: the default graph is named by

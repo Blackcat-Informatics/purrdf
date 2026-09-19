@@ -167,16 +167,21 @@ fn params() -> Params {
 /// A request that reaches both producers: lexical text for the inverted index,
 /// an entity seed for the graph.
 fn request() -> retrieval::RetrievalRequest {
-    retrieval::RetrievalRequest::from_terms(vec![
-        retrieval::RequestTerm::Lexical {
-            text: "quick fox".to_owned(),
-            language: None,
-            predicate: Some(retrieval::Iri::parse(NOTE).expect("the fixture predicate is valid")),
-        },
-        retrieval::RequestTerm::EntitySeed {
-            entity: retrieval::Term::new(format!("<{}>", entity_iri("a"))),
-        },
-    ])
+    retrieval::RetrievalRequest::bounded(
+        vec![
+            retrieval::RequestTerm::Lexical {
+                text: "quick fox".to_owned(),
+                language: None,
+                predicate: Some(
+                    retrieval::Iri::parse(NOTE).expect("the fixture predicate is valid"),
+                ),
+            },
+            retrieval::RequestTerm::EntitySeed {
+                entity: retrieval::Term::new(format!("<{}>", entity_iri("a"))),
+            },
+        ],
+        retrieval::TopK::new(8),
+    )
 }
 
 fn profile() -> retrieval::FusionProfile {
@@ -216,7 +221,6 @@ fn search() -> retrieval::SearchResult {
         &*dataset,
         &environment,
         &profile,
-        retrieval::TopK::new(8),
     ))
     .expect("the ladder composes both producers")
 }
@@ -423,17 +427,21 @@ fn text_only_search() -> retrieval::SearchResult {
         fusion_profile: None,
     };
     block_on(retrieval::search(
-        &retrieval::RetrievalRequest::from_terms(vec![retrieval::RequestTerm::Lexical {
-            text: "quick fox".to_owned(),
-            language: None,
-            predicate: Some(retrieval::Iri::parse(NOTE).expect("the fixture predicate is valid")),
-        }]),
+        &retrieval::RetrievalRequest::bounded(
+            vec![retrieval::RequestTerm::Lexical {
+                text: "quick fox".to_owned(),
+                language: None,
+                predicate: Some(
+                    retrieval::Iri::parse(NOTE).expect("the fixture predicate is valid"),
+                ),
+            }],
+            retrieval::TopK::new(8),
+        ),
         &registry,
         &statistics,
         &*dataset,
         &environment,
         &profile,
-        retrieval::TopK::new(8),
     ))
     .expect("the exhaustive producer composes alone")
 }

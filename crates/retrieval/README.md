@@ -35,7 +35,10 @@ The stages:
   wildcard arm that swallows it. It deliberately carries modalities ahead of the
   producers that answer them — producers are caller-supplied configuration, not
   a bound on what may be asked — and a term this registry has nobody for is
-  reported per term as an `UnservedTerm`, never dropped.
+  reported per term as an `UnservedTerm`, never dropped. A request also states
+  how much of the answer it is for, as a `ReadBound` over the bounded and the
+  complete case — a planning input rather than a trailing preference, because it
+  is what each stratum's depth is derived from.
 * `plan(request, registry, statistics)` — the pure planner. It matches request
   terms to producers by a lookup over the producers' declared capabilities,
   records selected and rejected producers with reasons, derives per-stratum
@@ -73,14 +76,36 @@ The stages:
   a stratum's whole result before its first row is readable, so stopping here
   buys independent per-stratum receipts and no cross-stratum accounting — never
   a cheaper enumeration than reading the stratum costs.
-* `fuse(streams, profile, k)` / `search(…, k)` — the exact fixed-point
-  reciprocal-rank fusion, bounded by the caller's `TopK` because fused
+* `fuse(streams, profile, k)` / `search(request, …)` — the exact fixed-point
+  reciprocal-rank fusion, bounded by the request's own `TopK` because fused
   enumeration is top-k by construction. The bound stops the reading as well as
   the returning: a producer still holding rows when it is reached is reported at
   the contribution it was read down to, never drained to make it declare
   exhaustion. The answer carries every applicable producer's own status in its
   trailer — including those that could not answer — and every request term that
   reached nothing.
+
+  `search` reads the bound from the request rather than taking one of its own,
+  because the planner already derived every depth from it. `fuse` is the
+  lower-level entry and still takes one — a caller assembling its own streams has
+  no request to read it from — and refuses a bound the streams were not planned
+  for (`FusionError::ReadBoundMismatch`), so the two cannot drift.
+
+## The bound is a read bound, not only a row bound
+
+Over strata whose producers declare pairwise **disjoint** candidate blocks, each
+candidate has exactly one naming stratum, so its fused score is one weighted
+contribution that falls with rank and the global top `k` is a merge of per-stratum
+prefixes: nothing below per-stratum rank `k` can enter it. The planner therefore
+records a depth of `min(declared, statistics-narrowed, k)`, the compiled unit is
+emitted at that depth plus its probe row, and the work a bounded search does is
+flat in the corpus rather than linear in it. The proof, the tie case and the
+neighbours it must not fire on are on `plan`'s own documentation.
+
+Any overlap between two declarations, or any `Unrestricted` stratum, and the
+declared-or-measured bound stands exactly as it did — scores sum across strata
+there and the merge argument has no premise. The answer is identical either way;
+only the reading moves.
 
 ## What a producer owes this layer
 

@@ -42,14 +42,14 @@ use purrdf_retrieval::{
     ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
     Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
     ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream, RankedStreamAdapter,
-    RankedStreamImpl, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness, SearchError,
-    SearchResult, Statistics, StatisticsSnapshot, StreamContract, StreamEnding, Term, TopK,
-    UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness,
+    SearchError, SearchResult, Statistics, StatisticsSnapshot, StreamContract, StreamEnding, Term,
+    TopK, UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankedDeclaration,
-    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -431,7 +431,7 @@ fn exhausted(rows: u64) -> ProducerReceipt {
 fn stop_at_plan_inspect_value() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 10, 2);
     let stats = single_statistics(&ex("stratum/hand"), 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
 
     let planned = plan(&request, &registry, &stats).expect("the fixture request plans");
 
@@ -461,7 +461,7 @@ fn stop_at_plan_inspect_value() {
 fn stop_at_compile_run_directly() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 12, 3);
     let stats = single_statistics(&ex("stratum/hand"), 12);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let env = AdmissionEnvironment {
         registry: &registry,
@@ -502,7 +502,7 @@ fn stop_at_compile_run_directly() {
 fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 9, 5);
     let stats = single_statistics(&ex("stratum/hand"), 9);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let env = AdmissionEnvironment {
         registry: &registry,
@@ -545,7 +545,7 @@ fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
 fn start_at_compile_hand_built_plan() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 10, 2);
     let stats = single_statistics(&ex("stratum/hand"), 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let stratum = iri(&ex("stratum/hand"));
 
     let mut stratum_depths = HashMap::new();
@@ -556,6 +556,7 @@ fn start_at_compile_hand_built_plan() {
     let hand_built = Plan {
         version: Plan::VERSION,
         request_terms: vec![lexical_term()],
+        read_bound: ReadBound::Complete,
         producer_bindings: vec![ProducerBinding {
             producer: ex("pf/hand"),
             stratum,
@@ -1119,7 +1120,7 @@ fn unfused_rung_applies_no_threshold_to_its_rows() {
     const ROWS: usize = 4096;
     let registry = single_registry(&ex("stratum/deep"), &ex("pf/deep"), ROWS as u64, ROWS);
     let stats = single_statistics(&ex("stratum/deep"), ROWS as u64);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let env = AdmissionEnvironment {
         registry: &registry,
@@ -1224,7 +1225,7 @@ fn reporting_names_plan_and_profile() {
         fusion_profile: None,
     };
     let profile = single_profile(&ex("stratum/report"));
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
 
     let expected_plan = plan(&request, &registry, &stats).expect("plans");
     let result = block_on(search(
@@ -1234,7 +1235,6 @@ fn reporting_names_plan_and_profile() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the composed search answers");
 
@@ -1290,13 +1290,12 @@ async fn search_shape<S, D>(
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
-    top_k: TopK,
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
     D: purrdf_core::DatasetView + Sync,
 {
-    search(request, registry, statistics, dataset, env, profile, top_k).await
+    search(request, registry, statistics, dataset, env, profile).await
 }
 
 /// The seam is the same behaviour observed earlier; a mode flag would be a
@@ -1340,7 +1339,7 @@ fn no_stage_takes_a_selector() {
         statistics: &stats,
         fusion_profile: None,
     };
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let compiled = compile(&planned, &env).expect("admits");
     let dataset = common::empty_dataset();
@@ -1367,7 +1366,6 @@ fn no_stage_takes_a_selector() {
         &*dataset,
         &env,
         &seam_profile,
-        TOP_K,
     ))
     .expect("the composed search answers");
     assert_eq!(searched.plan_id, planned.id());
@@ -1441,7 +1439,7 @@ async fn equality_fusion(profile: &FusionProfile) -> FusionResult<Term> {
 fn encoding_and_fusion_are_deterministic_in_one_process() {
     let registry = single_registry(&ex("stratum/eq"), &ex("pf/eq"), 12, 3);
     let stats = single_statistics(&ex("stratum/eq"), 12);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
 
     // A plan's canonical encoding is a pure function of its fields: repeated
@@ -1487,7 +1485,7 @@ fn encoding_and_fusion_are_deterministic_in_one_process() {
 fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let registry = single_registry(&ex("stratum/resume"), &ex("pf/resume"), 10, 3);
     let stats = single_statistics(&ex("stratum/resume"), 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
@@ -1566,7 +1564,7 @@ fn executed_stream(suffix: &str, profile: &FusionProfile) -> (PlanId, Iri, Ranke
     let stratum_iri = ex(&format!("stratum/{suffix}"));
     let registry = single_registry(&stratum_iri, &ex(&format!("pf/{suffix}")), 10, 3);
     let stats = single_statistics(&stratum_iri, 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
@@ -1657,6 +1655,163 @@ fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
     .expect("a stream that descends from no plan is not a disagreement");
     assert_eq!(mixed.rows, agreed.rows, "and the rows are the same rows");
     assert_eq!(mixed.trailer.plan_id, None);
+}
+
+// ---------------------------------------------------------------------------
+// 11c. The bound the streams were planned for travels with them too, and a
+//      fusion run at another bound is refused rather than answered short
+//
+// This is the sibling of 11b, one field over. A depth derived for a bound of two
+// rows is honest for two rows: the rows past it were never read, and nothing
+// about the rows that WERE read says so. So the bound rides with them and `fuse`
+// checks its own argument against it, exactly as it checks that the streams agree
+// on a plan.
+//
+// The fixture declares a single block, which is what makes the refusal
+// load-bearing rather than pedantic: under that declaration the planner really
+// does cut the read to the bound, so the deeper fusion is asking for rows that
+// are not there.
+// ---------------------------------------------------------------------------
+
+/// A registered producer restricted to one block of the candidate universe.
+///
+/// One tag rather than a set, because a single-block declaration entails the
+/// block of every row and needs no per-row block column. It is what lets the
+/// planner narrow this stratum's depth to the request's own bound.
+fn registry_within_one_block(
+    stratum_iri: &str,
+    producer_iri: &str,
+    rows: u64,
+    count: usize,
+) -> PropertyFunctionRegistry {
+    let mut declaration = ranked(stratum_iri, vec![TermPattern::of_kind(TermKind::Any)], true);
+    declaration.domains = CandidateDomains::within([
+        DomainTag::parse(&ex("block/only")).expect("the fixture domain tag is a valid IRI")
+    ]);
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        producer_iri,
+        make_producer(rows, "hand/", count),
+        declaration,
+    );
+    registry
+}
+
+/// Plan, compile and execute one single-block fixture for a request bounded at
+/// `top_k`, returning the recorded depth, the bound the bundle was compiled for,
+/// its stratum, and the bridged stream tagged with that bound.
+fn executed_stream_bounded(
+    suffix: &str,
+    profile: &FusionProfile,
+    top_k: TopK,
+) -> (u32, TopK, Iri, RankedStreamAdapter) {
+    let stratum_iri = ex(&format!("stratum/{suffix}"));
+    let registry = registry_within_one_block(&stratum_iri, &ex(&format!("pf/{suffix}")), 10, 3);
+    let stats = single_statistics(&stratum_iri, 10);
+    let request = RetrievalRequest::bounded(vec![lexical_term()], top_k);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let planned = plan(&request, &registry, &stats).expect("plans");
+    let depth = planned.stratum_depths[&iri(&stratum_iri)];
+    let compiled = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+    let stream = execution
+        .streams
+        .into_iter()
+        .next()
+        .expect("the stratum streamed");
+    let adapter =
+        RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum)
+            .expect("the profile weights the stratum the plan reached")
+            .with_fused_bound(stream.fused_bound);
+    (depth, stream.fused_bound, stream.stratum, adapter)
+}
+
+#[test]
+fn fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name() {
+    let profile = profile(&[("bound", Fixed::ONE)], K);
+
+    // The fixture must really have been cut by the bound, or the refusal below
+    // would be protecting nothing: the producer holds three rows and declares ten,
+    // and a bound of two is what the depth comes out as.
+    let (depth, planned_bound, deeper_stratum, stream) =
+        executed_stream_bounded("bound", &profile, TopK::new(2));
+    assert_eq!(
+        depth, 2,
+        "the request's bound is what the depth was derived from"
+    );
+    assert_eq!(planned_bound, TopK::new(2));
+
+    let deeper = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![(deeper_stratum, stream)],
+        &profile,
+        TopK::new(5),
+    ))
+    .expect_err("a read taken for two rows cannot answer a fusion for five");
+    assert!(
+        matches!(
+            &deeper,
+            FusionError::ReadBoundMismatch { planned, requested }
+                if *planned == TopK::new(2) && *requested == TopK::new(5)
+        ),
+        "expected ReadBoundMismatch {{ planned: 2, requested: 5 }}, got {deeper:?}"
+    );
+
+    // A SHALLOWER bound is refused too, and the message is the same one. It would
+    // answer correctly, out of a read deeper than the question needed — and then
+    // the depth the bundle records, the resolution it reports and the identity it
+    // carries would all be describing a different request.
+    let (_, _, shallower_stratum, stream) =
+        executed_stream_bounded("bound", &profile, TopK::new(2));
+    let shallower = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![(shallower_stratum, stream)],
+        &profile,
+        TopK::new(1),
+    ))
+    .expect_err("a bound below the planned one is still not the planned one");
+    assert!(
+        matches!(
+            &shallower,
+            FusionError::ReadBoundMismatch { planned, requested }
+                if *planned == TopK::new(2) && *requested == TopK::new(1)
+        ),
+        "expected ReadBoundMismatch {{ planned: 2, requested: 1 }}, got {shallower:?}"
+    );
+
+    // THE NEIGHBOUR THAT MUST SUCCEED: the same streams, fused at the bound they
+    // were planned for. A refusal that also swept this up would have made the
+    // resumable seam unusable, which is the mirror failure of not checking at all.
+    let (_, planned_bound, matched_stratum, stream) =
+        executed_stream_bounded("bound", &profile, TopK::new(2));
+    let matched = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![(matched_stratum, stream)],
+        &profile,
+        planned_bound,
+    ))
+    .expect("streams fused at the bound they were planned for answer");
+    assert_eq!(
+        matched.rows.len(),
+        2,
+        "and they answer with the rows the bound asked for"
+    );
+
+    // THE SECOND NEIGHBOUR, because the refusal must stay narrow: a stream built
+    // outside the ladder names no bound at all, so there is nothing for the
+    // caller's argument to disagree with and it fuses at whatever was named.
+    let unbounded = block_on(fuse::<ScriptedStream, Term>(
+        vec![(
+            stratum("bound"),
+            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "alpha")], exhausted(1)),
+        )],
+        &profile,
+        TopK::new(9),
+    ))
+    .expect("a stream that no plan bounded is not a disagreement");
+    assert_eq!(unbounded.rows.len(), 1);
 }
 
 #[test]
