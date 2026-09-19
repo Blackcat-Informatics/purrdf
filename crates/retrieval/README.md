@@ -126,10 +126,12 @@ reports both.
 That axis reaches the answer three ways. `FusionTrailer::attestations` carries it
 verbatim, per stratum: which generation answered, and the verbatim reason if that
 index declared itself short. `FusionTrailer::exactness` says how to read a fused
-score — `Exact` when no handed stream declared itself short, or `LowerBounds`
-naming exactly the strata that did, because a stratum serving from a short index
-omits whatever its missing shard held and a candidate that shard would have named
-is summed one contribution light. And `EvidenceId` digests the attestation map
+score — `Exact` when no handed stream was degraded, or `Estimated` naming the
+responsible strata on each side. Both sides, because a stratum serving from a
+short index omits whatever its missing shard held *and*, since this layer scores
+by rank alone, promotes every row behind the missing one into a rank it did not
+earn: the candidate it missed is summed too low, the ones it named too high.
+`FusedRow::interval` carries the size of each error for one row. And `EvidenceId` digests the attestation map
 into the third identity an answer carries: `PlanId` names the question,
 `FusionProfileId` names the law, `EvidenceId` names the index generations that
 answered. The third exists because the first two are derived from configuration,

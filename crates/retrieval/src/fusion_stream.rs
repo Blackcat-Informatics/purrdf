@@ -326,11 +326,14 @@ impl From<ProducerReceipt> for ProducerStatus {
 ///
 /// `contributions` names, for every stratum the candidate surfaced in, the
 /// 1-based rank and the contribution that stratum made. Their checked sum is
-/// `score` — exact over the strata that answered, and a lower bound where one
-/// of them served from an index it attested was not whole (see
-/// [`FusionTrailer::exactness`]). `threshold_witness` is the global threshold
-/// in force when the row was certified, so a reader can replay the
-/// certification.
+/// `score` — exact over the strata that answered, and an estimate where one of
+/// them could not name every row that was due, whether because its index was
+/// short or because its search is approximate (see
+/// [`FusionTrailer::exactness`] for the verdict and [`Self::interval`] for this
+/// row's own error bounds, in both directions). `threshold_witness` is the
+/// global threshold in force when the row was certified, so a reader can replay
+/// the certification — over the streams **as emitted**, which is the whole of
+/// what it witnesses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusedRow {
     /// The candidate, in its canonical term lexical — `<http://example.org/doc>`,
@@ -869,6 +872,16 @@ pub struct FusionTrailer {
     /// risen to exactly the emitted row's score had fusion read further; it is
     /// not counted here, and `false` is not evidence it does not exist. `false`
     /// is therefore not proof the final place was earned on relevance.
+    ///
+    /// There is a third class this flag cannot see at all, and it is not a live
+    /// rival but an absent one. A stratum that declared
+    /// [`Completeness::Lossy`](crate::Completeness::Lossy) may simply never have
+    /// named a candidate that would have tied with — or beaten — the emitted
+    /// row, and no amount of reading further would surface it, because not
+    /// naming things is precisely what such a search does. Where
+    /// [`Self::exactness`] is [`ScoreExactness::Estimated`], `false` is
+    /// therefore silent about rivals that were never offered, as well as about
+    /// rivals that were still live.
     ///
     /// This is what the field means, not a shortfall standing in for a stronger
     /// one. Settling every live rival would require pulling at least one row

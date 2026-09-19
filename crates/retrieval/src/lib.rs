@@ -47,7 +47,7 @@
 //!
 //! Every number in the answer those stages assemble is a function of what the
 //! producers said about themselves, so what a producer owes this layer is
-//! written down in one place: [`producer_contract`]. Fifteen obligations, each
+//! written down in one place: [`producer_contract`]. Sixteen obligations, each
 //! with the failure it prevents and with whether this layer *checks* it — a
 //! breach is a named refusal — or *believes* it, in which case the entry names
 //! the test that proves the shipped producers keep the promise. A host wiring up
@@ -109,7 +109,7 @@
 //! [`RankedStream::attestation`] *before* pulling a row. It reaches the answer
 //! three ways: verbatim in [`FusionTrailer::attestations`], as
 //! [`FusionTrailer::exactness`] — which says whether a fused score may be read
-//! as a number or only as a lower bound — and digested into
+//! as a number or only as an estimate — and digested into
 //! [`SearchResult::evidence_id`], so two answers assembled from differently-aged
 //! indexes are distinguishable even when every other identity matches.
 //!
@@ -279,12 +279,21 @@
 //!
 //! That is also what keeps a fused score honest. A stratum serving from a short
 //! index omits whatever its missing shard held, so a candidate that shard would
-//! have named is summed one contribution light; labelling that "exact" would be
-//! a bound on the read becoming a value, which is the one failure this layer
-//! exists to prevent. [`FusionTrailer::exactness`] says which reading applies —
-//! [`ScoreExactness::Exact`], or [`ScoreExactness::LowerBounds`] naming exactly
-//! the strata that declared themselves short — and the rows are returned either
-//! way, because a short index still produced real rows in a real order.
+//! have named is summed one contribution light. Labelling that "exact" would be
+//! a bound on the read becoming a value, and labelling it a *lower bound* would
+//! be worse: this layer scores by rank, so the omission also promotes every row
+//! behind the missing one into a rank it did not earn, and a one-sided name is
+//! right about the first direction and wrong about the second.
+//! [`FusionTrailer::exactness`] says which reading applies —
+//! [`ScoreExactness::Exact`], or [`ScoreExactness::Estimated`] naming the
+//! responsible strata on each side — [`FusedRow::interval`] carries the size of
+//! each for one row, and the rows are returned either way, because a degraded
+//! stratum still produced real rows in a real order.
+//!
+//! The same applies, for the same reason, to a producer whose *search* is
+//! approximate rather than whose index was short: rows that were due did not
+//! arrive. What that producer declared about itself is carried to the answer
+//! beside the attestation, in [`FusionTrailer::fidelities`].
 //!
 //! # No float is ever computed with
 //!
@@ -338,7 +347,7 @@ mod request;
 mod search;
 mod statistics;
 
-/// The fifteen obligations a ranked producer owes this layer, and who holds it
+/// The sixteen obligations a ranked producer owes this layer, and who holds it
 /// to each one.
 ///
 /// Documentation only — this module declares no item. It is the crate's

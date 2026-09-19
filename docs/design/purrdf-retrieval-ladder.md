@@ -474,20 +474,44 @@ incomplete, and could not honestly certify completeness either, because it
 never looked at the rows it skipped. Silence is therefore silence, never a
 certificate.
 
-**A short index makes every score a lower bound, and the answer says so.**
+**A short index makes every score an estimate, in both directions, and the answer says so.**
 A stratum serving from a short index omits whatever its missing shard
 held, so a candidate that shard would have named is summed one
 contribution light; labelling that "exact" would be a bound on the read
-presented as a value. So the trailer carries a score-exactness reading
-beside the statuses: exact when no handed stream declared itself short, or
-lower-bounds **naming exactly the strata that did**, so a caller knows
-which indexes to rebuild and can read each one's verbatim reason under the
-same key. The rows are returned either way, because a short index still
-produced real rows in a real order — what cannot be concluded is that a
-row absent from the answer would have stayed absent. The reading is derived
-from the attestations alone, so unlike the statuses it does not move as a
+presented as a value.
+
+Labelling it a *lower bound* would be worse. Fusion scores by **rank** and
+nothing else, so the omission does not merely withhold the missing row's
+contribution: every row behind it moves up a rank and collects a larger
+one than it earned. The candidate the stratum missed scores too low, the
+candidates it named score too high, and a one-sided name is right about the
+first and wrong about the second — which leaves a consumer confidently
+wrong in the one direction the name told it not to look.
+
+So the trailer carries a score-exactness reading beside the statuses:
+exact when no handed stream was degraded, or estimated **naming exactly the
+strata that were**, on each side, so a caller knows which indexes to
+rebuild and can read each one's verbatim reason under the same key. Each
+row carries the size of its own error in both directions, and the prefix of
+the answer whose places survive it is computable from those. The rows are
+returned either way, because a degraded stratum still produced real rows in
+a real order — what cannot be concluded is that a row absent from the
+answer would have stayed absent.
+
+**The same reading covers an approximate search, and for the same reason.**
+A short index and a lossy search differ in everything an operator cares
+about — one is a fault to repair, the other is what the producer *is* — and
+they are reported separately for that reason, under their own keys. But
+their effect on a score is identical: rows that were due did not arrive.
+What sets both apart from a stratum stopped at its depth is that a depth-
+or ceiling-stopped read **says so in its own status** and can be undone by
+reading deeper, while these announce nothing there and no further reading
+recovers what was never found.
+
+The reading is derived from the declarations and attestations alone, both
+pinned before the first row, so unlike the statuses it does not move as a
 caller certifies further rows: how deep a caller read changes which streams
-are still open, never whether an index was whole.
+are still open, never whether an index was whole or a search exhaustive.
 
 ## 7. Fused is top-k by construction; unfused carries no cross-stratum accounting
 

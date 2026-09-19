@@ -1293,27 +1293,46 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     }
     out.set_item("attestations", attestations)?;
 
-    // Whether the scores are exact, read off the same attestations. `False` does
-    // not make the answer wrong: every row in it is a real row in this fusion's
-    // own certified order, and every score is a LOWER BOUND on the score the
-    // whole index would have produced. What does not follow is that a row absent
-    // from the answer would have stayed absent, or that the emitted order would
-    // have survived the missing contributions. The strata named are exactly the
-    // ones that attested an incomplete index, in canonical order, and each one's
-    // verbatim reason is under the same key in "attestations" — so the list is
-    // the set of indexes to rebuild rather than a flag to shrug at.
+    // Whether the scores are exact, read off what the producers declared and
+    // what their indexes attested. `False` does not make the answer wrong: every
+    // row in it is a real row in this fusion's own certified order. What it means
+    // is that a score is an ESTIMATE rather than a value, and the error runs in
+    // BOTH directions -- which is why there is no "lower_bounds_for" key here.
+    //
+    // Fusion scores by RANK and nothing else, so a stratum that fails to name a
+    // row does not merely withhold that row's contribution: every row behind the
+    // missing one moves up a rank and collects a larger contribution than it
+    // earned. A candidate the degraded stratum missed is summed too LOW; one it
+    // named is summed too HIGH. A consumer handed a one-sided name would be
+    // confidently wrong in the direction the name told it not to look.
+    //
+    // "deficit" and "inflation" name the strata responsible on each side, in
+    // canonical order. "unbounded" names strata whose declared ORDER is
+    // perturbed, for which no finite bound exists at all -- empty for every
+    // producer this workspace ships, because an HNSW graph compares exact
+    // distances and fails only to visit. Each stratum's verbatim reason is under
+    // the same key in "fidelities" or "attestations", so the lists are what to
+    // act on rather than flags to shrug at.
     let exactness = PyDict::new(py);
+    fn strata_list(strata: &BTreeSet<Iri>) -> Vec<&str> {
+        strata.iter().map(Iri::as_str).collect()
+    }
     match &result.trailer.exactness {
         ScoreExactness::Exact => {
             exactness.set_item("exact", true)?;
-            exactness.set_item("lower_bounds_for", Vec::<&str>::new())?;
+            exactness.set_item("deficit", Vec::<&str>::new())?;
+            exactness.set_item("inflation", Vec::<&str>::new())?;
+            exactness.set_item("unbounded", Vec::<&str>::new())?;
         }
-        ScoreExactness::LowerBounds { strata } => {
+        ScoreExactness::Estimated {
+            deficit,
+            inflation,
+            unbounded,
+        } => {
             exactness.set_item("exact", false)?;
-            exactness.set_item(
-                "lower_bounds_for",
-                strata.iter().map(Iri::as_str).collect::<Vec<_>>(),
-            )?;
+            exactness.set_item("deficit", strata_list(deficit))?;
+            exactness.set_item("inflation", strata_list(inflation))?;
+            exactness.set_item("unbounded", strata_list(unbounded))?;
         }
     }
     out.set_item("exactness", exactness)?;
