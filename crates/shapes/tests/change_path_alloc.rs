@@ -2260,6 +2260,25 @@ fn covered_kind_names() -> std::collections::HashSet<String> {
 /// reifier path adds; it asserts nothing about the change path's allocation
 /// behaviour for that constraint, so it does not count as coverage here.
 ///
+/// `reification_required` has since been MEASURED on the change path, and the
+/// measurement is why it still carries no [`CASES`] entry rather than why it
+/// should get one. Driving `sh:reificationRequired true` over a value triple
+/// that is present on both branches — conforming when the statement layer
+/// carries a reifier for it, violating when it does not — costs
+/// `6 + 18 * focus_nodes` allocations: 36,870 at 2,048 conforming focus nodes
+/// and 73,734 at 4,096, and 37,107 against 73,971 with eight violations held
+/// fixed. The slope is exactly 18 per focus node, contributed by the reification
+/// arm of `eval_property_shape` (`crates/shapes/src/constraints.rs`), which
+/// materializes each value node and the focus node as owned terms, builds the
+/// quoted triple term, and then answers the existence question through
+/// `reifiers_for` — a `native_quads` vector, a dedup set and a sorted result
+/// vector per value node. The `delta(2N) == delta(N)` claim `CASES` exists to
+/// pin is therefore FALSE for this kind today, so a `CASES` entry would be
+/// asserting something untrue and an `ALLOCATION_EXCLUSIONS` entry would be
+/// hiding a first-party growth term behind a list reserved for named
+/// third-party causes. The growth term is in this crate and has to go, not be
+/// excluded.
+///
 /// Leave this `#[ignore]`d until a case (or a stated `ALLOCATION_EXCLUSIONS` /
 /// `SIBLING_FILE_COVERAGE` entry, argued on its own merits) lands for exactly
 /// these three kinds; then remove the `#[ignore]`. If the assertion below ever

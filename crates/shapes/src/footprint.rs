@@ -28,7 +28,9 @@
 //!   predicate at all (`sh:closed` inspects every outgoing triple of its node).
 //! * `endpoint` — which end of the matched triple is the node the read happens AT.
 //!   A forward predicate step reads `(node, p, ?)`, so the node is the SUBJECT; an
-//!   `sh:inversePath` step reads `(?, p, node)`, so it is the OBJECT.
+//!   `sh:inversePath` step reads `(?, p, node)`, so it is the OBJECT; and an RDF 1.2
+//!   reifier declaration reads `(?, rdf:reifies, <<( node … )>>)`, where the node is
+//!   the SUBJECT OF THE TRIPLE TERM the object carries.
 //! * `chain` — the forward path from the focus node to that node, or `None` when
 //!   the focus node IS it.
 //!
@@ -106,6 +108,17 @@ pub(crate) enum Endpoint {
     Subject,
     /// An inverse read, `(?, p, node)`.
     Object,
+    /// An RDF 1.2 read THROUGH a triple term in the object position:
+    /// `(?, p, <<( node q ? )>>)`. The matched row names the anchored node nowhere
+    /// in its own three slots — it names a triple term whose SUBJECT is that node —
+    /// so a matched row is unpacked one level before the chain is walked back, and a
+    /// row whose object is not a triple term matches nothing.
+    ///
+    /// This exists for exactly one read, `sh:reifierShape` /
+    /// `sh:reificationRequired`: a reifier declaration is the virtual quad
+    /// `(reifier, rdf:reifies, <<( focus path value )>>)`, and the node whose verdict
+    /// it moves is the triple term's subject.
+    ObjectTripleSubject,
 }
 
 /// One way a changed triple can reach a focus node. See the module docs.
@@ -361,7 +374,37 @@ impl FootprintWalk {
         );
     }
 
-    // ── The three visit points ──────────────────────────────────────────────────
+    // ── The four visit points ───────────────────────────────────────────────────
+
+    /// Record the read that decides whether the value triples of a property shape
+    /// carry a REIFIER at all.
+    ///
+    /// `sh:reifierShape` and `sh:reificationRequired` both begin by asking the RDF
+    /// 1.2 statement layer which reifiers exist for `<<( focus path value )>>`, and
+    /// that question is answered by rows this walk sees nowhere else: a reifier
+    /// declaration lives in a side table, surfaces as the virtual quad
+    /// `(reifier, rdf:reifies, <<( focus path value )>>)`, and names neither the
+    /// focus node nor the value node in a slot an ordinary trigger inspects.
+    ///
+    /// It is recorded whether or not any reifier shape follows, because the
+    /// EXISTENCE answer alone moves a verdict in both directions: gaining a reifier
+    /// retracts an `sh:reificationRequired` violation, and gaining one also submits a
+    /// new node to every `sh:reifierShape`. Recording it only when a reifier shape
+    /// happens to emit a read of its own would leave `sh:reificationRequired` — which
+    /// reaches no nested shape at all — described by nothing.
+    ///
+    /// The anchor is [`Root::Declaring`]: the triple term's subject is the node that
+    /// DECLARED the property shape, not one of the value nodes the path arrives at.
+    pub(crate) fn record_reification(&mut self) {
+        self.emit(
+            Root::Declaring,
+            &[],
+            Some(NamedNode::new_unchecked(rdf::REIFIES)),
+            Endpoint::ObjectTripleSubject,
+        );
+    }
+
+    // ── The three constraint-side visit points ──────────────────────────────────
 
     /// Record what one TARGET declaration reads to decide membership.
     ///

@@ -1773,6 +1773,15 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         .iter()
         .map(|nested| lower_property(nested, walk))
         .collect();
+    // Finding the reifiers of `<<( focus path value )>>` is itself a read, and it is
+    // the read both `sh:reifierShape` and `sh:reificationRequired` start from — the
+    // same pair the evaluator gates its whole reification arm on. It is recorded
+    // BEFORE the unrooted scope below because the question is asked at the declaring
+    // node, which this walk can still name; only the answer lands somewhere it
+    // cannot.
+    if !property.reifier_shapes.is_empty() || property.reification_required {
+        walk.footprint.record_reification();
+    }
     // A reifier shape constrains the REIFIER of the triple this path traversed, and
     // a reifier is not reached from the focus node by a SHACL path — it is found
     // through the RDF 1.2 statement overlay. Unrooted, therefore: a reifier shape

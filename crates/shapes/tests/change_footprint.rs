@@ -743,6 +743,93 @@ ex:ConfidenceShape a sh:NodeShape ;
     naive_misses: false,
 };
 
+/// `sh:reificationRequired` with NO `sh:reifierShape`.
+///
+/// The verdict turns on whether a reifier EXISTS for the value triple
+/// `<<( ex:alice ex:parent ex:carl )>>`, and the row that supplies one is an
+/// `rdf:reifies` declaration whose subject is the reifier and whose object is the
+/// triple term — so neither the focus node nor the value node appears anywhere in
+/// the changed row. Nothing on the property path changed, and yet `ex:alice` goes
+/// from violating to conforming.
+const REIFICATION_REQUIRED: Case = Case {
+    name: "sh:reificationRequired with no reifier shape",
+    shapes: r"
+ex:ParentageShape a sh:NodeShape ;
+    sh:targetNode ex:alice, ex:bob ;
+    sh:property [ sh:path ex:parent ; sh:reificationRequired true ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://example.org/ns#parent> <http://example.org/ns#carl> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#parent> <http://example.org/ns#dana> .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[(
+        "stmt1",
+        RDF_REIFIES,
+        Obj::Triple("alice", "http://example.org/ns#parent", "carl"),
+    )],
+    removals: &[],
+    untouched: "bob",
+    naive_misses: true,
+};
+
+/// The mirror direction: the base CONFORMS because a reifier is declared, and the
+/// delta suppresses that declaration, so `ex:alice` starts violating.
+const REIFICATION_REQUIRED_SUPPRESSED: Case = Case {
+    name: "sh:reificationRequired loses its reifier",
+    shapes: r"
+ex:ParentageShape a sh:NodeShape ;
+    sh:targetNode ex:alice, ex:bob ;
+    sh:property [ sh:path ex:parent ; sh:reificationRequired true ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://example.org/ns#parent> <http://example.org/ns#carl> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#parent> <http://example.org/ns#dana> .\n",
+    ),
+    base_overlay: &[(
+        "stmt1",
+        RDF_REIFIES,
+        Obj::Triple("alice", "http://example.org/ns#parent", "carl"),
+    )],
+    inserts: &[],
+    removals: &[(
+        "stmt1",
+        RDF_REIFIES,
+        Obj::Triple("alice", "http://example.org/ns#parent", "carl"),
+    )],
+    untouched: "bob",
+    naive_misses: true,
+};
+
+/// The other half of the same gate: `sh:reifierShape` with no
+/// `sh:reificationRequired`.
+///
+/// The reifier shape here reads no triple of its own — `sh:in` judges the reifier's
+/// own identity — so the footprint stays bounded and the only thing standing between
+/// the delta and a silent drop is the EXISTENCE read. Declaring `ex:stmt1` as a
+/// reifier submits a brand-new node to that shape, which rejects it.
+const REIFIER_SHAPE_GAINS_A_REIFIER: Case = Case {
+    name: "sh:reifierShape gains a reifier to judge",
+    shapes: r"
+ex:ParentageShape a sh:NodeShape ;
+    sh:targetNode ex:alice, ex:bob ;
+    sh:property [ sh:path ex:parent ; sh:reifierShape [ sh:in ( ex:approved ) ] ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://example.org/ns#parent> <http://example.org/ns#carl> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#parent> <http://example.org/ns#dana> .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[(
+        "stmt1",
+        RDF_REIFIES,
+        Obj::Triple("alice", "http://example.org/ns#parent", "carl"),
+    )],
+    removals: &[],
+    untouched: "bob",
+    naive_misses: true,
+};
+
 /// Every case, so one failure names the form it belongs to.
 const CASES: &[&Case] = &[
     &FORWARD_PREDICATE,
@@ -785,6 +872,68 @@ fn a_suppressed_reifier_declaration_is_in_the_change_set() {
 #[test]
 fn an_added_annotation_is_in_the_change_set_under_its_own_subject() {
     assert_expansion_covers_every_moved_verdict(&ANNOTATION_ADDED_ON_A_DECLARED_REIFIER);
+}
+
+#[test]
+fn a_reifier_gained_for_a_required_reification_expands_the_focus_node() {
+    assert_expansion_covers_every_moved_verdict(&REIFICATION_REQUIRED);
+}
+
+#[test]
+fn a_reifier_lost_for_a_required_reification_expands_the_focus_node() {
+    assert_expansion_covers_every_moved_verdict(&REIFICATION_REQUIRED_SUPPRESSED);
+}
+
+#[test]
+fn a_reifier_gained_under_a_reifier_shape_expands_the_focus_node() {
+    assert_expansion_covers_every_moved_verdict(&REIFIER_SHAPE_GAINS_A_REIFIER);
+}
+
+/// The over-refusal half of the reification read: the SAME data and the SAME delta,
+/// under a property shape that declares neither `sh:reifierShape` nor
+/// `sh:reificationRequired`.
+///
+/// Such a shape never asks the statement layer anything, so a reifier declaration
+/// cannot move its verdict and `ex:alice` must NOT be expanded. Emitting the
+/// `rdf:reifies` trigger unconditionally would satisfy every superset assertion above
+/// while re-validating a node for a change it cannot see — the mirror bug, and
+/// invisible without this control.
+#[test]
+fn a_property_shape_without_reification_ignores_a_reifier_declaration() {
+    let (snapshot, validator) = bound(
+        r"
+ex:ParentageShape a sh:NodeShape ;
+    sh:targetNode ex:alice, ex:bob ;
+    sh:property [ sh:path ex:parent ; sh:minCount 1 ] .
+",
+        concat!(
+            "<http://example.org/ns#alice> <http://example.org/ns#parent> <http://example.org/ns#carl> .\n",
+            "<http://example.org/ns#bob> <http://example.org/ns#parent> <http://example.org/ns#dana> .\n",
+        ),
+        (
+            "stmt1",
+            RDF_REIFIES,
+            Obj::Triple("alice", "http://example.org/ns#parent", "carl"),
+        ),
+    );
+    let expansion = validator
+        .affected_focus_node_ids(&snapshot)
+        .expect("expansion");
+    assert!(
+        !expansion.is_everything(),
+        "a property shape with no reification clause reads nothing this walk cannot bound, so \
+         answering TOP is over-refusal: {:?}",
+        expansion.reason()
+    );
+    let ids = expansion.ids().expect("bounded");
+    let alice = validator
+        .term_id(&ex_term("alice"))
+        .expect("the base interned ex:alice");
+    assert!(
+        !ids.contains(&alice),
+        "this shapes graph never asks whether ex:alice's value triple has a reifier, so a \
+         reifier declaration must not expand it"
+    );
 }
 
 /// WHY the change set may omit a row the overlay RECLASSIFIES — and the two facts

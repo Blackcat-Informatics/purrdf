@@ -1757,6 +1757,17 @@ impl PreparedValidator {
                 let read_node = match trigger.endpoint {
                     Endpoint::Subject => quad.s,
                     Endpoint::Object => quad.o,
+                    // An RDF 1.2 reifier declaration carries the read node one level
+                    // down, inside the triple term it reifies, so the row is
+                    // unpacked before the chain is walked back. A changed
+                    // `rdf:reifies` row whose object is NOT a triple term reifies
+                    // nothing and is not this read — skipped, not guessed at.
+                    Endpoint::ObjectTripleSubject => match core.resolve(quad.o) {
+                        ::purrdf::TermRef::Triple { s, .. } => s,
+                        ::purrdf::TermRef::Iri(_)
+                        | ::purrdf::TermRef::Blank { .. }
+                        | ::purrdf::TermRef::Literal { .. } => continue,
+                    },
                 };
                 match &reversed {
                     // An empty chain: the focus node IS the node the read happens
