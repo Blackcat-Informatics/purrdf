@@ -419,11 +419,28 @@ declares `u64::MAX`.
 **The failure it prevents.** The two directions fail differently, and that
 asymmetry is the whole guidance.
 
-Under-declaring **refuses your own plans loudly**. The admission waist refuses a
-recorded depth above the declaration, and the compiled unit is emitted at
-`min(depth + 1, declared bound)` — so an under-declaration silently caps the read
-at a number the index could have beaten, and then refuses the plans that ask for
-more. It is noisy, and it is a configuration error a host will find.
+Under-declaring refuses your own plans, and it is **only partly loud**. The
+admission waist refuses a recorded depth above the declaration, so a plan that
+asks for more than you promised fails by name and a host finds it.
+
+But there is one depth where it fails **silently, and with a false completeness
+claim** — which is the failure this whole document exists to prevent, so it is
+stated here rather than left to be discovered. The compiled unit is emitted at
+`max(1, min(depth + 1, declared bound))`. Where the planned depth already equals
+your declared bound, the `min` leaves no room for the probe row, so no probe is
+emitted; and with no probe there is nothing to distinguish a producer that ran out
+from a read the bound cut. The stratum is reported
+[`ProducerStatus::Exhausted`] for exactly the rows the
+depth allowed — the strongest completeness claim this layer has, made about a read
+your own under-declaration truncated. Nothing anywhere says so.
+
+This is the reason A8's `rows_per_invocation` is a **hard obligation and not the
+estimate its name suggests**. A8 permits the number to be wrong without the
+producer being incorrect, and that permission is about *scheduling*: a bad bound
+buys a bad join order. It does **not** extend to under-declaring, because on this
+path the number is an upper bound the layer relies on to know whether it has seen
+your last row. Declare a bound your index can actually reach, or declare
+`u64::MAX`.
 
 Over-declaring is **silent** and costs a worse join order, because the bound is
 what orders a call against the other operators of its group: a call that emits at
