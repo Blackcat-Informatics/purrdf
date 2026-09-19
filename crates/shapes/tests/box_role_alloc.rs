@@ -547,6 +547,7 @@ fn conforming_box_role_validation_has_no_growth_term_in_focus_count() {
 /// be the same defect read from the other side.
 #[test]
 fn violating_box_role_validation_still_stamps_every_role() {
+    let _guard = measure_lock();
     let fixture = Fixture::build(FOCUS_NODES, VIOLATIONS);
 
     let configured = fixture.validate_violating(true);
@@ -668,6 +669,7 @@ const ROLE_CASES: &[RoleCase] = &[
 /// captured the wrong slice, so the contents are asserted, sorted and complete.
 #[test]
 fn box_roles_are_pinned_for_path_nested_and_reifier_shapes() {
+    let _guard = measure_lock();
     for case in ROLE_CASES {
         let shapes = format!("{CASE_PREFIXES}{}", case.shapes);
         let report = purrdf_shapes::engine::validate_graphs_with_config(
@@ -710,4 +712,108 @@ fn box_roles_are_pinned_for_path_nested_and_reifier_shapes() {
             case.name
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 5. The regression guard: every test in this binary holds MEASURE_LOCK first
+// ---------------------------------------------------------------------------
+
+/// Whether `attrs` carries a bare `#[test]` attribute.
+///
+/// Matches by attribute PATH, not by scanning the source text for the word
+/// "test": a doc comment or a code comment that happens to contain that word
+/// must never be read as marking a function.
+fn is_test_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| attr.path().is_ident("test"))
+}
+
+/// Whether `block`'s FIRST statement is a `let` binding whose initializer is a
+/// call to `measure_lock()`.
+///
+/// Not "somewhere in the body": [`WholeProcessWindow`] reads one process-global
+/// ledger for the whole test, so a lock taken after even one allocation has
+/// already let that allocation land unguarded. It must also be a `let` binding
+/// and not a bare `measure_lock();` statement — the returned [`MutexGuard`] is a
+/// temporary that drops at the end of a bare statement, which releases the lock
+/// immediately rather than holding it for the test.
+fn first_statement_holds_measure_lock(block: &syn::Block) -> bool {
+    let Some(syn::Stmt::Local(local)) = block.stmts.first() else {
+        return false;
+    };
+    let Some(init) = &local.init else {
+        return false;
+    };
+    matches!(
+        init.expr.as_ref(),
+        syn::Expr::Call(call)
+            if matches!(
+                call.func.as_ref(),
+                syn::Expr::Path(path) if path.path.is_ident("measure_lock")
+            )
+    )
+}
+
+/// Every `#[test]` function declared anywhere in the scanned file, in source
+/// order.
+///
+/// Walks the whole file rather than only its top-level items, so a `#[test]`
+/// nested inside a `mod` block cannot go unseen.
+#[derive(Default)]
+struct TestFns(Vec<syn::ItemFn>);
+
+impl<'ast> syn::visit::Visit<'ast> for TestFns {
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if is_test_attr(&item.attrs) {
+            self.0.push(item.clone());
+        }
+        syn::visit::visit_item_fn(self, item);
+    }
+}
+
+/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
+/// statement of its body.**
+///
+/// This file's own documentation states that rule; this is what enforces it. A
+/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
+/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
+/// allocates without holding the lock — whether or not it takes a measurement of
+/// its own — can land its traffic inside a sibling test's open window and shift
+/// a pinned constant nondeterministically. A future test that omits the lock is
+/// exactly the contamination source this file exists to rule out, so it must
+/// fail loudly and name itself rather than show up as an occasional,
+/// unattributed shift in someone else's figure.
+///
+/// A source scan rather than a runtime check: nothing observable at runtime
+/// distinguishes "this test forgot to take the lock" from "this test never
+/// needed it", so the only place the distinction is visible is the source
+/// itself.
+#[test]
+fn every_test_in_this_binary_takes_the_measure_lock_first() {
+    let _guard = measure_lock();
+    let source = include_str!("box_role_alloc.rs");
+    let parsed = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("this file must parse as Rust: {error}"));
+    let mut collector = TestFns::default();
+    syn::visit::Visit::visit_file(&mut collector, &parsed);
+
+    assert!(
+        !collector.0.is_empty(),
+        "the scan found no #[test] function in this file at all, so this guard is reading \
+         nothing"
+    );
+
+    let mut offenders: Vec<String> = collector
+        .0
+        .iter()
+        .filter(|item| !first_statement_holds_measure_lock(&item.block))
+        .map(|item| item.sig.ident.to_string())
+        .collect();
+    offenders.sort();
+
+    assert!(
+        offenders.is_empty(),
+        "these #[test] functions do not take MEASURE_LOCK as the first statement of their \
+         body, so they can allocate concurrently with another test's WholeProcessWindow and \
+         silently shift its pinned figure: {offenders:?}"
+    );
 }
