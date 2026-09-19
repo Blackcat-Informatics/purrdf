@@ -5,12 +5,17 @@
 //! digest sensitivity, decode round-trip and loud version refusal.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
     ProducerDecision, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
     StatisticsSnapshot, Term, UnservedReason, UnservedTerm,
+};
+use purrdf_sparql_eval::{
+    CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
+    RankedDeclaration,
 };
 
 fn iri(text: &str) -> Iri {
@@ -684,4 +689,96 @@ fn crate_sources_contain_no_function_pointers() {
             "{name} contains a function pointer; plans and capability declarations must be pure data"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// T6.6. A producer's candidate-domain declaration reaches the plan's identity.
+//
+// A plan records the content fingerprint of the registry it was planned
+// against, and the fingerprint folds in every declared field of every ranked
+// declaration. The domain declaration is one of those fields, and it must be:
+// two registries that differ only in what their producers may name FUSE
+// DIFFERENTLY — one licenses a bounded read, the other does not — so a plan
+// admitted against one must not be admissible against the other. The route is
+// registry declaration → content fingerprint → plan bytes → plan id, and this
+// test walks all of it rather than asserting the middle.
+// ---------------------------------------------------------------------------
+
+/// A one-producer registry whose declaration names `domains` and is otherwise
+/// fixed, so the fingerprint difference below can come from nothing else.
+fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        "http://example.org/ns#ranked",
+        Arc::new(MemoryRelation::new(1, 1, Vec::new()).expect("an empty table is uniform")),
+        RankedDeclaration {
+            stratum: purrdf_core::parse_iri("http://example.org/stratum/a").expect("fixture IRI"),
+            accepted_terms: Vec::new(),
+            depth_placement: None,
+            candidate_position: 0,
+            duplicates: DuplicatePolicy::Unique,
+            domains,
+            mandatory: false,
+        },
+    );
+    registry
+}
+
+/// The baseline plan, recording `registry`'s durable content fingerprint.
+fn plan_against(registry: &PropertyFunctionRegistry) -> Plan {
+    Plan {
+        registry_content_fingerprint: registry
+            .content_fingerprint()
+            .expect("the fixture declarations are readable"),
+        ..baseline()
+    }
+}
+
+#[test]
+fn a_declared_candidate_domain_moves_the_plan_identity() {
+    let unrestricted = registry_declaring(CandidateDomains::Unrestricted);
+    let restricted = registry_declaring(CandidateDomains::within([DomainTag::parse(
+        "http://example.org/domain/documents",
+    )
+    .expect("fixture domain tag")]));
+
+    assert_ne!(
+        unrestricted.content_fingerprint().expect("readable"),
+        restricted.content_fingerprint().expect("readable"),
+        "the declaration reaches the registry's durable fingerprint"
+    );
+    assert_ne!(
+        plan_against(&unrestricted).id(),
+        plan_against(&restricted).id(),
+        "and through it the plan's identity, so a plan admitted against one \
+         wiring cannot run against a wiring that fuses differently"
+    );
+
+    // The valid neighbour, and the property that makes the identity usable: two
+    // registries declaring the SAME domains plan to the same identity. An id
+    // that moved between identical wirings would invalidate every cached plan
+    // on every rebuild.
+    let same = registry_declaring(CandidateDomains::within([DomainTag::parse(
+        "http://example.org/domain/documents",
+    )
+    .expect("fixture domain tag")]));
+    assert_eq!(
+        plan_against(&restricted).id(),
+        plan_against(&same).id(),
+        "the identity is a function of what was declared, not of which registry \
+         instance declared it"
+    );
+
+    // And two different restrictions are two different identities: the tags
+    // themselves reach the digest, not merely the fact that a restriction
+    // exists.
+    let other_block = registry_declaring(CandidateDomains::within([DomainTag::parse(
+        "http://example.org/domain/people",
+    )
+    .expect("fixture domain tag")]));
+    assert_ne!(
+        plan_against(&restricted).id(),
+        plan_against(&other_block).id(),
+        "the blocks are part of the declaration, so they are part of the identity"
+    );
 }

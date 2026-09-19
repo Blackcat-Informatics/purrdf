@@ -68,8 +68,8 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus,
-    ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
+    CandidateDomains, DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt,
+    ProducerStatus, ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -158,7 +158,7 @@ impl RankedStream for ScriptedStream {
     /// the contract decides what the engine holds and refuses, so a target that
     /// read it differently would fuse differently.
     fn contract(&self) -> StreamContract {
-        StreamContract::new(DuplicatePolicy::Unique)
+        StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
     }
 }
 

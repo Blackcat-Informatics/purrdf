@@ -59,17 +59,28 @@
 //! contribution bound the fused top-k stopped reading it at.
 //!
 //! That includes what each producer declared about its *own* rows. A ranked
-//! producer states its duplicate handling where it is registered, and fusion is
-//! the consumer that declaration was written for, so it is carried from the
-//! registry to that consumer as a [`StreamContract`] — read at the admission
-//! waist into [`StratumUnit`], tagged onto every [`StratumStream`], reported
-//! through [`RankedStream::contract`]. A producer that declared
+//! producer states its duplicate handling, and which blocks of the candidate
+//! universe it may name, where it is registered; fusion is the consumer both
+//! declarations were written for, so they are carried from the registry to that
+//! consumer as a [`StreamContract`] — read at the admission waist into
+//! [`StratumUnit`], tagged onto every [`StratumStream`], reported through
+//! [`RankedStream::contract`]. A producer that declared
 //! [`DuplicatePolicy::Allowed`] is de-duplicated, which is what that policy says
 //! its consumer must do; one that declared [`DuplicatePolicy::Unique`] costs no
 //! per-stream identity set at all, and is held to its declaration rather than
 //! taken on trust — a repeat is refused as
 //! [`ProtocolError::DuplicateItem`], naming the entity and the stratum, for
 //! however long the fusion runs.
+//!
+//! A [`CandidateDomains`] declaration is what makes a bounded read bounded in
+//! *rows pulled* as well as in rows returned. Without one, a candidate cannot
+//! certify until every open stream has named it, so strata whose candidates do
+//! not overlap are read to their ends however small the caller's top-k; with
+//! one, fusion skips exactly the streams that provably cannot name the
+//! candidate in hand. The scores do not move — the declaration changes how much
+//! is read, never what is returned — and a producer that names a candidate its
+//! declaration cannot reach is refused as
+//! [`ProtocolError::OutsideDeclaredDomain`] rather than quietly merged.
 //!
 //! Neither declaration can put the same entity in an answer twice. That is the
 //! one property here that is not a producer's to negotiate: a fused answer's
@@ -355,6 +366,13 @@ pub use purrdf_sparql_eval::RegistryId;
 // is built from it and a caller assembling a stream of its own must be able to
 // name it without depending on the evaluator crate.
 pub use purrdf_sparql_eval::DuplicatePolicy;
+// Which blocks of the candidate universe a ranked producer may name, and the
+// caller-named tag one block is identified by. Re-exported for the same reason
+// `DuplicatePolicy` is: `StreamContract` carries one, `FusionTrailer` reports a
+// map of them, and a caller assembling a stream of its own — or auditing an
+// answer — must be able to name the type without depending on the evaluator
+// crate.
+pub use purrdf_sparql_eval::{CandidateDomains, DomainTag};
 // What a producer attests about the index behind its rows. Re-exported for the
 // same reason: `RankedStream::attestation` returns one and `FusionTrailer`
 // reports a map of them, so a caller implementing a stream or reading a trailer

@@ -540,6 +540,244 @@ impl DuplicatePolicy {
     }
 }
 
+/// One caller-named block of the candidate universe.
+///
+/// A domain tag is an IRI the **caller** chooses — `documents`, `people`,
+/// `places`, `chunks-of-the-2019-corpus`. Nothing here mints one, and nothing
+/// here interprets one: the tag is compared for equality against other tags and
+/// is otherwise opaque data, exactly as a stratum label is.
+///
+/// # A tag names a block of a partition, not a label an item may collect
+///
+/// The whole arithmetic value of a declared domain rests on this reading, so it
+/// is stated rather than implied: the tags a host uses **partition** the
+/// candidate universe, and a candidate lies in exactly one block. That is what
+/// lets a consumer bound the score of an item it has not seen yet by the best
+/// single block rather than by every stream at once — an unseen item cannot
+/// collect contributions from two disjoint blocks, because it is not in two
+/// blocks.
+///
+/// A host that tags one entity into two blocks has not made the declaration
+/// weaker, it has made it false, and the consumer says so rather than quietly
+/// scoring it: `purrdf-retrieval`'s fusion refuses a stream that names a
+/// candidate its declared domains cannot reach. A host whose entity really does
+/// belong to two categories declares a producer over **both** tags
+/// ([`CandidateDomains::Within`] takes a set) or declares
+/// [`CandidateDomains::Unrestricted`], and both of those are honest.
+///
+/// # Why this is a newtype rather than a bare [`Iri`]
+///
+/// A set of tags has to be ordered to be a set, to be compared, and to be
+/// encoded injectively into a registry's fingerprint, and the kernel's [`Iri`]
+/// is a parsed value with neither an `Ord` nor a `Hash` impl — deliberately, as
+/// the ring-fenced leaf it is. So the ordering lives here, over the IRI's text,
+/// which is the same thing `purrdf-retrieval`'s plan-facing IRI wrapper does
+/// and for the same reason. Ordering by text is what makes the canonical
+/// encoding a pure function of the value rather than of the order a host
+/// happened to insert its tags in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainTag(Iri);
+
+impl DomainTag {
+    /// Carry `iri` as a domain tag.
+    #[must_use]
+    pub const fn new(iri: Iri) -> Self {
+        Self(iri)
+    }
+
+    /// Parse and validate `text` as a domain tag.
+    ///
+    /// # Errors
+    ///
+    /// The parser's own [`IriError`](purrdf_core::IriError) when `text` is not
+    /// a valid IRI. Nothing is guessed or repaired: a tag that is not an IRI is
+    /// refused where it is written.
+    pub fn parse(text: &str) -> Result<Self, purrdf_core::IriError> {
+        purrdf_core::parse_iri(text).map(Self)
+    }
+
+    /// The tag's IRI text, verbatim.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// The tag's underlying IRI.
+    #[must_use]
+    pub const fn as_iri(&self) -> &Iri {
+        &self.0
+    }
+}
+
+impl From<Iri> for DomainTag {
+    fn from(iri: Iri) -> Self {
+        Self(iri)
+    }
+}
+
+impl core::fmt::Display for DomainTag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
+impl PartialOrd for DomainTag {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DomainTag {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.as_str().cmp(other.0.as_str())
+    }
+}
+
+impl core::hash::Hash for DomainTag {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_str().hash(state);
+    }
+}
+
+/// Which blocks of the candidate universe a ranked producer may name.
+///
+/// This is the second promise a producer makes about its own rows, beside
+/// [`DuplicatePolicy`], and like that one it is host-supplied configuration
+/// read at registration rather than anything a consumer infers. It exists
+/// because a consumer fusing several ranked streams has exactly one way to
+/// learn that a stream will *not* name a candidate — read that stream to its
+/// end — and over strata whose candidate sets do not overlap that is every row
+/// of every stream, however small the caller's top-k.
+///
+/// # What it buys, stated as the arithmetic it licenses
+///
+/// A fused score is exact only when every stream that could still name the
+/// candidate has named it. With no declaration, "could still name it" is true
+/// of every open stream, so a candidate in one stratum waits for a stratum that
+/// was never going to mention it — the fusion drains, the frontier grows with
+/// the input, and the terminal report says `Exhausted` about streams that were
+/// emptied rather than bounded. With a declaration, the consumer may skip the
+/// streams that *provably* cannot name the candidate, and only those. The
+/// consumer's finality test does not get weaker; its quantifier gets smaller.
+///
+/// # [`Self::Unrestricted`] is the wider promise, not the weaker one
+///
+/// It says "this producer may name anything", which is a statement about the
+/// producer that happens to license the consumer to assume nothing. It is
+/// today's behaviour exactly, it is the honest value for a host that does not
+/// know how its indexes partition, and a fusion whose every stream declares it
+/// computes precisely the numbers it computed before this existed — the same
+/// rows, the same scores, the same provenance, and the same reading cost.
+///
+/// # Nothing is defaulted from a stratum or from a graph
+///
+/// The tags come from the **host**, because the host is the only party that
+/// knows whether its text index and its vector index name the same entities. A
+/// consumer deriving a tag per stratum would hand two producers over one entity
+/// space a pair of tags it reads as disjoint, and there is no safe way for that
+/// to be wrong: the pair either makes the consumer refuse a query that was
+/// valid, or lets it certify a score that is missing a contribution the other
+/// stream was about to make. A wrong guess here is a wrong answer, so there is
+/// no guess.
+///
+/// # What verification can and cannot reach
+///
+/// A consumer verifies this declaration only over the rows it actually pulls: a
+/// stream that names a candidate another stream's declaration has already
+/// placed elsewhere is refused, and nothing else is checkable. A false
+/// declaration that no pulled row contradicts produces a score that declaration
+/// made wrong. That is the same trust the seam already places in
+/// [`DuplicatePolicy::Unique`], whose breach is likewise detected only when the
+/// repeat is actually read, and it is stated here rather than dressed up: a
+/// declaration is a promise, and the consumer checks the promises it is in a
+/// position to check.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CandidateDomains {
+    /// The producer may name any candidate at all.
+    Unrestricted,
+    /// Every candidate this producer names lies in one of these blocks.
+    ///
+    /// Never empty. A producer that promises to name nothing has not restricted
+    /// its domain, it has described a producer that should not be registered,
+    /// and
+    /// [`register_ranked`](PropertyFunctionRegistry::register_ranked) refuses
+    /// it where it is written.
+    Within(std::collections::BTreeSet<DomainTag>),
+}
+
+impl CandidateDomains {
+    /// A restriction to the tags `tags` yields, in any order.
+    ///
+    /// A convenience over building the set, and it is deliberately **not** the
+    /// place the empty case is refused: this is plain data with public
+    /// variants, so a host can spell an empty restriction either way and the
+    /// one refusal that matters is the one at registration, where the
+    /// declaration is committed.
+    pub fn within<I: IntoIterator<Item = DomainTag>>(tags: I) -> Self {
+        Self::Within(tags.into_iter().collect())
+    }
+
+    /// Whether some candidate could satisfy both restrictions at once.
+    ///
+    /// [`Self::Unrestricted`] intersects everything, including itself: it is
+    /// "any block", so there is always a block in common. Two restricted
+    /// declarations intersect exactly when they name a block in common —
+    /// because a candidate lies in exactly one block ([`DomainTag`]), so a
+    /// candidate both could name must be in a block both declared.
+    ///
+    /// Allocates nothing: the set intersection is the lazy iterator's first
+    /// step and no result set is built.
+    #[must_use]
+    pub fn intersects(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Unrestricted, _) | (_, Self::Unrestricted) => true,
+            (Self::Within(left), Self::Within(right)) => left.intersection(right).next().is_some(),
+        }
+    }
+
+    /// Whether a candidate in block `tag` could be named under this
+    /// declaration.
+    #[must_use]
+    pub fn admits(&self, tag: &DomainTag) -> bool {
+        match self {
+            Self::Unrestricted => true,
+            Self::Within(tags) => tags.contains(tag),
+        }
+    }
+
+    /// The blocks this declaration names, or `None` when it names no
+    /// restriction at all.
+    #[must_use]
+    pub const fn tags(&self) -> Option<&std::collections::BTreeSet<DomainTag>> {
+        match self {
+            Self::Unrestricted => None,
+            Self::Within(tags) => Some(tags),
+        }
+    }
+
+    /// Append this declaration's canonical, injective description to `out`.
+    ///
+    /// A present/absent discriminant, then — for a restriction — the tag count
+    /// and every tag length-framed in canonical order. The count is what makes
+    /// a set of two tags unreadable as a set of one followed by whatever came
+    /// next, and the `BTreeSet`'s own order is what makes the bytes a function
+    /// of the value rather than of the host's insertion order.
+    fn push_canonical(&self, out: &mut String) {
+        match self {
+            Self::Unrestricted => out.push('0'),
+            Self::Within(tags) => {
+                out.push('1');
+                out.push_str(&tags.len().to_string());
+                out.push(':');
+                for tag in tags {
+                    push_canonical_field(out, tag.as_str());
+                }
+            }
+        }
+        out.push(';');
+    }
+}
+
 /// The canonical description of "this relation does not participate in ranked
 /// retrieval" — the one byte a non-ranked producer contributes to a registry's
 /// content fingerprint, named once so the ranked and non-ranked spellings can
@@ -683,6 +921,16 @@ pub struct RankedDeclaration {
     pub candidate_position: usize,
     /// The producer's duplicate handling.
     pub duplicates: DuplicatePolicy,
+    /// Which blocks of the candidate universe this producer may name.
+    ///
+    /// The second promise a producer makes about its own rows. A consumer
+    /// fusing several ranked streams reads it to learn which streams *cannot*
+    /// name a given candidate, which is the only way it can certify a score
+    /// before reading a stream to its end — see [`CandidateDomains`] for the
+    /// whole argument, including why [`CandidateDomains::Unrestricted`] is the
+    /// wider promise rather than the weaker one, and why nothing derives a tag
+    /// from a stratum or a graph on a host's behalf.
+    pub domains: CandidateDomains,
     /// Whether a request that reaches this producer must actually be served by
     /// it. Declared by the host, never inferred by a consumer: admission
     /// enforces whatever the registry declared and adds nothing of its own.
@@ -704,6 +952,12 @@ impl RankedDeclaration {
         out.push('r');
         push_canonical_field(&mut out, self.stratum.as_str());
         push_canonical_field(&mut out, self.duplicates.as_str());
+        // Beside the duplicate policy, because the two are the same kind of
+        // fact: a promise the producer makes about its own rows that a consumer
+        // holds it to. Both must reach the registry's content fingerprint, or
+        // two registries that fuse differently could share a digest and a plan
+        // admitted against one would run against the other.
+        self.domains.push_canonical(&mut out);
         push_canonical_field(&mut out, &self.candidate_position.to_string());
         out.push(if self.mandatory { '1' } else { '0' });
         out.push(';');
@@ -1185,6 +1439,10 @@ impl PropertyFunctionRegistry {
     ///   one position renders one value.
     /// * `decl.candidate_position` is also a placement or depth target: a
     ///   position filled with a constant cannot also be the projected candidate.
+    /// * `decl.domains` is an empty [`CandidateDomains::Within`] — a promise to
+    ///   name nothing is not a narrow domain, it is a producer that should not
+    ///   be registered; a host that does not want to restrict its candidates
+    ///   declares [`CandidateDomains::Unrestricted`].
     /// * `decl.stratum` is already claimed by another registered producer — one
     ///   stratum carries one producer, because a rank means something only inside
     ///   the list that assigned it. The panic message carries the whole argument:
@@ -1511,6 +1769,25 @@ fn assert_stratum_unclaimed(
 /// See [`PropertyFunctionRegistry::register_ranked`] for the full list.
 fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
     let total = arity.total();
+    // An empty restriction is not a narrow producer, it is a producer that
+    // promised to name nothing. Read literally by a consumer it is a stream
+    // whose every row contradicts its own declaration, so the first row it
+    // emitted would be refused and the registration would have bought a
+    // configuration that cannot answer. Refused where it is committed, like
+    // every other declaration a relation cannot honour — and distinctly from
+    // `CandidateDomains::Unrestricted`, which is one line away and is what a
+    // host that does not want to restrict its candidates actually means.
+    if let CandidateDomains::Within(tags) = &decl.domains {
+        assert!(
+            !tags.is_empty(),
+            "ranked declaration for <{iri}> restricts its candidates to an empty set of \
+             domains, which promises that this producer names nothing at all; a consumer \
+             holds a producer to this declaration row by row, so every row it emitted would \
+             contradict it. Name the domains this producer really draws from, or declare \
+             CandidateDomains::Unrestricted, which is the honest statement that it may name \
+             anything"
+        );
+    }
     assert!(
         decl.candidate_position < total,
         "ranked declaration for <{iri}> projects its candidate from position {} but the relation \

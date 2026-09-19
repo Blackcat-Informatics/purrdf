@@ -100,8 +100,8 @@
 //! include the count would be a flake waiting for a bigger dataset.
 //!
 //! What *is* attached here is the producer's own ranked-stream contract —
-//! its rank ordering and its duplicate handling — carried through from the
-//! compiled unit into [`StratumStream::contract`]. That is not a fusion input
+//! its duplicate handling and the blocks of the candidate universe it may name
+//! — carried through from the compiled unit into [`StratumStream::contract`]. That is not a fusion input
 //! the way a weight is: it is the producer's declaration about its own rows, and
 //! the same one-stratum-one-producer rule the ranks rest on makes it
 //! unambiguous, so a stratum's contract is simply its producer's. It travels
@@ -144,8 +144,8 @@ pub struct StratumStream {
     pub stratum: Iri,
     /// The admitted plan the stream was compiled from.
     pub plan_id: PlanId,
-    /// The rank ordering and duplicate handling the stratum's producer declared,
-    /// carried from [`StratumUnit::contract`](crate::StratumUnit).
+    /// The duplicate handling and the candidate domains the stratum's producer
+    /// declared, carried from [`StratumUnit::contract`](crate::StratumUnit).
     ///
     /// It travels with the rows for the reason [`Self::plan_id`] does: the
     /// fusion stage is the consumer those two declarations were written for, and
@@ -484,7 +484,7 @@ pub async fn execute<D: DatasetView + Sync>(
                         streams.push(StratumStream {
                             stratum: unit.stratum.clone(),
                             plan_id: compiled.plan_id,
-                            contract: unit.contract,
+                            contract: unit.contract.clone(),
                             attestation,
                             stream: RankedStreamImpl::new(ranked, ending),
                         });

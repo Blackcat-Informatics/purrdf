@@ -25,9 +25,9 @@ use purrdf_retrieval::{
     UnservedReason, UnservedTerm, compile, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError, PfArgs,
+    PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -97,6 +97,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        domains: CandidateDomains::Unrestricted,
         mandatory,
     }
 }
@@ -1793,5 +1794,174 @@ fn the_same_repeating_relation_declaring_allowed_answers_once_through_search() {
         result.trailer.statuses[&iri(&ex("stratum/repeat"))],
         ProducerStatus::Exhausted { rows_emitted: 3 },
         "a de-duplicated row is still a row the producer emitted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T6.9. The candidate-domain declaration travels the whole route, and the
+//       answer says which declarations it was certified under.
+//
+// The declaration is host configuration supplied at `register_ranked`. Fusion
+// is the consumer it was written for, and it is four stages downstream: the
+// admission waist reads it into `StratumUnit::contract`, `execute` tags every
+// stream with it, `RankedStreamAdapter` reports it through the protocol, and
+// `FusionStream::new` reads it before pulling a row. A break anywhere on that
+// route is invisible from either end — the registry still declares, the answer
+// still has rows — so the trailer echoes what actually reached the engine, and
+// this test compares that echo against the registry itself rather than against
+// a literal written twice.
+// ---------------------------------------------------------------------------
+
+/// What a fused row says as an ANSWER: the entity, its score and where that
+/// score came from.
+///
+/// [`FusedRow::threshold_witness`] is deliberately absent: it is the threshold
+/// in force at the instant the row certified, so it is a fact about how far the
+/// streams had been read rather than about the answer, and a declaration that
+/// licenses an earlier stop certifies the identical row against a higher one.
+type FusedAnswer = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+
+/// Two caller-named blocks. Nothing here mints them: they are `example.org`
+/// IRIs a host chose for its own partition, exactly as the strata are.
+fn domain_tag(suffix: &str) -> DomainTag {
+    DomainTag::parse(&ex(suffix)).expect("fixture domain tags are valid IRIs")
+}
+
+/// The fixture registry, with each producer declaring where its candidates lie.
+///
+/// The three mock producers really do emit disjoint candidate sets — each mints
+/// its entities under its own prefix — so `universal` and `text` are declared
+/// over their own blocks and `graph` over both, which is the truthful
+/// declaration for a producer whose rows a host knows span the corpus. Every
+/// declaration below is a fact about these fixtures rather than a convenient
+/// label, which is what makes the answer comparable with the undeclared one.
+fn domain_declaring_registry() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    let literal_pattern = TermPattern {
+        kind: TermKind::Literal,
+        datatype: None,
+        language: Some("en".to_owned()),
+        predicate: Some(ex("body")),
+    };
+    registry.register_ranked(
+        ex("pf/any"),
+        producer(200, "universal/", 3),
+        RankedDeclaration {
+            domains: CandidateDomains::within([domain_tag("domain/universal")]),
+            ..ranked(
+                &ex("stratum/universal"),
+                vec![TermPattern::of_kind(TermKind::Any)],
+                true,
+            )
+        },
+    );
+    registry.register_ranked(
+        ex("pf/literal"),
+        producer(100, "text/", 2),
+        RankedDeclaration {
+            domains: CandidateDomains::within([domain_tag("domain/text")]),
+            ..ranked(&ex("stratum/text"), vec![literal_pattern], false)
+        },
+    );
+    registry.register_ranked(
+        ex("pf/iri"),
+        producer(50, "graph/", 1),
+        RankedDeclaration {
+            domains: CandidateDomains::within([
+                domain_tag("domain/universal"),
+                domain_tag("domain/text"),
+            ]),
+            ..ranked(
+                &ex("stratum/graph"),
+                vec![TermPattern::of_kind(TermKind::Iri)],
+                false,
+            )
+        },
+    );
+    registry.register(ex("pf/not-ranked"), producer(0, "unranked/", 0));
+    registry
+}
+
+#[test]
+fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
+    let registry = domain_declaring_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the fixture request searches");
+
+    // The expectation is read back OUT OF THE REGISTRY, by producer IRI, so
+    // this compares the answer against the configuration rather than against a
+    // second copy of the same literal. A route that dropped the declaration
+    // somewhere between the two would pass a literal-to-literal comparison.
+    let declared = |producer: &str, stratum: &str| {
+        (
+            iri(&ex(stratum)),
+            registry
+                .ranked_declaration(&ex(producer))
+                .expect("the fixture producer is registered as ranked")
+                .domains
+                .clone(),
+        )
+    };
+    assert_eq!(
+        result.trailer.domains,
+        BTreeMap::from([
+            declared("pf/any", "stratum/universal"),
+            declared("pf/literal", "stratum/text"),
+            declared("pf/iri", "stratum/graph"),
+        ]),
+        "every stream this search fused reports the declaration its producer \
+         was registered with, keyed by its stratum"
+    );
+
+    // And the declaration is an input, not a result: the same request over the
+    // same producers declaring nothing returns the same rows. A declaration
+    // that moved the answer would be a bound bought with a wrong result.
+    let undeclared = fixture_registry();
+    let undeclared_env = fixture_env(&undeclared, &stats);
+    let plain = block_on(search(
+        &mixed_request(),
+        &undeclared,
+        &stats,
+        &*common::empty_dataset(),
+        &undeclared_env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the fixture request searches");
+    let answers = |result: &SearchResult| -> Vec<FusedAnswer> {
+        result
+            .rows
+            .iter()
+            .map(|row| (row.entity.clone(), row.score, row.contributions.clone()))
+            .collect()
+    };
+    assert_eq!(
+        answers(&result),
+        answers(&plain),
+        "the declared search and the undeclared one answer identically"
+    );
+    assert_eq!(
+        plain.trailer.domains,
+        BTreeMap::from([
+            (
+                iri(&ex("stratum/universal")),
+                CandidateDomains::Unrestricted
+            ),
+            (iri(&ex("stratum/text")), CandidateDomains::Unrestricted),
+            (iri(&ex("stratum/graph")), CandidateDomains::Unrestricted),
+        ]),
+        "a producer that declared nothing is reported as promising everything, \
+         which is what it did promise"
     );
 }

@@ -38,9 +38,9 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, ExecutionError,
-    ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri,
-    PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
+    AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
+    ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
+    Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
     ProducerStatus, ProtocolError, RankedStream, RankedStreamAdapter, RankedStreamImpl,
     RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics,
     StatisticsSnapshot, StreamContract, StreamEnding, Term, TopK, UnservedReason, UnservedTerm,
@@ -123,6 +123,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        domains: CandidateDomains::Unrestricted,
         mandatory,
     }
 }
@@ -134,7 +135,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
 /// not part of it — that law holds for every stream and is checked rank by rank
 /// rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique)
+    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
 }
 
 fn lexical_term() -> RequestTerm {

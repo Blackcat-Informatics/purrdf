@@ -107,8 +107,8 @@ use purrdf_core::{
 
 use crate::error::EvalError;
 use crate::property_fn::{
-    AcceptedTerm, DepthPlacement, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, PfArgs, PfArity, PfCursor,
+    PfRow, PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
 };
 use crate::user_fn::Volatility;
 
@@ -728,12 +728,31 @@ impl EmbeddingKnnRelation {
     /// contiguous and ascending, which is the one rank law
     /// [`RankedDeclaration`] holds every ranked producer to. Terms are distinct
     /// within a space and a search returns distinct rows, so no item repeats.
+    ///
+    /// # `domains` comes from the host, and cannot come from anywhere else
+    ///
+    /// Which blocks of the candidate universe this space's neighbours lie in is
+    /// a fact about the *corpus the space was built over*, and this relation
+    /// cannot see it: it holds vectors and row numbers, and the terms those
+    /// rows carry are whatever the host embedded. Only the host knows whether
+    /// the entities in this space are the same entities its text index ranks,
+    /// or a disjoint population. So the tags are a parameter.
+    ///
+    /// Deriving one from the stratum would be the dangerous convenience:
+    /// two producers over one entity space would receive two tags a consumer
+    /// reads as disjoint, and that is not a conservative mistake in either
+    /// direction — it makes a fusion refuse a valid query when both producers
+    /// name one entity, and certify a score missing the other producer's
+    /// contribution when they do not. [`CandidateDomains::Unrestricted`] is the
+    /// honest value where the host does not know, and it is today's behaviour
+    /// exactly.
     #[must_use]
     pub fn ranked_declaration(
         &self,
         stratum: Iri,
         seed: TermKind,
         depth_datatype: String,
+        domains: CandidateDomains,
     ) -> RankedDeclaration {
         RankedDeclaration {
             stratum,
@@ -751,6 +770,7 @@ impl EmbeddingKnnRelation {
             }),
             candidate_position: Self::NEIGHBOUR,
             duplicates: DuplicatePolicy::Unique,
+            domains,
             mandatory: false,
         }
     }

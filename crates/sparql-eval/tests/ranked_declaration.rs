@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use purrdf_core::Iri;
 use purrdf_sparql_eval::{
-    AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PropertyFunction,
-    PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement,
+    AcceptedTerm, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy, MemoryRelation,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement,
 };
 
 const EX_REL: &str = "http://example.org/ns#search";
@@ -25,6 +25,14 @@ const EX_STRATUM: &str = "http://example.org/stratum/lexical";
 const EX_STRATUM_B: &str = "http://example.org/stratum/vector";
 const EX_DEPTH_TYPE: &str = "http://example.org/datatype/count";
 const EX_LANG_TYPE: &str = "http://example.org/datatype/tag";
+/// Two caller-named blocks of a candidate universe. Nothing here mints them;
+/// they are ordinary `example.org` IRIs a host chose for its own partition.
+const EX_DOMAIN_DOCS: &str = "http://example.org/domain/documents";
+const EX_DOMAIN_PEOPLE: &str = "http://example.org/domain/people";
+
+fn tag(iri: &str) -> DomainTag {
+    DomainTag::parse(iri).expect("fixture domain tag")
+}
 
 /// A five-position relation: one subject-side argument, four object-side. The
 /// widest shape the fixtures below place into, so a position is out of range
@@ -81,6 +89,11 @@ fn declaration() -> RankedDeclaration {
         }),
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        // The reference declaration promises nothing about where its candidates
+        // lie, which is the widest promise and the one every producer made
+        // before the term existed. The tests that are ABOUT the term state
+        // their own.
+        domains: CandidateDomains::Unrestricted,
         mandatory: true,
     }
 }
@@ -295,6 +308,81 @@ fn a_candidate_that_collides_with_the_depth_is_refused() {
         ..declaration()
     };
     registry.register_ranked(EX_REL, relation(), decl);
+}
+
+#[test]
+fn an_empty_domain_restriction_is_refused_while_a_named_one_registers() {
+    // The refusal. `Within` with no blocks says "this producer names nothing",
+    // which is not a narrow producer but an unusable one: a consumer holds a
+    // producer to this declaration row by row, so the first row it emitted
+    // would contradict it.
+    let message = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                domains: CandidateDomains::Within(std::collections::BTreeSet::new()),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        message.contains("empty set of") && message.contains("CandidateDomains::Unrestricted"),
+        "the refusal must name the offence AND the one-line remedy, got: {message}"
+    );
+
+    // Nothing was inserted: the refusal runs before the registry is written, the
+    // same discipline every other declaration refusal keeps.
+    let mut refused = PropertyFunctionRegistry::new();
+    let outcome = without_panic_output(|| {
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            refused.register_ranked(
+                EX_REL,
+                relation(),
+                RankedDeclaration {
+                    domains: CandidateDomains::Within(std::collections::BTreeSet::new()),
+                    ..declaration()
+                },
+            );
+        }))
+    });
+    assert!(outcome.is_err());
+    assert!(
+        refused.is_empty(),
+        "nothing was inserted before the refusal"
+    );
+
+    // THE VALID NEIGHBOURS, and they are what this refusal must not touch. A
+    // restriction naming one block registers; so does one naming two; so does
+    // the unrestricted declaration the whole fixture set uses. Only the empty
+    // set is refused.
+    for (name, domains) in [
+        ("one block", CandidateDomains::within([tag(EX_DOMAIN_DOCS)])),
+        (
+            "two blocks",
+            CandidateDomains::within([tag(EX_DOMAIN_DOCS), tag(EX_DOMAIN_PEOPLE)]),
+        ),
+        ("unrestricted", CandidateDomains::Unrestricted),
+    ] {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                domains: domains.clone(),
+                ..declaration()
+            },
+        );
+        assert_eq!(
+            registry
+                .ranked_declaration(EX_REL)
+                .expect("the declaration registered")
+                .domains,
+            domains,
+            "a {name} declaration must register and read back verbatim"
+        );
+    }
 }
 
 // ---- one stratum, one producer -------------------------------------------
@@ -536,6 +624,27 @@ fn canonical_description_is_injective_over_every_field() {
             "mandatory",
             RankedDeclaration {
                 mandatory: false,
+                ..base.clone()
+            },
+        ),
+        (
+            "domains restricted",
+            RankedDeclaration {
+                domains: CandidateDomains::within([tag(EX_DOMAIN_DOCS)]),
+                ..base.clone()
+            },
+        ),
+        (
+            "domains other block",
+            RankedDeclaration {
+                domains: CandidateDomains::within([tag(EX_DOMAIN_PEOPLE)]),
+                ..base.clone()
+            },
+        ),
+        (
+            "domains two blocks",
+            RankedDeclaration {
+                domains: CandidateDomains::within([tag(EX_DOMAIN_DOCS), tag(EX_DOMAIN_PEOPLE)]),
                 ..base.clone()
             },
         ),

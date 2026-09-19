@@ -165,7 +165,7 @@ use crate::retrieval::{
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
-use purrdf_sparql_eval::PropertyFunctionRegistry;
+use purrdf_sparql_eval::{CandidateDomains, PropertyFunctionRegistry};
 
 /// The number of decimal digits in one whole fixed-point unit.
 ///
@@ -358,7 +358,16 @@ fn build_registry(
             )
         })?;
         let declaration = relation
-            .ranked_declaration(stratum, Some(producer.predicate.clone()))
+            .ranked_declaration(
+                stratum,
+                Some(producer.predicate.clone()),
+                // The Python surface does not yet carry a domain declaration,
+                // so the widest promise is what this layer can honestly make on
+                // a host's behalf: it licenses no early certification and is
+                // exactly the behaviour this binding had before the term
+                // existed.
+                CandidateDomains::Unrestricted,
+            )
             .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
         registry.register_ranked(&producer.producer, Arc::new(relation), declaration);
     }

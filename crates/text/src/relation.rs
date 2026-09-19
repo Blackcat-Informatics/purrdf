@@ -43,8 +43,9 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
-    AcceptedTerm, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -596,6 +597,25 @@ impl TextSearchRelation {
     ///   contiguous and ascending. Which is exactly why a multi-partition index
     ///   is refused below.
     ///
+    /// # `domains` comes from the host, and cannot come from anywhere else
+    ///
+    /// Which blocks of the candidate universe this index's documents lie in is
+    /// a fact about the *corpus*, and this relation cannot see it: it holds
+    /// documents and their subjects, and whether those subjects are the same
+    /// entities some vector space also ranks is known only to the host that
+    /// built both. So the tags are a parameter rather than something derived
+    /// here.
+    ///
+    /// Deriving one from the stratum, or from the index's graph, would be the
+    /// dangerous convenience: two producers over one entity space would receive
+    /// two tags a consumer reads as disjoint, and that mistake is not
+    /// conservative in either direction — it makes a fusion refuse a valid
+    /// query when both producers name one entity, and certify a score missing
+    /// the other producer's contribution when they do not.
+    /// [`CandidateDomains::Unrestricted`] is the honest value where the host
+    /// does not know, and it is exactly the behaviour a consumer had before
+    /// domains could be declared at all.
+    ///
     /// # Errors
     ///
     /// [`TextError::Config`] when the index holds **more than one partition**.
@@ -621,6 +641,7 @@ impl TextSearchRelation {
         &self,
         stratum: Iri,
         predicate: Option<String>,
+        domains: CandidateDomains,
     ) -> Result<RankedDeclaration, TextError> {
         let partitions = self.index.partition_count();
         if partitions > 1 {
@@ -653,6 +674,7 @@ impl TextSearchRelation {
             depth_placement: None,
             candidate_position: Self::DOC,
             duplicates: DuplicatePolicy::Unique,
+            domains,
             mandatory: false,
         })
     }
@@ -1405,8 +1427,8 @@ mod tests {
     use crate::index::{GraphSelector, TextIndex, TextIndexConfig};
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
-        EvalError, PfArgs, PfRow, PropertyFunction, RequestFacet, TermKind, TermPattern,
-        TermPlacement,
+        CandidateDomains, DomainTag, EvalError, PfArgs, PfRow, PropertyFunction, RequestFacet,
+        TermKind, TermPattern, TermPlacement,
     };
 
     /// The one predicate every fixture indexes.
@@ -1585,10 +1607,36 @@ mod tests {
         let stratum = purrdf_core::parse_iri("https://example.org/stratum/text")
             .expect("the fixture stratum is a valid IRI");
         let declaration = relation
-            .ranked_declaration(stratum.clone(), Some(NOTE.to_owned()))
+            .ranked_declaration(
+                stratum.clone(),
+                Some(NOTE.to_owned()),
+                CandidateDomains::Unrestricted,
+            )
             .expect("a single-partition index has one ranked order");
 
         assert_eq!(declaration.stratum, stratum, "the stratum is the caller's");
+        assert_eq!(
+            declaration.domains,
+            CandidateDomains::Unrestricted,
+            "the candidate domains are the caller's too: this method carries the host's \
+             declaration through and derives none of its own from the index"
+        );
+        assert_eq!(
+            relation
+                .ranked_declaration(
+                    stratum,
+                    Some(NOTE.to_owned()),
+                    CandidateDomains::within([DomainTag::parse(
+                        "https://example.org/domain/documents"
+                    )
+                    .expect("the fixture domain tag is a valid IRI"),]),
+                )
+                .expect("a single-partition index has one ranked order")
+                .domains,
+            CandidateDomains::within([DomainTag::parse("https://example.org/domain/documents")
+                .expect("the fixture domain tag is a valid IRI"),]),
+            "and a restricted declaration arrives verbatim, not widened on the way"
+        );
         assert_eq!(declaration.candidate_position, TextSearchRelation::DOC);
         assert!(
             declaration.depth_placement.is_none(),
@@ -1642,7 +1690,7 @@ mod tests {
         let spread = TextSearchRelation::new(spread_subject());
         assert!(spread.index().partition_count() > 1);
         let error = spread
-            .ranked_declaration(stratum.clone(), None)
+            .ranked_declaration(stratum.clone(), None, CandidateDomains::Unrestricted)
             .expect_err("three partitions have no one ranked order");
         match error {
             TextError::Config(message) => {
@@ -1657,12 +1705,14 @@ mod tests {
         let empty = TextSearchRelation::new(Arc::new(index_of(&[])));
         assert_eq!(empty.index().partition_count(), 0);
         assert!(
-            empty.ranked_declaration(stratum.clone(), None).is_ok(),
+            empty
+                .ranked_declaration(stratum.clone(), None, CandidateDomains::Unrestricted)
+                .is_ok(),
             "an empty index ranks nothing, which is one ranked order"
         );
         assert!(
             TextSearchRelation::new(golden())
-                .ranked_declaration(stratum, None)
+                .ranked_declaration(stratum, None, CandidateDomains::Unrestricted)
                 .is_ok(),
             "and a one-partition index still declares"
         );

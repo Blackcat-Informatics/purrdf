@@ -62,7 +62,8 @@ use purrdf_retrieval::{
     RetrievalRequest, SearchResult, Statistics, Term, TopK, search,
 };
 use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry, TermKind,
+    CandidateDomains, EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry,
+    TermKind,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 
@@ -274,6 +275,10 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         .ranked_declaration(
             parse_iri(TEXT_STRATUM).expect("the host's stratum IRI is valid"),
             Some(NOTE.to_owned()),
+            // This host's notes and its embedded entities are the same
+            // entities — the example's whole point is a candidate both
+            // producers name — so neither producer restricts its domain.
+            CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");
     registry.register_ranked(TEXT_PRODUCER, Arc::new(text), text_declaration);
@@ -285,6 +290,8 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         // requests name.
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        // As above: one entity space, ranked twice by two laws.
+        CandidateDomains::Unrestricted,
     );
     registry.register_ranked(KNN_PRODUCER, Arc::new(knn), knn_declaration);
 

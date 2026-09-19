@@ -12,7 +12,7 @@
 //! it never gets to return a plausible-looking answer that quietly omitted a
 //! row.
 //!
-//! # One fixed rank law, and one declared duplicate policy
+//! # One fixed rank law, and two declared promises
 //!
 //! The rank check is absolute. Ranks are 1-based, contiguous and ascending for
 //! every ranked stream there is, with no registration able to soften it, and the
@@ -20,15 +20,25 @@
 //! stream ([`ProtocolError::OutOfOrderRanks`],
 //! [`ProtocolError::NonContiguousRanks`]).
 //!
-//! The duplicate check is the one that is not absolute, because the registry
-//! does not state it absolutely. A ranked producer declares its duplicate
-//! handling where it is registered ([`RankedDeclaration`]), and the consumer of
-//! its rows is this layer — so the consumer reads that declaration and holds the
-//! stream to the promise it actually made. [`StreamContract`] carries it with
-//! the stream through [`RankedStream::contract`], and the refusal below that
-//! names a repeat says which declaration it was measured against.
+//! The other two checks are not absolute, because the registry does not state
+//! them absolutely. A ranked producer declares its duplicate handling and the
+//! blocks of the candidate universe it may name where it is registered
+//! ([`RankedDeclaration`]), and the consumer of its rows is this layer — so the
+//! consumer reads those declarations and holds the stream to the promises it
+//! actually made. [`StreamContract`] carries both with the stream through
+//! [`RankedStream::contract`], and the two refusals below —
+//! [`ProtocolError::DuplicateItem`] and
+//! [`ProtocolError::OutsideDeclaredDomain`] — each say which declaration the
+//! row was measured against.
+//!
+//! Both are promises about rows nobody has read yet, so both are verified
+//! exactly as far as the rows actually pulled reach, and no further. That is
+//! stated on each term rather than implied: a declaration no pulled row
+//! contradicts is believed, because there is nothing else a consumer could do
+//! with it short of reading the whole stream, which is the cost the declaration
+//! exists to avoid.
 
-use purrdf_sparql_eval::{DuplicatePolicy, PfAttestation, RankedDeclaration};
+use purrdf_sparql_eval::{CandidateDomains, DuplicatePolicy, PfAttestation, RankedDeclaration};
 use purrdf_text::Fixed;
 
 use crate::iri::Term;
@@ -79,28 +89,65 @@ use crate::iri::Term;
 /// a row. That is the same route a plan identity takes, and for the same reason:
 /// a fact re-fetched at the end would be true of the registry rather than of the
 /// stream that is actually being read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StreamContract {
     /// The duplicate handling the producer declared. A
     /// [`DuplicatePolicy::Unique`] stream is believed and a repeat is a protocol
     /// violation; a [`DuplicatePolicy::Allowed`] stream is de-duplicated by the
     /// consumer, which is what that policy says a consumer must do.
     pub duplicates: DuplicatePolicy,
+    /// Which blocks of the candidate universe the producer declared it may
+    /// name.
+    ///
+    /// [`CandidateDomains::Unrestricted`] says "anything", which is the wider
+    /// promise and the one every stream made before this term existed:
+    /// [`FusionStream`](crate::FusionStream) then behaves exactly as it always
+    /// did. A [`CandidateDomains::Within`] declaration is what lets fusion
+    /// certify a candidate without first reading a stream that was never going
+    /// to name it — the drain that makes a top-ten answer over two disjoint
+    /// million-row strata read two million rows.
+    ///
+    /// # Why the consumer cannot derive this for itself
+    ///
+    /// Because the input protocol has no random access. A
+    /// [`RankedStream`] offers `next` and `receipt`, so the only way to learn
+    /// that a stream does *not* hold a candidate is to read it to its end. A
+    /// consumer that certified earlier without a declaration would be emitting
+    /// a score that a still-open stream might have raised — a lower bound
+    /// presented as an exact value — so exact scores and a k-bounded read over
+    /// strata that do not overlap are jointly unachievable unless the producers
+    /// say which candidates they can name. They say it here.
+    ///
+    /// # It is verified over the rows pulled, and nowhere else
+    ///
+    /// Fusion refuses a stream that names a candidate its declaration cannot
+    /// reach ([`ProtocolError::OutsideDeclaredDomain`]), which catches every
+    /// contradiction that arrives in a row it actually read. A false
+    /// declaration that no pulled row contradicts yields a score that
+    /// declaration made wrong, and this layer does not claim otherwise. It is
+    /// the identical trust the [`Self::duplicates`] term already carries: a
+    /// false [`DuplicatePolicy::Unique`] is detected when the repeat is pulled,
+    /// and not before.
+    pub domains: CandidateDomains,
 }
 
 impl StreamContract {
     /// The contract `declaration` states, verbatim.
     #[must_use]
-    pub const fn declared(declaration: &RankedDeclaration) -> Self {
+    pub fn declared(declaration: &RankedDeclaration) -> Self {
         Self {
             duplicates: declaration.duplicates,
+            domains: declaration.domains.clone(),
         }
     }
 
     /// A contract stated directly, for a stream a caller built itself.
     #[must_use]
-    pub const fn new(duplicates: DuplicatePolicy) -> Self {
-        Self { duplicates }
+    pub const fn new(duplicates: DuplicatePolicy, domains: CandidateDomains) -> Self {
+        Self {
+            duplicates,
+            domains,
+        }
     }
 }
 
@@ -244,6 +291,67 @@ pub enum ProtocolError {
         stratum: String,
     },
 
+    /// A stream named a candidate that its declared domains cannot reach.
+    ///
+    /// Raised only against a [`CandidateDomains::Within`] declaration, and only
+    /// where another stream has already named the same candidate: a domain tag
+    /// names a block of a partition of the candidate universe, so a candidate
+    /// lies in exactly one block, and two producers whose declarations put it
+    /// in blocks with nothing in common cannot both be telling the truth about
+    /// it. One of the two declarations is wrong, and the consumer cannot know
+    /// which — so it reports the contradiction rather than picking a side.
+    ///
+    /// # This is not a refusal of an overlapping index
+    ///
+    /// Two producers that really do rank the same entities are declared over
+    /// the same tag, or over tag sets that share one, or
+    /// [`CandidateDomains::Unrestricted`], and every one of those fuses
+    /// normally — the same rows, the same score, one row carrying both
+    /// contributions. What is refused is the *pair of declarations* that says
+    /// those entities are in two disjoint blocks while the rows say otherwise.
+    /// A host that finds this refusal firing has a tagging that does not
+    /// describe its corpus, and widening the declaration is a one-line fix that
+    /// costs only the early certification the narrower claim would have bought.
+    ///
+    /// # Why the answer is not silently widened instead
+    ///
+    /// Because the declaration has already been *used*. Fusion certifies
+    /// candidates early on the strength of it, so by the time this row arrives
+    /// an earlier answer may already have been emitted on the assumption this
+    /// stream would never name it — and quietly merging the late contribution
+    /// would put a score in the caller's hands that its own provenance
+    /// contradicts. The same reasoning
+    /// [`Self::DuplicateItem`] gives for refusing rather than dropping applies
+    /// here: the evidence has been shown to be unreliable, and a plausible
+    /// answer computed from it is the worst of the available outcomes.
+    ///
+    /// # All three fields, because each answers a different question
+    ///
+    /// The item says *what*, the stratum says *who broke it*, and `named_by`
+    /// says *against what* — the stratum whose own declaration, already
+    /// applied, put the candidate out of this one's reach. Without the third a
+    /// reader sees a producer refused for naming one of its own documents and
+    /// has no way to find the declaration it collided with.
+    #[error(
+        "stream for stratum {stratum} named item {item:?}, which its declared candidate domains \
+         cannot reach; stratum {named_by} already named it"
+    )]
+    OutsideDeclaredDomain {
+        /// The candidate's canonical text.
+        item: String,
+        /// The stratum whose stream named it outside its declaration, exactly
+        /// as that stream was tagged when it was handed to fusion.
+        stratum: String,
+        /// A stratum that had already named the candidate, and whose own
+        /// declared domains are what this one's cannot meet.
+        ///
+        /// Where several strata had named it, this is the first one whose
+        /// declaration is genuinely disjoint from the offender's, in the order
+        /// the streams were handed to fusion — the witness that makes the
+        /// contradiction visible, rather than an arbitrary member of the set.
+        named_by: String,
+    },
+
     /// A producer's contribution does not equal the profile's declared
     /// reciprocal-rank value for its stratum and rank. The fusion engine
     /// recomputes the contribution from the profile and refuses a mismatch
@@ -377,7 +485,8 @@ pub trait RankedStream {
     /// receipt.
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError>;
 
-    /// The promise this stream makes about its rows: its duplicate handling.
+    /// The promises this stream makes about its rows: its duplicate handling,
+    /// and which blocks of the candidate universe it may name.
     ///
     /// Read once by [`FusionStream::new`](crate::FusionStream::new), before any
     /// row is pulled, and then applied to every row of this stream. A producer
@@ -392,6 +501,16 @@ pub trait RankedStream {
     /// keeps a different amount of state for each. A default would be this
     /// layer fabricating a declaration the producer never made, and then holding
     /// the producer to it.
+    ///
+    /// The domain term has no default for a subtler reason, because it does
+    /// have an obviously safe value —
+    /// [`CandidateDomains::Unrestricted`] licenses nothing and is what every
+    /// stream effectively said before the term existed. It is still written
+    /// rather than assumed: the value is a *promise about the producer's
+    /// corpus*, the host is the only party that knows it, and a consumer that
+    /// filled it in would be choosing, on the host's behalf, between an answer
+    /// that costs a full drain and one that might be missing a contribution.
+    /// A caller that means "anything" says so in one word.
     fn contract(&self) -> StreamContract;
 
     /// The pinned plan these rows descend from, when the stream has one.

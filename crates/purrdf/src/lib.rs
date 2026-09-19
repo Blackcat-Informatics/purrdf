@@ -490,6 +490,10 @@ mod tests {
             .ranked_declaration(
                 iri::parse(STRATUM).expect("the fixture stratum IRI is valid"),
                 Some(NOTE.to_owned()),
+                // The facade fixture fuses one stratum, so there is no second
+                // producer for a narrower declaration to certify against; the
+                // widest promise is the honest one.
+                sparql::CandidateDomains::Unrestricted,
             )
             .expect("a single-partition index declares a ranked order");
         registry.register_ranked(PRODUCER, Arc::new(relation), declaration);

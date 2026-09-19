@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    DecayRule, DuplicatePolicy, Fixed, FusionProfile, FusionStream, Iri, ProducerReceipt,
-    ProtocolError, RankedStream, StreamContract, Term, contribution,
+    CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, FusionStream,
+    Iri, ProducerReceipt, ProtocolError, RankedStream, StreamContract, Term, contribution,
 };
 
 // ---------------------------------------------------------------------------
@@ -236,6 +236,14 @@ struct LazyStream {
     /// The stratum weight this stream's contributions are computed at, so the
     /// rows always carry the value the fixture's own profile re-derives.
     weight: Fixed,
+    /// The block this stream draws its candidates from, or `None` for the
+    /// overlapping fixture's shared, permuted universe.
+    ///
+    /// `Some` makes the three strata's candidate sets disjoint and makes each
+    /// producer declare the one block it draws from — the shape whose reading
+    /// is unbounded without a declaration, because no confirmation from
+    /// another stratum is ever coming.
+    block: Option<usize>,
 }
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
@@ -252,12 +260,14 @@ impl RankedStream for LazyStream {
         self.pulls.fetch_add(1, Ordering::Relaxed);
         let rank = self.emitted;
         let value = contribution(self.weight, rank, K).expect("the contribution fits");
-        let index = permuted_index(self.stream_index, rank);
-        Ok(Some((
-            rank,
-            value,
-            Term::new(format!("candidate-{index:08}")),
-        )))
+        let item = match self.block {
+            None => {
+                let index = permuted_index(self.stream_index, rank);
+                format!("candidate-{index:08}")
+            }
+            Some(block) => format!("block-{block}/candidate-{rank:08}"),
+        };
+        Ok(Some((rank, value, Term::new(item))))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -266,10 +276,24 @@ impl RankedStream for LazyStream {
         })
     }
 
-    /// Each stream emits a permutation of the universe, so its items really are
-    /// distinct and its contributions really do strictly descend.
+    /// Each stream emits distinct items whose contributions strictly descend,
+    /// under either fixture.
+    ///
+    /// The overlapping fixture's streams each emit a permutation of one
+    /// universe, so every stream really can name every candidate, which is
+    /// what [`CandidateDomains::Unrestricted`] says. The disjoint fixture's
+    /// streams each mint their items under their own prefix, so each really
+    /// does draw from one block, and says so.
     fn contract(&self) -> StreamContract {
-        StreamContract::new(DuplicatePolicy::Unique)
+        match self.block {
+            None => StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted),
+            Some(block) => StreamContract::new(
+                DuplicatePolicy::Unique,
+                CandidateDomains::within([
+                    DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs")
+                ]),
+            ),
+        }
     }
 }
 
@@ -294,6 +318,7 @@ fn fixture(
                     total,
                     pulls: Arc::clone(pulls),
                     weight,
+                    block: None,
                 },
             )
         })
@@ -318,6 +343,85 @@ fn phase(label: &str, total: u64, rows: usize) {
 fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, &pulls, weight);
+    let mut fusion = FusionStream::new(streams, profile);
+
+    let rss_before = rss_kb();
+    let baseline = reset_peak();
+    let mut fused = 0usize;
+    let mut contributions = 0usize;
+    while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
+        let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
+            break;
+        };
+        contributions += row.contributions.len();
+        fused += 1;
+    }
+    let peak = peak_since(baseline);
+    let rss_after = rss_kb();
+    let pulled = pulls.load(Ordering::Relaxed);
+    drop(fusion);
+
+    black_box(contributions);
+    report(
+        &format!("{label} fused={fused}/{rows} pulled={pulled}"),
+        peak,
+        rss_before,
+        rss_after,
+    );
+}
+
+/// The caller-named block each stratum of the disjoint fixture draws from, in
+/// [`STRATA`]'s own order. Nothing here mints them.
+const BLOCKS: [&str; 3] = [
+    "http://example.org/domain/block-0",
+    "http://example.org/domain/block-1",
+    "http://example.org/domain/block-2",
+];
+
+/// The profile and three streams whose candidate sets are disjoint, each
+/// declaring the one block it draws from.
+fn disjoint_fixture(
+    total: u64,
+    pulls: &Arc<AtomicUsize>,
+) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
+    let weights: BTreeMap<Iri, Fixed> = STRATA
+        .iter()
+        .map(|name| (stratum(name), Fixed::ONE))
+        .collect();
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
+    let streams = STRATA
+        .iter()
+        .enumerate()
+        .map(|(stream_index, name)| {
+            (
+                stratum(name),
+                LazyStream {
+                    stream_index,
+                    emitted: 0,
+                    total,
+                    pulls: Arc::clone(pulls),
+                    weight: Fixed::ONE,
+                    block: Some(stream_index),
+                },
+            )
+        })
+        .collect();
+    (profile, streams)
+}
+
+/// The same phase over the disjoint fixture: the shape whose *reading* a
+/// declaration bounds.
+///
+/// Every other phase in this bench fuses strata that emit one universe
+/// permuted, where confirmations arrive early and the reading is bounded
+/// whatever anybody declared — which is why the numbers here are the ones to
+/// watch. `pulled` is the quantity of interest: over disjoint strata it is
+/// `rows` plus a head per stream when the producers declare their blocks, and
+/// the whole of every stream when they do not.
+fn disjoint_phase(label: &str, total: u64, rows: usize) {
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let (profile, streams) = disjoint_fixture(total, &pulls);
     let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
@@ -375,6 +479,20 @@ fn main() {
             total,
             32,
             colliding,
+        );
+    }
+    // Disjoint strata, each producer declaring the block it draws from. This is
+    // the configuration the reading bound is about: `pulled` should stay flat
+    // as the streams grow by three orders of magnitude, where without a
+    // declaration it would follow them exactly.
+    println!(
+        "[fusion_frontier_alloc] --- disjoint strata, declared blocks, rows fused fixed at 32 ---"
+    );
+    for total in [1_000_u64, 10_000, 100_000, 1_000_000] {
+        disjoint_phase(
+            &format!("strata=3 rows=32 stream={total} disjoint"),
+            total,
+            32,
         );
     }
 }

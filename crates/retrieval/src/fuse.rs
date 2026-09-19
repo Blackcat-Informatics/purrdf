@@ -37,16 +37,46 @@
 //! Completeness belongs to the producers, and every producer's own terminal
 //! status is in the trailer.
 //!
-//! # The bound is a bound on the reading, not only on the rows
+//! # How far the bound reaches into the reading
 //!
-//! Reaching `k` stops the reading. Every stream that still holds rows is closed
-//! at the contribution it was read down to —
+//! Reaching `k` stops the reading *from that point on*: every stream that still
+//! holds rows is closed at the contribution it was read down to —
 //! [`ProducerStatus::CeilingReached`](crate::ProducerStatus::CeilingReached) —
 //! rather than drained to make it say `Exhausted`. Draining would read every
 //! row of every stream to produce a report, which is precisely the memory bound
 //! §7 says fused enumeration exists to keep, and it would report each stratum as
 //! complete when the answer deliberately was not. Every producer still gets a
 //! status; the status is just the true one.
+//!
+//! What that leaves open is how much reading it took to *reach* `k`, and the
+//! honest answer depends on what the producers declared, so it is stated here
+//! rather than promised away.
+//!
+//! A fused score is exact only once every stream that could still name a
+//! candidate has named it, and this engine has no random access: a
+//! [`RankedStream`] offers `next` and `receipt`, so the only way to learn that
+//! a stream will not name `x` is to read that stream until it does or until it
+//! ends. Where the strata overlap — the case a fused answer is usually wanted
+//! for — the confirmations arrive early and `k` rows cost a few rows per
+//! stratum. Where they do not overlap, and nothing has been declared, they
+//! never arrive: every candidate waits on a stratum that was never going to
+//! mention it, and the reading runs to the end of the streams even though the
+//! *rows* are still bounded by `k`. That is not a defect of the bound, it is
+//! the price of an exact score over a protocol with no random access.
+//!
+//! The way out is the producers' own declaration.
+//! [`StreamContract::domains`](crate::StreamContract::domains) — supplied by
+//! the host at registration, carried with the stream — says which blocks of the
+//! candidate universe a producer may name, and fusion skips exactly the streams
+//! that provably cannot name the candidate it is certifying. Under such
+//! declarations the reading is bounded by the same argument as the rows: `k`
+//! rows plus the lookahead the threshold needs, per stratum, however long the
+//! streams are. Under [`CandidateDomains`](crate::CandidateDomains)'s
+//! `Unrestricted` — the honest default-shaped value, and the widest promise —
+//! nothing is skipped and the reading is whatever the confirmations cost.
+//!
+//! The scores are identical either way. A declaration changes how much is read,
+//! never what is returned.
 
 use core::fmt;
 use std::collections::BTreeSet;

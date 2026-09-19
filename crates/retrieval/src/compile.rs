@@ -156,7 +156,7 @@ pub struct StratumUnit {
     pub stratum: Iri,
     /// A self-contained SPARQL `SELECT` over the stratum's registered relations.
     pub sparql: String,
-    /// The rank ordering and duplicate handling the stratum's producer
+    /// The duplicate handling and the candidate domains the stratum's producer
     /// declared — read off the registry here, at the one stage that is already
     /// holding the declaration, and carried forward rather than re-fetched.
     ///

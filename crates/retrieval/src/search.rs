@@ -98,14 +98,19 @@
 //! # So does each producer's declared stream contract
 //!
 //! The same route carries a second thing the fusion stage is the consumer of:
-//! the rank ordering and duplicate handling each producer declared where it was
-//! registered. [`compile`] reads them off the registry it admits against,
-//! [`execute`] tags every stream with them, the bridge below reports them, and
-//! [`FusionStream`](crate::FusionStream) reads them before it pulls a row — so a
-//! producer that declared its repeats are the consumer's to remove is
-//! de-duplicated, and one that promised there are none is believed and charged
-//! nothing for the promise. `search` chooses neither; it only refuses to lose
-//! the declaration on the way.
+//! the duplicate handling and the candidate domains each producer declared
+//! where it was registered. [`compile`] reads them off the registry it admits
+//! against, [`execute`] tags every stream with them, the bridge below reports
+//! them, and [`FusionStream`](crate::FusionStream) reads them before it pulls a
+//! row — so a producer that declared its repeats are the consumer's to remove
+//! is de-duplicated, one that promised there are none is believed and charged
+//! nothing for the promise, and one that named the blocks of the candidate
+//! universe it draws from lets the fusion stop reading it the moment it can no
+//! longer change the answer. `search` chooses none of them; it only refuses to
+//! lose the declarations on the way, and the trailer it returns reports the
+//! domains that were in force
+//! ([`FusionTrailer::domains`](crate::FusionTrailer::domains)) so an answer can
+//! be audited against them.
 //!
 //! # A term that reached no producer is in the answer too
 //!
@@ -709,7 +714,7 @@ impl RankedStream for RankedStreamAdapter {
     }
 
     fn contract(&self) -> StreamContract {
-        self.contract
+        self.contract.clone()
     }
 
     fn plan_id(&self) -> Option<PlanId> {

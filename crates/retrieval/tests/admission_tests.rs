@@ -23,9 +23,9 @@ use purrdf_retrieval::{
     UnservedReason, UnservedTerm, compile, contribution, execute,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -85,6 +85,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        domains: CandidateDomains::Unrestricted,
         mandatory,
     }
 }
@@ -1952,6 +1953,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        domains: CandidateDomains::Unrestricted,
         mandatory,
     }
 }

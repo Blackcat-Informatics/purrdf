@@ -52,8 +52,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus,
-    ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
+    CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, Iri,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankedStream, StreamContract, Term, TopK,
+    contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -211,6 +212,22 @@ struct LazyStream {
     /// the two against identical rows measures exactly what the declaration
     /// costs.
     duplicates: DuplicatePolicy,
+    /// Which blocks of the candidate universe this stream declares it may name.
+    ///
+    /// The overlapping fixtures declare [`CandidateDomains::Unrestricted`],
+    /// which is what they honestly are: every stratum emits the same universe
+    /// permuted, so every stream really can name anything. The disjoint fixture
+    /// declares one block per stratum, which is likewise what it is.
+    domains: CandidateDomains,
+    /// The block this stream draws its candidates from, or `None` for the
+    /// overlapping fixture's shared, permuted universe.
+    ///
+    /// `Some` is what makes the candidate sets genuinely disjoint: each stratum
+    /// mints its items under its own prefix, so no candidate is ever named
+    /// twice and no confirmation ever arrives from another stratum. That is the
+    /// shape the overlapping fixture cannot produce and the one the drain lived
+    /// in.
+    block: Option<usize>,
     /// The stratum weight this stream's contributions are computed at. Read from
     /// the fixture's own profile, so the rows always carry the value that
     /// profile would re-derive for them.
@@ -232,12 +249,14 @@ impl RankedStream for LazyStream {
         self.pulls.fetch_add(1, Ordering::SeqCst);
         let rank = self.emitted;
         let value = contribution(self.weight, rank, K).expect("the contribution fits");
-        let index = permuted_index(self.stream_index, rank);
-        Ok(Some((
-            rank,
-            value,
-            Term::new(format!("candidate-{index:08}")),
-        )))
+        let item = match self.block {
+            None => {
+                let index = permuted_index(self.stream_index, rank);
+                format!("candidate-{index:08}")
+            }
+            Some(block) => format!("block-{block}/candidate-{rank:08}"),
+        };
+        Ok(Some((rank, value, Term::new(item))))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -247,7 +266,7 @@ impl RankedStream for LazyStream {
     }
 
     fn contract(&self) -> StreamContract {
-        StreamContract::new(self.duplicates)
+        StreamContract::new(self.duplicates, self.domains.clone())
     }
 }
 
@@ -282,6 +301,60 @@ fn fixture(
                     total,
                     pulls: Arc::clone(pulls),
                     duplicates,
+                    domains: CandidateDomains::Unrestricted,
+                    block: None,
+                    weight,
+                },
+            )
+        })
+        .collect();
+    (profile, streams)
+}
+
+/// The caller-named block each stratum of the disjoint fixture draws from.
+///
+/// Three tags for three strata, in the same order as [`STRATA`]. Nothing here
+/// mints them: they are `example.org` IRIs, exactly as the strata are.
+const BLOCKS: [&str; 3] = [
+    "http://example.org/domain/block-0",
+    "http://example.org/domain/block-1",
+    "http://example.org/domain/block-2",
+];
+
+/// The fixture profile and three streams whose candidate sets are DISJOINT,
+/// each declaring the one block it draws from.
+///
+/// This is the shape the overlapping fixture above cannot produce and the one
+/// the drain lived in: with no declaration, no candidate here is ever confirmed
+/// by another stratum, so nothing certifies while another stream is open and a
+/// bounded fusion reads every row of every stream. The declaration is what
+/// makes the reading bounded, and the measurement below is what proves it —
+/// peak bytes AND pulls, because either one alone can be flat while the other
+/// tracks the input.
+fn disjoint_fixture(
+    total: u64,
+    duplicates: DuplicatePolicy,
+    pulls: &Arc<AtomicUsize>,
+    weight: Fixed,
+) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
+    let weights: BTreeMap<Iri, Fixed> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
+    let streams = STRATA
+        .iter()
+        .enumerate()
+        .map(|(stream_index, name)| {
+            (
+                stratum(name),
+                LazyStream {
+                    stream_index,
+                    emitted: 0,
+                    total,
+                    pulls: Arc::clone(pulls),
+                    duplicates,
+                    domains: CandidateDomains::within([DomainTag::parse(BLOCKS[stream_index])
+                        .expect("the fixture block tags are valid IRIs")]),
+                    block: Some(stream_index),
                     weight,
                 },
             )
@@ -348,11 +421,33 @@ fn measure_rows_at_weight(
 ) -> Measurement {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, duplicates, &pulls, weight);
+    measure_built(&profile, streams, rows, &pulls)
+}
 
+/// The same measurement over three DISJOINT streams of `total` rows each, whose
+/// producers declare the one block they draw from.
+fn measure_disjoint_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measurement {
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let (profile, streams) = disjoint_fixture(total, duplicates, &pulls, Fixed::ONE);
+    measure_built(&profile, streams, rows, &pulls)
+}
+
+/// Fuse `rows` rows out of `streams` through the shipped [`fuse`], measuring the
+/// peak heap it held.
+///
+/// One measuring body for both fixtures, so the overlapping and disjoint claims
+/// are measured by the same instrument and a difference between them is a
+/// difference in the fusion rather than in how it was weighed.
+fn measure_built(
+    profile: &FusionProfile,
+    streams: Vec<(Iri, LazyStream)>,
+    rows: usize,
+    pulls: &Arc<AtomicUsize>,
+) -> Measurement {
     // The baseline is taken after the fixture is built, so what is measured is
     // the fusion's own working set and not the fixture's.
     let baseline = reset_peak();
-    let result = block_on(fuse::<LazyStream, Term>(streams, &profile, TopK::new(rows)))
+    let result = block_on(fuse::<LazyStream, Term>(streams, profile, TopK::new(rows)))
         .expect("the fixture streams obey the protocol");
     let peak_bytes = peak_since(baseline);
     let pulls = pulls.load(Ordering::SeqCst);
@@ -669,5 +764,95 @@ fn the_frontier_stays_bounded_past_the_collision() {
         long.bounded,
         STRATA.len(),
         "every stream still held rows, so each closes at a contribution bound"
+    );
+}
+
+/// **The disjoint arm: a declared domain bounds the reading as well as the
+/// frontier.**
+///
+/// Every other measurement in this file fuses strata that emit the same
+/// universe permuted, which is the case where confirmations arrive early and
+/// the reading is bounded whatever anybody declared. That is exactly why none
+/// of them caught the drain: over strata whose candidate sets do not overlap,
+/// no confirmation ever arrives, nothing certifies while another stream is
+/// open, and a thirty-two-row answer reads every row of every stream. The rows
+/// stay bounded and the reading does not, so a peak measured over the
+/// overlapping fixture reports a success.
+///
+/// So this arm measures the shape that failed: three disjoint streams, each
+/// declaring the one block it draws from, at two lengths three orders of
+/// magnitude apart. Both quantities are asserted, because either alone can be
+/// flat while the other tracks the input — a fusion that drained but held
+/// nothing would show a flat peak, and a fusion that read little but retained
+/// everything would show flat pulls.
+#[test]
+fn disjoint_strata_declaring_their_blocks_read_and_hold_the_same_at_any_length() {
+    // Warm the lazy one-time allocations outside the measured window, exactly
+    // as the overlapping measurements do.
+    let warm = measure_disjoint_rows(1_000, CERTIFIED_ROWS, DuplicatePolicy::Unique);
+    assert!(warm.pulls > 0);
+
+    let short = measure_disjoint_rows(1_000, CERTIFIED_ROWS, DuplicatePolicy::Unique);
+    let long = measure_disjoint_rows(1_000_000, CERTIFIED_ROWS, DuplicatePolicy::Unique);
+
+    // The preconditions, asserted before the equalities that rest on them: both
+    // runs certified the same rows, and each row carries exactly one
+    // contribution, because the strata are disjoint and no candidate is named
+    // twice. A run where some candidate had two contributions would not be the
+    // disjoint fixture at all.
+    assert_eq!(short.rows_certified, CERTIFIED_ROWS);
+    assert_eq!(long.rows_certified, CERTIFIED_ROWS);
+    assert_eq!(
+        short.contributions, CERTIFIED_ROWS,
+        "the disjoint fixture's candidates are named by exactly one stratum each"
+    );
+    assert_eq!(long.contributions, CERTIFIED_ROWS);
+    assert!(
+        short.peak_bytes > 0,
+        "the fusion allocated nothing, so this measures nothing"
+    );
+
+    // The reading. This is the assertion the defect fails: without the
+    // declaration the long run pulls three million rows here and the short one
+    // three thousand.
+    assert_eq!(
+        short.pulls, long.pulls,
+        "a thousand-fold longer disjoint stream must not be read further: {} \
+         pulls against {}",
+        short.pulls, long.pulls
+    );
+    assert!(
+        short.pulls < 1_000,
+        "a thirty-two-row answer over disjoint strata must not read a thousand \
+         rows, read {}",
+        short.pulls
+    );
+
+    // And the holding, which the reading bound is worth nothing without.
+    assert_eq!(
+        short.peak_bytes, long.peak_bytes,
+        "peak heap tracked the disjoint streams' length: {} bytes over 1e3 rows \
+         against {} over 1e6",
+        short.peak_bytes, long.peak_bytes
+    );
+    // And in absolute terms it is kilobytes rather than megabytes. The
+    // equality above is the exact claim; this one is the order of magnitude,
+    // stated with room to spare because it is about the difference between a
+    // bounded working set and a materialized one — three million candidate
+    // terms would be tens of megabytes.
+    assert!(
+        long.peak_bytes < 128 * 1024,
+        "a bounded frontier should not cost {} bytes",
+        long.peak_bytes
+    );
+
+    // Every stratum still held rows, so each closes at the contribution it was
+    // read down to. A stratum reported `Exhausted` here would be one that had
+    // been drained to earn the word.
+    assert_eq!(
+        long.bounded,
+        STRATA.len(),
+        "a disjoint stratum stopped by the bound must report the bound, not \
+         exhaustion it would have read a million rows to claim"
     );
 }

@@ -43,7 +43,8 @@ use purrdf_retrieval::{
     plan, search,
 };
 use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry, TermKind,
+    CandidateDomains, EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry,
+    TermKind,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 
@@ -267,7 +268,15 @@ fn registry() -> PropertyFunctionRegistry {
 
     let text = TextSearchRelation::new(Arc::new(text_index()));
     let text_declaration = text
-        .ranked_declaration(kernel_iri(TEXT_STRATUM), Some(NOTE.to_owned()))
+        .ranked_declaration(
+            kernel_iri(TEXT_STRATUM),
+            Some(NOTE.to_owned()),
+            // This fixture's notes and its embedded entities are the SAME
+            // entities — the whole point of the file is a candidate both real
+            // producers name — so neither restricts its domain, and the fusion
+            // below certifies with no licence to skip anything.
+            CandidateDomains::Unrestricted,
+        )
         .expect("a single-partition index declares a ranked order");
     registry.register_ranked(TEXT_PF, Arc::new(text), text_declaration);
 
@@ -278,6 +287,8 @@ fn registry() -> PropertyFunctionRegistry {
         // requests name.
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        // As above: one entity space, ranked twice under two laws.
+        CandidateDomains::Unrestricted,
     );
     registry.register_ranked(KNN_PF, Arc::new(knn), knn_declaration);
 

@@ -1404,7 +1404,7 @@ mod content_fingerprint_tests {
     use super::{content_fingerprint, registry_fingerprint};
     use crate::error::EvalError;
     use crate::property_fn::{
-        DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+        CandidateDomains, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
         PropertyFunctionRegistry, RankedDeclaration,
     };
     use crate::user_fn::Volatility;
@@ -1497,6 +1497,7 @@ mod content_fingerprint_tests {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            domains: CandidateDomains::Unrestricted,
             mandatory: false,
         }
     }

@@ -711,8 +711,8 @@ mod tests {
     use crate::request::{Metric, RequestTerm};
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
-        AcceptedTerm, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode, RankedDeclaration,
-        RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+        AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode,
+        RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
     };
 
     fn ex(suffix: &str) -> String {
@@ -746,6 +746,9 @@ mod tests {
             depth_placement: depth,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            // Placement is about rendering arguments, not about fusion, so
+            // these fixtures make the widest promise there is.
+            domains: CandidateDomains::Unrestricted,
             mandatory: false,
         }
     }
