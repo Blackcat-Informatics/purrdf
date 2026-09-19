@@ -89,11 +89,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{FastMap, FastSet};
+use ::purrdf::{FastMap, FastSet, TermId};
 
 use crate::data::ShaclData;
 use crate::model::xsd;
 use crate::path;
+use crate::plan::{LoweredExpr, ShapePlan};
 use crate::shapes::{Path, Shape};
 use crate::term::{Literal, NamedNode, Term};
 
@@ -1112,6 +1113,82 @@ pub fn eval_node_expr(
     eval_node_expr_in_scope(store, focus, expr, guard, Scope::EMPTY)
 }
 
+/// [`eval_node_expr`] against a lowering the shapes-graph walk already produced.
+///
+/// This is the in-crate entry point: the expression's shape-constant derivations —
+/// the classes it names, the predicates its paths walk, the shapes it judges
+/// against — were resolved once at bind and are read here by index.
+///
+/// # Errors
+///
+/// As [`eval_node_expr`], plus an error when `lowered` does not describe `expr`.
+pub(crate) fn eval_planned_node_expr(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+) -> Result<Vec<Term>, String> {
+    eval_planned_node_expr_in_scope(store, focus, expr, lowered, plan, guard, Scope::EMPTY)
+}
+
+/// [`eval_node_expr_in_scope`] against a lowering the shapes-graph walk produced.
+///
+/// # Errors
+///
+/// As [`eval_planned_node_expr`].
+pub(crate) fn eval_planned_node_expr_in_scope(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, String> {
+    guard.enter_node_expr()?;
+    // Capture, unwind one level, THEN propagate: an early `?` here would leave
+    // the structural counter permanently raised for the rest of the evaluation.
+    let result = eval_node_expr_at_depth(store, focus, expr, lowered, plan, guard, scope);
+    guard.exit_node_expr();
+    result
+}
+
+/// Evaluate a node expression that has NO stage-0 lowering, lowering it here.
+///
+/// Two expressions are genuinely of that kind, and both are dynamic BY
+/// CONSTRUCTION rather than by omission:
+///
+/// * a `shnex:arg` argument, which travels in the evaluation [`Scope`] — a frozen
+///   public type carrying an argument's DECLARATION, with nowhere to put a
+///   lowering; and
+/// * the synthetic call [`call_custom_function`] builds at SPARQL query-evaluation
+///   time, out of argument values the engine has just computed.
+///
+/// Neither exists before evaluation begins, so neither can have been lowered
+/// before it. This is also what the PUBLIC entry points use, because a caller
+/// holding only a parsed `NodeExpr` has no preparation to have lowered it against.
+fn eval_unlowered(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, String> {
+    let lowering = crate::plan::lower_standalone_expression(expr);
+    let binding = lowering.bind(store.core_view());
+    eval_planned_node_expr_in_scope(
+        store,
+        focus,
+        expr,
+        lowering.expr(),
+        lowering.plan(&binding),
+        guard,
+        scope,
+    )
+}
+
 /// Evaluate a node expression against `store`, from `focus`, with `scope` in force.
 ///
 /// This is the full `evalExpr(expr, focusGraph, focusNode, scope)` of the SHACL 1.2
@@ -1129,20 +1206,18 @@ pub fn eval_node_expr_in_scope(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, String> {
-    guard.enter_node_expr()?;
-    // Capture, unwind one level, THEN propagate: an early `?` here would leave
-    // the structural counter permanently raised for the rest of the evaluation.
-    let result = eval_node_expr_at_depth(store, focus, expr, guard, scope);
-    guard.exit_node_expr();
-    result
+    eval_unlowered(store, focus, expr, guard, scope)
 }
 
 // Keep the class-view iterator out of the recursive expression dispatch frame.
 // Deep legal paging expressions do not enumerate classes at every nesting level.
-fn eval_instances_of(store: &ShaclData, class: &NamedNode) -> Vec<Term> {
+//
+// `class_id` was resolved at BIND: the class IRI this expression names is a shape
+// constant, so its dataset identity is not a question this evaluation asks. `None`
+// means the data graph interns no such term, which has no instances.
+fn eval_instances_of(store: &ShaclData, class_id: Option<TermId>) -> Vec<Term> {
     store.prepare_class_membership();
-    let class_term = Term::NamedNode(class.clone());
-    let Some(class_id) = crate::data::resolve_id(store.core_view(), &class_term) else {
+    let Some(class_id) = class_id else {
         return Vec::new();
     };
     let mut out: Vec<Term> = store
@@ -1165,26 +1240,58 @@ fn eval_node_expr_at_depth(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, String> {
+    // Every recursive descent reads the sub-lowering the WALK made for the operand
+    // it is descending into, by the position the walk assigned in declaration
+    // order. A position the lowering does not hold is refused loudly rather than
+    // skipped — the two are produced together, so a disagreement is a defect in
+    // this crate rather than in any input.
+    macro_rules! descend {
+        ($sub:expr, $position:expr) => {
+            eval_planned_node_expr_in_scope(
+                store,
+                focus,
+                $sub,
+                lowered.operand($position)?,
+                plan,
+                guard,
+                scope,
+            )
+        };
+        ($node:expr, $sub:expr, $position:expr) => {
+            eval_planned_node_expr_in_scope(
+                store,
+                $node,
+                $sub,
+                lowered.operand($position)?,
+                plan,
+                guard,
+                scope,
+            )
+        };
+    }
     match expr {
         NodeExpr::Constant(t) => Ok(vec![t.clone()]),
         NodeExpr::This => Ok(vec![focus.clone()]),
-        NodeExpr::Path(p) => {
+        NodeExpr::Path(_) => {
             // Node-expression set outputs are canonicalized HERE (sort+dedup) so
             // sh:offset / sh:limit applied directly to a bare Path set are
             // deterministic. `path::eval`'s crate-wide first-seen iteration order
             // is left untouched (it is used elsewhere for path traversal).
-            let mut v = path::eval(store.core_view(), focus, p);
+            let mut v =
+                path::eval_planned(store.core_view(), focus, lowered.path(0)?, plan.binding())?;
             crate::term::sort_terms_canonical(&mut v);
             v.dedup();
             Ok(v)
         }
         NodeExpr::Union(exprs) => {
             let mut out: Vec<Term> = Vec::new();
-            for sub in exprs {
-                out.extend(eval_node_expr_in_scope(store, focus, sub, guard, scope)?);
+            for (position, sub) in exprs.iter().enumerate() {
+                out.extend(descend!(sub, position)?);
             }
             crate::term::sort_terms_canonical(&mut out);
             out.dedup();
@@ -1195,16 +1302,13 @@ fn eval_node_expr_at_depth(
             let Some(first) = iter.next() else {
                 return Ok(Vec::new());
             };
-            let mut acc: FastSet<Term> =
-                eval_node_expr_in_scope(store, focus, first, guard, scope)?
-                    .into_iter()
-                    .collect();
+            let mut acc: FastSet<Term> = descend!(first, 0)?.into_iter().collect();
             // Reuse a single scratch set across operands (clear + refill) rather
             // than allocating a fresh set per iteration.
             let mut next: FastSet<Term> = FastSet::default();
-            for sub in iter {
+            for (position, sub) in iter.enumerate() {
                 next.clear();
-                next.extend(eval_node_expr_in_scope(store, focus, sub, guard, scope)?);
+                next.extend(descend!(sub, position + 1)?);
                 acc.retain(|t| next.contains(t));
             }
             let mut out: Vec<Term> = acc.into_iter().collect();
@@ -1214,7 +1318,7 @@ fn eval_node_expr_at_depth(
         }
         NodeExpr::If { cond, then, els } => {
             // Propagate a condition error rather than swallowing it.
-            let cond_nodes = eval_node_expr_in_scope(store, focus, cond, guard, scope)?;
+            let cond_nodes = descend!(cond, 0)?;
             // Per SHACL-AF the condition is a single value routed through SPARQL
             // effective-boolean-value. `IF(?c, true, false)` applies EBV to its
             // first argument, so a bound `?result` of `true`^^xsd:boolean means
@@ -1227,7 +1331,7 @@ fn eval_node_expr_at_depth(
             // hard `Err` (the no-swallowed-errors rule) rather than silently
             // selecting a branch.
             let branch = match cond_nodes.as_slice() {
-                [] => els,
+                [] => (els, 2),
                 [t] => {
                     let ebv = crate::sparql::eval_scalar_expr_view(
                         store.sparql_view(),
@@ -1235,8 +1339,8 @@ fn eval_node_expr_at_depth(
                         &[("c".to_owned(), t.clone())],
                     )?;
                     match ebv {
-                        Some(term) if term == bool_literal(true) => then,
-                        Some(term) if term == bool_literal(false) => els,
+                        Some(term) if term == bool_literal(true) => (then, 1),
+                        Some(term) if term == bool_literal(false) => (els, 2),
                         _ => {
                             return Err(format!(
                                 "sh:if condition value {t} has no effective boolean value"
@@ -1251,7 +1355,7 @@ fn eval_node_expr_at_depth(
                     ));
                 }
             };
-            eval_node_expr_in_scope(store, focus, branch, guard, scope)
+            descend!(branch.0, branch.1)
         }
         // Builtin and user-defined (`sh:SPARQLFunction`) calls lower identically:
         // both render an `<iri>(…)` call and route through the SPARQL seam. The only
@@ -1276,7 +1380,8 @@ fn eval_node_expr_at_depth(
             // call is a single empty tuple → one invocation.
             let arg_values: Vec<Vec<Term>> = args
                 .iter()
-                .map(|arg| eval_node_expr_in_scope(store, focus, arg, guard, scope))
+                .enumerate()
+                .map(|(position, arg)| descend!(arg, position))
                 .collect::<Result<_, _>>()?;
             // A `sparql:<NAME>` call carries its rendered SPARQL text from
             // shapes-load (see `FnCall::Sparql`); the other two kinds render an
@@ -1339,13 +1444,13 @@ fn eval_node_expr_at_depth(
             Ok(out)
         }
         NodeExpr::Distinct(of) => {
-            let mut out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
+            let mut out = descend!(of, 0)?;
             crate::term::sort_terms_canonical(&mut out);
             out.dedup();
             Ok(out)
         }
         NodeExpr::Count { distinct, of } => {
-            let mut out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
+            let mut out = descend!(of, 0)?;
             if *distinct {
                 crate::term::sort_terms_canonical(&mut out);
                 out.dedup();
@@ -1368,7 +1473,7 @@ fn eval_node_expr_at_depth(
             // over their keys (numeric/typed value order — e.g.
             // "2"^^xsd:integer < "10"^^xsd:integer — NOT N-Triples lexical
             // order). Direction defaults to ascending (`descending` flips it).
-            let elements = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
+            let elements = descend!(of, 0)?;
             if elements.is_empty() {
                 return Ok(Vec::new());
             }
@@ -1376,7 +1481,7 @@ fn eval_node_expr_at_depth(
             // element (0 or >1 is a hard error — no optionality).
             let mut keyed: Vec<(Term, Term)> = Vec::with_capacity(elements.len());
             for e in elements {
-                let ks = eval_node_expr_in_scope(store, &e, key, guard, scope)?;
+                let ks = descend!(&e, key, 1)?;
                 let [k] = ks.as_slice() else {
                     return Err(format!(
                         "sh:orderby key must yield exactly one value per node, got {} for {e}",
@@ -1419,7 +1524,7 @@ fn eval_node_expr_at_depth(
             Ok(out.into_iter().map(|(e, _, _)| e).collect())
         }
         NodeExpr::Offset { of, n } => {
-            let out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
+            let out = descend!(of, 0)?;
             let skip =
                 usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
             // Ordering is the caller's responsibility (an OrderBy wrapper) — apply
@@ -1429,7 +1534,7 @@ fn eval_node_expr_at_depth(
             Ok(out.into_iter().skip(skip).collect())
         }
         NodeExpr::Limit { of, n } => {
-            let out = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
+            let out = descend!(of, 0)?;
             let take = usize::try_from(*n).map_err(|e| format!("sh:limit value too large: {e}"))?;
             Ok(out.into_iter().take(take).collect())
         }
@@ -1450,14 +1555,19 @@ fn eval_node_expr_at_depth(
         // focus expression must yield at most one node (0 ⇒ empty, >1 ⇒ a hard
         // evaluation failure), and the path is walked from that node.
         NodeExpr::PathValues {
-            path: walk,
+            path: _walk,
             focus: from,
         } => {
-            let starts = eval_node_expr_in_scope(store, focus, from, guard, scope)?;
+            let starts = descend!(from, 0)?;
             match starts.as_slice() {
                 [] => Ok(Vec::new()),
                 [start] => {
-                    let mut v = path::eval(store.core_view(), start, walk);
+                    let mut v = path::eval_planned(
+                        store.core_view(),
+                        start,
+                        lowered.path(0)?,
+                        plan.binding(),
+                    )?;
                     crate::term::sort_terms_canonical(&mut v);
                     v.dedup();
                     Ok(v)
@@ -1472,30 +1582,26 @@ fn eval_node_expr_at_depth(
         // Sequence-valued — order preserved, duplicates preserved.
         NodeExpr::Concat(operands) => {
             let mut out: Vec<Term> = Vec::new();
-            for operand in operands {
-                out.extend(eval_node_expr_in_scope(
-                    store, focus, operand, guard, scope,
-                )?);
+            for (position, operand) in operands.iter().enumerate() {
+                out.extend(descend!(operand, position)?);
             }
             Ok(out)
         }
         // §4.2.4 Remove expression: N minus M by TERM equality, preserving N's
         // order. `"01"^^xsd:integer` therefore does not remove `"1"^^xsd:integer`.
         NodeExpr::Remove { nodes, remove } => {
-            let keep = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
-            let drop: FastSet<Term> = eval_node_expr_in_scope(store, focus, remove, guard, scope)?
-                .into_iter()
-                .collect();
+            let keep = descend!(nodes, 0)?;
+            let drop: FastSet<Term> = descend!(remove, 1)?.into_iter().collect();
             Ok(keep.into_iter().filter(|t| !drop.contains(t)).collect())
         }
         // §4.3.1 FlatMap expression: `map` evaluated once per input node WITH THAT
         // NODE AS FOCUS, results concatenated in input order. The scope threads
         // through unchanged — the spec rebinds the focus node here, not a variable.
         NodeExpr::FlatMap { nodes, map } => {
-            let inputs = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            let inputs = descend!(nodes, 0)?;
             let mut out: Vec<Term> = Vec::new();
             for node in &inputs {
-                out.extend(eval_node_expr_in_scope(store, node, map, guard, scope)?);
+                out.extend(descend!(node, map, 1)?);
             }
             Ok(out)
         }
@@ -1503,9 +1609,10 @@ fn eval_node_expr_at_depth(
         // Short-circuits, so a long candidate list costs only as many conformance
         // checks as it takes to hit one.
         NodeExpr::FindFirst { nodes, shape } => {
-            let inputs = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            let inputs = descend!(nodes, 0)?;
+            let shape_plan = lowered.shape(plan, 0, shape)?;
             for node in inputs {
-                if conforms_guarded(store, &node, shape, guard)? {
+                if conforms_guarded(store, &node, shape_plan, guard)? {
                     return Ok(vec![node]);
                 }
             }
@@ -1514,9 +1621,10 @@ fn eval_node_expr_at_depth(
         // §4.3.3 MatchAll expression: true iff EVERY input node conforms. An empty
         // input is vacuously true ("every node in N conforms" over an empty N).
         NodeExpr::MatchAll { nodes, shape } => {
-            let inputs = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            let inputs = descend!(nodes, 0)?;
+            let shape_plan = lowered.shape(plan, 0, shape)?;
             for node in inputs {
-                if !conforms_guarded(store, &node, shape, guard)? {
+                if !conforms_guarded(store, &node, shape_plan, guard)? {
                     return Ok(vec![bool_literal(false)]);
                 }
             }
@@ -1527,7 +1635,7 @@ fn eval_node_expr_at_depth(
         // subclasses. The shared class-membership view already answers exactly that
         // question (it is what `sh:class` and `sh:targetClass` consult), so this
         // reuses it rather than walking `rdfs:subClassOf` a second time.
-        NodeExpr::InstancesOf(class) => Ok(eval_instances_of(store, class)),
+        NodeExpr::InstancesOf(_) => Ok(eval_instances_of(store, lowered.class_id(plan)?)),
         // §4.5.2 NodesMatching expression: every node of the focus graph that
         // conforms to `shape`. The spec itself warns this output "may be very
         // large"; the candidate set is every subject and object of the graph,
@@ -1547,9 +1655,10 @@ fn eval_node_expr_at_depth(
             }
             crate::term::sort_terms_canonical(&mut candidates);
             candidates.dedup();
+            let shape_plan = lowered.shape(plan, 0, shape)?;
             let mut out: Vec<Term> = Vec::new();
             for node in candidates {
-                if conforms_guarded(store, &node, shape, guard)? {
+                if conforms_guarded(store, &node, shape_plan, guard)? {
                     out.push(node);
                 }
             }
@@ -1559,7 +1668,7 @@ fn eval_node_expr_at_depth(
         // argument must produce at most one node. No node ⇒ the empty list (the
         // spec's stated "no value" case); otherwise the boolean conformance answer.
         NodeExpr::ConformsToShape { node, shape } => {
-            let candidates = eval_node_expr_in_scope(store, focus, node, guard, scope)?;
+            let candidates = descend!(node, 0)?;
             match candidates.as_slice() {
                 [] => Ok(Vec::new()),
                 [only] => {
@@ -1568,11 +1677,13 @@ fn eval_node_expr_at_depth(
                     // here against the shapes graph's own shape index.
                     match shape {
                         ShapeArg::Named(shape) => Ok(vec![bool_literal(conforms_guarded(
-                            store, only, shape, guard,
+                            store,
+                            only,
+                            lowered.shape(plan, 0, shape)?,
+                            guard,
                         )?)]),
                         ShapeArg::Computed { expr, shapes } => {
-                            let produced =
-                                eval_node_expr_in_scope(store, focus, expr, guard, scope)?;
+                            let produced = descend!(expr, 1)?;
                             let [shape_iri] = produced.as_slice() else {
                                 return Err(format!(
                                     "shnex:conformsToShape shape argument must produce exactly \
@@ -1580,19 +1691,21 @@ fn eval_node_expr_at_depth(
                                     produced.len()
                                 ));
                             };
-                            let index = shapes.get().ok_or_else(|| {
+                            let resolved = shapes.get().ok_or_else(|| {
                                 "shnex:conformsToShape: the shapes graph's shape index was never \
                                  filled"
                                     .to_owned()
                             })?;
-                            let shape = index.get(&shape_iri.to_string()).ok_or_else(|| {
-                                format!(
-                                    "shnex:conformsToShape shape argument produced {shape_iri}, \
-                                     which is not a shape of this shapes graph"
-                                )
-                            })?;
+                            let shape_plan = plan
+                                .indexed(lowered.index()?, &shape_iri.to_string(), resolved)?
+                                .ok_or_else(|| {
+                                    format!(
+                                        "shnex:conformsToShape shape argument produced \
+                                         {shape_iri}, which is not a shape of this shapes graph"
+                                    )
+                                })?;
                             Ok(vec![bool_literal(conforms_guarded(
-                                store, only, shape, guard,
+                                store, only, shape_plan, guard,
                             )?)])
                         }
                     }
@@ -1641,7 +1754,7 @@ fn eval_node_expr_at_depth(
             // the query a different answer than the author wrote.
             for (arg_key, arg_expr) in scope.args() {
                 let name = arg_key.variable_name();
-                let values = eval_node_expr_in_scope(store, focus, arg_expr, guard, Scope::EMPTY)?;
+                let values = eval_unlowered(store, focus, arg_expr, guard, Scope::EMPTY)?;
                 match values.as_slice() {
                     [] => {}
                     [only] => bindings.push((name, only.clone())),
@@ -1664,7 +1777,7 @@ fn eval_node_expr_at_depth(
         NodeExpr::Arg(key) => match scope.lookup_arg(key) {
             None => Ok(Vec::new()),
             Some(arg) => {
-                let out = eval_node_expr_in_scope(store, focus, arg, guard, Scope::EMPTY)?;
+                let out = eval_unlowered(store, focus, arg, guard, Scope::EMPTY)?;
                 // §6.2 says of a custom LIST parameter function that "each argument
                 // produces at most one output node", and that "an evaluation failure
                 // occurs if any output produces more than one node". That restriction
@@ -1698,14 +1811,62 @@ fn eval_node_expr_at_depth(
             // otherwise restart the count at zero and never terminate.
             let result = {
                 let _depth = crate::sparql::enter_call_depth_scope(guard.depth());
-                eval_node_expr_in_scope(store, focus, body, guard, Scope::with_args(args))
+                // The body's lowering lives under the function's own IRI: a body
+                // may call the function it belongs to, so it cannot be a subtree
+                // of any one call site. A body this walk never reached has none,
+                // which is the dynamic case `eval_unlowered` exists for.
+                match plan.body(lowered.body_iri()?) {
+                    Some(body_lowered) => eval_planned_node_expr_in_scope(
+                        store,
+                        focus,
+                        body,
+                        body_lowered,
+                        plan,
+                        guard,
+                        Scope::with_args(args),
+                    ),
+                    None => eval_unlowered(store, focus, body, guard, Scope::with_args(args)),
+                }
             };
             guard.exit_call();
             result
         }
-        NodeExpr::Min(of) => aggregate(store, focus, of, "MIN", guard, scope),
-        NodeExpr::Max(of) => aggregate(store, focus, of, "MAX", guard, scope),
-        NodeExpr::Sum(of) => aggregate(store, focus, of, "SUM", guard, scope),
+        NodeExpr::Min(of) => aggregate(
+            store,
+            focus,
+            AggregateOperand {
+                of,
+                lowered: lowered.operand(0)?,
+                plan,
+                guard,
+            },
+            "MIN",
+            scope,
+        ),
+        NodeExpr::Max(of) => aggregate(
+            store,
+            focus,
+            AggregateOperand {
+                of,
+                lowered: lowered.operand(0)?,
+                plan,
+                guard,
+            },
+            "MAX",
+            scope,
+        ),
+        NodeExpr::Sum(of) => aggregate(
+            store,
+            focus,
+            AggregateOperand {
+                of,
+                lowered: lowered.operand(0)?,
+                plan,
+                guard,
+            },
+            "SUM",
+            scope,
+        ),
         NodeExpr::Filter { nodes, shape } => {
             // Candidate nodes retained iff they conform to `shape`. The re-entry
             // into `conforms` is a fresh guard/subtree, so we (a) guard the
@@ -1713,10 +1874,11 @@ fn eval_node_expr_at_depth(
             // and (b) thread the monotone depth across the constraint boundary so
             // a cross-shape filter cycle fails closed (depth ceiling) rather than
             // overflowing the stack.
-            let candidates = eval_node_expr_in_scope(store, focus, nodes, guard, scope)?;
+            let candidates = descend!(nodes, 0)?;
+            let shape_plan = lowered.shape(plan, 0, shape)?;
             let mut kept: Vec<Term> = Vec::new();
             for value in candidates {
-                if conforms_guarded(store, &value, shape, guard)? {
+                if conforms_guarded(store, &value, shape_plan, guard)? {
                     kept.push(value);
                 }
             }
@@ -1741,7 +1903,7 @@ fn eval_node_expr_at_depth(
             // `sh:exists` is a node-expression predicate: true iff `inner`
             // produces at least one node for the focus. A nested Filter inside
             // `inner` re-enters the guarded constraint engine itself.
-            let out = eval_node_expr_in_scope(store, focus, inner, guard, scope)?;
+            let out = descend!(inner, 0)?;
             Ok(vec![bool_literal(!out.is_empty())])
         }
     }
@@ -1818,16 +1980,33 @@ pub fn eval_custom_function_call(
 fn conforms_guarded(
     store: &ShaclData,
     node: &Term,
-    shape: &Shape,
+    shape: ShapePlan<'_>,
     guard: &mut RecursionGuard,
 ) -> Result<bool, String> {
-    let shape_id = shape.id.to_string();
+    let shape_id = shape.shape().id.to_string();
     let node_key = node.to_string();
     let next_depth = guard.depth().saturating_add(1);
     guard.enter(&shape_id, &node_key)?;
-    let verdict = crate::constraints::conforms_with_depth(store, node, shape, next_depth);
+    // The shape's own lowering travels with it: re-entering the constraint engine
+    // through an expression costs a plan lookup, not a fresh walk of the shape.
+    let verdict = crate::constraints::conforms_with_id_depth(
+        store,
+        node,
+        crate::data::resolve_id(store.core_view(), node),
+        shape,
+        next_depth,
+    );
     guard.exit(&shape_id, &node_key);
     verdict
+}
+
+/// The operand of a set aggregate: the expression to evaluate, paired with the
+/// lowering, plan and recursion guard that evaluation runs under.
+struct AggregateOperand<'a, 'guard> {
+    of: &'a NodeExpr,
+    lowered: &'a LoweredExpr,
+    plan: ShapePlan<'a>,
+    guard: &'guard mut RecursionGuard,
 }
 
 /// Evaluate a set aggregate (`"MIN"`/`"MAX"`/`"SUM"`) over `of`'s result via the
@@ -1837,15 +2016,24 @@ fn conforms_guarded(
 /// numeric type-promotion and ordering match the engine exactly (there is no
 /// parallel Rust numeric fold). `SUM` of an empty set is `0`^^`xsd:integer`;
 /// `MIN`/`MAX` of an empty set is unbound → an empty node set.
+///
+/// `operand` carries the four values evaluating the operand needs — the expression,
+/// its lowering, the plan that lowering belongs to and the guard — as one argument
+/// rather than four, because they only ever travel together.
 fn aggregate(
     store: &ShaclData,
     focus: &Term,
-    of: &NodeExpr,
+    operand: AggregateOperand<'_, '_>,
     agg: &str,
-    guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, String> {
-    let operands = eval_node_expr_in_scope(store, focus, of, guard, scope)?;
+    let AggregateOperand {
+        of,
+        lowered,
+        plan,
+        guard,
+    } = operand;
+    let operands = eval_planned_node_expr_in_scope(store, focus, of, lowered, plan, guard, scope)?;
     match crate::sparql::eval_aggregate_view(store.sparql_view(), agg, &operands)? {
         Some(term) => Ok(vec![term]),
         None => Ok(Vec::new()),

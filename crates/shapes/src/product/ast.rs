@@ -210,11 +210,11 @@ use std::sync::{Arc, OnceLock};
 use ::purrdf::{FastMap, RdfTextDirection};
 use purrdf_core::ir::pack::bits::{PackBitsError, read_varint, write_varint};
 
-use crate::engine::ClassCatalog;
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
 };
 use crate::model::{BoxRoleVocab, sparql_ns};
+use crate::plan::ClassCatalog;
 use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleSchedule};
 use crate::shapes::{
@@ -2483,8 +2483,8 @@ pub(crate) fn encode_ast(
 /// Two checks close that, and they close different halves of it:
 ///
 /// * the STAGE ID covers the derivation. It is digested from the class walk's own
-///   source — `ClassCatalog::for_shapes` and the four `collect_*_classes`
-///   functions — so a build whose reachability rule differs at all cannot share a
+///   source — `ClassCatalog::from_walk` and the `lower_*` functions of the one
+///   total shape walk — so a build whose reachability rule differs at all cannot share a
 ///   stage id with this one, and its products are refused by `admit` and sent to
 ///   `rebuild`, which re-derives and ignores what was carried. Before the analysis
 ///   travelled, that hazard was open in the other direction and unguarded: the walk
@@ -2570,7 +2570,10 @@ fn decode_classes(reader: &mut AstReader<'_>) -> Result<ClassCatalog, ShapesProd
 /// Every dimension [`encode_ast`] refuses on.
 #[cfg(test)]
 pub(crate) fn encode_ast_derived(shapes: &Shapes) -> Result<Vec<u8>, ShapesProductError> {
-    encode_ast(shapes, &ClassCatalog::for_shapes(shapes.node_shapes.iter()))
+    encode_ast(
+        shapes,
+        crate::plan::lower_shapes(shapes.node_shapes.iter()).classes(),
+    )
 }
 
 /// Decode the declarative half of a prepared product.

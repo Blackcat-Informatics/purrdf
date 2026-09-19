@@ -996,7 +996,7 @@ pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
 }
 
 /// The source file the class-analysis derivation lives in.
-const CLASS_ANALYSIS_SOURCE: &str = "crates/shapes/src/engine.rs";
+const CLASS_ANALYSIS_SOURCE: &str = "crates/shapes/src/plan.rs";
 
 /// THE CLASS-ANALYSIS DERIVATION: every item that decides which classes a prepared
 /// product's reusable analysis contains and which binding-row position each gets.
@@ -1013,13 +1013,17 @@ const CLASS_ANALYSIS_SOURCE: &str = "crates/shapes/src/engine.rs";
 /// it is the build that wrote it.
 ///
 /// Nothing else could establish that. The walk's meaning lives entirely in function
-/// bodies: `collect_shape_classes` could stop descending into reifier shapes, or
-/// `collect_expression_classes` could stop collecting `shnex:instancesOf`, and not
-/// one model type, variant, field or table entry would move. The census would be
-/// identical, the stage id would be identical, and every product written by the
-/// older build would still `admit` — serving that build's analysis to this build's
-/// validator, verified and wrong. That hazard predates the catalog travelling; what
-/// carrying the body changes is that it can no longer be left open.
+/// bodies: `lower_shape` could stop descending into reifier shapes, or
+/// `lower_expression` could stop collecting `shnex:instancesOf`, and not one model
+/// type, variant, field or table entry would move. The census would be identical,
+/// the stage id would be identical, and every product written by the older build
+/// would still `admit` — serving that build's analysis to this build's validator,
+/// verified and wrong. That hazard predates the catalog travelling; what carrying
+/// the body changes is that it can no longer be left open.
+///
+/// The walk that decides the catalog is the SAME walk that lowers the shapes, so
+/// the rows below are the lowering's own entry points: one visit per node produces
+/// both answers, and a change to how a node is visited is a change to both.
 ///
 /// # What is deliberately NOT in this table
 ///
@@ -1028,15 +1032,20 @@ const CLASS_ANALYSIS_SOURCE: &str = "crates/shapes/src/engine.rs";
 /// neither can go stale silently: the writer and the reader of a single product run
 /// one build's copy of each, so a change to either makes an older product refuse
 /// loudly on the class-catalog dimension rather than restore wrongly.
-/// `ValidationPlan::bind` is excluded for the same reason — it consumes a catalog
+/// `LoweredShapes::bind` is excluded for the same reason — it consumes a catalog
 /// rather than deciding one.
-const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 6] = [
-    ("", "struct", "ClassScan"),
-    ("ClassCatalog", "fn", "for_shapes"),
-    ("", "fn", "collect_shape_classes"),
-    ("", "fn", "collect_property_classes"),
-    ("", "fn", "collect_constraints_classes"),
-    ("", "fn", "collect_expression_classes"),
+///
+/// `lower_path` is likewise excluded: a path names no class, so it cannot change
+/// which classes a product carries. It is part of the lowering, not of the class
+/// analysis, and the stage id speaks for the analysis.
+const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 7] = [
+    ("", "struct", "ShapeWalk"),
+    ("ClassCatalog", "fn", "from_walk"),
+    ("", "fn", "lower_shapes"),
+    ("", "fn", "lower_shape"),
+    ("", "fn", "lower_property"),
+    ("", "fn", "lower_constraint"),
+    ("", "fn", "lower_expression"),
 ];
 
 /// The class-analysis derivation of the live repository sources.
@@ -1101,10 +1110,12 @@ pub fn class_analysis_table_from(source: &str) -> Vec<(String, String)> {
 
 /// The token trees inside `impl <type_name> { … }`, which must appear exactly once.
 ///
-/// Scoping is not a nicety: `for_shapes` is the name of two different functions in
-/// `engine.rs` — `ValidationPlan`'s, which binds a catalog to a dataset, and
-/// `ClassCatalog`'s, which derives one — and a scrape that digested whichever it met
-/// first would be pinning the wrong algorithm.
+/// Scoping is not a nicety: `bind` is the name of two different functions in
+/// `plan.rs` — `LoweredShapes`'s, which resolves a lowering against a dataset, and
+/// `StandaloneLowering`'s, which does the same for one expression — and a scrape
+/// that digested whichever it met first would be pinning the wrong algorithm. The
+/// row this scoping actually carries is `ClassCatalog::from_walk`, the rule that
+/// assigns each class its binding-row position.
 ///
 /// # Panics
 ///
@@ -1462,15 +1473,15 @@ fn stage_id_is_reproducible_and_its_preimage_is_readable() {
          http://www.w3.org/ns/shacl#MinCountConstraintComponent\n"
     ));
     assert!(preimage.contains("SINGLETON_PREDICATES[0] sh::DATATYPE = "));
-    assert!(preimage.contains("analysis ClassCatalog::for_shapes = fn for_shapes"));
-    assert!(preimage.contains("analysis collect_shape_classes = fn collect_shape_classes"));
+    assert!(preimage.contains("analysis ClassCatalog::from_walk = fn from_walk"));
+    assert!(preimage.contains("analysis lower_shape = fn lower_shape"));
     // A non-documentation attribute survives, because `#[derive(Default)]` on the
-    // scan accumulator really is part of how the walk starts.
-    assert!(preimage.contains("analysis ClassScan = # [derive (Default)] struct ClassScan"));
+    // walk accumulator really is part of how the walk starts.
+    assert!(preimage.contains("analysis ShapeWalk = # [derive (Default)] struct ShapeWalk"));
     // The walk's own commentary does NOT, in either comment form — a census that
     // fired on prose would be re-pinned reflexively and stop being read.
     for prose in [
-        "The accumulator the class-planning walk carries",
+        "The accumulator the one total shape walk carries",
         "A SPARQL-based node expression",
     ] {
         assert!(
@@ -1619,7 +1630,7 @@ fn stage_id_changes_when_a_capability_table_changes() {
 /// model type held fixed.**
 ///
 /// This is the case no other check here can reach, and the reason
-/// [`CLASS_ANALYSIS_SITES`] exists. The patch below stops `collect_property_classes`
+/// [`CLASS_ANALYSIS_SITES`] exists. The patch below stops `lower_property`
 /// descending into a property shape's REIFIER shapes — a genuine change to which
 /// classes a prepared product's analysis contains — and it touches no type, no
 /// variant, no field, no vocabulary constant and no parameter table. Before the
@@ -1628,7 +1639,7 @@ fn stage_id_changes_when_a_capability_table_changes() {
 /// build would `admit` and validate against an analysis that disagreed about the
 /// shapes graph. Every test in this file passed on both sides.
 ///
-/// The patch is applied to a copy of `engine.rs` held in memory. Nothing on disk is
+/// The patch is applied to a copy of `plan.rs` held in memory. Nothing on disk is
 /// touched, so this cannot rot into "the test that passed once".
 #[test]
 fn stage_id_changes_when_the_class_reachability_rule_changes() {
@@ -1637,8 +1648,8 @@ fn stage_id_changes_when_the_class_reachability_rule_changes() {
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
 
     let patched = real.replacen(
-        "collect_shape_classes(reifier_shape, scan);",
-        "let _ = reifier_shape;",
+        ".map(|reifier| lower_shape(reifier, walk))",
+        ".map(|reifier| lower_shape(reifier, &mut ShapeWalk::default()))",
         1,
     );
     assert_ne!(
@@ -1687,13 +1698,13 @@ fn reformatting_the_class_walk_does_not_move_the_stage_id() {
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
 
     let reworded = real.replacen(
-        "/// The accumulator the class-planning walk carries.",
+        "/// The accumulator the one total shape walk carries.",
         "/// An entirely different sentence about the accumulator.\n// And a line comment.\n\n",
         1,
     );
     assert_ne!(
         reworded, real,
-        "the scan accumulator's doc comment no longer opens with that sentence; the probe is \
+        "the walk accumulator's doc comment no longer opens with that sentence; the probe is \
          patching nothing and would pass vacuously"
     );
 

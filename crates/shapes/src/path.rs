@@ -22,6 +22,7 @@ use crate::data_view::ShaclRead;
 use ::purrdf::{IdSet, IdVec, TermId, smallvec};
 
 use crate::data::{GraphFilter, quads_for_pattern_ids, resolve_id};
+use crate::plan::{DatasetBinding, LoweredPath};
 use crate::shapes::Path;
 use crate::term::{NamedNode, Term, term_id_to_native};
 
@@ -107,6 +108,201 @@ pub(crate) fn eval_ids_from_id(ds: &impl ShaclRead, focus_id: TermId, path: &Pat
         }
     }
     out
+}
+
+// ── Planned evaluation ─────────────────────────────────────────────────────────
+//
+// The same six path forms, driven by a path whose predicate steps were resolved to
+// dataset identities once, at bind, instead of once per focus node. These are the
+// functions the validation engine calls; the [`Path`]-driven pair above remains the
+// entry point for a caller holding only a parsed path (the public surface) and for
+// the one form a lowering does not yet carry — an inverse over a COMPOSITE path,
+// which is inverted structurally rather than resolved.
+
+/// Id-native value-node producer for a focus node whose interned identity is
+/// already known, driven by a lowered path.
+///
+/// This is the validation hot path. Every predicate step reads an ARRAY SLOT the
+/// lowering assigned rather than hashing an IRI into the dataset's dictionary, so a
+/// property shape evaluated across a million focus nodes resolves its predicate
+/// exactly once.
+///
+/// # Errors
+///
+/// Returns an error when the lowering names a slot the walk never handed out — a
+/// defect in this crate, never in a caller's data.
+pub(crate) fn eval_planned_ids_from_id(
+    ds: &impl ShaclRead,
+    focus_id: TermId,
+    path: &LoweredPath,
+    binding: &DatasetBinding,
+) -> Result<IdVec, String> {
+    let ids = eval_planned_inner_ids(ds, focus_id, path, binding)?;
+    let mut seen: IdSet = IdSet::default();
+    let mut out: IdVec = IdVec::with_capacity(ids.len());
+    for id in ids {
+        if seen.insert(id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// [`eval`] driven by a lowered path, for a focus node that may not be interned.
+///
+/// # Errors
+///
+/// As [`eval_planned_ids_from_id`].
+pub(crate) fn eval_planned(
+    ds: &impl ShaclRead,
+    focus: &Term,
+    path: &LoweredPath,
+    binding: &DatasetBinding,
+) -> Result<Vec<Term>, String> {
+    let Some(focus_id) = resolve_id(ds, focus) else {
+        // Non-interned focus: it has no id and therefore no incoming/outgoing
+        // quads, so every predicate/inverse STEP is empty. The only value a path
+        // can yield is the focus term itself, via reflexive (zero-length)
+        // inclusion.
+        if admits_empty_planned_path(path) {
+            return Ok(vec![focus.clone()]);
+        }
+        return Ok(Vec::new());
+    };
+    let ids = eval_planned_ids_from_id(ds, focus_id, path, binding)?;
+    let mut nodes: Vec<Term> = Vec::with_capacity(ids.len());
+    for id in ids {
+        nodes.push(term_id_to_native(ds, id));
+    }
+    Ok(nodes)
+}
+
+/// [`admits_empty_path`] for a lowered path.
+///
+/// Stated over the lowering rather than delegated to the AST so a lowered path is
+/// self-sufficient: the evaluator holds no `Path` to consult for the one question
+/// that decides a non-interned focus's whole result.
+fn admits_empty_planned_path(path: &LoweredPath) -> bool {
+    match path {
+        // A predicate step is never zero-length.
+        LoweredPath::Predicate(_) | LoweredPath::InversePredicate(_) => false,
+        // Inversion does not change reflexivity: `^p` admits empty iff `p` does.
+        LoweredPath::InverseComposite(composite) => admits_empty_path(composite),
+        LoweredPath::OneOrMore(inner) => admits_empty_planned_path(inner),
+        // A sequence admits empty only if EVERY step can be taken in zero steps.
+        LoweredPath::Sequence(parts) => parts.iter().all(admits_empty_planned_path),
+        // An alternative admits empty if ANY branch does.
+        LoweredPath::Alternative(parts) => parts.iter().any(admits_empty_planned_path),
+        // The reflexive closures always admit the zero-length path.
+        LoweredPath::ZeroOrMore(_) | LoweredPath::ZeroOrOne(_) => true,
+    }
+}
+
+/// The recursive id-native evaluator for a lowered path and an interned `focus`.
+fn eval_planned_inner_ids(
+    ds: &impl ShaclRead,
+    focus: TermId,
+    path: &LoweredPath,
+    binding: &DatasetBinding,
+) -> Result<IdVec, String> {
+    Ok(match path {
+        LoweredPath::Predicate(slot) => match binding.term(*slot)? {
+            Some(p_id) => {
+                quads_for_pattern_ids(ds, Some(focus), Some(p_id), None, GraphFilter::DefaultGraph)
+                    .map(|q| q.o)
+                    .collect()
+            }
+            None => IdVec::new(),
+        },
+        LoweredPath::InversePredicate(slot) => match binding.term(*slot)? {
+            Some(p_id) => {
+                quads_for_pattern_ids(ds, None, Some(p_id), Some(focus), GraphFilter::DefaultGraph)
+                    .map(|q| q.s)
+                    .collect()
+            }
+            None => IdVec::new(),
+        },
+        // Inverse of a composite path: push the inversion inward and evaluate. The
+        // rewrite is a restructuring of the path rather than a resolution of a
+        // term, so it is still performed here, on the parsed form the lowering
+        // carried for exactly this purpose.
+        LoweredPath::InverseComposite(composite) => eval_inner_ids(ds, focus, &invert(composite)),
+        LoweredPath::Sequence(parts) => {
+            // Fold the frontier through each step, deduplicating per step
+            // (first-seen order) so diamond-shaped graphs stay linear. The
+            // scratch `next`/`seen` are hoisted out of the loop and cleared each
+            // iteration so their capacity is reused across steps.
+            let mut frontier: IdVec = smallvec![focus];
+            let mut next: IdVec = IdVec::new();
+            let mut seen: IdSet = IdSet::default();
+            for part in parts {
+                next.clear();
+                seen.clear();
+                for &node in &frontier {
+                    for value in eval_planned_inner_ids(ds, node, part, binding)? {
+                        if seen.insert(value) {
+                            next.push(value);
+                        }
+                    }
+                }
+                std::mem::swap(&mut frontier, &mut next);
+            }
+            frontier
+        }
+        LoweredPath::Alternative(parts) => {
+            let mut out: IdVec = IdVec::new();
+            for part in parts {
+                out.extend(eval_planned_inner_ids(ds, focus, part, binding)?);
+            }
+            out
+        }
+        LoweredPath::ZeroOrMore(inner) => planned_closure_ids(ds, focus, inner, binding, true)?,
+        LoweredPath::OneOrMore(inner) => planned_closure_ids(ds, focus, inner, binding, false)?,
+        LoweredPath::ZeroOrOne(inner) => {
+            let mut nodes: IdVec = smallvec![focus];
+            nodes.extend(eval_planned_inner_ids(ds, focus, inner, binding)?);
+            nodes
+        }
+    })
+}
+
+/// [`closure_ids`] over a lowered inner path.
+fn planned_closure_ids(
+    ds: &impl ShaclRead,
+    focus: TermId,
+    inner: &LoweredPath,
+    binding: &DatasetBinding,
+    reflexive: bool,
+) -> Result<IdVec, String> {
+    let mut seen: IdSet = IdSet::default();
+    let mut order: IdVec = IdVec::new();
+    let mut worklist: IdVec = IdVec::new();
+
+    if reflexive {
+        seen.insert(focus);
+        order.push(focus);
+        worklist.push(focus);
+    } else {
+        for value in eval_planned_inner_ids(ds, focus, inner, binding)? {
+            if seen.insert(value) {
+                order.push(value);
+                worklist.push(value);
+            }
+        }
+    }
+
+    let mut cursor = 0;
+    while cursor < worklist.len() {
+        let node = worklist[cursor];
+        cursor += 1;
+        for value in eval_planned_inner_ids(ds, node, inner, binding)? {
+            if seen.insert(value) {
+                order.push(value);
+                worklist.push(value);
+            }
+        }
+    }
+    Ok(order)
 }
 
 /// Whether a SHACL property path matches the zero-length (reflexive) path — i.e.

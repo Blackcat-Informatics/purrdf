@@ -56,7 +56,7 @@
 //!   which is the growth term the whole exercise is about;
 //! * with eight violations held fixed, the same doubling moves the figure from
 //!   10,475 to 20,719 on the first case, so the violating path carries it too;
-//! * binding costs 93 allocations for the seam dataset and 96 for twice its
+//! * binding costs 94 allocations for the seam dataset and 97 for twice its
 //!   instance data, a much smaller term but the same shape of defect.
 //!
 //! The golden and the admit seam are green, and must stay that way.
@@ -215,8 +215,8 @@ const SEAM_FOCUS_NODES: usize = 4_096;
 /// How many allocations one `bind_shared_dataset` costs over the
 /// [`SEAM_FOCUS_NODES`]-focus-node seam dataset.
 ///
-/// MEASURED on this revision, not chosen: binding that dataset makes 93
-/// allocations, and binding twice as much instance data makes 96. The three extra
+/// MEASURED on this revision, not chosen: binding that dataset makes 94
+/// allocations, and binding twice as much instance data makes 97. The three extra
 /// are the growth term the companion assertion in
 /// [`bind_allocation_is_independent_of_dataset_size_beyond_the_catalog`] refuses,
 /// which is why that test is red and this pin is not — the two assertions state
@@ -227,7 +227,7 @@ const SEAM_FOCUS_NODES: usize = 4_096;
 /// load, at any core count, because nothing in binding consults a clock, a source
 /// of randomness or the scheduler. A host-sensitive figure would have no business
 /// being asserted; this one has no business being merely logged.
-const BIND_ALLOC_CONST: u64 = 93;
+const BIND_ALLOC_CONST: u64 = 94;
 
 /// How many allocations one prepared-product `admit` costs.
 ///

@@ -11,15 +11,15 @@ use crate::data_view::ShaclRead;
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, IdSet, TermId, TermRef};
 use smallvec::SmallVec;
 
-use crate::data::{GraphFilter, ShaclData, native_quads, resolve_id};
-use crate::engine::ValidationPlan;
+use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
+use crate::plan::{PlannedConstraint, PropertyPlan, ShapePlan};
 use crate::report::ValidationResult;
-use crate::shapes::{ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape};
+use crate::shapes::{ComponentValidator, NodeKindValue, Path, PropertyShape, Shape};
 use crate::term::{NamedNode, Term, Triple, term_id_to_native};
 
 /// Internal value-node currency for the constraint layer.
@@ -177,7 +177,9 @@ impl<'a> From<&'a Shape> for ConstraintSource<'a> {
 struct ValidationContext<'a> {
     store: &'a ShaclData,
     box_role_vocab: Option<&'a BoxRoleVocab>,
-    plan: &'a ValidationPlan,
+    /// The shape being evaluated, with every derivation that does not depend on
+    /// this focus node already made.
+    plan: ShapePlan<'a>,
     depth: u32,
 }
 
@@ -222,30 +224,58 @@ pub fn validate_shape_with(
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Result<Vec<ValidationResult>, String> {
-    let plan = ValidationPlan::for_shape(store.core_view(), shape);
-    validate_shape_with_plan(store, focus, shape, box_role_vocab, &plan)
-}
-
-pub(crate) fn validate_shape_with_plan(
-    store: &ShaclData,
-    focus: &Term,
-    shape: &Shape,
-    box_role_vocab: Option<&BoxRoleVocab>,
-    plan: &ValidationPlan,
-) -> Result<Vec<ValidationResult>, String> {
+    // A caller holding only a parsed shape has no preparation to reuse, so the
+    // lowering is derived here for this one call. A caller validating MANY focus
+    // nodes should hold a `PreparedShapes`, which memoizes it.
+    let lowering = OneShotLowering::of(store, shape);
     let focus_id = resolve_id(store.core_view(), focus);
-    validate_shape_with_plan_at(store, focus, focus_id, shape, box_role_vocab, plan)
+    validate_shape_with_plan_at(store, focus, focus_id, box_role_vocab, lowering.plan()?)
 }
 
 pub(crate) fn validate_shape_with_plan_at(
     store: &ShaclData,
     focus: &Term,
     focus_id: Option<TermId>,
-    shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
 ) -> Result<Vec<ValidationResult>, String> {
-    validate_shape_with_depth(store, focus, focus_id, shape, box_role_vocab, plan, 0)
+    validate_shape_with_depth(store, focus, focus_id, box_role_vocab, plan, 0)
+}
+
+/// A shape lowering built for ONE call, for the entry points that are handed a
+/// bare [`Shape`] and have no preparation to memoize against.
+///
+/// It exists so those entry points can own the three values a [`ShapePlan`]
+/// borrows — the lowering, the catalog it produced and the dataset binding — for
+/// the duration of the call. Every repeated-validation surface goes through
+/// `PreparedShapes` instead, where the lowering is derived once per shapes graph
+/// rather than once per call.
+struct OneShotLowering<'a> {
+    lowered: crate::plan::LoweredShapes,
+    binding: crate::plan::DatasetBinding,
+    shape: &'a Shape,
+}
+
+impl<'a> OneShotLowering<'a> {
+    fn of(store: &ShaclData, shape: &'a Shape) -> Self {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+        let binding = lowered.bind(store.core_view(), lowered.classes());
+        Self {
+            lowered,
+            binding,
+            shape,
+        }
+    }
+
+    fn plan(&self) -> Result<ShapePlan<'_>, String> {
+        self.lowered.plan(
+            self.shape,
+            0,
+            &self.binding,
+            self.lowered.classes(),
+            self.lowered.no_targets(),
+        )
+    }
 }
 
 /// [`validate_shape_with`] carrying the ambient `sh:filterShape` / `sh:exists`
@@ -257,11 +287,11 @@ fn validate_shape_with_depth(
     store: &ShaclData,
     focus: &Term,
     focus_id: Option<TermId>,
-    shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
     depth: u32,
 ) -> Result<Vec<ValidationResult>, String> {
+    let shape = plan.shape();
     if depth > crate::expression::MAX_RECURSION_DEPTH {
         return Err(format!(
             "SHACL validation recursion depth exceeded ({} > {}) at shape {}: a cyclic sh:filterShape / sh:exists reference",
@@ -287,12 +317,12 @@ fn validate_shape_with_depth(
     // only a genuinely foreign SHACL-AF term needs an owned clone.
     let node_value_nodes =
         [focus_id.map_or_else(|| ValueNode::Foreign(focus.clone()), ValueNode::Interned)];
-    for constraint in &shape.constraints {
+    for (constraint, lowered) in plan.constraints()? {
         let mut rs = eval_constraint(
             context,
             focus,
             &node_value_nodes,
-            constraint,
+            plan.planned(constraint, lowered)?,
             None,
             ConstraintSource::from(shape),
         )?;
@@ -310,12 +340,13 @@ fn validate_shape_with_depth(
     }
 
     // --- Property shapes ---
-    for ps in &shape.property_shapes {
+    for (ps, property_plan) in plan.properties()? {
         results.extend(eval_property_shape(
             context,
             focus,
             focus_id,
             ps,
+            property_plan,
             &shape.box_roles,
         )?);
     }
@@ -325,8 +356,8 @@ fn validate_shape_with_depth(
     // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
     // same predicate attribution that property-shape results do — violations
     // must not drop their predicate role.
-    for constraint in &shape.constraints {
-        if let Constraint::Closed { ignored } = constraint {
+    for (constraint, lowered) in plan.constraints()? {
+        if let PlannedConstraint::Closed { ignored } = plan.planned(constraint, lowered)? {
             results.extend(eval_closed(store, focus, shape, ignored, box_role_vocab));
         }
     }
@@ -408,19 +439,25 @@ fn eval_closed(
 /// Returns `true` iff the focus node produces zero validation results against
 /// the shape (i.e., it fully conforms).
 ///
-/// This convenience entry point builds a [`ValidationPlan`] for `shape` on every
-/// call — the whole cycle-aware class walk, plus one interning probe per class.
-/// A caller that checks MANY focus nodes against the same shape should build the
-/// plan once and drive [`conforms_with_plan`] instead; `rules` does exactly that
-/// for its `sh:condition` checks.
+/// This convenience entry point lowers `shape` on every call — the whole
+/// cycle-aware walk, plus one interning probe per constant it names. A caller that
+/// checks MANY focus nodes against the same shape should lower it once and drive
+/// [`conforms_with_plan`] instead; `rules` does exactly that for its
+/// `sh:condition` checks.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
 pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
-    let plan = ValidationPlan::for_shape(store.core_view(), shape);
-    conforms_with_plan(store, focus, shape, &plan)
+    let lowering = OneShotLowering::of(store, shape);
+    conforms_with_id_depth(
+        store,
+        focus,
+        resolve_id(store.core_view(), focus),
+        lowering.plan()?,
+        0,
+    )
 }
 
 /// [`conforms`] against a plan the caller already built.
@@ -436,62 +473,30 @@ pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, 
 pub(crate) fn conforms_with_plan(
     store: &ShaclData,
     focus: &Term,
-    shape: &Shape,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
 ) -> Result<bool, String> {
-    conforms_with_id_depth(
-        store,
-        focus,
-        resolve_id(store.core_view(), focus),
-        shape,
-        plan,
-        0,
-    )
-}
-
-/// [`conforms`] carrying the ambient `sh:filterShape` / `sh:exists` re-entry
-/// depth, so a cyclic filter reference fails closed at
-/// [`crate::expression::MAX_RECURSION_DEPTH`] instead of overflowing the stack.
-///
-/// `depth` is the number of filter/exists boundaries already crossed to reach
-/// this call. [`crate::expression::eval_node_expr`]'s `Filter` arm increments it
-/// on each re-entry; the ordinary logical constraints (`sh:and`, `sh:or`,
-/// `sh:not`, `sh:node`, …) preserve it unchanged.
-///
-/// # Errors
-///
-/// Returns `Err(String)` when a constraint fails to evaluate (see
-/// [`validate_shape`]) or when the filter/exists depth ceiling is exceeded.
-pub(crate) fn conforms_with_depth(
-    store: &ShaclData,
-    focus: &Term,
-    shape: &Shape,
-    depth: u32,
-) -> Result<bool, String> {
-    let plan = ValidationPlan::for_shape(store.core_view(), shape);
-    let focus_id = resolve_id(store.core_view(), focus);
-    conforms_with_id_depth(store, focus, focus_id, shape, &plan, depth)
+    conforms_with_id_depth(store, focus, resolve_id(store.core_view(), focus), plan, 0)
 }
 
 #[inline]
-fn conforms_with_id_depth(
+pub(crate) fn conforms_with_id_depth(
     store: &ShaclData,
     focus: &Term,
     focus_id: Option<TermId>,
-    shape: &Shape,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
     depth: u32,
 ) -> Result<bool, String> {
-    Ok(validate_shape_with_depth(store, focus, focus_id, shape, None, plan, depth)?.is_empty())
+    Ok(validate_shape_with_depth(store, focus, focus_id, None, plan, depth)?.is_empty())
 }
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
 
-fn eval_property_shape(
-    context: ValidationContext<'_>,
+fn eval_property_shape<'a>(
+    context: ValidationContext<'a>,
     focus: &Term,
     focus_id: Option<TermId>,
-    ps: &PropertyShape,
+    ps: &'a PropertyShape,
+    property_plan: PropertyPlan<'a>,
     parent_box_roles: &[NamedNode],
 ) -> Result<Vec<ValidationResult>, String> {
     let store = context.store;
@@ -504,12 +509,17 @@ fn eval_property_shape(
     // owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
     // without materializing, and only the value nodes a violation records — or a
     // content constraint inspects — are resolved to owned terms.
+    // The path is the LOWERED one: every predicate step carries the dataset
+    // identity resolved at bind, so a property shape evaluated across a million
+    // focus nodes hashes its predicate IRI zero times.
+    let lowered_path = property_plan.path();
+    let binding = context.plan.binding();
     let value_nodes: SmallVec<[ValueNode; 4]> = match focus_id {
-        Some(id) => path::eval_ids_from_id(store.core_view(), id, &ps.path)
+        Some(id) => path::eval_planned_ids_from_id(store.core_view(), id, lowered_path, binding)?
             .into_iter()
             .map(ValueNode::Interned)
             .collect(),
-        None => path::eval(store.core_view(), focus, &ps.path)
+        None => path::eval_planned(store.core_view(), focus, lowered_path, binding)?
             .into_iter()
             .map(ValueNode::Foreign)
             .collect(),
@@ -535,12 +545,12 @@ fn eval_property_shape(
     };
 
     let mut results = Vec::new();
-    for constraint in &ps.constraints {
+    for (constraint, lowered) in property_plan.constraints(ps)? {
         let mut rs = eval_constraint(
             context,
             focus,
             &value_nodes,
-            constraint,
+            context.plan.planned(constraint, lowered)?,
             Some(&ps.path),
             constraint_source,
         )?;
@@ -578,7 +588,7 @@ fn eval_property_shape(
     // node of the nested property shape (W3C core/property/property-001,
     // core/validation-reports/shared — a nested shape reached via two parents
     // fires once per reach, so results are NOT deduplicated here).
-    for nested in &ps.property_shapes {
+    for (nested, nested_plan) in property_plan.properties(ps)? {
         for value in &value_nodes {
             // A value node becomes the focus of the nested shape: resolve it to an
             // owned term at the recursion boundary (recursion is not the hot
@@ -588,6 +598,7 @@ fn eval_property_shape(
                 &value.to_term(store.core_view()),
                 value.as_id(store.core_view()),
                 nested,
+                nested_plan,
                 source_roles.get_or_init(init_source_roles),
             )?);
         }
@@ -610,7 +621,7 @@ fn eval_property_shape(
             path_roles: path_roles.get_or_init(init_path_roles),
             path_term: path_term.get_or_init(|| path::path_to_term(&ps.path)),
             box_role_vocab: context.box_role_vocab,
-            plan: context.plan,
+            property_plan,
             depth: context.depth,
         })?);
     }
@@ -627,7 +638,7 @@ struct ReifierEvalContext<'a> {
     path_roles: &'a [NamedNode],
     path_term: &'a Term,
     box_role_vocab: Option<&'a BoxRoleVocab>,
-    plan: &'a ValidationPlan,
+    property_plan: PropertyPlan<'a>,
     depth: u32,
 }
 
@@ -641,7 +652,7 @@ fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResu
         path_roles,
         path_term,
         box_role_vocab,
-        plan,
+        property_plan,
         depth,
     } = ctx;
     if ps.reifier_shapes.is_empty() && !ps.reification_required {
@@ -681,14 +692,13 @@ fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResu
         }
 
         for reifier in &reifiers {
-            for reifier_shape in &ps.reifier_shapes {
+            for (reifier_shape, reifier_plan) in property_plan.reifiers(ps)? {
                 let inner_results = validate_shape_with_depth(
                     store,
                     reifier,
                     resolve_id(store.core_view(), reifier),
-                    reifier_shape,
                     box_role_vocab,
-                    plan,
+                    reifier_plan,
                     depth,
                 )?;
                 if inner_results.is_empty() {
@@ -830,12 +840,11 @@ fn eval_constraint(
     context: ValidationContext<'_>,
     focus_node: &Term,
     value_nodes: &[ValueNode],
-    constraint: &Constraint,
+    constraint: PlannedConstraint<'_>,
     path: Option<&Path>,
     source: ConstraintSource<'_>,
 ) -> Result<Vec<ValidationResult>, String> {
     let store = context.store;
-    let plan = context.plan;
     let depth = context.depth;
     let ds = store.core_view();
     let result_path = || path.map(path::path_to_term);
@@ -885,17 +894,17 @@ fn eval_constraint(
 
     Ok(match constraint {
         // ── Count constraints (operate on the SET) ─────────────────────────────
-        Constraint::MinCount(n) => {
+        PlannedConstraint::MinCount(n) => {
             let count = value_nodes.len() as u64;
-            if count < *n {
+            if count < n {
                 vec![result!(sh::MIN_COUNT_CONSTRAINT_COMPONENT, None)]
             } else {
                 vec![]
             }
         }
-        Constraint::MaxCount(n) => {
+        PlannedConstraint::MaxCount(n) => {
             let count = value_nodes.len() as u64;
-            if count > *n {
+            if count > n {
                 vec![result!(sh::MAX_COUNT_CONSTRAINT_COMPONENT, None)]
             } else {
                 vec![]
@@ -903,11 +912,12 @@ fn eval_constraint(
         }
 
         // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
-        Constraint::Class(class_iri) => {
+        PlannedConstraint::Class(id) => {
             // `None` = the data graph interns no term for this class, so no value
             // node can be an instance of it and every one of them violates. That
-            // is a real verdict, not a failure to compute one.
-            let class_id = plan.class_id(class_iri)?;
+            // is a real verdict, not a failure to compute one — and it was decided
+            // at BIND, once, not here.
+            let class_id = id;
             let mut results = Vec::new();
             let focus = focus_node;
             for vn in value_nodes {
@@ -944,7 +954,7 @@ fn eval_constraint(
         }
 
         // ── Datatype (per value node) ──────────────────────────────────────────
-        Constraint::Datatype(dt_iri) => {
+        PlannedConstraint::Datatype(dt_iri) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -971,7 +981,7 @@ fn eval_constraint(
         }
 
         // ── NodeKind (per value node) ──────────────────────────────────────────
-        Constraint::NodeKind(kind) => {
+        PlannedConstraint::NodeKind(kind) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1000,14 +1010,16 @@ fn eval_constraint(
         }
 
         // ── In (per value node) ────────────────────────────────────────────────
-        Constraint::In(allowed) => {
-            // Membership is pure identity: resolve the allowed set to ids once, so an
-            // interned value node's check is a `TermId` set lookup with no
-            // materialization. The interner is injective, so an allowed term that is
-            // not interned can never equal an interned value node; a non-interned
-            // value node falls back to term equality.
-            let allowed_ids: FastSet<TermId> =
-                allowed.iter().filter_map(|a| resolve_id(ds, a)).collect();
+        PlannedConstraint::In {
+            allowed,
+            ids: allowed_ids,
+        } => {
+            // Membership is pure identity, and the allowed set was resolved to ids
+            // ONCE, at bind: an interned value node's check is a `TermId` set
+            // lookup with no materialization and no per-focus-node set to build.
+            // The interner is injective, so an allowed term that is not interned
+            // can never equal an interned value node; a non-interned value node
+            // falls back to term equality against the declared list.
             let mut results = Vec::new();
             let focus = focus_node;
             for vn in value_nodes {
@@ -1036,12 +1048,13 @@ fn eval_constraint(
         }
 
         // ── HasValue (on the SET, one result if missing) ───────────────────────
-        Constraint::HasValue(required) => {
+        PlannedConstraint::HasValue { required, id } => {
             // Identity check: if `required` is interned, membership is a `TermId`
             // comparison and no value node is materialized. If it is not interned,
             // no interned value node can equal it, so only the (rare) non-interned
-            // value nodes could match — fall back to term equality.
-            let found = match resolve_id(ds, required) {
+            // value nodes could match — fall back to term equality. Which of the
+            // two it is was decided at bind.
+            let found = match id {
                 Some(req_id) => value_nodes.iter().any(|v| v.as_id(ds) == Some(req_id)),
                 None => value_nodes
                     .iter()
@@ -1071,7 +1084,7 @@ fn eval_constraint(
         }
 
         // ── Pattern (per value node) ───────────────────────────────────────────
-        Constraint::Pattern {
+        PlannedConstraint::Pattern {
             regex,
             flags,
             compiled,
@@ -1079,7 +1092,7 @@ fn eval_constraint(
             // Compile at most once per Constraint instance (across all focus
             // nodes and value nodes) using the OnceLock cache.  Behaviour is
             // identical to the per-call path: Err ⇒ violation on every value.
-            let compiled = compiled.get_or_init(|| build_regex(regex, flags.as_deref()));
+            let compiled = compiled.get_or_init(|| build_regex(regex, flags.map(String::as_str)));
             // SHACL has no shape-error channel on this path, so a pattern that
             // does not compile stays a violation (the W3C suite depends on
             // that). But discarding the compiler's typed error made a BROKEN
@@ -1089,7 +1102,6 @@ fn eval_constraint(
                 format!(
                     "invalid sh:pattern {regex:?}{}: {error}",
                     flags
-                        .as_deref()
                         .map(|f| format!(" with sh:flags {f:?}"))
                         .unwrap_or_default()
                 )
@@ -1130,7 +1142,7 @@ fn eval_constraint(
         }
 
         // ── MinLength (per value node) ─────────────────────────────────────────
-        Constraint::MinLength(n) => {
+        PlannedConstraint::MinLength(n) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1140,7 +1152,7 @@ fn eval_constraint(
                 let len_opt = value.lexical(ds).map(|s| s.chars().count());
                 let violates = match len_opt {
                     None => true, // blank node
-                    Some(len) => (len as u64) < *n,
+                    Some(len) => (len as u64) < n,
                 };
                 if violates {
                     results.push(ValidationResult {
@@ -1165,7 +1177,7 @@ fn eval_constraint(
         }
 
         // ── MaxLength (per value node) ─────────────────────────────────────────
-        Constraint::MaxLength(n) => {
+        PlannedConstraint::MaxLength(n) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1175,7 +1187,7 @@ fn eval_constraint(
                 let len_opt = value.lexical(ds).map(|s| s.chars().count());
                 let violates = match len_opt {
                     None => true, // blank node
-                    Some(len) => (len as u64) > *n,
+                    Some(len) => (len as u64) > n,
                 };
                 if violates {
                     results.push(ValidationResult {
@@ -1200,7 +1212,7 @@ fn eval_constraint(
         }
 
         // ── LanguageIn (per value node) ────────────────────────────────────────
-        Constraint::LanguageIn(tags) => {
+        PlannedConstraint::LanguageIn(tags) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1233,7 +1245,7 @@ fn eval_constraint(
         }
 
         // ── Not (per value node, recursive) ────────────────────────────────────
-        Constraint::Not(inner_shape) => {
+        PlannedConstraint::Not(inner_shape) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1243,7 +1255,7 @@ fn eval_constraint(
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 // Violation iff the value node DOES conform to the negated shape.
-                if conforms_with_id_depth(store, value, value_id, inner_shape, plan, depth)? {
+                if conforms_with_id_depth(store, value, value_id, inner_shape, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path(),
@@ -1268,10 +1280,10 @@ fn eval_constraint(
         // from the sibling property shapes — data `eval_constraint` does not
         // receive. It is evaluated directly in `validate_shape`; here it is a
         // no-op so the match stays exhaustive.
-        Constraint::Closed { .. } => vec![],
+        PlannedConstraint::Closed { .. } => vec![],
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
-        Constraint::UniqueLang(true) => {
+        PlannedConstraint::UniqueLang(true) => {
             let mut seen_langs: FastMap<String, usize> = FastMap::default();
             for value in value_nodes {
                 // Content/recursion arm: this constraint needs the value node's term
@@ -1312,10 +1324,10 @@ fn eval_constraint(
             }
             results
         }
-        Constraint::UniqueLang(false) => vec![],
+        PlannedConstraint::UniqueLang(false) => vec![],
 
         // ── MinInclusive / MaxInclusive (per value node) ───────────────────────
-        Constraint::MinInclusive(bound) => {
+        PlannedConstraint::MinInclusive(bound) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1350,7 +1362,7 @@ fn eval_constraint(
             }
             results
         }
-        Constraint::MaxInclusive(bound) => {
+        PlannedConstraint::MaxInclusive(bound) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1387,7 +1399,7 @@ fn eval_constraint(
         }
 
         // ── MinExclusive / MaxExclusive (per value node) ───────────────────────
-        Constraint::MinExclusive(bound) => {
+        PlannedConstraint::MinExclusive(bound) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1422,7 +1434,7 @@ fn eval_constraint(
             }
             results
         }
-        Constraint::MaxExclusive(bound) => {
+        PlannedConstraint::MaxExclusive(bound) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1459,7 +1471,7 @@ fn eval_constraint(
         }
 
         // ── And (per value node, recursive) ───────────────────────────────────
-        Constraint::And(members) => {
+        PlannedConstraint::And(members) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1468,8 +1480,8 @@ fn eval_constraint(
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 let mut all_conform = true;
-                for member in members {
-                    if !conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
+                for member in members.iter(context.plan) {
+                    if !conforms_with_id_depth(store, value, value_id, member, depth)? {
                         all_conform = false;
                         break;
                     }
@@ -1495,7 +1507,7 @@ fn eval_constraint(
         }
 
         // ── Or (per value node, recursive) ────────────────────────────────────
-        Constraint::Or(members) => {
+        PlannedConstraint::Or(members) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1504,8 +1516,8 @@ fn eval_constraint(
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 let mut any_conforms = false;
-                for member in members {
-                    if conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
+                for member in members.iter(context.plan) {
+                    if conforms_with_id_depth(store, value, value_id, member, depth)? {
                         any_conforms = true;
                         break;
                     }
@@ -1531,7 +1543,7 @@ fn eval_constraint(
         }
 
         // ── Xone (per value node, recursive) ──────────────────────────────────
-        Constraint::Xone(members) => {
+        PlannedConstraint::Xone(members) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1540,8 +1552,8 @@ fn eval_constraint(
                 let value_term = value.to_term(ds);
                 let value = &value_term;
                 let mut count = 0usize;
-                for member in members {
-                    if conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
+                for member in members.iter(context.plan) {
+                    if conforms_with_id_depth(store, value, value_id, member, depth)? {
                         count += 1;
                     }
                 }
@@ -1566,7 +1578,7 @@ fn eval_constraint(
         }
 
         // ── Node (per value node, recursive) ──────────────────────────────────
-        Constraint::Node(inner_shape) => {
+        PlannedConstraint::Node(inner_shape) => {
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
@@ -1575,7 +1587,7 @@ fn eval_constraint(
                 let value_id = value.as_id(ds);
                 let value_term = value.to_term(ds);
                 let value = &value_term;
-                if !conforms_with_id_depth(store, value, value_id, inner_shape, plan, depth)? {
+                if !conforms_with_id_depth(store, value, value_id, inner_shape, depth)? {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path(),
@@ -1597,14 +1609,13 @@ fn eval_constraint(
 
         // ── Property-pair constraints (§4.3): compare the value nodes against
         //    the objects of the given predicate from the SAME focus node. ──────
-        Constraint::Equals(pred) => {
+        PlannedConstraint::Equals(pred) => {
             let others = pair_values(store, focus_node, pred);
             // Membership is identity: compare in `TermId` space (the interner is
             // injective, so an interned value equals a predicate object iff their ids
             // match). Only offending value nodes are materialized on the conforming
             // side. `others` come from the data graph and are always interned.
-            let other_ids: FastSet<TermId> =
-                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
+            let other_ids: FastSet<TermId> = others.iter().map(|&(id, _)| id).collect();
             let value_ids: FastSet<TermId> =
                 value_nodes.iter().filter_map(|v| v.as_id(ds)).collect();
             let mut offending: Vec<Term> = Vec::new();
@@ -1615,7 +1626,7 @@ fn eval_constraint(
                     Some(id) => other_ids.contains(&id),
                     None => {
                         let term = v.to_term(ds);
-                        others.iter().any(|o| terms_equal(o, &term))
+                        others.iter().any(|(_, o)| terms_equal(o, &term))
                     }
                 };
                 if !present {
@@ -1626,12 +1637,8 @@ fn eval_constraint(
                 }
             }
             // …and predicate objects missing from the value nodes.
-            for o in &others {
-                let present = match resolve_id(ds, o) {
-                    Some(oid) => value_ids.contains(&oid),
-                    None => value_nodes.iter().any(|v| terms_equal(&v.to_term(ds), o)),
-                };
-                if !present && seen.insert(o.clone()) {
+            for (oid, o) in &others {
+                if !value_ids.contains(oid) && seen.insert(o.clone()) {
                     offending.push(o.clone());
                 }
             }
@@ -1646,19 +1653,18 @@ fn eval_constraint(
                 })
                 .collect()
         }
-        Constraint::Disjoint(pred) => {
+        PlannedConstraint::Disjoint(pred) => {
             let others = pair_values(store, focus_node, pred);
             // Identity check in `TermId` space; only offending value nodes are
             // materialized.
-            let other_ids: FastSet<TermId> =
-                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
+            let other_ids: FastSet<TermId> = others.iter().map(|&(id, _)| id).collect();
             let mut results = Vec::new();
             for v in value_nodes {
                 let violates = match v.as_id(ds) {
                     Some(id) => other_ids.contains(&id),
                     None => {
                         let term = v.to_term(ds);
-                        others.iter().any(|o| terms_equal(o, &term))
+                        others.iter().any(|(_, o)| terms_equal(o, &term))
                     }
                 };
                 if violates {
@@ -1671,7 +1677,7 @@ fn eval_constraint(
             }
             results
         }
-        Constraint::LessThan(pred) => {
+        PlannedConstraint::LessThan(pred) => {
             // Order comparison needs each value node's term (numeric/string/temporal
             // value space), so materialize the set for the pair walk.
             let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
@@ -1686,7 +1692,7 @@ fn eval_constraint(
                 })
                 .collect()
         }
-        Constraint::LessThanOrEquals(pred) => {
+        PlannedConstraint::LessThanOrEquals(pred) => {
             let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
             pair_order_offenders(store, focus_node, &value_terms, pred, true)
                 .into_iter()
@@ -1701,7 +1707,7 @@ fn eval_constraint(
         }
 
         // ── Qualified value shapes (§4.5.4–4.5.5) ──────────────────────────────
-        Constraint::QualifiedValueShape {
+        PlannedConstraint::QualifiedValueShape {
             shape: qshape,
             siblings,
             min_count,
@@ -1717,13 +1723,13 @@ fn eval_constraint(
                 let v_id = v.as_id(ds);
                 let v_term = v.to_term(ds);
                 let v = &v_term;
-                if !conforms_with_id_depth(store, v, v_id, qshape, plan, depth)? {
+                if !conforms_with_id_depth(store, v, v_id, qshape, depth)? {
                     continue;
                 }
                 let mut sibling_conforms = false;
-                if *disjoint {
-                    for sibling in siblings {
-                        if conforms_with_id_depth(store, v, v_id, sibling, plan, depth)? {
+                if disjoint {
+                    for sibling in siblings.iter(context.plan) {
+                        if conforms_with_id_depth(store, v, v_id, sibling, depth)? {
                             sibling_conforms = true;
                             break;
                         }
@@ -1735,7 +1741,7 @@ fn eval_constraint(
             }
             let mut results = Vec::new();
             if let Some(min) = min_count
-                && count < *min
+                && count < min
             {
                 results.push(result!(
                     sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
@@ -1744,7 +1750,7 @@ fn eval_constraint(
                 ));
             }
             if let Some(max) = max_count
-                && count > *max
+                && count > max
             {
                 results.push(result!(
                     sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
@@ -1768,7 +1774,7 @@ fn eval_constraint(
         // error rather than a panic.
         // The native SPARQL engine runs the validated query text over the dataset,
         // substituting $this for this focus node (SparqlRequest.substitutions).
-        Constraint::Sparql {
+        PlannedConstraint::Sparql {
             select,
             message: cmsg,
             severity: csev,
@@ -1799,8 +1805,9 @@ fn eval_constraint(
         // failure is a hard validation error (mirroring sh:sparql). The
         // expression node may carry its own sh:message / sh:severity overriding
         // the shape defaults.
-        Constraint::Expression {
+        PlannedConstraint::Expression {
             expr,
+            lowered,
             message: cmsg,
             severity: csev,
         } => {
@@ -1831,10 +1838,12 @@ fn eval_constraint(
                     &value_node,
                     crate::expression::Scope::EMPTY,
                 );
-                let out = crate::expression::eval_node_expr_in_scope(
+                let out = crate::expression::eval_planned_node_expr_in_scope(
                     store,
                     &value_node,
                     expr,
+                    lowered,
+                    context.plan,
                     &mut guard,
                     crate::expression::Scope::bound(&binding),
                 )
@@ -1858,9 +1867,11 @@ fn eval_constraint(
         // each shape it produces. Per the spec's own
         // `evalExpr(expr, data graph, v, {})` the value node is the FOCUS NODE and
         // the scope is EMPTY — unlike §7.1, which binds `value`.
-        Constraint::NodeByExpression {
+        PlannedConstraint::NodeByExpression {
             expr,
+            lowered,
             shapes,
+            index,
             message: cmsg,
             severity: csev,
         } => {
@@ -1869,7 +1880,7 @@ fn eval_constraint(
             // The index is filled at the end of the shapes-graph parse; an unfilled
             // one means this constraint escaped that parse, which would silently
             // make every conformance check vacuous. Refuse loudly instead.
-            let index = shapes.get().ok_or_else(|| {
+            let resolved = shapes.get().ok_or_else(|| {
                 format!(
                     "sh:nodeByExpression constraint on shape {source_shape}: the shapes graph's \
                      shape index was never filled"
@@ -1884,35 +1895,41 @@ fn eval_constraint(
                 // to recover what the value node already knew.
                 let value_id = value_node.as_id(ds);
                 let value_node = value_node.to_term(ds);
-                let produced =
-                    crate::expression::eval_node_expr(store, &value_node, expr, &mut guard)
-                        .map_err(|e| {
-                            format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
-                        })?;
+                let produced = crate::expression::eval_planned_node_expr(
+                    store,
+                    &value_node,
+                    expr,
+                    lowered,
+                    context.plan,
+                    &mut guard,
+                )
+                .map_err(|e| {
+                    format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
+                })?;
                 for shape_node in produced {
-                    let shape = index.get(&shape_node.to_string()).ok_or_else(|| {
-                        format!(
-                            "sh:nodeByExpression constraint on shape {source_shape}: \
-                             {shape_node} is not a shape of this shapes graph"
-                        )
-                    })?;
+                    let shape_plan = context
+                        .plan
+                        .indexed(index, &shape_node.to_string(), resolved)?
+                        .ok_or_else(|| {
+                            format!(
+                                "sh:nodeByExpression constraint on shape {source_shape}: \
+                                 {shape_node} is not a shape of this shapes graph"
+                            )
+                        })?;
                     // A failing conformance check is a FAILURE the spec requires be
                     // produced, so it propagates rather than counting as "does not
                     // conform".
                     //
-                    // The AMBIENT plan is threaded through, exactly as every other
-                    // recursive arm does: rebuilding one here would run the whole
-                    // cycle-aware class walk — a cloned `NamedNode` set, a sort, a
-                    // map and one interning probe per class — once per value node
-                    // per produced shape. The plan covers the shapes this index
-                    // resolves to because the class-planning walk enters the index
-                    // itself (`ClassScan::walk_shape_index`).
+                    // The AMBIENT lowering is threaded through, exactly as every
+                    // other recursive arm does: rebuilding one here would run the
+                    // whole cycle-aware shape walk once per value node per produced
+                    // shape. The lowering covers the shapes this index resolves to
+                    // because the walk ENTERS the index itself.
                     let conforms = conforms_with_id_depth(
                         store,
                         &value_node,
                         value_id,
-                        shape,
-                        plan,
+                        shape_plan,
                         next_depth,
                     )
                     .map_err(|e| {
@@ -1933,7 +1950,7 @@ fn eval_constraint(
         }
 
         // ── Custom constraint components (SHACL-SPARQL) ─────────────────────────
-        Constraint::Component {
+        PlannedConstraint::Component {
             component,
             source_shape,
             bindings,
@@ -2387,19 +2404,29 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
 
 /// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
 /// order — the "other" side of a property-pair constraint (§4.3).
-fn pair_values(store: &ShaclData, focus: &Term, pred: &NamedNode) -> Vec<Term> {
-    let predicate = Term::NamedNode(pred.clone());
-    let mut out: Vec<Term> = Vec::new();
-    let mut seen: FastSet<Term> = FastSet::default();
-    for (_, _, object) in native_quads(
-        store.core_view(),
+fn pair_values(store: &ShaclData, focus: &Term, pred: Option<TermId>) -> Vec<(TermId, Term)> {
+    let ds = store.core_view();
+    // The comparand predicate's identity was resolved at BIND. `None` means this
+    // data graph interns no such IRI, so it has no objects at all — an ordinary
+    // empty comparand set, not a failure. A focus node that is not interned has no
+    // outgoing quads for the same reason.
+    let (Some(predicate), Some(focus)) = (pred, resolve_id(ds, focus)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(TermId, Term)> = Vec::new();
+    let mut seen: IdSet = IdSet::default();
+    for quad in quads_for_pattern_ids(
+        ds,
         Some(focus),
-        Some(&predicate),
+        Some(predicate),
         None,
         GraphFilter::DefaultGraph,
     ) {
-        if seen.insert(object.clone()) {
-            out.push(object);
+        // Dedup in id space: every object comes out of the data graph and is
+        // therefore interned, and the interner is injective, so id equality and
+        // term equality are the same relation here.
+        if seen.insert(quad.o) {
+            out.push((quad.o, term_id_to_native(ds, quad.o)));
         }
     }
     out
@@ -2418,13 +2445,13 @@ fn pair_order_offenders(
     store: &ShaclData,
     focus: &Term,
     value_nodes: &[Term],
-    pred: &NamedNode,
+    pred: Option<TermId>,
     allow_equal: bool,
 ) -> Vec<Term> {
     let others = pair_values(store, focus, pred);
     let mut offending: Vec<Term> = Vec::new();
     for v in value_nodes {
-        for o in &others {
+        for (_, o) in &others {
             let ok = match compare_terms(v, o) {
                 Some(std::cmp::Ordering::Less) => true,
                 Some(std::cmp::Ordering::Equal) => allow_equal,
@@ -2551,6 +2578,7 @@ mod tests {
 
     use super::*;
     use crate::report::Severity;
+    use crate::shapes::Constraint;
     use crate::term::{Literal, NamedNode};
 
     /// Build a [`ShaclData`] holder over a projected test dataset: Core lookups and

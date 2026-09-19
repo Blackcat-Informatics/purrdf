@@ -8,17 +8,17 @@
 //! deterministically-sorted [`ValidationReport`].
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
+use ::purrdf::{DatasetView, FastSet, IdSet, RdfDataset, TermId};
 
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
-use crate::expression::{FnCall, NodeExpr, ShapeArg};
+use crate::plan::{ClassCatalog, DatasetBinding, LoweredShapes, PreparedTargets, ShapePlan};
 use crate::provenance::ValidatorProvenance;
 use crate::report::ValidationReport;
-use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
+use crate::shapes::{Shape, Shapes, Target};
 use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
@@ -80,551 +80,100 @@ fn objects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
 
 /// Dataset-bound invariant state shared by every focus evaluation in one pass.
 ///
-/// All class IRIs reachable from the parsed shape tree are resolved once. Their
-/// membership is answered by [`ShaclData`]'s shared immutable class view.
+/// The class analysis (dataset-independent) and the shape lowering it came out of
+/// are shared by `Arc`; only the resolved identities are rebuilt per dataset.
+///
+/// `targets` is positionally parallel to the node-shape list this was bound from.
+/// A deactivated shape still occupies its position with an empty index rather than
+/// being skipped, because a caller enumerating shapes and a caller enumerating
+/// target indexes have to agree on what the n-th entry is.
 #[derive(Debug)]
-pub(crate) struct ValidationPlan {
+pub(crate) struct BoundShapes {
+    lowered: Arc<LoweredShapes>,
     classes: Arc<ClassCatalog>,
-    class_ids: Box<[Option<TermId>]>,
+    binding: DatasetBinding,
+    targets: Vec<PreparedTargets>,
 }
 
-impl ValidationPlan {
-    pub(crate) fn for_shapes(ds: &impl ShaclRead, shapes: &Shapes) -> Self {
-        Self::from_shape_iter(ds, shapes.node_shapes.iter())
-    }
-
-    pub(crate) fn for_shape(ds: &impl ShaclRead, shape: &Shape) -> Self {
-        Self::from_shape_iter(ds, std::iter::once(shape))
-    }
-
-    pub(crate) fn from_shape_iter<'a>(
-        ds: &impl ShaclRead,
-        shapes: impl IntoIterator<Item = &'a Shape>,
-    ) -> Self {
-        Self::bind(ds, Arc::new(ClassCatalog::for_shapes(shapes)))
-    }
-
-    fn bind(ds: &impl ShaclRead, classes: Arc<ClassCatalog>) -> Self {
-        let mut class_ids = vec![None; classes.indices.len()].into_boxed_slice();
-        for (class, &position) in &classes.indices {
-            class_ids[position] = ds.term_id_by_iri(class.as_str());
-        }
-        Self { classes, class_ids }
-    }
-
-    /// The dataset identity of a planned class.
-    ///
-    /// The two negative answers are DIFFERENT conditions and are deliberately
-    /// spelled differently, because conflating them would turn an ordinary shapes
-    /// graph into a refusal:
-    ///
-    /// * `Ok(None)` — the class IS planned, but this DATA GRAPH interns no term
-    ///   for it. Entirely normal: a shapes graph may name a class the data never
-    ///   mentions. Every caller reads it as "nothing is an instance", which is the
-    ///   right answer, and it must never become an error.
-    /// * `Err(_)` — the class is absent from the CATALOG, so the class-planning
-    ///   walk failed to reach a class the evaluator went on to ask about. That is
-    ///   a defect in the walk, never in the caller's data. It was an `expect`,
-    ///   i.e. a panic — and a panic ABORTS across the PyO3 and C ABI boundaries,
-    ///   where a host has no frame to catch it. Loud means an error.
-    #[inline]
-    pub(crate) fn class_id(&self, class: &NamedNode) -> Result<Option<TermId>, String> {
-        let position = self.classes.indices.get(class).ok_or_else(|| {
-            format!(
-                "internal validation-plan defect: the class <{}> is reached during evaluation but \
-                 was never collected by the class-planning walk, so its dataset identity was \
-                 never resolved",
-                class.as_str()
-            )
-        })?;
-        Ok(self.class_ids[*position])
-    }
-}
-
-/// Dataset-independent class references from the complete, cycle-aware shape walk.
-/// Dataset bindings retain only resolved IDs; class names are owned here once.
-#[derive(Debug)]
-pub(crate) struct ClassCatalog {
-    indices: FastMap<NamedNode, usize>,
-}
-
-impl ClassCatalog {
-    /// Every planned class with the position its resolved [`TermId`] occupies in a
-    /// [`ValidationPlan`]'s binding row, in unspecified order.
-    ///
-    /// `pub(crate)` for the prepared-product codec, which both WRITES these pairs
-    /// into the artifact (`crate::product::ast`) and digests them into the
-    /// product's identity (`crate::product::identity::class_catalog_digest`), so a
-    /// restore can prove the body it carried is the analysis the identity pinned.
-    /// The order is the backing map's and is therefore NOT a fact about the
-    /// catalog — every consumer sorts.
-    pub(crate) fn entries(&self) -> impl Iterator<Item = (&NamedNode, usize)> {
-        self.indices
+impl BoundShapes {
+    /// Resolve every dataset identity `lowered` asked for, then index each shape's
+    /// active targets.
+    fn bind(
+        data: &ShaclData,
+        shapes: &[Shape],
+        lowered: Arc<LoweredShapes>,
+        classes: Arc<ClassCatalog>,
+    ) -> Result<Self, String> {
+        let binding = lowered.bind(data.core_view(), &classes);
+        let targets = shapes
             .iter()
-            .map(|(class, &position)| (class, position))
-    }
-
-    /// Rebuild a catalog from `(class, position)` pairs a prepared product carried,
-    /// or `None` when those pairs are not a catalog any walk could have produced.
-    ///
-    /// This is the codec's re-entry point for the reusable analysis, and it is
-    /// deliberately the narrowest possible gate: it checks only what the TYPE's own
-    /// invariants require, and leaves the question of whether these are the RIGHT
-    /// classes to the identity digest that already binds them.
-    ///
-    /// Two conditions are structural rather than a matter of taste, because
-    /// [`ValidationPlan::bind`] indexes a `Vec` of exactly `indices.len()` slots by
-    /// the position it reads back out, and [`ValidationPlan::class_id`] expects
-    /// every class it is asked about to be present:
-    ///
-    /// * a class IRI may appear **once**, because a repeat would silently collapse
-    ///   two entries into one and leave the binding row short by a slot; and
-    /// * the positions must be a **permutation of `0..len`**, because a position at
-    ///   or past the row's length is an out-of-bounds index — a panic, which is an
-    ///   abort no caller of a decoder could handle, arriving from bytes a caller
-    ///   supplied.
-    ///
-    /// What it deliberately does NOT check is that each class sits at the rank
-    /// [`Self::for_shapes`] would have given it. That rule belongs to the
-    /// derivation, and re-stating it here would be a second transcription of the
-    /// reachability rule inside the reader — the drift this codec spends a stage id
-    /// preventing. A permutation that is not the derivation's own is caught where
-    /// every other content claim is caught: the position is folded into
-    /// `class_catalog_digest`, so a product carrying one is refused on the
-    /// class-catalog dimension rather than restored.
-    pub(crate) fn from_entries(entries: Vec<(NamedNode, usize)>) -> Option<Self> {
-        let mut seen = vec![false; entries.len()];
-        for &(_, position) in &entries {
-            let slot = seen.get_mut(position)?;
-            if std::mem::replace(slot, true) {
-                return None;
-            }
-        }
-        let indices: FastMap<NamedNode, usize> = entries.into_iter().collect();
-        // A duplicate class IRI collapses in the map and is visible only as a
-        // shortfall against the slots just proven to be a permutation.
-        (indices.len() == seen.len()).then_some(Self { indices })
-    }
-
-    pub(crate) fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
-        let mut scan = ClassScan::default();
-        for shape in shapes {
-            collect_shape_classes(shape, &mut scan);
-        }
-        let mut classes: Vec<_> = scan.classes.into_iter().collect();
-        classes.sort_unstable();
-        let indices = classes
-            .into_iter()
-            .enumerate()
-            .map(|(position, class)| (class, position))
-            .collect();
-        Self { indices }
-    }
-}
-
-/// The accumulator the class-planning walk carries.
-///
-/// It is a struct rather than a bare set because the walk has to be cycle-safe: a
-/// custom node-expression function's `sh:bodyExpression` may CALL the very function
-/// it belongs to (SHACL 1.2 Node Expressions §6.1/§6.2 hold the body by reference
-/// precisely so that is expressible), so the IR genuinely contains a cycle. Walking
-/// it without a record of the bodies already entered would recurse until the native
-/// stack was exhausted — an ABORT, not an error any caller could handle.
-#[derive(Default)]
-struct ClassScan {
-    /// Every class IRI the walk has reached.
-    classes: FastSet<NamedNode>,
-    /// The custom node-expression function bodies already walked, by IRI. A body
-    /// names the same classes at every call site, so once is enough — and once is
-    /// also all a cyclic body can be given.
-    walked_bodies: FastSet<String>,
-    /// The `sh:nodeByExpression` / `shnex:conformsToShape` shape indexes already
-    /// walked, by the address of the shared `OnceLock` cell.
-    ///
-    /// A shapes graph has exactly one such index, shared by `Arc` across every
-    /// constraint that resolves against it — including the constraints of the
-    /// shapes the index itself holds. Walking it a second time from one of those
-    /// would not terminate, so it is entered once per scan.
-    walked_indexes: Vec<usize>,
-}
-
-impl ClassScan {
-    /// Walk every shape a `sh:nodeByExpression` / `shnex:conformsToShape` index can
-    /// resolve to, once per scan.
-    ///
-    /// These shapes are reachable ONLY through the index — the expression computes
-    /// the shape IRI, and the lookup happens per value node at validation time — so
-    /// a scan that did not enter the index would leave their `sh:class` IRIs
-    /// unplanned while the evaluator went on to ask [`ValidationPlan::class_id`]
-    /// about them. That is the gap the totality claim used to assert rather than
-    /// hold.
-    fn walk_shape_index(&mut self, index: &Arc<std::sync::OnceLock<FastMap<String, Shape>>>) {
-        let cell = Arc::as_ptr(index).addr();
-        if self.walked_indexes.contains(&cell) {
-            return;
-        }
-        self.walked_indexes.push(cell);
-        // An unfilled index resolves nothing: the constraint refuses loudly at
-        // evaluation rather than silently conforming, so there is no shape here
-        // whose classes could go unplanned.
-        let Some(shapes) = index.get() else {
-            return;
-        };
-        for shape in shapes.values() {
-            collect_shape_classes(shape, self);
-        }
-    }
-}
-
-fn collect_shape_classes(shape: &Shape, scan: &mut ClassScan) {
-    for target in &shape.targets {
-        match target {
-            Target::Class(class) => {
-                scan.classes.insert(class.clone());
-            }
-            Target::ImplicitClass(Term::NamedNode(class)) => {
-                scan.classes.insert(class.clone());
-            }
-            Target::SubjectsOf(_)
-            | Target::ObjectsOf(_)
-            | Target::Node(_)
-            | Target::ImplicitClass(_)
-            | Target::Sparql { .. } => {}
-        }
-    }
-    collect_constraints_classes(&shape.constraints, scan);
-    for property in &shape.property_shapes {
-        collect_property_classes(property, scan);
-    }
-}
-
-fn collect_property_classes(property: &PropertyShape, scan: &mut ClassScan) {
-    collect_constraints_classes(&property.constraints, scan);
-    for nested in &property.property_shapes {
-        collect_property_classes(nested, scan);
-    }
-    for reifier_shape in &property.reifier_shapes {
-        collect_shape_classes(reifier_shape, scan);
-    }
-}
-
-fn collect_constraints_classes(constraints: &[Constraint], scan: &mut ClassScan) {
-    for constraint in constraints {
-        match constraint {
-            Constraint::Class(class) => {
-                scan.classes.insert(class.clone());
-            }
-            Constraint::Not(shape) | Constraint::Node(shape) => {
-                collect_shape_classes(shape, scan);
-            }
-            Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
-                for shape in shapes {
-                    collect_shape_classes(shape, scan);
+            .map(|shape| {
+                if shape.deactivated {
+                    Ok(PreparedTargets::default())
+                } else {
+                    PreparedTargets::for_shape(data, shape, &binding, &classes)
                 }
-            }
-            Constraint::QualifiedValueShape {
-                shape, siblings, ..
-            } => {
-                collect_shape_classes(shape, scan);
-                for sibling in siblings {
-                    collect_shape_classes(sibling, scan);
-                }
-            }
-            Constraint::Expression { expr, .. } => {
-                collect_expression_classes(expr, scan);
-            }
-            // `sh:nodeByExpression` (Node Expressions §7.2) judges each value node
-            // against shapes the expression NAMES BY IRI, resolved per value node
-            // against the shared shape index. The expression walk below reaches the
-            // IRI-producing computation, never the shapes it lands on, so the index
-            // has to be entered here or a plan built for a single shape — the one
-            // `conforms` and `conforms_with_depth` build — would leave the resolved
-            // shape's `sh:class` unplanned.
-            Constraint::NodeByExpression { expr, shapes, .. } => {
-                collect_expression_classes(expr, scan);
-                scan.walk_shape_index(shapes);
-            }
-            Constraint::Datatype(_)
-            | Constraint::NodeKind(_)
-            | Constraint::MinCount(_)
-            | Constraint::MaxCount(_)
-            | Constraint::In(_)
-            | Constraint::HasValue(_)
-            | Constraint::Pattern { .. }
-            | Constraint::MinLength(_)
-            | Constraint::MaxLength(_)
-            | Constraint::UniqueLang(_)
-            | Constraint::LanguageIn(_)
-            | Constraint::Closed { .. }
-            | Constraint::MinInclusive(_)
-            | Constraint::MaxInclusive(_)
-            | Constraint::MinExclusive(_)
-            | Constraint::MaxExclusive(_)
-            | Constraint::Sparql { .. }
-            | Constraint::Equals(_)
-            | Constraint::Disjoint(_)
-            | Constraint::LessThan(_)
-            | Constraint::LessThanOrEquals(_)
-            | Constraint::Component { .. } => {}
-        }
-    }
-}
-
-fn collect_expression_classes(expr: &NodeExpr, scan: &mut ClassScan) {
-    match expr {
-        NodeExpr::Constant(_)
-        | NodeExpr::This
-        | NodeExpr::Path(_)
-        | NodeExpr::Empty
-        | NodeExpr::Var(_)
-        | NodeExpr::List(_)
-        // A SPARQL-based node expression (SPARQL Extensions §6.1/§6.2) names its
-        // classes inside opaque query TEXT, which this walk does not read. The
-        // membership view it would want is the SPARQL engine's own, not the
-        // validation plan's, so there is nothing here to pre-resolve.
-        | NodeExpr::Select { .. } => {}
-        // `shnex:instancesOf` (Node Expressions §4.5.1) selects the SHACL instances
-        // of a class, so that class must be resolved in the validation plan exactly
-        // like an `sh:class` constraint or the membership view answers "no
-        // instances" for it.
-        NodeExpr::InstancesOf(class) => {
-            scan.classes.insert(class.clone());
-        }
-        NodeExpr::Filter { nodes, shape } => {
-            collect_expression_classes(nodes, scan);
-            collect_shape_classes(shape, scan);
-        }
-        NodeExpr::FindFirst { nodes, shape } | NodeExpr::MatchAll { nodes, shape } => {
-            collect_expression_classes(nodes, scan);
-            collect_shape_classes(shape, scan);
-        }
-        NodeExpr::NodesMatching(shape) => collect_shape_classes(shape, scan),
-        NodeExpr::ConformsToShape { node, shape } => {
-            collect_expression_classes(node, scan);
-            match shape {
-                // A NAMED shape argument is only reachable through this
-                // expression, so the classes its constraints mention have to be
-                // collected here or they would go unresolved in the plan.
-                ShapeArg::Named(shape) => collect_shape_classes(shape, scan),
-                // A COMPUTED one resolves, at evaluation, to a shape out of the
-                // shapes graph's own top-level index. That index is walked here
-                // rather than assumed already covered: the assumption holds only
-                // for a plan built over the WHOLE shape list, and the single-shape
-                // plans `conforms` / `conforms_with_depth` build are exactly the
-                // ones that would come up short. The expression computing the IRI
-                // is walked for the same reason every other operand is.
-                ShapeArg::Computed { expr, shapes } => {
-                    collect_expression_classes(expr, scan);
-                    scan.walk_shape_index(shapes);
-                }
-            }
-        }
-        NodeExpr::Remove { nodes, remove } => {
-            collect_expression_classes(nodes, scan);
-            collect_expression_classes(remove, scan);
-        }
-        NodeExpr::FlatMap { nodes, map } => {
-            collect_expression_classes(nodes, scan);
-            collect_expression_classes(map, scan);
-        }
-        NodeExpr::PathValues { focus, .. } => collect_expression_classes(focus, scan),
-        // A custom node-expression function call (Node Expressions §6.1/§6.2): the
-        // classes its BODY names must be pre-resolved too, because the body is what
-        // actually evaluates. The arguments are walked for the same reason every
-        // other operand is.
-        NodeExpr::CustomCall { func, args } => {
-            for (_, arg) in args {
-                collect_expression_classes(arg, scan);
-            }
-            // The body is walked ONCE per function: it is shared by `Arc` and names
-            // the same classes at every call site, and it may call this very
-            // function, so re-entering it would not terminate.
-            if scan.walked_bodies.insert(func.iri.as_str().to_owned())
-                && let Some(body) = func.body.get()
-            {
-                collect_expression_classes(body, scan);
-            }
-        }
-        // `shnex:arg` (§6.3) resolves to an argument expression bound at the call
-        // site, which this walk already visited there.
-        NodeExpr::Arg(_) => {}
-        NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
-            for item in items {
-                collect_expression_classes(item, scan);
-            }
-        }
-        NodeExpr::If { cond, then, els } => {
-            collect_expression_classes(cond, scan);
-            collect_expression_classes(then, scan);
-            collect_expression_classes(els, scan);
-        }
-        NodeExpr::Count { of, .. }
-        | NodeExpr::Distinct(of)
-        | NodeExpr::Min(of)
-        | NodeExpr::Max(of)
-        | NodeExpr::Sum(of)
-        | NodeExpr::Limit { of, .. }
-        | NodeExpr::Offset { of, .. }
-        | NodeExpr::Exists(of) => collect_expression_classes(of, scan),
-        NodeExpr::OrderBy { of, key, .. } => {
-            collect_expression_classes(of, scan);
-            collect_expression_classes(key, scan);
-        }
-        NodeExpr::Call(call) => {
-            let args = match call {
-                FnCall::Builtin { args, .. }
-                | FnCall::UserDefined { args, .. }
-                | FnCall::Sparql { args, .. } => args,
-            };
-            for arg in args {
-                collect_expression_classes(arg, scan);
-            }
-        }
-    }
-}
-
-/// Collect subjects that are SHACL instances of `class_iri`: nodes with an
-/// `rdf:type` to `class_iri` or to any asserted (transitive) subclass of it.
-///
-/// `plan` carries the pre-resolved class identity; the shared class view answers
-/// membership without a graph-wide closure walk during focus resolution.
-fn instances_of_class(
-    data: &ShaclData,
-    class_iri: &NamedNode,
-    plan: &ValidationPlan,
-) -> Result<Vec<TermId>, String> {
-    // A class the data graph never names has no instances — an ordinary empty
-    // target, not a failure.
-    let Some(class) = plan.class_id(class_iri)? else {
-        return Ok(Vec::new());
-    };
-    Ok(data.class_view().instances_of(class).collect())
-}
-
-/// A resolved focus node carrying its already-known interned identity.
-#[derive(Debug, Clone)]
-pub(crate) struct FocusNode {
-    term: Term,
-    id: Option<TermId>,
-}
-
-impl FocusNode {
-    #[inline]
-    pub(crate) fn term(&self) -> &Term {
-        &self.term
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Self {
+            lowered,
+            classes,
+            binding,
+            targets,
+        })
     }
 
-    #[inline]
-    pub(crate) fn id(&self) -> Option<TermId> {
-        self.id
-    }
-
-    #[inline]
-    pub(crate) fn into_term(self) -> Term {
-        self.term
-    }
-}
-
-/// Resolve the focus node set for a single shape from its target declarations.
-///
-/// Interned targets are deduplicated in id space and resolved to an owned term
-/// exactly once. Results retain that id for constraint and path evaluation and
-/// are sorted canonically before return.
-pub(crate) fn resolve_focus_nodes(
-    data: &ShaclData,
-    targets: &[Target],
-    plan: &ValidationPlan,
-) -> Result<Vec<FocusNode>, String> {
-    let ds = data.core_view();
-    let mut seen_ids: IdSet = IdSet::default();
-    let mut seen_foreign: FastSet<Term> = FastSet::default();
-    let mut nodes: Vec<FocusNode> = Vec::new();
-
-    for target in targets {
-        let ids = match target {
-            Target::Class(class_iri) => Some(instances_of_class(data, class_iri, plan)?),
-            Target::SubjectsOf(pred) => Some(subjects_of(ds, pred)),
-            Target::ObjectsOf(pred) => Some(objects_of(ds, pred)),
-            Target::ImplicitClass(Term::NamedNode(class)) => {
-                Some(instances_of_class(data, class, plan)?)
-            }
-            Target::ImplicitClass(_) => Some(Vec::new()),
-            Target::Node(_) | Target::Sparql { .. } => None,
-        };
-        if let Some(ids) = ids {
-            // Upper bound on the pushes this target adds: one Vec growth step
-            // instead of amortized doubling across the loop.
-            nodes.reserve(ids.len());
-            for id in ids {
-                if seen_ids.insert(id) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(ds, id),
-                        id: Some(id),
-                    });
-                }
-            }
-            continue;
-        }
-
-        let candidates = match target {
-            Target::Node(term) => vec![term.clone()],
-            // SELECT-form is enforced at shape-load; residual evaluation failures
-            // remain hard validation errors.
-            Target::Sparql {
-                select,
-                substitutions,
-            } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
-                .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
-            Target::Class(_)
-            | Target::SubjectsOf(_)
-            | Target::ObjectsOf(_)
-            | Target::ImplicitClass(_) => unreachable!("id-native target handled above"),
-        };
-        for term in candidates {
-            if let Some(id) = resolve_id(ds, &term) {
-                if seen_ids.insert(id) {
-                    nodes.push(FocusNode { term, id: Some(id) });
-                }
-            } else if seen_foreign.insert(term.clone()) {
-                nodes.push(FocusNode { term, id: None });
-            }
+    /// Bind without indexing any targets, for the entry points that resolve focus
+    /// nodes directly from the shape's declarations instead of from an index.
+    fn bind_untargeted(
+        data: &ShaclData,
+        lowered: Arc<LoweredShapes>,
+        classes: Arc<ClassCatalog>,
+    ) -> Self {
+        let binding = lowered.bind(data.core_view(), &classes);
+        Self {
+            lowered,
+            classes,
+            binding,
+            targets: Vec::new(),
         }
     }
 
-    sort_focus_nodes(&mut nodes);
-    Ok(nodes)
-}
+    /// The plan for the `position`-th shape, with its prepared target index.
+    fn plan<'a>(&'a self, shape: &'a Shape, position: usize) -> Result<ShapePlan<'a>, String> {
+        let targets = self
+            .targets
+            .get(position)
+            .unwrap_or_else(|| self.lowered.no_targets());
+        self.lowered
+            .plan(shape, position, &self.binding, &self.classes, targets)
+    }
 
-/// Dataset-bound target predicates used by [`PreparedValidator`].
-///
-/// Core targets are retained as compact membership indexes instead of eagerly
-/// expanding every target node. A bounded request can therefore test only its
-/// supplied candidates. Explicit and SHACL-SPARQL target results are resolved
-/// once at preparation because they cannot be answered through a Core pattern
-/// lookup.
-#[derive(Debug, Default)]
-struct PreparedTargets {
-    explicit_ids: IdSet,
-    explicit_foreign: FastSet<Term>,
-    target_class_ids: IdSet,
-    subject_predicates: IdSet,
-    object_predicates: IdSet,
+    /// The class analysis behind this binding.
+    fn classes(&self) -> &ClassCatalog {
+        &self.classes
+    }
+
+    /// The resolved identities behind this binding.
+    fn binding(&self) -> &DatasetBinding {
+        &self.binding
+    }
 }
 
 impl PreparedTargets {
-    fn for_shape(data: &ShaclData, shape: &Shape, plan: &ValidationPlan) -> Result<Self, String> {
+    fn for_shape(
+        data: &ShaclData,
+        shape: &Shape,
+        binding: &DatasetBinding,
+        classes: &ClassCatalog,
+    ) -> Result<Self, String> {
         let mut prepared = Self::default();
         for target in &shape.targets {
             match target {
-                Target::Class(class) => {
+                Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
                     // `None` = the data graph names no such class, so the target
                     // set is empty; that is not a preparation failure.
-                    if let Some(class) = plan.class_id(class)? {
-                        prepared.target_class_ids.insert(class);
-                    }
-                }
-                Target::ImplicitClass(Term::NamedNode(class)) => {
-                    if let Some(class) = plan.class_id(class)? {
+                    if let Some(class) = binding.class_id(classes, class)? {
                         prepared.target_class_ids.insert(class);
                     }
                 }
@@ -750,11 +299,126 @@ impl PreparedTargets {
     }
 }
 
+/// Collect subjects that are SHACL instances of `class_iri`: nodes with an
+/// `rdf:type` to `class_iri` or to any asserted (transitive) subclass of it.
+///
+/// `binding` carries the pre-resolved class identity; the shared class view answers
+/// membership without a graph-wide closure walk during focus resolution.
+fn instances_of_class(
+    data: &ShaclData,
+    class_iri: &NamedNode,
+    binding: &DatasetBinding,
+    classes: &ClassCatalog,
+) -> Result<Vec<TermId>, String> {
+    // A class the data graph never names has no instances — an ordinary empty
+    // target, not a failure.
+    let Some(class) = binding.class_id(classes, class_iri)? else {
+        return Ok(Vec::new());
+    };
+    Ok(data.class_view().instances_of(class).collect())
+}
+
+/// A resolved focus node carrying its already-known interned identity.
+#[derive(Debug, Clone)]
+pub(crate) struct FocusNode {
+    term: Term,
+    id: Option<TermId>,
+}
+
+impl FocusNode {
+    #[inline]
+    pub(crate) fn term(&self) -> &Term {
+        &self.term
+    }
+
+    #[inline]
+    pub(crate) fn id(&self) -> Option<TermId> {
+        self.id
+    }
+
+    #[inline]
+    pub(crate) fn into_term(self) -> Term {
+        self.term
+    }
+}
+
+/// Resolve the focus node set for a single shape from its target declarations.
+///
+/// Interned targets are deduplicated in id space and resolved to an owned term
+/// exactly once. Results retain that id for constraint and path evaluation and
+/// are sorted canonically before return.
+pub(crate) fn resolve_focus_nodes(
+    data: &ShaclData,
+    targets: &[Target],
+    binding: &DatasetBinding,
+    classes: &ClassCatalog,
+) -> Result<Vec<FocusNode>, String> {
+    let ds = data.core_view();
+    let mut seen_ids: IdSet = IdSet::default();
+    let mut seen_foreign: FastSet<Term> = FastSet::default();
+    let mut nodes: Vec<FocusNode> = Vec::new();
+
+    for target in targets {
+        let ids = match target {
+            Target::Class(class_iri) => {
+                Some(instances_of_class(data, class_iri, binding, classes)?)
+            }
+            Target::SubjectsOf(pred) => Some(subjects_of(ds, pred)),
+            Target::ObjectsOf(pred) => Some(objects_of(ds, pred)),
+            Target::ImplicitClass(Term::NamedNode(class)) => {
+                Some(instances_of_class(data, class, binding, classes)?)
+            }
+            Target::ImplicitClass(_) => Some(Vec::new()),
+            Target::Node(_) | Target::Sparql { .. } => None,
+        };
+        if let Some(ids) = ids {
+            // Upper bound on the pushes this target adds: one Vec growth step
+            // instead of amortized doubling across the loop.
+            nodes.reserve(ids.len());
+            for id in ids {
+                if seen_ids.insert(id) {
+                    nodes.push(FocusNode {
+                        term: term_id_to_native(ds, id),
+                        id: Some(id),
+                    });
+                }
+            }
+            continue;
+        }
+
+        let candidates = match target {
+            Target::Node(term) => vec![term.clone()],
+            // SELECT-form is enforced at shape-load; residual evaluation failures
+            // remain hard validation errors.
+            Target::Sparql {
+                select,
+                substitutions,
+            } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
+                .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
+            Target::Class(_)
+            | Target::SubjectsOf(_)
+            | Target::ObjectsOf(_)
+            | Target::ImplicitClass(_) => unreachable!("id-native target handled above"),
+        };
+        for term in candidates {
+            if let Some(id) = resolve_id(ds, &term) {
+                if seen_ids.insert(id) {
+                    nodes.push(FocusNode { term, id: Some(id) });
+                }
+            } else if seen_foreign.insert(term.clone()) {
+                nodes.push(FocusNode { term, id: None });
+            }
+        }
+    }
+
+    sort_focus_nodes(&mut nodes);
+    Ok(nodes)
+}
+
 fn evaluate_shape_focus_nodes(
     data: &ShaclData,
     shapes: &Shapes,
-    shape: &Shape,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
 ) -> Result<Vec<crate::report::ValidationResult>, String> {
@@ -773,7 +437,6 @@ fn evaluate_shape_focus_nodes(
                     data,
                     focus.term(),
                     focus.id(),
-                    shape,
                     shapes.box_role_vocab.as_ref(),
                     plan,
                 )?);
@@ -811,7 +474,6 @@ fn evaluate_shape_focus_nodes(
                     data,
                     focus.term(),
                     focus.id(),
-                    shape,
                     shapes.box_role_vocab.as_ref(),
                     plan,
                 )?);
@@ -859,7 +521,7 @@ fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> Validatio
 fn validate_with_plan_and_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
-    plan: &ValidationPlan,
+    bound: &BoundShapes,
     mut include_focus: F,
 ) -> Result<ValidationReport, String>
 where
@@ -872,11 +534,12 @@ where
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut all_results = Vec::new();
 
-    for shape in &shapes.node_shapes {
+    for (position, shape) in shapes.node_shapes.iter().enumerate() {
         if shape.deactivated {
             continue;
         }
-        let mut focus_nodes = resolve_focus_nodes(data, &shape.targets, plan)?;
+        let mut focus_nodes =
+            resolve_focus_nodes(data, &shape.targets, bound.binding(), bound.classes())?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
         // the retained set to workers.
@@ -884,8 +547,7 @@ where
         all_results.extend(evaluate_shape_focus_nodes(
             data,
             shapes,
-            shape,
-            plan,
+            bound.plan(shape, position)?,
             &focus_nodes,
             |_| true,
         )?);
@@ -910,6 +572,23 @@ where
 pub struct PreparedShapes {
     shapes: Arc<Shapes>,
     classes: Arc<ClassCatalog>,
+    /// The stage-0 lowering of these shapes: their structure with every
+    /// shape-constant derivation already made, shared with every binding.
+    ///
+    /// Derived on first BIND rather than in a constructor, and that is the whole
+    /// point of the cell. [`Self::with_carried_analysis`] is the prepared-product
+    /// admit seam, and a restore is promised "no RDF reparsing, no shape
+    /// extraction, no repeated shared analysis" — a lowering built in
+    /// [`Self::with_provenance`] only would either be absent on a restored
+    /// preparation (leaving every `sh:in`, `sh:hasValue` and `sh:class` on it
+    /// unable to constrain, silently) or would have to be rebuilt at admit, which
+    /// is the repeated analysis the promise rules out. Deriving it here, once, on
+    /// whichever bind comes first, is the only placement that is correct for both
+    /// constructors.
+    ///
+    /// Shared by `Arc` so a clone of a preparation shares the memoized lowering
+    /// rather than deriving a second one.
+    lowered: OnceLock<Arc<LoweredShapes>>,
     /// Where this preparation came from, recorded by the expression that built it.
     ///
     /// Shared rather than owned so that binding a preparation to a dataset — the
@@ -942,8 +621,15 @@ impl PreparedShapes {
     ///
     /// [`ParseProvenance`]: crate::provenance::ParseProvenance
     pub(crate) fn with_provenance(shapes: Arc<Shapes>, provenance: ValidatorProvenance) -> Self {
-        let classes = Arc::new(ClassCatalog::for_shapes(shapes.node_shapes.iter()));
-        Self::with_carried_analysis(shapes, provenance, classes)
+        // ONE walk: the class catalog is this lowering's own output, not a second
+        // traversal beside it. The lowering is retained rather than discarded, so a
+        // locally parsed preparation reaches its first bind with the memo already
+        // filled and pays for the walk exactly as many times as a restored one.
+        let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
+        let classes = Arc::clone(lowered.classes());
+        let prepared = Self::with_carried_analysis(shapes, provenance, classes);
+        let _ = prepared.lowered.set(lowered);
+        prepared
     }
 
     /// Assemble a preparation around an analysis that was NOT derived here.
@@ -972,8 +658,22 @@ impl PreparedShapes {
         Self {
             shapes,
             classes,
+            lowered: OnceLock::new(),
             provenance: Arc::new(provenance),
         }
+    }
+
+    /// The stage-0 lowering of these shapes, deriving it on first use.
+    ///
+    /// Idempotent and shared: the walk runs at most once per preparation however
+    /// many datasets it is bound to, and a preparation restored from a prepared
+    /// product reaches it by exactly the same route a locally parsed one does.
+    fn lowered(&self) -> Arc<LoweredShapes> {
+        Arc::clone(
+            self.lowered.get_or_init(|| {
+                Arc::new(crate::plan::lower_shapes(self.shapes.node_shapes.iter()))
+            }),
+        )
     }
 
     /// Where this preparation came from: parsed in this process, or restored from a
@@ -1200,8 +900,10 @@ pub struct PreparedValidator {
     /// it and with every sibling binding — a bind copies a reference count, never an
     /// identity.
     provenance: Arc<ValidatorProvenance>,
-    plan: ValidationPlan,
-    targets: Vec<PreparedTargets>,
+    /// Stage 0 × this dataset: the shape lowering, the class analysis, every
+    /// identity they named and every active target, resolved once here so no focus
+    /// node resolves any of them again.
+    bound: BoundShapes,
 }
 
 impl PreparedValidator {
@@ -1219,24 +921,17 @@ impl PreparedValidator {
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
-        let plan = ValidationPlan::bind(data.core_view(), Arc::clone(&prepared.classes));
-        let targets = shapes
-            .node_shapes
-            .iter()
-            .map(|shape| {
-                if shape.deactivated {
-                    Ok(PreparedTargets::default())
-                } else {
-                    PreparedTargets::for_shape(&data, shape, &plan)
-                }
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        let bound = BoundShapes::bind(
+            &data,
+            &shapes.node_shapes,
+            prepared.lowered(),
+            Arc::clone(&prepared.classes),
+        )?;
         Ok(Self {
             data,
             shapes,
             provenance: Arc::clone(&prepared.provenance),
-            plan,
-            targets,
+            bound,
         })
     }
 
@@ -1321,16 +1016,16 @@ impl PreparedValidator {
     /// Returns an error when a constraint evaluation hard-fails.
     pub fn validate(&self) -> Result<ValidationReport, String> {
         let mut all_results = Vec::new();
-        for (shape, targets) in self.shapes.node_shapes.iter().zip(&self.targets) {
+        for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
                 continue;
             }
-            let focus_nodes = targets.resolve_all(&self.data);
+            let plan = self.bound.plan(shape, position)?;
+            let focus_nodes = plan.targets().resolve_all(&self.data);
             all_results.extend(evaluate_shape_focus_nodes(
                 &self.data,
                 &self.shapes,
-                shape,
-                &self.plan,
+                plan,
                 &focus_nodes,
                 |_| true,
             )?);
@@ -1417,15 +1112,16 @@ impl PreparedValidator {
             return Ok(finish_report(Vec::new()));
         }
         let mut all_results = Vec::new();
-        for (shape, targets) in self.shapes.node_shapes.iter().zip(&self.targets) {
+        for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
                 continue;
             }
+            let plan = self.bound.plan(shape, position)?;
+            let targets = plan.targets();
             all_results.extend(evaluate_shape_focus_nodes(
                 &self.data,
                 &self.shapes,
-                shape,
-                &self.plan,
+                plan,
                 focus_nodes,
                 |focus| targets.contains(&self.data, focus),
             )?);
@@ -1598,8 +1294,10 @@ pub fn validate_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    let plan = ValidationPlan::for_shapes(data.core_view(), shapes);
-    validate_with_plan_and_focus_filter(data, shapes, &plan, &mut include_focus)
+    let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
+    let classes = Arc::clone(lowered.classes());
+    let bound = BoundShapes::bind_untargeted(data, lowered, classes);
+    validate_with_plan_and_focus_filter(data, shapes, &bound, &mut include_focus)
 }
 
 /// Validate a frozen [`::purrdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
@@ -1997,7 +1695,7 @@ mod tests {
                     .unwrap();
             let data = project_dataset(&data).unwrap();
             let binding = prepared.bind_projected_dataset(Arc::clone(&data)).unwrap();
-            assert!(Arc::ptr_eq(&prepared.classes, &binding.plan.classes));
+            assert!(Arc::ptr_eq(&prepared.classes, &binding.bound.classes));
             assert!(Arc::ptr_eq(&data, &binding.data.core_arc()));
             let report = binding.validate().unwrap();
             assert_eq!(report.results.len(), *expected, "{source}");
@@ -2653,22 +2351,27 @@ mod tests {
              <http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Value> .\n",
         );
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let plan = ValidationPlan::for_shapes(data.as_ref(), &shapes);
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let classes = lowered.classes();
+        let binding = lowered.bind(data.as_ref(), classes);
 
-        assert_eq!(plan.class_ids.len(), 3);
+        assert_eq!(classes.len(), 3);
         assert!(
-            plan.class_id(&NamedNode::from("http://example.org/ns#Root"))
+            binding
+                .class_id(classes, &NamedNode::from("http://example.org/ns#Root"))
                 .expect("ex:Root is planned")
                 .is_some()
         );
         assert!(
-            plan.class_id(&NamedNode::from("http://example.org/ns#Value"))
+            binding
+                .class_id(classes, &NamedNode::from("http://example.org/ns#Value"))
                 .expect("ex:Value is planned")
                 .is_some()
         );
         // Planned but absent from the DATA graph: a soft `None`, never an error.
         assert!(
-            plan.class_id(&NamedNode::from("http://example.org/ns#Nested"))
+            binding
+                .class_id(classes, &NamedNode::from("http://example.org/ns#Nested"))
                 .expect("ex:Nested is planned even though the data never names it")
                 .is_none()
         );
@@ -2694,18 +2397,23 @@ mod tests {
             "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Root> .\n",
         );
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let plan = ValidationPlan::for_shapes(data.as_ref(), &shapes);
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let classes = lowered.classes();
+        let binding = lowered.bind(data.as_ref(), classes);
 
         // Planned, but the data graph interns no such class term.
         assert_eq!(
-            plan.class_id(&NamedNode::from("http://example.org/ns#Ghost")),
+            binding.class_id(classes, &NamedNode::from("http://example.org/ns#Ghost")),
             Ok(None),
             "a planned class the data never names is a soft None, not a refusal"
         );
 
         // Never collected by the walk at all.
-        let error = plan
-            .class_id(&NamedNode::from("http://example.org/ns#NotInTheCatalog"))
+        let error = binding
+            .class_id(
+                classes,
+                &NamedNode::from("http://example.org/ns#NotInTheCatalog"),
+            )
             .expect_err("a class outside the catalog is a plan defect");
         assert!(
             error.contains("NotInTheCatalog") && error.contains("class-planning walk"),

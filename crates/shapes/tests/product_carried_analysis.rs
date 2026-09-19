@@ -444,7 +444,7 @@ fn a_carried_analysis_the_identity_does_not_pin_is_refused() {
 /// refused too.
 ///
 /// The class set is untouched here, so nothing but the positions can explain the
-/// refusal. That is the point: a `ValidationPlan` indexes its resolved-term row by
+/// refusal. That is the point: a dataset binding indexes its resolved-term row by
 /// the position the catalog assigns, so two catalogs over the same classes with
 /// different assignments are different analyses, and an identity that bound only
 /// the IRI set would let one pass for the other.
@@ -603,4 +603,101 @@ fn parsing_admitting_and_rebuilding_agree() {
 
     assert_eq!(report_nt(&admitted), parsed);
     assert_eq!(report_nt(&rebuilt), parsed);
+}
+
+// ── A restored preparation still CONSTRAINS ────────────────────────────────────
+
+/// A shapes graph whose constraints are the ones a shape lowering resolves against
+/// the data graph: `sh:class`, `sh:in` and `sh:hasValue`.
+///
+/// Every one of them is decided by an interned identity that a preparation resolves
+/// when it binds. That makes them exactly the constraints a restored preparation
+/// could lose without any existing check noticing: a restore whose lowering was
+/// absent would answer "conforms" for all three and produce an EMPTY report, which
+/// is indistinguishable from a data graph that happens to be valid.
+const LOWERED_SHAPES: &str = r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+
+ex:DocumentShape a sh:NodeShape ;
+    sh:targetClass ex:Document ;
+    sh:property [ sh:path ex:author ; sh:class ex:Person ] ;
+    sh:property [ sh:path ex:status ; sh:in ( "draft" "final" ) ] ;
+    sh:property [ sh:path ex:tag ; sh:hasValue ex:required ] .
+"#;
+
+/// A data graph that violates all three of [`LOWERED_SHAPES`]'s constraints.
+const LOWERED_DATA: &str = r#"
+@prefix ex: <http://example.org/ns#> .
+
+ex:d1 a ex:Document ;
+    ex:author ex:notAPerson ;
+    ex:status "archived" ;
+    ex:tag ex:other .
+ex:notAPerson a ex:Thing .
+"#;
+
+/// Validate [`LOWERED_DATA`] with `prepared`, rendered as canonical N-Triples.
+fn lowered_report_nt(prepared: &PreparedShapes) -> String {
+    let data: Arc<RdfDataset> =
+        parse_turtle_to_dataset(LOWERED_DATA, None).expect("the fixture data parses");
+    prepared
+        .bind_shared_dataset(data)
+        .expect("the data graph binds")
+        .validate()
+        .expect("validation runs")
+        .to_ntriples()
+}
+
+/// **A product-admitted preparation constrains exactly as a freshly parsed one
+/// does — `sh:class`, `sh:in` and `sh:hasValue` included.**
+///
+/// This is the check a lowered constraint form makes necessary. The lowering is
+/// derived from the shape tree and memoized; a preparation restored from a product
+/// reaches it by a DIFFERENT route from one parsed in this process, and a route
+/// that never populated it would leave every identity-resolved constraint unable to
+/// constrain. That failure is silent by construction: the report simply gets
+/// shorter, and a shorter report from a validator is the same shape as a cleaner
+/// data graph.
+///
+/// So the comparison is against a report that is asserted NON-EMPTY first, and
+/// asserted to name all three components. A restored preparation that had stopped
+/// constraining would produce an empty report and fail the equality; one that had
+/// stopped constraining while the fixture also stopped violating would fail the
+/// non-vacuity check before the comparison was ever reached.
+#[test]
+fn an_admitted_product_constrains_exactly_as_a_fresh_parse_does() {
+    let shapes = parse_shapes(LOWERED_SHAPES, None).expect("the fixture shapes parse");
+    let parsed = PreparedShapes::new(Arc::new(shapes));
+    let expected = lowered_report_nt(&parsed);
+
+    for component in [
+        "ClassConstraintComponent",
+        "InConstraintComponent",
+        "HasValueConstraintComponent",
+    ] {
+        assert!(
+            expected.contains(component),
+            "the fixture must produce a {component} violation, or this comparison can pass by \
+             both sides being empty: {expected}"
+        );
+    }
+
+    let product = parsed
+        .to_product(&ShapesProfile::CORE)
+        .expect("the fixture is representable as a product");
+    let admitted = admit(&product).expect("the product admits in the process that wrote it");
+
+    assert_eq!(
+        lowered_report_nt(&admitted),
+        expected,
+        "a product-admitted preparation answered differently from a fresh parse of the same \
+         shapes graph, so a restore does not carry — or does not derive — everything validation \
+         needs",
+    );
+
+    // …and again on a SECOND bind of the same restored preparation, because the
+    // lowering is memoized on first use: a restore that derived it correctly once
+    // and then read a stale or empty memo would pass the comparison above.
+    assert_eq!(lowered_report_nt(&admitted), expected);
 }

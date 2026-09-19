@@ -42,6 +42,7 @@ pub mod linkml;
 pub mod model;
 pub(crate) mod parallel;
 pub mod path;
+pub(crate) mod plan;
 pub(crate) mod prebinding;
 pub mod product;
 pub mod provenance;

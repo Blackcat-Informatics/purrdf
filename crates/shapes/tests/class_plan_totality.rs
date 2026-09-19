@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The class plan must cover every class evaluation can reach — and must keep the
-//! two "no id" answers apart.
+//! The shape lowering must cover every term evaluation can reach — and must keep
+//! the two "no id" answers apart.
 //!
-//! `ValidationPlan::class_id` answers a class IRI with its interned dataset id.
-//! There are two negative answers and they are NOT the same condition:
+//! A bound lowering answers a shape constant with its interned dataset id. There
+//! are two negative answers and they are NOT the same condition:
 //!
 //! * the class is planned but the DATA GRAPH never names it — entirely normal,
 //!   read as "nothing is an instance"; and
-//! * the class is missing from the CATALOG — a defect in the planning walk, which
+//! * the term is missing from the LOWERING — a defect in the walk, which
 //!   used to be an `expect`, i.e. a panic, and a panic ABORTS across the PyO3 and
 //!   C ABI boundaries rather than surfacing as an error a host can handle.
 //!
@@ -147,4 +147,93 @@ ex:a a ex:Thing .
     let report = validate_dataset(&data, &shapes).expect("an empty target class is not an error");
     assert!(report.conforms, "no focus node, so nothing to report");
     assert!(report.results.is_empty());
+}
+
+/// An `sh:hasValue` naming an IRI the data graph does not contain is
+/// unsatisfiable. That is a VIOLATION on every focus node with the path, not an
+/// error and not a silently skipped constraint.
+///
+/// This is the constraint whose whole answer is an interned identity, so a
+/// lowering that read "no identity" as "nothing to check" would turn the
+/// unsatisfiable case into a conforming one — the silent-drop mirror of the
+/// refusal above.
+#[test]
+fn an_unsatisfiable_has_value_still_reports_a_violation() {
+    let shapes_ttl = r"
+ex:S a sh:NodeShape ;
+    sh:targetClass ex:Thing ;
+    sh:property [ sh:path ex:ref ; sh:hasValue ex:NeverInterned ] .
+";
+    let data_ttl = r"
+ex:a a ex:Thing ; ex:ref ex:r1 .
+";
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
+    let data: Arc<_> =
+        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
+    let report = validate_dataset(&data, &shapes)
+        .expect("a required value the data graph lacks is not an error");
+    assert!(
+        !report.conforms,
+        "ex:a's ex:ref values do not include the required value"
+    );
+    assert_eq!(report.results.len(), 1, "exactly one sh:hasValue violation");
+    assert_eq!(report.results[0].focus_node, ex("a"));
+    assert_eq!(
+        report.results[0].source_constraint_component,
+        NamedNode::new_unchecked(
+            "http://www.w3.org/ns/shacl#HasValueConstraintComponent".to_owned()
+        ),
+        "the constraint was EVALUATED, not skipped"
+    );
+}
+
+/// An `sh:in` list none of whose members the data graph interns admits nothing.
+/// Every value node violates; the constraint is not skipped and the shapes graph
+/// is not refused.
+#[test]
+fn an_in_list_with_no_interned_members_still_reports_a_violation() {
+    let shapes_ttl = r"
+ex:S a sh:NodeShape ;
+    sh:targetClass ex:Thing ;
+    sh:property [ sh:path ex:ref ; sh:in ( ex:NeverInterned ex:AlsoNeverInterned ) ] .
+";
+    let data_ttl = r"
+ex:a a ex:Thing ; ex:ref ex:r1 .
+";
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
+    let data: Arc<_> =
+        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
+    let report = validate_dataset(&data, &shapes)
+        .expect("an sh:in list the data graph does not intern is not an error");
+    assert!(!report.conforms, "ex:r1 is not one of the permitted values");
+    assert_eq!(report.results.len(), 1, "exactly one sh:in violation");
+    assert_eq!(
+        report.results[0].source_constraint_component,
+        NamedNode::new_unchecked("http://www.w3.org/ns/shacl#InConstraintComponent".to_owned()),
+        "the constraint was EVALUATED, not skipped"
+    );
+}
+
+/// The mirror of the two above: an `sh:in` whose member the data graph DOES
+/// intern still admits that value. Over-refusal would show up here as a spurious
+/// violation on a conforming graph.
+#[test]
+fn an_in_list_admits_a_value_the_data_graph_interns() {
+    let shapes_ttl = r"
+ex:S a sh:NodeShape ;
+    sh:targetClass ex:Thing ;
+    sh:property [ sh:path ex:ref ; sh:in ( ex:r1 ex:NeverInterned ) ] .
+";
+    let data_ttl = r"
+ex:a a ex:Thing ; ex:ref ex:r1 .
+";
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
+    let data: Arc<_> =
+        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
+    let report = validate_dataset(&data, &shapes).expect("validation runs");
+    assert!(
+        report.conforms,
+        "ex:r1 is a permitted value, so the shape must not refuse it: {:?}",
+        report.results
+    );
 }
