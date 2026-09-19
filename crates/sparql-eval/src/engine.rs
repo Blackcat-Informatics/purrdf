@@ -1867,7 +1867,9 @@ impl NativeSparqlEngine {
     /// every row a `Vec`, every variable a `String`, plus the auxiliary graph of
     /// constructed list cells. This hands `visit` the rows as the evaluator holds
     /// them, so a caller that reads two columns of a wide result pays for two
-    /// columns.
+    /// columns. The auxiliary graph is deferred rather than skipped — `visit` asks
+    /// for it at [`InternedSolutions::constructed_dataset`], and gets the graph the
+    /// owned door would have attached.
     ///
     /// # Why the result cannot simply be returned
     ///
@@ -2554,6 +2556,15 @@ impl SparqlEngine for NativeSparqlEngine {
 /// additive rather than a second implementation: both take the very same
 /// [`Outcome`] the evaluator produced, so the two doors cannot answer differently
 /// about what a query returned — only about who owns it.
+///
+/// That covers the auxiliary graph of constructed list cells too, which is the one
+/// part of a solution result that does not live in the [`Outcome`] but in the
+/// context beside it. [`materialize`] attaches it here, eagerly, because the owned
+/// result outlives the context and has no later chance to ask. A visitor is still
+/// inside the evaluation, so the borrowed door reaches the identical graph through
+/// [`InternedSolutions::constructed_dataset`] instead — on demand, because a query
+/// that constructs nothing (every query SHACL runs) would otherwise be charged
+/// here, per result, for an empty dataset no visitor reads.
 fn borrow_outcome<'a, 'd, D: DatasetView + Sync>(
     outcome: &'a Outcome<D::Id>,
     ctx: &'a EvalCtx<'d, D>,

@@ -19,6 +19,12 @@
 //! [`VarSchema`](crate::solution::VarSchema) — and pays for exactly the cells it
 //! asks for.
 //!
+//! Deferred, not dropped: the auxiliary graph is the one item on that list a
+//! result is not complete without, since a constructed list head names cells that
+//! exist nowhere in the queried dataset. It moves to
+//! [`InternedSolutions::constructed_dataset`], where a visitor asks for it and a
+//! query that constructed nothing builds nothing.
+//!
 //! # Why a visitor and not a returned value
 //!
 //! A [`SolutionTerm::Computed`] cell names a term minted into this execution's
@@ -169,6 +175,32 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
             .copied()
             .flatten()
             .map(|term| self.value_of(term))
+    }
+
+    /// The auxiliary graph of quads this query INVENTED, reachable from a term
+    /// bound in a surviving row.
+    ///
+    /// A list constructor (`listSlice`, `listConcat`) binds a cell to the HEAD of
+    /// an `rdf:List` whose cells exist nowhere in the queried dataset — they were
+    /// minted by this execution. A caller that reads that head out of
+    /// [`Self::cell`] and no more holds an identifier pointing into a graph it
+    /// cannot see. This is that graph: the very same quads, built the very same
+    /// way, that the owned egress hands back as
+    /// [`SparqlResult::Solutions`](purrdf_core::SparqlResult)'s `aux` field, so the
+    /// two egress doors answer identically about what the query returned.
+    ///
+    /// # Why an accessor and not a field
+    ///
+    /// The owned door attaches the graph eagerly because it is building a result
+    /// that outlives the evaluation and has no later chance to. A visitor is still
+    /// INSIDE the evaluation, so it can simply ask — and the overwhelmingly common
+    /// query constructs nothing, so a field populated at construction would charge
+    /// every borrowed result, on every row of every SHACL focus node, for an empty
+    /// dataset nobody reads. Asked or not, a query that invented no cells walks no
+    /// rows here.
+    #[must_use]
+    pub fn constructed_dataset(&self) -> Arc<RdfDataset> {
+        self.ctx.constructed_dataset_of(self.seq)
     }
 }
 
