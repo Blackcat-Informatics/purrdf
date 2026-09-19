@@ -47,6 +47,7 @@ use ::purrdf::{FastMap, FastSet, IdSet, TermId};
 use crate::data::resolve_id;
 use crate::data_view::ShaclRead;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
+use crate::footprint::{Footprint, FootprintWalk, applies_to_current_node};
 use crate::shapes::{
     ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
 };
@@ -209,6 +210,14 @@ pub(crate) struct LoweredShapes {
     /// would put an allocation back on the per-focus-node path this lowering
     /// exists to clear.
     no_targets: PreparedTargets,
+    /// The dependency footprint this SAME walk derived: which graph changes can
+    /// move which focus node's verdict.
+    ///
+    /// Here rather than in a derivation of its own because the reachability rule
+    /// it needs is the one this walk already applies, and a second traversal would
+    /// be a second transcription of that rule — the drift this module exists to
+    /// prevent.
+    footprint: Footprint,
 }
 
 impl LoweredShapes {
@@ -302,6 +311,12 @@ impl LoweredShapes {
     #[inline]
     pub(crate) fn no_targets(&self) -> &PreparedTargets {
         &self.no_targets
+    }
+
+    /// The dependency footprint this walk derived.
+    #[inline]
+    pub(crate) fn footprint(&self) -> &Footprint {
+        &self.footprint
     }
 }
 
@@ -1512,6 +1527,10 @@ struct ShapeWalk {
     /// The function IRIs whose bodies are currently being lowered, so a body that
     /// calls its own function records the call and stops rather than recursing.
     in_flight: Vec<String>,
+    /// The dependency footprint accumulating alongside the lowering. It drives no
+    /// recursion of its own: every visit below hands it what the lowering walk
+    /// just reached, at the node the lowering walk is standing on.
+    footprint: FootprintWalk,
 }
 
 impl ShapeWalk {
@@ -1563,6 +1582,7 @@ impl ShapeWalk {
             indexes: self.indexes.into_boxed_slice(),
             bodies: self.bodies,
             no_targets: PreparedTargets::default(),
+            footprint: self.footprint.finish(),
         }
     }
 
@@ -1588,10 +1608,18 @@ impl ShapeWalk {
         // evaluation rather than silently conforming, so there is no shape here
         // whose classes could go unplanned.
         if let Some(shapes) = index.get() {
+            // The index is entered once, from wherever the walk first reached it,
+            // but the shapes inside are resolved PER VALUE NODE against data — so
+            // the node their reads start from is not the node this walk happens to
+            // be standing on. Walking them unrooted makes the footprint say so
+            // instead of describing them from an arbitrary chain, and keeps the
+            // derivation independent of arrival order.
+            let saved = self.footprint.enter_unrooted();
             let lowered: FastMap<String, LoweredShape> = shapes
                 .iter()
                 .map(|(iri, shape)| (iri.clone(), lower_shape(shape, self)))
                 .collect();
+            self.footprint.leave(saved);
             self.indexes[position as usize].shapes = lowered;
         }
         position
@@ -1701,7 +1729,9 @@ fn standalone_root() -> Shape {
 /// Lower one shape: its targets' classes, its own constraints and its property
 /// shapes.
 fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
+    let scope = walk.footprint.enter_shape();
     for target in &shape.targets {
+        walk.footprint.record_target(target);
         match target {
             Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
                 walk.classes.insert(class.clone());
@@ -1713,14 +1743,16 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
             | Target::Sparql { .. } => {}
         }
     }
-    LoweredShape {
+    let lowered = LoweredShape {
         constraints: lower_constraints(&shape.constraints, &shape.property_shapes, walk),
         properties: shape
             .property_shapes
             .iter()
             .map(|property| lower_property(property, walk))
             .collect(),
-    }
+    };
+    walk.footprint.leave(scope);
+    lowered
     // `shape.rules` is deliberately NOT descended into. A rule's own shapes are
     // planned by the rules engine, against a plan it builds for the rule's shape
     // and conditions together, so reaching them from here would put classes into
@@ -1730,19 +1762,35 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
 /// Lower one property shape: its path, its constraints, its nested property shapes
 /// and its reifier shapes.
 fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProperty {
+    let path = lower_path(&property.path, walk);
+    // Every step of the path is a read, and everything below applies to the nodes
+    // the path arrives at — so the footprint moves to those value nodes here, while
+    // remembering the declaring node the property-pair comparands are read from.
+    let scope = walk.footprint.enter_values(&property.path);
+    let constraints = lower_constraints(&property.constraints, &property.property_shapes, walk);
+    let properties: Box<[LoweredProperty]> = property
+        .property_shapes
+        .iter()
+        .map(|nested| lower_property(nested, walk))
+        .collect();
+    // A reifier shape constrains the REIFIER of the triple this path traversed, and
+    // a reifier is not reached from the focus node by a SHACL path — it is found
+    // through the RDF 1.2 statement overlay. Unrooted, therefore: a reifier shape
+    // that reads a triple makes the footprint say it cannot bound the reads rather
+    // than describing them from a chain that does not lead there.
+    let reified = walk.footprint.enter_unrooted();
+    let reifiers: Box<[LoweredShape]> = property
+        .reifier_shapes
+        .iter()
+        .map(|reifier| lower_shape(reifier, walk))
+        .collect();
+    walk.footprint.leave(reified);
+    walk.footprint.leave(scope);
     LoweredProperty {
-        path: lower_path(&property.path, walk),
-        constraints: lower_constraints(&property.constraints, &property.property_shapes, walk),
-        properties: property
-            .property_shapes
-            .iter()
-            .map(|nested| lower_property(nested, walk))
-            .collect(),
-        reifiers: property
-            .reifier_shapes
-            .iter()
-            .map(|reifier| lower_shape(reifier, walk))
-            .collect(),
+        path,
+        constraints,
+        properties,
+        reifiers,
     }
 }
 
@@ -1807,6 +1855,10 @@ fn lower_constraint(
     siblings: &[PropertyShape],
     walk: &mut ShapeWalk,
 ) -> LoweredConstraint {
+    // The footprint's own visit of this constraint, at the node the walk is
+    // standing on. It records only what the constraint reads DIRECTLY; everything
+    // it reaches is reached again below, by this same walk.
+    walk.footprint.record_constraint(constraint);
     match constraint {
         Constraint::Class(class) => LoweredConstraint::Class(walk.class_slot(class)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
@@ -1902,6 +1954,43 @@ fn lower_constraint(
     }
 }
 
+/// Lower a shape that judges the nodes `nodes` produces.
+///
+/// Identical to [`lower_shape`] except in what the FOOTPRINT records: the shape's
+/// reads start at the judged nodes, which are the node the walk stands on only when
+/// `nodes` is `shnex:this`.
+fn lower_shape_at_nodes(shape: &Shape, nodes: &NodeExpr, walk: &mut ShapeWalk) -> LoweredShape {
+    if applies_to_current_node(nodes) {
+        return lower_shape(shape, walk);
+    }
+    lower_shape_unrooted(shape, walk)
+}
+
+/// Lower a shape whose focus node the footprint cannot reach from a focus node by
+/// any path.
+fn lower_shape_unrooted(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
+    let scope = walk.footprint.enter_unrooted();
+    let lowered = lower_shape(shape, walk);
+    walk.footprint.leave(scope);
+    lowered
+}
+
+/// Lower an expression that is re-evaluated with each node `nodes` produced as its
+/// focus — the footprint twin of [`lower_shape_at_nodes`].
+fn lower_expression_at_nodes(
+    expr: &NodeExpr,
+    nodes: &NodeExpr,
+    walk: &mut ShapeWalk,
+) -> LoweredExpr {
+    if applies_to_current_node(nodes) {
+        return lower_expression(expr, walk);
+    }
+    let scope = walk.footprint.enter_unrooted();
+    let lowered = lower_expression(expr, walk);
+    walk.footprint.leave(scope);
+    lowered
+}
+
 /// Lower a list of shapes reached through one constraint, in declaration order.
 fn lower_shape_list(shapes: &[Shape], walk: &mut ShapeWalk) -> Box<[LoweredShape]> {
     shapes
@@ -1918,6 +2007,8 @@ fn lower_shape_list(shapes: &[Shape], walk: &mut ShapeWalk) -> Box<[LoweredShape
 /// ones that would otherwise leave an `sh:class` inside a `sh:filterShape`
 /// unplanned.
 fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
+    // The footprint's own visit, for the same reason [`lower_constraint`] has one.
+    walk.footprint.record_expression(expr);
     match expr {
         NodeExpr::Constant(_)
         | NodeExpr::This
@@ -1952,22 +2043,30 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
         NodeExpr::Filter { nodes, shape }
         | NodeExpr::FindFirst { nodes, shape }
         | NodeExpr::MatchAll { nodes, shape } => LoweredExpr {
-            shapes: Box::new([lower_shape(shape, walk)]),
+            // The shape judges the nodes `nodes` produces, so its reads start
+            // there — at the current node when `nodes` is `shnex:this`, and at a
+            // node the footprint cannot name otherwise.
+            shapes: Box::new([lower_shape_at_nodes(shape, nodes, walk)]),
             operands: Box::new([lower_expression(nodes, walk)]),
             ..LoweredExpr::default()
         },
         NodeExpr::NodesMatching(shape) => LoweredExpr {
-            shapes: Box::new([lower_shape(shape, walk)]),
+            // Graph-wide: the shape is matched against every node in the data, so
+            // no chain from a focus node describes where it reads.
+            shapes: Box::new([lower_shape_unrooted(shape, walk)]),
             ..LoweredExpr::default()
         },
-        NodeExpr::ConformsToShape { node, shape } => {
-            let node = lower_expression(node, walk);
+        NodeExpr::ConformsToShape {
+            node: node_expr,
+            shape,
+        } => {
+            let node = lower_expression(node_expr, walk);
             match shape {
                 // A NAMED shape argument is only reachable through this
                 // expression, so what its constraints mention has to be lowered
                 // here or it would go unresolved in the plan.
                 ShapeArg::Named(shape) => LoweredExpr {
-                    shapes: Box::new([lower_shape(shape, walk)]),
+                    shapes: Box::new([lower_shape_at_nodes(shape, node_expr, walk)]),
                     operands: Box::new([node]),
                     ..LoweredExpr::default()
                 },
@@ -1993,7 +2092,12 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
             ..LoweredExpr::default()
         },
         NodeExpr::FlatMap { nodes, map } => LoweredExpr {
-            operands: Box::new([lower_expression(nodes, walk), lower_expression(map, walk)]),
+            // `map` is re-evaluated with each node `nodes` produced as its focus,
+            // so its reads start there rather than here.
+            operands: Box::new([
+                lower_expression(nodes, walk),
+                lower_expression_at_nodes(map, nodes, walk),
+            ]),
             ..LoweredExpr::default()
         },
         // A custom node-expression function call (Node Expressions §6.1/§6.2): what
@@ -2016,7 +2120,13 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
                 && let Some(body) = func.body.get()
             {
                 walk.in_flight.push(iri.clone());
+                // A body evaluates in its own argument scope, with the function's
+                // IRI as its focus node — not with the focus node of whatever shape
+                // called it. Nothing this walk can name reaches it, so its reads
+                // are recorded unrooted.
+                let scope = walk.footprint.enter_unrooted();
                 let lowered = lower_expression(body, walk);
+                walk.footprint.leave(scope);
                 walk.in_flight.pop();
                 walk.bodies.insert(iri.clone(), lowered);
             }
@@ -2055,7 +2165,12 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
             ..LoweredExpr::default()
         },
         NodeExpr::OrderBy { of, key, .. } => LoweredExpr {
-            operands: Box::new([lower_expression(of, walk), lower_expression(key, walk)]),
+            // The sort key is evaluated once per node `of` produced, with that node
+            // as its focus — the same relocation `shnex:flatMap` performs.
+            operands: Box::new([
+                lower_expression(of, walk),
+                lower_expression_at_nodes(key, of, walk),
+            ]),
             ..LoweredExpr::default()
         },
         NodeExpr::Call(call) => {

@@ -8,6 +8,7 @@
 //! deterministically-sorted [`ValidationReport`].
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
+use crate::footprint::Endpoint;
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
@@ -137,6 +138,64 @@ fn objects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
 
 /// Dataset-bound invariant state shared by every focus evaluation in one pass.
 ///
+/// The expansion of a graph change into the focus nodes it can move, as answered
+/// by [`PreparedValidator::affected_focus_node_ids`].
+///
+/// Two answers, and the second is the point of the type. A bounded superset is what
+/// incremental validation wants; a shapes graph whose reads hide inside query text
+/// has no bounded superset anyone can derive from it, and saying so is the only
+/// honest alternative to returning a set that LOOKS complete and is not. An
+/// under-approximation here does not fail — it reports `conforms` about a node
+/// nobody re-checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FocusExpansion {
+    /// Every focus node the change can move, plus whatever the over-approximation
+    /// swept in, as identities of the binding that produced them and in ascending
+    /// id order. Hand it straight to
+    /// [`PreparedValidator::validate_focus_node_ids`].
+    ///
+    /// Empty means exactly what it says: nothing the shapes graph reads changed.
+    Bounded(Vec<TermId>),
+    /// No bounded superset exists for this shapes graph, so the only sound
+    /// re-validation is [`PreparedValidator::validate`].
+    Everything {
+        /// Which construct made the footprint unreadable, for a caller who wants
+        /// to know what to change to get incremental validation back.
+        reason: &'static str,
+    },
+}
+
+impl FocusExpansion {
+    /// The bounded expansion, or `None` when the footprint is TOP.
+    ///
+    /// Deliberately NOT a `Default`-flavoured accessor that hands back an empty
+    /// slice for the TOP case: an empty slice and "every node in the graph" are
+    /// opposite instructions, and collapsing them is the drop this type exists to
+    /// prevent.
+    #[must_use]
+    pub fn ids(&self) -> Option<&[TermId]> {
+        match self {
+            Self::Bounded(ids) => Some(ids),
+            Self::Everything { .. } => None,
+        }
+    }
+
+    /// Why the footprint is TOP, or `None` when the expansion is bounded.
+    #[must_use]
+    pub fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Bounded(_) => None,
+            Self::Everything { reason } => Some(reason),
+        }
+    }
+
+    /// Whether this expansion requires a full validation.
+    #[must_use]
+    pub fn is_everything(&self) -> bool {
+        matches!(self, Self::Everything { .. })
+    }
+}
+
 /// The class analysis (dataset-independent) and the shape lowering it came out of
 /// are shared by `Arc`; only the resolved identities are rebuilt per dataset.
 ///
@@ -201,6 +260,11 @@ impl BoundShapes {
             targets: Vec::new(),
             dispatch: TargetDispatch::default(),
         }
+    }
+
+    /// The dependency footprint the shapes-lowering walk derived.
+    fn footprint(&self) -> &crate::footprint::Footprint {
+        self.lowered.footprint()
     }
 
     /// The plan for the `position`-th shape, with its prepared target index.
@@ -1220,6 +1284,12 @@ impl PreparedShapes {
     /// Bind an immutable mutation snapshot and its shapes graph through shared
     /// indexes, freezing neither the base nor a combined data-plus-shapes graph.
     ///
+    /// The binding this returns can expand the same snapshot into the focus nodes
+    /// the change moved, through
+    /// [`PreparedValidator::affected_focus_node_ids`] — which is the only sound
+    /// input to [`PreparedValidator::validate_focus_node_ids`], because the
+    /// subjects of the changed rows are not it.
+    ///
     /// # Errors
     /// Refuses retention limits, invalid graph placement or failed targets.
     pub fn bind_delta_with_shapes_graph(
@@ -1470,8 +1540,17 @@ impl PreparedValidator {
     ///
     /// Candidates are deduplicated and canonically ordered. Target membership is
     /// answered through direct IR index probes; whole target sets are not built.
-    /// The caller remains responsible for expanding a graph change into every
-    /// potentially affected focus node (for example, an inverse-path dependency).
+    ///
+    /// Expanding a graph change into the focus nodes it can move is
+    /// [`Self::affected_focus_node_ids`]'s job, not a caller's: it derives the
+    /// dependency footprint — inverse paths, sequence prefixes, closures,
+    /// `sh:targetObjectsOf`, `sh:node` recursion, property-pair comparands and the
+    /// class hierarchy — from the same walk that lowers the shapes graph, and
+    /// reports a footprint it cannot bound rather than returning a short answer.
+    /// Two obligations stay with the caller, and both are visible rather than
+    /// implied: feeding it the mutation snapshot this binding was built over, and
+    /// honouring a [`FocusExpansion::Everything`] answer by calling
+    /// [`Self::validate`] instead.
     ///
     /// # Errors
     ///
@@ -1516,6 +1595,148 @@ impl PreparedValidator {
         }
         focus_nodes.sort(&self.data);
         self.validate_bounded(&focus_nodes)
+    }
+
+    /// The interned identity this binding gives `term`, or `None` when the dataset
+    /// never interned it.
+    ///
+    /// The bridge between a caller's owned terms and the id-native change path: the
+    /// ids [`Self::affected_focus_node_ids`] returns and the ids
+    /// [`Self::validate_focus_node_ids`] accepts are indices into THIS binding's
+    /// term table, and this is how a caller holding a [`Term`] gets one without
+    /// re-deriving the table.
+    #[must_use]
+    pub fn term_id(&self, term: &Term) -> Option<TermId> {
+        resolve_id(self.data.core_view(), term)
+    }
+
+    /// Expand a mutation snapshot into every focus node whose verdict the change
+    /// can move — the SOUND input to [`Self::validate_focus_node_ids`].
+    ///
+    /// `delta` must be the snapshot this binding was built over, through
+    /// [`PreparedShapes::bind_delta_with_shapes_graph`]. That is checked, not
+    /// assumed: a [`TermId`] is an index, so ids derived from one dataset's changes
+    /// would be perfectly valid indices into another dataset's table and would
+    /// name the wrong nodes without any lookup ever failing.
+    ///
+    /// # What it guarantees
+    ///
+    /// The answer is a SUPERSET of the focus nodes whose validation outcome the
+    /// change can alter — in either direction, a violation gained or a violation
+    /// lost. It is derived from the dependency footprint of the shapes graph (see
+    /// `crate::footprint`), which the shapes-lowering walk emits alongside the
+    /// lowering itself, so it covers every route a read can take back to a focus
+    /// node: a forward predicate step at any depth of a sequence, an
+    /// `sh:inversePath`, a `sh:zeroOrMorePath` / `sh:oneOrMorePath` closure,
+    /// `sh:targetSubjectsOf` / `sh:targetObjectsOf`, the `rdf:type` and
+    /// `rdfs:subClassOf*` edges behind `sh:targetClass` and `sh:class`, a
+    /// property-pair comparand predicate, and the whole nesting of `sh:node`,
+    /// `sh:not`, `sh:and` / `sh:or` / `sh:xone` and `sh:qualifiedValueShape`.
+    ///
+    /// Over-approximating is the safe direction and this deliberately takes it: a
+    /// focus node that did not need re-validating merely conforms again.
+    ///
+    /// # When there is no bounded answer
+    ///
+    /// A shapes graph that reads through query text this walk does not interpret —
+    /// `sh:sparql`, a SPARQL target, a constraint component's `sh:ask` /
+    /// `sh:select` validator, a `sh:SPARQLFunction` call, a SPARQL node expression
+    /// — has no footprint anyone can bound from the shapes graph alone. That
+    /// answers [`FocusExpansion::Everything`], carrying the reason, and the caller
+    /// must run [`Self::validate`]. It is reported rather than silently
+    /// under-approximated because a short answer here is indistinguishable from a
+    /// clean bill of health.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `delta` is not the snapshot this binding reads, and
+    /// when a changed row names a term this binding's own view does not map —
+    /// which is a defect in this crate rather than in a caller's data.
+    pub fn affected_focus_node_ids(
+        &self,
+        delta: &::purrdf::ir::DeltaDatasetView,
+    ) -> Result<FocusExpansion, String> {
+        let core = self.data.core_view();
+        let bound = core.delta_source().ok_or_else(|| {
+            "affected_focus_node_ids: this validator is not bound to a mutation snapshot, so it \
+             has no change to expand; bind through PreparedShapes::bind_delta_with_shapes_graph"
+                .to_owned()
+        })?;
+        if !std::ptr::eq(Arc::as_ptr(bound), std::ptr::from_ref(delta)) {
+            return Err(
+                "affected_focus_node_ids: the supplied mutation snapshot is not the one this \
+                 validator was bound to, and the ids it would produce would index this \
+                 validator's term table while naming the other snapshot's terms"
+                    .to_owned(),
+            );
+        }
+        if let Some(reason) = self.bound.footprint().opaque() {
+            return Ok(FocusExpansion::Everything { reason });
+        }
+        // The change set in THIS binding's id space, mapped once rather than once
+        // per trigger: the trigger loop below rescans it for every read the shapes
+        // graph performs.
+        let mut changed: Vec<::purrdf::QuadIds> = Vec::new();
+        for quad in delta.changed_quads() {
+            let ids = [quad.s, quad.p, quad.o].map(|id| core.local_delta_id(id));
+            let [Some(s), Some(p), Some(o)] = ids else {
+                return Err(format!(
+                    "internal change-path defect: a changed row of the bound mutation snapshot \
+                     names a term the binding's own {}-term view does not map",
+                    core.term_count()
+                ));
+            };
+            changed.push(::purrdf::QuadIds { s, p, o, g: None });
+        }
+        let mut seen: IdSet = IdSet::default();
+        let mut affected: Vec<TermId> = Vec::new();
+        for trigger in self.bound.footprint().triggers() {
+            let predicate = match &trigger.predicate {
+                // A predicate this dataset never interned cannot be the predicate
+                // of a changed row, so this read matches nothing. That is the
+                // ordinary "the shapes graph names what the data does not" answer,
+                // not a refusal.
+                Some(predicate) => match core.term_id_by_iri(predicate.as_str()) {
+                    Some(id) => Some(id),
+                    None => continue,
+                },
+                // `sh:closed` binds no predicate: every changed row is a candidate.
+                None => None,
+            };
+            // The read described forwards, walked backwards. Inverted once per
+            // trigger, not once per changed row.
+            let reversed = trigger.chain.as_ref().map(crate::path::invert);
+            for quad in &changed {
+                if predicate.is_some_and(|predicate| predicate != quad.p) {
+                    continue;
+                }
+                let read_node = match trigger.endpoint {
+                    Endpoint::Subject => quad.s,
+                    Endpoint::Object => quad.o,
+                };
+                match &reversed {
+                    // An empty chain: the focus node IS the node the read happens
+                    // at, so there is nothing to walk back.
+                    None => {
+                        if seen.insert(read_node) {
+                            affected.push(read_node);
+                        }
+                    }
+                    Some(path) => {
+                        for id in crate::path::eval_ids_from_id(core, read_node, path) {
+                            if seen.insert(id) {
+                                affected.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Canonical order, because a change expansion is a value a caller may log,
+        // compare or pin, and first-seen order is a fact about the walk rather than
+        // about the change.
+        affected.sort_unstable_by_key(|id| id.index());
+        Ok(FocusExpansion::Bounded(affected))
     }
 
     fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> FocusSet {

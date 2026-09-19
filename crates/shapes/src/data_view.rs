@@ -315,6 +315,28 @@ impl ShaclDatasetView {
         })
     }
 
+    /// The mutation snapshot this view reads, when it reads one.
+    ///
+    /// Exposed so the incremental change path can prove the delta a caller hands
+    /// it is the delta this binding was built over. The alternative — trusting the
+    /// caller — would answer with ids from one dataset about changes in another,
+    /// and every one of those ids would be a valid index into the wrong table.
+    pub(crate) fn delta_source(&self) -> Option<&Arc<DeltaDatasetView>> {
+        match &self.source {
+            Source::Delta(dense) => Some(&dense.source),
+            Source::Native(_) | Source::Composite(_) => None,
+        }
+    }
+
+    /// This view's own handle for a snapshot term, or `None` when the term is not
+    /// one this view maps.
+    pub(crate) fn local_delta_id(&self, id: ::purrdf::ir::DeltaViewId) -> Option<TermId> {
+        match &self.source {
+            Source::Delta(dense) => dense.local_ids.get(&id).copied(),
+            Source::Native(_) | Source::Composite(_) => None,
+        }
+    }
+
     /// Retained handle mapping and explicit materialization work.
     #[must_use]
     pub fn stats(&self) -> ShaclViewStats {

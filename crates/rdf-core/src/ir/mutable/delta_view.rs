@@ -265,6 +265,36 @@ impl DeltaDatasetView {
         &self.delta
     }
 
+    /// Every row this snapshot CHANGES relative to its base, in this view's own
+    /// [`DeltaViewId`] space: each added row, then each suppressed one.
+    ///
+    /// The point of the id space is that a consumer can join these rows against
+    /// reads of this same view without a term-value round trip. [`Self::delta`]
+    /// alone cannot serve that: its ids are delta-LOCAL, so a term the base
+    /// already interned carries a different number there than it does here.
+    ///
+    /// The three added-row streams are chained because the delta keeps RDF 1.2
+    /// reifier and annotation rows in tables of their own, and a consumer asking
+    /// "what moved?" that saw only the plain rows would miss a statement whose
+    /// only change was an annotation. Rows may therefore repeat — a row present in
+    /// two of those tables is yielded twice, and an added row identical to a
+    /// suppressed one is yielded on both sides. That is deliberate: this is a
+    /// CHANGE set, its consumers deduplicate whatever they accumulate from it, and
+    /// deduplicating here would cost a base-sized set to answer a question nobody
+    /// asked.
+    pub fn changed_quads(&self) -> impl Iterator<Item = QuadIds<DeltaViewId>> + '_ {
+        self.delta
+            .quads_for_pattern(None, None, None, GraphMatch::Any)
+            .chain(self.delta.reifier_quads())
+            .chain(self.delta.annotation_quads())
+            .map(|q| self.map_delta(q))
+            .chain(
+                self.suppressed
+                    .iter()
+                    .map(|q| map_quad(*q, DeltaViewId::Base)),
+            )
+    }
+
     pub(crate) fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
         self.base
             .term_id_by_iri(iri)
