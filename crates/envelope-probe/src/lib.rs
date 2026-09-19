@@ -654,9 +654,12 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
     // `retain_graph` drops every page the sealed per-stream postings prove holds nothing
     // in the graph, so it is the eviction counterpart of the prediction above: the same
     // metadata that says which pages a query WILL touch says which pages may be released
-    // without losing a row. Evidencing it needs all three legs — the eviction happened,
-    // it cost no materialization, and it changed no answer — because any one alone is
-    // satisfied by doing nothing.
+    // without losing a row. Two legs are asserted here — the eviction happened, and it
+    // changed no answer — because either alone is satisfied by doing nothing: retaining
+    // every page preserves the answer, and dropping the owning page evicts plenty. The
+    // third leg, that it materializes no page, is a claim about the sealed postings
+    // rather than about this query, and is pinned by name in the paged backend's own
+    // tests.
     let retained = paged.retain_graph(graph_id);
     let retained_pages = retained.page_count() as u64;
     if retained_pages >= profile.paged_pages as u64 {
