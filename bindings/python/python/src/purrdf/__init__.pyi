@@ -522,6 +522,16 @@ class RelationAttestations(TypedDict):
     #: Invocations of this relation that entered host code — the same executions the
     #: `property-function-invocation` charge point prices, so the receipt and the meter
     #: describe the same run.
+    #:
+    #: A fact about the SCHEDULE, not about the index, and therefore NOT comparable
+    #: across runs — unlike the two declaration lists beside it. Under a `FILTER EXISTS`
+    #: the engine evaluates each chunk of driving rows on a worker whose `EXISTS` memo
+    #: starts cold, so the relation inside it is re-entered once per chunk and the chunk
+    #: count comes from the runtime's thread count; the same query over the same data can
+    #: report a different number while every declaration beside it is identical, including
+    #: between two runs that differ only in the budget they were given. Read it as "did
+    #: this relation run at all" (`0` versus non-zero) or as a rough magnitude for a log
+    #: line, never as a value to compare between two receipts.
     invocations: int
     #: Every DISTINCT index version this relation declared, sorted and de-duplicated.
     #: `None` is a member like any other and means those invocations declared NOTHING:
@@ -1459,6 +1469,12 @@ class _Shapes:
     # relative reference raises ValueError rather than being silently unresolved.
     def __init__(self, shapes_ttl: str, *, base: str | None = None) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
+    # Either quad container, validated through the native snapshot seam: both hold
+    # a frozen dataset behind their copy-on-write overlay, so neither is serialized
+    # to N-Triples and parsed back to be validated. The report is a statement about
+    # the data as it was — a later mutation moves the next report, not this one.
+    # Anything that cannot hand over such a snapshot raises `TypeError` naming the
+    # type that arrived and what is accepted; text belongs in `validate_nt`.
     def validate_store(self, data: Store | MutableDataset) -> _ValidationReport: ...
     # Analyze the shape tree once; the step a prepared PRODUCT is written from.
     def prepare(self) -> _PreparedShapes: ...
@@ -2035,6 +2051,18 @@ class slice:
 # nothing is not a narrow producer but one that should not be registered: a
 # consumer holds a producer to its declaration row by row, so every row it
 # emitted would contradict it. Pass `None` to restrict nothing.
+#
+# A list naming MORE THAN ONE distinct block raises `ValueError` naming the
+# producer too, and it is refused at registration rather than at the first row.
+# One block is entailed by the declaration, so a consumer reads it off the
+# declaration and no row repeats it; several blocks say only that the rows lie
+# somewhere in the set, which obliges the producer to name each row's own block —
+# and the ranked relations this surface builds project a candidate and a score
+# and declare no such column, because a tag describes how a host's corpora
+# partition and only the host knows that. The refusal quotes the blocks in
+# canonical order and names three exits: exactly one tag (the block this
+# producer's rows really lie in), one producer per block with its own stratum, or
+# `None`. A list that repeats one tag names one block and is accepted.
 #
 # A declaration is a promise, and `search` checks it against the rows it pulls.
 # Two producers whose declarations place one candidate in disjoint blocks cannot

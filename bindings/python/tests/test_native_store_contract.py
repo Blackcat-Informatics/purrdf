@@ -16,18 +16,24 @@ position — including the ones nested inside an RDF 1.2 quoted triple, which is
 the place a recursive walk is most likely to stop one level early.
 
 **The snapshot seam.** ``Shapes.validate_store`` borrows a frozen snapshot of a
-store rather than serialising it to N-Triples, and it reaches it through an
-internal capsule whose value is the address of a heap-boxed ``Arc``. Two things
-about that must hold from Python, and nothing else can check them: a report
-already produced is unaffected by a later mutation of the store it came from
-(it holds a snapshot, not a live view), and the dataset stays alive exactly as
-long as it is reachable — the capsule's destructor owns the one box, so a report
-outliving its store is fine and neither end frees twice.
+quad container rather than serialising it to N-Triples, and it reaches it through
+an internal capsule whose value is the address of a heap-boxed ``Arc``. Four
+things about that must hold from Python, and nothing else can check them: a
+report already produced is unaffected by a later mutation of the container it
+came from (it holds a snapshot, not a live view); the dataset stays alive exactly
+as long as it is reachable — the capsule's destructor owns the one box, so a
+report outliving its producer is fine and neither end frees twice; BOTH
+containers on this surface answer the protocol, and either one validated gives
+the one answer the triples deserve; and a value that answers no such protocol is
+refused by name, because the seam is private and an ``AttributeError`` about it
+diagnoses nothing for the caller who never wrote that name.
 """
 
 from __future__ import annotations
 
 import gc
+
+import pytest
 
 import purrdf
 from purrdf import RdfFormat
@@ -253,3 +259,90 @@ def test_a_validation_report_outlives_the_store_it_was_taken_from() -> None:
         assert report.conforms is False
         assert len(report.results) == 1
         assert report.to_ntriples() == text
+
+
+def test_validate_store_reads_a_mutable_dataset_through_the_same_seam() -> None:
+    """``MutableDataset`` is a data graph validation can see, not one it must copy.
+
+    Both quad containers on this surface hold a frozen native dataset behind a
+    copy-on-write overlay, so both can answer the snapshot protocol, and the
+    protocol is the only thing ``validate_store`` asks of its argument. A
+    ``MutableDataset`` that could not answer it would have to be serialised to
+    N-Triples and parsed back to be validated at all — a full copy, and a round
+    trip through a syntax, to reach a dataset that was already sitting there.
+
+    The two halves held here are that the report is real (not an accepted
+    argument producing an empty answer) and that it is the SAME report the
+    equivalent ``Store`` produces: the container a caller happened to load into
+    is not part of what SHACL says about the data.
+    """
+    shapes = purrdf.shapes.Shapes(_SHAPES)
+    document = _violating_person("alice")
+
+    dataset = purrdf.MutableDataset()
+    dataset.load(document, RdfFormat.N_TRIPLES)
+    from_dataset = shapes.validate_store(dataset)
+
+    assert from_dataset.conforms is False
+    assert len(from_dataset.results) == 1, "one person, one violation"
+    assert from_dataset.results[0]["value"] == '"not-an-integer"'
+
+    store = purrdf.Store()
+    store.load(document, RdfFormat.N_TRIPLES)
+    from_store = shapes.validate_store(store)
+    assert from_dataset.to_ntriples() == from_store.to_ntriples(), (
+        "the same triples validated through either container, one answer"
+    )
+
+    # And the snapshot rule holds on this side too: a report already produced is
+    # a statement about the dataset as it was, so mutating it afterwards moves
+    # the next report and not the one already in hand.
+    before = from_dataset.to_ntriples()
+    dataset.load(_violating_person("bob"), RdfFormat.N_TRIPLES)
+    assert len(shapes.validate_store(dataset).results) == 2
+    assert len(from_dataset.results) == 1
+    assert from_dataset.to_ntriples() == before
+
+
+def test_validate_store_refuses_a_value_that_is_no_data_graph_by_name() -> None:
+    """A value that cannot hand over a dataset is refused by name, not by traceback.
+
+    ``validate_store`` reaches its argument through a private protocol method, so
+    an argument that does not implement it used to surface as a bare
+    ``AttributeError`` about ``_store_capsule`` — a name the caller never wrote,
+    from a call whose real problem is that it was handed no data graph. The
+    refusal names the type that arrived and the three things that are accepted,
+    including the one a caller holding TEXT wants (``validate_nt``), which is the
+    most likely way to arrive here by mistake.
+
+    The neighbours that must keep working are the two containers themselves, and
+    they are held by the tests above and by this one's second half.
+    """
+    shapes = purrdf.shapes.Shapes(_SHAPES)
+
+    with pytest.raises(TypeError) as refused:
+        shapes.validate_store(_violating_person("alice"))
+    message = str(refused.value)
+    assert not isinstance(refused.value, AttributeError), (
+        "a missing private attribute is not a diagnosis of anything"
+    )
+    assert "str" in message, "the refusal names what arrived"
+    assert "purrdf.Store" in message and "purrdf.MutableDataset" in message
+    assert "validate_nt" in message, "and the exit for a caller holding text"
+
+    # An object that answers the protocol with something that is not a capsule is
+    # refused the same way, rather than reading an address out of whatever it is.
+    class _Pretender:
+        def _store_capsule(self) -> str:
+            return "not a capsule"
+
+    with pytest.raises(TypeError, match="not honoured"):
+        shapes.validate_store(_Pretender())
+
+    # The neighbour: both real containers still validate.
+    store = purrdf.Store()
+    store.load(_violating_person("carol"), RdfFormat.N_TRIPLES)
+    assert shapes.validate_store(store).conforms is False
+    dataset = purrdf.MutableDataset()
+    dataset.load(_violating_person("carol"), RdfFormat.N_TRIPLES)
+    assert shapes.validate_store(dataset).conforms is False

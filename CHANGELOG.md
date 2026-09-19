@@ -394,8 +394,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   registration, because a promise to name nothing is not a restriction, and
   because the refusal on the far side of the boundary is a panic that must never
   cross it.
+- **python:** `MutableDataset` answers the native validation snapshot protocol, so
+  `Shapes.validate_store` accepts one for real: both quad containers on this
+  surface hold a frozen dataset behind a copy-on-write overlay, and validation
+  borrows that snapshot instead of serialising to N-Triples and parsing it back.
+  Either container validated yields the one answer the triples deserve, and the
+  snapshot rule holds on both -- a report already produced is a statement about the
+  data as it was. A value that answers no such protocol is now refused with a
+  `TypeError` naming the type that arrived and the three things accepted (a
+  `Store`, a `MutableDataset`, or `validate_nt` for text a caller holds), rather
+  than escaping as an `AttributeError` about a private attribute the caller never
+  wrote.
 
 ### Fixed
+
+- **python:** A ranked producer declared with more than one candidate-domain tag
+  failed at the wrong time. One tag entails where every row of that producer
+  lies, so a consumer reads the block off the declaration; several tags say only
+  that the rows lie somewhere in the set, which obliges the producer to name each
+  row's own block -- and both ranked relations this binding can build project a
+  candidate and a score and declare no such column, because a tag describes how a
+  host's corpora partition and only the host knows that. The declaration was
+  therefore unsatisfiable by construction, and the fusion said so at the first row
+  it pulled, after the plan, the compile and the first read had all been paid for.
+  It is refused at registration now, where the caller can act on it, naming the
+  producer, quoting the blocks in canonical order and naming the three exits that
+  work: one tag, one producer per block, or `domains=None`. A list that repeats
+  one tag names one block and still registers, and single-tag declarations are
+  untouched -- including the shorter read they buy.
 
 - **python:** A host that ran a compiled retrieval unit's SPARQL itself had no way
   to learn how many of its rows it was allowed to report. The compile stage emits
@@ -459,6 +485,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   coarser rank resolution.
 
 ### Removed
+
+- **sparql-eval:** `RelationWitness::canonical_bytes`, and the encoding version tag
+  behind it. It was a second canonical encoding of "what the indexes attested",
+  and the only one nothing shipped: every caller was a determinism test comparing
+  it against itself. The encoding an answer is actually compared by lives in
+  `purrdf-retrieval`, which collapses the ledger per stratum and digests the result
+  into its `EvidenceId` -- and the ledger could not have been that encoding's
+  source, because it is keyed by relation IRI rather than by stratum, holds sets
+  where an answer's evidence holds one generation and one service level, and counts
+  invocations, a quantity that follows the evaluator's chunking of driving rows
+  rather than anything an index said. An evidence identity derived from it would
+  have moved between two runs over one unchanged index. The ledger's own
+  determinism is now pinned as what it is -- an ordered value whose declarations are
+  identical across repeated runs and across the fork -- and the shipped digest is
+  pinned through the shipped path, including that it does not move with the
+  invocation count.
 
 - **python:** Every Rust test module under `bindings/python/src` -- roughly
   fifteen hundred lines across ten files, holding fifty-six `#[test]` functions
@@ -868,6 +910,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Performance
 
+- **sparql-eval/text:** Attesting an index generation is a refcount bump instead of
+  a string copy, and an entry point that cannot carry the answer no longer asks the
+  question. `IndexGeneration::Declared` holds a shared `Arc<str>`, so a producer over
+  a frozen index -- both text relations, the kNN cursor -- renders its generation once
+  at construction and every invocation clones a pointer, where each one previously
+  copied 64 hex characters into a fresh `String` in a seam entered once per driving
+  row. On a lane whose return type has no witness slot, the generation is not read
+  and the ledger entry is not built at all: the value could only have been dropped
+  with the context unread. The service-level read is deliberately not conditional,
+  because the refusal an unwitnessed lane owes a relation that declares its index
+  short depends on it. A relation over a frozen index therefore attests at no
+  per-invocation allocation, and one that genuinely computes a generation per
+  invocation pays for it only where somebody can read it --
+  `benches/relation_attestation_alloc.rs` reports the counts per invocation for both
+  shapes on both lanes (report-only, no threshold).
+  `IndexGeneration::declared` builds the variant from a `&str`, a `String` or an
+  `Arc<str>`.
+
 - **core/iri:** Restoring a dataset pack allocates 21 times for the prepared
   product fixture's 3.8 KB section, down from 523, and requests 43,411 bytes
   down from 104,527. The largest single cause was a double parse across a crate
@@ -881,6 +941,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   vector and the frozen product golden are unaffected.
 
 ### Documentation
+
+- **sparql-eval/book:** `RelationAttestations::invocations` says, where a host reads
+  it, that it is a fact about the schedule rather than about the index: under a
+  `FILTER EXISTS` the parallel row loop evaluates each chunk of driving rows on a
+  worker whose `EXISTS` memo starts cold, so the relation inside it is re-entered
+  once per chunk and the count follows the input size and the worker count. The
+  declaration sets beside it do not move with any of that, which is why the
+  per-stratum conformance rule and an answer's evidence identity are keyed on them
+  alone. The two readings the count does support -- ran at all, and a rough
+  magnitude -- are named, and comparing it between two receipts is named as the one
+  thing it cannot be used for. The querying chapter carries the same correction,
+  which previously promised that two runs over one snapshot compare byte for byte
+  across the whole mapping.
 
 - **design:** `docs/design/purrdf-prepared-products.md` records the decisions
   behind the prepared-product surface — admission rather than parsing, why there

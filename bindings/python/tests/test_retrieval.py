@@ -1959,19 +1959,31 @@ def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
     assert lawless["units"], "a call that names no law is still a compiled plan"
 
 
-def test_a_multi_block_declaration_reports_its_blocks_in_canonical_order() -> None:
-    """The blocks a producer declared are carried in canonical order, not the host's.
+def test_a_several_block_declaration_is_refused_where_it_is_registered() -> None:
+    """A restriction no row can back is refused at registration, not at row one.
 
-    A declaration is a SET of blocks, so the order it was written in carries no
-    information and must not survive into anything a consumer reads — two hosts
-    that declared the same two blocks in different orders declared the same thing,
-    and a consumer comparing declarations has to see that.
+    A one-block declaration needs nothing per row: it has already said where every
+    candidate of this producer lies, so a consumer reads the block off the
+    declaration. A SEVERAL-block declaration says only that the candidates lie
+    somewhere in the set, which obliges the producer to say which block each row
+    came from — and neither ranked relation this surface can build declares a
+    column such a block could be read out of, because a domain tag describes how a
+    host's corpora partition and only the host knows that.
 
-    It is read here out of the protocol refusal, which is where a multi-block
-    declaration lands with the shipped text producer: a stream restricted to more
-    than one block owes a block on every row, so that it can be held to the
-    declaration, and the shipped producer names none. The refusal is the honest
-    outcome — and it carries the declared set, in order.
+    So a several-block list from Python is unsatisfiable by construction, and the
+    fusion used to say so at the first row it pulled: a registration-time defect
+    reported as a query-time failure, after the plan, the compile and the first
+    read had all been paid for. It is refused where the caller wrote it instead,
+    naming the producer and the three exits that do work.
+
+    The blocks are quoted in canonical order, not the host's. A declaration is a
+    SET, so the order it was written in carries no information and must not reach
+    anything a reader compares: two hosts that named the same two blocks in
+    different orders named the same declaration and read the same refusal.
+
+    The valid neighbours are held below — one tag, one tag written twice, and
+    `None` — and that the one-tag declaration still shortens the read it bounds
+    is held by ``test_a_declared_domain_changes_the_reading_and_not_the_answer``.
     """
     common: dict[str, Any] = {
         "weights": {NOTE_STRATUM: retrieval.SCALE},
@@ -1984,7 +1996,7 @@ def test_a_multi_block_declaration_reports_its_blocks_in_canonical_order() -> No
     assert NOTE_DOMAIN < TITLE_DOMAIN, "canonical order is over the tag IRIs"
 
     for declared in ([NOTE_DOMAIN, TITLE_DOMAIN], [TITLE_DOMAIN, NOTE_DOMAIN]):
-        with pytest.raises(ValueError, match="restricted its candidates") as refused:
+        with pytest.raises(ValueError, match=re.escape(NOTE_PRODUCER)) as refused:
             retrieval.search(
                 DATA,
                 request,
@@ -1994,14 +2006,31 @@ def test_a_multi_block_declaration_reports_its_blocks_in_canonical_order() -> No
                 **common,
             )
         message = str(refused.value)
-        assert f'["{NOTE_DOMAIN}", "{TITLE_DOMAIN}"]' in message, (
+        assert "names 2 blocks" in message, message
+        assert f"[<{NOTE_DOMAIN}>, <{TITLE_DOMAIN}>]" in message, (
             f"declared as {declared}, reported canonically: {message}"
         )
-        assert NOTE_STRATUM in message, "and the stratum whose stream owed a block"
+        # The exits, because a refusal a caller cannot act on is only a stop.
+        assert "exactly ONE domain tag" in message
+        assert "one producer per block" in message
+        assert "`domains=None`" in message
 
-    # The neighbouring single-block declaration IS satisfiable, because one block
-    # leaves nothing to disambiguate — so the refusal is about the ambiguity and
-    # not about declaring domains at all.
+    # It is refused before anything is planned, so the cheapest stage sees it too
+    # — a host that never calls `search` still learns at the same point.
+    with pytest.raises(ValueError, match="names 2 blocks"):
+        retrieval.plan(
+            DATA,
+            request,
+            text_producers=_declared(
+                (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN, TITLE_DOMAIN])
+            ),
+            statistics=STATISTICS,
+        )
+
+    # ── the valid neighbours, which is the point of the test ──────────────────
+    # One block leaves nothing to disambiguate, so it registers AND still bounds
+    # the read: the refusal above is about the ambiguity, not about declaring
+    # domains at all.
     restricted = retrieval.search(
         DATA,
         request,
@@ -2010,3 +2039,26 @@ def test_a_multi_block_declaration_reports_its_blocks_in_canonical_order() -> No
     )
     assert restricted["domains"] == {NOTE_STRATUM: [NOTE_DOMAIN]}
     assert restricted["rows"]
+
+    # A list that spells one block twice names ONE block, so the count that
+    # decides is taken over the set and not over the list the host wrote.
+    repeated = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN, NOTE_DOMAIN])
+        ),
+        **common,
+    )
+    assert repeated["domains"] == {NOTE_STRATUM: [NOTE_DOMAIN]}
+    assert _ranking(repeated) == _ranking(restricted)
+
+    # And `None` — the widest promise — registers exactly as it always did.
+    unrestricted = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)),
+        **common,
+    )
+    assert unrestricted["domains"] == {NOTE_STRATUM: None}
+    assert _ranking(unrestricted) == _ranking(restricted)

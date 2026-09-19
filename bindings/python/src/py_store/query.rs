@@ -670,7 +670,7 @@ fn attestation(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<Option<Attestati
         // neither does this boundary: a generation is whatever the host's index calls its
         // versions, and a reason is whatever an operator needs to read.
         generation: read(&generation, "generation")?
-            .map_or(IndexGeneration::Undeclared, IndexGeneration::Declared),
+            .map_or(IndexGeneration::Undeclared, IndexGeneration::declared),
         service: read(&incompleteness, "incompleteness")?
             .map_or(ServiceLevel::Undeclared, |reason| {
                 ServiceLevel::Incomplete { reason }
@@ -2141,7 +2141,7 @@ fn witness_to_dict<'py>(
             .iter()
             .map(|generation| match generation {
                 IndexGeneration::Undeclared => None,
-                IndexGeneration::Declared(value) => Some(value.as_str()),
+                IndexGeneration::Declared(value) => Some(&**value),
             })
             .collect();
         entry.set_item("generations", generations)?;

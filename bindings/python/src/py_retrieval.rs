@@ -152,6 +152,19 @@
 //! registered, and a consumer holding it to that declaration row by row would
 //! refuse its first row.
 //!
+//! A list of **more than one** tag is refused by name as well, and the refusal is
+//! about what this binding can register rather than about the declaration. One
+//! tag says where every row of this producer lies, so a consumer reads the block
+//! off the declaration and no row has to repeat it. Several tags say only that
+//! the rows lie somewhere in that set, which obliges the producer to name each
+//! row's own block — and the two ranked relations this surface builds project a
+//! candidate and a score and declare no column such a block could be read out
+//! of, because a tag describes how a host's corpora partition and only the host
+//! knows that. Refused at registration, where a caller can act on it, rather
+//! than at the first row pulled, where it arrives as a failure of the fusion.
+//! The exits are the ones the refusal names: one tag, one producer per block, or
+//! `None`.
+//!
 //! Nothing is defaulted from a stratum or from a graph, here or below. Which
 //! entities a text index names is a fact about the host's corpus that neither
 //! this layer nor the relation can see, and a tag derived per stratum would hand
@@ -214,6 +227,26 @@
 //! own provenance contradicts. The second is fixed by declaring the tag the two
 //! producers share, or `None` — both fuse the overlapping entity into one row
 //! carrying both contributions.
+//!
+//! A third refusal in that family never reaches the fusion at all: a `domains`
+//! list of **more than one** tag is refused where it is written, before a
+//! registry exists, naming the producer that declared it and the three exits
+//! (one tag, one producer per block, `domains=None`). It used to arrive at the
+//! first row pulled instead, as the fusion's *"restricted its candidates to …
+//! but the row at rank R names no block, so nothing backs that restriction"* —
+//! a registration-time defect in a query-time failure's clothes.
+//!
+//! That leaves the engine's three row-level block refusals unreachable from this
+//! binding today, which is a property of what this surface can register and not
+//! a claim that they are unreal: each is a live refusal for a host writing its
+//! own relation on the Rust surface. The *"nothing backs that restriction"* one
+//! is the message the registration refusal above forecloses. The other two —
+//! *"named item I in block B, which its declared domains … do not include"* and
+//! *"name item I from two different blocks"* — need a producer whose rows DO
+//! name their own block, and both relations this module builds declare no block
+//! column, so nothing registered here can emit such a row. What a Python host
+//! can actually meet is the two stratum-level messages above and the
+//! registration refusal.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -405,6 +438,30 @@ fn retrieval_iri(role: &str, text: &str) -> Result<Iri, String> {
 /// by panicking, which must never reach the FFI boundary, so the same refusal is
 /// raised here — before the registry is touched — as a `ValueError` naming the
 /// producer that declared it.
+///
+/// A list of MORE THAN ONE tag is refused here too, and for a reason that is
+/// specific to this binding rather than to the declaration itself. A
+/// several-block restriction says only that the producer's candidates lie
+/// *somewhere* in that set, so a consumer that wants to hold it to a row has to
+/// be told which block that row came from — the per-row fact
+/// `RankedDeclaration::block_position` points at. The ranked relations this
+/// module can build project a candidate and a score and nothing else, and both
+/// declare no block column, because a domain tag describes how a host's corpora
+/// partition and only the host knows that. So a several-block list from Python
+/// is a restriction that no row this binding can produce is able to back, and a
+/// fusion holding the stream to it refuses the very first row it pulls. That is
+/// a registration-time defect wearing a query-time failure's clothes, so it is
+/// refused where the caller wrote it, with the exits that do work: one tag (the
+/// block whose rows this producer really ranks), one producer per block, or
+/// `None`.
+///
+/// A one-tag list needs no per-row fact and is fully supported: the block is
+/// *entailed* by the declaration, and the executor reads it straight off the
+/// declaration for every row. The count that decides between the two is taken
+/// after the tags become a set, so a list repeating one tag is the one-block
+/// declaration it means; and the blocks the refusal quotes are quoted in the
+/// set's own canonical order, so two hosts that wrote the same blocks in
+/// different orders read the same message about the same declaration.
 fn candidate_domains(
     producer: &str,
     declared: Option<&[String]>,
@@ -426,6 +483,31 @@ fn candidate_domains(
         let iri = crate::iri::parse(tag)
             .map_err(|e| format!("text producer <{producer}>: domain tag <{tag}>: {e}"))?;
         blocks.insert(DomainTag::new(iri));
+    }
+    // Counted after the set absorbs them, so a list that spells one block twice
+    // is the satisfiable one-block declaration it means rather than a refusal
+    // over an arity the declaration does not actually have.
+    if blocks.len() > 1 {
+        let listed = blocks
+            .iter()
+            .map(|tag| format!("<{}>", tag.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "text producer <{producer}>: `domains` names {count} blocks [{listed}], and a \
+             several-block declaration only says this producer's candidates lie somewhere in that \
+             set — it obliges the producer to say, row by row, which of those blocks each row came \
+             from. The ranked relations this surface builds project a candidate and a score and \
+             declare no block column, because a domain tag describes how a host's corpora \
+             partition and only the host knows that. So this is a restriction no row this producer \
+             can emit is able to back, and a fusion holding it to the declaration refuses its \
+             first row. Three exits work: pass exactly ONE domain tag, naming the block this \
+             producer's rows really lie in — a single tag entails the per-row fact and needs no \
+             block column; or register one producer per block, each with its own single tag and \
+             its own stratum; or pass `domains=None`, which restricts nothing and costs only the \
+             earlier certification a narrower claim would have bought",
+            count = blocks.len()
+        ));
     }
     Ok(CandidateDomains::Within(blocks))
 }
@@ -1279,7 +1361,7 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
             "generation",
             match &attestation.generation {
                 IndexGeneration::Undeclared => None,
-                IndexGeneration::Declared(generation) => Some(generation.as_str()),
+                IndexGeneration::Declared(generation) => Some(&**generation),
             },
         )?;
         entry.set_item(
