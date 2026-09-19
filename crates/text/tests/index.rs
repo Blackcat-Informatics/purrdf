@@ -847,6 +847,271 @@ fn landed_dataset() -> Arc<RdfDataset> {
     builder.freeze().expect("the fixture must validate")
 }
 
+// ── a configuration that found less than it names ────────────────────────────
+
+/// The five configured predicates of the shortfall fixtures, in sorted order.
+const FIVE: [&str; 5] = [
+    "https://example.org/comment",
+    "https://example.org/label",
+    "https://example.org/note",
+    "https://example.org/summary",
+    "https://example.org/title",
+];
+
+/// `ex:summary` with one character wrong — a mistyped predicate IRI, and one
+/// that is still a perfectly well-formed IRI, so nothing about its shape betrays
+/// it.
+const MISTYPED_SUMMARY: &str = "https://example.org/summarv";
+
+/// A dataset holding one document under each of `predicates`: subject `ex:sN`
+/// carrying the literal `"textN"`, all in the default graph.
+fn document_per_predicate(predicates: &[&str]) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    for (at, predicate) in predicates.iter().enumerate() {
+        let subject = builder.intern_iri(&format!("https://example.org/s{at}"));
+        let predicate = builder.intern_iri(predicate);
+        let text = builder.intern_literal(RdfLiteral::simple(format!("text{at}")));
+        builder.push_quad(subject, predicate, text, None);
+    }
+    builder.freeze().expect("the fixture must validate")
+}
+
+/// Five configured predicates with one document each and one character wrong in
+/// one of the IRIs: the typo is named, and the intended configuration over the
+/// same dataset reports clean.
+///
+/// This is the shape a digest comparison cannot see, and the reason the coverage
+/// exists. `verify_binding` recomputes the source digest under the *same*
+/// configuration the index was built under, so a mistyped predicate agrees with
+/// itself: both sides walk the same four predicates, both digest the same four
+/// predicates' rows, and the fifth of the corpus that is missing is missing from
+/// both. Detection has to look at what the dataset holds, not at the
+/// configuration's agreement with itself.
+#[test]
+fn a_mistyped_predicate_is_named_and_the_intended_configuration_is_clean() {
+    let dataset = document_per_predicate(&FIVE);
+
+    let intended = config(&FIVE);
+    let whole = TextIndex::from_dataset(&*dataset, &intended)
+        .expect("the intended configuration must build");
+    assert_eq!(
+        whole.document_count(),
+        5,
+        "one document under each of the five predicates"
+    );
+    let coverage = whole.source_coverage();
+    assert!(coverage.dataset_holds_statements());
+    assert!(
+        coverage.unrepresented_predicates().is_empty(),
+        "every configured predicate carries a statement"
+    );
+    assert!(
+        coverage.shortfall().is_none(),
+        "the intended configuration over the intended dataset is clean"
+    );
+    verify_binding(&whole, &*dataset, &intended)
+        .expect("the intended configuration found every predicate it names");
+
+    // The same dataset, the same five predicates, one character wrong in one of
+    // them. The index still builds — a report, not a refusal, is what keeps a
+    // host that is mid-load from being turned away — and it holds four documents
+    // of five.
+    let mistyped = config(&[FIVE[0], FIVE[1], FIVE[2], MISTYPED_SUMMARY, FIVE[4]]);
+    let short = TextIndex::from_dataset(&*dataset, &mistyped)
+        .expect("a mistyped predicate is not a construction refusal");
+    assert_eq!(
+        short.document_count(),
+        4,
+        "the typo removed one document of five, which is the silence being detected"
+    );
+
+    let coverage = short.source_coverage();
+    assert!(
+        coverage.dataset_holds_statements(),
+        "this dataset holds four predicates' worth of statements, so the absence is about the data"
+    );
+    assert_eq!(
+        coverage.shortfall(),
+        Some(&[TermValue::iri(MISTYPED_SUMMARY)][..]),
+        "the shortfall names the one predicate nothing was found under"
+    );
+    let error = verify_binding(&short, &*dataset, &mistyped)
+        .expect_err("a corpus one predicate short is not the intended data");
+    assert!(matches!(error, TextError::Data(_)), "got {error:?}");
+    assert!(
+        error.to_string().contains(MISTYPED_SUMMARY),
+        "the message must name the predicate a host has to go and fix: {error}"
+    );
+
+    // And the digests really do agree with themselves, which is the claim the
+    // detector was added for: the typo'd index verifies its own digest against
+    // this dataset, so the shortfall is the only thing that reports it.
+    assert_eq!(
+        short.source_fingerprint(),
+        TextIndex::from_dataset(&*dataset, &mistyped)
+            .expect("the same pairing builds again")
+            .source_fingerprint(),
+        "the typo'd configuration digests the same rows every time, so the digest cannot see it"
+    );
+}
+
+/// A wholly empty dataset with configured predicates still builds, still reports
+/// no problem, and still attests a generation — the capability the relaxation was
+/// made for — while a single statement anywhere turns the same unrepresented list
+/// into a shortfall.
+#[test]
+fn an_empty_dataset_is_no_shortfall_and_still_attests_a_generation() {
+    let empty = RdfDatasetBuilder::new()
+        .freeze()
+        .expect("a dataset with no quads is a valid dataset");
+    let over_five = config(&FIVE);
+
+    let waiting = TextIndex::from_dataset(&*empty, &over_five)
+        .expect("an index over an empty dataset is an ordinary operating state");
+    assert_eq!(waiting.document_count(), 0);
+    let coverage = waiting.source_coverage();
+    assert!(
+        !coverage.dataset_holds_statements(),
+        "an empty dataset holds no statement in any of the three layers"
+    );
+    assert_eq!(
+        coverage.unrepresented_predicates().len(),
+        5,
+        "the raw observation is that nothing was found under anything"
+    );
+    assert!(
+        coverage.shortfall().is_none(),
+        "nothing has landed yet, so no predicate's absence is a fact about the data"
+    );
+    verify_binding(&waiting, &*empty, &over_five)
+        .expect("an index waiting for its documents is honestly bound to the dataset with none");
+    assert_ne!(
+        waiting.fingerprint(),
+        [0; FINGERPRINT_BYTES],
+        "an empty index attests a real generation rather than a placeholder"
+    );
+
+    // The neighbour that proves the silence above is emptiness rather than a
+    // detector that never fires: ONE statement, under a predicate this
+    // configuration does not name. The index is just as empty and digests
+    // identically — which is exactly why the digest cannot be the detector — and
+    // the same five unrepresented predicates are now a shortfall.
+    let elsewhere = document_per_predicate(&[P]);
+    let missed = TextIndex::from_dataset(&*elsewhere, &over_five)
+        .expect("a configuration that finds nothing still builds");
+    assert_eq!(missed.document_count(), 0);
+    assert_eq!(
+        missed.source_fingerprint(),
+        waiting.source_fingerprint(),
+        "both walked no rows, so the source digest is the same value for both"
+    );
+    assert_eq!(
+        missed.source_coverage().shortfall().map(<[TermValue]>::len),
+        Some(5),
+        "the dataset holds a statement, so none of the five being found is about the data"
+    );
+    let error = verify_binding(&missed, &*elsewhere, &over_five)
+        .expect_err("a configuration that found none of a non-empty dataset is reported");
+    assert!(matches!(error, TextError::Data(_)), "got {error:?}");
+}
+
+/// A configured predicate that legitimately carries nothing yet reads exactly
+/// like a typo, because it is the same observation; and a predicate carried only
+/// by statements with IRI objects reads as **found**, because a statement carries
+/// it.
+///
+/// The first is deliberate. Nothing in the data separates a half-loaded corpus
+/// from a misspelling, so the report covers both and refuses neither: the index
+/// builds, answers, and names what it did not find. The second is the
+/// over-refusal this detector must not commit — a predicate whose objects are all
+/// IRIs contributes no text, which has never been an error and is not a wiring
+/// mistake.
+#[test]
+fn an_unloaded_predicate_reads_as_a_shortfall_and_an_iri_valued_one_does_not() {
+    let loading = document_per_predicate(&FIVE[..4]);
+    let over_five = config(&FIVE);
+    let half = TextIndex::from_dataset(&*loading, &over_five)
+        .expect("a dataset still loading is not a refusal");
+    assert_eq!(half.document_count(), 4);
+    assert_eq!(
+        half.source_coverage().shortfall(),
+        Some(&[TermValue::iri(FIVE[4])][..]),
+        "the predicate whose data has not arrived is reported exactly as a typo would be"
+    );
+    let error = verify_binding(&half, &*loading, &over_five)
+        .expect_err("four predicates of five is not the data the configuration names");
+    assert!(
+        error.to_string().contains(FIVE[4]),
+        "the message names the predicate so a host can decide which case it is in: {error}"
+    );
+    assert!(
+        !half
+            .source_coverage()
+            .unrepresented_predicates()
+            .contains(&TermValue::iri(FIVE[0])),
+        "and it names only that one: the four that landed are found"
+    );
+
+    // The valid neighbour, against a dataset where every configured predicate
+    // occupies a statement and one of them carries no literal.
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(S);
+    let note = builder.intern_iri(NOTE);
+    let title = builder.intern_iri(FIVE[4]);
+    let o = builder.intern_iri(O);
+    let text = builder.intern_literal(RdfLiteral::simple("only this counts"));
+    builder.push_quad(s, note, text, None);
+    builder.push_quad(s, title, o, None);
+    let dataset = builder.freeze().expect("the fixture must validate");
+
+    let two = config(&[NOTE, FIVE[4]]);
+    let index = TextIndex::from_dataset(&*dataset, &two).expect("the index must build");
+    assert_eq!(
+        index.document_count(),
+        1,
+        "the IRI-valued statement carries no text, so it is no document"
+    );
+    assert!(
+        index.source_coverage().shortfall().is_none(),
+        "a statement carries the predicate, so the configuration found it; that its object is an \
+         IRI is data"
+    );
+    verify_binding(&index, &*dataset, &two)
+        .expect("an IRI-valued predicate is present, not missing");
+}
+
+/// A predicate carried only by the RDF 1.2 **annotation** layer is found.
+///
+/// The coverage is taken from both layers the walk reads, which is not optional:
+/// `quads_for_pattern` cannot see an annotation row at all, so a coverage built
+/// from the asserted table alone would report a shortfall for the crate's
+/// headline case and call a working index a misconfigured one.
+#[test]
+fn an_annotation_only_predicate_is_found_by_the_coverage() {
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(S);
+    let p = builder.intern_iri(P);
+    let o = builder.intern_iri(O);
+    let note = builder.intern_iri(NOTE);
+    let reifier = builder.intern_iri(REIFIER);
+    let text = builder.intern_literal(RdfLiteral::simple("annotation text"));
+    builder.push_quad(s, p, o, None);
+    let statement = builder.intern_triple(s, p, o);
+    builder.push_reifier(reifier, statement);
+    builder.push_annotation(reifier, note, text);
+    let dataset = builder.freeze().expect("the fixture must validate");
+
+    let over_note = config(&[NOTE]);
+    let index = TextIndex::from_dataset(&*dataset, &over_note).expect("the index must build");
+    assert_eq!(index.document_count(), 1);
+    assert!(
+        index.source_coverage().shortfall().is_none(),
+        "the annotation layer carries ex:note, so the configuration found it"
+    );
+    verify_binding(&index, &*dataset, &over_note)
+        .expect("an annotation-only corpus is the intended data");
+}
+
 /// The analyzed terms of `text`, as a needle for [`select`].
 fn needle_terms(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();

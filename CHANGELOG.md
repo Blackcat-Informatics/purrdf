@@ -497,14 +497,54 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   holds over a stream with no rows in it), and a search answers with zero rows
   through the ordinary cursor path.
 
-  What is given up is named rather than glossed: a mistyped predicate IRI now
-  removes that predicate's share of the corpus quietly. A presence check was never
-  a sound detector of it -- it accepted any IRI the dataset interned anywhere,
-  including in an unrelated position, and said nothing about a correctly spelled
-  predicate whose objects are all IRIs, which already contributed no text and
-  already raised nothing. `verify_binding` remains the surface that answers "is
-  this the data under that index?", and it compares digests over the rows actually
-  walked. The multi-partition refusal in `ranked_declaration` is untouched.
+  What the relaxation costs is a mistyped predicate IRI's share of the corpus, and
+  that cost is paid by a detector rather than absorbed: see
+  `TextIndex::source_coverage` below. A presence check was never the detector -- it
+  accepted any IRI the dataset interned anywhere, including in an unrelated
+  position, and it condemned a correctly spelled predicate whose objects are all
+  IRIs, which contributes no text and has never raised anything. The
+  multi-partition refusal in `ranked_declaration` is untouched.
+
+- **text:** Letting an index build over a predicate the dataset carries nothing
+  for traded a hard failure for a silent partial corpus, and named a detector that
+  could not detect it. `verify_binding` recomputes the source digest under the
+  *same* configuration the index was built under, so a mistyped predicate agreed
+  with itself: five configured predicates with one document each and one character
+  wrong in one IRI gave `document_count = 4` and a clean verdict. The other signals
+  -- a zero document count, a declared row bound of zero -- fire only when *every*
+  configured predicate is wrong, not the one-of-five case.
+
+  `TextIndex::source_coverage` now reports what the walk found, because the two
+  empty states are distinguishable and only one of them is a mistake. A dataset
+  holding no statement in any of its three layers is an index standing ready before
+  its documents land: every configured predicate is unrepresented for that one
+  reason, `SourceCoverage::shortfall` is `None`, and nothing complains -- the
+  capability the relaxation was made for is unchanged, generation and all. A
+  dataset that holds statements and carries none under a configured predicate is a
+  shortfall, and `shortfall` names the predicates. A `GraphSelector::Named` graph
+  the dataset does not hold lands there too, because it leaves every configured
+  predicate with nothing in scope. `verify_binding` checks the shortfall against
+  the dataset in hand after it checks the digest, and names the predicates in its
+  message.
+
+  Representation is counted per **statement**, in either RDF 1.2 layer and inside
+  the configured graph scope -- not per literal row, and not by the predicate IRI
+  being interned somewhere. A predicate whose objects are all IRIs is therefore
+  found rather than reported, and a predicate carried only by the annotation side
+  table is found rather than reported, which a coverage taken from the asserted
+  table alone would have got exactly backwards for this crate's headline case. The
+  dataset is probed for a single statement only when something came up
+  unrepresented, and each probe stops at the first row.
+
+  One case is reported that is not a mistake, and it is reported deliberately: a
+  host loading one predicate's data before another's is the same observation as a
+  typo -- a configured predicate with no statement, in a dataset holding other
+  things -- and nothing in the data separates them. So this is a report and never a
+  refusal at construction: the index builds, answers and attests its generation
+  either way, and a host that means it reads the coverage instead of asking for a
+  verdict. The coverage is in neither fingerprint, because it cannot change an
+  answer: two datasets whose literal rows agree answer alike whether or not one
+  also holds a non-literal statement under a configured predicate.
 
 - **retrieval:** A stratum whose planned depth already equalled its producer's
   declared row bound was reported `ProducerStatus::Exhausted` -- the strongest

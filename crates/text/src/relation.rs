@@ -36,7 +36,8 @@
 //! text without any second declaration that could disagree with the first.
 //!
 //! The one thing the seam cannot check for a consumer is that the index and the
-//! dataset are the same data — see [`verify_binding`].
+//! dataset are the same data, and that the configuration found that data rather
+//! than a misspelling of it — see [`verify_binding`].
 
 use std::sync::Arc;
 
@@ -1509,6 +1510,26 @@ impl PfCursor for OccurrenceCursor {
 /// `(graph, subject, predicate, literal)` rows the index was actually built by
 /// walking.
 ///
+/// # The second channel: a configuration that found less than it names
+///
+/// A digest comparison alone cannot catch a mistyped predicate IRI, and it is
+/// worth being exact about why: the index and the recomputed digest are taken
+/// under the *same* configuration, so a typo agrees with itself. Five configured
+/// predicates with one character wrong in one of them digest equal on both sides
+/// while a fifth of the corpus is missing.
+///
+/// So the walk's [`SourceCoverage`](crate::SourceCoverage) is checked too. A configured predicate that
+/// carries no statement in `dataset`, while `dataset` holds statements, is
+/// reported here — that is the typo, and it is also the mid-load state of a host
+/// that has one predicate's data and not another's, which no observation can tell
+/// apart from it. A dataset holding no statement at all is *not* reported: that is
+/// an index standing ready before its documents land, and it is the state
+/// [`TextIndex::from_dataset`] exists to allow.
+///
+/// A host that means it — one deliberately pairing an index with a dataset that is
+/// still loading — reads [`TextIndex::source_coverage`], or the coverage of the
+/// dataset in hand, instead of asking this function for a verdict.
+///
 /// # When to call it
 ///
 /// It is **O(corpus)**: it re-walks both RDF 1.2 layers for every configured
@@ -1521,13 +1542,14 @@ impl PfCursor for OccurrenceCursor {
 ///   built under. Digesting `dataset` under a different configuration would
 ///   compare two different questions, so the mismatch is reported instead of
 ///   producing a verdict that means nothing.
-/// * [`TextError::Data`] if a term cannot be encoded. A `dataset` that does not
-///   carry a configured predicate, or the configured named graph, at all is not
-///   an error here: it digests to the digest of an empty row set, which is the
-///   verdict a host wants — equal to an index built over an empty corpus, and
-///   unequal to one built over any corpus with text in it.
+/// * [`TextError::Data`] if a term cannot be encoded.
 /// * [`TextError::Data`] if the digests differ, naming both so a host can see
 ///   which pairing it made.
+/// * [`TextError::Data`] if `dataset` holds statements and carries none under some
+///   configured predicate, naming those predicates. An empty `dataset` is not an
+///   error here: it digests to the digest of an empty row set — equal to an index
+///   built over an empty corpus, unequal to one built over any corpus with text in
+///   it — and its coverage reports no shortfall.
 pub fn verify_binding<D: DatasetView>(
     index: &TextIndex,
     dataset: &D,
@@ -1542,16 +1564,28 @@ pub fn verify_binding<D: DatasetView>(
     }
 
     let expected = index.source_fingerprint();
-    let actual = source_digest(dataset, config)?;
-    if expected == actual {
-        return Ok(());
+    let (actual, coverage) = source_digest(dataset, config)?;
+    if expected != actual {
+        return Err(TextError::data(format!(
+            "this index was built over a different dataset: its source digest is {expected:02x?} \
+             and the supplied dataset digests to {actual:02x?}. Rebuild the index from the dataset \
+             the query runs against, or pair the query with the dataset the index was built from — \
+             an index joined to the wrong dataset returns no rows and reports nothing."
+        )));
     }
-    Err(TextError::data(format!(
-        "this index was built over a different dataset: its source digest is {expected:02x?} and \
-         the supplied dataset digests to {actual:02x?}. Rebuild the index from the dataset the \
-         query runs against, or pair the query with the dataset the index was built from — an \
-         index joined to the wrong dataset returns no rows and reports nothing."
-    )))
+    if let Some(missing) = coverage.shortfall() {
+        return Err(TextError::data(format!(
+            "this dataset holds statements but carries none under {} of this configuration's \
+             predicates: {missing:?}. Each contributes no text, so the corpus is short by their \
+             share of it while every digest agrees. Check the spelling of those predicate IRIs and \
+             of the configured graph — a named graph the dataset does not hold leaves every \
+             configured predicate with nothing in scope. If the data is instead still arriving, \
+             read TextIndex::source_coverage rather than asking for this verdict: the index \
+             answers, and reports the corpus it has.",
+            missing.len()
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
