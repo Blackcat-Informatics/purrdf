@@ -325,6 +325,23 @@ Four governed channels carry it:
    field derived one way on one construction path and another way on the other
    is the modal optionality this workspace refuses.
 
+   What that contract cannot describe is what the host did to the vectors
+   **before** the build saw them. Quantize the embeddings, build a graph over
+   the codes, and the producer is genuinely order-perturbed while every contract
+   reachable from the index still reads `transforms_vectors: false` — the
+   contract describes the build, not its input. So `ranked_declaration` takes
+   that disclosure as an `OrderFidelity` parameter and composes it with the
+   derived one by taking the worse of the two: a host can degrade the axis and
+   can never upgrade it, and a host with nothing to disclose spells
+   `Faithful` rather than being defaulted into the top of the axis.
+
+   The completeness axis stays the relation's, and is not a parameter beside it.
+   It is `Lossy` over every space on every request, so there is no silence there
+   for a consumer to read as completeness — the failure a declared fidelity
+   exists to prevent cannot occur on that axis — and the profile's own evidence
+   occupies it, which is where the approximation contract requires that string
+   to reach a consumer byte for byte.
+
    A relation registered *without* a ranked declaration is not silently fused:
    it forms no stratum, contributes no trailer entry, and the request reports
    its term as unserved. Reaching for the unranked registration by mistake is a

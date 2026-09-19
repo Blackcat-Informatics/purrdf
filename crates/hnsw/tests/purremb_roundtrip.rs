@@ -354,7 +354,11 @@ fn the_profiles_own_evidence_and_loss_contract_still_bind_and_are_what_fidelity_
         .expect("the untampered artifact binds"),
     );
 
-    let fidelity = space.relation().fidelity();
+    // A host that handed the build the vectors it meant, unquantized, has
+    // nothing to disclose on the order axis and says so. What it says there
+    // cannot reach the completeness axis, which is what the assertion below
+    // rests on.
+    let fidelity = space.relation().fidelity(OrderFidelity::Faithful);
     let Completeness::Lossy { evidence } = &fidelity.completeness else {
         panic!("an HNSW search offers candidates and never certifies absence");
     };

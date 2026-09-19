@@ -15,7 +15,10 @@
 use std::sync::Arc;
 
 use purrdf_core::{DistanceMetric, IndexLossContract, TermValue};
-use purrdf_hnsw::relation::{HnswRelation, HnswSpace, order_fidelity, register_hnsw_relation};
+use purrdf_hnsw::relation::{
+    HnswRelation, HnswSpace, RankedHnswRegistration, composed_order_fidelity, order_fidelity,
+    register_hnsw_relation,
+};
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, profile};
 use purrdf_sparql_eval::{
     CandidateDomains, Completeness, DuplicatePolicy, KnnGuard, OrderFidelity,
@@ -67,10 +70,24 @@ fn stratum() -> purrdf_core::Iri {
 }
 
 fn declaration(space: &Arc<HnswSpace>) -> purrdf_sparql_eval::RankedDeclaration {
+    declaration_with(space, OrderFidelity::Faithful)
+}
+
+/// The same declaration under a host that has something to disclose about the
+/// vectors it handed the build.
+///
+/// `Faithful` is the "I did nothing to them" case above; it is spelled rather
+/// than defaulted, because the top of an axis is the one direction a default
+/// must never go.
+fn declaration_with(
+    space: &Arc<HnswSpace>,
+    vector_order: OrderFidelity,
+) -> purrdf_sparql_eval::RankedDeclaration {
     HnswRelation::new(Arc::clone(space)).ranked_declaration(
         stratum(),
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        vector_order,
         CandidateDomains::Unrestricted,
     )
 }
@@ -165,7 +182,117 @@ fn the_shipped_relation_is_pinned_to_that_function() {
     let evidence: Arc<str> = Arc::from(space.evidence());
     assert_eq!(
         decl.fidelity.order,
-        order_fidelity(&profile::loss_contract(), &evidence),
+        composed_order_fidelity(
+            order_fidelity(&profile::loss_contract(), &evidence),
+            OrderFidelity::Faithful
+        ),
+    );
+}
+
+// --- The host's half of the order axis ------------------------------------
+
+/// What the vectors were BEFORE the build is a fact the index cannot read, so
+/// the host states it, and stating it degrades the axis the derivation left at
+/// the top.
+///
+/// A host that product-quantizes its embeddings and then builds an HNSW graph
+/// over the codes has an order-perturbed producer: the distances that ranked its
+/// rows are approximations, so a row can arrive at a better rank than it was due
+/// and no finite bound on a fused score survives. This build's loss contract
+/// cannot see any of that — it describes what `HnswIndex::build` did, not what
+/// reached it.
+#[test]
+fn a_host_that_approximated_its_vectors_declares_a_perturbed_order() {
+    let host: Arc<str> = Arc::from(
+        "the vectors handed to this build are int8 codes of the model's f32 \
+         output; a distance between two codes approximates the distance the \
+         caller meant",
+    );
+    let decl = declaration_with(
+        &space(16),
+        OrderFidelity::Perturbed {
+            evidence: Arc::clone(&host),
+        },
+    );
+
+    assert_eq!(
+        decl.fidelity.order,
+        OrderFidelity::Perturbed {
+            evidence: Arc::clone(&host)
+        },
+        "the host's words, byte for byte, not a summary of them"
+    );
+    assert!(
+        decl.fidelity.order_is_unbounded(),
+        "which is the fact a consumer acts on: no finite score bound exists"
+    );
+
+    // And the profile's own disclosure is NOT displaced by the host's. It is
+    // published on the completeness axis, which is lossy over every space on
+    // every request, so it still reaches a consumer verbatim.
+    let Completeness::Lossy { evidence } = &decl.fidelity.completeness else {
+        panic!("an HNSW search offers candidates and never certifies absence");
+    };
+    assert_eq!(&**evidence, profile::LOSS_EVIDENCE);
+}
+
+/// The neighbour that must keep working: a host with nothing to disclose gets
+/// exactly the declaration it got before, and the added parameter refuses
+/// nothing.
+#[test]
+fn a_host_that_transformed_nothing_gets_the_declaration_it_always_had() {
+    let space = space(16);
+    let decl = declaration_with(&space, OrderFidelity::Faithful);
+    assert_eq!(
+        decl.fidelity.order,
+        OrderFidelity::Faithful,
+        "an untransformed pipeline over an untransforming profile is faithful \
+         on both halves, so the meet of them is too"
+    );
+    let Completeness::Lossy { evidence } = &decl.fidelity.completeness else {
+        panic!("the beam is still the beam");
+    };
+    assert_eq!(&**evidence, profile::LOSS_EVIDENCE);
+}
+
+/// The composition degrades and never upgrades, on every one of its four
+/// inputs — including the branch the shipped profile cannot reach today.
+///
+/// The `Perturbed` × `Perturbed` corner is the one worth writing down: an axis
+/// holds one disclosure, so a rule is needed, and the host's is the one that
+/// wins. Nothing is lost by that, because the derived string is a second copy of
+/// the space's evidence and the first copy is on the completeness axis, where
+/// the approximation contract pins it.
+#[test]
+fn the_composition_takes_the_worse_of_the_two_and_keeps_the_hosts_words() {
+    let derived: Arc<str> = Arc::from(profile::LOSS_EVIDENCE);
+    let host: Arc<str> = Arc::from("https://example.org/disclosure/quantized-input");
+    let host_perturbed = OrderFidelity::Perturbed {
+        evidence: Arc::clone(&host),
+    };
+    let derived_perturbed = OrderFidelity::Perturbed {
+        evidence: Arc::clone(&derived),
+    };
+
+    assert_eq!(
+        composed_order_fidelity(OrderFidelity::Faithful, OrderFidelity::Faithful),
+        OrderFidelity::Faithful
+    );
+    assert_eq!(
+        composed_order_fidelity(derived_perturbed.clone(), OrderFidelity::Faithful),
+        derived_perturbed,
+        "a host saying `I did nothing` cannot talk a transforming profile back \
+         up to the top of the axis"
+    );
+    assert_eq!(
+        composed_order_fidelity(OrderFidelity::Faithful, host_perturbed.clone()),
+        host_perturbed
+    );
+    assert_eq!(
+        composed_order_fidelity(derived_perturbed, host_perturbed.clone()),
+        host_perturbed,
+        "and where both have something to say the host's is carried, because \
+         the profile's is already on the completeness axis"
     );
 }
 
@@ -181,10 +308,13 @@ fn the_declaration_registers_through_the_ranked_path() {
         &mut registry,
         PREDICATE,
         space(16),
-        stratum(),
-        TermKind::Iri,
-        XSD_INTEGER.to_owned(),
-        CandidateDomains::Unrestricted,
+        RankedHnswRegistration {
+            stratum: stratum(),
+            seed: TermKind::Iri,
+            depth_datatype: XSD_INTEGER.to_owned(),
+            vector_order: OrderFidelity::Faithful,
+            domains: CandidateDomains::Unrestricted,
+        },
     );
 
     let read_back = registry

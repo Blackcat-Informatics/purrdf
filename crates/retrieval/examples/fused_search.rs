@@ -330,6 +330,11 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         // requests name.
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        // An exhaustive scan over vectors this host knows are its whole corpus.
+        // The first half of that is the relation's own property; the second half
+        // is this host's statement, and the relation refuses to make it on the
+        // host's behalf for the reason the sample producer below exists.
+        RankFidelity::EXACT,
         // As above: one entity space, ranked twice by two laws.
         CandidateDomains::Unrestricted,
     );

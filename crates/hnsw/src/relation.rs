@@ -456,14 +456,52 @@ impl HnswRelation {
     /// is no artifact to decode a contract out of. A field derived one way on
     /// one construction path and another way on the other is the modal
     /// optionality this workspace refuses.
+    ///
+    /// # What `vector_order` is, and why it is the only thing the host supplies
+    ///
+    /// The derivation above reads *this index's* loss contract, which describes
+    /// what the HNSW build did to the vectors it was handed. It says nothing
+    /// about what happened to them **before** that: a host that quantized,
+    /// sketched or otherwise approximated its vectors and then called
+    /// [`HnswIndex::build`] over the result has an order-perturbed producer, and
+    /// no contract reachable from here records it. That fact has exactly one
+    /// holder, so it is a parameter — and it is spelled at every call site
+    /// rather than defaulted, because [`OrderFidelity::Faithful`] is the top of
+    /// that axis and a default there would put the stronger claim into the mouth
+    /// of a host that never spoke.
+    ///
+    /// The two are combined by [`composed_order_fidelity`], which only ever
+    /// degrades: a host cannot declare its way back to `Faithful` over a profile
+    /// that transforms vectors.
+    ///
+    /// # Why the host supplies nothing on the completeness axis
+    ///
+    /// Because this relation already declares the weaker claim there, from a
+    /// fact it genuinely holds: a beam search offers the candidates it reached
+    /// and never certifies that nothing else matched, so the completeness axis
+    /// is [`Completeness::Lossy`] over every space, on every request, whatever
+    /// corpus it covers. A consumer therefore already charges this stratum a
+    /// deficit, an inflation and a rank-one contribution it never named — the
+    /// failure that makes an undeclared approximation invisible *cannot* occur
+    /// here, because there is no silence to read as completeness.
+    ///
+    /// A host with something further to say about its corpus would also have to
+    /// displace the profile's own evidence, which is the one string the
+    /// approximation contract requires to reach a consumer byte for byte. So the
+    /// axis stays the relation's. A host that wants both disclosures edits the
+    /// returned [`RankedDeclaration`] — every field of it is public — and owns
+    /// the wording of the merged evidence itself.
     #[must_use]
-    pub fn fidelity(&self) -> RankFidelity {
+    pub fn fidelity(&self, vector_order: OrderFidelity) -> RankFidelity {
         let evidence: Arc<str> = Arc::from(self.space.evidence());
         RankFidelity {
             completeness: Completeness::Lossy {
                 evidence: Arc::clone(&evidence),
             },
-            order: order_fidelity(&profile::loss_contract(), &evidence),
+            order: composed_order_fidelity(
+                order_fidelity(&profile::loss_contract(), &evidence),
+                vector_order,
+            ),
         }
     }
 
@@ -477,12 +515,20 @@ impl HnswRelation {
     /// `domains` is the caller's, never inferred: which blocks of its candidate
     /// universe this space draws from is a fact about the host's corpus and
     /// nothing here can know it.
+    ///
+    /// `vector_order` is the caller's for the same kind of reason: whether the
+    /// vectors handed to [`HnswIndex::build`] were already approximations of the
+    /// values the caller meant is a fact about the host's pipeline, upstream of
+    /// anything this space can read. See [`Self::fidelity`] for how it composes
+    /// with the axis derived here, and for why the completeness axis is not a
+    /// parameter beside it.
     #[must_use]
     pub fn ranked_declaration(
         &self,
         stratum: Iri,
         seed: TermKind,
         depth_datatype: String,
+        vector_order: OrderFidelity,
         domains: CandidateDomains,
     ) -> RankedDeclaration {
         RankedDeclaration {
@@ -504,7 +550,7 @@ impl HnswRelation {
             // visits a node at most once, so a row cannot repeat within an
             // invocation.
             duplicates: DuplicatePolicy::Unique,
-            fidelity: self.fidelity(),
+            fidelity: self.fidelity(vector_order),
             domains,
             // This relation projects a neighbour and a distance; it knows
             // nothing of a host's partition, so it has no position to read a
@@ -791,10 +837,18 @@ impl PfCursor for HnswCursor {
 /// The order fidelity an index with this loss contract can promise.
 ///
 /// A pure function of the contract, and a function rather than an inline
-/// expression on purpose: written as a literal at the one call site, the
+/// expression on purpose: written as a literal at its one call site the
 /// [`OrderFidelity::Perturbed`] branch would never execute, and the branch that
 /// never executes is the one carrying the claim that no finite score bound
-/// exists. Here both branches are reachable and both are tested.
+/// exists. Here both branches are reachable and both are tested — directly, from
+/// a contract a test writes, because this build's
+/// [`profile::loss_contract`] is a constant with `transforms_vectors: false` and
+/// reaches only the first of them.
+///
+/// **This is half of the answer, not the whole of it.** It describes what the
+/// HNSW build did to the vectors it was given, and a host may have approximated
+/// them before handing them over. [`composed_order_fidelity`] combines the two,
+/// and it is that value — never this one alone — that reaches a declaration.
 ///
 /// # Why `transforms_vectors` is the right discriminator
 ///
@@ -814,6 +868,44 @@ pub fn order_fidelity(contract: &IndexLossContract, evidence: &Arc<str>) -> Orde
         }
     } else {
         OrderFidelity::Faithful
+    }
+}
+
+/// The order fidelity of a search whose index may perturb the order **and**
+/// whose vectors the host may already have perturbed before the index saw them.
+///
+/// The meet of the two on a two-element lattice: the result is
+/// [`OrderFidelity::Perturbed`] when either input is, and
+/// [`OrderFidelity::Faithful`] only when both are. It degrades and never
+/// upgrades, which is the property that matters — a host passing `Faithful`
+/// says "I did nothing to the vectors", not "the index is faithful", and cannot
+/// talk a transforming profile back up to the top of the axis.
+///
+/// # Which evidence survives, and why nothing is lost
+///
+/// When both inputs are perturbed the host's evidence is the one carried, and
+/// the derived string is **not** concatenated onto it, re-worded, or summarized:
+/// an axis holds one disclosure and a consumer reads those bytes rather than a
+/// composition of them.
+///
+/// That costs the reader nothing, because the derived string is not the
+/// profile's disclosure to a consumer — it is a *second copy* of it.
+/// [`HnswRelation::fidelity`] derives both axes from one string, the space's
+/// own [`HnswSpace::evidence`], and publishes it on the completeness axis, which
+/// is [`Completeness::Lossy`] unconditionally and so always carries it. So the
+/// profile's evidence reaches a declaration, a stream contract and a fused
+/// trailer byte for byte on every path through this function, and the host's
+/// words reach them beside it instead of displacing them.
+///
+/// The host's is the one that must win the axis: it is the only one of the two a
+/// reader could otherwise never obtain, and A16 of the producer contract is
+/// exactly the rule that a consumer either receives such a fact from the
+/// producer or never has it.
+#[must_use]
+pub fn composed_order_fidelity(derived: OrderFidelity, host: OrderFidelity) -> OrderFidelity {
+    match host {
+        OrderFidelity::Perturbed { evidence } => OrderFidelity::Perturbed { evidence },
+        OrderFidelity::Faithful => derived,
     }
 }
 
@@ -858,6 +950,33 @@ fn append_framed(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
 /// can never equal a digest of the same bytes taken for another purpose.
 const SPACE_GENERATION_DOMAIN: &str = "purrdf-hnsw/space-generation-v1";
 
+/// Everything [`HnswRelation::ranked_declaration`] cannot derive: the five facts
+/// a host states about its own corpus and pipeline when it registers a space as
+/// a ranked producer.
+///
+/// Carried as one value because that is what they are — one host's statement,
+/// made at one moment, about one space — and because a registration function
+/// taking them loose would be eight positional arguments of which five are the
+/// same argument. Every field is public and none is optional: a bare-field
+/// struct with no builder and no `Default` is what makes an omitted disclosure a
+/// compile error rather than a silent top-of-lattice claim, which is the same
+/// discipline [`RankedDeclaration`] itself follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankedHnswRegistration {
+    /// The caller's stratum IRI: the label rows from this space are ranked and
+    /// fused under.
+    pub stratum: Iri,
+    /// Which RDF term kind the host's requests seed a search with.
+    pub seed: TermKind,
+    /// The caller's datatype IRI for the rendered neighbour count.
+    pub depth_datatype: String,
+    /// What the host did to its vectors **before** [`HnswIndex::build`] saw
+    /// them. See [`HnswRelation::fidelity`].
+    pub vector_order: OrderFidelity,
+    /// Which blocks of the candidate universe this space may name.
+    pub domains: CandidateDomains,
+}
+
 /// Register `space` as a relation under the caller's predicate `iri`.
 ///
 /// PurRDF supplies no IRI: the caller's predicate is what a query text names the provider
@@ -866,13 +985,18 @@ pub fn register_ranked_hnsw_relation(
     registry: &mut PropertyFunctionRegistry,
     iri: impl Into<String>,
     space: Arc<HnswSpace>,
-    stratum: Iri,
-    seed: TermKind,
-    depth_datatype: String,
-    domains: CandidateDomains,
+    declared: RankedHnswRegistration,
 ) {
+    let RankedHnswRegistration {
+        stratum,
+        seed,
+        depth_datatype,
+        vector_order,
+        domains,
+    } = declared;
     let relation = HnswRelation::new(space);
-    let declaration = relation.ranked_declaration(stratum, seed, depth_datatype, domains);
+    let declaration =
+        relation.ranked_declaration(stratum, seed, depth_datatype, vector_order, domains);
     registry.register_ranked(iri, Arc::new(relation), declaration);
 }
 
@@ -893,8 +1017,8 @@ pub fn register_ranked_hnsw_relation(
 ///
 /// A host composing this space into a fused answer wants
 /// [`register_ranked_hnsw_relation`] instead, which needs the stratum, seed
-/// kind, depth datatype and domain declaration a plain-SPARQL host has no
-/// reason to invent.
+/// kind, depth datatype, vector-order disclosure and domain declaration a
+/// plain-SPARQL host has no reason to invent.
 pub fn register_hnsw_relation(
     registry: &mut PropertyFunctionRegistry,
     iri: impl Into<String>,

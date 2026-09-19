@@ -977,6 +977,39 @@ the repeat arrives. A producer declaring itself exhaustive while quietly missing
 rows yields an answer that declaration made wrong, and this layer does not claim
 otherwise.
 
+**Where a shipped relation gets it from.** Every ranked producer in this
+workspace takes its fidelity, or the half of it the relation cannot derive, as a
+parameter at the point of declaration. `TextSearchRelation` and
+`EmbeddingKnnRelation` take the whole `RankFidelity`, because both are
+exhaustive over the data they hold and neither can see whether that data is the
+whole of the host's corpus: BM25 scores every document holding a query term and
+the kNN relation scans every row of its space, so `RankFidelity::EXACT` is a true
+statement about each one's *search* and says nothing about its *coverage*. A
+relation asserting it would be the failure above in its purest form — the
+strongest claim in the lattice in the mouth of the one party that never spoke,
+about the one fact nothing downstream can recover.
+
+The HNSW relation is the exception, and takes only an `OrderFidelity`. Its
+completeness axis is `Lossy` over every space on every request, derived from a
+fact it genuinely holds — a beam offers what it reached and never certifies that
+nothing else matched — so there is no silence there to be read as completeness,
+and the profile's own evidence occupies the axis, which is where this contract
+requires it to reach a consumer byte for byte. What the relation cannot see is
+what the host did to the vectors *before* the build: quantize them and the
+producer is order-perturbed, and no loss contract reachable from the index
+records it. That is the parameter, and it composes with the derived value by
+taking the worse of the two, so a host can degrade the axis and never upgrade it.
+
+**This is not the attestation channel, and does not duplicate it.**
+`ServiceLevel::Incomplete` answers a different question — was the index *version*
+that served this invocation whole, given a shard that failed to load or a replica
+that has not caught up — and it already degrades `ScoreExactness` on its own. It
+is the wrong channel for a corpus a host deliberately sampled, twice over: it is
+read per invocation from the cursor rather than stated at registration, and an
+`Incomplete` reading is a *refusal* on every entry point that carries no witness,
+so a host stating a permanent fact there would take out its ordinary SPARQL
+queries along with its fused ones.
+
 **What it does to a fused answer.** The declaration reaches
 `FusionTrailer::fidelities` verbatim, under the same stratum key as the status,
 and the two are read together: a status is how the read *ended*, a fidelity is
@@ -992,7 +1025,15 @@ the two answers differ in what they may be read to claim. **A consequence worth
 knowing before you edit an evidence string:** changing that sentence changes
 every plan that names the producer.
 
-Pinned by `the_declaration_carries_the_profile_evidence_byte_for_byte` and
-`the_order_axis_is_a_function_of_the_loss_contract_and_not_a_literal` in
-`crates/hnsw/tests/ranked_declaration.rs`, and by the `T8`/`T9` groups in
-`tests/fusion.rs`.
+Pinned by `the_declaration_carries_the_profile_evidence_byte_for_byte`,
+`the_order_axis_is_a_function_of_the_loss_contract_and_not_a_literal`,
+`a_host_that_approximated_its_vectors_declares_a_perturbed_order`,
+`a_host_that_transformed_nothing_gets_the_declaration_it_always_had` and
+`the_composition_takes_the_worse_of_the_two_and_keeps_the_hosts_words` in
+`crates/hnsw/tests/ranked_declaration.rs`; by
+`the_ranked_declaration_carries_the_fidelity_the_caller_stated` in
+`crates/sparql-eval/src/knn/tests.rs`; by
+`a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness` and its
+neighbour `a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores`
+in `tests/real_producers.rs`, which run the whole ladder over a real sealed
+artifact holding half a corpus; and by the `T8`/`T9` groups in `tests/fusion.rs`.

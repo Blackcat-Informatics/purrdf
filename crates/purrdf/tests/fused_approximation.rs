@@ -21,7 +21,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-use purrdf::hnsw::relation::{HnswSpace, register_ranked_hnsw_relation};
+use purrdf::hnsw::relation::{HnswSpace, RankedHnswRegistration, register_ranked_hnsw_relation};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix, profile};
 use purrdf::sparql::{
     CandidateDomains, Completeness, IndexGeneration, KnnGuard, OrderFidelity,
@@ -126,10 +126,16 @@ fn registry() -> PropertyFunctionRegistry {
         &mut registry,
         HNSW_PRODUCER,
         vector_space(),
-        purrdf::iri::parse(HNSW_STRATUM).expect("the fixture stratum IRI is valid"),
-        TermKind::Iri,
-        XSD_INTEGER.to_owned(),
-        CandidateDomains::Unrestricted,
+        RankedHnswRegistration {
+            stratum: purrdf::iri::parse(HNSW_STRATUM).expect("the fixture stratum IRI is valid"),
+            seed: TermKind::Iri,
+            depth_datatype: XSD_INTEGER.to_owned(),
+            // This fixture hands the build the vectors it means, unquantized
+            // and untransformed, so it has nothing to disclose on the order
+            // axis. It says so rather than leaving it unsaid.
+            vector_order: OrderFidelity::Faithful,
+            domains: CandidateDomains::Unrestricted,
+        },
     );
     registry
 }

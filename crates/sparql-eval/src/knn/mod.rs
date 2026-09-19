@@ -854,6 +854,31 @@ impl EmbeddingKnnRelation {
     /// [`RankedDeclaration`] holds every ranked producer to. Terms are distinct
     /// within a space and a search returns distinct rows, so no item repeats.
     ///
+    /// # `fidelity` comes from the host, for the same reason `domains` does
+    ///
+    /// This relation is the **exact oracle**: it scans every row of its space,
+    /// compares exact distances, prunes nothing and exits early nowhere, so
+    /// over the vectors it holds it names every neighbour that was due and
+    /// orders them truly. [`RankFidelity::EXACT`] is therefore a true statement
+    /// about its *search*.
+    ///
+    /// What it is not is a statement about the *corpus*. Whether the vectors
+    /// this space holds are the whole of what the host means is not a fact this
+    /// relation holds — a host that embedded a sample, or one shard of a larger
+    /// collection, or a snapshot it knows has fallen behind, has a genuinely
+    /// lossy producer, and this is the only place it can say so. Asserting
+    /// exactness on its behalf would put the strongest claim in the lattice into
+    /// the mouth of the one party that never spoke, and that claim is invisible
+    /// downstream: a stream that ran out of rows and a stream whose space never
+    /// held them both simply stop yielding, so a consumer reads the silence as
+    /// completeness and certifies an answer missing half a corpus.
+    ///
+    /// This is the identical parameter `purrdf-text`'s
+    /// `TextSearchRelation::ranked_declaration` takes, for the identical
+    /// reason, and it is deliberately not defaulted: see
+    /// [`RankFidelity::EXACT`] for why the top of the lattice is the one
+    /// direction a default must never go.
+    ///
     /// # `domains` comes from the host, and cannot come from anywhere else
     ///
     /// Which blocks of the candidate universe this space's neighbours lie in is
@@ -877,6 +902,7 @@ impl EmbeddingKnnRelation {
         stratum: Iri,
         seed: TermKind,
         depth_datatype: String,
+        fidelity: RankFidelity,
         domains: CandidateDomains,
     ) -> RankedDeclaration {
         RankedDeclaration {
@@ -895,11 +921,17 @@ impl EmbeddingKnnRelation {
             }),
             candidate_position: Self::NEIGHBOUR,
             duplicates: DuplicatePolicy::Unique,
+            // Passed through, never asserted here, for the reason `domains` is.
             // This relation scans every row of its space and compares exact
             // distances, so it names every neighbour that was due and orders
-            // them truly. It is the exact oracle an approximate index is
-            // measured against, and it declares the top of the lattice.
-            fidelity: RankFidelity::EXACT,
+            // them truly: it is the exact oracle an approximate index is
+            // measured against, and [`RankFidelity::EXACT`] is the true
+            // declaration of its SEARCH.
+            //
+            // Whether the vectors it searched are the whole of the host's
+            // corpus is a different question and not one this relation can
+            // answer, so the host answers it. See the doc comment above.
+            fidelity,
             domains,
             // This relation projects a neighbour and a distance; it knows
             // nothing of a host's partition, so it has no position to read a

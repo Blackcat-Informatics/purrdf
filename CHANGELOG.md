@@ -282,6 +282,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   exact scores; whether that index covers what the host means by its corpus is a
   fact the relation cannot see, so the term is the host's to supply for the same
   reason `domains` is.
+- **sparql-eval:** `EmbeddingKnnRelation::ranked_declaration` takes that same
+  fidelity term, in the same position, for the same reason. The relation is the
+  exact oracle -- it scans every row of its space, prunes nothing and exits early
+  nowhere -- so `RankFidelity::EXACT` is a true statement about its *search* and
+  it used to assert exactly that. It is not a statement about whether the vectors
+  it searched are the whole of a host's corpus, and a host that embedded a sample
+  had nowhere to say so: the answer certified that every stratum was exhaustive
+  and whole while a document the whole space would have ranked was silently
+  absent. Breaking, in the same way and at the same seam as the text relation
+  above.
+- **hnsw:** `HnswRelation::ranked_declaration` and `HnswRelation::fidelity` take
+  an `OrderFidelity` describing what the
+  host did to its vectors **before** `HnswIndex::build` saw them. A host that
+  quantizes its embeddings and then builds a graph over the codes has an
+  order-perturbed producer, and no loss contract reachable from the index records
+  it -- the profile's contract describes what the build did, not what reached it.
+  The new term composes with the derived axis through `composed_order_fidelity`,
+  which takes the worse of the two, so a host can degrade the axis and never
+  upgrade it. The completeness axis stays the relation's: it is `Lossy` over
+  every space on every request, so no silence there can be read as completeness,
+  and the profile's own evidence keeps the axis and keeps reaching a consumer
+  byte for byte. Breaking.
+- **hnsw:** `register_ranked_hnsw_relation` takes the five facts a host states
+  about its own corpus and pipeline as one `RankedHnswRegistration` rather than
+  loose: they are one statement made at one moment about one space, and the new
+  disclosure would otherwise have made the call eight positional arguments of
+  which five were the same argument. A bare-field struct with no builder and no
+  `Default`, like every other declaration in this workspace. Breaking.
 - **python:** A `text_producers` value may carry a sixth `(completeness, order)`
   position, each member a `str` or `None`, shaped like the attestation position
   beside it and read on the same terms -- `None` is silence on that axis, a
