@@ -711,6 +711,70 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **BREAKING** **retrieval:** The read bound moved into `RetrievalRequest`, so a
+  bounded answer costs a bounded *read*. `RetrievalRequest` gains a `bound` field
+  of the new `ReadBound` -- a total enum over the bounded case and the complete
+  one, because "give me the top five" and "give me everything these strata hold"
+  are both things a caller asks for and neither is the absence of the other. `plan`
+  derives each stratum's depth from it, `Plan` records it and digests it into
+  `Plan::id`, and `search` reads it from the request instead of taking a separate
+  `top_k`. The bound used to arrive at `fuse`, four stages after every depth had
+  been chosen: a fused top-five over two strata whose producers declare disjoint
+  candidate blocks walked a handful of ranks and reported so, while the compiled
+  unit was still `LIMIT <corpus>` -- so the elapsed time grew with the corpus while
+  the instrument said it had not. Only the measurement had moved.
+
+  When the bound narrows a depth is decided from the producers' own
+  `CandidateDomains` and from nothing else, with no caller hint and no mode. Where
+  every stratum declares a block set and no two of those sets meet, each candidate
+  has exactly one naming stratum, so its fused score is one weighted contribution
+  that falls with rank and the global top `k` is a merge of per-stratum prefixes:
+  nothing below per-stratum rank `k` can enter it, even where the decay has
+  saturated and the scores tie, because the tie-break's next key is the stratum
+  rank those candidates win on. The depth is therefore
+  `min(declared, statistics-narrowed, k)` and it is exact rather than merely
+  smaller. Any overlap between two declarations, and any `Unrestricted` stratum,
+  and the declared-or-measured bound stands exactly as before -- scores sum across
+  strata there and the merge argument has no premise to run on. Rows, scores and
+  provenance are identical either way.
+
+  A bound also gives a finite depth to a producer that declares unboundedly many
+  rows, where previously only a measured cardinality could: such a read, taken for
+  an answer that provably cannot use more than `k` rows, is a read of `k` rows.
+  `PlanError::StatisticsUnavailable` still refuses the same declaration asked for
+  everything.
+
+  The probe row is untouched: the emitted bound is still the depth plus one
+  wherever the declaration leaves room, and a depth *argument* is still never
+  raised past the producer's own registration. It matters more at a tight depth
+  than at a loose one.
+
+- **BREAKING** **retrieval:** `fuse` refuses a bound the streams were not planned
+  for, as `FusionError::ReadBoundMismatch`. `CompiledRetrieval::fused_bound`
+  resolves a plan's `ReadBound` once into the row count a fusion of its units must
+  run at, `execute` tags every `StratumStream` with it, and `RankedStream` gains a
+  defaulted `fused_bound` so a stream assembled outside the ladder still fuses at
+  whatever its caller names. It is a sibling of `PlanIdMismatch` rather than a case
+  of it: that one is a disagreement among the streams about their provenance, this
+  one is a disagreement between the streams and the caller's own argument, and the
+  repairs differ. It closes a latent defect -- a plan could be fused at any bound,
+  including one its depths could not honestly serve, with nothing catching it.
+
+- **BREAKING** **retrieval:** `PLAN_VERSION` is 3. The canonical plan encoding
+  appends the request's read bound after the per-term unserved evidence, which
+  every recorded depth is derived from; a version-2 plan's bytes end where the
+  bound would begin, so the decoder refuses the old layout by name instead of
+  running off the end of it. Every plan identity moves, as does the plan document's
+  JSON, which now carries `"read_bound"`.
+
+- **BREAKING** **python:** `retrieval.plan` and `retrieval.compile` take the
+  `top_k` keyword `retrieval.search` already took, and all three require it. The
+  row bound is a planning input, so a `plan` or `compile` call without one would
+  report a depth, a `LIMIT` and a `plan_id` for a read nobody asked for.
+
+  The whole ranked-retrieval declaration surface postdates the last release, so
+  every change above moves an API no published version carries.
+
 - **retrieval:** A stratum depth is floored at one row, whether the zero came from
   a statistics provider or from the registry's own declaration. A bound narrows a
   read; it never eliminates one. A provider reporting a selectivity of zero parts

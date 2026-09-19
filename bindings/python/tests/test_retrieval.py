@@ -66,6 +66,16 @@ DATA = f"""
 
 STATISTICS: dict[str, Any] = {"source": "host-statistics", "revision": "r1"}
 
+# The row bound the plan-and-compile fixtures ask for.
+#
+# `plan` and `compile` require it because it is a planning input: it decides how
+# deep each stratum is read wherever the producers' own `domains` make that sound.
+# This value is above anything the small fixture corpora hold, so the fixtures
+# below measure the depth the declarations and the statistics set rather than a
+# depth this number cut — the narrowing itself is measured where it is the subject,
+# in `test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum`.
+PLAN_TOP_K = 1024
+
 # The two decay rules, by the spelling the binding reads them under. Neither is
 # a default: they compute different contributions from the same weights and
 # reach different depths, so every call that names a fusion law names one.
@@ -605,7 +615,9 @@ def test_a_producer_that_declares_no_attestation_is_unchanged() -> None:
     def _fingerprint(producers: dict[str, Any]) -> str:
         planned = retrieval.plan(
             DATA, ATTESTED_REQUEST, text_producers=producers, statistics=STATISTICS
-        )
+        ,
+            top_k=PLAN_TOP_K,
+)
         return planned["registry_content_fingerprint"]
 
     assert _fingerprint(_note_attesting((INDEX_GENERATION, REBUILDING))) == (
@@ -831,6 +843,170 @@ def test_a_declared_domain_changes_the_reading_and_not_the_answer() -> None:
     # The shorter read is still an exact one: nothing here attested a short
     # index, so the scores are sums of every contribution that was due.
     assert declared["exactness"] == {"exact": True, "lower_bounds_for": []}
+
+
+def test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum() -> None:
+    """The materialized read is flat in corpus size, not merely walked less far.
+
+    The defect this test exists for: a declaration used to buy a shorter walk of a
+    stream that had already been materialized in full. Fusion stopped early and
+    said so, and the compiled unit was still ``LIMIT <corpus>`` — so the elapsed
+    time of a top-five answer grew with the corpus while the instrument reported a
+    handful of ranks pulled. The bound arrived at ``fuse``, four stages after the
+    depth was chosen.
+
+    The bound is a planning input now, so the same ``top_k`` over a corpus and over
+    a corpus four times its size compiles to the SAME per-stratum ``LIMIT`` and
+    records the SAME depth. Both numbers are asserted, because either alone would
+    leave the defect expressible: a narrowed ``LIMIT`` beside an unnarrowed depth
+    is a plan recording a read nobody took, and an unnarrowed ``LIMIT`` beside a
+    narrowed depth is the corpus still being materialized.
+
+    And the answer does not move. At both sizes the bounded run's rows, scores and
+    provenance are identical to the draining run's — the run that reads every row
+    of every stream because nothing was declared. That is the soundness gate: a
+    depth rule that fired too eagerly would show up here as a truncated ranked
+    list, which is the mirror of the defect above and worse than it.
+    """
+    top_k = 5
+    disjoint = _declared(
+        (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+        (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
+    )
+    request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
+    law: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": top_k,
+    }
+
+    def compiled_bounds(rows: int) -> dict[str, tuple[int, int]]:
+        """Each stratum's recorded depth and the ``LIMIT`` its unit carries."""
+        compiled = retrieval.compile(
+            _disjoint_corpus(rows),
+            request,
+            text_producers=disjoint,
+            statistics=STATISTICS,
+            top_k=top_k,
+        )
+        return {
+            unit["stratum"]: (unit["depth"], _emitted_limit(unit["sparql"]))
+            for unit in compiled["units"]
+        }
+
+    small, large = compiled_bounds(400), compiled_bounds(1600)
+    assert small == large, (
+        "the materialized read is flat in corpus size, so neither the recorded "
+        f"depth nor the emitted LIMIT may move with it: {small} vs {large}"
+    )
+    assert small == {
+        NOTE_STRATUM: (top_k, top_k + 1),
+        TITLE_STRATUM: (top_k, top_k + 1),
+    }, (
+        "each stratum is read to the bound and no deeper, with the probe row one "
+        f"past it exactly as at any other depth: {small}"
+    )
+
+    # The answer is the same answer, at both sizes, as the run that drains
+    # everything. Nothing declared means no stream fusion may skip, so the
+    # undeclared run is the oracle here rather than a second engine.
+    for rows in (400, 1600):
+        corpus = _disjoint_corpus(rows)
+        bounded = retrieval.search(corpus, request, text_producers=disjoint, **law)
+        draining = retrieval.search(corpus, request, text_producers=BOTH, **law)
+        assert _ranking(bounded) == _ranking(draining), (
+            f"over {rows} rows per predicate a declaration licensed a shorter "
+            "read, and it must never license a different answer"
+        )
+        assert len(bounded["rows"]) == top_k
+
+        # And the reading really was flat, measured on the rows themselves: the
+        # draining run pulled its whole corpus per stratum, the bounded one pulled
+        # at most what its depth allowed.
+        for stratum in (NOTE_STRATUM, TITLE_STRATUM):
+            assert draining["observed_resolution"][stratum]["ranks_pulled"] == rows, (
+                "the undeclared run has no stream it may skip, so it reads to the "
+                "end of both"
+            )
+            assert bounded["observed_resolution"][stratum]["ranks_pulled"] <= top_k, (
+                stratum
+            )
+
+
+def test_an_unrestricted_or_overlapping_stratum_keeps_the_declared_depth() -> None:
+    """The neighbours the prefix rule must NOT fire on, and they are not refused.
+
+    The proof the prefix rests on needs one premise: each candidate has at most
+    one naming stratum, so its fused score is a single weighted contribution that
+    falls with rank. The producers' own declarations are what supply that premise,
+    and two shapes supply none of it — a stratum that says it may name anything,
+    and two strata that say they draw from the same block, where a candidate's
+    score is a SUM across both.
+
+    Neither is refused and neither answers differently. What they keep is the
+    depth, which is the declared-or-measured bound and exactly the depth every such
+    plan has always carried. Reading more than the answer needs is the safe
+    direction; reading less would truncate a ranked list with nothing saying so.
+    """
+    top_k = 5
+    rows = 40
+    corpus = _disjoint_corpus(rows)
+    request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
+
+    def depths(producers: dict[str, tuple[Any, ...]]) -> dict[str, int]:
+        compiled = retrieval.compile(
+            corpus, request, text_producers=producers, statistics=STATISTICS, top_k=top_k
+        )
+        return {unit["stratum"]: unit["depth"] for unit in compiled["units"]}
+
+    # The declared bound, read off the shape that licenses no prefix at all: both
+    # producers unrestricted, which is what every producer said before domains
+    # carried.
+    declared = depths(BOTH)
+    assert declared == {NOTE_STRATUM: rows, TITLE_STRATUM: rows}, (
+        "each producer's own index bounds it at the rows it holds"
+    )
+
+    # One unrestricted stratum beside one restricted one: the unrestricted one has
+    # made no promise about which candidates it will not name, so there is no
+    # premise and the bound stands for BOTH.
+    mixed = _declared(
+        (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+        (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+    )
+    assert depths(mixed) == declared, (
+        "an unrestricted stratum licenses no prefix, for itself or for its siblings"
+    )
+
+    # Two producers declaring the SAME block. Every candidate either could name is
+    # in a block both declared, so scores sum across strata and the merge argument
+    # has nothing to stand on.
+    overlapping = _declared(
+        (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+        (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [NOTE_DOMAIN]),
+    )
+    assert depths(overlapping) == declared, (
+        "declarations that meet license no prefix"
+    )
+
+    # And every one of them answers, identically. The depth is the only thing that
+    # moved anywhere in this family.
+    law: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": top_k,
+    }
+    widest = retrieval.search(corpus, request, text_producers=BOTH, **law)
+    for producers in (mixed, overlapping):
+        assert _ranking(
+            retrieval.search(corpus, request, text_producers=producers, **law)
+        ) == _ranking(widest), (
+            "a declaration changes how much is read, never what is returned"
+        )
 
 
 def test_an_empty_domain_declaration_is_refused_and_its_neighbours_are_not() -> None:
@@ -1069,10 +1245,14 @@ def test_the_registry_shape_is_durable_where_the_instance_is_not() -> None:
     request = [_lexical("quick fox", NOTE)]
     first = retrieval.plan(
         DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     second = retrieval.plan(
         DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     assert (
         first["registry_content_fingerprint"] == second["registry_content_fingerprint"]
     )
@@ -1086,7 +1266,8 @@ def test_plan_reports_why_a_producer_was_not_selected() -> None:
         [_lexical("quick fox", NOTE)],
         text_producers=BOTH,
         statistics=STATISTICS,
-    )
+            top_k=PLAN_TOP_K,
+)
     decisions = {d["producer"]: d for d in planned["producer_decisions"]}
     assert decisions[NOTE_PRODUCER]["selected"] is True
     assert decisions[NOTE_PRODUCER]["stratum"] == NOTE_STRATUM
@@ -1101,13 +1282,16 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
     request = [_lexical("quick fox", NOTE)]
     unbounded = retrieval.plan(
         DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     bounded = retrieval.plan(
         DATA,
         request,
         text_producers=NOTE_ONLY,
         statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
-    )
+            top_k=PLAN_TOP_K,
+)
     assert bounded["stratum_depths"][NOTE_STRATUM] == 1
     assert (
         bounded["stratum_depths"][NOTE_STRATUM]
@@ -1136,7 +1320,8 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-    )
+            top_k=PLAN_TOP_K,
+)
     units = compiled["units"]
     assert len(units) == 1
     assert units[0]["stratum"] == NOTE_STRATUM
@@ -1172,7 +1357,8 @@ def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> No
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
-    )
+            top_k=PLAN_TOP_K,
+)
     unit = compiled["units"][0]
     assert unit["depth"] == 1, "the host's measurement lowered the depth to one row"
     assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
@@ -1204,14 +1390,16 @@ def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> N
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-    )
+            top_k=PLAN_TOP_K,
+)
     unit = compiled["units"][0]
     planned = retrieval.plan(
         DATA,
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert unit["depth"] == planned["stratum_depths"][NOTE_STRATUM], (
         "the unit reports the depth the plan recorded, not a number of its own"
     )
@@ -1236,7 +1424,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     planned = compiled["planned_resolution"][NOTE_STRATUM]
     assert planned["fully_separated"] is True, (
         "a whole unit of weight separates every rank this plan reads"
@@ -1262,7 +1451,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: sufficient - 1},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     coarse_planned = coarse["planned_resolution"][NOTE_STRATUM]
     assert coarse_planned["requested_depth"] == depth
     assert coarse_planned["fully_separated"] is False, (
@@ -1281,7 +1471,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: sufficient},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert exact["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
 
@@ -1304,11 +1495,14 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
             [_lexical("quick fox", NOTE)],
             weights={NOTE_STRATUM: retrieval.SCALE},
             **common,
-        )
+                    top_k=PLAN_TOP_K,
+)
     with pytest.raises(ValueError, match="smoothing constant"):
         retrieval.compile(
             DATA, [_lexical("quick fox", NOTE)], k=60, decay=TRUNCATED, **common
-        )
+        ,
+            top_k=PLAN_TOP_K,
+)
     # Two thirds of a law is still not a law, and the message names the third
     # that is missing rather than choosing one.
     with pytest.raises(ValueError, match=r"left the `decay` rule unnamed"):
@@ -1318,7 +1512,8 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
             weights={NOTE_STRATUM: retrieval.SCALE},
             k=60,
             **common,
-        )
+                    top_k=PLAN_TOP_K,
+)
 
     # All three together are a law, and the same call answers.
     whole = retrieval.compile(
@@ -1328,12 +1523,13 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
         k=60,
         decay=TRUNCATED,
         **common,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert whole["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
     # Naming NONE of the three is not a refusal: it compiles without a law and
     # is simply told nothing about resolution.
-    lawless = retrieval.compile(DATA, [_lexical("quick fox", NOTE)], **common)
+    lawless = retrieval.compile(DATA, [_lexical("quick fox", NOTE)], **common, top_k=PLAN_TOP_K)
     assert lawless["planned_resolution"] == {}
     assert lawless["units"], "a call that names no law is still a compiled plan"
 
@@ -1377,7 +1573,8 @@ def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert compiled["planned_resolution"] == answer["planned_resolution"]
 
 
@@ -1386,7 +1583,9 @@ def test_no_producer_is_refused_by_name() -> None:
     with pytest.raises(ValueError, match="no ranked producers"):
         retrieval.plan(
             DATA, [_lexical("quick fox", NOTE)], text_producers={}, statistics=STATISTICS
-        )
+        ,
+            top_k=PLAN_TOP_K,
+)
 
 
 def test_statistics_must_name_their_own_revision() -> None:
@@ -1397,7 +1596,8 @@ def test_statistics_must_name_their_own_revision() -> None:
             [_lexical("quick fox", NOTE)],
             text_producers=NOTE_ONLY,
             statistics={"source": "host-statistics"},
-        )
+                    top_k=PLAN_TOP_K,
+)
 
 
 def test_a_float_weight_is_refused_and_an_exact_one_is_not() -> None:
@@ -1432,7 +1632,9 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
     with pytest.raises(ValueError, match="partition"):
         retrieval.plan(
             tagged, [_lexical("quick", NOTE)], text_producers=NOTE_ONLY, statistics=STATISTICS
-        )
+        ,
+            top_k=PLAN_TOP_K,
+)
 
     # The neighbouring valid case: one language is one partition, and it answers.
     one_language = (
@@ -1441,7 +1643,9 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
     )
     planned = retrieval.plan(
         one_language, [_lexical("quick", NOTE)], text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     assert planned["producer_bindings"], "a single-partition index declares a ranked order"
 
     # …and the declaration is worth having: the whole ladder runs over it and both
@@ -1470,7 +1674,8 @@ def test_an_unknown_request_kind_names_what_is_accepted() -> None:
             [("keyword", "quick fox", None, NOTE)],
             text_producers=NOTE_ONLY,
             statistics=STATISTICS,
-        )
+                    top_k=PLAN_TOP_K,
+)
 
 
 def test_an_unknown_graph_selector_names_what_is_accepted() -> None:
@@ -1481,7 +1686,8 @@ def test_an_unknown_graph_selector_names_what_is_accepted() -> None:
             [_lexical("quick fox", NOTE)],
             text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every")},
             statistics=STATISTICS,
-        )
+                    top_k=PLAN_TOP_K,
+)
 
 
 def test_the_folded_rule_reaches_every_number_in_the_answer() -> None:
@@ -2026,7 +2232,8 @@ def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> 
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert (
         compiled["planned_resolution"][NOTE_STRATUM]["requested_depth"]
         == compiled["plan"]["stratum_depths"][NOTE_STRATUM]
@@ -2042,7 +2249,8 @@ def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> 
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert bounded["plan"]["stratum_depths"][NOTE_STRATUM] == 1
     assert bounded["planned_resolution"][NOTE_STRATUM]["requested_depth"] == 1
     assert (
@@ -2234,7 +2442,9 @@ def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
         with pytest.raises(ValueError) as refused:
             retrieval.compile(
                 DATA, request, **{part: whole[part] for part in supplied}, **common
-            )
+            ,
+                top_k=PLAN_TOP_K,
+)
         message = str(refused.value)
         arrived = " and ".join(labels[part] for part in order if part in supplied)
         missing = " and ".join(labels[part] for part in absent)
@@ -2244,9 +2454,9 @@ def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
 
     # The two neighbouring cases that are NOT refusals: all three name a law, and
     # none of them names no law — which is compiled without one, not refused.
-    named = retrieval.compile(DATA, request, **whole, **common)
+    named = retrieval.compile(DATA, request, **whole, **common, top_k=PLAN_TOP_K)
     assert named["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
-    lawless = retrieval.compile(DATA, request, **common)
+    lawless = retrieval.compile(DATA, request, **common, top_k=PLAN_TOP_K)
     assert lawless["planned_resolution"] == {}
     assert lawless["units"], "a call that names no law is still a compiled plan"
 
@@ -2317,7 +2527,8 @@ def test_a_several_block_declaration_is_refused_where_it_is_registered() -> None
                 (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN, TITLE_DOMAIN])
             ),
             statistics=STATISTICS,
-        )
+                    top_k=PLAN_TOP_K,
+)
 
     # ── the valid neighbours, which is the point of the test ──────────────────
     # One block leaves nothing to disambiguate, so it registers AND still bounds

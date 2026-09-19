@@ -549,6 +549,22 @@ candidate are skipped, and nothing about what a live stream owes a
 candidate changes. A live head contributing zero still blocks its
 candidate, because a sum cannot answer a membership question.
 
+The same licence is read one stage **earlier**, and that is where the read is
+actually bounded. Skipping a stream is a bound on how far a *materialized*
+result is walked, and on this rung a stratum's whole result is materialized by
+`execute` before its first row is readable — so a top-ten over two disjoint
+million-row strata would still pay for two million rows even with the
+declaration, if the compiled unit were emitted at the corpus. It is not: the
+request states its own bound, and where every stratum's declared blocks are
+pairwise disjoint the planner derives each depth from that bound. Each candidate
+then has exactly one naming stratum, so its fused score is one weighted
+contribution that falls with rank; the global top `k` is a merge of per-stratum
+prefixes, and nothing below per-stratum rank `k` can enter it. The depth is
+`min(declared, statistics-narrowed, k)`, exact rather than merely smaller, and
+the work a bounded answer costs is flat in the corpus. Any overlap, or any
+unrestricted stratum, and the declared-or-measured bound stands — scores sum
+across strata there and the merge argument has no premise.
+
 The *verification* reaches exactly as far as the rows pulled. A stream
 that names a candidate its declaration cannot reach is refused, and the
 refusal names the stratum whose own declaration — already applied — put

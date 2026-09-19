@@ -356,14 +356,23 @@ pub enum SearchError {
 /// 2. [`compile(&plan, env)`](crate::compile) — semantic admission and emission;
 /// 3. [`execute(&compiled, registry, dataset)`](crate::execute) — one run per
 ///    stratum, against the caller's data;
-/// 4. [`fuse(streams, profile, top_k)`](crate::fuse) — the verified fixed-point
-///    fusion, bounded by the caller's `top_k`.
+/// 4. [`fuse(streams, profile, bound)`](crate::fuse) — the verified fixed-point
+///    fusion, bounded by exactly the bound the request stated.
 ///
-/// The parameters read request → data → policy → bound: what is being asked,
-/// what it is asked of, the law the answer is composed under, and how much of
-/// the answer is wanted. `top_k` is required rather than defaulted because fused
-/// enumeration is top-k by construction; see [`TopK`] and §7 of the design
-/// record.
+/// The parameters read request → data → policy: what is being asked, what it is
+/// asked of, and the law the answer is composed under. How much of the answer is
+/// wanted is **in the request** ([`ReadBound`](crate::ReadBound)), not beside it,
+/// because it is a planning input: the planner derives each stratum's depth from
+/// it, so a bound passed here as a second argument could disagree with the depths
+/// the plan already recorded. It is still required rather than defaulted — fused
+/// enumeration is top-k by construction, see [`TopK`] and §7 of the design record
+/// — and a caller that wants the whole of every stratum says so with
+/// [`ReadBound::Complete`](crate::ReadBound::Complete).
+///
+/// [`fuse`] remains the lower-level entry and still takes a bound, because a
+/// caller assembling its own streams has no request to read one from. That entry
+/// refuses a bound the streams were not planned for
+/// ([`FusionError::ReadBoundMismatch`]), so the two cannot drift.
 ///
 /// The executor's `(rank, candidate, block)` streams are bridged to the fusion protocol
 /// by [`RankedStreamAdapter`], which attaches each row's reciprocal-rank
@@ -406,7 +415,6 @@ pub async fn search<S, D>(
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
-    top_k: TopK,
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
@@ -448,6 +456,7 @@ where
     for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
         let plan_id = stratum_stream.plan_id;
+        let fused_bound = stratum_stream.fused_bound;
         let attestation = stratum_stream.attestation.clone();
         // The contract travels with the stream, exactly as the plan identity
         // does: it is the producer's own declaration, read at the admission
@@ -470,7 +479,10 @@ where
         // why it is attached here rather than collected after.
         streams.push((
             stratum,
-            adapter.with_plan_id(plan_id).with_attestation(attestation),
+            adapter
+                .with_plan_id(plan_id)
+                .with_fused_bound(fused_bound)
+                .with_attestation(attestation),
         ));
     }
     // `execute` yields its streams in the compiler's stratum order, but the
@@ -489,9 +501,14 @@ where
         }
     }
 
-    // 5. Fuse. `Term` is the item type: the executor's candidate terms.
+    // 5. Fuse, at exactly the bound the request stated and the plan recorded its
+    //    depths under. `search` takes no bound of its own: the one it would take
+    //    is the one already in the request, and a second copy could disagree with
+    //    the depths that were derived from the first. Every stream carries the
+    //    bundle's bound, so `fuse` re-checks this call against it rather than
+    //    taking it on trust.
     let fused_strata = streams.len();
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, top_k)
+    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
         .await
         .map_err(SearchError::FusionError)?;
 
@@ -588,6 +605,9 @@ pub struct RankedStreamAdapter {
     decay: DecayRule,
     /// The pinned plan these rows descend from, when the caller named one.
     plan_id: Option<PlanId>,
+    /// The row bound these rows' depth was derived for, when the caller named
+    /// one.
+    fused_bound: Option<TopK>,
     /// What the index behind these rows attested, when the caller named it.
     attestation: PfAttestation,
 }
@@ -628,8 +648,29 @@ impl RankedStreamAdapter {
             weight: profile.weight(stratum)?,
             decay: profile.decay(),
             plan_id: None,
+            fused_bound: None,
             attestation: PfAttestation::UNDECLARED,
         })
+    }
+
+    /// Name the row bound these rows' depth was derived for.
+    ///
+    /// [`execute`] tags every stream it returns with the bound the bundle was
+    /// compiled for ([`StratumStream::fused_bound`](crate::StratumStream)), and
+    /// this is how that tag continues into the fusion: [`fuse`] reads it back
+    /// through [`RankedStream::fused_bound`] and refuses a `top_k` that disagrees
+    /// with it, so a read taken for one bound is never served as an answer to
+    /// another.
+    ///
+    /// It is a builder step rather than a parameter of [`new`](Self::new) for the
+    /// reason [`with_plan_id`](Self::with_plan_id) is: the rows and their
+    /// provenance arrive as separate fields of one `StratumStream`, and a stream
+    /// whose depth no plan bounded attaches nothing and fuses at whatever bound
+    /// its caller names.
+    #[must_use]
+    pub const fn with_fused_bound(mut self, fused_bound: TopK) -> Self {
+        self.fused_bound = Some(fused_bound);
+        self
     }
 
     /// Name the pinned plan these rows descend from.
@@ -727,6 +768,10 @@ impl RankedStream for RankedStreamAdapter {
 
     fn plan_id(&self) -> Option<PlanId> {
         self.plan_id
+    }
+
+    fn fused_bound(&self) -> Option<TopK> {
+        self.fused_bound
     }
 
     fn attestation(&self) -> PfAttestation {

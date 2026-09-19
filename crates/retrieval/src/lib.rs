@@ -22,10 +22,19 @@
 //! fuse(streams, profile, k)           -> the top k of one ordered answer
 //! ```
 //!
+//! The `k` at the end is the caller's, and it arrives at the **start**: a request
+//! states how much of the answer it is for ([`ReadBound`]), because that is what
+//! each stratum's depth is derived from. Over strata whose producers declare
+//! disjoint candidate blocks the depth is the bound itself, so the compiled unit
+//! reads a prefix rather than a corpus — see [`plan`] for the rule and its proof.
+//! [`search`] therefore takes no bound of its own, and [`fuse`], which a caller
+//! reaches with streams it assembled itself, refuses a bound the streams were not
+//! planned for.
+//!
 //! This build ships all four stages. [`plan`] is the pure planner, with the
 //! stage's value ([`Plan`]), the typed request lattice ([`RetrievalRequest`],
-//! [`RequestTerm`]), the statistics input planning consults ([`Statistics`]),
-//! and the plan's canonical identity ([`PlanId`]). [`compile`] is the semantic
+//! [`RequestTerm`], [`ReadBound`]), the statistics input planning consults
+//! ([`Statistics`]), and the plan's canonical identity ([`PlanId`]). [`compile`] is the semantic
 //! admission waist ([`AdmissionEnvironment`], [`AdmissionError`]) that emits the
 //! per-stratum SPARQL units a caller can run directly ([`CompiledRetrieval`],
 //! [`StratumUnit`]). [`execute`] runs those units independently through
@@ -90,6 +99,14 @@
 //! is read, never what is returned — and a producer that names a candidate its
 //! declaration cannot reach is refused as
 //! [`ProtocolError::OutsideDeclaredDomain`] rather than quietly merged.
+//!
+//! The same declaration is read one stage earlier, by [`plan`], and there it
+//! bounds how much is *materialized* rather than how much of a materialized
+//! stream is walked. Over strata whose declared blocks are pairwise disjoint the
+//! recorded depth is the request's own bound, so the emitted `LIMIT` is that bound
+//! plus its probe row and the work is flat in the corpus. The two readings answer
+//! different questions — how deep the unit reads, and how far the fusion walks
+//! what it read — and neither changes an answer.
 //!
 //! Neither declaration can put the same entity in an answer twice. That is the
 //! one property here that is not a producer's to negotiate: a fused answer's
@@ -386,7 +403,7 @@ pub use ranked_stream::{
 };
 pub use reciprocal_rank::{ClassWidth, MonotoneDepth, ToleratedDepth};
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
-pub use request::{Metric, RequestTerm, RetrievalRequest};
+pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
 pub use statistics::Statistics;
 

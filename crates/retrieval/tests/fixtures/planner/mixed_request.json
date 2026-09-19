@@ -52,6 +52,7 @@
       }
     }
   ],
+  "read_bound": "Complete",
   "registry_content_fingerprint": "c39417e074e9aac2740f9c196c5e6e0d67dea87d9de482928a9a91e9ca285d4f",
   "registry_instance_id": 0,
   "request_terms": [
@@ -116,5 +117,5 @@
       "request_term": 1
     }
   ],
-  "version": 2
+  "version": 3
 }

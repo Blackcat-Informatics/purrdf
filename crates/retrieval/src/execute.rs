@@ -164,6 +164,7 @@ use purrdf_sparql_eval::{
 };
 
 use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval};
+use crate::fuse::TopK;
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
@@ -178,6 +179,19 @@ pub struct StratumStream {
     pub stratum: Iri,
     /// The admitted plan the stream was compiled from.
     pub plan_id: PlanId,
+    /// The row bound this stream's depth was derived for, carried from
+    /// [`CompiledRetrieval::fused_bound`](crate::CompiledRetrieval).
+    ///
+    /// It travels with the rows for the reason [`Self::plan_id`] does, and it
+    /// closes the same class of defect one stage later: the depth behind these
+    /// rows is honest for one bound, and a fusion run at another would serve an
+    /// answer out of a read that was never taken for it.
+    /// [`fuse`](crate::fuse) reads it back through
+    /// [`RankedStream::fused_bound`](crate::RankedStream::fused_bound) and refuses
+    /// the mismatch by name. A caller that stops here and fuses later hands it to
+    /// [`RankedStreamAdapter::with_fused_bound`](crate::RankedStreamAdapter::with_fused_bound),
+    /// beside the plan identity it already hands over.
+    pub fused_bound: TopK,
     /// The duplicate handling and the candidate domains the stratum's producer
     /// declared, carried from [`StratumUnit::contract`](crate::StratumUnit).
     ///
@@ -615,6 +629,7 @@ pub async fn execute<D: DatasetView + Sync>(
                         streams.push(StratumStream {
                             stratum: unit.stratum.clone(),
                             plan_id: compiled.plan_id,
+                            fused_bound: compiled.fused_bound,
                             contract: unit.contract.clone(),
                             attestation,
                             stream: RankedStreamImpl::new(ranked, ending),

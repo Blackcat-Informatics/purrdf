@@ -24,12 +24,12 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, Iri, Metric, Plan, PlanError, ProducerStatus,
-    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
-    UnservedReason, UnservedTerm, compile, execute, plan,
+    RankedStreamImpl, ReadBound, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
+    TopK, UnservedReason, UnservedTerm, compile, execute, plan,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DuplicatePolicy, EvalError,
-    NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
+    EvalError, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
     PropertyFunctionRegistry, QueryOptions, RankedDeclaration, RequestFacet, TermKind, TermPattern,
     TermPlacement, Volatility,
 };
@@ -153,6 +153,13 @@ struct Spec {
     depth: Option<DepthPlacement>,
     candidate: usize,
     mandatory: bool,
+    /// Which blocks of the candidate universe the producer may name.
+    ///
+    /// [`CandidateDomains::Unrestricted`] is the fixture default because it is
+    /// the widest promise and the one every producer effectively made before the
+    /// term existed, so a spec that says nothing about domains keeps exactly the
+    /// reading it had.
+    domains: CandidateDomains,
 }
 
 impl Spec {
@@ -169,7 +176,20 @@ impl Spec {
             depth: None,
             candidate: 0,
             mandatory: false,
+            domains: CandidateDomains::Unrestricted,
         }
+    }
+
+    /// Restrict the producer to the single block `tag`.
+    ///
+    /// One tag rather than a set, because a single-block declaration entails the
+    /// block of every row and so needs no per-row block column; a several-block
+    /// declaration would oblige this mock to project one.
+    fn within(mut self, tag: &str) -> Self {
+        self.domains = CandidateDomains::within([
+            DomainTag::parse(&ex(tag)).expect("fixture domain tags are valid IRIs")
+        ]);
+        self
     }
 
     fn arity(mut self, subject: usize, object: usize, modes: Vec<&'static str>) -> Self {
@@ -248,7 +268,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 depth_placement: spec.depth,
                 candidate_position: spec.candidate,
                 duplicates: DuplicatePolicy::Unique,
-                domains: CandidateDomains::Unrestricted,
+                domains: spec.domains,
                 block_position: None,
                 mandatory: spec.mandatory,
             },
@@ -339,7 +359,7 @@ fn seed(text: &str) -> RequestTerm {
 }
 
 fn request(terms: Vec<RequestTerm>) -> RetrievalRequest {
-    RetrievalRequest::from_terms(terms)
+    RetrievalRequest::complete(terms)
 }
 
 /// Plan and compile `terms` against `registry`, returning each stratum's text
@@ -1783,3 +1803,301 @@ fn the_branch_limit_reaches_the_relation_as_the_observed_ceiling() {
 // descent past a `UNION`, and it is proved in `purrdf-sparql-eval` against
 // hand-written two-arm queries, including the constant-bearing arm this compiler
 // emits.
+
+// ---------------------------------------------------------------------------
+// 13. The request's own bound is what the depth is derived from
+//
+// The defect this section exists for: a fused top-k over strata whose declared
+// candidate blocks do not overlap read its whole corpus. The declarations bought
+// a shorter walk of a stream that had already been MATERIALIZED in full, because
+// the compiled unit was still `LIMIT <corpus>` — the bound arrived at `fuse`,
+// four stages after the depth was chosen. The measurement moved; the work did
+// not.
+//
+// The claim below is the one that fixes it, and it is about the *materialized*
+// read: the same `top_k` over two corpora of different sizes compiles to the same
+// per-stratum `LIMIT` and records the same depth. Its neighbours are here too,
+// because a rule that fired where it must not would be the mirror defect — a
+// truncated ranked list with nothing anywhere saying so.
+// ---------------------------------------------------------------------------
+
+/// Two producers over one needle, each ranking its own stratum, with the blocks
+/// each may name declared as `domains` says.
+///
+/// `domains` is a pair of tag local names, or `None` for the unrestricted promise
+/// both producers made before the term existed. `rows` is the corpus size each
+/// producer declares it can yield per invocation, which is what stands in here
+/// for a corpus: it is the number the planner's depth comes from when the request
+/// licenses no narrowing.
+fn two_stratum_registry(rows: u64, domains: Option<(&str, &str)>) -> PropertyFunctionRegistry {
+    let accepted = || {
+        vec![alternative(
+            TermPattern::of_kind(TermKind::Literal),
+            value_at(1),
+        )]
+    };
+    let usize_rows = usize::try_from(rows).expect("the fixture corpus fits in a usize");
+    let notes = Spec::new("notes", accepted()).rows(rows, usize_rows);
+    let titles = Spec::new("titles", accepted()).rows(rows, usize_rows);
+    let (notes, titles) = match domains {
+        None => (notes, titles),
+        Some((left, right)) => (notes.within(left), titles.within(right)),
+    };
+    registry_of(vec![("notes", notes), ("titles", titles)]).0
+}
+
+/// Each stratum's recorded depth and the `LIMIT` its unit was emitted at, keyed
+/// by the stratum's local name.
+///
+/// Both numbers, together, because either alone would leave the defect
+/// expressible. A narrowed `LIMIT` beside an unnarrowed depth is the plan
+/// recording a read nobody took; an unnarrowed `LIMIT` beside a narrowed depth is
+/// the corpus still being materialized.
+fn depths_and_limits(
+    registry: &PropertyFunctionRegistry,
+    stats: &MockStatistics,
+    request: &RetrievalRequest,
+) -> BTreeMap<String, (u32, u32)> {
+    let planned = plan(request, registry, stats).expect("the fixture request plans");
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: stats,
+        fusion_profile: None,
+    };
+    compile(&planned, &env)
+        .expect("the plan is admitted")
+        .units
+        .into_iter()
+        .map(|unit| {
+            let name = unit
+                .stratum
+                .as_str()
+                .rsplit('/')
+                .next()
+                .expect("a stratum IRI has a last segment")
+                .to_owned();
+            (name, (unit.depth, emitted_limit(&unit.sparql)))
+        })
+        .collect()
+}
+
+/// The `LIMIT` a unit's outer `SELECT` carries.
+fn emitted_limit(sparql: &str) -> u32 {
+    sparql
+        .rsplit("LIMIT ")
+        .next()
+        .expect("an emitted unit carries a LIMIT")
+        .trim()
+        .parse()
+        .expect("an emitted LIMIT is a number")
+}
+
+#[test]
+fn a_bounded_request_over_disjoint_strata_reads_a_flat_prefix_of_each() {
+    let stats = statistics(&[]);
+    let bounded = RetrievalRequest::bounded(vec![lexical("quick brown fox", None)], TopK::new(5));
+
+    // The same request over a corpus and over a corpus four times its size. The
+    // read is identical, which is the whole claim: a top-five answer over
+    // disjoint strata costs five rows per stratum however long the streams are.
+    let small = depths_and_limits(
+        &two_stratum_registry(400, Some(("block/notes", "block/titles"))),
+        &stats,
+        &bounded,
+    );
+    let large = depths_and_limits(
+        &two_stratum_registry(1_600, Some(("block/notes", "block/titles"))),
+        &stats,
+        &bounded,
+    );
+    assert_eq!(
+        small, large,
+        "the materialized read is flat in corpus size, so neither the recorded \
+         depth nor the emitted LIMIT may move with it"
+    );
+    assert_eq!(
+        small,
+        BTreeMap::from([("notes".to_owned(), (5, 6)), ("titles".to_owned(), (5, 6)),]),
+        "five rows per stratum is the exact depth, and the probe row sits one \
+         past it exactly as it does at any other depth"
+    );
+}
+
+#[test]
+fn the_unbounded_and_overlapping_neighbours_keep_the_declared_depth() {
+    let stats = statistics(&[]);
+    let needle = || vec![lexical("quick brown fox", None)];
+    let disjoint = || Some(("block/notes", "block/titles"));
+    // What the declared bound alone says, at each size: this is the depth every
+    // neighbour below must still carry.
+    let declared_small = BTreeMap::from([
+        ("notes".to_owned(), (400, 401)),
+        ("titles".to_owned(), (400, 401)),
+    ]);
+    let declared_large = BTreeMap::from([
+        ("notes".to_owned(), (1_600, 1_601)),
+        ("titles".to_owned(), (1_600, 1_601)),
+    ]);
+
+    // 1. A complete request. It asks for everything the strata hold, so the
+    //    declaration is the depth even though the blocks are disjoint — the
+    //    narrowing is licensed by the BOUND, and this request states none.
+    for (rows, expected) in [(400, &declared_small), (1_600, &declared_large)] {
+        assert_eq!(
+            &depths_and_limits(
+                &two_stratum_registry(rows, disjoint()),
+                &stats,
+                &RetrievalRequest::complete(needle()),
+            ),
+            expected,
+            "a complete request licenses no prefix, at any corpus size"
+        );
+    }
+
+    // 2. Overlapping declarations. Both producers say they draw from the same
+    //    block, so a candidate can be named by both and its fused score is a SUM
+    //    across strata; the merge argument the prefix rests on has no premise and
+    //    the declared bound stands.
+    let overlapping = Some(("block/shared", "block/shared"));
+    for (rows, expected) in [(400, &declared_small), (1_600, &declared_large)] {
+        assert_eq!(
+            &depths_and_limits(
+                &two_stratum_registry(rows, overlapping),
+                &stats,
+                &RetrievalRequest::bounded(needle(), TopK::new(5)),
+            ),
+            expected,
+            "declarations that meet license no prefix"
+        );
+    }
+
+    // 3. No declaration at all — the widest promise, and the one every producer
+    //    made before candidate domains existed. It says nothing about which
+    //    candidates it will NOT name, so it supplies no premise either.
+    for (rows, expected) in [(400, &declared_small), (1_600, &declared_large)] {
+        assert_eq!(
+            &depths_and_limits(
+                &two_stratum_registry(rows, None),
+                &stats,
+                &RetrievalRequest::bounded(needle(), TopK::new(5)),
+            ),
+            expected,
+            "an unrestricted stratum licenses no prefix"
+        );
+    }
+}
+
+#[test]
+fn a_prefix_never_raises_a_depth_and_never_narrows_one_to_nothing() {
+    let needle = || vec![lexical("quick brown fox", None)];
+    let disjoint = Some(("block/notes", "block/titles"));
+
+    // A bound above what the producers declared is not a licence to read deeper:
+    // every step of the derivation is a `min`, so the declaration still wins.
+    assert_eq!(
+        depths_and_limits(
+            &two_stratum_registry(7, disjoint),
+            &statistics(&[]),
+            &RetrievalRequest::bounded(needle(), TopK::new(5_000)),
+        ),
+        BTreeMap::from([("notes".to_owned(), (7, 8)), ("titles".to_owned(), (7, 8)),]),
+        "a bound narrows a depth the registry already set, or it changes nothing"
+    );
+
+    // A measured cardinality below the bound still binds, for the same reason.
+    assert_eq!(
+        depths_and_limits(
+            &two_stratum_registry(400, disjoint),
+            &statistics(&[("notes", 3)]),
+            &RetrievalRequest::bounded(needle(), TopK::new(5)),
+        ),
+        BTreeMap::from([("notes".to_owned(), (3, 4)), ("titles".to_owned(), (5, 6)),]),
+        "the depth is the smallest of the declaration, the measurement and the bound"
+    );
+
+    // And a bound of zero is floored at one row, exactly as a measured zero is:
+    // a bound may narrow a read and may never eliminate one, because emptiness is
+    // the producer's to report and a `LIMIT 0` would report it for them.
+    assert_eq!(
+        depths_and_limits(
+            &two_stratum_registry(400, disjoint),
+            &statistics(&[]),
+            &RetrievalRequest::bounded(needle(), TopK::new(0)),
+        ),
+        BTreeMap::from([("notes".to_owned(), (1, 2)), ("titles".to_owned(), (1, 2)),]),
+        "the floor of one survives the bound, and the probe row survives the floor"
+    );
+}
+
+#[test]
+fn a_bound_gives_an_unbounded_declaration_a_finite_depth_and_its_absence_still_refuses() {
+    let stats = statistics(&[]);
+    let needle = || vec![lexical("quick brown fox", None)];
+    let disjoint = Some(("block/notes", "block/titles"));
+    let unbounded = || two_stratum_registry(u64::MAX, disjoint);
+
+    // A producer that declares unboundedly many rows, read for an answer that
+    // provably cannot use more than five of them, is a read of five rows. The
+    // refusal below exists because a depth nobody bounded cannot be recorded, and
+    // here the request bounds it.
+    assert_eq!(
+        depths_and_limits(
+            &unbounded(),
+            &stats,
+            &RetrievalRequest::bounded(needle(), TopK::new(5)),
+        ),
+        BTreeMap::from([("notes".to_owned(), (5, 6)), ("titles".to_owned(), (5, 6)),]),
+        "the request's bound is a real bound on a read that otherwise has none"
+    );
+
+    // The neighbour that must still refuse: the same registry, asked for
+    // everything. Nothing bounds the read, so there is no finite depth to record
+    // and recording `u32::MAX` would claim a bound no producer declared.
+    let refused = plan(&RetrievalRequest::complete(needle()), &unbounded(), &stats)
+        .expect_err("an unbounded declaration with nothing to bound it is refused");
+    assert!(
+        matches!(refused, PlanError::StatisticsUnavailable { .. }),
+        "expected StatisticsUnavailable, got {refused:?}"
+    );
+}
+
+#[test]
+fn the_bound_is_in_the_identity_so_two_bounds_are_two_plans() {
+    let stats = statistics(&[]);
+    let registry = two_stratum_registry(400, Some(("block/notes", "block/titles")));
+    let needle = || vec![lexical("quick brown fox", None)];
+
+    let five = plan(
+        &RetrievalRequest::bounded(needle(), TopK::new(5)),
+        &registry,
+        &stats,
+    )
+    .expect("plans");
+    let five_hundred = plan(
+        &RetrievalRequest::bounded(needle(), TopK::new(500)),
+        &registry,
+        &stats,
+    )
+    .expect("plans");
+    let complete = plan(&RetrievalRequest::complete(needle()), &registry, &stats).expect("plans");
+
+    assert_ne!(
+        five.id(),
+        five_hundred.id(),
+        "two bounds read different numbers of rows, so they are two plans"
+    );
+    assert_ne!(
+        five_hundred.id(),
+        complete.id(),
+        "and a complete request is a third, even where its depths coincide"
+    );
+
+    // The bound survives a canonical round trip, because a depth whose derivation
+    // cannot be read back is a number nobody can check.
+    let decoded = Plan::from_canonical_bytes(&five.canonical_bytes()).expect("round trips");
+    assert_eq!(decoded.read_bound, ReadBound::Bounded(TopK::new(5)));
+    assert_eq!(decoded.id(), five.id());
+    let decoded = Plan::from_canonical_bytes(&complete.canonical_bytes()).expect("round trips");
+    assert_eq!(decoded.read_bound, ReadBound::Complete);
+    assert_eq!(decoded.id(), complete.id());
+}

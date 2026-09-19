@@ -126,7 +126,15 @@ fn seed_term() -> RequestTerm {
 }
 
 fn mixed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), vector_term(), seed_term()])
+    mixed_request_at(TOP_K)
+}
+
+/// The mixed request, bounded at `top_k`.
+///
+/// The bound is part of the request rather than an argument of `search`, so a
+/// fixture that varies it varies the request — and, by construction, the plan.
+fn mixed_request_at(top_k: TopK) -> RetrievalRequest {
+    RetrievalRequest::bounded(vec![lexical_term(), vector_term(), seed_term()], top_k)
 }
 
 /// A mock ranked producer that declares `rows` and emits `emitted`.
@@ -385,7 +393,6 @@ async fn manual_composition(
     dataset: &RdfDataset,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
-    top_k: TopK,
 ) -> SearchResult {
     let planned = plan(request, registry, stats).expect("the fixture request plans");
     // The waist is held to the law this composition is about to fuse under, which
@@ -407,6 +414,7 @@ async fn manual_composition(
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
         let plan_id = stream.plan_id;
+        let fused_bound = stream.fused_bound;
         let attestation = stream.attestation.clone();
         match RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum) {
             // The plan the unit was compiled from rides on with the rows, which
@@ -415,14 +423,17 @@ async fn manual_composition(
             // and evidence identity are derived from.
             Some(adapter) => streams.push((
                 stream.stratum,
-                adapter.with_plan_id(plan_id).with_attestation(attestation),
+                adapter
+                    .with_plan_id(plan_id)
+                    .with_fused_bound(fused_bound)
+                    .with_attestation(attestation),
             )),
             None => unweighted_strata.push(stream.stratum),
         }
     }
     unweighted_strata.sort();
 
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, top_k)
+    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
     let trailer = fused.trailer.completed_with(execution.statuses);
@@ -524,11 +535,11 @@ fn search_equals_manual_composition() {
     let dataset = common::empty_dataset();
 
     let direct = block_on(search(
-        &request, &registry, &stats, &*dataset, &env, &profile, TOP_K,
+        &request, &registry, &stats, &*dataset, &env, &profile,
     ))
     .expect("the composed search answers");
     let manual = block_on(manual_composition(
-        &request, &registry, &stats, &dataset, &env, &profile, TOP_K,
+        &request, &registry, &stats, &dataset, &env, &profile,
     ));
 
     assert_eq!(
@@ -575,13 +586,12 @@ fn plan_error_propagates() {
 
     // An empty request reaches no producer, so planning refuses it.
     let error = block_on(search(
-        &RetrievalRequest::new(),
+        &RetrievalRequest::bounded(Vec::new(), TOP_K),
         &registry,
         &stats,
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect_err("an empty request does not plan");
     assert!(
@@ -611,7 +621,6 @@ fn admission_error_propagates() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect_err("a different live registry instance is refused at admission");
     assert!(
@@ -663,7 +672,6 @@ fn fusion_error_propagates() {
         &*common::empty_dataset(),
         &env,
         &disjoint,
-        TOP_K,
     ))
     .expect_err("a profile that weights none of the executed strata is refused");
     match error {
@@ -718,7 +726,6 @@ fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
         &*common::empty_dataset(),
         &env,
         &shallow,
-        TOP_K,
     ))
     .expect("a depth past the profile's separating range still answers");
 
@@ -732,7 +739,6 @@ fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
             &*common::empty_dataset(),
             &env,
             &fixture_profile(),
-            TOP_K,
         ))
         .is_ok(),
         "a profile whose arithmetic covers every recorded depth still answers"
@@ -791,7 +797,6 @@ fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
         &*common::empty_dataset(),
         &env,
         &shallow,
-        TOP_K,
     ))
     .expect("a depth past the profile's separating range still answers");
 
@@ -869,7 +874,6 @@ fn a_fully_separated_plan_reports_itself_as_separated_rather_than_as_an_absence(
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("a profile whose arithmetic covers every recorded depth answers");
 
@@ -931,7 +935,6 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
         &*common::empty_dataset(),
         &env,
         &narrow,
-        TOP_K,
     ))
     .expect("the weighted stratum still answers");
 
@@ -986,7 +989,6 @@ fn a_profile_that_weights_every_stratum_sets_nothing_aside() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the fixture search answers");
     assert!(
@@ -1016,7 +1018,6 @@ fn end_to_end_search_returns_expected_results() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the fixture search answers");
     let expected_plan = plan(&request, &registry, &stats).expect("the request plans");
@@ -1170,7 +1171,6 @@ fn a_stratum_that_could_not_answer_is_named_in_the_trailer_beside_those_that_did
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the strata that can answer still answer");
 
@@ -1230,7 +1230,6 @@ fn every_contributor_is_named_when_none_fail() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the fixture search answers");
 
@@ -1287,7 +1286,7 @@ fn a_term_that_reached_no_producer_is_visible_in_the_plan_and_in_the_answer() {
     let profile = text_only_profile();
     // The lexical term reaches the one producer; the vector term reaches
     // nothing, because no declaration in this registry accepts that shape.
-    let request = RetrievalRequest::from_terms(vec![lexical_term(), vector_term()]);
+    let request = RetrievalRequest::bounded(vec![lexical_term(), vector_term()], TOP_K);
 
     let planned = plan(&request, &registry, &stats).expect("the lexical term plans");
     assert_eq!(
@@ -1306,7 +1305,6 @@ fn a_term_that_reached_no_producer_is_visible_in_the_plan_and_in_the_answer() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the served term still answers");
 
@@ -1350,7 +1348,7 @@ fn a_request_every_term_of_which_reached_a_producer_reports_nothing_unserved() {
     let stats = statistics("r1");
     let env = fixture_env(&registry, &stats);
     let profile = fixture_profile();
-    let request = RetrievalRequest::from_terms(vec![lexical_term(), seed_term()]);
+    let request = RetrievalRequest::bounded(vec![lexical_term(), seed_term()], TOP_K);
 
     let result = block_on(search(
         &request,
@@ -1359,7 +1357,6 @@ fn a_request_every_term_of_which_reached_a_producer_reports_nothing_unserved() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the fixture search answers");
     assert!(
@@ -1403,7 +1400,6 @@ fn a_request_carrying_a_term_only_a_placement_free_producer_accepts_reports_it()
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the two served terms still answer");
     assert_eq!(
@@ -1430,17 +1426,18 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
     let stats = statistics("r1");
     let env = fixture_env(&registry, &stats);
     let profile = fixture_profile();
-    let request = mixed_request();
 
+    // The bound travels in the request, so varying it varies the request — and a
+    // request that asks for a different number of rows is planned as a different
+    // plan. That is the point of the identity, not an accident of it.
     let run = |top_k| {
         block_on(search(
-            &request,
+            &mixed_request_at(top_k),
             &registry,
             &stats,
             &*common::empty_dataset(),
             &env,
             &profile,
-            top_k,
         ))
         .expect("the fixture search answers")
     };
@@ -1481,9 +1478,19 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
         whole.trailer.statuses.keys().collect::<Vec<_>>(),
         "the same producers are named whatever the bound"
     );
-    assert_eq!(
+    assert_ne!(
         none.trailer.plan_id, whole.trailer.plan_id,
-        "and the answer descends from the same plan"
+        "a bound is a planning input, so the two runs descend from DIFFERENT plans \
+         — which is exactly what a plan identity sensitive to the bound is for"
+    );
+    assert_eq!(
+        plan(&mixed_request_at(TopK::new(0)), &registry, &stats)
+            .expect("the fixture request plans")
+            .id(),
+        none.trailer
+            .plan_id
+            .expect("the streams carried their plan"),
+        "and each answer names the plan its own bound was planned into"
     );
     for (stratum, status) in &none.trailer.statuses {
         let whole_status = whole
@@ -1569,7 +1576,6 @@ fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("a producer that could not run is a status, not a whole-request refusal");
 
@@ -1716,13 +1722,12 @@ fn a_repeating_unique_relation_is_refused_through_search_naming_the_item_and_str
     // left the frontier — which is the arm under test and the one the defect
     // lived in.
     let bounded = block_on(search(
-        &RetrievalRequest::from_terms(vec![lexical_term()]),
+        &RetrievalRequest::bounded(vec![lexical_term()], TopK::new(2)),
         &registry,
         &stats,
         &*common::empty_dataset(),
         &env,
         &profile,
-        TopK::new(2),
     ))
     .expect("the bound stops the reading before the repeat is merged");
     assert_eq!(
@@ -1739,13 +1744,12 @@ fn a_repeating_unique_relation_is_refused_through_search_naming_the_item_and_str
     );
 
     let error = block_on(search(
-        &RetrievalRequest::from_terms(vec![lexical_term()]),
+        &RetrievalRequest::bounded(vec![lexical_term()], TOP_K),
         &registry,
         &stats,
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect_err("a `Unique` relation whose rows repeat a candidate must be refused");
 
@@ -1782,13 +1786,12 @@ fn the_same_repeating_relation_declaring_allowed_answers_once_through_search() {
     let profile = repeating_profile();
 
     let result = block_on(search(
-        &RetrievalRequest::from_terms(vec![lexical_term()]),
+        &RetrievalRequest::bounded(vec![lexical_term()], TOP_K),
         &registry,
         &stats,
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("an `Allowed` relation's repeats are de-duplicated, not refused");
 
@@ -1934,7 +1937,6 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the fixture request searches");
 
@@ -1975,7 +1977,6 @@ fn the_trailer_reports_the_candidate_domains_the_registry_declared() {
         &*common::empty_dataset(),
         &undeclared_env,
         &profile,
-        TOP_K,
     ))
     .expect("the fixture request searches");
     let answers = |result: &SearchResult| -> Vec<FusedAnswer> {
@@ -2064,7 +2065,6 @@ fn search_against(registry: &PropertyFunctionRegistry) -> Result<SearchResult, S
         &*common::empty_dataset(),
         &env,
         &fixture_profile(),
-        TOP_K,
     ))
 }
 
