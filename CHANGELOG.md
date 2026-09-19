@@ -469,6 +469,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   collapsing it. The answer is unchanged: rows, scores and provenance are identical
   to the draining run and to an independent oracle across hundreds of
   configurations, and the ranks read never rise as a declaration is refined.
+
+  What the bound bounds is stated exactly, because the number above invites a wider
+  reading than it earns: it is the ranks **fusion pulls from a stream**, and the
+  frontier it therefore has to hold. It is not the producer's work. Each stratum's
+  rows are materialized by the evaluator up to the depth the plan recorded before
+  fusion pulls anything, so a stratum planned a thousand deep is read a thousand
+  deep whatever the bound later turns out to need — the evaluator's egress model is
+  a complete answer, with no cursor surface for a consumer's bound to reach back
+  through. A ranked producer's own cursor is lazy and stays lazy; what is not lazy
+  is the boundary between it and this layer.
 - **retrieval:** Fusion no longer refuses a well-formed producer stream when the
   profile's own fixed-point decay gives two adjacent ranks one contribution. A
   producer's ordering declaration is a claim about **ranks**, and the check was
