@@ -512,8 +512,8 @@ pub enum ScoreInterval {
         /// How much a degraded stratum could still have ADDED to this row.
         ///
         /// Summed over the streams that have not named this candidate and whose
-        /// declared domains do not rule it out — the same `Dom(x)` narrowing
-        /// [`FusionStream::upper_bound`] takes, and taken here for the same
+        /// declared domains do not rule it out — the same `Dom(x)` narrowing the
+        /// engine's own certification bound takes, and taken here for the same
         /// reason: a stream that provably cannot name this candidate could not
         /// have withheld anything from it, so charging it would inflate the
         /// bound with a contribution that was never possible.

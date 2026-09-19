@@ -15,7 +15,7 @@
 //! # The approximation contract, in the query surface
 //!
 //! The approximation contract declares four governed channels; the first is the guard's
-//! [`IndexLossContract`](purrdf_core::IndexLossContract) and evidence string, checked by
+//! [`purrdf_core::IndexLossContract`] and evidence string, checked by
 //! [`crate::guard::load`]. The other three live here:
 //!
 //! * the relation is registered under the caller's predicate IRI, so the query text itself
