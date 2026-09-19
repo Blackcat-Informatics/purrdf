@@ -35,7 +35,9 @@ The PyO3 spellings that change a member's PYTHON name are honoured, because the 
 name is what the stub must declare:
 
 * `#[new]` is `__init__`;
-* `#[pyo3(name = "x")]` renames to `x` (`Store._store_capsule` is the live case);
+* `#[pyo3(name = "x")]` renames to `x` (`Store._store_capsule` is the live case) — read
+  at the attribute's TOP level only, because inside a `signature = (…)` group the same
+  spelling is a parameter called `name` carrying a string default;
 * `#[getter]` / `#[setter]` declare a PROPERTY — under `#[getter(x)]`'s explicit name if
   one is given, else the function's, with a `get_` / `set_` prefix stripped exactly as
   PyO3 strips it;
@@ -105,6 +107,15 @@ is reported by name and is itself a failure of this script. A mutation that can 
 be APPLIED fails too: its needle is gone because the tree moved, and a self-test quietly
 testing nothing is the defect one layer up. `--self-test` runs the suite alone and prints
 one line per mutation.
+
+`_ACCEPTED` is the other half, and it is not optional: a refusal is a claim too. The
+mutation suite proves only that this gate refuses a BROKEN tree, which a gate refusing
+everything also does — so each entry there is a VALID spelling this gate could plausibly
+mis-read, and each must leave `gate_problems` empty. The live one is
+`#[pyo3(signature = (name = "…", …))]`, where `name` is a PARAMETER with a string
+default and not a rename at all; read flat, it would make this gate demand a stub
+`def <that default>(` and report the real method as undeclared. An over-refusal is the
+mirror of a missed member, and it hides better, because it looks like strictness.
 
 Pure text over committed files: no cargo build and no Python import. Run standalone or
 from `make check` / CI.
@@ -268,6 +279,39 @@ def _braced_body(lines: list[str], index: int) -> list[str]:
     )
 
 
+_PYO3_ATTRIBUTE = "#[pyo3("
+
+
+def _top_level_rename(attribute: str) -> str | None:
+    """The Python name a `#[pyo3(…)]` attribute renames its item to, or `None`.
+
+    Anchored to the attribute's TOP level, because `name = "x"` is a rename only there.
+    Inside a nested group it is something else entirely: `#[pyo3(signature = (name =
+    "graph", pretty = false))]` declares a PARAMETER called `name` with a string
+    default, an entirely plausible spelling in an RDF library where graphs have names.
+    Read flat, that parameter's default would be taken for the method's Python name —
+    the gate would demand a stub `def graph(` and report the real method as undeclared,
+    refusing a tree that is correct. So every nested parenthesized group is dropped
+    before the rename is looked for, and `_ACCEPTED` holds this to it.
+    """
+    body = attribute.strip()
+    if not body.startswith(_PYO3_ATTRIBUTE):
+        return None
+    depth = 1
+    top_level: list[str] = []
+    for character in body[len(_PYO3_ATTRIBUTE) :]:
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        elif depth == 1:
+            top_level.append(character)
+    renamed = _NAME_ARGUMENT_RE.search("".join(top_level))
+    return renamed.group(1) if renamed else None
+
+
 def _python_member_name(function: str, attributes: list[str]) -> tuple[str, str] | None:
     """The Python name and kind of a `#[pymethods]` function, from what decorates it."""
     kind = "method"
@@ -289,10 +333,9 @@ def _python_member_name(function: str, attributes: list[str]) -> tuple[str, str]
                 explicit = _NAME_ARGUMENT_RE.search(argument)
                 name = explicit.group(1) if explicit else argument.strip('"')
             continue
-        if body.startswith("#[pyo3("):
-            renamed = _NAME_ARGUMENT_RE.search(body)
-            if renamed:
-                return renamed.group(1), kind
+        renamed = _top_level_rename(body)
+        if renamed is not None:
+            return renamed, kind
     return name, kind
 
 
@@ -387,14 +430,15 @@ def _read_pyclass(
         if variant:
             renamed_variant = next(
                 (
-                    _NAME_ARGUMENT_RE.search(attribute)
-                    for attribute in attributes
-                    if attribute.startswith("#[pyo3(")
-                    and _NAME_ARGUMENT_RE.search(attribute)
+                    renamed
+                    for renamed in (
+                        _top_level_rename(attribute) for attribute in attributes
+                    )
+                    if renamed is not None
                 ),
                 None,
             )
-            name = renamed_variant.group(1) if renamed_variant else variant.group(1)
+            name = renamed_variant if renamed_variant is not None else variant.group(1)
             exposed.add(Member(name, "enum member", where))
         attributes = []
 
@@ -734,6 +778,53 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
 )
 
 
+# ── the mirror arm: valid trees this gate must ACCEPT ──────────────────────────────────
+
+# A refusal is a claim too. `_MUTATIONS` proves this gate REFUSES a broken tree and
+# proves nothing whatsoever about what it accepts — and an over-refusal is the mirror of
+# the silent drop: every mutation still fails, the gate still reads as strict, and a
+# correct tree is rejected with a message indistinguishable from a real defect. So each
+# entry below is a VALID spelling this gate could plausibly mis-read, applied the same
+# way, and each must leave `gate_problems` EMPTY. An entry that comes back with problems
+# is an over-refusal and fails this script exactly as a survived mutation does.
+_ACCEPTED: tuple[tuple[str, str, Callable[[str], str]], ...] = (
+    (
+        'a `signature = (name = "…")` parameter default is not a rename',
+        _SPECIMEN_SOURCE,
+        lambda text: _swap(
+            text,
+            "    fn to_sarif(&self, py: Python<'_>) -> String {",
+            '    #[pyo3(signature = (name = "report", pretty = false))]\n'
+            "    fn to_sarif(&self, py: Python<'_>, name: &str, pretty: bool) -> String {",
+        ),
+    ),
+)
+
+
+def accepts_valid_trees(report: bool) -> list[str]:
+    """Every VALID tree this gate refuses. An empty list is the only passing answer."""
+    refused: list[str] = []
+    for what, relative, spell in _ACCEPTED:
+        try:
+            text = spell(_read(relative))
+        except SystemExit as stale:
+            raise SystemExit(
+                f"check-python-stub-parity: the self-test cannot apply its valid "
+                f"spelling {what!r} to {relative}: {stale}. The tree moved — update the "
+                "arm rather than leaving the self-test proving nothing."
+            ) from stale
+        with _mutated(relative, text):
+            try:
+                problems = gate_problems()
+            except SystemExit as refusal:
+                problems = [f"  • the gate refused to read the tree: {refusal}"]
+        if report:
+            print(f"  {'accepted' if not problems else 'REFUSED':8}  {relative}: {what}")
+        if problems:
+            refused.append(f"  • {relative}: {what}\n" + "\n".join(problems))
+    return refused
+
+
 def self_test(report: bool) -> list[str]:
     """Every mutation this gate does NOT catch. An empty list is the only passing answer."""
     survived: list[str] = []
@@ -786,8 +877,30 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
+
     if alone:
-        print(f"OK: all {len(_MUTATIONS)} mutations of the committed tree fail this gate.")
+        print(
+            f"check-python-stub-parity: and spelling it {len(_ACCEPTED)} valid way(s), "
+            "each of which must PASS —"
+        )
+    # The other half of the same obligation: refusing everything is not strictness.
+    refused = accepts_valid_trees(report=alone)
+    if refused:
+        print(
+            "check-python-stub-parity: this gate REFUSES a tree that is correct:\n"
+            + "\n".join(refused)
+            + "\n\nEach block above is a valid spelling this gate reports as a defect — an "
+            "over-refusal, which is the mirror of a missed member and just as much a bug "
+            "in the check. Fix the check, not the spelling.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if alone:
+        print(
+            f"OK: all {len(_MUTATIONS)} mutations of the committed tree fail this gate, "
+            f"and all {len(_ACCEPTED)} valid spelling(s) of it pass."
+        )
         return 0
 
     problems = gate_problems()
@@ -803,8 +916,8 @@ def main(argv: list[str]) -> int:
     members = sum(len(exposed.members) for exposed in classes.values())
     print(
         f"OK: all {members} Python-visible member(s) of {len(classes)} `#[pyclass]`(es) "
-        f"are declared in {_STUB}; and all {len(_MUTATIONS)} mutations of that tree fail "
-        "this gate."
+        f"are declared in {_STUB}; all {len(_MUTATIONS)} mutations of that tree fail this "
+        f"gate; and all {len(_ACCEPTED)} valid spelling(s) of it pass."
     )
     return 0
 

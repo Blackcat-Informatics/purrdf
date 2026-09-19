@@ -25,6 +25,15 @@ So :func:`summarize_change` below is written the way a downstream consumer write
   ``[attr-defined]``, and a member declared with the wrong type fails it with
   ``[assignment]``.
 
+Declaring a member is only half of it: the name has to be legal where a consumer WRITES
+it. Every step of the chain — ``Shapes``, ``PreparedShapes``, ``ChangeValidation``,
+``ValidationReport`` — is therefore annotated in PARAMETER position here, because each
+is reachable only as ``purrdf.shapes.X`` and a namespace re-export spelled as a plain
+assignment is a variable to a type checker, rejected in annotation position and taking
+every method call on it down with a second ``[attr-defined]``. Covering one name and
+not its siblings leaves the hole open on the siblings, which is why all four cross a
+function boundary below rather than only the outcome type.
+
 ``scripts/check-python-stub-parity.py`` is the gate that makes an undeclared member
 impossible to commit; this is the test that makes a WRONGLY declared one impossible
 to ship, because parity is about names and these assignments are about types.
@@ -122,6 +131,42 @@ def read_scope(outcome: purrdf.shapes.ChangeValidation) -> str:
     return f"everything({reason})"
 
 
+# The three helpers below take the REST of the SHACL chain in parameter position, for
+# the same reason and against the same hole. `ChangeValidation` alone is the outcome
+# type; a consumer that factors the lane into functions — loads shapes once here, hands
+# the prepared object to a handler there, reads the report somewhere else — has to
+# write `Shapes`, `PreparedShapes` and `ValidationReport` in signatures too, and each
+# is reachable ONLY as `purrdf.shapes.X` (there is no `purrdf.PreparedShapes`, and
+# `__all__` carries none of them). A plain `X = _X` for any one of them is that
+# consumer's `Variable "..." is not valid as a type`, followed by the same
+# `[attr-defined]` on every method they then call. Annotating one member and not its
+# siblings leaves the hole open on the siblings, so all four are exercised here.
+
+
+def prepare_once(shapes: purrdf.shapes.Shapes) -> purrdf.shapes.PreparedShapes:
+    """`Shapes` in, `PreparedShapes` out — the step a caller hoists out of a loop."""
+    return shapes.prepare()
+
+
+def validate_changes(
+    prepared: purrdf.shapes.PreparedShapes, store: purrdf.Store
+) -> purrdf.shapes.ChangeValidation:
+    """`PreparedShapes` in parameter position, and the change call made ON it.
+
+    The `[attr-defined]` this catches is the exact one the stub work was raised to fix:
+    a plain assignment makes `prepared` an untyped variable, and
+    `prepared.validate_store_changes(store)` is then an attribute of nothing.
+    """
+    return prepared.validate_store_changes(store)
+
+
+def render_report(report: purrdf.shapes.ValidationReport) -> str:
+    """`ValidationReport` in parameter position, and its members read off it."""
+    if report.conforms:
+        return "conforms"
+    return f"violations({len(report.results)})"
+
+
 def summarize_change(shapes_ttl: str, base_nt: str, quads: list[purrdf.Quad]) -> Summary:
     """Load, checkpoint, mutate, and validate only what the mutation can move."""
     store = purrdf.Store()
@@ -203,6 +248,32 @@ def test_read_scope_renders_both_arms() -> None:
 
     assert read_scope(bounded) == "bounded(1)"
     assert read_scope(unbounded).startswith("everything(")
+
+
+def test_the_whole_chain_runs_through_its_annotations() -> None:
+    """`Shapes` → `PreparedShapes` → `ChangeValidation` → `ValidationReport`, each
+    crossing a function boundary under the name a consumer must write.
+
+    The companion to the `mypy` test below: that one proves the four names are legal in
+    annotation position, this one proves the values really are what those annotations
+    claim, on both a conforming store and a violating one.
+    """
+    store = purrdf.Store()
+    store.load(_BASE_NT, purrdf.RdfFormat.N_TRIPLES)
+    store.checkpoint()
+
+    prepared = prepare_once(purrdf.shapes.Shapes(_SHAPES))
+
+    settled = validate_changes(prepared, store)
+    assert read_scope(settled) == "bounded(0)", "a checkpoint leaves nothing to revisit"
+    assert render_report(settled.report) == "conforms"
+
+    for quad in _new_person("http://example.org/alice"):
+        store.add(quad)
+
+    moved = validate_changes(prepared, store)
+    assert read_scope(moved) == "bounded(1)"
+    assert render_report(moved.report) == "violations(1)", "the new person has no age"
 
 
 def test_mypy_accepts_this_module_against_the_shipped_stub(tmp_path: Path) -> None:

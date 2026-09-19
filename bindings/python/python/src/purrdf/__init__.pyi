@@ -1502,17 +1502,21 @@ class _ShapesProduct:
     def certify(self) -> None: ...
 
 class shapes:
-    ValidationReport = _ValidationReport
-    Shapes = _Shapes
-    PreparedShapes = _PreparedShapes
-    # Spelled with an explicit `TypeAlias` — as `purrdf.entail.Regime` is, and for the
-    # same reason — because this is a type a caller ANNOTATES with: a function that
-    # takes or returns the outcome of a change validation writes
+    # Every re-export below is spelled with an explicit `TypeAlias` — as
+    # `purrdf.entail.Regime` is, and for the same reason — because each is a type a
+    # caller ANNOTATES with: a function that takes a prepared shapes graph or returns
+    # the outcome of a change validation writes `purrdf.shapes.PreparedShapes` or
     # `purrdf.shapes.ChangeValidation` in the signature, and a plain `X = X` reads to a
-    # type checker as a variable, which is then rejected in annotation position.
+    # type checker as a variable, which is then rejected in annotation position. There
+    # is no other public spelling of these names — `purrdf.PreparedShapes` does not
+    # exist and `__all__` carries neither — so a plain assignment here makes the type
+    # unwritable rather than merely awkward.
+    ValidationReport: TypeAlias = _ValidationReport
+    Shapes: TypeAlias = _Shapes
+    PreparedShapes: TypeAlias = _PreparedShapes
     ChangeValidation: TypeAlias = _ChangeValidation
-    ShapesProduct = _ShapesProduct
-    ShapesProductError = _ShapesProductError
+    ShapesProduct: TypeAlias = _ShapesProduct
+    ShapesProductError: TypeAlias = _ShapesProductError
     # Compile a Turtle shapes graph into a prepared product in one call — the
     # composition of `Shapes(...).prepare().to_product()`.
     @staticmethod
@@ -1560,10 +1564,10 @@ class _Regime:
 type RegimeLike = _Regime | str
 
 class entail:
-    # Spelled with an explicit `TypeAlias` (rather than the bare `X = _X` the
-    # namespaces above use) because `purrdf.entail.Regime` is a *type* every call
-    # site annotates with; a plain assignment reads to mypy as a variable and is
-    # then rejected in annotation position.
+    # Spelled with an explicit `TypeAlias`, as every type re-exported by a namespace
+    # class here is, because `purrdf.entail.Regime` is a *type* every call site
+    # annotates with; a plain assignment reads to mypy as a variable and is then
+    # rejected in annotation position.
     Regime: TypeAlias = _Regime
     # Close a frozen RdfDataset under `regime`, returning (closure, report). The
     # report is never optional: it names which rules fired, which specification
@@ -1904,8 +1908,12 @@ class gts:
     gts_to_sqlite = _gts_to_sqlite
     gts_to_duckdb = _gts_to_duckdb
     gts_to_parquet = _gts_to_parquet
-    RdfDataset = _RdfDataset
-    GtsFoldViewNative = _GtsFoldViewNative
+    # The two TYPES of this namespace, so spelled with an explicit `TypeAlias`: the
+    # function re-exports above are values a caller CALLS, but these are written in
+    # annotation position, where a plain assignment reads to a type checker as a
+    # variable and is rejected.
+    RdfDataset: TypeAlias = _RdfDataset
+    GtsFoldViewNative: TypeAlias = _GtsFoldViewNative
 
 # ── Slice tooling (bindings/python/src/py_slice.rs, purrdf_native.slice) ─────────
 # Project artifact/dependency tooling, surfaced as `purrdf.slice`.
@@ -1993,14 +2001,17 @@ class _OwnershipAnalyzer:
     def analysis_graph_turtle(self) -> str: ...
 
 class slice:
-    ArtifactRecord = _ArtifactRecord
-    ManifestView = _ManifestView
-    SliceRecord = _SliceRecord
-    DependencyEdge = _DependencyEdge
-    ManifestPatch = _ManifestPatch
-    OwnershipReport = _OwnershipReport
-    SliceCatalog = _SliceCatalog
-    OwnershipAnalyzer = _OwnershipAnalyzer
+    # Every one an explicit `TypeAlias`, for the reason spelled out on `class shapes:`
+    # above: these are the types a caller writes in a signature, and a plain assignment
+    # reads to a type checker as a variable that is rejected in annotation position.
+    ArtifactRecord: TypeAlias = _ArtifactRecord
+    ManifestView: TypeAlias = _ManifestView
+    SliceRecord: TypeAlias = _SliceRecord
+    DependencyEdge: TypeAlias = _DependencyEdge
+    ManifestPatch: TypeAlias = _ManifestPatch
+    OwnershipReport: TypeAlias = _OwnershipReport
+    SliceCatalog: TypeAlias = _SliceCatalog
+    OwnershipAnalyzer: TypeAlias = _OwnershipAnalyzer
 
 # ── Ranked retrieval (bindings/python/src/py_retrieval.rs, purrdf_native.retrieval) ──
 # The composition layer over the ranked property-function producers, surfaced as
