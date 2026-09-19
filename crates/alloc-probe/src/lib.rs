@@ -156,14 +156,39 @@ fn thread_record_deallocation(size: usize) {
 // Whole-process accounting
 // ---------------------------------------------------------------------------
 
-/// Whether the allocator should keep the process-wide ledger at all.
+/// High bit of [`PROCESS_STATE`]: set while a [`WholeProcessWindow`] is
+/// armed.
+const PROCESS_ARMED_BIT: u64 = 1 << 63;
+/// The remaining bits of [`PROCESS_STATE`]: how many recorders are currently
+/// inside the counted region, between their armed check and their counter
+/// updates.
+const PROCESS_COUNT_MASK: u64 = !PROCESS_ARMED_BIT;
+
+/// Whether the process-wide ledger is armed, and how many recorders are
+/// currently between their armed check and their counter updates, packed
+/// into one word.
 ///
-/// Unlike the per-thread cells, this ledger is four atomics shared by every
-/// thread, and keeping it is not free on a parallel workload. It is therefore
-/// armed only for the duration of a [`WholeProcessWindow`], so a bench that
-/// measures *time* outside its probe windows pays one relaxed load per
-/// allocation and nothing else.
-static PROCESS_ARMED: AtomicBool = AtomicBool::new(false);
+/// The two used to be a separate `AtomicBool` for armed and nothing at all
+/// tracking in-flight recorders. That let a recorder pass the armed check,
+/// get preempted, and only touch the counters after `close()` had already
+/// sampled them — or, worse, after a later `open()` had zeroed them and
+/// re-armed, in which case the stale recorder's update landed on the NEXT
+/// window instead of the one it observed as armed. Packing the flag and the
+/// count into one word lets the check and the registration happen as a
+/// single compare-exchange (see [`process_enter`]), so a recorder can never
+/// register against a window that has already started closing, and closing
+/// can wait for exactly the recorders it let in (see
+/// [`process_disarm_and_drain`]).
+///
+/// Unlike the per-thread cells, the ledger this guards is four atomics
+/// shared by every thread, and keeping it is not free on a parallel
+/// workload. It is therefore armed only for the duration of a
+/// [`WholeProcessWindow`], so a bench that measures *time* outside its probe
+/// windows pays one `Acquire` load per allocation and nothing else. The load
+/// is `Acquire` rather than `Relaxed` because entry has to pair with the
+/// `Release` that clears the armed bit in [`process_disarm_and_drain`], or a
+/// recorder could still observe "armed" after the bit was already cleared.
+static PROCESS_STATE: AtomicU64 = AtomicU64::new(0);
 /// Whether a [`WholeProcessWindow`] token is outstanding; the nesting guard.
 static PROCESS_WINDOW_HELD: AtomicBool = AtomicBool::new(false);
 /// Successful allocation calls on every thread since the window opened.
@@ -175,9 +200,66 @@ static PROCESS_LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
 /// High-water mark of [`PROCESS_LIVE_BYTES`] since the window opened.
 static PROCESS_PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
 
+/// Try to enter the counted region: atomically check the armed bit and, if
+/// set, register one more in-flight recorder in [`PROCESS_STATE`].
+///
+/// The check and the registration happen in the same compare-exchange on
+/// purpose. Two separate steps — load the bit, then increment a count — would
+/// leave a window between them wide enough for `close()` to disarm and drain
+/// through it: the recorder would have observed "armed" but not yet be
+/// counted, `close()` would see zero in-flight and sample, and the recorder
+/// would then update counters a later window may already have zeroed. The
+/// CAS below closes that: a recorder is either counted before it can be
+/// missed, or it never gets past the check at all.
+///
+/// Returns `false` (a single `Acquire` load, nothing else) when no window is
+/// armed, which is the fast path this ledger promises outside a
+/// [`WholeProcessWindow`].
+fn process_enter() -> bool {
+    loop {
+        let state = PROCESS_STATE.load(Ordering::Acquire);
+        if state & PROCESS_ARMED_BIT == 0 {
+            return false;
+        }
+        if PROCESS_STATE
+            .compare_exchange_weak(state, state + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+/// Leave the counted region entered via [`process_enter`].
+///
+/// `Release` so that the counter updates the caller just made happen-before
+/// [`process_disarm_and_drain`]'s spin observes the decremented count — the
+/// half of the pairing that lets a drain trust a zero count as "no recorder
+/// is still touching the counters", not just "no recorder is still counted".
+fn process_leave() {
+    PROCESS_STATE.fetch_sub(1, Ordering::Release);
+}
+
+/// Disarm the ledger and wait for every recorder already inside the counted
+/// region to leave it.
+///
+/// Once the armed bit is cleared, [`process_enter`]'s compare-exchange can
+/// never succeed again — it only ever succeeds while the bit is still set —
+/// so the in-flight count is monotonically non-increasing from this point on
+/// and the spin below is guaranteed to terminate. Callers must run this
+/// before sampling or zeroing the counters: it is what makes "no window is
+/// open" mean "no thread is still updating the counters", not just "no
+/// thread will start".
+fn process_disarm_and_drain() {
+    PROCESS_STATE.fetch_and(!PROCESS_ARMED_BIT, Ordering::AcqRel);
+    while PROCESS_STATE.load(Ordering::Acquire) & PROCESS_COUNT_MASK != 0 {
+        std::hint::spin_loop();
+    }
+}
+
 /// Record `size` bytes handed out on any thread, if a window is armed.
 fn process_record_allocation(size: usize) {
-    if !PROCESS_ARMED.load(Ordering::Relaxed) {
+    if !process_enter() {
         return;
     }
     PROCESS_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
@@ -198,14 +280,16 @@ fn process_record_allocation(size: usize) {
             Err(observed) => peak = observed,
         }
     }
+    process_leave();
 }
 
 /// Record `size` bytes returned on any thread, if a window is armed.
 fn process_record_deallocation(size: usize) {
-    if !PROCESS_ARMED.load(Ordering::Relaxed) {
+    if !process_enter() {
         return;
     }
     PROCESS_LIVE_BYTES.fetch_sub(widen_i64(size), Ordering::Relaxed);
+    process_leave();
 }
 
 // ---------------------------------------------------------------------------
@@ -376,8 +460,8 @@ impl Drop for CurrentThreadWindow {
 /// and report the parallel path as the cheapest one in the run.
 ///
 /// While no window is open the process-wide ledger is not kept at all, so a
-/// timed benchmark that opens a window only around its probe pays one relaxed
-/// load per allocation the rest of the time.
+/// timed benchmark that opens a window only around its probe pays one
+/// `Acquire` load per allocation the rest of the time.
 ///
 /// # Hazard: it cannot separate the measured region from the rest of the process
 ///
@@ -406,9 +490,14 @@ impl WholeProcessWindow {
         PROCESS_REQUESTED_BYTES.store(0, Ordering::Relaxed);
         PROCESS_LIVE_BYTES.store(0, Ordering::Relaxed);
         PROCESS_PEAK_BYTES.store(0, Ordering::Relaxed);
-        // Release: every thread that observes the armed flag must also observe
-        // the zeroed counters, or it would add to a total from the last window.
-        PROCESS_ARMED.store(true, Ordering::Release);
+        // Release: every thread that observes the armed bit must also observe
+        // the zeroed counters, or it would add to a total from the last
+        // window. The in-flight count starts at zero here because the
+        // previous window's `Drop` ran `process_disarm_and_drain` — which
+        // waits for the count to reach zero — before it released
+        // `PROCESS_WINDOW_HELD`, and `already_held` above proves this `open`
+        // could not have run until that release happened.
+        PROCESS_STATE.store(PROCESS_ARMED_BIT, Ordering::Release);
         Self(())
     }
 
@@ -423,14 +512,27 @@ impl WholeProcessWindow {
     }
 
     /// Close the window, returning what it observed.
+    ///
+    /// Disarms the ledger and waits for every in-flight recorder to leave it
+    /// BEFORE sampling, so the returned measurement cannot still be updated
+    /// by a recorder that passed the armed check a moment before `close` was
+    /// called; sampling first (the previous behaviour) left exactly that gap
+    /// open.
     pub fn close(self) -> Measurement {
+        process_disarm_and_drain();
         self.sample()
     }
 }
 
 impl Drop for WholeProcessWindow {
     fn drop(&mut self) {
-        PROCESS_ARMED.store(false, Ordering::Release);
+        // Disarm-and-drain first (a no-op if `close` already ran it), and
+        // only then release the nesting guard. `PROCESS_WINDOW_HELD` gates
+        // the next `open`'s zeroing of the counters, so it must not drop
+        // while a recorder from this window could still be updating them —
+        // otherwise the next window's `open` could zero counters a straggler
+        // from this one is about to add to.
+        process_disarm_and_drain();
         PROCESS_WINDOW_HELD.store(false, Ordering::Release);
     }
 }
@@ -439,13 +541,15 @@ impl Drop for WholeProcessWindow {
 mod tests {
     use std::hint::black_box;
     use std::panic::{self, AssertUnwindSafe};
-    use std::sync::atomic::Ordering;
-    use std::sync::{Mutex, MutexGuard, PoisonError};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
     use std::thread;
+    use std::time::Duration;
 
     use super::{
-        CountingAllocator, CurrentThreadWindow, PROCESS_ARMED, PROCESS_WINDOW_HELD,
-        WholeProcessWindow,
+        CountingAllocator, CurrentThreadWindow, PROCESS_ARMED_BIT, PROCESS_COUNT_MASK,
+        PROCESS_STATE, PROCESS_WINDOW_HELD, WholeProcessWindow, process_enter, process_leave,
     };
 
     // The instrument can only be tested through the allocator it instruments,
@@ -594,15 +698,154 @@ mod tests {
             "a buffer freed inside the window was reported as retained: {measured:?}"
         );
 
-        // And the ledger is disarmed again, so nothing after this point is
-        // charged to a window nobody has open.
+        // And the ledger is disarmed again, with no in-flight recorder left
+        // registered, so nothing after this point is charged to a window
+        // nobody has open.
+        let state = PROCESS_STATE.load(Ordering::Acquire);
         assert!(
-            !PROCESS_ARMED.load(Ordering::Relaxed),
+            state & PROCESS_ARMED_BIT == 0,
             "the closed window left the process ledger armed"
+        );
+        assert!(
+            state & PROCESS_COUNT_MASK == 0,
+            "the closed window left an in-flight recorder registered"
         );
         assert!(
             !PROCESS_WINDOW_HELD.load(Ordering::Relaxed),
             "the closed window left its nesting guard held"
+        );
+    }
+
+    /// Pins the drain itself: `close` must not return — and therefore must
+    /// not sample — while a recorder that passed the armed check is still
+    /// inside the counted region.
+    ///
+    /// This is the exact defect the packed `PROCESS_STATE` word exists to
+    /// close. Under the old design (a bare `AtomicBool` for armed, and
+    /// nothing tracking in-flight recorders) `close` sampled immediately: a
+    /// recorder that had already passed the armed check but not yet touched
+    /// the counters was invisible to it, so this test's closer thread would
+    /// send on `done_tx` almost at once, well inside the 50ms timeout below,
+    /// and the first assertion would fail. Against the fix, entering via
+    /// [`process_enter`] and withholding [`process_leave`] must block
+    /// `close` in `process_disarm_and_drain` until the entered recorder
+    /// leaves, which this test observes directly through a channel rather
+    /// than by timing.
+    #[test]
+    fn closing_a_whole_process_window_waits_for_an_in_flight_recorder_to_leave() {
+        let _exclusive = exclusive();
+        let window = WholeProcessWindow::open();
+
+        // Simulate a recorder that has passed the armed check and is
+        // between that check and its matching `process_leave` — exactly the
+        // gap the old check-then-act code left unguarded.
+        assert!(
+            process_enter(),
+            "process_enter must succeed while the window is armed"
+        );
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let closer = thread::spawn(move || {
+            let measured = window.close();
+            done_tx
+                .send(())
+                .expect("the test thread is still waiting on done_rx");
+            measured
+        });
+
+        // The closer cannot have finished: `process_disarm_and_drain` spins
+        // until the in-flight count reaches zero, and it cannot, because the
+        // entered recorder above has not left yet. A short timeout is enough
+        // to prove "has not finished" without asserting exact timing — no
+        // amount of waiting here can make the closer finish, because nothing
+        // has permitted it to.
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "close() returned while a recorder was still inside the counted region"
+        );
+
+        // Now let the simulated recorder leave, which is the only thing that
+        // can unblock the drain.
+        process_leave();
+
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("close() must complete once the in-flight recorder leaves");
+        closer.join().expect("the closer thread completes");
+
+        let state = PROCESS_STATE.load(Ordering::Acquire);
+        assert_eq!(state, 0, "the drained window left a nonzero process state");
+    }
+
+    /// Stress-shaped companion to the deterministic test above: hammer real
+    /// allocations from worker threads that are still mid-flight when a
+    /// window closes, under heavy contention on [`PROCESS_STATE`], and
+    /// confirm a freshly opened second window's count is exactly the known
+    /// quantity allocated inside it.
+    ///
+    /// What this pins precisely: the workers are joined — meaning every
+    /// `fetch_add` any of them will ever do has already happened — before
+    /// the second window opens, so this test cannot by itself force the
+    /// narrow interleaving the previous test injects directly (a worker
+    /// straggling past a `close`/`open` boundary that has already gone by).
+    /// It is a heavy-load sanity check that `process_disarm_and_drain`
+    /// actually waits out real concurrent allocator traffic — not synthetic,
+    /// single manually-held entries — before `close` returns, and that doing
+    /// so under contention still leaves the ledger exactly zeroed for the
+    /// next window. The deterministic test above is what pins the exact
+    /// race described in the task; this one is additional coverage at
+    /// volume.
+    #[test]
+    fn a_second_window_counts_exactly_its_own_allocations_after_heavy_contention() {
+        let _exclusive = exclusive();
+        const WORKER_ALLOCATION_BYTES: usize = 64;
+        const SECOND_WINDOW_ALLOCATIONS: u64 = 32;
+        const WORKER_ITERATIONS: u64 = 20_000;
+
+        let keep_running = Arc::new(AtomicU64::new(1));
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let keep_running = Arc::clone(&keep_running);
+                thread::spawn(move || {
+                    let mut done = 0u64;
+                    while keep_running.load(Ordering::Relaxed) != 0 && done < WORKER_ITERATIONS {
+                        drop(black_box(vec![9u8; WORKER_ALLOCATION_BYTES]));
+                        done += 1;
+                    }
+                })
+            })
+            .collect();
+
+        let first = WholeProcessWindow::open();
+        // Let the workers pile up real contention on `PROCESS_STATE` while
+        // the window is still armed, then close through it.
+        thread::sleep(Duration::from_millis(5));
+        let _ = first.close();
+
+        // Signal and join before the second window opens: every worker
+        // `fetch_add` that will ever happen is complete before `open` below
+        // zeroes the counters, which is what makes the exact-equality
+        // assertion below sound (see the doc comment above).
+        keep_running.store(0, Ordering::Relaxed);
+        for worker in workers {
+            worker.join().expect("worker thread completes");
+        }
+
+        let second = WholeProcessWindow::open();
+        for _ in 0..SECOND_WINDOW_ALLOCATIONS {
+            drop(black_box(vec![3u8; WORKER_ALLOCATION_BYTES]));
+        }
+        let measured = second.close();
+
+        assert_eq!(
+            measured.allocations, SECOND_WINDOW_ALLOCATIONS,
+            "a fresh window's count did not match its own known allocations: {measured:?}"
+        );
+        let state = PROCESS_STATE.load(Ordering::Acquire);
+        assert_eq!(
+            state, 0,
+            "the second window left the process ledger non-zero after closing"
         );
     }
 }
