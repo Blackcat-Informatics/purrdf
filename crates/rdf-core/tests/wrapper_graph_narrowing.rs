@@ -20,21 +20,33 @@
 //!
 //! as a SEQUENCE, not a set — same multiset, same order. Likewise for annotations.
 //! The whole risk in overriding these on a wrapper is dropping the wrapper's own row
-//! predicate (residue keeping, composition dedup, overlay masking), so every fixture
-//! here exercises that predicate rather than an empty wrapper.
+//! predicate, so every fixture here is built to CHARGE one, rather than to wrap an
+//! empty view where dropping the predicate would be invisible. The predicates, and
+//! the fixture that charges each:
+//!
+//! * composition dedup — two identical sources plus a distinct one, so the
+//!   earlier-source predicate rejects a row on every probe;
+//! * the delta overlay's SUPPRESSION mask — a snapshot with base statement-layer rows
+//!   removed, which the narrowed seam must not resurrect;
+//! * the delta overlay's DUPLICATE masks — a snapshot holding a delta row that folds
+//!   onto a row the base already has, which the narrowed seam must not double-count.
+//!
+//! Residue keeping lives on the bundle carrier, not on a wrapper built here; it is
+//! pinned by `ir::pipeline_bundle`'s own tests.
 
 use std::sync::Arc;
 
 use purrdf_core::{
     BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, GraphMatch,
-    GraphPlacement, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, ScopeBinding,
-    TermValue, ViewLimits,
+    GraphPlacement, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    ScopeBinding, TermValue, ViewLimits,
 };
 
 const P: &str = "http://example.org/p";
 const CONFIDENCE: &str = "http://example.org/confidence";
 const HIGH: &str = "http://example.org/high";
 const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+const LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 /// An `example.org` IRI value, for terms this file's fixtures need to name but do
 /// not otherwise intern through a builder.
@@ -207,8 +219,8 @@ fn composite_graph_seam_matches_the_filtered_stream_over_a_selection() {
 
 /// A delta snapshot whose overlay does real work in BOTH directions: rows removed
 /// from the base (the suppression mask) and rows added by the delta, each in a
-/// different graph, plus one row added that the base already holds (the duplicate
-/// mask).
+/// different graph. The duplicate masks are charged by their own fixture below,
+/// because a row re-inserted exactly as the base spells it never reaches the delta.
 #[test]
 fn delta_graph_seam_matches_the_filtered_stream() {
     let base = statement_layers(None);
@@ -261,8 +273,11 @@ fn delta_graph_seam_matches_the_filtered_stream() {
             })
             .expect("a fresh annotation inserts");
     }
-    // A row the base already holds: re-inserting it must be a no-op, so the overlay
-    // never double-counts it on either side of the seam.
+    // A row the base already holds, spelled exactly as the base spells it: base
+    // membership absorbs it, so it never reaches the delta and the overlay's
+    // DUPLICATE masks stay empty on this fixture. Charging those masks needs a row
+    // the base holds under a different spelling of the same term — see
+    // `delta_graph_seam_matches_the_filtered_stream_when_the_duplicate_masks_are_charged`.
     assert!(
         !mutable
             .insert(QuadValues::quad(
@@ -339,4 +354,118 @@ fn delta_graph_seam_matches_the_filtered_stream_for_a_blank_graph_name() {
         .expect("a declaration in the blank graph inserts");
     let view = mutable.snapshot_view().expect("the snapshot publishes");
     assert_graph_seam_agrees(&view, "delta/blank-graph");
+}
+
+/// A delta snapshot whose DUPLICATE masks are non-empty — the overlay's third row
+/// predicate, and the only one the fixtures above cannot charge.
+///
+/// A statement-layer row reaches the delta while the base already holds it whenever
+/// the caller spells a term in a form the base's value lookup does not recognize but
+/// interning normalizes onto a term the base already has. That is exactly the C0.1
+/// literal identity policy: `MutableDataset` probes base membership on the value AS
+/// AUTHORED, while freezing the delta lowercases the language tag and lets the tag —
+/// not the stated datatype — name the datatype. So `"high"@EN` misses a base holding
+/// `"high"@en`, is added to the delta, and freezes back onto the base's OWN term. The
+/// row is then in both layers, and `duplicate_reifiers`/`duplicate_annotations` are
+/// what keep the union from yielding it twice — on the narrowed seam exactly as on
+/// the unkeyed one.
+#[test]
+fn delta_graph_seam_matches_the_filtered_stream_when_the_duplicate_masks_are_charged() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri(P);
+    // The base's own spelling of the literal, interned through the C0.1 policy.
+    let tagged = b.intern_literal(RdfLiteral::language_tagged("high", "en"));
+    let triple = b.intern_triple(s, p, tagged);
+    let r = b.intern_iri("http://example.org/r");
+    let confidence = b.intern_iri(CONFIDENCE);
+    let g1 = b.intern_iri("http://example.org/g1");
+    for graph in [None, Some(g1)] {
+        b.push_quad(s, p, tagged, graph);
+        b.push_reifier_in_graph(r, triple, graph);
+        b.push_annotation_in_graph(r, confidence, tagged, graph);
+    }
+    let base = b.freeze().expect("language-tagged fixture freezes");
+    let base_reifiers = base.reifier_quads().count();
+    let base_annotations = base.annotation_quads().count();
+
+    // The SAME literal, spelled with the tag in upper case. `TermValue::lang_literal`
+    // would fold it here, so the fold has to be stated to reach the delta at all.
+    let shouted = TermValue::Literal {
+        lexical_form: "high".into(),
+        datatype: LANG_STRING.into(),
+        language: Some("EN".into()),
+        direction: None,
+    };
+    let quoted = TermValue::Triple {
+        s: Box::new(iri("s")),
+        p: Box::new(TermValue::iri(P)),
+        o: Box::new(shouted.clone()),
+    };
+
+    let mut mutable = MutableDataset::new(Arc::clone(&base));
+    for graph in [None, Some(iri("g1"))] {
+        assert!(
+            mutable
+                .insert(QuadValues {
+                    s: iri("r"),
+                    p: TermValue::iri(REIFIES),
+                    o: quoted.clone(),
+                    g: graph.clone(),
+                })
+                .expect("the shouted declaration inserts"),
+            "the shouted declaration must reach the delta, not be absorbed as present"
+        );
+        assert!(
+            mutable
+                .insert(QuadValues {
+                    s: iri("r"),
+                    p: TermValue::iri(CONFIDENCE),
+                    o: shouted.clone(),
+                    g: graph,
+                })
+                .expect("the shouted annotation inserts"),
+            "the shouted annotation must reach the delta, not be absorbed as present"
+        );
+    }
+    // Four rows really are in the delta — the masks below are charged, not vacuous.
+    assert_eq!(
+        mutable.added_len(),
+        4,
+        "both graphs must carry a delta declaration and a delta annotation"
+    );
+
+    let view = mutable.snapshot_view().expect("the snapshot publishes");
+    assert_graph_seam_agrees(&view, "delta/duplicate-mask");
+
+    // Every delta row folded back onto a row the base already holds, so the union
+    // grew by nothing. Counted per graph as well as in total: equality between the
+    // narrowed and the filtered stream alone would still hold if BOTH sides dropped
+    // the mask, and these counts are what refuses that.
+    assert_eq!(
+        view.reifier_quads().count(),
+        base_reifiers,
+        "a re-spelled declaration must not add a reifier row"
+    );
+    assert_eq!(
+        view.annotation_quads().count(),
+        base_annotations,
+        "a re-spelled annotation must not add an annotation row"
+    );
+    let g1 = view.term_id_by_value(&iri("g1")).expect("g1 survives");
+    for (g, label) in [
+        (GraphMatch::Named(g1), "g1"),
+        (GraphMatch::Default, "default"),
+    ] {
+        assert_eq!(
+            view.reifier_quads_in_graph(g).count(),
+            1,
+            "{label}: the narrowed seam must yield the declaration once, not twice"
+        );
+        assert_eq!(
+            view.annotation_quads_in_graph(g).count(),
+            1,
+            "{label}: the narrowed seam must yield the annotation once, not twice"
+        );
+    }
 }
