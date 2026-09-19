@@ -207,6 +207,18 @@ fn admit_algebra(
 pub struct PlanCache {
     entries: BoundedCache<Arc<[u8]>, Arc<PreparedQuery>>,
     memory: PlanMemoryObserver,
+    /// The buffer [`Self::prepare_with_relations`] builds its lookup key in, reused
+    /// across calls.
+    ///
+    /// The key is a pure function of the request, so on a HIT — which is every
+    /// repeat of a query text, and a SHACL validation is one query text per focus
+    /// node — nothing needs to own it past the probe. Building it into a fresh
+    /// `Vec` charged one allocation to every prepare for bytes discarded a line
+    /// later. This buffer is grown once to the largest key seen and then reused;
+    /// only the MISS path, which is already parsing and planning, allocates the
+    /// owned `Arc<[u8]>` the map retains. Its contents carry no meaning between
+    /// calls: each call clears it before writing.
+    key_scratch: Vec<u8>,
 }
 
 impl Drop for PlanCache {
@@ -251,6 +263,7 @@ impl PlanCache {
         Self {
             entries: BoundedCache::new(limits),
             memory: PlanMemoryObserver::default(),
+            key_scratch: Vec::new(),
         }
     }
 
@@ -334,10 +347,29 @@ impl PlanCache {
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
             .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
-        let key = plan_cache_key(query, base_iri, options, &fingerprint, &agg_fingerprint);
-        if let Some(prepared) = self.entries.get(key.as_slice()) {
+        // The key is built into the cache's own reusable buffer and probed as a
+        // borrowed slice, so a hit costs no allocation at all. The buffer is moved
+        // out for the duration of the build (the probe needs `&mut self.entries`)
+        // and put back before this method can return or fail, so a later call still
+        // finds its capacity.
+        let mut scratch = std::mem::take(&mut self.key_scratch);
+        scratch.clear();
+        plan_cache_key_into(
+            &mut scratch,
+            query,
+            base_iri,
+            options,
+            &fingerprint,
+            &agg_fingerprint,
+        );
+        if let Some(prepared) = self.entries.get(scratch.as_slice()) {
+            self.key_scratch = scratch;
             return Ok(prepared);
         }
+        // A miss retains the key, so here — and only here — it is copied into the
+        // owned form the map stores.
+        let key: Arc<[u8]> = Arc::from(scratch.as_slice());
+        self.key_scratch = scratch;
         let mut parser = SparqlParser::new();
         if let Some(base) = base_iri {
             parser = parser.with_base_iri(base);
@@ -358,7 +390,7 @@ impl PlanCache {
             .saturating_add(prepared.retained_size_bytes());
         if self
             .entries
-            .insert_with_eviction(key.into(), prepared.clone(), bytes, |plan| {
+            .insert_with_eviction(key, prepared.clone(), bytes, |plan| {
                 plan.memory.detach();
             })
         {
@@ -370,13 +402,18 @@ impl PlanCache {
 
 /// Length-prefixed fields cannot alias when a caller's configuration contains
 /// separator characters. List lengths distinguish namespace-set boundaries.
-fn plan_cache_key(
+///
+/// Appends to `out`, which the caller supplies already empty: the key is only
+/// needed for the lookup, so [`PlanCache`] hands its reusable buffer here rather
+/// than paying for a fresh one per prepare.
+fn plan_cache_key_into(
+    out: &mut Vec<u8>,
     query: &str,
     base_iri: Option<&str>,
     options: &ParserOptions,
     relations: &str,
     aggregates: &str,
-) -> Vec<u8> {
+) {
     fn length(out: &mut Vec<u8>, value: usize) {
         out.extend_from_slice(&(value as u64).to_le_bytes());
     }
@@ -398,19 +435,19 @@ fn plan_cache_key(
             capacity += size_of::<u64>() + value.len();
         }
     }
-    let mut key = Vec::with_capacity(capacity);
-    key.push(u8::from(base_iri.is_some()));
-    field(&mut key, base_iri.unwrap_or(""));
+    // A no-op once the buffer has seen a key this size, which is the steady state.
+    out.reserve(capacity);
+    out.push(u8::from(base_iri.is_some()));
+    field(out, base_iri.unwrap_or(""));
     for list in lists {
-        length(&mut key, list.len());
+        length(out, list.len());
         for value in list {
-            field(&mut key, value);
+            field(out, value);
         }
     }
     for value in [relations, aggregates, query] {
-        field(&mut key, value);
+        field(out, value);
     }
-    key
 }
 
 /// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6).

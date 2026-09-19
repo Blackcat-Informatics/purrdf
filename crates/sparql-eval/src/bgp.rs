@@ -147,9 +147,17 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     // The interned id of `rdf:reifies`, resolved once. `None` ⇒ the dataset has no
     // reifier layer at all (the predicate was never interned), so no virtual reifier
     // candidates exist for any pattern.
-    let reifies_id = ctx
-        .dataset
-        .term_id_by_value(&purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
+    //
+    // The lookup value is a process-wide `static`, not a fresh `TermValue::Iri` per
+    // BGP: `DatasetView::term_id_by_value` takes a borrowed value, the IRI is a
+    // constant, and minting it here charged one heap allocation to every BGP
+    // evaluation — a per-focus-node cost on the SHACL path, for a string that is the
+    // same bytes every time. `TermValue::Iri` owns a `String`, so it cannot be a
+    // `const`; a write-once `OnceLock` is the allocation-free-after-first-use form
+    // and needs no dependency (same shape as `SINGLETON` in `plan_or_cached_order`).
+    static REIFIES: std::sync::OnceLock<purrdf_core::TermValue> = std::sync::OnceLock::new();
+    let reifies_value = REIFIES.get_or_init(|| purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
+    let reifies_id = ctx.dataset.term_id_by_value(reifies_value);
 
     // Whether this execution charges fuel at all. Read once, outside the pattern loop:
     // an ungoverned run (and a run whose caller set only a deadline or only an answer

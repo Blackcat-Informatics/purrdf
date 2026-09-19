@@ -55,10 +55,20 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 100 | 1,277,672 | 8,399 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 218 | 16,156 | 16,156 |
-//! | custom `sh:select` component | 2,738 | 120 | 1,278,972 | 9,699 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 200 | 13,393 | 13,393 |
+//! | `sh:sparql` constraint | 2,695 | 96 | 1,277,672 | 7,671 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 214 | 16,156 | 15,272 |
+//! | custom `sh:select` component | 2,738 | 116 | 1,278,972 | 8,956 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 194 | 13,393 | 12,605 |
+//!
+//! The "after" column is the figure pinned below, which is a live number rather
+//! than a historical one: it moves whenever the evaluator's per-query setup gets
+//! cheaper, and the pins move with it. The four surfaces last dropped by 4, 4, 4
+//! and 6 allocations respectively (from 100, 218, 120 and 200) when three
+//! per-query allocations in `purrdf_sparql_eval` were removed — the `rdf:reifies`
+//! lookup value each BGP compilation used to mint, the plan cache's lookup key,
+//! which is now built in a buffer the cache reuses and probed borrowed, and one
+//! of the two walks the pre-binding rewrite made over the core pattern, the
+//! pushdown and the seed join now riding a single descent.
 //!
 //! # The two big rows and the two small ones are two different findings
 //!
@@ -71,13 +81,16 @@
 //! `ex:name` quad in the dataset and then discarded all but its own. The
 //! deciding measurement holds the focus count fixed at 64 and varies the data
 //! graph: before, the per-focus-node cost tracked the graph exactly (383
-//! allocations over 768 quads, 8,324 over 24,576); after, it is FLAT at 100 for
-//! every one of those sizes. The constant is pushed into the pattern now, so the
-//! bound position is an index probe.
+//! allocations over 768 quads, 8,324 over 24,576); after, it is FLAT across every
+//! one of those sizes (at 100, the figure pinned when that measurement was taken).
+//! The constant is pushed into the pattern now, so the bound position is an index
+//! probe.
 //!
-//! **The two non-SELECT surfaces were never scanning**, which is why their bytes
-//! do not move at all: an ASK materializes no rows on any path, and the
-//! expression call's body has no BGP with a pre-bound term in it. Their
+//! **The two non-SELECT surfaces were never scanning**, which is why that step
+//! moved their bytes by nothing at all — 16,156 and 13,393 on both sides of it:
+//! an ASK materializes no rows on any path, and the expression call's body has no
+//! BGP with a pre-bound term in it. (The later per-query-setup work above does
+//! show in their bytes, because it removed whole buffers rather than rows.) Their
 //! allocation savings come from the pre-binding rewrite getting cheaper rather
 //! than narrower — one combined `VALUES` seed carrying every pre-bound variable
 //! instead of one seed, one `Join` and one whole rebuild of the
@@ -309,7 +322,7 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 100,
+        per_focus_node: 96,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -326,7 +339,7 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 218,
+        per_focus_node: 214,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -347,7 +360,7 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 120,
+        per_focus_node: 116,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -362,7 +375,7 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 200,
+        per_focus_node: 194,
         results_per_violation: 1,
     },
 ];

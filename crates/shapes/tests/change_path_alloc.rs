@@ -2420,6 +2420,15 @@ type SiblingCoverageEntry = (
 /// intermediates a query allocates simply by running once. Removing the
 /// pre-binding charge entirely would still leave a per-focus-node term.
 ///
+/// Those shares were measured against a term of 100/218/120/200. Two of the
+/// components they name have since been removed — the plan-cache key is now
+/// built in a buffer the cache reuses and probed borrowed, so a cache hit does
+/// not allocate one, and the pre-binding rewrite's pushdown and seed join now
+/// ride a single descent over the core pattern instead of two — which is what
+/// took the term to the 96/214/116/194 the sibling file pins. The shares
+/// themselves have not been re-measured and are left as the reading that
+/// motivated those removals.
+///
 /// So these entries move OUT of `SIBLING_FILE_COVERAGE` and into `CASES` only
 /// when a focus node costs no allocation at all, which needs the evaluator's
 /// per-execution cost addressed and not just the pre-binding path. Until then

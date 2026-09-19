@@ -115,14 +115,13 @@ pub(crate) fn apply_substitutions(
             ground_term_from_value(value)?,
         ));
     }
-    // Pushdown FIRST, seed second: the pushdown's `at_core_root` peephole is
-    // stated about the node the seed is going to wrap, and both walks reach that
-    // node through the same `map_core_pattern` descent. Running the seed first
-    // would put a `Values` mentioning the pre-bound variable between the core and
-    // this rewrite, and the peephole would be describing the seed rather than the
-    // pattern.
-    let mut query = query.map_core_pattern(|core| push_probe_constants(core, &probes));
-
+    if probes.is_empty() {
+        // Nothing to push and nothing to seed. [`push_probe_constants`] returns its
+        // argument untouched for an empty probe list and a `map_core_pattern` whose
+        // body is the identity rebuilds the query it was handed, so descending at all
+        // here would be a walk with no rewrite in it.
+        return Ok(query);
+    }
     // ONE seed carrying every pre-binding, not one seed per pre-binding.
     //
     // `Query::substitute_variable` joins a single-row `VALUES` binding ONE variable
@@ -138,30 +137,45 @@ pub(crate) fn apply_substitutions(
     // A REPEATED variable name is the one case where that equivalence fails: two
     // seeds binding the same variable to different terms are incompatible and yield
     // the empty solution, while one `VALUES` row cannot even spell the second
-    // binding. That case keeps the original per-variable path, so its behaviour is
+    // binding. That case keeps the original per-variable path — its own pushdown
+    // descent, then one `substitute_variable` per pre-binding — so its behaviour is
     // unchanged rather than approximated.
     if has_repeated_variable(&probes) {
+        let mut query = query.map_core_pattern(|core| push_probe_constants(core, &probes));
         for (var, ground) in probes {
             query = query.substitute_variable(&var, ground);
         }
         return Ok(query);
     }
-    if probes.is_empty() {
-        return Ok(query);
-    }
-    let mut variables = Vec::with_capacity(probes.len());
-    let mut row = Vec::with_capacity(probes.len());
-    for (var, ground) in probes {
-        variables.push(var);
-        row.push(Some(ground));
-    }
-    let seed = GraphPattern::Values {
-        variables,
-        bindings: vec![row],
-    };
-    Ok(query.map_core_pattern(|core| GraphPattern::Join {
-        left: Box::new(seed),
-        right: Box::new(core),
+    // ONE descent doing both rewrites, in the order the two separate descents ran
+    // them.
+    //
+    // Pushdown FIRST, seed second: the pushdown's `at_core_root` peephole is stated
+    // about the node the seed is going to wrap. Running the seed first would put a
+    // `Values` mentioning the pre-bound variable between the core and this rewrite,
+    // and the peephole would be describing the seed rather than the pattern. That
+    // ordering is preserved here exactly — `push_probe_constants` is applied to the
+    // core, and the `Join` is built AROUND its result — and now costs one descent
+    // instead of two, because both walks reached the same node through the same
+    // `map_core_pattern` descent and the pushdown leaves that node's variant alone
+    // (`push_probes` maps every arm onto its own variant, and `at_core_root`
+    // suppresses the restoring `Values` there), so the second descent could only
+    // ever have stopped where the first one did.
+    Ok(query.map_core_pattern(move |core| {
+        let core = push_probe_constants(core, &probes);
+        let mut variables = Vec::with_capacity(probes.len());
+        let mut row = Vec::with_capacity(probes.len());
+        for (var, ground) in probes {
+            variables.push(var);
+            row.push(Some(ground));
+        }
+        GraphPattern::Join {
+            left: Box::new(GraphPattern::Values {
+                variables,
+                bindings: vec![row],
+            }),
+            right: Box::new(core),
+        }
     }))
 }
 
