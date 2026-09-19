@@ -52,6 +52,14 @@ impl StreamCsr {
 /// ascending [`PageId`] order, so it is already ascending and needs no sort.
 #[derive(Debug, Clone, Default)]
 struct GraphPostings {
+    /// Pages that DECLARE this graph, whether or not they carry a row of any stream.
+    ///
+    /// A graph declared empty is a key with no stream postings, so the three lists
+    /// below cannot answer "which pages know this graph exists" — they answer "which
+    /// pages hold rows in it", and for a declared-empty graph that is nobody. Page
+    /// retention needs the first question: evicting every page that declares a graph
+    /// erases the graph itself.
+    declaring: Vec<PageId>,
     /// Pages carrying at least one base-quad row in this graph.
     base: Vec<PageId>,
     /// Pages carrying at least one reifier row in this graph.
@@ -72,6 +80,10 @@ pub(crate) struct GraphPageIndex {
     /// deduplicated (a declared-empty graph is included). This is the composed
     /// `named_graphs()` answer.
     keys: Box<[GlobalTermId]>,
+    /// Per-key declaring-page postings, parallel to `keys`: every page that names the
+    /// graph at all. Non-empty for EVERY key, including a declared-empty one, which is
+    /// exactly what the three stream postings below cannot say.
+    declaring: StreamCsr,
     /// Per-key base-quad page postings, parallel to `keys`.
     base: StreamCsr,
     /// Per-key reifier-row page postings, parallel to `keys`.
@@ -130,6 +142,22 @@ impl GraphPageIndex {
         }
     }
 
+    /// The ascending pages that DECLARE named graph `g` — every page that names it,
+    /// whether or not it holds a row; an empty slice only when `g` is not a known
+    /// graph at all.
+    ///
+    /// This is the retention question, and it is NOT
+    /// [`pages_for_named`](Self::pages_for_named) unioned over the three streams: a
+    /// graph declared empty is a key with no stream postings, so that union is empty
+    /// and would authorize evicting every page that knows the graph — erasing it.
+    #[inline]
+    pub(crate) fn pages_declaring_named(&self, g: GlobalTermId) -> &[PageId] {
+        let Ok(index) = self.keys.binary_search(&g) else {
+            return &[];
+        };
+        self.declaring.pages(index)
+    }
+
     /// The ascending pages carrying at least one `stream` row in the default graph;
     /// an empty slice if none.
     #[inline]
@@ -168,6 +196,11 @@ impl GraphPageIndex {
             for local_graph in summary.declared_graphs() {
                 let global_graph = slot.translation.to_global(local_graph);
                 let postings = named.entry(global_graph).or_default();
+                // Unconditional: the page named the graph, which is what retention asks
+                // about. The three stream tests below answer the different question of
+                // which pages hold rows, and all three are false for a declared-empty
+                // graph.
+                postings.declaring.push(slot.id);
                 if summary.graph_rows(local_graph, PageStream::Base) > 0 {
                     postings.base.push(slot.id);
                 }
@@ -190,12 +223,14 @@ impl GraphPageIndex {
         }
 
         let keys: Box<[GlobalTermId]> = named.keys().copied().collect();
+        let declaring = build_csr(&named, |p| &p.declaring);
         let base = build_csr(&named, |p| &p.base);
         let reifier = build_csr(&named, |p| &p.reifier);
         let annotation = build_csr(&named, |p| &p.annotation);
 
         Self {
             keys,
+            declaring,
             base,
             reifier,
             annotation,

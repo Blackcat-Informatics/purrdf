@@ -877,26 +877,36 @@ impl PagedDataset {
         self.pages_for_pattern(None, None, None, GraphMatch::Named(g))
     }
 
-    /// Produce a variant retaining only the pages that CARRY named graph `g`, evicting
+    /// Produce a variant retaining only the pages that KNOW named graph `g`, evicting
     /// the rest — the graph-scoped page-eviction primitive, built on
     /// [`pages_for_graph`](Self::pages_for_graph) and
     /// [`with_pages`](Self::with_pages).
     ///
-    /// "Carries `g`" means *owns at least one row in `g` in ANY of the three sealed
-    /// streams*: the base quads [`pages_for_graph`](Self::pages_for_graph) names, PLUS
-    /// the RDF 1.2 reifier and annotation side tables, whose rows carry their own graph
-    /// slot and are data in their own right. A page whose only content in `g` is a
-    /// reifier or annotation row — with no base quad there at all — is therefore
-    /// RETAINED; evicting it on the base-quad answer alone would silently drop rows
-    /// that belong to `g`.
+    /// "Knows `g`" is deliberately wider than "holds a row in `g`", and the gap is the
+    /// whole correctness argument:
+    ///
+    /// * *Rows in any stream.* The base quads [`pages_for_graph`](Self::pages_for_graph)
+    ///   names, PLUS the RDF 1.2 reifier and annotation side tables, whose rows carry
+    ///   their own graph slot and are data in their own right. A page whose only content
+    ///   in `g` is a reifier or annotation row — with no base quad there at all — is
+    ///   RETAINED; evicting it on the base-quad answer alone would silently drop rows.
+    /// * *Declaration without rows.* A graph declared empty is a key with NO stream
+    ///   postings, so the three answers above are all empty for it and retaining on
+    ///   them alone would evict every page and delete the graph outright — the call
+    ///   would erase exactly what it was asked to keep. When no page holds a row in
+    ///   `g`, the pages that DECLARE it are retained instead. A declaring page is still
+    ///   evicted when some other page holds rows in `g`, because those pages keep `g` a
+    ///   key on their own and the declaration is then redundant — eviction stays as
+    ///   aggressive as it can soundly be.
     ///
     /// Retention is a SUPERSET of `g`, not a projection onto it: a retained page keeps
     /// every row it holds, including its rows in OTHER graphs. What this method
-    /// guarantees is the eviction direction — a page is dropped only when the sealed
-    /// per-stream graph postings PROVE it holds nothing in `g`, so no read scoped to
-    /// `g` can see a different answer afterwards. There is deliberately no
-    /// drop-shaped twin: a page carrying `g` usually carries other graphs too, so
-    /// "drop the pages of `g`" would destroy unrelated rows.
+    /// guarantees is the eviction direction — `retain_graph(g)` answers every read
+    /// scoped to `g` exactly as the original did, **including enumeration**:
+    /// `retain_graph(g).named_graphs()` contains `g` whenever the original's did, so
+    /// `GRAPH ?g` still binds a graph that was declared empty, as SPARQL requires.
+    /// There is deliberately no drop-shaped twin: a page carrying `g` usually carries
+    /// other graphs too, so "drop the pages of `g`" would destroy unrelated rows.
     ///
     /// Materializes NOTHING: page selection reads sealed metadata only, and
     /// [`with_pages`](Self::with_pages) copies seal-time state. The result keeps the
@@ -918,6 +928,21 @@ impl PagedDataset {
                 GraphMatch::Named(g),
                 stream,
             ));
+        }
+        // The stream postings above answer "which pages hold rows in `g`". For a graph
+        // declared EMPTY they are all empty — a declared-empty graph is a key with no
+        // postings — so stopping here would evict every page and delete the graph this
+        // call was asked to retain.
+        //
+        // Falling back only when nothing holds a row keeps both properties at once. A
+        // page that merely declares `g` while some other page holds rows in it is still
+        // evicted, because those row-holding pages keep `g` a key on their own: the
+        // retained dataset enumerates `g` either way, so the declaration is redundant
+        // and eviction stays as aggressive as it can soundly be. When NO page holds a
+        // row, the declaration is the only thing `g` has, and dropping it is the
+        // difference between an empty graph and no graph.
+        if keep.is_empty() {
+            keep.extend(self.graph_index().pages_declaring_named(g).iter().copied());
         }
         let keep: Vec<PageId> = keep.into_iter().collect();
         // Every id came from this dataset's own page list, so `with_pages`'s

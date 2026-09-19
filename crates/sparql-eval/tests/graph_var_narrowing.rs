@@ -774,3 +774,74 @@ fn graph_var_materializes_only_the_pages_that_own_a_named_graph() {
         "only the three pages owning a named graph are materialized"
     );
 }
+
+/// Graph-scoped page eviction must not erase the graph it retains, as seen from SPARQL.
+///
+/// A graph declared empty owns no row in any stream, so a keep-set built only from "which
+/// pages hold rows in `g`" is empty for it — and evicting on that answer deletes the graph
+/// outright. `GRAPH ?g` enumerates declared-empty graphs, so the deletion is observable as
+/// a lost solution on the production query surface, not merely as missing metadata.
+#[test]
+fn retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var() {
+    let pages = [
+        page_with_data_and_declared_empties(),
+        page_with_side_table_only_graph(),
+        page_with_default_graph_only(),
+    ];
+    let view = paged(&pages);
+    let engine = NativeSparqlEngine::new();
+    let query = "SELECT ?g WHERE { GRAPH ?g { FILTER(true) } }";
+    let prepared = engine.prepare_query(query, None).expect("prepare");
+
+    let (_, rows) = solutions(
+        engine
+            .query_prepared_view(&view, &prepared, &[], QueryOptions::EMPTY)
+            .expect("whole-dataset enumeration"),
+    );
+    let before = first_column(&rows);
+    assert!(
+        before.contains(&iri("gempty1")),
+        "sanity: the whole dataset binds the declared-empty graph"
+    );
+
+    let gempty1 = view
+        .term_id_by_value(&iri("gempty1"))
+        .expect("gempty1 is interned");
+    let retained = view.retain_graph(gempty1);
+
+    let (_, rows) = solutions(
+        engine
+            .query_prepared_view(&retained, &prepared, &[], QueryOptions::EMPTY)
+            .expect("enumeration after eviction"),
+    );
+    let after = first_column(&rows);
+    assert!(
+        after.contains(&iri("gempty1")),
+        "retaining a declared-empty graph must leave it bound by GRAPH ?g, not delete it"
+    );
+
+    // The neighbouring valid case: eviction is still a real decision. `gside` owns rows
+    // on a different page, so retaining it must NOT keep the declared-empty page.
+    let gside = view
+        .term_id_by_value(&iri("gside"))
+        .expect("gside interned");
+    let (_, rows) = solutions(
+        engine
+            .query_prepared_view(
+                &view.retain_graph(gside),
+                &prepared,
+                &[],
+                QueryOptions::EMPTY,
+            )
+            .expect("enumeration after retaining a graph that owns rows"),
+    );
+    let side_only = first_column(&rows);
+    assert!(
+        side_only.contains(&iri("gside")),
+        "the retained graph is still bound"
+    );
+    assert!(
+        !side_only.contains(&iri("gempty1")),
+        "a graph whose only page was evicted is gone: retention is not 'keep everything'"
+    );
+}

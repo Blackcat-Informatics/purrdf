@@ -2414,3 +2414,57 @@ fn retain_graph_keeps_every_page_carrying_the_graph_in_any_stream_and_materializ
         "a term that names no graph is carried by no page"
     );
 }
+
+/// Retaining a DECLARED-EMPTY graph must keep the graph. A graph declared empty is a
+/// key with no stream postings, so a keep-set built only from "which pages hold rows
+/// in `g`" is empty for it — which would evict every page and delete the graph the
+/// call was asked to retain, the silent-drop direction. The retained dataset must
+/// still enumerate `g`, because `named_graphs()` includes declared-empty graphs and
+/// `GRAPH ?g` binds them.
+#[test]
+fn retain_graph_keeps_a_declared_empty_graph_that_owns_no_row_anywhere() {
+    let provider = Arc::new(CountingDemandProvider::new(multi_graph_page_thunks()));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+
+    let g_empty = paged
+        .term_id_by_value(&iri("gEmpty"))
+        .expect("gEmpty is a declared graph of the whole dataset");
+    assert!(
+        paged.named_graphs().any(|g| g == g_empty),
+        "the whole dataset enumerates the declared-empty graph"
+    );
+    assert!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_empty))
+            .next()
+            .is_none(),
+        "gEmpty owns no base row — this is precisely why the stream postings are empty"
+    );
+
+    let hits_before = provider.hits();
+    let retained = paged.retain_graph(g_empty);
+
+    // The invalid case the old keep-set produced: zero pages, and the graph gone.
+    assert_eq!(
+        retained.page_count(),
+        1,
+        "the page that DECLARES gEmpty is retained, so the graph survives eviction"
+    );
+    assert!(
+        retained.named_graphs().any(|g| g == g_empty),
+        "retaining a graph must not erase it: the retained dataset still enumerates gEmpty"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_before,
+        "retention reads sealed metadata only and materializes no page"
+    );
+
+    // The neighbouring valid case: retention is still a real decision, not "keep all".
+    let gb = paged.term_id_by_value(&iri("gB")).expect("gB known");
+    assert!(
+        paged.retain_graph(gb).page_count() < paged.page_count(),
+        "a graph that only some pages know still evicts the pages that do not"
+    );
+}
