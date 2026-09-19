@@ -109,8 +109,8 @@ use purrdf_core::{
 use crate::error::EvalError;
 use crate::property_fn::{
     AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, IndexGeneration, PfArgs,
-    PfArity, PfCursor, PfRow, PropertyFunction, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement,
+    PfArity, PfCursor, PfRow, PropertyFunction, RankFidelity, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement,
 };
 use crate::user_fn::Volatility;
 
@@ -880,6 +880,11 @@ impl EmbeddingKnnRelation {
             }),
             candidate_position: Self::NEIGHBOUR,
             duplicates: DuplicatePolicy::Unique,
+            // This relation scans every row of its space and compares exact
+            // distances, so it names every neighbour that was due and orders
+            // them truly. It is the exact oracle an approximate index is
+            // measured against, and it declares the top of the lattice.
+            fidelity: RankFidelity::EXACT,
             domains,
             mandatory: false,
         }

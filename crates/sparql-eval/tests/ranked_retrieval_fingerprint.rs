@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError, PfArgs,
-    PfArity, PfCursor, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PfArity, PfCursor, PropertyFunction, PropertyFunctionRegistry, RankFidelity, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const EX_REL: &str = "http://example.org/ns#ranked";
@@ -95,6 +95,8 @@ fn ranked_declaration() -> RankedDeclaration {
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        // The fixture producer is exhaustive over its own table.
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         mandatory: true,
     }

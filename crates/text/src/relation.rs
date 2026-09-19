@@ -44,8 +44,8 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, IndexGeneration, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement, Volatility,
+    PfCursor, PfRow, PropertyFunction, RankFidelity, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -730,6 +730,12 @@ impl TextSearchRelation {
             depth_placement: None,
             candidate_position: Self::DOC,
             duplicates: DuplicatePolicy::Unique,
+            // BM25 here is computed over a full inverted index in exact
+            // fixed-point arithmetic: every document holding a query term is
+            // scored, and the ordering is the ordering those scores induce. No
+            // pruning, no sketch, no early exit — so the rows that were due are
+            // the rows emitted, at their true ranks.
+            fidelity: RankFidelity::EXACT,
             domains,
             mandatory: false,
         })
