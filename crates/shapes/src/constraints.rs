@@ -1144,8 +1144,8 @@ fn eval_property_shape<'a, S: ResultSink>(
             .map(|v| v.to_term(store.core_view()))
             .collect();
         // Reifier shapes build quoted triple terms whose SUBJECT is the focus
-        // node, so this branch — and only this branch — needs it owned. It is
-        // materialized once here rather than once per value node.
+        // node, so reifier evaluation — and nothing else on the route — needs it
+        // owned. It is materialized once here rather than once per value node.
         let focus_term = focus.to_term(store.core_view());
         return eval_reifier_shapes(
             ReifierEvalContext {

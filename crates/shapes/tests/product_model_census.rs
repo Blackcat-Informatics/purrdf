@@ -1438,6 +1438,14 @@ fn census_rows_carry_every_variant_and_field() {
 /// with a stage id describing a model this build no longer has. That is precisely the
 /// stale-but-verified failure a derived stage id exists to prevent, so there is exactly
 /// one digest and this is the assertion that binds it to the sources.
+///
+/// A stage id that moves also invalidates `tests/fixtures/prepared-shapes-core.product`,
+/// because every product this build writes is stamped with it. Re-preparing that artifact
+/// has a supported command —
+/// `crates/shapes/tests/product_determinism.rs::regenerate_the_prepared_product_fixture`,
+/// `#[ignore]`d and run by name — and the failure message below names it. It is a target
+/// rather than something each change improvises so that the artifact is never written by
+/// a scratch binary nobody can identify afterwards.
 #[test]
 fn stage_id_matches_shipped_constant() {
     let computed = live_stage_id();
@@ -1448,7 +1456,11 @@ fn stage_id_matches_shipped_constant() {
          SPARQL built-in table, the constraint-component parameter table, the class-analysis \
          derivation or the profile id changed, which means every product written under \
          `{shipped}` describes a preparation this build no longer performs. Update STAGE_ID in \
-         the product module to `{computed}` ONLY after confirming the codec covers the change."
+         the product module to `{computed}` ONLY after confirming the codec covers the change, \
+         then re-prepare the product fixture the new stage id invalidates with the supported \
+         command — `cargo test -p purrdf-shapes --test product_determinism -- --ignored --exact \
+         --nocapture regenerate_the_prepared_product_fixture` — and set GOLDEN_LEN in that file \
+         to the length it prints. Do NOT hand-roll a throwaway writer for that step."
     );
 }
 

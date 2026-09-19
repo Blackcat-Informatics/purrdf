@@ -18,6 +18,29 @@
 //! now read the interned value node's borrowed surface (length, kind, language)
 //! and the closed-permitted set's borrowed keys instead of materializing terms.
 //!
+//! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
+//! dataset and ONE binding: the change path materializes a focus node only where a
+//! result is built, so a conforming request should cost a constant whatever the
+//! focus count while a violating one pays per violation. Reporting only the
+//! conforming half would be satisfied by a validator that had stopped validating,
+//! so the violating half asserts its result count.
+//!
+//! Its conforming probe reads flat up to 512 focus nodes and then steps at 4,096.
+//! That step is not a growth term and it is not this crate: 4,096 is above
+//! `crate::parallel::PARALLEL_MIN_FOCUS_NODES`, and the shape carries
+//! `sh:pattern`, whose `regex::Regex::is_match` borrows a scratch cache from a
+//! thread-sharded pool inside the `regex` crate — a worker that finds its shard
+//! empty builds one. `crates/shapes/tests/change_path_alloc.rs` traced that
+//! residual allocation by allocation and holds `sh:pattern` out of its two exact
+//! equality assertions for exactly this reason, while
+//! `pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold`
+//! measures the same shape below the threshold and pins a slope of exactly zero.
+//!
+//! Every group here is **report-only**: nothing in this file asserts a threshold,
+//! a ratio or a comparison against a baseline. The allocation invariants these
+//! groups illustrate are executed as contracts in
+//! `crates/shapes/tests/change_path_alloc.rs`.
+//!
 //! # The probe lines, and why this target uses both measurement modes
 //!
 //! Interleaved with the criterion groups are `println!` probe lines a human
@@ -79,6 +102,12 @@ const CLASS_DEPTH: usize = 40;
 const MEMBERSHIP_DATASET_FOCUS_NODES: usize = 100_000;
 const MEMBERSHIP_PATTERN_FOCUS_NODES: usize = 4_096;
 const MEMBERSHIP_RULE_FOCUS_NODES: usize = 64;
+/// How many conforming focus nodes the change-path contrast's dataset holds.
+///
+/// The same scale as `shacl_focus_realtime`'s: the claim being illustrated is that
+/// the change path's per-request cost is independent of the graph it sits on, and
+/// illustrating it over a small graph would illustrate nothing.
+const CONTRAST_DATASET_FOCUS_NODES: usize = 1_000_000;
 
 struct ValidationFixture {
     dataset: Arc<RdfDataset>,
@@ -167,6 +196,19 @@ fn bench_validate(c: &mut Criterion) {
 }
 
 fn core_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+    core_focus_dataset(focus_nodes, 0)
+}
+
+/// The Core focus fixture, optionally carrying a disjoint VIOLATING population.
+///
+/// `violating` subjects are targeted by the same shape and carry `ex:value` and
+/// `ex:member` but no `ex:label`, so each trips that property shape's
+/// `sh:minCount` exactly once and contributes exactly one result. They live in the
+/// same dataset as the conforming ones deliberately: the contrast group varies
+/// *conformance* and nothing else — same graph, same binding, same shapes — so a
+/// difference between its two rows cannot be a difference in dataset size,
+/// interning or target resolution.
+fn core_focus_dataset(focus_nodes: usize, violating: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
     let subclass = builder.intern_iri(RDFS_SUBCLASS_OF);
@@ -204,6 +246,14 @@ fn core_focus_fixture(focus_nodes: usize) -> ValidationFixture {
         let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
         builder.push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None);
         builder.push_quad(focus, label_predicate, label, None);
+        builder.push_quad(focus, value_predicate, value, None);
+        builder.push_quad(focus, member_predicate, member, None);
+    }
+
+    for index in 0..violating {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}unlabelled-item{index}"));
+        let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
+        builder.push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None);
         builder.push_quad(focus, value_predicate, value, None);
         builder.push_quad(focus, member_predicate, member, None);
     }
@@ -630,6 +680,168 @@ fn bench_focus_realtime(c: &mut Criterion) {
                     .iter(|| validate_prepared_ids(black_box(prepared_ref), black_box(focus_ids)));
             },
         );
+    }
+    group.finish();
+}
+
+/// One binding over one graph, with a conforming and a violating focus
+/// population addressable separately.
+struct ContrastFixture {
+    prepared: PreparedValidator,
+    conforming_ids: Vec<TermId>,
+    violating_ids: Vec<TermId>,
+    dataset_focus_nodes: usize,
+}
+
+/// Build the contrast fixture: one dataset, one preparation, two focus
+/// populations differing only in whether they satisfy the shape.
+fn contrast_fixture() -> ContrastFixture {
+    let violating = *REALTIME_FOCUS_SIZES
+        .last()
+        .expect("realtime sizes are non-empty");
+    let fixture = core_focus_dataset(CONTRAST_DATASET_FOCUS_NODES, violating);
+    let conforming_ids = (0..violating)
+        .map(|index| {
+            fixture
+                .dataset
+                .term_id_by_iri(&format!("{BENCH_EX}item{index}"))
+                .expect("conforming contrast focus must be interned")
+        })
+        .collect();
+    let violating_ids = (0..violating)
+        .map(|index| {
+            fixture
+                .dataset
+                .term_id_by_iri(&format!("{BENCH_EX}unlabelled-item{index}"))
+                .expect("violating contrast focus must be interned")
+        })
+        .collect();
+    let prepared = PreparedValidator::from_projected_dataset(
+        Arc::clone(&fixture.dataset),
+        Arc::new(fixture.shapes.clone()),
+    )
+    .expect("contrast benchmark preparation must succeed");
+    ContrastFixture {
+        prepared,
+        conforming_ids,
+        violating_ids,
+        dataset_focus_nodes: fixture.focus_nodes,
+    }
+}
+
+/// Validate a conforming focus set through the change path; answer its result
+/// count, which must be zero.
+fn validate_conforming_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) -> usize {
+    let report = prepared
+        .validate_focus_node_ids(focus_ids)
+        .expect("conforming contrast validation must not error");
+    assert!(report.conforms, "the conforming contrast row must conform");
+    let results = report.results.len();
+    black_box(report);
+    results
+}
+
+/// Validate a violating focus set through the same path; answer its result count,
+/// which must be one per focus node.
+///
+/// The count is asserted, not merely reported: a cheap row that had stopped
+/// producing results would otherwise be indistinguishable from a cheap row that
+/// still checked everything, and the whole contrast rests on the violating side
+/// really doing the work.
+fn validate_violating_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) -> usize {
+    let report = prepared
+        .validate_focus_node_ids(focus_ids)
+        .expect("violating contrast validation must not error");
+    assert!(
+        !report.conforms,
+        "the violating contrast row must not conform"
+    );
+    assert_eq!(
+        report.results.len(),
+        focus_ids.len(),
+        "every violating contrast focus node must contribute exactly one result"
+    );
+    let results = report.results.len();
+    black_box(report);
+    results
+}
+
+fn print_contrast_probe(
+    fixture: &ContrastFixture,
+    conformance: &str,
+    focus_ids: &[TermId],
+    run: fn(&PreparedValidator, &[TermId]) -> usize,
+) {
+    run(&fixture.prepared, focus_ids);
+    let window = WholeProcessWindow::open();
+    let started = Instant::now();
+    let results = run(&fixture.prepared, focus_ids);
+    let elapsed = started.elapsed();
+    let measured = window.close();
+    println!(
+        "[shacl_change_path_contrast] stage=2 conformance={conformance} dataset_focus_nodes={} requested_focus_nodes={} results={results} elapsed_ns={} allocations={} allocated_bytes={}",
+        fixture.dataset_focus_nodes,
+        focus_ids.len(),
+        elapsed.as_nanos(),
+        measured.allocations,
+        measured.requested_bytes,
+    );
+}
+
+/// The conforming-versus-violating contrast, which is what deferred
+/// materialization buys.
+///
+/// The change path materializes a focus node only where a result is built, so a
+/// conforming graph should pay a constant no matter how many focus nodes the
+/// change touched, while a violating one pays per violation. Both halves of that
+/// sentence are measurable and neither is worth much alone: the conforming row on
+/// its own is satisfied perfectly by a validator that stopped validating, and the
+/// violating row on its own says nothing about the common case. They are reported
+/// side by side, over one dataset and one binding, so the only thing that differs
+/// between two rows at the same size is whether the focus nodes conform.
+///
+/// Report-only, like every other group in this file: no threshold, ratio or
+/// baseline is asserted here. The zero-growth claim itself is an executable
+/// contract in `crates/shapes/tests/change_path_alloc.rs`, which is where it
+/// belongs — a bench that gated on it would be a gate on a machine, not on the
+/// code.
+fn bench_change_path_contrast(c: &mut Criterion) {
+    let fixture = contrast_fixture();
+
+    let mut group = c.benchmark_group("shacl_change_path_contrast");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    for &focus_nodes in REALTIME_FOCUS_SIZES {
+        for (conformance, ids, run) in [
+            (
+                "conforming",
+                &fixture.conforming_ids[..focus_nodes],
+                validate_conforming_ids as fn(&PreparedValidator, &[TermId]) -> usize,
+            ),
+            (
+                "violating",
+                &fixture.violating_ids[..focus_nodes],
+                validate_violating_ids as fn(&PreparedValidator, &[TermId]) -> usize,
+            ),
+        ] {
+            let probe = Once::new();
+            let fixture_ref = &fixture;
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(conformance, focus_nodes),
+                ids,
+                move |bencher, focus_ids| {
+                    probe.call_once(|| {
+                        print_contrast_probe(fixture_ref, conformance, focus_ids, run);
+                    });
+                    bencher.iter(|| {
+                        black_box(run(black_box(&fixture_ref.prepared), black_box(focus_ids)));
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -1220,6 +1432,7 @@ criterion_group!(
     bench_focus_closed,
     bench_focus_sparql,
     bench_focus_realtime,
+    bench_change_path_contrast,
     bench_subclass_membership,
     bench_subclass_patterns,
     bench_subclass_rule_rounds,

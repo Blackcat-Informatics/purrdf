@@ -836,6 +836,33 @@ impl Term {
     /// is a raw label rather than a qualified one. Whenever the two spellings
     /// differ, the verbatim DEFAULT-scope key is offered as a fallback and the
     /// caller tries each until one resolves.
+    ///
+    /// # Deprecated: use [`PreparedValidator::term_id`] instead
+    ///
+    /// This hands out *lookup keys* and leaves the caller to run the search, try
+    /// the fallback in the right order, and decide what a miss means. Nothing in
+    /// this workspace does that any more — the engine resolves a [`Term`] to its
+    /// interned identity internally, and the supported public route is
+    /// [`PreparedValidator::term_id`], which answers the identity itself against
+    /// the binding whose term table the answer indexes. That matters beyond
+    /// convenience: a [`TermId`] is meaningful only relative to one
+    /// dataset, and a key-returning helper cannot enforce that pairing while an
+    /// accessor on the binding cannot avoid it.
+    ///
+    /// Deprecated rather than removed because removal is a breaking change and
+    /// this release is not one; it is additive today and the attribute is how an
+    /// out-of-tree caller finds out before the next major. There is no
+    /// functionality here that the supported route does not cover, so nothing is
+    /// waiting on a replacement.
+    ///
+    /// [`PreparedValidator::term_id`]: crate::engine::PreparedValidator::term_id
+    // No `since`: the version this deprecation first ships in is not knowable from
+    // inside the commit that writes it, and a wrong `since` is a claim about a
+    // release rather than a pointer to the supported route.
+    #[deprecated(
+        note = "resolve a Term through PreparedValidator::term_id, which answers the interned \
+                identity against the binding it indexes, instead of handing back lookup keys"
+    )]
     pub fn lookup_term_values(&self) -> Vec<TermValue> {
         match self {
             Self::BlankNode(b) => {

@@ -1552,6 +1552,36 @@ impl PreparedValidator {
     /// honouring a [`FocusExpansion::Everything`] answer by calling
     /// [`Self::validate`] instead.
     ///
+    /// # Bounded allocation
+    ///
+    /// **Validating a CONFORMING focus set through this method allocates a bounded
+    /// amount, independent of how many focus nodes were supplied.** Cost is
+    /// proportional to the violations found, not to the focus nodes examined: a
+    /// focus node is carried as its interned identity and materialized as an owned
+    /// term only where a result is actually built.
+    ///
+    /// This is a product claim and it is executed, not asserted in prose:
+    /// `crates/shapes/tests/change_path_alloc.rs` measures the allocation delta of
+    /// two conforming validations differing only in focus count, through both
+    /// change-path entry points, over every constraint kind and path form it
+    /// covers, and requires the two figures to be EQUAL. A companion test holds
+    /// the violation count fixed while the conforming population doubles and the
+    /// conforming population fixed while the violations double, so "bounded" cannot
+    /// be satisfied by a validator that stopped validating.
+    ///
+    /// Two residuals are documented there, neither of them a per-focus-node term:
+    /// `rayon`'s global injector queue allocates one block every 63 submissions,
+    /// and the `regex` crate's thread-sharded cache pool allocates when a worker
+    /// finds its shard empty, which is reachable under `sh:pattern` above the
+    /// parallel threshold. The guarantee is about this crate's own traffic.
+    ///
+    /// The bind in front of this method is bounded too — independent of the data
+    /// graph's size beyond the class catalog — so an incremental caller does not
+    /// pay for the whole graph to ask about a handful of nodes.
+    /// [`PreparedShapes::bind_dataset`] is the deliberate exception: it projects
+    /// the data graph into an owned snapshot first, so it is linear in the graph by
+    /// construction.
+    ///
     /// # Errors
     ///
     /// Returns an error when a constraint evaluation hard-fails.
@@ -1565,6 +1595,20 @@ impl PreparedValidator {
     ///
     /// [`TermId`] values are dataset-local. Passing an id from another dataset is a
     /// caller error; out-of-range ids are rejected before lookup.
+    ///
+    /// # Bounded allocation
+    ///
+    /// **Validating a CONFORMING focus set through this method allocates a bounded
+    /// amount, independent of how many ids were supplied** — the same guarantee
+    /// [`Self::validate_focus_nodes`] carries and measured through both entry
+    /// points by the same tests in `crates/shapes/tests/change_path_alloc.rs`.
+    /// Cost is proportional to the violations found, not to the focus nodes
+    /// examined. See that method for the guarantee's exact scope and for the two
+    /// third-party residuals it excludes.
+    ///
+    /// This is the crate's headline realtime surface, so the claim is stated where
+    /// it is called rather than only in a design note: a caller sizing a latency
+    /// budget around "re-validate only what changed" is relying on it.
     ///
     /// # Errors
     ///

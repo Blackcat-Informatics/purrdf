@@ -42,6 +42,25 @@
 //!   the distinction between `encode/to_product` (which re-packs and
 //!   canonicalizes the shapes dataset) and the restore paths.
 //!
+//! # Every line names its binding time
+//!
+//! The figures are reported **per stage**, never as one aggregate, because the
+//! three stages `crates/shapes/src/plan.rs` names have completely different
+//! amortization and adding them up hides which one a change moved:
+//!
+//! * **stage 0** — derived from the shapes graph alone, so it is paid once per
+//!   preparation however many datasets that preparation is bound to;
+//! * **stage 1** — stage 0 × one dataset, paid once per bind;
+//! * **stage 2** — × one focus node, the only work a change path repeats.
+//!
+//! `lower/first_bind` exists to keep the memoized stage-0 lowering visible. A
+//! product carries the reusable class analysis but not the lowered constraint
+//! tree, so a RESTORED preparation derives that tree on whichever bind comes
+//! first. Folded into `bind/dataset` it would read as a stage-1 cost that grew,
+//! which is the wrong conclusion about the right number. It is therefore measured
+//! on its own, against `bind/dataset` — which runs on a locally parsed
+//! preparation whose memo is already filled — as the stage-1-only subtrahend.
+//!
 //! # The intermediate bytes
 //!
 //! The encoded product's length is printed here as `artifact_bytes`, and that is
@@ -69,11 +88,38 @@ mod fixture;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// Print one phase's four figures.
-fn report(label: &str, measured: Measurement) {
+/// The binding time a phase belongs to, in the vocabulary of
+/// `crates/shapes/src/plan.rs`.
+///
+/// Carried on every reported line rather than left for a reader to infer, because
+/// the amortization differs by stage and a figure without its stage cannot be
+/// compared to anything.
+#[derive(Debug, Clone, Copy)]
+enum Stage {
+    /// The shapes graph alone: once per preparation.
+    Shapes,
+    /// Stage 0 × one dataset: once per bind.
+    Dataset,
+    /// × one focus node: the work a change path repeats.
+    FocusNode,
+}
+
+impl Stage {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Shapes => "0",
+            Self::Dataset => "1",
+            Self::FocusNode => "2",
+        }
+    }
+}
+
+/// Print one phase's four figures, under the stage that pays them.
+fn report(stage: Stage, label: &str, measured: Measurement) {
     println!(
-        "[shacl_product_alloc] {label}: allocations={} requested_bytes={} retained_bytes={} \
-         peak_working_bytes={}",
+        "[shacl_product_alloc] stage={} {label}: allocations={} requested_bytes={} \
+         retained_bytes={} peak_working_bytes={}",
+        stage.label(),
         measured.allocations,
         measured.requested_bytes,
         measured.retained_bytes,
@@ -95,14 +141,14 @@ fn main() {
     // The cold path a product replaces: Turtle text to a reusable preparation.
     let window = WholeProcessWindow::open();
     let prepared = fixture::prepared(&source);
-    report("cold/parse_and_prepare", window.close());
+    report(Stage::Shapes, "cold/parse_and_prepare", window.close());
 
     // The reusable preparation alone, over an already-parsed shapes graph: the
     // class-catalog derivation both restore paths repeat rather than carry.
     let parsed = Arc::new(parse_shapes(&source, None).expect("the bench shapes graph parses"));
     let window = WholeProcessWindow::open();
     let reusable = PreparedShapes::new(Arc::clone(&parsed));
-    report("prepare/reusable", window.close());
+    report(Stage::Shapes, "prepare/reusable", window.close());
     drop(reusable);
 
     // The producer's cost, and the pipeline's peak-memory event: the shapes
@@ -110,7 +156,7 @@ fn main() {
     // it has actually established.
     let window = WholeProcessWindow::open();
     let product = fixture::encode(&prepared);
-    report("encode/to_product", window.close());
+    report(Stage::Shapes, "encode/to_product", window.close());
     println!(
         "[shacl_product_alloc] artifact_bytes={} (the intermediate bytes; the determinism \
          fixture's equivalent is an asserted constant, not only a log line)",
@@ -123,7 +169,7 @@ fn main() {
         let view = ShapesProduct::open(&product).expect("the product opens");
         let measured = window.close();
         black_box(view.section_kinds());
-        report("restore/open", measured);
+        report(Stage::Shapes, "restore/open", measured);
     }
 
     // The memo path. The open is outside the measured region so this line reports
@@ -135,7 +181,7 @@ fn main() {
             .admit(&ShapesProfile::CORE, &host)
             .expect("the product admits");
         let measured = window.close();
-        report("restore/admit", measured);
+        report(Stage::Shapes, "restore/admit", measured);
         drop(admitted);
     }
 
@@ -149,8 +195,31 @@ fn main() {
             .rebuild(&ShapesProfile::CORE, &host)
             .expect("the product rebuilds");
         let measured = window.close();
-        report("restore/rebuild", measured);
+        report(Stage::Shapes, "restore/rebuild", measured);
         drop(rebuilt);
+    }
+
+    // The memoized stage-0 lowering, on its own line rather than inside a stage-1
+    // one. A restored preparation carries the class analysis but not the lowered
+    // constraint tree, so its FIRST bind derives that tree and every later bind
+    // does not. Read against `bind/dataset` below — the same operation on a
+    // preparation whose memo is already filled — the difference is the lowering.
+    {
+        let view = ShapesProduct::open(&product).expect("the product opens");
+        let restored = view
+            .admit(&ShapesProfile::CORE, &host)
+            .expect("the product admits");
+        let window = WholeProcessWindow::open();
+        let first = restored
+            .bind_shared_dataset(Arc::clone(&data))
+            .expect("the bench data graph binds to a restored preparation");
+        let measured = window.close();
+        report(Stage::Shapes, "lower/first_bind", measured);
+        // Outside the measured region: a first bind that reached no constraint
+        // would report a small, tidy figure for a lowering that lowered nothing.
+        let validation = first.validate().expect("validation runs");
+        fixture::assert_non_vacuous(&validation);
+        drop(first);
     }
 
     // Per-dataset work, reported apart from every line above: paid once per
@@ -159,12 +228,12 @@ fn main() {
     let validator = prepared
         .bind_shared_dataset(Arc::clone(&data))
         .expect("the bench data graph binds");
-    report("bind/dataset", window.close());
+    report(Stage::Dataset, "bind/dataset", window.close());
 
     let window = WholeProcessWindow::open();
     let validation = validator.validate().expect("validation runs");
     let measured = window.close();
-    report("eval/validate", measured);
+    report(Stage::FocusNode, "eval/validate", measured);
     // Outside the measured region: a phase that reached no constraint would
     // otherwise report a small, tidy, meaningless number.
     fixture::assert_non_vacuous(&validation);

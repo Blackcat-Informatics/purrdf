@@ -93,11 +93,40 @@ places the shapes graph under its caller-provided name. Independently parsed
 documents must establish their separate blank scopes before shape preparation;
 retaining raw local IDs across datasets is never an identity rule.
 
-This reuse does not authorize skipping targets after a data change. Paths,
-SPARQL and custom expressions can depend on nodes beyond the changed triples;
-call `validate()` for a complete report unless the caller has established the
-complete affected focus set. Target sets and validation answers belong to the
-exact bound snapshot.
+### The change path after a data change
+
+Paths, SPARQL and custom expressions can depend on nodes well beyond the changed
+triples, so the focus nodes a change can move are not the subjects of that
+change. Deriving them is `PreparedValidator::affected_focus_node_ids`'s job, not
+the caller's: it walks the dependency footprint the shapes-lowering walk emits —
+inverse paths, sequence prefixes, `sh:zeroOrMorePath`/`sh:oneOrMorePath`
+closures, `sh:targetSubjectsOf`/`sh:targetObjectsOf`, `sh:node` recursion,
+property-pair comparands and the `rdfs:subClassOf*` hierarchy — and returns a
+superset of the focus nodes whose verdict the change can alter, in either
+direction. Feed that answer to `validate_focus_node_ids` (or
+`validate_focus_nodes` for owned terms); use `term_id` to turn a `Term` into an
+id in the binding's own space.
+
+Two obligations stay with the caller and both are visible rather than implied:
+bind through `bind_delta_with_shapes_graph` and hand the expansion the same
+mutation snapshot, and honour a `FocusExpansion::Everything` answer by calling
+`validate()` instead. A shapes graph that reads through query text the walk does
+not interpret — `sh:sparql`, a SPARQL target, a component's `sh:ask`/`sh:select`
+validator, a `sh:SPARQLFunction` call, a SPARQL node expression — has no
+footprint anyone can bound from the shapes graph alone, and that is reported
+rather than silently under-approximated. Target sets and validation answers
+belong to the exact bound snapshot.
+
+**Validating a conforming focus set through that path allocates a bounded
+amount, independent of the focus-node count.** Cost is proportional to the
+violations found, not to the focus nodes examined: a focus node is carried as its
+interned identity and materialized as an owned term only where a result is built.
+The bind in front of it is likewise independent of the data graph's size beyond
+the class catalog. `bind_dataset` is the deliberate exception — it projects the
+graph into an owned snapshot first, so it is linear in the graph by construction.
+The guarantee is executed in `tests/change_path_alloc.rs` as an equality between
+two conforming validations differing only in focus count, with a companion test
+that fails if validation ever gets cheaper by producing fewer results.
 
 ## Ontology-complete developer schemas
 
