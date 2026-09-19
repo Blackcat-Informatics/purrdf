@@ -116,6 +116,26 @@ the binding that minted it, and `validate_focus_node_ids` refuses one that names
 a different binding, so the expand-then-validate loop is provenance-safe by type
 rather than by documentation.
 
+#### Reaching the change path without writing Rust
+
+The loop is wired on the shipped surfaces, so it is not a Rust-only API.
+
+On the **command line**, `purrdf validate --changes FILE` (and its retract half
+`--changes-removed FILE`) branches the data graph into a copy-on-write mutation,
+applies the change, and runs exactly the expand-then-validate loop above. Which
+arm it took is written to stderr as `shacl change-expansion bounded N` or
+`shacl change-expansion everything <reason>`, because the bounded report
+describes the affected focus nodes and the fallback report describes the whole
+graph, and a verdict whose scope has to be inferred is a verdict nobody can act
+on.
+
+In **Python**, a `Store` already holds a change: mutation edits its
+copy-on-write delta. `Store.checkpoint()` folds everything so far into the base
+so the delta is the mutation you are asking about, and
+`PreparedShapes.validate_store_changes(store)` runs the same loop, returning a
+`ChangeValidation` that carries the report beside the scope it describes
+(`bounded`, `focus_nodes`, `reason`).
+
 **API note.** `validate_focus_node_ids` shipped taking `&[TermId]` and now takes
 `&[FocusId]`. That is a deliberate signature break with no deprecated `&[TermId]`
 door left open beside it: the old door is the unguarded one. Callers holding a

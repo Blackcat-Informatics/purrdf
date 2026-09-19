@@ -916,6 +916,50 @@ pub(crate) enum Command {
         /// terms, and it is serialized with no base rather than under this one.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
+        /// The rows ADDED to `IN`: the insert half of a change set, as a document in any
+        /// input syntax. Naming either half takes this run down the INCREMENTAL lane —
+        /// the engine expands the change into the focus nodes whose verdict it can move
+        /// and re-validates only those, instead of validating the merged graph whole.
+        ///
+        /// **The report then describes the AFFECTED focus nodes, not the whole graph.**
+        /// `shacl conforms true` on this lane means the change introduced no violation,
+        /// not that `IN` plus the change conforms — a pre-existing violation at a node
+        /// the change cannot reach is not re-reported, which is the entire saving. For
+        /// those affected nodes the results are identical, and in the identical order, to
+        /// what a full validation of the merged graph reports about them.
+        ///
+        /// A shapes graph that reads through SPARQL query text has no bounded change
+        /// footprint, and such a run validates the merged graph in FULL rather than
+        /// under-reporting. Which of the two happened is always written to stderr as a
+        /// `shacl change-expansion bounded N` or `shacl change-expansion everything
+        /// <reason>` line, so the scope of a verdict is never guessed at.
+        ///
+        /// With neither half named, this command behaves exactly as it did before the
+        /// flag existed.
+        #[arg(long, value_name = "FILE")]
+        changes: Option<String>,
+        /// The rows REMOVED from `IN`: the retract half of a change set, and the reason
+        /// `--changes` alone would be half of one — a SHACL verdict moves when a row
+        /// leaves the graph just as readily as when one joins it.
+        ///
+        /// Composes with `--changes`: a change set may add rows, remove rows, or both,
+        /// and the expansion covers every focus node either direction can move. A row
+        /// named here that `IN` does not carry retracts nothing, which is a no-op rather
+        /// than an error — the same contract `remove` carries everywhere else in PurRDF.
+        ///
+        /// Takes the identical incremental lane `--changes` does; see it for what the
+        /// resulting report does and does not describe.
+        #[arg(long = "changes-removed", value_name = "FILE")]
+        changes_removed: Option<String>,
+        /// Change-document format override for `--changes` and `--changes-removed`;
+        /// inferred from each path's extension when omitted. Both halves are read as the
+        /// same syntax, because they are two halves of one change set.
+        ///
+        /// Refused when neither half is named: there would be no document for it to
+        /// label, and a format flag that silently named nothing is the no-op this
+        /// pipeline refuses everywhere else.
+        #[arg(long = "changes-from", value_enum)]
+        changes_from: Option<CliRdfFormat>,
         /// How to serialize the validation report: an RDF syntax for the SHACL results
         /// graph (the default, `ntriples`), or `sarif` for SARIF 2.1.0 JSON.
         #[arg(long, value_enum, default_value = "ntriples")]
