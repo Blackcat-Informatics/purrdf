@@ -303,6 +303,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   audited against its own inputs; and `"evidence_id"` sits beside `"plan_id"` and
   `"profile_id"` in the same 64-character lowercase hex spelling, so one
   comparison over the three decides whether two answers are comparable.
+- **python:** A governed outcome carries `relation_witness`, the record of what each
+  relation attested about itself during the run: per relation IRI, how many times it
+  was invoked, which index generations answered, and the verbatim reason wherever one
+  declared its index incomplete. It is read off the governed receipt on both arms, so
+  a query whose governor tripped still reports what the relations attested before it
+  did. The mapping is always present and may be empty -- a governed query that invoked
+  no relation reports `{}`, which is a fact about the run rather than an absence -- and
+  `None` inside `"generations"` is an invocation that attested nothing, kept as a member
+  of the set rather than dropped because otherwise "declared one generation every time"
+  and "declared it sometimes and said nothing the rest" would read identically. Keys
+  and both lists are emitted in the engine's own sorted order, so two runs over one
+  snapshot compare byte for byte.
+
+  This is the other half of the refusal beside it. A relation that declares itself
+  incomplete is refused on any lane with nowhere to record the declaration, and the
+  governed lane is the sanctioned destination -- so a surface that refused on one lane
+  and could not show the receipt on the other left the caller with no honest route at
+  all, which is the state the hard-fail doctrine exists to prevent.
+- **python:** Every relation declaration accepts one trailing position,
+  `(generation, incompleteness)`, each a string or `None` and each recorded verbatim,
+  so a host-registered relation can attest the two facts only its own cursor knows.
+  Declaring neither is the default and means the relation said nothing, which is
+  silence rather than a claim that its index was whole. The position reaches all three
+  relation kinds and every query, update and entailment entry on both `Store` and
+  `MutableDataset`. A trailing value that is not a two-member sequence reports the
+  declaration's accepted shapes, and a string is refused explicitly rather than
+  destructured -- `"ab"` would otherwise extract as a well-formed attestation of
+  `("a", "b")`.
 - **python:** A host declares a producer's candidate domains where it declares the
   rest of that producer: the ranked-producer tuple takes an optional fourth
   element, a list of domain-tag IRI strings, with `None` -- and omission -- meaning

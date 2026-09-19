@@ -1794,6 +1794,38 @@ re-enter the interpreter, which is exactly why they are the members that cross.
 The WebAssembly and C-ABI surfaces expose no property-function registration at
 all.
 
+### What a relation attests about itself, and the one lane that can record it
+
+Two facts about an invocation are known to a relation's cursor and to nothing
+else: which generation of its index answered, and whether that index was whole.
+Every Python relation declaration therefore accepts one trailing position,
+`(generation, incompleteness)`, each a string or `None` and each recorded
+verbatim. Declaring neither is the default and means the relation said nothing —
+which is silence, not a claim that the index was whole.
+
+A relation that declares itself **incomplete** is refused at any entry point with
+nowhere to put that declaration: the ungoverned `query` and every `update` lane
+raise `native-sparql-relation-incomplete`, and the update applies nothing. That
+refusal is the reason the governed lane exists rather than an obstacle to it — a
+short answer whose receipt nobody can read is precisely what the hard-fail
+doctrine forbids. So the governed lane answers, and its outcome carries:
+
+```python
+outcome.relation_witness
+# {relation_iri: {"invocations": int,
+#                 "generations": [str | None],
+#                 "incompleteness": [str]}}
+```
+
+The mapping is always present and may be empty — a governed query that invoked no
+relation reports `{}`, which is a fact rather than an absence. `None` inside
+`generations` is an invocation that attested nothing, and it is deliberately a
+member of the set rather than dropped: without it, "declared one generation every
+time" and "declared it sometimes and said nothing the rest" would read
+identically. Keys and both lists are emitted in the engine's own sorted order, so
+two runs over one snapshot compare byte for byte. A tripped governor still reports
+what the relations attested before it tripped.
+
 PurRDF's first-party **statistical set** is different, precisely because it is
 NOT an arbitrary closure: `AggregateRegistry::register_statistical_aggregates`
 takes only a namespace **string** and wires ten pre-built Rust instances

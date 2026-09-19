@@ -568,6 +568,39 @@ store.query(
 )
 ```
 
+Any of the three declarations may carry one extra trailing position:
+`(generation, incompleteness)`, what the host knows about the index the rows came
+from. It is the one part of a relation the rows cannot express — a table read out of
+a search index mid-rebuild is the same tuple of rows as one read out of a whole
+index, and no query text or dataset snapshot differs between the two runs. Both
+members are recorded verbatim and `None` on either is silence, never a claim that
+the index was current or whole:
+
+```python
+outcome = store.query_governed(
+    query,
+    relations={
+        f"{EX}rel/memberOf": (
+            1, 1, rows,
+            ("members-index-7", "shard 3 of 4 is still rebuilding"),
+        )
+    },
+)
+outcome.relation_witness[f"{EX}rel/memberOf"]["incompleteness"]
+# ['shard 3 of 4 is still rebuilding']
+```
+
+An attested incompleteness is **witnessed or fatal**, decided by the entry point's
+own return type rather than by any keyword. A governed outcome has a slot for the
+declaration, so `query_governed` / `query_entailment_governed` answer and report it
+on `relation_witness` — `{relation_iri: {"invocations": int, "generations": [...],
+"incompleteness": [...]}}`, keyed in IRI order, always present and possibly empty.
+`query` and `update` have nowhere to put it, so they raise `ValueError` carrying
+`native-sparql-relation-incomplete` rather than hand back a short answer that is
+indistinguishable from a complete one. An empty witness, an empty
+`incompleteness` list, and a `None` generation are all absences — none of them is a
+certificate that an index was whole.
+
 Registration is per call and carries no callable, so the whole evaluation still
 runs with the GIL released. The property functions that are arbitrary host
 closures on the Rust side — the full-text index, the GeoSPARQL relations, the

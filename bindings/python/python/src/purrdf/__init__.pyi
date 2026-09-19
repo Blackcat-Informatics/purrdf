@@ -296,8 +296,46 @@ _Term = NamedNode | BlankNode | Literal | Triple
 #             )
 #         },
 #     )
-_Relation = tuple[int, int, Sequence[Sequence[_Term]]]
-_RelationFromGraph = tuple[_Term, int, int]
+# Any of the three spellings may carry ONE extra trailing position: what the host
+# knows about the index the rows came from, which is the one part of a relation the
+# rows themselves cannot express. A table read out of a search index mid-rebuild is
+# the same tuple of rows as a table read out of a whole one, and no query text,
+# dataset snapshot or registry fingerprint differs between the two runs — so if the
+# host does not say, nothing can.
+#
+# `(generation, incompleteness)`, each `str` or `None`, both recorded verbatim and
+# never parsed:
+#
+# * `generation` is the host's own name for the index version that produced the
+#   rows. `None` is SILENCE — it is never a claim that the index was current.
+# * `incompleteness` is the host's own reason the index was NOT whole ("shard 3 of 4
+#   is still rebuilding"). `None` says nothing, which is likewise never a
+#   certificate of wholeness: there is no seam at which wholeness can be certified,
+#   so neither this binding nor the engine mints such a claim.
+#
+# An attested incompleteness is WITNESSED OR FATAL, decided by the entry point's own
+# return type rather than by any keyword. `query_governed` and
+# `query_entailment_governed` report it on `QueryOutcome.relation_witness` beside
+# their rows; `query` and `update` have nowhere to put it, so they raise
+# `ValueError` carrying `native-sparql-relation-incomplete` rather than hand back a
+# short answer that is indistinguishable from a complete one.
+#
+#     outcome = store.query_governed(
+#         "SELECT ?team WHERE { <http://example.org/ann> "
+#         "<http://example.org/rel/memberOf> ?team }",
+#         relations={
+#             "http://example.org/rel/memberOf": (
+#                 1, 1, rows, ("members-index-7", "shard 3 of 4 is still rebuilding"),
+#             )
+#         },
+#     )
+#     outcome.relation_witness["http://example.org/rel/memberOf"]["incompleteness"]
+_Attestation = tuple[str | None, str | None]
+_Relation = (
+    tuple[int, int, Sequence[Sequence[_Term]]]
+    | tuple[int, int, Sequence[Sequence[_Term]], _Attestation]
+)
+_RelationFromGraph = tuple[_Term, int, int] | tuple[_Term, int, int, _Attestation]
 
 # `_PathRelation` is the third spelling, and the one that is not a table at all: it
 # declares a TRAVERSAL over the store's own edges, and the relation binds the walk it
@@ -342,7 +380,10 @@ _RelationFromGraph = tuple[_Term, int, int]
 # steps: each (predicate_term, "forward" | "inverse"); at least one, no duplicates
 # mode: "walk" (every simple-prefix witness) | "shortest" (one shortest witness per pair)
 _PathStep = tuple[_Term, str]
-_PathRelation = tuple[Sequence[_PathStep], int, int, int, int, str]
+_PathRelation = (
+    tuple[Sequence[_PathStep], int, int, int, int, str]
+    | tuple[Sequence[_PathStep], int, int, int, int, str, _Attestation]
+)
 
 # ── Query results ───────────────────────────────────────────────────────────────
 
@@ -473,6 +514,34 @@ class PartialAnswers:
     @property
     def barrier(self) -> str | None: ...
 
+# What ONE relation attested across every invocation it served in one governed
+# execution. Three facts, none derivable from the others: how hard the query leaned on
+# the relation, which index versions answered, and whether any of them admitted to
+# being short.
+class RelationAttestations(TypedDict):
+    #: Invocations of this relation that entered host code — the same executions the
+    #: `property-function-invocation` charge point prices, so the receipt and the meter
+    #: describe the same run.
+    invocations: int
+    #: Every DISTINCT index version this relation declared, sorted and de-duplicated.
+    #: `None` is a member like any other and means those invocations declared NOTHING:
+    #: an absent generation is silence, and silence is NOT a claim that the index was
+    #: whole or current.
+    #:
+    #: A list rather than a single value because the engine's record is a set: a
+    #: long-running query CAN straddle a rebuild, and a relation that pinned one version
+    #: for some invocations and another for the rest is the one thing that would
+    #: otherwise be invisible. A relation registered from Python declares one
+    #: attestation for the whole call, so through this surface the list holds exactly one
+    #: entry per relation that ran.
+    generations: list[str | None]
+    #: The producer's OWN reasons, verbatim, for invocations that declared the index
+    #: not whole — sorted and de-duplicated. Empty means nobody declared an
+    #: incompleteness, which again is never a certificate of wholeness. Verbatim rather
+    #: than a boolean because "shard 3 of 4 is still rebuilding" tells an operator what
+    #: to do and `True` does not.
+    incompleteness: list[str]
+
 class QueryOutcome:
     @property
     def is_complete(self) -> bool: ...
@@ -486,6 +555,22 @@ class QueryOutcome:
     def tripped(self) -> TrippedGovernor | None: ...
     @property
     def evidence(self) -> GovernorEvidence: ...
+    # What each relation this execution INVOKED attested about the index behind it,
+    # keyed by the IRI it was registered under and ordered by that IRI on every
+    # machine and every run.
+    #
+    # ALWAYS PRESENT, possibly empty — never `None` and never absent. An empty mapping
+    # is the true statement that no relation attested anything, usually because the
+    # query invoked none; it is emphatically NOT a claim that an index was whole. A
+    # relation that ran and declared nothing is listed, with its invocation count and a
+    # single `None` generation, because "it ran and said nothing" and "it never ran" are
+    # different facts.
+    #
+    # This is why the governed lane can answer where the ungoverned one raises: rows
+    # whose receipt names the relation that was short, and quotes its reason, are
+    # labelled rather than silently short.
+    @property
+    def relation_witness(self) -> dict[str, RelationAttestations]: ...
 
 class EntailmentQueryOutcome:
     @property
