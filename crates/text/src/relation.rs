@@ -43,9 +43,9 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
-    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
-    Volatility,
+    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, IndexGeneration, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern,
+    TermPlacement, Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -332,6 +332,57 @@ fn partition_keys(index: &TextIndex) -> Vec<PartitionKey> {
 }
 
 // ---------------------------------------------------------------------------
+// The generation both relations attest
+// ---------------------------------------------------------------------------
+
+/// The [`IndexGeneration`] both relations in this file declare: the lowercase
+/// hex of `index`'s own [`TextIndex::fingerprint`].
+///
+/// # Why `fingerprint` and not either of its two neighbours
+///
+/// The seam asks one question — *which generation of this index produced the
+/// rows you just emitted?* — and the answer has to move exactly when the rows
+/// that can be emitted move. The index carries three digests and only one of
+/// them has that property:
+///
+/// * [`TextIndex::fingerprint`] covers the index's own content: the configured
+///   predicates and graph selector, the ranking law, the four Unicode table
+///   versions the analyzer resolved against, the document table, the term
+///   dictionary, every posting with its positions, and every partition's
+///   statistics. That is the closure of everything either relation reads to
+///   build a row — the subject, the language, the score, the rank, the matched
+///   count, the token position — so it moves when and only when an emittable
+///   row moves. This is the one that is declared.
+/// * [`TextIndex::source_fingerprint`] covers the `(graph, subject, predicate,
+///   literal)` rows the index was *built from*. It is the right digest for
+///   catching an index paired with the wrong dataset (see [`verify_binding`]),
+///   and the wrong one here: rebuilding the same rows under a different ranking
+///   profile changes every score and rank this relation emits and leaves the
+///   source digest untouched, so declaring it would attest "same generation"
+///   across two states that answer differently.
+/// * `TextIndex::analyzer_fingerprint` covers the tokenization profile alone
+///   and holds no document at all. Adding a document to the corpus moves not
+///   one bit of it, which is the silent-same-generation failure in its purest
+///   form.
+///
+/// # Why it is rendered once, here
+///
+/// The hex is computed at relation construction and handed to each cursor as a
+/// shared [`Arc<str>`], for the same reason the row bounds beside it are
+/// measured there: the index is frozen, so the value is a constant of the
+/// relation rather than a per-invocation computation. Opening a cursor clones
+/// the pointer and nothing else; the one unavoidable allocation is the `String`
+/// [`IndexGeneration::Declared`] owns, and the engine asks for it once per
+/// invocation rather than once per row.
+///
+/// Nothing here reads a clock, a counter or an RNG. The value is a pure
+/// function of the index's content, so two processes that built the same index
+/// from the same rows attest the same generation and a reader may compare them.
+fn index_generation(index: &TextIndex) -> Arc<str> {
+    Arc::from(purrdf_core::hex::lower(&index.fingerprint()))
+}
+
+// ---------------------------------------------------------------------------
 // Ranked retrieval
 // ---------------------------------------------------------------------------
 
@@ -504,6 +555,8 @@ pub struct TextSearchRelation {
     modes: [BindingPattern; 1],
     /// The row maxima, measured once at construction.
     bounds: SearchBounds,
+    /// The generation every cursor attests, rendered once at construction.
+    generation: Arc<str>,
 }
 
 impl TextSearchRelation {
@@ -511,14 +564,17 @@ impl TextSearchRelation {
     ///
     /// The row bounds this relation declares are measured here, once, rather
     /// than recomputed per invocation: they are a function of the index, and
-    /// the index is frozen.
+    /// the index is frozen. The generation its cursors attest is rendered here
+    /// for exactly the same reason — see [`index_generation`].
     #[must_use]
     pub fn new(index: Arc<TextIndex>) -> Self {
         let bounds = SearchBounds::of(&index);
+        let generation = index_generation(&index);
         Self {
             index,
             modes: [BindingPattern::from_code(SEARCH_MODE)],
             bounds,
+            generation,
         }
     }
 
@@ -841,6 +897,7 @@ impl PropertyFunction for TextSearchRelation {
 
         Ok(Box::new(SearchCursor {
             index: Arc::clone(&self.index),
+            generation: Arc::clone(&self.generation),
             needle: needle.clone(),
             rows,
             at: 0,
@@ -874,6 +931,9 @@ impl PropertyFunction for TextSearchRelation {
 struct SearchCursor {
     /// The index the rows' subjects and languages are read from.
     index: Arc<TextIndex>,
+    /// The generation of that index, pinned here because `open` is where the
+    /// snapshot this cursor answers from is pinned.
+    generation: Arc<str>,
     /// The needle, echoed verbatim into position 1 of every row.
     needle: TermValue,
     /// The ranked rows, in `(partition ASC, rank ASC)` order.
@@ -922,6 +982,16 @@ impl PfCursor for SearchCursor {
             }
         }
         Ok(None)
+    }
+
+    /// The index generation these rows came out of — the digest
+    /// [`index_generation`] renders, verbatim.
+    ///
+    /// The `Arc<str>` was cloned in `open`, so the reading is of the snapshot
+    /// this cursor was built against and cannot drift if the host swaps its
+    /// relation for one over a rebuilt index mid-drain.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Declared(self.generation.as_ref().to_owned())
     }
 }
 
@@ -1087,6 +1157,8 @@ pub struct TermOccurrenceRelation {
     modes: [BindingPattern; 1],
     /// The row maxima, measured once at construction.
     bounds: OccurrenceBounds,
+    /// The generation every cursor attests, rendered once at construction.
+    generation: Arc<str>,
 }
 
 impl TermOccurrenceRelation {
@@ -1094,14 +1166,17 @@ impl TermOccurrenceRelation {
     ///
     /// Walks every term's postings once to measure the row bounds it declares;
     /// the index is frozen, so they are measured here rather than per
-    /// invocation.
+    /// invocation, and the generation its cursors attest is rendered here for
+    /// the same reason (see [`index_generation`]).
     #[must_use]
     pub fn new(index: Arc<TextIndex>) -> Self {
         let bounds = OccurrenceBounds::of(&index);
+        let generation = index_generation(&index);
         Self {
             index,
             modes: [BindingPattern::from_code(OCCURRENCE_MODE)],
             bounds,
+            generation,
         }
     }
 
@@ -1232,6 +1307,7 @@ impl PropertyFunction for TermOccurrenceRelation {
 
         Ok(Box::new(OccurrenceCursor {
             index: Arc::clone(&self.index),
+            generation: Arc::clone(&self.generation),
             term,
             needle: needle.clone(),
             partitions,
@@ -1259,6 +1335,9 @@ impl PropertyFunction for TermOccurrenceRelation {
 struct OccurrenceCursor {
     /// The index the postings are read from.
     index: Arc<TextIndex>,
+    /// The generation of that index, pinned here because `open` is where the
+    /// snapshot this cursor answers from is pinned.
+    generation: Arc<str>,
     /// The analyzed term, empty when the needle named none.
     term: String,
     /// The needle, echoed verbatim into position 1 of every row.
@@ -1342,6 +1421,13 @@ impl PfCursor for OccurrenceCursor {
                 return Ok(Some(row));
             }
         }
+    }
+
+    /// The index generation these occurrences came out of — the same digest the
+    /// ranked relation beside it declares, because it is the same index and the
+    /// same question.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Declared(self.generation.as_ref().to_owned())
     }
 }
 

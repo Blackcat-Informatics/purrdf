@@ -716,3 +716,146 @@ fn search_equals_the_hand_composed_pipeline_over_the_real_producers() {
         "search is exactly fuse ∘ execute ∘ compile ∘ plan, on the real path too"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 4. The evidence: what the two real indexes attested
+// ---------------------------------------------------------------------------
+
+/// Run the fixture request over a freshly built registry and return the answer.
+///
+/// Fresh each time on purpose. Two runs that shared one registry would share
+/// one `TextIndex` and one `EmbeddingSpace` object, and an equal generation
+/// across them could be explained by object identity rather than by content.
+/// Rebuilding both from the same rows is what makes the comparison below a
+/// statement about the data.
+fn answer_of_a_fresh_build() -> SearchResult {
+    let registry = registry();
+    let statistics = NoStatistics;
+    let data = dataset();
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: None,
+    };
+    block_on(search(
+        &request(),
+        &registry,
+        &statistics,
+        &*data,
+        &env,
+        &profile(),
+        TOP_K,
+    ))
+    .expect("the real producers answer")
+}
+
+/// The generation attested for `stratum`, or a panic naming what was attested
+/// instead.
+fn attested_generation(result: &SearchResult, stratum: &str) -> String {
+    let attestation = result
+        .trailer
+        .attestations
+        .get(&iri(stratum))
+        .unwrap_or_else(|| panic!("{stratum} ran, so it must have an attestation"));
+    match &attestation.generation {
+        purrdf_retrieval::IndexGeneration::Declared(value) => value.clone(),
+        purrdf_retrieval::IndexGeneration::Undeclared => panic!(
+            "{stratum} is served by a shipped producer over a content-addressable index, \
+             so it must declare the generation that answered rather than stay silent"
+        ),
+    }
+}
+
+/// T8.3 — the generation both shipped producers attest reaches the fused
+/// answer, and is the digest of the index that actually answered.
+///
+/// The whole chain is under test here and nowhere else: a cursor declares, the
+/// evaluator reads the declaration immediately after `open`, the executor
+/// carries it out of the per-stratum run, the fusion pins it into the trailer
+/// before pulling a row, and the `EvidenceId` is its content identity. A break
+/// anywhere along it shows up as an `Undeclared` in the trailer or as a
+/// generation that does not equal the index's own fingerprint.
+#[test]
+fn both_real_producers_attest_the_generation_of_the_index_that_answered() {
+    let result = answer_of_a_fresh_build();
+
+    assert_eq!(
+        result.trailer.attestations.len(),
+        2,
+        "both strata opened an index, so both are keyed"
+    );
+
+    let lexical = attested_generation(&result, TEXT_STRATUM);
+    let neighbour = attested_generation(&result, KNN_STRATUM);
+
+    for (stratum, generation) in [(TEXT_STRATUM, &lexical), (KNN_STRATUM, &neighbour)] {
+        assert_eq!(generation.len(), 64, "{stratum}: a 32-byte digest in hex");
+        assert!(
+            generation
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{stratum}: rendered in lowercase hex, got {generation}"
+        );
+    }
+    assert_ne!(
+        lexical, neighbour,
+        "two different indexes answered, and the attestations distinguish them"
+    );
+
+    // Not merely non-empty: each one is the digest of the index it came from,
+    // recomputed here from the same fixture data through the producers' own
+    // public surfaces. A generation that were a constant, a counter or a hash of
+    // the wrong thing would pass every assertion above and fail these two.
+    assert_eq!(
+        lexical,
+        purrdf_core::hex::lower(&text_index().fingerprint()),
+        "the lexical stratum attests the text index's own content fingerprint"
+    );
+    assert_eq!(
+        neighbour,
+        embedding_space().generation(),
+        "the neighbour stratum attests the embedding space's own generation"
+    );
+
+    // No producer said its index was short, and `None` there is silence rather
+    // than a certificate — so the claim tested is only that neither declared
+    // incompleteness.
+    for (stratum, attestation) in &result.trailer.attestations {
+        assert_eq!(
+            attestation.service,
+            purrdf_retrieval::ServiceLevel::Undeclared,
+            "{stratum} served from whole fixture data and declared no shortfall"
+        );
+    }
+}
+
+/// T8.3 — and the evidence id built from those attestations is stable across
+/// two independent runs over the same data.
+///
+/// This is the property a host actually consumes: `plan_id` pins the question
+/// and `profile_id` pins the law, and neither of them moves when an index is
+/// rebuilt. `evidence_id` is the only one that can, so it is worth nothing
+/// unless two answers produced against the same index state agree on it.
+#[test]
+fn two_runs_over_the_same_index_state_carry_one_evidence_id() {
+    let first = answer_of_a_fresh_build();
+    let second = answer_of_a_fresh_build();
+
+    assert_eq!(
+        first.trailer.attestations, second.trailer.attestations,
+        "the same indexes rebuilt from the same rows attest the same thing twice"
+    );
+    assert_eq!(
+        first.evidence_id, second.evidence_id,
+        "so the two answers were produced against the same evidence and say so"
+    );
+    assert_eq!(
+        first.evidence_id, first.trailer.evidence_id,
+        "the answer's evidence id is read off the trailer, never recomputed beside it"
+    );
+
+    // And it is its own identity rather than a restatement of the other two: a
+    // reader compares the triple.
+    assert_ne!(first.evidence_id.to_hex(), first.plan_id.to_hex());
+    assert_ne!(first.evidence_id.to_hex(), first.profile_id.to_hex());
+}

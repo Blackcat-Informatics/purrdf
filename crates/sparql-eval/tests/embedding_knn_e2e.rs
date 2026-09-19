@@ -10,6 +10,7 @@
 //! into the crate's internals: a surface whose stages only line up from inside is a
 //! surface a host cannot use.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -20,7 +21,7 @@ use purrdf_core::{
     TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_sparql_eval::{
-    ChargePoint, EmbeddingKnnRelation, EmbeddingSpace, GovernedOutcome, KnnGuard,
+    ChargePoint, EmbeddingKnnRelation, EmbeddingSpace, GovernedOutcome, IndexGeneration, KnnGuard,
     NativeSparqlEngine, NodeCharges, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
     ResourceDimension,
 };
@@ -678,7 +679,7 @@ fn the_k_returned_are_the_true_k_nearest_of_a_crowded_space() {
         // within the tie-extended prefix — a neighbour from outside it is a wrong answer
         // even when its distance happens to match.
         let boundary = expected.last().copied().expect("k >= 1");
-        let admissible: std::collections::BTreeSet<&str> = oracle
+        let admissible: BTreeSet<&str> = oracle
             .iter()
             .filter(|(distance, _)| *distance <= boundary)
             .map(|(_, name)| *name)
@@ -690,12 +691,163 @@ fn the_k_returned_are_the_true_k_nearest_of_a_crowded_space() {
                 row[0]
             );
         }
-        let distinct: std::collections::BTreeSet<&str> =
-            got.iter().map(|row| row[0].as_str()).collect();
+        let distinct: BTreeSet<&str> = got.iter().map(|row| row[0].as_str()).collect();
         assert_eq!(
             distinct.len(),
             k,
             "k = {k} must emit k DISTINCT neighbours, not one row repeated"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The generation the space attests
+// ---------------------------------------------------------------------------
+
+/// Open a space over exactly `bytes` with exactly `bindings` — the seam the
+/// generation tests below vary one argument of at a time.
+fn space_over(
+    bytes: &[u8],
+    target_set: TargetSetId,
+    vector_space: VectorSpaceId,
+    bindings: Vec<(TargetId, TermValue)>,
+) -> EmbeddingSpace {
+    EmbeddingSpace::from_artifact(
+        bytes,
+        target_set,
+        vector_space,
+        bindings,
+        KnnGuard::new(10, 5).expect("positive bounds"),
+    )
+    .expect("the space opens")
+}
+
+/// T8.2 — the generation is a content identity of the space: the same artifact
+/// under the same bindings attests the same one, and a different artifact does
+/// not.
+///
+/// Both halves matter. Without the first, every receipt disagrees with every
+/// other one and a host comparing two answers' evidence learns nothing; without
+/// the second, an answer from one set of vectors is reported as the same
+/// evidence as an answer from another.
+#[test]
+fn one_artifact_under_one_binding_attests_one_generation() {
+    let (bytes, set, vector_space, bindings) = artifact(&points());
+    let left = space_over(&bytes, set, vector_space, bindings.clone());
+    let right = space_over(&bytes, set, vector_space, bindings);
+
+    assert_eq!(
+        left.generation(),
+        right.generation(),
+        "two opens of one artifact under one binding are one generation"
+    );
+    assert_eq!(
+        left.generation().len(),
+        64,
+        "a 32-byte digest rendered as hex"
+    );
+    assert!(
+        left.generation()
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "rendered in lowercase hex, like every other digest this workspace ships: {}",
+        left.generation()
+    );
+
+    // A different artifact: one vector moved, which moves both the distances and
+    // the rank order the relation emits.
+    let moved = vec![
+        ("a", vec![0.0, 0.0]),
+        ("b", vec![30.0, 40.0]),
+        ("c", vec![3.0, 4.0]),
+    ];
+    let (moved_bytes, moved_set, moved_space, moved_bindings) = artifact(&moved);
+    assert_ne!(
+        bytes, moved_bytes,
+        "the two artifacts really are different bytes"
+    );
+    assert_ne!(
+        space_over(&moved_bytes, moved_set, moved_space, moved_bindings).generation(),
+        left.generation(),
+        "different vectors are a different generation of the space"
+    );
+
+    // And it is what the CURSOR declares, on the receipt a host reads. The
+    // space's own accessor proves the fold; only this proves the relation
+    // wired it into the seam the evaluator takes its reading at.
+    let mut relations = PropertyFunctionRegistry::new();
+    relations.register(
+        SPACE_IRI,
+        Arc::new(EmbeddingKnnRelation::new(Arc::new(right))),
+    );
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query_with_options(QUERY, None, with_relations(&relations))
+        .expect("the query prepares against the registry");
+    let outcome = engine
+        .query_prepared_governed_view(
+            &*dataset(),
+            &prepared,
+            &[],
+            with_relations(&relations),
+            &QueryGovernors::UNBOUNDED,
+        )
+        .expect("a governed run of a valid query is an outcome, never an error");
+    let attested = outcome
+        .relations()
+        .witness
+        .get(SPACE_IRI)
+        .expect("the relation this query invoked must appear on the receipt");
+    assert_eq!(
+        attested.generations,
+        BTreeSet::from([IndexGeneration::Declared(left.generation().to_owned())]),
+        "the cursor declares the space's generation verbatim, once per index"
+    );
+}
+
+/// T8.2, the half the artifact digest alone cannot cover: the SAME artifact
+/// bytes under DIFFERENT host bindings are a different generation.
+///
+/// This is the case that decides the shape of the fold. PURREMB lets a target be
+/// disclosed by digest alone, so the map from a row to the RDF term it stands
+/// for is an argument the host supplies rather than artifact content — and the
+/// term is position 0 of every row this relation emits. The two spaces below
+/// share every byte of their artifact, so the matrix and projection digests are
+/// equal, and yet every row they return names a different term. A generation
+/// that folded only the artifact would attest "same generation" across them.
+#[test]
+fn the_same_artifact_under_different_terms_attests_a_different_generation() {
+    let (bytes, set, vector_space, bindings) = artifact(&points());
+    let original = space_over(&bytes, set, vector_space, bindings.clone());
+
+    // The same rows, in the same order, named differently. Terms must stay
+    // distinct, or the space refuses the binding outright.
+    let renamed: Vec<(TargetId, TermValue)> = bindings
+        .iter()
+        .enumerate()
+        .map(|(at, (target, _))| (*target, TermValue::iri(format!("{EX}renamed-{at}"))))
+        .collect();
+    let other = space_over(&bytes, set, vector_space, renamed);
+
+    assert_eq!(
+        original.row_count(),
+        other.row_count(),
+        "the same artifact holds the same rows either way"
+    );
+    let original_terms: Vec<&TermValue> = (0..original.row_count())
+        .map(|row| original.term(row).expect("every row is named"))
+        .collect();
+    let other_terms: Vec<&TermValue> = (0..other.row_count())
+        .map(|row| other.term(row).expect("every row is named"))
+        .collect();
+    assert_ne!(
+        original_terms, other_terms,
+        "the rows really do come back under different terms"
+    );
+    assert_ne!(
+        original.generation(),
+        other.generation(),
+        "so the two spaces answer differently and must attest different generations, even \
+         though their artifact bytes are identical"
+    );
 }

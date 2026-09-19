@@ -280,12 +280,11 @@ def test_an_answer_names_the_evidence_the_indexes_attested() -> None:
     there is no way to tell two answers assembled from different index states
     apart. Two runs over the same corpus are the same evidence, and say so.
 
-    The shipped text producer does not attest a generation today: its cursor
-    declares neither axis, so both come back ``None``, which is an ABSENCE and
-    specifically not a claim that the index was whole. The assertion below is
-    written as the tripwire it should be — when the shipped producers begin
-    fingerprinting their indexes it fails here and is updated to the
-    value-bearing form, rather than passing while asserting nothing.
+    The shipped text producer attests the content fingerprint of the index that
+    answered: a digest of the configuration, the ranking law, the analyzer's
+    Unicode tables, the documents, the dictionary and every posting. It is
+    derived from content and never from a clock or a counter, so two runs over
+    one corpus agree on it and a corpus with one more document does not.
     """
     kwargs: dict[str, Any] = {
         "text_producers": NOTE_ONLY,
@@ -300,17 +299,44 @@ def test_an_answer_names_the_evidence_the_indexes_attested() -> None:
 
     attestation = first["attestations"][NOTE_STRATUM]
     assert set(attestation) == {"generation", "incomplete"}
-    assert attestation["generation"] is None, (
-        "the shipped text producer declares no generation yet; None is the "
-        "honest absence, never a claim that the index was current"
+    generation = attestation["generation"]
+    assert isinstance(generation, str) and generation, (
+        "the shipped text producer names the generation of the index that "
+        "answered, verbatim; an absence here would make two answers over two "
+        "index states indistinguishable"
+    )
+    assert len(generation) == 64 and all(c in "0123456789abcdef" for c in generation), (
+        f"a 32-byte content digest in lowercase hex, got {generation!r}"
     )
     assert first["attestations"] == second["attestations"], (
         "the same index in the same state attests the same thing twice"
     )
 
+    # Rebuilt with one more document: a row the earlier index could not return,
+    # and a corpus size every surviving row is scored against. The request, the
+    # producers, the weights and the law are identical, so the only thing that
+    # changed is the index — and the generation moves with it.
+    grown = retrieval.search(
+        DATA + f'<{EX}d> <{NOTE}> "another quick fox" .\n',
+        [_lexical("quick fox", NOTE)],
+        **kwargs,
+    )
+    reached = {row["entity"] for row in grown["rows"]}
+    assert f"<{EX}d>" in reached and reached != {
+        row["entity"] for row in first["rows"]
+    }, "the added document really is retrievable, so the returnable rows changed"
+    grown_generation = grown["attestations"][NOTE_STRATUM]["generation"]
+    assert grown_generation != generation, (
+        "an added document changes which rows can be returned, so it must "
+        "change the generation the producer attests"
+    )
+
     assert len(first["evidence_id"]) == 64, "rendered like its two sibling ids"
     assert first["evidence_id"] == second["evidence_id"], (
         "two runs over one index state carry one evidence id"
+    )
+    assert grown["evidence_id"] != first["evidence_id"], (
+        "and two answers from two index states do not"
     )
     # And it is its own identity, not a restatement of the other two: the answer
     # carries all three, and a reader compares the triple.
