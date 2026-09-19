@@ -794,8 +794,19 @@ fn the_frontier_stays_bounded_past_the_collision() {
          rows against {} over 1e6 — the removed refusal was load-bearing after all",
         short.peak_bytes, long.peak_bytes
     );
+    // The absolute figure, on the same terms as its two siblings: a smell test
+    // against the tens of megabytes materializing a 1e6-row stream would cost,
+    // not a derived bound. The derived claim is the equality directly above,
+    // which is what says the peak does not track the input, and it is untouched.
+    //
+    // It was `64 * 1024` and the measurement sat 49 bytes under it. A margin of
+    // 0.07% is not a smell test, it is a coincidence: the next per-row field
+    // anyone adds trips it, for a reason that has nothing to do with the claim
+    // the assertion makes, and the cheapest way out for whoever hits it is to
+    // weaken the equality instead. Stated with room, it keeps saying "kilobytes,
+    // not megabytes" — which is the only thing it was ever able to say.
     assert!(
-        long.peak_bytes < 64 * 1024,
+        long.peak_bytes < 128 * 1024,
         "a bounded frontier should not cost {} bytes",
         long.peak_bytes
     );

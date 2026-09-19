@@ -1467,6 +1467,50 @@ impl EmittedTable {
     }
 }
 
+/// What a fusion holding at least one degraded stream needs on its row loop,
+/// derived once before a row is pulled.
+///
+/// Every field is a pure function of facts [`FusionStream::new`] has already
+/// pinned — the producers' declarations, their indices' attestations, and the
+/// profile — and none of them can move once reading starts. They are held
+/// because [`FusionStream::score_interval`] asks all three **per emitted row**:
+/// re-deriving them there recomputed a `BTreeMap` lookup, a fixed-point
+/// division and a linear scan over the streams, once per contribution, for
+/// answers that were settled before row one.
+struct Degradation {
+    /// Whether each stream may have failed to name a row that was due: it
+    /// declared a lossy search, or the index behind it attested it was short.
+    ///
+    /// Indexed by stream, like `heads` and `domains`, because that is how it is
+    /// asked. At least one entry is `true` — a fusion with none holds no
+    /// [`Degradation`] at all.
+    degraded: Vec<bool>,
+    /// The contribution each stream would award a rank-one row, or `None` where
+    /// the profile's arithmetic refused to produce one.
+    ///
+    /// `None` is **not** a value and is never read as one. It records only that
+    /// the precomputation refused; the refusal itself is deliberately not
+    /// stored. A [`FusionError`] is not `Clone`, and a cached one would in any
+    /// case be a refusal raised at construction rather than at the call that
+    /// asked — so [`FusionStream::rank_one_contribution`] re-derives on that
+    /// arm, and a caller sees the same error, from the same operands, at the
+    /// same point in the read as it always has.
+    rank_one: Vec<Option<Fixed>>,
+    /// The stream index serving each stratum.
+    ///
+    /// First entry wins, exactly as the linear scan it replaces did: a caller
+    /// driving [`FusionStream`] directly may hand it two streams tagged with one
+    /// stratum, and no answer may move because a lookup changed shape.
+    stratum_index: BTreeMap<Iri, usize>,
+}
+
+impl Degradation {
+    /// The stream index serving `stratum`, if this fusion was handed one.
+    fn index_of(&self, stratum: &Iri) -> Option<usize> {
+        self.stratum_index.get(stratum).copied()
+    }
+}
+
 /// The NRA fusion engine over a set of verified ranked streams.
 ///
 /// `FusionStream` is generic over the stream type and produces [`FusedRow`]s on
@@ -1531,6 +1575,23 @@ pub struct FusionStream<S: RankedStream> {
     /// would go missing in exactly the runs where the bound made the
     /// approximation matter most.
     fidelities: Vec<RankFidelity>,
+    /// The per-stream invariants the interval arithmetic reads, or `None` for a
+    /// fusion in which **no** stream declared itself degraded.
+    ///
+    /// The absence is the point, exactly as it is for `seen_items` above: every
+    /// term this table feeds is zero over undegraded streams, so a fusion none
+    /// of whose producers disclosed a shortfall has nothing for it to hold, and
+    /// [`Self::score_interval`]'s inflation loop is skipped rather than run to
+    /// accumulate zeroes. It also keeps the whole of this precomputation off
+    /// the ordinary exhaustive fusion's working set, which `tests/
+    /// fusion_frontier_alloc.rs` measures.
+    ///
+    /// Boxed for the same reason it is optional. The three tables are cold —
+    /// read only where a producer disclosed a shortfall — and this engine is
+    /// held across an `await`, so carrying them inline would widen every
+    /// fusion's state by the width of three collections whether or not any of
+    /// them exists.
+    degradation: Option<Box<Degradation>>,
     statuses: BTreeMap<Iri, ProducerStatus>,
     frontier: BTreeMap<CandidateId, CandidateState>,
     /// Every candidate that has left the frontier by being certified, and the
@@ -1656,10 +1717,48 @@ impl<S: RankedStream> FusionStream<S> {
         // streams tagged with one stratum — `fuse` refuses that before pulling
         // — and both maps collapse such a pair the same way rather than
         // disagreeing about how many producers there were.
-        let attestations = streams
+        let attestations: BTreeMap<Iri, PfAttestation> = streams
             .iter()
             .map(|(stratum, stream)| (stratum.clone(), stream.attestation()))
             .collect();
+        // The three per-stream invariants the interval arithmetic reads,
+        // derived here because they are decided here. Each is a pure function of
+        // facts this constructor has already pinned -- the declarations, the
+        // attestations and the profile -- and none of them can move once a row
+        // is pulled, so deriving them per row would recompute a constant on the
+        // one path that runs per emitted row.
+        //
+        // Held only where something actually declared a shortfall. Over
+        // undegraded streams every term they feed is zero, so an ordinary
+        // exhaustive fusion carries none of this rather than a table of
+        // falsehoods and unread numbers.
+        let degraded: Vec<bool> = (0..count)
+            .map(|index| {
+                fidelities[index].may_omit()
+                    || attestations
+                        .get(&streams[index].0)
+                        .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
+            })
+            .collect();
+        let degradation = degraded.contains(&true).then(|| {
+            // First entry wins, which is what the `position` scan this replaces
+            // did.
+            let mut stratum_index: BTreeMap<Iri, usize> = BTreeMap::new();
+            for (index, (stratum, _)) in streams.iter().enumerate() {
+                stratum_index.entry(stratum.clone()).or_insert(index);
+            }
+            Box::new(Degradation {
+                degraded,
+                // The refusal is *recorded* rather than carried: see
+                // `Degradation::rank_one` for why a stored error would be the
+                // wrong error.
+                rank_one: streams
+                    .iter()
+                    .map(|(stratum, _)| Self::rank_one_under(&profile, stratum).ok())
+                    .collect(),
+                stratum_index,
+            })
+        });
         Self {
             streams,
             profile,
@@ -1675,6 +1774,7 @@ impl<S: RankedStream> FusionStream<S> {
             domains,
             fidelities,
             attestations,
+            degradation,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
             emitted: EmittedTable::default(),
@@ -2570,14 +2670,21 @@ impl<S: RankedStream> FusionStream<S> {
         }
 
         let mut inflation = Fixed::ZERO;
-        for (stratum, _, contribution) in &state.contributions {
-            let Some(index) = self.index_of(stratum) else {
-                continue;
-            };
-            if self.is_degraded(index) {
-                inflation = inflation
-                    .checked_add(*contribution)
-                    .map_err(|_| FusionError::Overflow)?;
+        // Skipped whole where nothing declared a shortfall: every summand would
+        // be a contribution from a stream that promised to have missed nothing,
+        // so the loop could only accumulate zero. The table it reads to decide
+        // that does not exist for such a fusion, which is the same fact stated
+        // in storage.
+        if let Some(degradation) = self.degradation.as_ref() {
+            for (stratum, _, contribution) in &state.contributions {
+                let Some(index) = degradation.index_of(stratum) else {
+                    continue;
+                };
+                if degradation.degraded[index] {
+                    inflation = inflation
+                        .checked_add(*contribution)
+                        .map_err(|_| FusionError::Overflow)?;
+                }
             }
         }
 
@@ -2590,33 +2697,53 @@ impl<S: RankedStream> FusionStream<S> {
     /// The two arrive by different routes and have opposite remedies, and they
     /// stay separately *reported* for that reason — but their effect on a score
     /// is identical, so the bound reads them together.
+    ///
+    /// Both inputs are pinned before the first pull, so the answer is decided
+    /// once in [`Self::new`] and read here. See [`Degradation::degraded`]; a
+    /// fusion none of whose streams declared a shortfall holds no table at all,
+    /// and the honest answer for every index of it is `false`.
     fn is_degraded(&self, index: usize) -> bool {
-        self.fidelities[index].may_omit()
-            || self
-                .attestations
-                .get(&self.streams[index].0)
-                .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
+        self.degradation
+            .as_ref()
+            .is_some_and(|degradation| degradation.degraded[index])
     }
 
     /// The contribution stream `index` would award a rank-one row.
     ///
     /// Read from the profile rather than from any row, because the row in
-    /// question is precisely one that never arrived.
+    /// question is precisely one that never arrived — which is also why it is
+    /// invariant for the whole fusion and is precomputed in [`Self::new`].
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`contribution_under`](crate::contribution_under) refuses under
+    /// this profile's decay rule at rank one. The refusal is raised *here*, on
+    /// the call that asked, rather than being cached at construction: the
+    /// precomputed table records only that the arithmetic gave out, and this
+    /// re-derives the error so that a caller sees the same variant, from the
+    /// same operands, at the same point in the read as it always has.
     fn rank_one_contribution(&self, index: usize) -> Result<Fixed, FusionError> {
-        let stratum = &self.streams[index].0;
-        let Some(weight) = self.profile.weight(stratum) else {
+        self.degradation
+            .as_ref()
+            .and_then(|degradation| degradation.rank_one[index])
+            .map_or_else(
+                || Self::rank_one_under(&self.profile, &self.streams[index].0),
+                Ok,
+            )
+    }
+
+    /// The contribution `profile` awards a rank-one row of `stratum`.
+    ///
+    /// Free of `self` so [`Self::new`] can fill the precomputed table with the
+    /// very function [`Self::rank_one_contribution`] falls back to, leaving one
+    /// definition of the value and one definition of its refusal.
+    fn rank_one_under(profile: &FusionProfile, stratum: &Iri) -> Result<Fixed, FusionError> {
+        let Some(weight) = profile.weight(stratum) else {
             // A stratum the profile does not weight contributes nothing to any
             // score, so it can withhold nothing either.
             return Ok(Fixed::ZERO);
         };
-        crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, 1)
-    }
-
-    /// The stream index serving `stratum`, if this fusion was handed one.
-    fn index_of(&self, stratum: &Iri) -> Option<usize> {
-        self.streams
-            .iter()
-            .position(|(candidate, _)| candidate == stratum)
+        crate::reciprocal_rank::contribution_under(profile.decay(), weight, 1)
     }
 
     /// `U(x)`: `L(x)` plus the current head of every stream that could still
