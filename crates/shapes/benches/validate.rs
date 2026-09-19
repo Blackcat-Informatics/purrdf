@@ -70,7 +70,7 @@ use purrdf::loss::LossLedger;
 use purrdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
 use purrdf_shapes::engine::{
-    __prepared_class_membership_view, PreparedValidator, parse_shapes, validate_graphs,
+    __prepared_class_membership_view, FocusId, PreparedValidator, parse_shapes, validate_graphs,
     validate_projected_dataset, validate_projected_dataset_with_focus_filter,
 };
 use purrdf_shapes::json_schema::CompiledSchema;
@@ -593,7 +593,26 @@ fn bench_focus_sparql(c: &mut Criterion) {
     group.finish();
 }
 
-fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) {
+/// Mint one focus id against the binding that will validate it.
+///
+/// The change path takes ids stamped with their binding, so a benchmark resolves
+/// them through the binding rather than through the dataset beside it. Every call
+/// happens while a fixture is being assembled, outside every timed or measured
+/// region.
+fn focus_id(prepared: &PreparedValidator, iri: &str) -> FocusId {
+    prepared
+        .term_id(&purrdf_shapes::term::NamedNode::new_unchecked(iri).into_term())
+        .unwrap_or_else(|| panic!("benchmark focus {iri} must be interned"))
+}
+
+/// The first `count` class-membership focus nodes, minted against `prepared`.
+fn membership_focus_ids(prepared: &PreparedValidator, count: usize) -> Vec<FocusId> {
+    (0..count)
+        .map(|index| focus_id(prepared, &format!("{BENCH_EX}membership-item{index}")))
+        .collect()
+}
+
+fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[FocusId]) {
     let report = prepared
         .validate_focus_node_ids(focus_ids)
         .expect("prepared benchmark validation must not error");
@@ -601,7 +620,7 @@ fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) {
     black_box(report);
 }
 
-fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[TermId]) {
+fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[FocusId]) {
     validate_prepared_ids(prepared, focus_ids);
     let window = WholeProcessWindow::open();
     let started = Instant::now();
@@ -636,13 +655,10 @@ fn bench_focus_realtime(c: &mut Criterion) {
         measured.allocations,
         measured.requested_bytes,
     );
-    let all_focus_ids: Vec<_> = (0..*REALTIME_FOCUS_SIZES.last().expect("non-empty sizes"))
-        .map(|index| {
-            fixture
-                .dataset
-                .term_id_by_iri(&format!("{BENCH_EX}item{index}"))
-                .expect("benchmark focus must be interned")
-        })
+    // Minted BY the binding: a focus id names the binding it belongs to, so it
+    // cannot be resolved from the dataset beside it.
+    let all_focus_ids: Vec<FocusId> = (0..*REALTIME_FOCUS_SIZES.last().expect("non-empty sizes"))
+        .map(|index| focus_id(&prepared, &format!("{BENCH_EX}item{index}")))
         .collect();
 
     let mut group = c.benchmark_group("shacl_focus_realtime");
@@ -688,8 +704,8 @@ fn bench_focus_realtime(c: &mut Criterion) {
 /// population addressable separately.
 struct ContrastFixture {
     prepared: PreparedValidator,
-    conforming_ids: Vec<TermId>,
-    violating_ids: Vec<TermId>,
+    conforming_ids: Vec<FocusId>,
+    violating_ids: Vec<FocusId>,
     dataset_focus_nodes: usize,
 }
 
@@ -700,27 +716,17 @@ fn contrast_fixture() -> ContrastFixture {
         .last()
         .expect("realtime sizes are non-empty");
     let fixture = core_focus_dataset(CONTRAST_DATASET_FOCUS_NODES, violating);
-    let conforming_ids = (0..violating)
-        .map(|index| {
-            fixture
-                .dataset
-                .term_id_by_iri(&format!("{BENCH_EX}item{index}"))
-                .expect("conforming contrast focus must be interned")
-        })
-        .collect();
-    let violating_ids = (0..violating)
-        .map(|index| {
-            fixture
-                .dataset
-                .term_id_by_iri(&format!("{BENCH_EX}unlabelled-item{index}"))
-                .expect("violating contrast focus must be interned")
-        })
-        .collect();
     let prepared = PreparedValidator::from_projected_dataset(
         Arc::clone(&fixture.dataset),
         Arc::new(fixture.shapes.clone()),
     )
     .expect("contrast benchmark preparation must succeed");
+    let conforming_ids = (0..violating)
+        .map(|index| focus_id(&prepared, &format!("{BENCH_EX}item{index}")))
+        .collect();
+    let violating_ids = (0..violating)
+        .map(|index| focus_id(&prepared, &format!("{BENCH_EX}unlabelled-item{index}")))
+        .collect();
     ContrastFixture {
         prepared,
         conforming_ids,
@@ -731,7 +737,7 @@ fn contrast_fixture() -> ContrastFixture {
 
 /// Validate a conforming focus set through the change path; answer its result
 /// count, which must be zero.
-fn validate_conforming_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) -> usize {
+fn validate_conforming_ids(prepared: &PreparedValidator, focus_ids: &[FocusId]) -> usize {
     let report = prepared
         .validate_focus_node_ids(focus_ids)
         .expect("conforming contrast validation must not error");
@@ -748,7 +754,7 @@ fn validate_conforming_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) -
 /// producing results would otherwise be indistinguishable from a cheap row that
 /// still checked everything, and the whole contrast rests on the violating side
 /// really doing the work.
-fn validate_violating_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) -> usize {
+fn validate_violating_ids(prepared: &PreparedValidator, focus_ids: &[FocusId]) -> usize {
     let report = prepared
         .validate_focus_node_ids(focus_ids)
         .expect("violating contrast validation must not error");
@@ -769,8 +775,8 @@ fn validate_violating_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) ->
 fn print_contrast_probe(
     fixture: &ContrastFixture,
     conformance: &str,
-    focus_ids: &[TermId],
-    run: fn(&PreparedValidator, &[TermId]) -> usize,
+    focus_ids: &[FocusId],
+    run: fn(&PreparedValidator, &[FocusId]) -> usize,
 ) {
     run(&fixture.prepared, focus_ids);
     let window = WholeProcessWindow::open();
@@ -818,12 +824,12 @@ fn bench_change_path_contrast(c: &mut Criterion) {
             (
                 "conforming",
                 &fixture.conforming_ids[..focus_nodes],
-                validate_conforming_ids as fn(&PreparedValidator, &[TermId]) -> usize,
+                validate_conforming_ids as fn(&PreparedValidator, &[FocusId]) -> usize,
             ),
             (
                 "violating",
                 &fixture.violating_ids[..focus_nodes],
-                validate_violating_ids as fn(&PreparedValidator, &[TermId]) -> usize,
+                validate_violating_ids as fn(&PreparedValidator, &[FocusId]) -> usize,
             ),
         ] {
             let probe = Once::new();
@@ -854,7 +860,7 @@ fn print_membership_preparation_probe(fixture: &MembershipFixture) -> PreparedVa
     let measured = window.close();
     let dimensions = prepared.__class_membership_dimensions();
     assert_membership_dimensions(fixture, dimensions);
-    validate_prepared_ids(&prepared, &fixture.focus_ids[..1]);
+    validate_prepared_ids(&prepared, &membership_focus_ids(&prepared, 1));
     println!(
         "[shacl_subclass_prepare] variant={} dataset_focus_nodes={} quads={} terms={} class_depth={CLASS_DEPTH} indexed_typed_classes={} indexed_subject_ids={} ancestor_ids={} superclass_entries={} source_class_ids={} virtual_row_upper_bound={} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.variant.label(),
@@ -877,7 +883,7 @@ fn print_membership_preparation_probe(fixture: &MembershipFixture) -> PreparedVa
 fn print_membership_realtime_probe(
     fixture: &MembershipFixture,
     prepared: &PreparedValidator,
-    focus_ids: &[TermId],
+    focus_ids: &[FocusId],
 ) {
     validate_prepared_ids(prepared, focus_ids);
     let window = WholeProcessWindow::open();
@@ -905,6 +911,7 @@ fn bench_subclass_membership(c: &mut Criterion) {
     for variant in MembershipVariant::ALL {
         let fixture = membership_fixture(MEMBERSHIP_DATASET_FOCUS_NODES, variant);
         let prepared = print_membership_preparation_probe(&fixture);
+        let membership_ids = membership_focus_ids(&prepared, fixture.focus_ids.len());
 
         group.throughput(Throughput::Elements(fixture.focus_nodes as u64));
         group.bench_with_input(
@@ -918,7 +925,7 @@ fn bench_subclass_membership(c: &mut Criterion) {
         );
 
         for &focus_nodes in REALTIME_FOCUS_SIZES {
-            let focus_ids = &fixture.focus_ids[..focus_nodes];
+            let focus_ids = &membership_ids[..focus_nodes];
             let probe = Once::new();
             group.throughput(Throughput::Elements(focus_nodes as u64));
             group.bench_with_input(

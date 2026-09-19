@@ -133,10 +133,11 @@
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
+use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
-use purrdf_shapes::engine::{PreparedShapes, PreparedValidator, parse_shapes};
+use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
 use purrdf_shapes::report::ValidationReport;
+use purrdf_shapes::term::NamedNode;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -370,10 +371,19 @@ const CASES: &[SparqlCase] = &[
 struct Fixture {
     /// One bound validator per entry of [`CASES`], in the same order.
     validators: Vec<PreparedValidator>,
-    /// Focus nodes that satisfy every case's shape, in construction order.
-    conforming: Vec<TermId>,
-    /// Focus nodes that break every case's shape, in construction order.
-    violating: Vec<TermId>,
+    /// Focus nodes that satisfy every case's shape, in construction order, per
+    /// entry of [`validators`] and in the same order.
+    ///
+    /// A [`FocusId`] names the binding that minted it, and each case gets its
+    /// own binding over the shared dataset, so the ids are resolved once per
+    /// case. That happens in [`Fixture::build`], outside every measured window,
+    /// exactly as the bare ids were.
+    ///
+    /// [`validators`]: Fixture::validators
+    conforming: Vec<Vec<FocusId>>,
+    /// Focus nodes that break every case's shape, in the same per-case shape as
+    /// [`Fixture::conforming`].
+    violating: Vec<Vec<FocusId>>,
 }
 
 /// Build the shared data graph.
@@ -418,7 +428,7 @@ impl Fixture {
     /// Build one dataset and one bound validator per case over it.
     fn build(conforming: usize, violating: usize) -> Self {
         let dataset = build_dataset(conforming, violating);
-        let validators = CASES
+        let validators: Vec<PreparedValidator> = CASES
             .iter()
             .map(|case| {
                 let mut ttl = String::from(PREFIXES);
@@ -433,20 +443,26 @@ impl Fixture {
                     })
             })
             .collect();
-        let resolve = |prefix: char, count: usize| -> Vec<TermId> {
+        let resolve = |validator: &PreparedValidator, prefix: char, count: usize| -> Vec<FocusId> {
             (0..count)
                 .map(|index| {
                     let iri = format!("{NS}{prefix}{index}");
-                    dataset
-                        .term_id_by_iri(&iri)
+                    validator
+                        .term_id(&NamedNode::new_unchecked(iri.clone()).into_term())
                         .unwrap_or_else(|| panic!("focus {iri} must be interned"))
                 })
                 .collect()
         };
         Self {
+            conforming: validators
+                .iter()
+                .map(|validator| resolve(validator, 'c', conforming))
+                .collect(),
+            violating: validators
+                .iter()
+                .map(|validator| resolve(validator, 'v', violating))
+                .collect(),
             validators,
-            conforming: resolve('c', conforming),
-            violating: resolve('v', violating),
         }
     }
 
@@ -455,7 +471,7 @@ impl Fixture {
     fn validate_conforming(&self, case: usize, focus_nodes: usize) -> ValidationReport {
         let name = CASES[case].name;
         let report = self.validators[case]
-            .validate_focus_node_ids(&self.conforming[..focus_nodes])
+            .validate_focus_node_ids(&self.conforming[case][..focus_nodes])
             .unwrap_or_else(|error| {
                 panic!("case {name}: the conforming set must validate: {error}")
             });
@@ -478,7 +494,7 @@ impl Fixture {
             ..
         } = CASES[case];
         let report = self.validators[case]
-            .validate_focus_node_ids(&self.violating)
+            .validate_focus_node_ids(&self.violating[case])
             .unwrap_or_else(|error| {
                 panic!("case {name}: the violating set must validate: {error}")
             });
@@ -488,11 +504,11 @@ impl Fixture {
         );
         assert_eq!(
             report.results.len(),
-            self.violating.len() * results_per_violation,
+            self.violating[case].len() * results_per_violation,
             "case {name}: each of the {} violating focus nodes must produce {results_per_violation} \
              result(s); a different count means the fixture is not exercising the surface these \
              figures are written about",
-            self.violating.len(),
+            self.violating[case].len(),
         );
         report
     }

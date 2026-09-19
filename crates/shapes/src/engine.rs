@@ -136,6 +136,76 @@ fn objects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
     result
 }
 
+/// A focus node identity together with the binding it was minted against.
+///
+/// # Why a bare [`TermId`] is not enough
+///
+/// A `TermId` is an index into ONE binding's term table. It carries no
+/// provenance, so an id minted against binding A is, handed to binding B, very
+/// probably in range — and it then resolves, dispatches, and validates a
+/// DIFFERENT node, quietly and with a conforming report to show for it. Two live
+/// id spaces is not an exotic misuse either: it is the designed situation the
+/// moment a caller binds a mutation snapshot beside the base binding through
+/// [`PreparedShapes::bind_delta_with_shapes_graph`].
+///
+/// So the provenance travels with the id instead of being delegated to the
+/// caller. A `FocusId` can only be obtained from a binding — from
+/// [`PreparedValidator::term_id`] or from
+/// [`PreparedValidator::affected_focus_node_ids`] — and
+/// [`PreparedValidator::validate_focus_node_ids`] refuses one that names a
+/// different binding. There is no public constructor and no public field,
+/// because either would be a way to mint an id with a provenance it does not
+/// have.
+///
+/// # The check is binding-scoped, not dataset-scoped
+///
+/// A binding's identity is the retained view it was bound over, not the dataset
+/// underneath it, so binding the SAME dataset twice produces two identities and
+/// an id minted against one is refused by the other — even though both term
+/// tables are byte-identical and the id would have resolved correctly. That
+/// refusal is deliberate. A token loose enough to admit it would have to reason
+/// about how a delta view remaps ids locally, and the failure it would then be
+/// unable to catch is the silent one: validating the wrong node and reporting
+/// conformance for it. Refusing a portable id costs a caller one visible error
+/// telling them which binding to mint from; accepting a non-portable one costs
+/// them a wrong answer they never learn about. Mint from the binding you are
+/// about to validate against and the question does not arise.
+///
+/// # Cost
+///
+/// Two words where a `TermId` was one, and no allocation per focus node: the
+/// change-path entry point compares one `usize` per id and is otherwise
+/// unchanged. `crates/shapes/tests/change_path_alloc.rs` pins that.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FocusId {
+    /// Which binding's term table [`Self::id`] indexes.
+    dataset: DatasetIdentity,
+    /// The dataset-local identity itself.
+    id: TermId,
+}
+
+impl FocusId {
+    /// Mint an id against the binding that resolved it.
+    ///
+    /// `pub(crate)` on purpose: minting is the act that asserts provenance, so
+    /// it stays with the code that actually performed the resolution.
+    #[inline]
+    pub(crate) const fn new(dataset: DatasetIdentity, id: TermId) -> Self {
+        Self { dataset, id }
+    }
+
+    /// The dataset-local identity this names.
+    ///
+    /// Read-only, and deliberately one-way: a `TermId` can be logged, compared
+    /// against another of the same binding, or handed to a lower-level view, but
+    /// it cannot be turned back into a `FocusId` without a binding to mint it.
+    #[must_use]
+    #[inline]
+    pub const fn term_id(self) -> TermId {
+        self.id
+    }
+}
+
 /// Dataset-bound invariant state shared by every focus evaluation in one pass.
 ///
 /// The expansion of a graph change into the focus nodes it can move, as answered
@@ -155,7 +225,7 @@ pub enum FocusExpansion {
     /// [`PreparedValidator::validate_focus_node_ids`].
     ///
     /// Empty means exactly what it says: nothing the shapes graph reads changed.
-    Bounded(Vec<TermId>),
+    Bounded(Vec<FocusId>),
     /// No bounded superset exists for this shapes graph, so the only sound
     /// re-validation is [`PreparedValidator::validate`].
     Everything {
@@ -173,7 +243,7 @@ impl FocusExpansion {
     /// opposite instructions, and collapsing them is the drop this type exists to
     /// prevent.
     #[must_use]
-    pub fn ids(&self) -> Option<&[TermId]> {
+    pub fn ids(&self) -> Option<&[FocusId]> {
         match self {
             Self::Bounded(ids) => Some(ids),
             Self::Everything { .. } => None,
@@ -785,13 +855,13 @@ impl FocusNode {
 /// [`Self::nodes_of`] refuses to hand it to a different one. The check is one
 /// integer comparison per validation, not per focus node.
 ///
-/// # What this does NOT claim
+/// # Where this sits relative to [`FocusId`]
 ///
-/// The public id-native entry point receives a bare `&[TermId]`, and a bare
-/// `TermId` carries no provenance whatever; nothing in this type can tell where
-/// a caller got one. What it pins is that an id resolved against one binding's
-/// view is never INTERPRETED against another's inside this crate — the leg of the
-/// hazard that grew when focus nodes stopped materializing.
+/// This is the INNER half of the same guard. `FocusId` carries provenance across
+/// the public boundary, so an id from another binding is refused before it ever
+/// reaches a focus set; this pins the other leg — that a set assembled against
+/// one binding's view is never INTERPRETED against another's inside this crate,
+/// including on the term-keyed route, which mints no ids a caller can hold.
 pub(crate) struct FocusSet {
     /// The dataset this set's ids are addressed against.
     dataset: DatasetIdentity,
@@ -1358,6 +1428,7 @@ impl PreparedShapes {
 ///
 /// use purrdf::RdfDatasetBuilder;
 /// use purrdf_shapes::engine::{PreparedValidator, parse_shapes};
+/// use purrdf_shapes::term::NamedNode;
 ///
 /// # fn main() -> Result<(), String> {
 /// let mut builder = RdfDatasetBuilder::new();
@@ -1389,6 +1460,11 @@ impl PreparedShapes {
 /// )?;
 ///
 /// // Reuse `validator` for each affected focus set in this immutable snapshot.
+/// // A focus id is minted BY the binding, so it cannot be confused with an id
+/// // of the same number belonging to a different one.
+/// let alice = validator
+///     .term_id(&NamedNode::new_unchecked("https://example.org/alice").into_term())
+///     .ok_or("alice must be interned")?;
 /// let report = validator.validate_focus_node_ids(&[alice])?;
 /// assert!(report.conforms);
 /// # Ok(())
@@ -1593,8 +1669,26 @@ impl PreparedValidator {
     /// Id-native twin of [`Self::validate_focus_nodes`] for callers already using
     /// the prepared dataset's interned identities.
     ///
-    /// [`TermId`] values are dataset-local. Passing an id from another dataset is a
-    /// caller error; out-of-range ids are rejected before lookup.
+    /// # Provenance is checked, not assumed
+    ///
+    /// Every [`FocusId`] names the binding it was minted against, and one minted
+    /// against a different binding is REFUSED here. That is the whole reason the
+    /// argument is a `FocusId` and not a [`TermId`]: a `TermId` is an index, an
+    /// index from another binding is very probably in range, and it would resolve
+    /// to a different term and validate the wrong node without any lookup ever
+    /// failing. Mint ids from this binding — [`Self::term_id`] for a caller
+    /// holding a [`Term`], [`Self::affected_focus_node_ids`] for the change path —
+    /// and the `delta` → expand → validate loop is provenance-safe end to end by
+    /// type.
+    ///
+    /// # Compatibility
+    ///
+    /// This method shipped in 2.0.2 taking `&[TermId]`, and the change to
+    /// `&[FocusId]` is a deliberate, un-versioned break of that signature. There
+    /// is no `&[TermId]` shim beside it on purpose: the old door is the unguarded
+    /// one, and keeping it open would leave the hazard reachable while claiming it
+    /// was closed. Callers holding `TermId`s re-mint them through
+    /// [`Self::term_id`], which is a lookup they were already entitled to do.
     ///
     /// # Bounded allocation
     ///
@@ -1612,12 +1706,15 @@ impl PreparedValidator {
     ///
     /// # Errors
     ///
-    /// Returns an error for an out-of-range id or when constraint evaluation
-    /// hard-fails.
+    /// Returns an error for an id minted against another binding, for an
+    /// out-of-range id, or when constraint evaluation hard-fails.
     pub fn validate_focus_node_ids(
         &self,
-        focus_node_ids: &[TermId],
+        focus_node_ids: &[FocusId],
     ) -> Result<ValidationReport, String> {
+        // Read once, compared per id: the comparison is one `usize` against a
+        // local, with no allocation and no lookup behind it.
+        let dataset = self.data.identity();
         // INPUT-sized, and sized: `focus_node_ids.len()` is an exact upper bound
         // on the distinct ids this loop admits, and an unhinted set filling to N
         // reallocates about log2(N) times — a growth term in the focus count,
@@ -1625,33 +1722,47 @@ impl PreparedValidator {
         let mut seen: IdSet =
             IdSet::with_capacity_and_hasher(focus_node_ids.len(), ::purrdf::FastHasher::default());
         let mut focus_nodes = FocusSet::with_capacity(&self.data, focus_node_ids.len());
-        for &id in focus_node_ids {
-            if id.index() >= self.data.core_view().term_count() {
+        for &focus in focus_node_ids {
+            if focus.dataset != dataset {
+                return Err(format!(
+                    "focus node TermId {} was minted against a different dataset binding than the \
+                     one this validator is bound to; TermIds are dataset-local, so an in-range id \
+                     from another binding resolves to a different term",
+                    focus.id.index()
+                ));
+            }
+            // Unreachable through the public surface — an id minted by this
+            // binding indexes this binding's table — and kept because the mint is
+            // `pub(crate)`, so a future in-crate mint site that got the binding
+            // right and the id wrong has to fail here rather than read past the
+            // table.
+            if focus.id.index() >= self.data.core_view().term_count() {
                 return Err(format!(
                     "focus node TermId {} is outside the prepared dataset's {}-term table",
-                    id.index(),
+                    focus.id.index(),
                     self.data.core_view().term_count()
                 ));
             }
-            if seen.insert(id) {
-                focus_nodes.push(FocusNode::Interned(id));
+            if seen.insert(focus.id) {
+                focus_nodes.push(FocusNode::Interned(focus.id));
             }
         }
         focus_nodes.sort(&self.data);
         self.validate_bounded(&focus_nodes)
     }
 
-    /// The interned identity this binding gives `term`, or `None` when the dataset
-    /// never interned it.
+    /// The identity this binding gives `term`, or `None` when the dataset never
+    /// interned it.
     ///
-    /// The bridge between a caller's owned terms and the id-native change path: the
-    /// ids [`Self::affected_focus_node_ids`] returns and the ids
+    /// The bridge between a caller's owned terms and the id-native change path,
+    /// and the only way a caller holding a [`Term`] mints a [`FocusId`]: the ids
+    /// [`Self::affected_focus_node_ids`] returns and the ids
     /// [`Self::validate_focus_node_ids`] accepts are indices into THIS binding's
-    /// term table, and this is how a caller holding a [`Term`] gets one without
-    /// re-deriving the table.
+    /// term table, stamped with THIS binding, and this is how one is obtained
+    /// without re-deriving the table.
     #[must_use]
-    pub fn term_id(&self, term: &Term) -> Option<TermId> {
-        resolve_id(self.data.core_view(), term)
+    pub fn term_id(&self, term: &Term) -> Option<FocusId> {
+        resolve_id(self.data.core_view(), term).map(|id| FocusId::new(self.data.identity(), id))
     }
 
     /// Expand a mutation snapshot into every focus node whose verdict the change
@@ -1732,8 +1843,12 @@ impl PreparedValidator {
             };
             changed.push(::purrdf::QuadIds { s, p, o, g: None });
         }
+        // The stamp every id this walk emits carries, read once. Dedup and the
+        // ordering below stay in the bare id space — the stamp is the same value
+        // for every element of one expansion, so it is not part of the key.
+        let dataset = self.data.identity();
         let mut seen: IdSet = IdSet::default();
-        let mut affected: Vec<TermId> = Vec::new();
+        let mut affected: Vec<FocusId> = Vec::new();
         // The slot row the lowered trigger chains index, resolved once at bind —
         // the same row the validation beside this one reads.
         let binding = self.bound.binding();
@@ -1778,7 +1893,7 @@ impl PreparedValidator {
                     // at, so there is nothing to walk back.
                     None => {
                         if seen.insert(read_node) {
-                            affected.push(read_node);
+                            affected.push(FocusId::new(dataset, read_node));
                         }
                     }
                     Some(path) => {
@@ -1786,7 +1901,7 @@ impl PreparedValidator {
                             crate::path::eval_planned_ids_from_id(core, read_node, path, binding)?
                         {
                             if seen.insert(id) {
-                                affected.push(id);
+                                affected.push(FocusId::new(dataset, id));
                             }
                         }
                     }
@@ -1796,7 +1911,7 @@ impl PreparedValidator {
         // Canonical order, because a change expansion is a value a caller may log,
         // compare or pin, and first-seen order is a fact about the walk rather than
         // about the change.
-        affected.sort_unstable_by_key(|id| id.index());
+        affected.sort_unstable_by_key(|focus| focus.id.index());
         Ok(FocusExpansion::Bounded(affected))
     }
 
@@ -3540,8 +3655,8 @@ mod tests {
             expected_whole.to_ntriples()
         );
 
-        let alice_id = projected
-            .term_id_by_iri("http://example.org/ns#alice")
+        let alice_id = prepared
+            .term_id(&NamedNode::new_unchecked("http://example.org/ns#alice").into_term())
             .expect("alice must be interned");
         assert_eq!(
             prepared
@@ -3557,8 +3672,13 @@ mod tests {
                 .conforms
         );
 
-        let invalid = TermId::from_index(
-            u32::try_from(projected.term_count()).expect("small test term table"),
+        // Minted with the RIGHT binding and an id past the end of its table, which
+        // is the only way to build one: the public surface cannot produce it. The
+        // range check behind it is therefore an in-crate backstop, and this is
+        // what keeps it honest.
+        let invalid = FocusId::new(
+            prepared.data.identity(),
+            TermId::from_index(u32::try_from(projected.term_count()).expect("small test term")),
         );
         assert!(
             prepared.validate_focus_node_ids(&[invalid]).is_err(),
@@ -3975,15 +4095,15 @@ mod tests {
 
     /// Resolve each `terms` entry (all named nodes, all `ex:v{i}` focus nodes) to its
     /// [`TermId`] in `projected`, panicking with `label` context on a lookup miss.
-    fn term_ids_for(projected: &RdfDataset, terms: &[Term], label: &str) -> Vec<TermId> {
+    fn term_ids_for(prepared: &PreparedValidator, terms: &[Term], label: &str) -> Vec<FocusId> {
         terms
             .iter()
             .map(|term| {
                 let Term::NamedNode(named) = term else {
                     panic!("{label}: focus term must be a named node: {term:?}")
                 };
-                projected
-                    .term_id_by_iri(named.as_str())
+                prepared
+                    .term_id(term)
                     .unwrap_or_else(|| panic!("{label}: {named} must be interned"))
             })
             .collect()
@@ -4188,7 +4308,7 @@ mod tests {
                 );
                 assert!(!bounded.conforms, "{label}: validate_focus_nodes");
 
-                let bounded_ids_input = term_ids_for(&projected, &bounded_focus_terms, label);
+                let bounded_ids_input = term_ids_for(&prepared, &bounded_focus_terms, label);
                 let bounded_ids = prepared
                     .validate_focus_node_ids(&bounded_ids_input)
                     .unwrap_or_else(|error| {
@@ -4444,7 +4564,7 @@ mod tests {
             );
             assert!(!bounded.conforms, "{label}: validate_focus_nodes");
 
-            let bounded_ids_input = term_ids_for(&projected, &bounded_focus_terms, label);
+            let bounded_ids_input = term_ids_for(&prepared, &bounded_focus_terms, label);
             let bounded_ids = pool
                 .install(|| {
                     let _scope = crate::sparql::enter_property_function_scope(Arc::new(
@@ -4540,11 +4660,29 @@ mod tests {
     /// integer compare — sorts the set exactly backwards rather than plausibly
     /// wrong, which is the only way that mistake is visible in a test.
     fn anti_canonical_focus_dataset() -> Arc<RdfDataset> {
+        // Descending locals, so ids ascend as the rendered IRIs descend.
+        focus_dataset_interning(&DESCENDING_FOCUS_LOCALS)
+    }
+
+    /// The fixture's ten focus locals in the order
+    /// [`anti_canonical_focus_dataset`] interns them.
+    const DESCENDING_FOCUS_LOCALS: [&str; 10] =
+        ["n9", "n8", "n7", "n6", "n5", "n4", "n3", "n2", "n1", "n0"];
+
+    /// The same ten focus nodes and the same targeting class, interned in
+    /// whatever order `locals` names.
+    ///
+    /// Interning order is what assigns ids, so two datasets built from the same
+    /// IRIs in two orders give the SAME IRI two different ids — and therefore give
+    /// one id two different meanings. That is the hazard a focus id's provenance
+    /// stamp exists for, and it is what
+    /// [`a_focus_id_from_another_binding_is_refused_and_its_own_is_accepted`]
+    /// builds.
+    fn focus_dataset_interning(locals: &[&str]) -> Arc<RdfDataset> {
         let mut builder = ::purrdf::RdfDatasetBuilder::new();
         let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
         let class = builder.intern_iri("http://example.org/ns#Focus");
-        // Descending locals, so ids ascend as the rendered IRIs descend.
-        for local in ["n9", "n8", "n7", "n6", "n5", "n4", "n3", "n2", "n1", "n0"] {
+        for local in locals {
             let node = builder.intern_iri(&format!("http://example.org/ns#{local}"));
             builder.push_quad(node, rdf_type, class, None);
         }
@@ -4728,6 +4866,198 @@ mod tests {
         assert!(
             message.contains("dataset-local"),
             "the refusal must say why TermIds are not portable: {message}"
+        );
+    }
+
+    /// The fixture's ten focus locals as owned terms, in interning order.
+    fn descending_focus_terms() -> Vec<Term> {
+        DESCENDING_FOCUS_LOCALS
+            .iter()
+            .map(|local| {
+                NamedNode::new_unchecked(format!("http://example.org/ns#{local}")).into_term()
+            })
+            .collect()
+    }
+
+    /// The shapes graph both focus-id provenance tests bind.
+    ///
+    /// `sh:minCount 1` on a predicate NOTHING in the fixture carries, so every
+    /// focus node produces a result. That is what lets the accepting half below
+    /// compare report CONTENT: a bare `conforms` flag is satisfied just as well by
+    /// a validator that stopped validating.
+    fn focus_provenance_shapes() -> Arc<Shapes> {
+        Arc::new(load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:property [ sh:path ex:absent ; sh:minCount 1 ] ."
+        )))
+    }
+
+    /// **The PUBLIC id-native entry point refuses a focus id minted by another
+    /// binding, and still validates one minted by its own.**
+    ///
+    /// The sibling test above drives `validate_bounded`, which is `pub(crate)`;
+    /// a guard that only ever runs behind a crate-private door is not a guard on
+    /// the door callers use. This one drives
+    /// [`PreparedValidator::validate_focus_node_ids`] itself.
+    ///
+    /// The two bindings intern the SAME IRIs in OPPOSITE orders, so an id is not
+    /// merely foreign — it is in range and it denotes a different term, which is
+    /// asserted here rather than assumed. Both directions are executed: a refusal
+    /// that fired on everything would close the hazard by closing the feature,
+    /// and the accepting half is what distinguishes the two.
+    #[test]
+    fn a_focus_id_from_another_binding_is_refused_and_its_own_is_accepted() {
+        let prepared = PreparedShapes::new(focus_provenance_shapes());
+        let here = prepared
+            .bind_shared_dataset(focus_dataset_interning(&DESCENDING_FOCUS_LOCALS))
+            .expect("the first binding binds");
+        let mut ascending = DESCENDING_FOCUS_LOCALS;
+        ascending.reverse();
+        // A SECOND, independently interned snapshot of the same data — exactly
+        // what `bind_delta_with_shapes_graph` leaves a caller holding beside a
+        // base binding — with the interning order reversed.
+        let there = prepared
+            .bind_shared_dataset(focus_dataset_interning(&ascending))
+            .expect("the second binding binds");
+
+        let terms = descending_focus_terms();
+        let mint = |validator: &PreparedValidator| -> Vec<FocusId> {
+            terms
+                .iter()
+                .map(|term| {
+                    validator
+                        .term_id(term)
+                        .unwrap_or_else(|| panic!("{term} must be interned"))
+                })
+                .collect()
+        };
+        let here_ids = mint(&here);
+        let there_ids = mint(&there);
+
+        // The hazard, made concrete. Every id minted by `there` is IN RANGE for
+        // `here`, and at least one of them denotes a DIFFERENT term there — so
+        // without the stamp it would resolve, dispatch and validate the wrong
+        // node, reporting on a focus set nobody asked about.
+        let mut denoting_differently = 0_usize;
+        for (term, focus) in terms.iter().zip(&there_ids) {
+            assert!(
+                focus.term_id().index() < here.data.core_view().term_count(),
+                "{term}'s id from the other binding must be IN RANGE here, or the range check \
+                 would be what rejected it rather than the provenance stamp"
+            );
+            if let ::purrdf::TermRef::Iri(denoted) = here.data.core_view().resolve(focus.term_id())
+                && NamedNode::new_unchecked(denoted).into_term() != *term
+            {
+                denoting_differently += 1;
+            }
+        }
+        assert!(
+            denoting_differently > 0,
+            "the two bindings must give at least one IRI two different ids, or this fixture is \
+             not the hazard the stamp exists for"
+        );
+
+        // REFUSED: minted by `there`, handed to `here`.
+        let refused = here
+            .validate_focus_node_ids(&there_ids)
+            .expect_err("focus ids minted by another binding must be refused");
+        assert!(
+            refused.contains("minted against a different dataset binding"),
+            "the refusal must name the mismatch it found: {refused}"
+        );
+        assert!(
+            refused.contains("dataset-local"),
+            "the refusal must say why an id is not portable: {refused}"
+        );
+
+        // ACCEPTED: each binding still validates its own, and produces the report
+        // the term-keyed route produces over the same nodes — same content, same
+        // order.
+        for (label, validator, ids) in [("here", &here, &here_ids), ("there", &there, &there_ids)] {
+            let accepted = validator
+                .validate_focus_node_ids(ids)
+                .unwrap_or_else(|error| {
+                    panic!("{label}: its own focus ids must validate: {error}")
+                });
+            assert_eq!(
+                accepted.results.len(),
+                DESCENDING_FOCUS_LOCALS.len(),
+                "{label}: every focus node violates sh:minCount, so the accepting half has to be \
+                 a real validation rather than an empty pass"
+            );
+            assert_eq!(
+                accepted.to_ntriples(),
+                validator
+                    .validate_focus_nodes(&terms)
+                    .unwrap_or_else(|error| panic!("{label}: the term-keyed route: {error}"))
+                    .to_ntriples(),
+                "{label}: the id-native route must still produce the report it produced before, \
+                 content and ORDER alike"
+            );
+        }
+    }
+
+    /// **The change loop is type-closed: what the expansion answers is exactly
+    /// what the id-native entry point takes, with no conversion in between.**
+    ///
+    /// That is the point of carrying provenance on the id rather than documenting
+    /// it. `delta` → [`PreparedValidator::affected_focus_node_ids`] →
+    /// [`PreparedValidator::validate_focus_node_ids`] passes a `&[FocusId]`
+    /// straight through, so there is no place for a caller to strip the stamp and
+    /// no place for one to be attached to an id that did not earn it.
+    #[test]
+    fn the_change_expansion_feeds_the_id_native_entry_point_unconverted() {
+        let base = focus_dataset_interning(&DESCENDING_FOCUS_LOCALS);
+        let mut mutation = ::purrdf::MutableDataset::new(base);
+        assert!(
+            ::purrdf::DatasetMut::insert(
+                &mut mutation,
+                ::purrdf::QuadValues {
+                    s: ::purrdf::TermValue::iri("http://example.org/ns#n10"),
+                    p: ::purrdf::TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
+                    o: ::purrdf::TermValue::iri("http://example.org/ns#Focus"),
+                    g: None,
+                }
+            )
+            .expect("the insert applies"),
+            "the fixture row must really change the graph, or the expansion below is empty for \
+             the wrong reason"
+        );
+        let snapshot = Arc::new(mutation.snapshot_view().expect("the mutation snapshots"));
+        let validator = PreparedShapes::new(focus_provenance_shapes())
+            .bind_delta_with_shapes_graph(
+                Arc::clone(&snapshot),
+                None,
+                ::purrdf::ir::ViewLimits::default(),
+            )
+            .expect("the delta binds");
+
+        let expansion = validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("the expansion succeeds");
+        let ids = expansion.ids().unwrap_or_else(|| {
+            panic!(
+                "this shapes graph is readable, so the expansion must be bounded ({:?})",
+                expansion.reason()
+            )
+        });
+        assert_eq!(
+            ids.len(),
+            1,
+            "the inserted row makes exactly one new focus node, and an expansion that named \
+             more or fewer is not the loop this test closes"
+        );
+
+        // The loop, with nothing between its two halves.
+        let report = validator
+            .validate_focus_node_ids(ids)
+            .expect("the expansion must validate through the entry point it feeds");
+        assert_eq!(
+            report.results.len(),
+            1,
+            "the new focus node carries no ex:absent, so re-validating the expansion must report \
+             its violation"
         );
     }
 }

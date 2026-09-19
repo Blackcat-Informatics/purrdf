@@ -303,7 +303,8 @@ estimates.
 projected snapshot and parsed shapes, precomputes class closures and target
 identities, and evaluates SHACL-SPARQL targets once. Callers that already hold
 the projected snapshot should use `from_projected_dataset` and pass that exact
-snapshot's dataset-local `TermId` values to `validate_focus_node_ids`. The
+snapshot's own `FocusId` values — minted by that binding through `term_id` or
+`affected_focus_node_ids` — to `validate_focus_node_ids`. The
 compatibility focus-filter entry point must enumerate whole target sets before
 discarding unrelated nodes and is intentionally retained as a comparison, not
 as the realtime path. Publishing an overlay or replacement snapshot requires a

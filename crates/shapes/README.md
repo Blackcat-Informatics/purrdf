@@ -107,6 +107,22 @@ direction. Feed that answer to `validate_focus_node_ids` (or
 `validate_focus_nodes` for owned terms); use `term_id` to turn a `Term` into an
 id in the binding's own space.
 
+Those ids are `FocusId` values, and the type is the guard. A `TermId` is an
+index into one binding's term table: an index from another binding is very
+probably in range, so it resolves to a different term and validates the wrong
+node without any lookup failing — and two live id spaces is the designed
+situation the moment a delta binding sits beside a base one. A `FocusId` carries
+the binding that minted it, and `validate_focus_node_ids` refuses one that names
+a different binding, so the expand-then-validate loop is provenance-safe by type
+rather than by documentation.
+
+**API note.** `validate_focus_node_ids` shipped taking `&[TermId]` and now takes
+`&[FocusId]`. That is a deliberate signature break with no deprecated `&[TermId]`
+door left open beside it: the old door is the unguarded one. Callers holding a
+`TermId` re-mint it with `term_id`, which is the lookup they were already
+entitled to make. `FocusId::term_id` reads the dataset-local id back out for
+logging or for a lower-level view.
+
 Two obligations stay with the caller and both are visible rather than implied:
 bind through `bind_delta_with_shapes_graph` and hand the expansion the same
 mutation snapshot, and honour a `FocusExpansion::Everything` answer by calling

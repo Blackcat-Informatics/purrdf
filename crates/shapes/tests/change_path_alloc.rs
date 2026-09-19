@@ -195,7 +195,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
-use purrdf_shapes::engine::{PreparedShapes, PreparedValidator, parse_shapes};
+use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::term::{NamedNode, Term};
@@ -1107,9 +1107,12 @@ struct CaseFixture {
     /// The bound validator; the change path under measurement hangs off this.
     validator: PreparedValidator,
     /// Focus nodes that satisfy the case's shape, in construction order.
-    conforming: Vec<TermId>,
+    ///
+    /// Minted by [`Self::validator`], because a [`FocusId`] is only valid against
+    /// the binding that issued it.
+    conforming: Vec<FocusId>,
     /// Focus nodes that break it, in construction order.
-    violating: Vec<TermId>,
+    violating: Vec<FocusId>,
     /// The same conforming population in the term key space, for the term-keyed
     /// change path. Built here so that constructing the argument is never part of
     /// a measured region.
@@ -1159,19 +1162,20 @@ fn build_case(case: &ConstraintCase, conforming: usize, violating: usize) -> Cas
         .bind_shared_dataset(Arc::clone(&dataset))
         .unwrap_or_else(|error| panic!("case {} must bind: {error}", case.name));
 
-    let resolve = |names: &[String]| -> Vec<TermId> {
+    let resolve = |names: &[String]| -> Vec<FocusId> {
         names
             .iter()
             .map(|scope| {
-                dataset
-                    .term_id_by_iri(&format!("{NS}{scope}"))
+                validator
+                    .term_id(&NamedNode::new_unchecked(format!("{NS}{scope}")).into_term())
                     .unwrap_or_else(|| panic!("case {} focus {scope} must be interned", case.name))
             })
             .collect()
     };
+    let (conforming_ids, violating_ids) = (resolve(&conforming_names), resolve(&violating_names));
     CaseFixture {
-        conforming: resolve(&conforming_names),
-        violating: resolve(&violating_names),
+        conforming: conforming_ids,
+        violating: violating_ids,
         conforming_terms: conforming_names
             .iter()
             .map(|scope| NamedNode::new_unchecked(format!("{NS}{scope}")).into_term())
@@ -1196,7 +1200,7 @@ impl CaseFixture {
     /// make it pass. Holding the conforming population identical and ADDING
     /// violating nodes makes the difference attributable to the violations and
     /// nothing else.
-    fn focus_set(&self, violations: usize, conforming: usize) -> Vec<TermId> {
+    fn focus_set(&self, violations: usize, conforming: usize) -> Vec<FocusId> {
         let mut ids = Vec::with_capacity(violations + conforming);
         ids.extend_from_slice(&self.violating[..violations]);
         ids.extend_from_slice(&self.conforming[..conforming]);
@@ -1521,7 +1525,7 @@ fn violating_change_path_allocation_scales_with_violations_not_focus_count() {
         let few_large = fixture.focus_set(VIOLATIONS, 2 * FOCUS_NODES);
         let many_small = fixture.focus_set(2 * VIOLATIONS, FOCUS_NODES);
 
-        let validate = |ids: &[TermId]| {
+        let validate = |ids: &[FocusId]| {
             fixture
                 .validator
                 .validate_focus_node_ids(ids)

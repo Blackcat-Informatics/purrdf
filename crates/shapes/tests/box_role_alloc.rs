@@ -118,9 +118,9 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
+use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
-use purrdf_shapes::engine::{PreparedShapes, PreparedValidator, parse_shapes_with_config};
+use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes_with_config};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::{ValidationReport, ValidationResult};
 use purrdf_shapes::term::NamedNode;
@@ -239,10 +239,25 @@ struct Fixture {
     with_vocab: PreparedValidator,
     /// The binding whose shapes were parsed with the feature inactive.
     without_vocab: PreparedValidator,
-    /// Focus nodes that satisfy the shape, in construction order.
-    conforming: Vec<TermId>,
-    /// Focus nodes that break it, in construction order.
-    violating: Vec<TermId>,
+    /// Focus ids for [`Fixture::with_vocab`]: the conforming population, then
+    /// the violating one.
+    ///
+    /// A [`FocusId`] is only valid against the binding that minted it, and the
+    /// two bindings here are two separate carriers over one dataset, so each
+    /// gets its own pair. The ids are resolved in [`Fixture::build`], outside
+    /// every measurement window, exactly as the bare ids were.
+    with_vocab_ids: FocusSets,
+    /// The same two populations minted by [`Fixture::without_vocab`].
+    without_vocab_ids: FocusSets,
+}
+
+/// One binding's conforming and violating focus ids, in construction order.
+#[derive(Debug)]
+struct FocusSets {
+    /// Focus nodes that satisfy the shape.
+    conforming: Vec<FocusId>,
+    /// Focus nodes that break it.
+    violating: Vec<FocusId>,
 }
 
 /// Build the shared data graph.
@@ -289,21 +304,36 @@ impl Fixture {
     /// Build one dataset and both bindings over it.
     fn build(conforming: usize, violating: usize) -> Self {
         let dataset = build_dataset(conforming, violating);
-        let resolve = |prefix: char, count: usize| -> Vec<TermId> {
+        let with_vocab = bind(&dataset, Some(vocabulary()));
+        let without_vocab = bind(&dataset, None);
+        let resolve = |validator: &PreparedValidator, prefix: char, count: usize| -> Vec<FocusId> {
             (0..count)
                 .map(|index| {
                     let iri = format!("{NS}{prefix}{index}");
-                    dataset
-                        .term_id_by_iri(&iri)
+                    validator
+                        .term_id(&NamedNode::new_unchecked(iri.clone()).into_term())
                         .unwrap_or_else(|| panic!("focus {iri} must be interned"))
                 })
                 .collect()
         };
+        let sets = |validator: &PreparedValidator| FocusSets {
+            conforming: resolve(validator, 'c', conforming),
+            violating: resolve(validator, 'v', violating),
+        };
         Self {
-            with_vocab: bind(&dataset, Some(vocabulary())),
-            without_vocab: bind(&dataset, None),
-            conforming: resolve('c', conforming),
-            violating: resolve('v', violating),
+            with_vocab_ids: sets(&with_vocab),
+            without_vocab_ids: sets(&without_vocab),
+            with_vocab,
+            without_vocab,
+        }
+    }
+
+    /// The binding under test and the focus ids it minted.
+    fn binding(&self, configured: bool) -> (&PreparedValidator, &FocusSets, &'static str) {
+        if configured {
+            (&self.with_vocab, &self.with_vocab_ids, "with a vocabulary")
+        } else {
+            (&self.without_vocab, &self.without_vocab_ids, "with none")
         }
     }
 
@@ -314,13 +344,9 @@ impl Fixture {
         configured: bool,
         focus_nodes: usize,
     ) -> (ValidationReport, &'static str) {
-        let (validator, label) = if configured {
-            (&self.with_vocab, "with a vocabulary")
-        } else {
-            (&self.without_vocab, "with none")
-        };
+        let (validator, ids, label) = self.binding(configured);
         let report = validator
-            .validate_focus_node_ids(&self.conforming[..focus_nodes])
+            .validate_focus_node_ids(&ids.conforming[..focus_nodes])
             .unwrap_or_else(|error| panic!("the conforming set must validate {label}: {error}"));
         assert!(
             report.conforms,
@@ -334,20 +360,16 @@ impl Fixture {
     /// Validate every violating id through one binding, requiring one result per
     /// violating focus node.
     fn validate_violating(&self, configured: bool) -> ValidationReport {
-        let validator = if configured {
-            &self.with_vocab
-        } else {
-            &self.without_vocab
-        };
+        let (validator, ids, _) = self.binding(configured);
         let report = validator
-            .validate_focus_node_ids(&self.violating)
+            .validate_focus_node_ids(&ids.violating)
             .unwrap_or_else(|error| panic!("the violating set must validate: {error}"));
         assert_eq!(
             report.results.len(),
-            self.violating.len(),
+            ids.violating.len(),
             "each of the {} violating focus nodes must produce exactly one result; {} means the \
              fixture is not exercising the branch the role assertions are written about",
-            self.violating.len(),
+            ids.violating.len(),
             report.results.len()
         );
         report

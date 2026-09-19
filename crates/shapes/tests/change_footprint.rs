@@ -58,7 +58,7 @@ use std::sync::Arc;
 
 use purrdf::ir::ViewLimits;
 use purrdf::{DatasetMut, MutableDataset, QuadValues, TermId, TermValue};
-use purrdf_shapes::engine::{PreparedShapes, PreparedValidator, parse_shapes};
+use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::term::Term;
 use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
@@ -276,7 +276,9 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
             expansion.reason()
         )
     });
-    let ids: BTreeSet<TermId> = ids.iter().copied().collect();
+    // Compared in the bare id space: every id of one expansion carries the same
+    // binding stamp, so the stamp is not part of what distinguishes them.
+    let ids: BTreeSet<TermId> = ids.iter().copied().map(FocusId::term_id).collect();
 
     // ── The superset law ────────────────────────────────────────────────────────
     let terms = focus_terms([&before, &after]);
@@ -285,13 +287,16 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
         let term = terms
             .get(focus)
             .unwrap_or_else(|| panic!("{}: no result names focus {focus}", case.name));
-        let id = validator.term_id(term).unwrap_or_else(|| {
-            panic!(
-                "{}: focus {focus} moved a verdict in the changed graph but that graph does \
-                 not intern it",
-                case.name
-            )
-        });
+        let id = validator
+            .term_id(term)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: focus {focus} moved a verdict in the changed graph but that graph does \
+                     not intern it",
+                    case.name
+                )
+            })
+            .term_id();
         assert!(
             ids.contains(&id),
             "{}: focus {focus} moved a verdict the expansion does not cover — a silent drop: \
@@ -303,12 +308,15 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
 
     // ── Not vacuous: the expansion is not the whole graph ───────────────────────
     let untouched = ex_term(case.untouched);
-    let untouched_id = validator.term_id(&untouched).unwrap_or_else(|| {
-        panic!(
-            "{}: the untouched control node ex:{} is not in the data graph",
-            case.name, case.untouched
-        )
-    });
+    let untouched_id = validator
+        .term_id(&untouched)
+        .unwrap_or_else(|| {
+            panic!(
+                "{}: the untouched control node ex:{} is not in the data graph",
+                case.name, case.untouched
+            )
+        })
+        .term_id();
     assert!(
         !ids.contains(&untouched_id),
         "{}: ex:{} cannot be reached by this change, so an expansion that includes it is \
@@ -323,7 +331,7 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
             .inserts
             .iter()
             .chain(case.removals)
-            .filter_map(|row| validator.term_id(&ex_term(row.0)))
+            .filter_map(|row| validator.term_id(&ex_term(row.0)).map(FocusId::term_id))
             .collect();
         assert!(
             moved_ids.iter().any(|id| !naive.contains(id)),
@@ -1241,7 +1249,8 @@ ex:PersonShape a sh:NodeShape ;
         .expect("expansion");
     let ids = expansion.ids().expect("bounded");
     assert!(
-        ids.windows(2).all(|pair| pair[0].index() < pair[1].index()),
+        ids.windows(2)
+            .all(|pair| pair[0].term_id().index() < pair[1].term_id().index()),
         "the expansion must be strictly ascending, got {ids:?}"
     );
 }
