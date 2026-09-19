@@ -73,6 +73,10 @@ const PREFIXES: &str = r"
 const EX: &str = "http://example.org/ns#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+/// The RDF 1.2 reifier predicate. A row `(r, rdf:reifies, <<( s p o )>>)` is a
+/// REIFIER DECLARATION, not an ordinary quad: it lands in the statement side-table
+/// and reclassifies the rows about `r` in the graph that declared it.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// One object position of a fixture row.
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +85,9 @@ enum Obj {
     Ex(&'static str),
     /// A plain literal.
     Lit(&'static str),
+    /// A triple term `<<( ex:s <p> ex:o )>>`, by `(subject local name, predicate
+    /// IRI, object local name)` — the object a reifier declaration takes.
+    Triple(&'static str, &'static str, &'static str),
 }
 
 /// One row of a delta, as `(subject local name, predicate IRI, object)`.
@@ -94,6 +101,12 @@ struct Case {
     shapes: &'static str,
     /// The base data graph, as N-Triples.
     data: &'static str,
+    /// Rows folded into the BASE before it freezes, for the RDF 1.2 statement
+    /// layer that N-Triples text cannot spell: a `rdf:reifies` row becomes a
+    /// reifier declaration, and a row about a declared reifier becomes that
+    /// reifier's annotation. Empty for a case with no overlay, which then parses
+    /// its base exactly as before.
+    base_overlay: &'static [Row],
     /// Rows the delta adds.
     inserts: &'static [Row],
     /// Rows the delta removes.
@@ -123,6 +136,11 @@ fn object(obj: Obj) -> TermValue {
     match obj {
         Obj::Ex(local) => TermValue::iri(ex(local)),
         Obj::Lit(lexical) => TermValue::simple_literal(lexical),
+        Obj::Triple(s, p, o) => TermValue::Triple {
+            s: Box::new(TermValue::iri(ex(s))),
+            p: Box::new(TermValue::iri(p)),
+            o: Box::new(TermValue::iri(ex(o))),
+        },
     }
 }
 
@@ -146,6 +164,32 @@ fn focus_terms(reports: [&ValidationReport; 2]) -> BTreeMap<String, Term> {
         .collect()
 }
 
+/// Fold [`Case::base_overlay`] into the parsed base, so the case's BASE — not its
+/// delta — already carries an RDF 1.2 statement layer.
+///
+/// Inserting the rows into a mutation and freezing it is the same classifier the
+/// delta path uses, so the reifier declaration lands in the reifier side-table and
+/// a row about that reifier lands in the annotation side-table. A case with no
+/// overlay is handed back its parsed base untouched, never a re-frozen copy of it.
+fn fold_overlay_into_base(case: &Case, base: Arc<purrdf::RdfDataset>) -> Arc<purrdf::RdfDataset> {
+    if case.base_overlay.is_empty() {
+        return base;
+    }
+    let mut mutation = MutableDataset::new(base);
+    for &row in case.base_overlay {
+        assert!(
+            mutation
+                .insert(quad(row))
+                .unwrap_or_else(|error| panic!("{}: base overlay insert: {error}", case.name)),
+            "{}: base overlay row {row:?} changed nothing",
+            case.name
+        );
+    }
+    mutation
+        .freeze()
+        .unwrap_or_else(|error| panic!("{}: base overlay freeze: {error}", case.name))
+}
+
 /// Run one differential case end to end.
 fn assert_expansion_covers_every_moved_verdict(case: &Case) {
     let shapes = Arc::new(
@@ -155,6 +199,7 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
     let prepared = PreparedShapes::new(shapes);
     let base = parse_ntriples_to_dataset(case.data)
         .unwrap_or_else(|error| panic!("{}: data must parse: {error:?}", case.name));
+    let base = fold_overlay_into_base(case, base);
 
     let before = prepared
         .bind_dataset(&base)
@@ -306,6 +351,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
         "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[],
     removals: &[("alice", "http://example.org/ns#name", Obj::Lit("Alice"))],
     untouched: "bob",
@@ -329,6 +375,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#carl> <http://example.org/ns#parent> <http://example.org/ns#alice> .\n",
         "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
     ),
+    base_overlay: &[],
     inserts: &[("dana", "http://example.org/ns#parent", Obj::Ex("bob"))],
     removals: &[],
     untouched: "alice",
@@ -349,6 +396,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
         "<http://example.org/ns#dana> <http://example.org/ns#parent> <http://example.org/ns#bob> .\n",
     ),
+    base_overlay: &[],
     inserts: &[],
     removals: &[("carl", "http://example.org/ns#parent", Obj::Ex("alice"))],
     untouched: "bob",
@@ -371,6 +419,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#bob> <http://example.org/ns#address> <http://example.org/ns#addr2> .\n",
         "<http://example.org/ns#addr2> <http://example.org/ns#city> \"Halifax\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[],
     removals: &[("addr1", "http://example.org/ns#city", Obj::Lit("Ottawa"))],
     untouched: "bob",
@@ -394,6 +443,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
         "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[],
     removals: &[("label1", "http://example.org/ns#nameOf", Obj::Ex("alice"))],
     untouched: "bob",
@@ -415,6 +465,7 @@ ex:ChainShape a sh:NodeShape ;
         "<http://example.org/ns#dave> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Chain> .\n",
         "<http://example.org/ns#dave> <http://example.org/ns#next> <http://example.org/ns#e> .\n",
     ),
+    base_overlay: &[],
     inserts: &[("c", "http://example.org/ns#next", Obj::Lit("not an IRI"))],
     removals: &[],
     untouched: "dave",
@@ -433,6 +484,7 @@ ex:EmployedShape a sh:NodeShape ;
         "<http://example.org/ns#alice> <http://example.org/ns#worksFor> <http://example.org/ns#acme> .\n",
         "<http://example.org/ns#alice> <http://example.org/ns#name> \"Alice\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[("mallory", "http://example.org/ns#worksFor", Obj::Ex("acme"))],
     removals: &[],
     untouched: "alice",
@@ -452,6 +504,7 @@ ex:EmployerShape a sh:NodeShape ;
         "<http://example.org/ns#acme> <http://example.org/ns#name> \"Acme\" .\n",
         "<http://example.org/ns#zed> <http://example.org/ns#name> \"Zed\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[(
         "alice",
         "http://example.org/ns#worksFor",
@@ -475,6 +528,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#alice> <http://example.org/ns#name> \"Alice\" .\n",
         "<http://example.org/ns#mallory> <http://example.org/ns#age> \"41\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[("mallory", RDF_TYPE, Obj::Ex("Person"))],
     removals: &[],
     untouched: "alice",
@@ -496,6 +550,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#mallory> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Employee> .\n",
         "<http://example.org/ns#mallory> <http://example.org/ns#age> \"41\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[("Employee", RDFS_SUB_CLASS_OF, Obj::Ex("Person"))],
     removals: &[],
     untouched: "alice",
@@ -521,6 +576,7 @@ ex:AddressShape a sh:NodeShape ;
         "<http://example.org/ns#bob> <http://example.org/ns#address> <http://example.org/ns#addr2> .\n",
         "<http://example.org/ns#addr2> <http://example.org/ns#city> \"Halifax\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[],
     removals: &[("addr1", "http://example.org/ns#city", Obj::Lit("Ottawa"))],
     untouched: "bob",
@@ -549,6 +605,7 @@ ex:AddressShape a sh:NodeShape ;
         "<http://example.org/ns#addr2> <http://example.org/ns#city> \"Halifax\" .\n",
         "<http://example.org/ns#addr2> <http://example.org/ns#town> \"Halifax\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[("addr1", "http://example.org/ns#town", Obj::Lit("Gatineau"))],
     removals: &[],
     untouched: "bob",
@@ -571,6 +628,7 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#bob> <http://example.org/ns#knows> <http://example.org/ns#dana> .\n",
         "<http://example.org/ns#dana> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
     ),
+    base_overlay: &[],
     inserts: &[],
     removals: &[("carl", RDF_TYPE, Obj::Ex("Person"))],
     untouched: "bob",
@@ -593,7 +651,93 @@ ex:PersonShape a sh:NodeShape ;
         "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
         "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
     ),
+    base_overlay: &[],
     inserts: &[("alice", "http://example.org/ns#nickname", Obj::Lit("Al"))],
+    removals: &[],
+    untouched: "bob",
+    naive_misses: false,
+};
+
+// ── The RDF 1.2 statement layer ─────────────────────────────────────────────────
+//
+// A delta may change the statement layer instead of the plain one, and those rows
+// live in side-tables of their own: a `rdf:reifies` declaration and a row about a
+// declared reifier never reach the delta's plain quad table at all. A change set
+// assembled from that one table would return nothing for any of the three cases
+// below while the graph plainly changed, so each drives the same differential
+// oracle over a delta that only touches the overlay.
+
+/// A REIFIER DECLARATION added by the delta, read back as an `rdf:reifies` row.
+const REIFIER_DECLARATION_ADDED: Case = Case {
+    name: "an added rdf:reifies declaration",
+    shapes: r"
+ex:ReifiedShape a sh:NodeShape ;
+    sh:targetNode ex:alice, ex:bob ;
+    sh:property [
+        sh:path <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ;
+        sh:minCount 1 ;
+    ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://example.org/ns#name> \"Alice\" .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[(
+        "alice",
+        RDF_REIFIES,
+        Obj::Triple("carl", "http://example.org/ns#parent", "dana"),
+    )],
+    removals: &[],
+    untouched: "bob",
+    naive_misses: false,
+};
+
+/// The same declaration SUPPRESSED, which is the direction a change set assembled
+/// from added rows alone gets wrong.
+const REIFIER_DECLARATION_SUPPRESSED: Case = Case {
+    name: "a suppressed rdf:reifies declaration",
+    shapes: r"
+ex:ReifiedShape a sh:NodeShape ;
+    sh:targetNode ex:stmt1, ex:bob ;
+    sh:property [
+        sh:path <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ;
+        sh:minCount 1 ;
+    ] .
+",
+    data: "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+    base_overlay: &[(
+        "stmt1",
+        RDF_REIFIES,
+        Obj::Triple("carl", "http://example.org/ns#parent", "dana"),
+    )],
+    inserts: &[],
+    removals: &[(
+        "stmt1",
+        RDF_REIFIES,
+        Obj::Triple("carl", "http://example.org/ns#parent", "dana"),
+    )],
+    untouched: "bob",
+    naive_misses: false,
+};
+
+/// A row added ABOUT a declared reifier. The delta admits it as that reifier's
+/// ANNOTATION — a third table again — and SHACL reads it at `ex:stmt1` all the
+/// same, so the change set has to carry it under the subject it was written with.
+const ANNOTATION_ADDED_ON_A_DECLARED_REIFIER: Case = Case {
+    name: "an annotation added on a declared reifier",
+    shapes: r"
+ex:ConfidenceShape a sh:NodeShape ;
+    sh:targetNode ex:stmt1, ex:bob ;
+    sh:property [ sh:path ex:confidence ; sh:minCount 1 ] .
+",
+    data: "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+    base_overlay: &[(
+        "stmt1",
+        RDF_REIFIES,
+        Obj::Triple("carl", "http://example.org/ns#parent", "dana"),
+    )],
+    inserts: &[("stmt1", "http://example.org/ns#confidence", Obj::Lit("0.9"))],
     removals: &[],
     untouched: "bob",
     naive_misses: false,
@@ -622,6 +766,134 @@ fn the_expansion_is_a_superset_of_every_verdict_the_change_moves() {
     for case in CASES {
         assert_expansion_covers_every_moved_verdict(case);
     }
+}
+
+// The overlay cases run as tests of their own rather than as three more entries in
+// `CASES`: they are three independent tables of one layer, and a loop stops at the
+// first panic, which would hide the other two behind whichever fails first.
+
+#[test]
+fn an_added_reifier_declaration_is_in_the_change_set() {
+    assert_expansion_covers_every_moved_verdict(&REIFIER_DECLARATION_ADDED);
+}
+
+#[test]
+fn a_suppressed_reifier_declaration_is_in_the_change_set() {
+    assert_expansion_covers_every_moved_verdict(&REIFIER_DECLARATION_SUPPRESSED);
+}
+
+#[test]
+fn an_added_annotation_is_in_the_change_set_under_its_own_subject() {
+    assert_expansion_covers_every_moved_verdict(&ANNOTATION_ADDED_ON_A_DECLARED_REIFIER);
+}
+
+/// WHY the change set may omit a row the overlay RECLASSIFIES — and the two facts
+/// that have to stay true for that to remain sound.
+///
+/// Declaring a reifier for `ex:alice` demotes every row about `ex:alice` out of the
+/// snapshot's plain table and into its annotation table. That row is in no added
+/// and no suppressed table, so `changed_quads` does not name it, and a reader of
+/// `DeltaDatasetView::quads` alone would see a statement disappear that no change
+/// set mentioned.
+///
+/// SHACL is not that reader. Its data view projects the RDF 1.2 statement layer
+/// onto the plain stream, so a demoted row is still read at the same subject with
+/// the same predicate: it changed tables, it did not leave the graph, and no verdict
+/// can move because of it. This test asserts BOTH halves — the demotion really
+/// happens, and validation really is unmoved by it — because either half alone is
+/// consistent with a silent drop. If the statement projection is ever switched off
+/// for the change path, the second half fails here and this seam must be reopened:
+/// the change set would then owe its consumer the demoted row itself.
+#[test]
+fn a_reclassifying_delta_moves_no_verdict_because_statements_are_projected() {
+    use purrdf::prelude::{DatasetView, GraphMatch};
+
+    let shapes = r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetNode ex:alice, ex:bob ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+";
+    let parsed = Arc::new(
+        parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("fixture shapes must parse"),
+    );
+    let prepared = PreparedShapes::new(parsed);
+    let base = parse_ntriples_to_dataset(concat!(
+        "<http://example.org/ns#alice> <http://example.org/ns#name> \"Alice\" .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+    ))
+    .expect("fixture data must parse");
+    let before = prepared
+        .bind_dataset(&base)
+        .and_then(|validator| validator.validate())
+        .expect("base validation");
+    assert!(
+        before.conforms,
+        "both targets have a name in the base, so the base must conform for this test to be \
+         about the delta at all"
+    );
+
+    let mut mutation = MutableDataset::new(Arc::clone(&base));
+    assert!(
+        mutation
+            .insert(quad((
+                "alice",
+                RDF_REIFIES,
+                Obj::Triple("carl", "http://example.org/ns#parent", "dana"),
+            )))
+            .expect("insert")
+    );
+    let snapshot = Arc::new(mutation.snapshot_view().expect("snapshot"));
+
+    // Half one: the demotion is real. The row is gone from the plain table…
+    let alice = snapshot
+        .term_id_by_value(&TermValue::iri(ex("alice")))
+        .expect("the base interned ex:alice");
+    let name = snapshot
+        .term_id_by_value(&TermValue::iri(ex("name")))
+        .expect("the base interned ex:name");
+    assert_eq!(
+        snapshot
+            .quads_for_pattern(Some(alice), Some(name), None, GraphMatch::Any)
+            .count(),
+        0,
+        "declaring a reifier for ex:alice must demote the rows about it out of the plain \
+         table, or this test is not exercising reclassification at all"
+    );
+    // …and it is on the annotation table instead, not lost.
+    assert!(
+        snapshot
+            .annotations_of_with_graph(alice)
+            .any(|(p, _, _)| p == name),
+        "the demoted row must be readable as an annotation of ex:alice"
+    );
+
+    // Half two: SHACL is unmoved, because it reads the projection of both tables.
+    let validator = prepared
+        .bind_delta_with_shapes_graph(Arc::clone(&snapshot), None, ViewLimits::default())
+        .expect("delta bind");
+    let after = validator.validate().expect("changed-graph validation");
+    assert_eq!(
+        before.result_tuples(),
+        after.result_tuples(),
+        "a row that only changed tables must move no verdict; if it can, the change set owes \
+         its consumer that row and affected_focus_node_ids is under-approximating"
+    );
+    let owned = prepared
+        .bind_dataset(&mutation.freeze().expect("freeze"))
+        .and_then(|validator| validator.validate())
+        .expect("owned validation");
+    assert_eq!(
+        after.result_tuples(),
+        owned.result_tuples(),
+        "the snapshot and its owned freeze must validate identically"
+    );
+    assert!(
+        !validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("expansion")
+            .is_everything(),
+        "an overlay-only delta is fully readable, so answering TOP would be over-refusal"
+    );
 }
 
 // ── The over-refusal pair ───────────────────────────────────────────────────────
