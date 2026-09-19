@@ -70,7 +70,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
+use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
 use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
 
 use crate::constraints::conforms_with_plan;
@@ -824,11 +824,19 @@ fn sparql_rule_producer(
     let plan = RulePlan::of(data, shape, conditions);
     let focus_nodes = plan.focus_nodes(data)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
+    // SHACL-AF pre-binds `$this`, `$shapesGraph` and `$currentShape` for a
+    // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path. Two
+    // of the three are constants of the RULE and so is every NAME, so the list is
+    // built once here and only `$this` is overwritten per focus node.
+    const THIS_SLOT: usize = 0;
+    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(3);
+    subs.push(("this".to_owned(), TermValue::Iri(String::new())));
+    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, Some(&shape.id));
     for focus in &focus_nodes {
         if !conditions_hold(data, focus, &plan)? {
             continue;
         }
-        let subs = [("this".to_owned(), focus.to_term_value())];
+        subs[THIS_SLOT].1 = focus.to_term_value();
         // A CONSTRUCT template blank is minted from a per-evaluation counter that
         // resets each call, so two focus nodes would both mint `_:c1` and
         // conflate. The evaluation therefore mints under a per-focus prefix
@@ -844,14 +852,10 @@ fn sparql_rule_producer(
         // the serializable BLANK_NODE_LABEL alphabet, or the entailed dataset
         // cannot round-trip.
         let tag = focus_tag(focus);
-        // SHACL-AF pre-binds `$this`, `$shapesGraph`, and `$currentShape` for a
-        // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path.
         let graph = crate::sparql::run_construct_with_shacl_prebinding_view(
             data.sparql_view(),
             construct,
             &subs,
-            shapes_graph_iri,
-            Some(&shape.id),
             Some(tag.as_str()),
         )?;
         for quad in quads_for_pattern_ids(graph.as_ref(), None, None, None, GraphFilter::AnyGraph) {

@@ -522,6 +522,21 @@ pub(crate) struct LoweredExpr {
     /// The IRI of the custom node-expression function this expression calls, whose
     /// lowered body lives in [`LoweredShapes::bodies`]; `None` otherwise.
     body: Option<String>,
+    /// The rendered single-row SELECT that evaluates a FUNCTION CALL expression
+    /// (`sh:expression` with a builtin, `sh:SPARQLFunction` or `sparql:NAME`
+    /// callee); `None` for every other kind.
+    ///
+    /// A fifth thing the lowering resolves, and it resolves for the same reason the
+    /// other four do: it is a constant of the shapes graph that the evaluator would
+    /// otherwise recompute at every invocation. The callee and the `?a0 … ?an`
+    /// placeholder list are both fixed when the call is lowered, so the query TEXT
+    /// is too — and rendering it per invocation put a `format!` inside the
+    /// cartesian product over argument tuples and minted a fresh plan-cache key on
+    /// every pass.
+    ///
+    /// A `Box<str>` rather than a `String`: it is written once and never appended
+    /// to, so the spare capacity a `String` carries is dead weight in every plan.
+    query: Option<Box<str>>,
     /// The lowering of each PATH this expression names, in declaration order.
     paths: Box<[LoweredPath]>,
     /// The lowering of each SHAPE this expression names, in declaration order.
@@ -1385,6 +1400,22 @@ impl LoweredExpr {
         })
     }
 
+    /// The rendered single-row SELECT that evaluates this function-call
+    /// expression.
+    ///
+    /// # Errors
+    /// Returns an error when the lowering beside a function call records no query
+    /// text, which — like every other slot here — is a defect in the walk rather
+    /// than anything an input can cause.
+    #[inline]
+    pub(crate) fn scalar_query(&self) -> Result<&str, String> {
+        self.query.as_deref().ok_or_else(|| {
+            "internal validation-plan defect: a function-call node expression was evaluated \
+             against a lowering that records no query text, so its callee was never rendered"
+                .to_owned()
+        })
+    }
+
     /// The IRI of the custom node-expression function this expression calls.
     ///
     /// # Errors
@@ -2034,6 +2065,9 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
                 | FnCall::Sparql { args, .. } => args,
             };
             LoweredExpr {
+                // The call's query text, rendered here and never again; see
+                // `LoweredExpr::query`.
+                query: Some(crate::expression::scalar_call_query(call).into_boxed_str()),
                 operands: args.iter().map(|arg| lower_expression(arg, walk)).collect(),
                 ..LoweredExpr::default()
             }

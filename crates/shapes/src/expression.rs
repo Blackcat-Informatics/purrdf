@@ -87,6 +87,7 @@
 //! produces the order it was asked for. Their determinism comes from their inputs
 //! being deterministic, not from a final sort.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::{FastMap, FastSet, TermId};
@@ -1084,6 +1085,50 @@ fn builtin_keyword(iri: &str) -> Option<&'static str> {
     })
 }
 
+/// The single-row scalar SELECT that routes an `sh:if` condition value through
+/// SPARQL effective-boolean-value.
+///
+/// `IF(?c, true, false)` applies EBV to its first argument, so a bound `?result`
+/// of `true`/`false` IS the condition's EBV and an unbound one is a genuine SPARQL
+/// type error. The text names nothing but the probe itself, so unlike a function
+/// call it is not merely a constant of the shapes graph — it is a constant of the
+/// crate, and lives here rather than in a plan slot.
+const EBV_PROBE_QUERY: &str = "SELECT ((IF(?c, true, false)) AS ?result) WHERE {}";
+
+/// The single-row scalar SELECT that evaluates one function-call node expression.
+///
+/// Both halves are constants of the SHAPES GRAPH: the callee (a keyword for the
+/// keyword-only SPARQL builtins, an `<iri>(…)` call otherwise, or the text a
+/// `sparql:NAME` call carried from shapes-load) and the `?a0 … ?an` argument
+/// placeholders, whose count is the call's arity. Nothing in it varies with the
+/// focus node, the value node, or the argument VALUES.
+///
+/// It is therefore rendered ONCE, when the plan is lowered
+/// ([`crate::plan::LoweredExpr::scalar_query`]), rather than per invocation. Per
+/// invocation it was rendered inside the cartesian product over argument tuples —
+/// two allocations per tuple, plus a freshly allocated key hashed into the
+/// engine's never-evicted plan cache on every one of them.
+pub(crate) fn scalar_call_query(call: &FnCall) -> String {
+    let (iri, arity) = match call {
+        // A `sparql:<NAME>` call carries its rendered SPARQL text from shapes-load,
+        // so there is nothing to render here — only to wrap.
+        FnCall::Sparql { expr, .. } => return crate::sparql::scalar_expr_query(expr),
+        FnCall::Builtin { iri, args } | FnCall::UserDefined { iri, args } => (iri, args.len()),
+    };
+    let mut placeholders = String::new();
+    for position in 0..arity {
+        if position > 0 {
+            placeholders.push_str(", ");
+        }
+        let _ = write!(placeholders, "?a{position}");
+    }
+    let expr = match builtin_keyword(iri.as_str()) {
+        Some(keyword) => format!("{keyword}({placeholders})"),
+        None => format!("<{}>({placeholders})", iri.as_str()),
+    };
+    crate::sparql::scalar_expr_query(&expr)
+}
+
 // ── Evaluator ───────────────────────────────────────────────────────────────────
 
 /// Evaluate a node expression against `store`, from `focus`.
@@ -1333,9 +1378,9 @@ fn eval_node_expr_at_depth(
             let branch = match cond_nodes.as_slice() {
                 [] => (els, 2),
                 [t] => {
-                    let ebv = crate::sparql::eval_scalar_expr_view(
+                    let ebv = crate::sparql::eval_scalar_query_view(
                         store.sparql_view(),
-                        "IF(?c, true, false)",
+                        EBV_PROBE_QUERY,
                         &[("c".to_owned(), t.clone())],
                     )?;
                     match ebv {
@@ -1365,9 +1410,9 @@ fn eval_node_expr_at_depth(
         // SPARQL 1.1 function (STRLEN, CONTAINS, ABS, REGEX, …) is lowered to that
         // keyword; a user function's IRI is never a keyword, so it keeps the call form.
         NodeExpr::Call(
-            FnCall::Builtin { iri, args }
-            | FnCall::UserDefined { iri, args }
-            | FnCall::Sparql { iri, args, .. },
+            FnCall::Builtin { args, .. }
+            | FnCall::UserDefined { args, .. }
+            | FnCall::Sparql { args, .. },
         ) => {
             // Each argument is a node expression yielding a SET of values. Per the
             // reference implementations (TopBraid / DASH / pySHACL) the function is
@@ -1383,21 +1428,12 @@ fn eval_node_expr_at_depth(
                 .enumerate()
                 .map(|(position, arg)| descend!(arg, position))
                 .collect::<Result<_, _>>()?;
-            // A `sparql:<NAME>` call carries its rendered SPARQL text from
-            // shapes-load (see `FnCall::Sparql`); the other two kinds render an
-            // `<iri>(…)` call (or the keyword form, for the keyword-only builtins)
-            // here.
-            let expr_string = match expr {
-                NodeExpr::Call(FnCall::Sparql { expr, .. }) => expr.clone(),
-                _ => {
-                    let placeholders: Vec<String> =
-                        (0..arg_values.len()).map(|i| format!("?a{i}")).collect();
-                    match builtin_keyword(iri.as_str()) {
-                        Some(kw) => format!("{kw}({})", placeholders.join(", ")),
-                        None => format!("<{}>({})", iri.as_str(), placeholders.join(", ")),
-                    }
-                }
-            };
+            // The callee and the `?a0 … ?an` placeholders are constants of the
+            // shapes graph, so the whole single-row SELECT was rendered once when
+            // the plan was lowered; see `scalar_call_query`. The callee IRI is
+            // therefore not read here at all — re-rendering it would be a second
+            // spelling of a decision the plan already made.
+            let query = lowered.scalar_query()?;
             // The product size is the product of the per-argument value-set sizes;
             // any empty set collapses it to zero (no invocations).
             let combinations = arg_values.iter().map(Vec::len).product::<usize>();
@@ -1428,9 +1464,9 @@ fn eval_node_expr_at_depth(
                     }
                     // A SPARQL error/unbound result is the correct SHACL-AF "no value"
                     // signal for that tuple — it contributes nothing, not a violation.
-                    if let Some(term) = crate::sparql::eval_scalar_expr_view(
+                    if let Some(term) = crate::sparql::eval_scalar_query_view(
                         store.sparql_view(),
-                        &expr_string,
+                        query,
                         &bindings,
                     )? {
                         out.push(term);
