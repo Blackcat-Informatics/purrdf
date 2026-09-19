@@ -404,9 +404,9 @@ impl RenderedQuery {
         self.subject.iter().chain(self.object.iter())
     }
 
-    /// Whether the producer this branch calls bounds *itself*, which is true of
-    /// exactly the producer that declared a depth placement and received the depth
-    /// as an argument.
+    /// Whether the producer called by the graph pattern this unit emits bounds
+    /// *itself*, which is true of exactly the producer that declared a depth
+    /// placement and received the depth as an argument.
     ///
     /// Read off the arguments rather than recorded beside them. "The producer takes
     /// the depth as an argument", "the branch carries no `LIMIT` of its own" and
