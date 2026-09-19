@@ -346,8 +346,17 @@ For the row bound, the producer. The layer checks the recorded depth *against* t
 declaration — [`AdmissionError::DepthBoundViolation`],
 pinned by `a_declared_row_bound_still_refuses_a_raised_depth` and
 `a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero` in
-`tests/admission_tests.rs` — and has no way whatever to check the declaration
-against the index behind it.
+`tests/admission_tests.rs` — and cannot ask your index what its real worst case
+is, because nothing in the seam answers that question.
+
+It can, however, catch the declaration being beaten where it was about to be
+relied on. A plan whose depth sits at your declared bound is emitted with a probe
+row one past it, so if the row your declaration ruled out shows up, the run is
+refused (`ExecutionError::RowBoundBreached`) instead of reported exhausted; see
+[A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound). That is
+narrower than checking the declaration — it says nothing about a bound never
+planned to — and it is exactly the case where being wrong would have cost a
+consumer a false completeness claim rather than a bad join order.
 
 **On declaring many modes.** The subset direction is the useful one: a relation
 that can serve object-bound/subject-free can also serve both-bound, by producing
@@ -385,26 +394,64 @@ one answer to one question, bought at three different altitudes because no singl
 altitude can answer it.
 
 The layer's own purchase — the middle one — is the depth probe.
-[`compile`] emits `LIMIT max(1, min(depth + 1, declared row bound))`, so a
+[`compile`] emits `LIMIT max(1, min(depth, declared row bound) + 1)`, so a
 unit whose producer still had rows past the planned depth hands back one more row
 than its stratum may contribute. That row is a **probe**: never emitted onto the
 stream, never ranked, never counted, present in no plan field, no identity and no
 resolution number. All it decides is
 [`ProducerStatus::DepthReached`] versus
-[`ProducerStatus::Exhausted`]. The `min` is what
-keeps the probe from becoming an over-refusal of its own: where the depth already
-equals the producer's declared bound there is nothing further to promise, the
-registry already answered the question, and no probe is emitted. Without it an
+[`ProducerStatus::Exhausted`]. Without it an
 executor could only ever say `Exhausted` — the strongest completeness claim this
-layer makes — about a read the plan itself had cut short. The outer `max(1)` is
-the other side of that same care: a producer declaring zero rows would otherwise
-be bounded at `LIMIT 0`, which hands back nothing whatever its index holds, so its
-emptiness would be the bound's claim rather than its own
-(see [A12](#a12--bounds-narrow-they-never-zero)).
+layer makes — about a read the plan itself had cut short.
+
+The `+ 1` sits **outside** the `min`, and that placement is the rule rather than
+an arrangement of parentheses. Written inside it, the probe disappears at exactly
+one depth — the depth that already equals the producer's declared bound, where
+the `min` would select the declaration and the unit would be emitted at its own
+depth with no slot to probe with. That is the one depth an under-declaring
+producer lands a plan on, and it is the one where `Exhausted` would be a guess.
+Outside, the slot exists at every depth. It raises the emitted `LIMIT` only: the
+recorded depth is the number admission holds a plan to, and it does not move, so
+no plan field, identity or resolution number moves with it.
+
+The slot is not an over-refusal either, because it costs an honest producer
+nothing. A producer that declared `n` and really holds `n` returns `n` rows into
+an `n + 1`-row bound, the slot comes back empty, and `Exhausted` is *verified*
+rather than believed. A row arriving in it is the producer yielding an `n + 1`-th
+after promising there is none, and the executor refuses the run by name
+(`ExecutionError::RowBoundBreached`, carrying the stratum, the declared bound and
+the count actually returned) rather than truncating to the depth and certifying
+the remainder as completeness.
+
+The outer `max(1)` is what a declared **zero** lands on: `min(depth, 0) + 1` is
+one, so such a producer is bounded at one row rather than at `LIMIT 0`, which
+would hand back nothing whatever its index holds and make its emptiness the
+bound's claim rather than its own
+(see [A12](#a12--bounds-narrow-they-never-zero)). There is no slot past the depth
+there and the refusal above is unreachable, which is deliberate: at a declared
+zero the layer reads the declaration rather than obeying it, and a row it asked
+for on purpose cannot breach anything.
+
+**If you declare a depth placement, the number you receive is bounded
+differently.** A `LIMIT` is a ceiling the evaluator applies to a cursor you never
+hear about, so probing one row past your declaration there costs you nothing. The
+depth argument is a *request you read*, and a request for `declared + 1` asks you
+to exceed the bound you registered — which a producer with a configured ceiling
+should refuse, as the nearest-neighbour relation refuses a `k` above its guard.
+So the argument carries `max(1, min(depth + 1, declared bound))`: the probe where
+your declaration leaves room, your declaration itself where it does not. Your
+unit's own `LIMIT` still sits one row past the declaration either way, so a
+self-bounding producer that returns more rows than it declared is still caught —
+you are simply never asked to produce them.
 Pinned by
-`the_probe_separates_a_cut_read_from_an_exhausted_one` in
-`tests/execute_dataset.rs` and `the_probe_row_changes_the_ending_and_nothing_else`
-in `src/execute.rs`.
+`the_probe_separates_a_cut_read_from_an_exhausted_one` and
+`an_under_declared_row_bound_is_refused_and_an_honest_one_is_not` in
+`tests/execute_dataset.rs`, by
+`the_probe_row_changes_the_ending_and_nothing_else` and
+`a_row_past_the_declaration_is_refused_and_an_honest_one_is_not`
+in `src/execute.rs`, and by
+`the_neighbour_count_stays_inside_the_guard_while_the_limit_probes_past_it`
+in `tests/real_producers.rs`.
 
 `Exhausted` is the only completeness claim in the vocabulary. Every other ending
 names the stopper.
@@ -419,28 +466,30 @@ declares `u64::MAX`.
 **The failure it prevents.** The two directions fail differently, and that
 asymmetry is the whole guidance.
 
-Under-declaring refuses your own plans, and it is **only partly loud**. The
-admission waist refuses a recorded depth above the declaration, so a plan that
-asks for more than you promised fails by name and a host finds it.
+Under-declaring **refuses your own plans loudly**, in two places. The admission
+waist refuses a recorded depth above the declaration, and the compiled unit is
+emitted at `max(1, min(depth, declared bound) + 1)` — so an under-declaration
+caps the read at a number your index could have beaten, and then refuses the
+plans that ask for more. It is noisy, and it is a configuration error a host
+will find.
 
-But there is one depth where it fails **silently, and with a false completeness
-claim** — which is the failure this whole document exists to prevent, so it is
-stated here rather than left to be discovered. The compiled unit is emitted at
-`max(1, min(depth + 1, declared bound))`. Where the planned depth already equals
-your declared bound, the `min` leaves no room for the probe row, so no probe is
-emitted; and with no probe there is nothing to distinguish a producer that ran out
-from a read the bound cut. The stratum is reported
-[`ProducerStatus::Exhausted`] for exactly the rows the
-depth allowed — the strongest completeness claim this layer has, made about a read
-your own under-declaration truncated. Nothing anywhere says so.
+The second place is the one that matters at the depth the first cannot see. A
+plan whose depth lands *at* your declared bound is admitted — it asks for no more
+than you promised — and the emitted probe row therefore sits one past your
+declaration. If your index really does stop where you said, that row never
+arrives and your stratum is reported
+[`ProducerStatus::Exhausted`], now verified rather
+than assumed. If it does not, the row arrives, and the run is refused by name with
+your declared bound and the count actually returned in the message
+(`ExecutionError::RowBoundBreached`). Either way the mistake is *said*. Nothing
+is reported exhausted on the strength of a bound you got wrong.
 
-This is the reason A8's `rows_per_invocation` is a **hard obligation and not the
-estimate its name suggests**. A8 permits the number to be wrong without the
-producer being incorrect, and that permission is about *scheduling*: a bad bound
-buys a bad join order. It does **not** extend to under-declaring, because on this
-path the number is an upper bound the layer relies on to know whether it has seen
-your last row. Declare a bound your index can actually reach, or declare
-`u64::MAX`.
+This is what makes A8's reading of `rows_per_invocation` hold on this path rather
+than needing an exception carved out of it. The number remains an estimate in
+A8's sense — nothing can check it against your index, and it may be wrong without
+your producer being incorrect, buying you a bad join order and nothing worse. What
+the probe adds is that where the layer would otherwise have had to *rely* on it to
+know it had seen your last row, it no longer does: it goes and looks.
 
 Over-declaring is **silent** and costs a worse join order, because the bound is
 what orders a call against the other operators of its group: a call that emits at

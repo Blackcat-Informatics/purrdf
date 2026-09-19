@@ -512,12 +512,19 @@ fn two_requests_compile_to_different_queries_and_carry_the_needle() {
         "and only that needle is: {fox}"
     );
     // The plain-string spelling is pinned: the short form, never `^^<xsd:string>`.
+    //
+    // The bound is eleven over a depth of ten: this fixture's producer declares
+    // ten rows and the statistics measure ten, so the depth sits exactly at the
+    // declaration and the probe row is emitted one past it, as it is at every
+    // other depth. The recorded depth is still ten — that the emitted bound moves
+    // and the depth does not is pinned in `admission_accepts_fresh_plan`, which
+    // holds the same pair of numbers and asserts both.
     assert_eq!(
         fox,
         format!(
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( \"quick brown fox\" ) }} \
-             LIMIT 10 }}\n}}\nLIMIT 10",
+             LIMIT 11 }}\n}}\nLIMIT 11",
             ex("pf/text")
         )
     );
@@ -1063,10 +1070,14 @@ fn a_producer_declaring_no_rows_is_planned_at_one_row_and_still_serves_its_term(
         .find(|unit| unit.stratum == iri(&ex("stratum/narrow")))
         .expect("the zero-declaring producer's stratum emits a unit");
     assert_eq!(narrow.depth, 1, "the unit reads one row");
-    // The emitted bound is the floor rather than `min(depth + 1, 0)`. A `LIMIT 0`
+    // The emitted bound is the floor rather than `min(depth, 0)`. A `LIMIT 0`
     // here would hand back no row whatever the relation holds, and the stratum
     // would then be reported exhausted with nothing — a completeness claim about
     // the bound, which is the exact defect this arm exists to keep out of the tree.
+    // It is also the one declaration that gets no probe slot: the floor IS the
+    // depth here, so nothing can arrive past it, which is deliberate — a zero
+    // declaration is read rather than obeyed, and the row the layer asked for on
+    // purpose is not a breach of it.
     assert!(
         narrow.sparql.ends_with("LIMIT 1"),
         "a declared zero still emits one row, never `LIMIT 0`: {}",

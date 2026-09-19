@@ -599,12 +599,17 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
         format!(
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{TEXT_PF}> \
-             ( \"alpha beta\" ?c2 ?c3 ?c4 ?c5 ) }} LIMIT 4 }}\n\
-             }}\nLIMIT 4"
+             ( \"alpha beta\" ?c2 ?c3 ?c4 ?c5 ) }} LIMIT 5 }}\n\
+             }}\nLIMIT 5"
         ),
         "the needle is a rendered constant at the relation's own needle position, \
          every other position is free, and the relation takes no depth argument so the \
-         branch carries the stratum's LIMIT"
+         branch carries the stratum's LIMIT — five over a depth of four, because the \
+         probe row is emitted at every depth including one that sits on the declaration"
+    );
+    assert_eq!(
+        text.depth, 4,
+        "and the recorded depth is four: only the emitted bound carries the probe"
     );
 
     let knn = compiled
@@ -618,11 +623,59 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{KNN_PF}> \
              ( <{seed}> \"4\"^^<{XSD_INTEGER}> ?c3 ) }} }}\n\
-             }}\nLIMIT 4",
+             }}\nLIMIT 5",
             seed = ex("a")
         ),
         "the seed is a rendered constant and the stratum's depth IS the neighbour \
          count, so this branch bounds itself and carries no LIMIT of its own"
+    );
+    assert_eq!(
+        knn.declared_rows,
+        Some(4),
+        "this producer's declaration is its guard, and the depth sits on it"
+    );
+}
+
+/// The depth **argument** stops at the declaration; the emitted `LIMIT` does not.
+///
+/// The two numbers differ for this producer and only at this depth, and the
+/// difference is the point: a `LIMIT` is a ceiling the evaluator applies to a
+/// cursor, while the neighbour count is a request the relation reads and checks
+/// against its own configured guard. Asking for five neighbours from a guard that
+/// admits four is refused by the relation — correctly, since serving it would be a
+/// short answer returned as a complete one — so the probe row is bought on the
+/// `LIMIT`, where it costs the producer nothing, and never on the argument.
+///
+/// Without this split the probe would have turned a valid query into a refused
+/// one, which is the mirror of the silent truncation it exists to prevent.
+#[test]
+fn the_neighbour_count_stays_inside_the_guard_while_the_limit_probes_past_it() {
+    let registry = registry();
+    let statistics = NoStatistics;
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: None,
+    };
+    let planned = plan(&request(), &registry, &statistics).expect("the request plans");
+    let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
+    let knn = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == iri(KNN_STRATUM))
+        .expect("the neighbour stratum emits a unit");
+
+    assert!(
+        knn.sparql.contains(&format!("\"4\"^^<{XSD_INTEGER}>")),
+        "the relation is asked for the four neighbours it declared it can serve, \
+         never the five that would breach its guard: {}",
+        knn.sparql
+    );
+    assert!(
+        knn.sparql.ends_with("LIMIT 5"),
+        "while the unit's own bound still reaches one row past the declaration, so a \
+         relation that returned five would still be caught: {}",
+        knn.sparql
     );
 }
 

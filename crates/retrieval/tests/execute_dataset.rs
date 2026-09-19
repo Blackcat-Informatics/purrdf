@@ -1007,15 +1007,15 @@ fn a_short_index_that_served_no_row_still_reports_its_shortfall() {
 /// A stratum read at depth three over a producer holding ten rows is not
 /// exhausted, and before the probe there was no way for this layer to know that:
 /// ten rows cut to three and three rows that were all there ever was arrive
-/// identically. The emitted bound is therefore one row deeper wherever the
-/// registry left room, and the arrival of that row — and nothing else about it —
-/// decides the ending.
+/// identically. The emitted bound is therefore one row deeper, and the arrival of
+/// that row — and nothing else about it — decides the ending.
 ///
-/// The third arm is the over-refusal guard. A producer that declared three rows
-/// per invocation has already promised there is no fourth, so at depth three
-/// there is nothing to probe for: the unit ends at exactly three and `Exhausted`
-/// is honest by contract. Probing anyway would push the emitted bound past a
-/// number admission itself enforces.
+/// The third arm is the depth the `min` used to erase: a producer declaring three
+/// rows, planned at three. The probe row is emitted there too, because that is the
+/// depth at which `Exhausted` would otherwise be a guess. This arm is the honest
+/// half of that pair — a producer that declared three and holds three — and it must
+/// stay exactly as it was: three rows, no refusal, `Exhausted`. Its lying neighbour
+/// is [`an_under_declared_row_bound_is_refused_and_an_honest_one_is_not`].
 #[test]
 fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
     let alpha = iri(&ex(STRATA[0]));
@@ -1088,8 +1088,11 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
         3
     );
 
-    // (c) A producer declaring exactly three rows, planned at three: the depth
-    //     IS the declared bound, so there is no room and no question.
+    // (c) A producer declaring exactly three rows and holding exactly three,
+    //     planned at three: the depth IS the declared bound, and the probe slot
+    //     is emitted there too. It comes back empty, which is what turns this
+    //     stratum's exhaustion from a claim about the bound into a claim about
+    //     the data.
     let registry = one_stratum_registry(3, 3);
     let stats = statistics_bounding(10);
     let planned = plan(&seed_request(), &registry, &stats).expect("plans");
@@ -1104,21 +1107,120 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
     };
     let bundle = compile(&planned, &env).expect("admits");
     assert!(
-        bundle.units[0].sparql.ends_with("LIMIT 3"),
-        "a producer that promised no fourth row is not asked for one: {}",
+        bundle.units[0].sparql.ends_with("LIMIT 4"),
+        "the probe slot exists at the declared bound too — erasing it there is the \
+         one depth where `Exhausted` would be a guess: {}",
         bundle.units[0].sparql
     );
-    assert_eq!(bundle.units[0].depth, 3);
+    assert_eq!(
+        bundle.units[0].depth, 3,
+        "and only the emitted bound moved: the recorded depth is still three"
+    );
+    assert_eq!(
+        bundle.units[0].declared_rows,
+        Some(3),
+        "the unit carries the declaration the probe row will be read against"
+    );
     let execution =
         block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the unit runs");
     assert_eq!(
         execution.statuses[&alpha],
         ProducerStatus::Exhausted { rows_emitted: 3 },
-        "and exhaustion at the declared bound is honest by contract, not a guess"
+        "an honest producer loses nothing to the probe: three rows, no refusal, and \
+         an exhaustion now verified by the empty slot"
     );
     assert_eq!(
         searched(&registry, &stats).planned_resolution[&alpha].requested_depth,
         3
+    );
+}
+
+/// The hazard arm of case (c): a producer that **under-declares** its row bound.
+///
+/// Ten rows held, three declared. The planner takes the declaration for the
+/// stratum's depth, so the plan lands at exactly three — the depth at which the
+/// probe row used to be erased, and therefore the depth at which this read was
+/// reported [`ProducerStatus::Exhausted`] for three of its ten rows, with nothing
+/// anywhere saying so. That is the strongest completeness claim this layer has,
+/// minted for a read a wrong declaration truncated.
+///
+/// With the probe slot present the fourth row arrives, and it cannot be the
+/// ordinary `DepthReached`: the producer promised there is no fourth. It is the
+/// producer contradicting the registry, so the whole run is refused by name.
+///
+/// The neighbouring valid case — the same depth over a producer whose declaration
+/// is true — is arm (c) of
+/// [`the_probe_separates_a_cut_read_from_an_exhausted_one`], and it is asserted
+/// again here so the refusal and its non-refusal live in one place.
+#[test]
+fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
+    let alpha = iri(&ex(STRATA[0]));
+    let stats = statistics_bounding(3);
+
+    // The liar: ten rows behind a declaration of three.
+    let registry = one_stratum_registry(10, 3);
+    let planned = plan(&seed_request(), &registry, &stats).expect("plans");
+    assert_eq!(
+        planned.stratum_depths[&alpha], 3,
+        "the plan sits at the declared bound, which is the hazard depth"
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let bundle = compile(&planned, &env).expect("a depth at the bound is admitted, not refused");
+    assert!(
+        bundle.units[0].sparql.ends_with("LIMIT 4"),
+        "the read reaches for the row the declaration ruled out: {}",
+        bundle.units[0].sparql
+    );
+    assert_eq!(
+        bundle.units[0].depth, 3,
+        "the recorded depth did not move with the emitted bound"
+    );
+    let error = block_on(execute(&bundle, &registry, &*dataset_of(&[])))
+        .expect_err("a fourth row from a producer that declared three is refused");
+    match &error {
+        ExecutionError::RowBoundBreached {
+            stratum,
+            declared,
+            pulled,
+        } => {
+            assert_eq!(
+                stratum.as_str(),
+                alpha.as_str(),
+                "the refusal names the stratum"
+            );
+            assert_eq!(*declared, 3, "the promise the host has to go and fix");
+            assert_eq!(*pulled, 4, "and the evidence that it is false");
+        }
+        other => panic!("the breach is refused by name, not reported as a status or as {other:?}"),
+    }
+    let message = error.to_string();
+    assert!(
+        message.contains("at most 3 rows") && message.contains("returned 4"),
+        "both numbers reach a host that only reads the message: {message}"
+    );
+
+    // The neighbour that must stay green: the same depth, the same declaration,
+    // over a producer whose declaration is true.
+    let honest = one_stratum_registry(3, 3);
+    let planned = plan(&seed_request(), &honest, &stats).expect("plans");
+    assert_eq!(planned.stratum_depths[&alpha], 3);
+    let env = AdmissionEnvironment {
+        registry: &honest,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let bundle = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&bundle, &honest, &*dataset_of(&[]))).expect("an honest producer runs");
+    assert_eq!(
+        execution.statuses[&alpha],
+        ProducerStatus::Exhausted { rows_emitted: 3 },
+        "the refusal costs the honest producer nothing: no extra row, no refusal, \
+         and the same exhaustion it always reported"
     );
 }
 

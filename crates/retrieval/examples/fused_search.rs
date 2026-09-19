@@ -42,6 +42,28 @@
 //! and the trailer reports what each producer actually did, which for a corpus
 //! this small is to run out of rows.
 //!
+//! # The trailer is the rest of the answer
+//!
+//! The rows are what was asked for; the trailer is what a consumer needs in order
+//! to know what the rows are worth, so this example prints all of it rather than
+//! stopping at the ranking. After the statuses and the planned resolution it
+//! reports:
+//!
+//! * **what each index attested** — which generation answered, and whether that
+//!   generation declared itself short. Both are pinned when the index is opened,
+//!   before a single row is pulled, so they describe the read that produced these
+//!   rows and not the state of an index some time afterwards;
+//! * **the evidence identity**, a digest of exactly those attestations. Two
+//!   answers assembled from differently-aged indexes carry different ids even
+//!   when the plan, the profile and every row match;
+//! * **what that makes of the scores** — exact, or a lower bound naming the
+//!   strata whose shortfall made it one. A lower bound is still a real order over
+//!   real rows; what it withdraws is the claim that a missing row would have
+//!   stayed missing;
+//! * **the candidate domains in force**, which say what each producer could ever
+//!   have named. Both producers here rank the same four documents and so promise
+//!   nothing narrower than "anything".
+//!
 //! Every IRI here is the host's own `example.org` vocabulary. PurRDF mints none,
 //! and there is no default producer, stratum or weight to fall back on.
 
@@ -59,11 +81,11 @@ use purrdf_core::{
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus, RequestTerm,
-    RetrievalRequest, SearchResult, Statistics, Term, TopK, search,
+    RetrievalRequest, ScoreExactness, SearchResult, Statistics, Term, TopK, search,
 };
 use purrdf_sparql_eval::{
-    CandidateDomains, EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry,
-    TermKind,
+    CandidateDomains, DomainTag, EmbeddingKnnRelation, EmbeddingSpace, IndexGeneration, KnnGuard,
+    PropertyFunctionRegistry, ServiceLevel, TermKind,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 
@@ -470,6 +492,63 @@ fn report(result: &SearchResult) {
             short(stratum),
             planned.requested_depth
         );
+    }
+
+    // The trailer is where a consumer looks for "what should I know about this
+    // answer", so the exemplar reads all of it rather than the rows alone. Each
+    // block below is a fact no row can carry: which index answered, whether that
+    // index was whole, what that makes of the scores, and which slice of the
+    // candidate universe each producer was ever able to name.
+    println!("\nwhat each index attested (pinned before a row was pulled)");
+    for (stratum, attestation) in &result.trailer.attestations {
+        let generation = match &attestation.generation {
+            IndexGeneration::Declared(generation) => format!("generation {generation}"),
+            IndexGeneration::Undeclared => "no generation declared".to_owned(),
+        };
+        let service = match &attestation.service {
+            ServiceLevel::Undeclared => "declared no shortfall".to_owned(),
+            ServiceLevel::Incomplete { reason } => format!("declared itself SHORT: {reason}"),
+        };
+        println!("  {}: {generation}; {service}", short(stratum));
+    }
+
+    // A pure function of the attestations above, so two answers built from the
+    // same indexes carry the same id and two built from differently-aged ones do
+    // not — whatever else about the query matched.
+    println!("\nevidence identity {}", result.evidence_id);
+
+    println!("\nwhat that makes of the scores");
+    match &result.trailer.exactness {
+        ScoreExactness::Exact => println!(
+            "  exact: no stratum in this fusion declared itself short, so each score is \
+             the whole sum of the contributions that were due"
+        ),
+        ScoreExactness::LowerBounds { strata } => {
+            let named = strata.iter().map(short).collect::<Vec<_>>().join(", ");
+            println!(
+                "  lower bounds: {named} attested an incomplete index, so every score here \
+                 is at most what the whole index would have produced"
+            );
+        }
+    }
+
+    // What each producer promised it could ever name. `Unrestricted` is the
+    // widest promise and the one both producers here make, because both rank the
+    // same four documents; a `Within` declaration is what lets fusion certify a
+    // candidate without draining a stratum that was never going to name it.
+    println!("\ncandidate domains in force");
+    for (stratum, domains) in &result.trailer.domains {
+        let rendered = match domains {
+            CandidateDomains::Unrestricted => "may name any candidate".to_owned(),
+            CandidateDomains::Within(tags) => format!(
+                "restricted to {}",
+                tags.iter()
+                    .map(DomainTag::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        println!("  {}: {rendered}", short(stratum));
     }
 
     println!("\nrequest terms nothing served");

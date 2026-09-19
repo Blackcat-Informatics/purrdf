@@ -114,11 +114,15 @@
 //! indexes are distinguishable even when every other identity matches.
 //!
 //! Neither is the depth a read was cut at. A unit is emitted one row deeper than
-//! its stratum reads wherever the registry left room, and that probe row is what
-//! separates [`ProducerStatus::DepthReached`] from
-//! [`ProducerStatus::Exhausted`] — the difference between "the plan stopped me"
-//! and "this is all there is". The probe is a read and never a value: no plan
-//! field, identity or resolution number moves by one because of it.
+//! its stratum reads, and that probe row is what separates
+//! [`ProducerStatus::DepthReached`] from [`ProducerStatus::Exhausted`] — the
+//! difference between "the plan stopped me" and "this is all there is". The
+//! probe is a read and never a value: no plan field, identity or resolution
+//! number moves by one because of it. Where the row is past the registry's
+//! declared bound rather than merely past the depth, the producer contradicted
+//! its own declaration and the run is refused
+//! ([`ExecutionError::RowBoundBreached`]) rather than reported as either
+//! ending.
 //!
 //! Rank order is not carried there, because it is not a per-producer variable.
 //! Every ranked stream owes its consumer the same law — 1-based, contiguous,

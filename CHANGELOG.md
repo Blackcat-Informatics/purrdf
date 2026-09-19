@@ -408,6 +408,47 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **retrieval:** A stratum whose planned depth already equalled its producer's
+  declared row bound was reported `ProducerStatus::Exhausted` -- the strongest
+  completeness claim this layer has -- for a read that bound had cut, with
+  nothing anywhere saying so. The depth probe is the row that tells a read which
+  ran out from a read which was stopped, and it was emitted at
+  `min(depth + 1, declared)`: at that one depth the `min` selected the
+  declaration, the unit was emitted at exactly its own depth, and there was no
+  probe slot left to answer the question. It is now
+  `max(1, min(depth, declared) + 1)`, so the slot exists at every depth. Only the
+  emitted `LIMIT` moves; the recorded depth is what admission holds a plan to and
+  is unchanged, as are every plan field, identity and planned-resolution number
+  keyed to it.
+
+  A row arriving in that slot is past the declaration rather than merely past the
+  depth, which means the producer yielded a row it promised did not exist. That
+  is refused by name -- a new `ExecutionError::RowBoundBreached` carrying the
+  stratum, the declared bound and the count actually returned -- rather than
+  truncated and certified as exhaustion. It is a whole-run refusal and not a
+  per-stratum status, because the broken number ordered that call against the
+  other operators of its group and admitted every depth in the plan, and because
+  `ProducerStatus::ExecutionFailed` says the producer could not run while this
+  one ran and returned rows. An honest producer pays nothing for the slot: it
+  returns the rows it declared, the slot comes back empty, and its exhaustion is
+  now verified rather than believed.
+
+  The depth *argument* handed to a producer that declares a depth placement keeps
+  the older `max(1, min(depth + 1, declared))`, and that split is the point: a
+  `LIMIT` is a ceiling the evaluator applies to a cursor the producer never hears
+  about, while the argument is a request the producer reads and checks. Asking
+  for `declared + 1` there asks a producer to exceed its own registration, and
+  the nearest-neighbour relation correctly refuses a `k` above its configured
+  guard -- so probing on the argument would have turned a valid query into a
+  refused one. The unit's own bound still reaches one row past the declaration,
+  so a self-bounding producer that returns more rows than it declared is still
+  caught; it is simply never asked to.
+
+  `StratumUnit` gains a `declared_rows` field carrying the registry's declaration
+  for the stratum, which is what lets the executor tell the two kinds of extra row
+  apart. `None` there is a registry that declared no access mode and therefore no
+  bound, which promises nothing for a row to breach.
+
 - **python:** A ranked producer declared with more than one candidate-domain tag
   failed at the wrong time. One tag entails where every row of that producer
   lies, so a consumer reads the block off the declaration; several tags say only
