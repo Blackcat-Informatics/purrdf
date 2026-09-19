@@ -566,7 +566,9 @@ impl TextSearchRelation {
     /// The row bounds this relation declares are measured here, once, rather
     /// than recomputed per invocation: they are a function of the index, and
     /// the index is frozen. The generation its cursors attest is rendered here
-    /// for exactly the same reason — see [`index_generation`].
+    /// for exactly the same reason: it is the index fingerprint in lowercase hex,
+    /// so one rendering is interned once and every invocation attests a pointer to
+    /// it rather than a fresh copy.
     #[must_use]
     pub fn new(index: Arc<TextIndex>) -> Self {
         let bounds = SearchBounds::of(&index);
@@ -1179,7 +1181,8 @@ impl TermOccurrenceRelation {
     /// Walks every term's postings once to measure the row bounds it declares;
     /// the index is frozen, so they are measured here rather than per
     /// invocation, and the generation its cursors attest is rendered here for
-    /// the same reason (see [`index_generation`]).
+    /// the same reason — it is the index fingerprint in lowercase hex, interned
+    /// once so that attesting it costs a pointer rather than a copy.
     #[must_use]
     pub fn new(index: Arc<TextIndex>) -> Self {
         let bounds = OccurrenceBounds::of(&index);

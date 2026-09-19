@@ -386,8 +386,18 @@ impl EmbeddingSpace {
 
     /// The generation this space attests for every row it returns.
     ///
-    /// A content identity, comparable across processes and machines: see
-    /// [`space_generation`] for what it folds and why each part of it is there.
+    /// A content identity, comparable across processes and machines. It folds the
+    /// projection digest, the family contract that names the metric, and every
+    /// bound term in row order — and it moves exactly when the rows this space can
+    /// return move, which is what makes it worth comparing.
+    ///
+    /// The projection digest rather than the matrix digest, because a prefix policy
+    /// lets two spaces share one stored matrix and differ in the prefix taken. The
+    /// bindings are folded because the map from a row to the RDF term it stands for
+    /// is a host argument: two spaces over byte-identical artifacts with different
+    /// bindings return a different term at every position, and a matrix-only
+    /// identity would call them one generation. The bound on work is excluded — it
+    /// decides how hard a search tries, never which rows exist or how they rank.
     #[must_use]
     pub fn generation(&self) -> &str {
         &self.generation
