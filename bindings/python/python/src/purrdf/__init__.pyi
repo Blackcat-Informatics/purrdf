@@ -2110,6 +2110,25 @@ class retrieval:
     ) -> dict[str, builtins.object]: ...
     # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
     #
+    # Each entry under `"units"` is `{"stratum": str, "sparql": str, "depth":
+    # int}`. `"depth"` is the REPORTABLE bound — the most rows that stratum may
+    # contribute to an answer — and it is deliberately NOT the `LIMIT` in
+    # `"sparql"`. The text is emitted at most `depth + 1` rows deep, and that last
+    # row is a probe: it exists only so a reader can tell a producer that ran out
+    # of rows from a read the plan's depth cut short, two endings a text bounded
+    # at exactly `depth` cannot distinguish. The probe row is a READ and never a
+    # value. So a host that runs the text itself keeps at most `"depth"` rows and
+    # reports nothing past them; `search`, which runs the units for you, already
+    # does.
+    #
+    # "At most `depth + 1`" is exact, not hedged. Where the producer's declared
+    # row bound already equals the depth there is no room for a probe — the
+    # registry already answered the question the probe would ask — so none is
+    # emitted and the text's `LIMIT` equals `"depth"`. Read the bound off
+    # `"depth"` rather than off the text, which carries whichever of the two
+    # applies. `"planned_resolution"` is not a fallback source for it: that map is
+    # empty unless the call names a fusion law.
+    #
     # `weights`, `k` and `decay` are the fusion law the caller means to fuse
     # under, and naming it is what makes `"planned_resolution"` answerable: per
     # weighted stratum, the `"separates_to"` depth this law still tells adjacent

@@ -1163,6 +1163,15 @@ fn planned_resolution_dict<'py>(
 /// Render one compiled plan as a dict: the plan document, the per-stratum
 /// SPARQL, the two identities that pin the units, and what the plan's depths
 /// will cost in rank resolution under the law the caller named.
+///
+/// Each unit carries its `"depth"` beside its `"sparql"`, because the emitted
+/// text is written one row deeper than the plan reads wherever the producer's
+/// declaration left room for it: that last row is a probe the executor reads to
+/// tell an exhausted producer from a depth-cut one, and it is never a value. A
+/// host that runs the text itself has no other honest source for the number of
+/// rows it may keep — the depth is not recoverable from the text, and
+/// `planned_resolution` answers only when the call named a fusion law — so the
+/// bound travels with the text it bounds.
 fn compile_dict<'py>(
     py: Python<'py>,
     planned: &Plan,
@@ -1175,6 +1184,10 @@ fn compile_dict<'py>(
         let entry = PyDict::new(py);
         entry.set_item("stratum", unit.stratum.as_str())?;
         entry.set_item("sparql", &unit.sparql)?;
+        // The unit's own reportable bound, read off the field that carries it
+        // rather than re-derived from the text or looked up again in the plan:
+        // the text's `LIMIT` is the emitted bound, which includes the probe.
+        entry.set_item("depth", unit.depth)?;
         units.append(entry)?;
     }
     out.set_item("units", units)?;
@@ -1403,13 +1416,21 @@ fn plan<'py>(
 /// Plan, admit and emit: the per-stratum SPARQL the request compiles to.
 ///
 /// Returns the plan document under `"plan"` and, under `"units"`, one entry per
-/// stratum carrying the SPARQL text that stratum runs — the per-stratum depth
-/// is already a bound the plan carries, and the emitted text carries it as its
-/// own `LIMIT`. The admitted `"plan_id"` and the
+/// stratum carrying the `"sparql"` text that stratum runs and the `"depth"` that
+/// text is keyed to. The admitted `"plan_id"` and the
 /// `"registry_fingerprint"` the units were compiled against are alongside, so a
 /// host that logs a unit can say exactly which plan and which registry it came
 /// from. A host can read, log or execute those units itself; [`search`] is what
 /// runs them and fuses their rows.
+///
+/// `"depth"` is the reportable bound and it is **not** the `LIMIT` in
+/// `"sparql"`: the text is emitted at most one row deeper, and that extra row is
+/// a probe that exists only so a reader can tell a producer that ran out from a
+/// read the depth cut. A host that runs the text itself keeps at most `"depth"`
+/// rows and reports none of what came after. "At most one row deeper" is exact:
+/// where the producer's declared row bound already equals the depth there is no
+/// room for a probe and none is emitted, so the text's `LIMIT` equals `"depth"`
+/// there.
 ///
 /// `"planned_resolution"` is what those depths will cost in rank resolution,
 /// per stratum, **before** anything is executed: each entry names the

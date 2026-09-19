@@ -199,6 +199,20 @@ def _declared(
     }
 
 
+def _emitted_limit(sparql: str) -> int:
+    """The row bound a compiled unit's own text carries, read off that text.
+
+    The unit's trailing ``LIMIT`` — the one bounding the whole ``SELECT``, not
+    any bound an inner call renders into its own arguments. It is read here so a
+    test can compare what the text is allowed to RETURN against the ``"depth"``
+    the unit says may be REPORTED; those two numbers differ by the probe row
+    wherever the producer's declaration left room for one.
+    """
+    found = re.search(r"LIMIT (\d+)\s*$", sparql)
+    assert found is not None, f"a compiled unit carries a trailing LIMIT: {sparql!r}"
+    return int(found.group(1))
+
+
 def _ranking(answer: dict[str, Any]) -> list[tuple[str, str, tuple[Any, ...]]]:
     """An answer's rows, scores and provenance, as one comparable value."""
     return [
@@ -825,7 +839,15 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
 
 
 def test_compile_emits_the_sparql_each_stratum_runs() -> None:
-    """Admission's value is plain text a host can read, log, or run itself."""
+    """Admission's value is plain text a host can read, log, or run under an obligation.
+
+    The text is runnable, and running it is not the same as reporting its rows:
+    a unit is emitted at most one row deeper than the plan reads, so a host that
+    executes the text itself keeps at most ``"depth"`` rows. The unit carries
+    that bound beside the text, which is the only reason the obligation is
+    dischargeable here — ``"planned_resolution"`` is empty on a call that names
+    no law, so it is no fallback source for the number.
+    """
     compiled = retrieval.compile(
         DATA,
         [_lexical("quick fox", NOTE)],
@@ -837,9 +859,72 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
     assert units[0]["stratum"] == NOTE_STRATUM
     assert '"quick fox"' in units[0]["sparql"], "the needle is a rendered constant"
     assert f"<{NOTE_PRODUCER}>" in units[0]["sparql"], "the unit calls the bound producer"
+    depth = units[0]["depth"]
+    assert isinstance(depth, int) and depth >= 1, (
+        "the reportable bound travels with the text it bounds"
+    )
+    assert _emitted_limit(units[0]["sparql"]) in {depth, depth + 1}, (
+        "the emitted bound is the depth, or the depth plus the one probe row"
+    )
     assert compiled["plan_id"] == compiled["plan"]["plan_id"]
     assert compiled["planned_resolution"] == {}, (
         "resolution is measured against a fusion law, and this call named none"
+    )
+
+
+def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> None:
+    """The emitted ``LIMIT`` is not the reportable bound, and the unit says both.
+
+    A text bounded at exactly the depth cannot tell the two endings apart that
+    a consumer has to distinguish: a producer that ran out of rows, and a read
+    the plan's depth cut short. So wherever the producer's declared row bound
+    leaves room, the unit is emitted one row deeper and that last row is a
+    probe — a READ and never a value. Here a measured cardinality lowers the
+    depth below what the producer declared, which is exactly the room the probe
+    needs, so the emitted ``LIMIT`` is ``depth + 1`` while ``"depth"`` stays the
+    number of rows a host may keep.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
+    )
+    unit = compiled["units"][0]
+    assert unit["depth"] == 1, "the host's measurement lowered the depth to one row"
+    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+        "the extra row is the probe, and a host that runs this text reports "
+        "only the first `depth` rows"
+    )
+
+
+def test_no_probe_row_is_emitted_where_the_declaration_leaves_no_room() -> None:
+    """At most one row deeper is EXACT: a probe is emitted only where it fits.
+
+    With no statistic to narrow it, the depth is already the producer's whole
+    declared row bound, and a probe past that asks a question the registry
+    answered at registration. None is emitted, so the emitted ``LIMIT`` equals
+    ``"depth"`` — which is why the bound is read off ``"depth"`` rather than off
+    the text, whose ``LIMIT`` carries whichever of the two cases applies.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+    )
+    unit = compiled["units"][0]
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+    )
+    assert unit["depth"] == planned["stratum_depths"][NOTE_STRATUM], (
+        "the unit reports the depth the plan recorded, not a number of its own"
+    )
+    assert _emitted_limit(unit["sparql"]) == unit["depth"], (
+        "the declared row bound already answers what a probe would ask"
     )
 
 

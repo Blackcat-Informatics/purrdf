@@ -341,6 +341,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **python:** A host that ran a compiled retrieval unit's SPARQL itself had no way
+  to learn how many of its rows it was allowed to report. The compile stage emits
+  the text at most one row deeper than the plan reads, and that last row is a
+  probe that exists only to tell an exhausted producer from a depth-cut read: it
+  is read and never reported. Rust callers have carried the reportable bound on
+  the unit all along; the Python unit dict exposed only `"stratum"` and
+  `"sparql"`, so the text's `LIMIT` was the only number in reach and it is the
+  wrong one. Each unit now carries `"depth"` beside its text -- the plan's own
+  recorded bound, not a number re-derived from the emitted `LIMIT` -- and the
+  surface states the obligation: keep at most `"depth"` rows. Where the
+  producer's declared row bound already equals the depth no probe is emitted and
+  the two numbers coincide, which is exactly why the bound cannot be read off the
+  text. `"planned_resolution"` was no fallback either: it is empty unless the call
+  names a fusion law.
 - **retrieval:** A fused answer could contain the same entity twice. Certifying a
   candidate removes it from the frontier, and the check that held a stream to its
   declared uniqueness read only the frontier, so a stream naming that entity again
