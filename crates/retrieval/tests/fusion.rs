@@ -1714,9 +1714,25 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     );
 }
 
-// 15. The bound stops the reading, not only the returning.
+// 15. The bound stops the reading, not only the returning — over ONE stratum.
+//
+// **The single-stratum case is degenerate, and the name says so.** With one
+// stream open there is no rival stratum that could still contribute to a
+// candidate, so the finality test every certification rests on is satisfied by
+// the first row pulled and the bound stops the read whatever the engine's
+// threshold arithmetic does. That is worth pinning — it is the shape a
+// single-producer request really has — but it is *not* evidence that the reading
+// is bounded in general, and a version of this test that claimed to be would
+// have stayed green throughout the fused top-k drain defect, which lived
+// entirely in the multi-stratum threshold.
+//
+// The load-bearing claim over several strata is
+// `declared_domains_bound_the_reading_over_disjoint_strata`, which measures the
+// same quantity across two disjoint strata and carries the counter-measurement:
+// without a domain declaration the identical streams drain, because with two
+// open streams nothing licenses an early stop.
 #[test]
-fn a_bounded_stop_closes_a_stream_instead_of_draining_it() {
+fn a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it() {
     // A stratum with far more rows than the bound asks for, and a counter on
     // every pull. If the terminal report drained the stream to make it declare
     // `Exhausted`, the count would be the whole stream and the memory bound
