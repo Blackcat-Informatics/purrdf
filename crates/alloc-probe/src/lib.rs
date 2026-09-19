@@ -440,6 +440,7 @@ mod tests {
     use std::hint::black_box;
     use std::panic::{self, AssertUnwindSafe};
     use std::sync::atomic::Ordering;
+    use std::sync::{Mutex, MutexGuard, PoisonError};
     use std::thread;
 
     use super::{
@@ -452,9 +453,43 @@ mod tests {
     #[global_allocator]
     static GLOBAL: CountingAllocator = CountingAllocator;
 
+    /// Serializes this module's tests, so the whole-process one is alone.
+    ///
+    /// [`WholeProcessWindow`]'s documented precondition is that the test holding
+    /// one "must also be the only thing running". That is not free under a
+    /// harness that runs test functions concurrently over one allocator: a
+    /// sibling test's still-live buffer lands in this window's `retained_bytes`
+    /// indistinguishably from retention by the measured region, which is the
+    /// documented hazard rather than a defect in the ledger. The precondition
+    /// has to be taken, so every test here takes it.
+    static EXCLUSIVE: Mutex<()> = Mutex::new(());
+
+    /// Take [`EXCLUSIVE`] for the rest of the caller's test.
+    ///
+    /// Poisoning is expected, not exceptional: `nesting_a_current_thread_window_is_refused`
+    /// panics by design while holding the guard. A poisoned lock still excludes,
+    /// and there is no shared state behind it to have been left inconsistent.
+    fn exclusive() -> MutexGuard<'static, ()> {
+        EXCLUSIVE.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// How large the buffer the cross-thread tests allocate is; big enough that
     /// no incidental traffic could be mistaken for it.
     const PROBE_BYTES: usize = 1 << 20;
+
+    /// How far a whole-process window's live-byte baseline may drift below
+    /// where it opened before the peak assertion stops meaning anything.
+    ///
+    /// A whole-process window opens over a RUNNING process and reports deltas
+    /// from that instant, so memory allocated before it and freed inside it
+    /// reads as negative retention — the documented behaviour of
+    /// [`Measurement::retained_bytes`]. `peak_working_bytes` is a high-water
+    /// mark of that same signed delta, so the identical drift puts the peak of
+    /// a `PROBE_BYTES` buffer just UNDER `PROBE_BYTES`, and a bound at exactly
+    /// `PROBE_BYTES` claims a baseline of zero that this window never promised.
+    /// Ambient drift is a few hundred bytes; this slack is far above that and
+    /// far below the buffer, so nothing but the buffer can clear the bound.
+    const BASELINE_DRIFT_SLACK: i64 = 64 * 1024;
 
     /// A vector of `PROBE_BYTES` bytes, returned so the caller decides when it
     /// is freed.
@@ -464,6 +499,7 @@ mod tests {
 
     #[test]
     fn a_current_thread_window_reports_the_four_quantities_apart() {
+        let _exclusive = exclusive();
         let window = CurrentThreadWindow::open();
         let transient = probe_buffer();
         let transient_len = transient.len();
@@ -496,6 +532,7 @@ mod tests {
     fn a_current_thread_window_does_not_see_another_thread() {
         // The documented hazard, executed: this is why a window over a
         // `rayon`-parallel region has to be the whole-process one.
+        let _exclusive = exclusive();
         let window = CurrentThreadWindow::open();
         thread::spawn(|| drop(probe_buffer()))
             .join()
@@ -510,6 +547,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "a CurrentThreadWindow is already open")]
     fn nesting_a_current_thread_window_is_refused() {
+        let _exclusive = exclusive();
         let _outer = CurrentThreadWindow::open();
         let _inner = CurrentThreadWindow::open();
     }
@@ -519,13 +557,14 @@ mod tests {
     /// The ledger it reads has exactly one set of counters for the process, so
     /// two test functions exercising it would race under a harness that runs
     /// tests concurrently — the second `open` would meet the first's token and
-    /// refuse. Keeping the whole-process surface in a single test is what makes
-    /// these assertions statements about the instrument rather than about
-    /// scheduling; the assertions themselves are one-sided (`>=`) wherever a
-    /// sibling test's traffic could land inside the window, because being
-    /// unable to exclude it is the documented hazard of this mode.
+    /// refuse. Keeping the whole-process surface in a single test settles that
+    /// much, but not the measurement: the window counts every thread, so a
+    /// sibling test's live buffer is retention as far as the ledger can tell,
+    /// and the upper bound below would fail on scheduling alone. [`EXCLUSIVE`]
+    /// is what makes these assertions statements about the instrument.
     #[test]
     fn the_whole_process_window_sees_every_thread_and_only_while_it_is_open() {
+        let _exclusive = exclusive();
         let window = WholeProcessWindow::open();
         thread::spawn(|| drop(probe_buffer()))
             .join()
@@ -545,8 +584,8 @@ mod tests {
         );
         assert!(measured.allocations >= 1, "{measured:?}");
         assert!(
-            measured.peak_working_bytes >= PROBE_BYTES as i64,
-            "{measured:?}"
+            measured.peak_working_bytes >= PROBE_BYTES as i64 - BASELINE_DRIFT_SLACK,
+            "a whole-process window missed another thread's working set: {measured:?}"
         );
         // The buffer was freed inside the window, so it is traffic and peak but
         // not retention — the distinction the four quantities exist to keep.

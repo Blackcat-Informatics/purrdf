@@ -125,18 +125,26 @@ version_state() {
   crates_io_version_state "$1" "${VERSION}" "${user_agent}"
 }
 
-# workspace_path_deps <crate>: "<kind> <name>" per PATH dependency, every kind.
+# workspace_path_deps <crate>: "<kind> <name>" per PATH dependency, every kind,
+# except the ones onto a member that is never published (`publish = false`,
+# which cargo metadata reports as an empty list). Those edges carry a path and
+# no version, so cargo strips them from the manifest it uploads — the publish
+# never looks for them on a registry they will never be on, and they are not a
+# publish-ordering constraint at all. `purrdf-alloc-probe` is the live case;
+# scripts/release-crates.sh states the versionless rule they depend on. Kinds
+# are still never filtered: a dev-edge onto a PUBLISHED crate does constrain.
 workspace_path_deps() {
   python3 - "${metadata_json}" "$1" <<'PY'
 import json
 import sys
 
 metadata = json.load(open(sys.argv[1], encoding="utf-8"))
+never_published = {p["name"] for p in metadata["packages"] if p.get("publish") == []}
 for package in metadata["packages"]:
     if package["name"] != sys.argv[2]:
         continue
     for dep in package["dependencies"]:
-        if dep.get("path"):
+        if dep.get("path") and dep["name"] not in never_published:
             print(dep["kind"] or "normal", dep["name"])
 PY
 }
