@@ -2448,8 +2448,18 @@ class retrieval:
     # whatever the degraded strata did or did not find — the answer a caller with
     # a completeness obligation actually has, since without it the only safe move
     # is to downgrade the whole answer. It claims membership and never absence: a
-    # row past the prefix is POSSIBLE, not excluded, and a candidate no producer
-    # named is not spoken for at all.
+    # row PAST the prefix is possible rather than excluded.
+    #
+    # `"unemitted_ceiling"` is the evidence that verdict rests on, in the same
+    # fixed-point lexical as `"score"`: the most any candidate outside the answer
+    # could be worth, counting both the candidates no stream ever named and the
+    # ones a bounded read abandoned. A leading row is certain exactly when its own
+    # floor clears it, which is what lets the prefix speak about candidates no
+    # producer named -- a bound over only the rows in hand would be a claim about
+    # the ranking rather than about the answer. It is `None` where a stratum
+    # declared a perturbed order, because that breaks the one inequality every
+    # bound here rests on and no finite ceiling exists; `"certain_prefix"` is then
+    # `0`.
     #
     # `"domains"` maps a stratum to the candidate-domain declaration its stream
     # fused under: `None` where the producer promised only that it may name

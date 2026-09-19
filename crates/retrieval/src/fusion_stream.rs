@@ -906,6 +906,54 @@ pub struct FusionTrailer {
     /// further to sharpen this field would falsify that one, so the flag is
     /// defined over what the bounded read had already settled.
     pub cut_on_a_tie: bool,
+    /// The highest true score any candidate this fusion did **not** emit could
+    /// have, or `None` where no finite such bound exists.
+    ///
+    /// It is the term that turns [`Self::certain_prefix`] from a statement about
+    /// the rows in hand into a statement about membership. A row's own
+    /// [`ScoreInterval`] bounds what the degraded strata could have done to *it*;
+    /// this bounds what they could have done for a candidate the answer never
+    /// names, which is the other half of "this row keeps its place".
+    ///
+    /// # Why it is on the trailer rather than recomputed from the rows
+    ///
+    /// Because it is not a function of the rows. Every term of it is a fact of
+    /// the fusion that produced them — what each open stream was still offering
+    /// when reading stopped, what the profile awards a rank-one row in each
+    /// degraded stratum, and how far the candidates left in the frontier had
+    /// already accumulated. None of that survives into a [`FusedRow`], and a
+    /// holder of the rows alone could not derive it at any cost.
+    ///
+    /// # What it covers
+    ///
+    /// Two populations, and the bound is the larger of the two:
+    ///
+    /// * a candidate **no stream ever named** — bounded by the fusion's own
+    ///   unseen-item threshold, plus the rank-one contribution of every degraded
+    ///   stratum, since a stratum that could have missed a candidate entirely
+    ///   could have missed it at rank one;
+    /// * a candidate **named but never certified**, still in the frontier when
+    ///   reading stopped — bounded by what it had already accumulated plus the
+    ///   same per-candidate deficit [`FusedRow::interval`] reports for an
+    ///   emitted row.
+    ///
+    /// # What it does NOT claim
+    ///
+    /// Nothing about *which* candidate that would be: knowing what a degraded
+    /// stratum failed to name would mean knowing what it did not look at, which
+    /// nobody has. It is a bound on a score and never a name.
+    ///
+    /// It speaks for the reads this trailer describes, not for reads that were
+    /// never performed. A producer stopped at its plan depth, or one that could
+    /// not run at all, states that shortfall in [`Self::statuses`] — the same
+    /// division [`Self::exactness`] makes, and for the same reason: a shortfall
+    /// a status already reports is not restated here as a number.
+    ///
+    /// `None` is the refusal [`ScoreInterval::Unbounded`] makes, in the same
+    /// voice: where a stratum declared a perturbed order, an emitted rank bounds
+    /// nothing, so no finite ceiling on an unemitted candidate exists and none is
+    /// invented. The responsible strata are named in [`Self::exactness`].
+    pub unemitted_ceiling: Option<Fixed>,
 }
 
 // Canonical discriminators for the evidence encoding. One tag space per enum,
@@ -1016,13 +1064,27 @@ impl FusionTrailer {
     ///
     /// This is a terminal operation on a terminal value — the trailer exists
     /// only after every stream reached its receipt — so nothing here makes a
+    /// status readable mid-stream.
+    #[must_use]
+    pub fn completed_with<I>(mut self, statuses: I) -> Self
+    where
+        I: IntoIterator<Item = (Iri, ProducerStatus)>,
+    {
+        for (stratum, status) in statuses {
+            self.statuses.entry(stratum).or_insert(status);
+        }
+        self
+    }
+
     /// How many leading rows of `rows` are **certainly** in the answer.
     ///
     /// The longest prefix in which every row's lowest possible score still beats
-    /// every later row's highest possible score. Those rows keep their places
-    /// whatever the degraded strata did or did not find; past the prefix, two
-    /// rows' intervals overlap and their relative order is an artefact of what
-    /// the producers happened to return.
+    /// both of the things that could displace it: every later row's highest
+    /// possible score, and [`Self::unemitted_ceiling`] — the highest possible
+    /// score of any candidate this answer does not contain. Those rows keep
+    /// their places whatever the degraded strata did or did not find; past the
+    /// prefix, two rows' intervals overlap and their relative order is an
+    /// artefact of what the producers happened to return.
     ///
     /// # What this is for
     ///
@@ -1032,18 +1094,61 @@ impl FusionTrailer {
     /// certain, it can present that prefix as settled and mark the rest — which
     /// is both more useful and more honest than either extreme.
     ///
+    /// # Both terms are needed, and only one of them is about the rows
+    ///
+    /// The pairwise term settles the rows against each other. On its own it
+    /// would settle nothing: a lossy stratum's whole failure mode is not naming
+    /// things, so the candidate that displaces an emitted row is the one that is
+    /// not in `rows` at all, and no comparison among the rows in hand can see
+    /// it. [`Self::unemitted_ceiling`] is that missing term, and it is a fact of
+    /// the fusion rather than of the rows — which is why it is carried on this
+    /// trailer rather than recomputed here.
+    ///
+    /// A **degraded** stratum is charged its **rank-one** contribution there. A
+    /// stratum that could have missed a candidate entirely could have missed it
+    /// at rank one, and the profile's rank-one award is the supremum of what a
+    /// row it never emitted could have been worth. The charge is therefore the
+    /// largest one that stratum can justify, which is what makes the prefix
+    /// under-claim rather than over-claim when the declarations are vague.
+    ///
     /// # What it does NOT claim
     ///
-    /// Membership, not absence. A row outside the prefix is *possible*, never
-    /// excluded, and a candidate absent from `rows` entirely is not ruled out at
-    /// all: a lossy stratum's whole failure mode is not naming things, and
-    /// nothing here can speak for a row no producer offered. The prefix is a
-    /// claim about the rows in hand.
+    /// Membership, not order within a tie, and not exclusion past the prefix:
+    ///
+    /// * which of two *exactly* tied rows comes first is not settled here — it
+    ///   is decided by the engine's total tie-break (best rank, then canonical
+    ///   term order), replayably, and reported for the last emitted row as
+    ///   [`Self::cut_on_a_tie`];
+    /// * a row **past** the prefix is *possible*, never excluded. The prefix
+    ///   ending at three says the first three keep their places, not that the
+    ///   fourth has lost its own;
+    /// * no candidate is named. Knowing *which* row a degraded stratum failed to
+    ///   find would mean knowing what it did not look at, which nobody has. The
+    ///   unemitted term bounds such a candidate's score without identifying it.
+    ///
+    /// It speaks for the reads this trailer describes. A producer stopped at its
+    /// plan depth, or one that could not run at all, states that shortfall in
+    /// [`Self::statuses`] rather than in any bound — the division
+    /// [`Self::exactness`] already makes — so a consumer that needs the answer
+    /// over reads that were never performed reads the statuses beside this
+    /// number.
     ///
     /// # The degenerate cases, and why they are what they are
     ///
-    /// * Every stratum exhaustive ⇒ every interval is zero-width ⇒ the prefix is
-    ///   the whole of `rows`, which is the answer this engine always gave.
+    /// * Every stratum exhaustive ([`ScoreExactness::Exact`]) ⇒ the prefix is
+    ///   the whole of `rows`, which is the answer this engine always gave. Every
+    ///   interval is zero-width, so the pairwise term is the emitted order
+    ///   itself; and nothing outside `rows` can reach them either, because a row
+    ///   is certified only over a threshold that bounds every candidate still to
+    ///   come and that threshold only falls as reading proceeds. Taken as a
+    ///   short-circuit because it is both the common case and the one answer no
+    ///   arithmetic can improve on.
+    /// * Any row carrying [`ScoreInterval::Unbounded`] ⇒ `0`. An unbounded row
+    ///   could outscore anything, so nothing above it is safe either, and a
+    ///   prefix "certain except for one unbounded rival" is not certain.
+    /// * [`Self::unemitted_ceiling`] of `None` ⇒ `0`, for the same reason about
+    ///   the candidates this answer never named.
+    /// * `rows` empty ⇒ `0`.
     ///
     /// # Why the comparison admits equality
     ///
@@ -1056,17 +1161,15 @@ impl FusionTrailer {
     /// prefix ending at the tie, claiming doubt where there is none.
     ///
     /// Equality is sound because the intervals still order the true scores:
-    /// `true(i) >= floor(i) >= ceiling(j) >= true(j)`. What equality does not
-    /// settle is which of two *exactly* tied rows comes first, and that was
-    /// never this function's claim — it is decided by the engine's total
-    /// tie-break (best rank, then canonical term order), replayably, and
-    /// reported for the last emitted row as
-    /// [`FusionTrailer::cut_on_a_tie`].
+    /// `true(i) >= floor(i) >= ceiling(j) >= true(j)`.
     ///
-    /// * Any row carrying [`ScoreInterval::Unbounded`] ⇒ `0`. An unbounded row
-    ///   could outscore anything, so nothing above it is safe either, and a
-    ///   prefix "certain except for one unbounded rival" is not certain.
-    /// * `rows` empty ⇒ `0`.
+    /// # One backward pass
+    ///
+    /// "Beats every later row" is asked of every row, and asking it row by row
+    /// would walk the suffix each time — quadratic in the answer, on the default
+    /// path of every fused search. The suffix maximum of `ceiling` is carried
+    /// backwards instead, so each row is judged against one number and the whole
+    /// function is linear in `rows` with no allocation.
     ///
     /// `rows` is assumed to be in this fusion's emitted order, which is the
     /// order [`FusionStream::next`] yields and the order
@@ -1080,6 +1183,16 @@ impl FusionTrailer {
             .any(|row| matches!(row.interval, ScoreInterval::Unbounded { .. }))
         {
             return 0;
+        }
+        // And an absentee nothing bounds poisons it the same way: `None` is the
+        // identical refusal, made about the candidates this answer never named.
+        let Some(unemitted) = self.unemitted_ceiling else {
+            return 0;
+        };
+        // See the degenerate cases above: an exhaustive answer is certain in
+        // whole, and this is the path that does not pay to re-derive it.
+        if matches!(self.exactness, ScoreExactness::Exact) {
+            return rows.len();
         }
 
         // The inflation term is a sum of contributions that are themselves
@@ -1100,34 +1213,35 @@ impl FusionTrailer {
             ScoreInterval::Unbounded { .. } => None,
         };
 
-        let mut certain = 0;
-        for (position, row) in rows.iter().enumerate() {
+        // Walked from the back so that "beats every later row" is a comparison
+        // against one carried number. `suffix_ceiling` is the highest ceiling
+        // strictly after the row being judged — `None` at the last row, whose
+        // suffix is empty — and `suffix_unbounded` records a later row whose
+        // ceiling overflowed, which no row can be proved to beat.
+        let mut certain = rows.len();
+        let mut suffix_ceiling: Option<Fixed> = None;
+        let mut suffix_unbounded = false;
+        for (position, row) in rows.iter().enumerate().rev() {
             let mine = floor(row);
-            // A row is certain of its place when nothing behind it can reach it.
-            // Only the rows behind need checking: the ones ahead were settled on
-            // their own turn, and a row that tied with one of them would have
-            // stopped the prefix there.
-            let settled = rows[position + 1..]
-                .iter()
-                .all(|rival| ceiling(rival).is_some_and(|rival_ceiling| mine >= rival_ceiling));
+            let settled = !suffix_unbounded
+                && suffix_ceiling.is_none_or(|rival| mine >= rival)
+                && mine >= unemitted;
             if !settled {
-                break;
+                // Going backwards, every write is to a smaller position than the
+                // last, so the final write is the EARLIEST unsettled row — and
+                // the prefix is exactly what lies before it.
+                certain = position;
             }
-            certain = position + 1;
+            match ceiling(row) {
+                Some(reach) => {
+                    if suffix_ceiling.is_none_or(|best| reach > best) {
+                        suffix_ceiling = Some(reach);
+                    }
+                }
+                None => suffix_unbounded = true,
+            }
         }
         certain
-    }
-
-    /// status readable mid-stream.
-    #[must_use]
-    pub fn completed_with<I>(mut self, statuses: I) -> Self
-    where
-        I: IntoIterator<Item = (Iri, ProducerStatus)>,
-    {
-        for (stratum, status) in statuses {
-            self.statuses.entry(stratum).or_insert(status);
-        }
-        self
     }
 }
 
@@ -1818,7 +1932,98 @@ impl<S: RankedStream> FusionStream<S> {
                 .map(|(index, (stratum, _))| (stratum.clone(), self.domains[index].clone()))
                 .collect(),
             cut_on_a_tie: self.last_row_won_a_tie,
+            // Computed here because every term of it is a fact of the fusion --
+            // the open heads, the profile's rank-one awards, the frontier -- and
+            // none of them survives into a row. The trailer is the last moment
+            // any of it can be read.
+            unemitted_ceiling: self.unemitted_ceiling()?,
         })
+    }
+
+    /// The highest true score a candidate this fusion has **not** emitted could
+    /// have, or `None` where no finite such bound exists.
+    ///
+    /// The term [`FusionTrailer::certain_prefix`] cannot derive from the rows,
+    /// because it is about the candidates that are not among them. Two
+    /// populations, and the answer is the larger of the two bounds, since a
+    /// bound over a union is the maximum of the bounds over its parts:
+    ///
+    /// * **never named by any stream.** [`Self::compute_threshold`] is already
+    ///   this engine's own bound on such a candidate — it is asked of no
+    ///   particular candidate and maximizes over every block one could lie in —
+    ///   and what it cannot see is the strata that may have failed to name it at
+    ///   all. Each degraded stratum is therefore charged its rank-one
+    ///   contribution on top, whether it is open or exhausted: a stratum that
+    ///   could have missed the candidate could have missed it at rank one. A
+    ///   degraded stream that is also open is charged twice over, which is a
+    ///   looser bound and not a wrong one — and so is a degraded stream that
+    ///   declared a narrow domain, because the licence [`Self::could_name`]
+    ///   takes needs a candidate to narrow by and there is no candidate here.
+    /// * **named, and never certified** — still in the frontier when reading
+    ///   stopped, either because the caller's [`TopK`](crate::TopK) was
+    ///   satisfied or because nothing settled it. This is the population an
+    ///   unseen-item threshold says nothing about, because such a candidate has
+    ///   already accumulated score the threshold does not describe. Its ceiling
+    ///   is what it has plus what it is still owed, which is exactly
+    ///   [`Self::score_interval`]'s deficit — the same term
+    ///   [`FusedRow::interval`] reports for an emitted row, read here for a row
+    ///   that was never emitted.
+    ///
+    /// # Why the frontier term is not optional
+    ///
+    /// Without it the claim is false on the ordinary bounded search. A top-k
+    /// fusion leaves behind exactly the candidates that lost to the last emitted
+    /// row, and a rival that lost by a hair while a lossy stratum had never
+    /// named it is precisely the rival whose true score exceeds the emitted
+    /// row's floor. The threshold cannot bound it: the threshold bounds what an
+    /// *unseen* item could still collect, and this one is not unseen.
+    ///
+    /// # The refusal
+    ///
+    /// A perturbed order means an emitted rank bounds nothing, so nothing bounds
+    /// what such a stratum could have contributed to a candidate this fusion did
+    /// not certify. [`ScoreInterval::Unbounded`] makes that refusal for a row
+    /// such a stratum named; `None` is the same refusal for the rows it did not,
+    /// and the strata responsible are already named in
+    /// [`FusionTrailer::exactness`].
+    ///
+    /// # Cost
+    ///
+    /// One pass over the frontier, once, at the end of a fusion — not on the row
+    /// loop. [`Self::score_interval`] is the same read the emission path already
+    /// performs per row, and it allocates nothing on the bounded path.
+    fn unemitted_ceiling(&self) -> Result<Option<Fixed>, FusionError> {
+        if self.fidelities.iter().any(RankFidelity::order_is_unbounded) {
+            return Ok(None);
+        }
+
+        let mut ceiling = self.compute_threshold()?;
+        for index in 0..self.streams.len() {
+            if self.is_degraded(index) {
+                ceiling = ceiling
+                    .checked_add(self.rank_one_contribution(index)?)
+                    .map_err(|_| FusionError::Overflow)?;
+            }
+        }
+
+        for state in self.frontier.values() {
+            let ScoreInterval::Bounded { deficit, .. } = self.score_interval(state)? else {
+                // Unreachable under the guard above -- an interval is unbounded
+                // only where a namer declared a perturbed order -- and answered
+                // as the refusal it would be rather than by a bound that assumed
+                // it away.
+                return Ok(None);
+            };
+            let reach = state
+                .lower_bound
+                .checked_add(deficit)
+                .map_err(|_| FusionError::Overflow)?;
+            if reach > ceiling {
+                ceiling = reach;
+            }
+        }
+
+        Ok(Some(ceiling))
     }
 
     /// Pull the first head of every stream.

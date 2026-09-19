@@ -199,6 +199,13 @@ what a caller with a completeness obligation can still act on — how many leadi
 rows keep their places whatever the degraded strata did or did not find. It
 claims membership and never absence.
 
+That claim needs a term no row carries, because the candidate that could take an
+emitted row's place is the one a lossy search never named — and it is therefore
+not among the rows to compare against. `FusionTrailer::unemitted_ceiling` is that
+term: the highest score anything outside the answer could have, over both the
+candidates no stream named and the ones a bounded read left uncertified. A row is
+certain of its place only when its own floor clears it.
+
 Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no
 default registry and no built-in producer.

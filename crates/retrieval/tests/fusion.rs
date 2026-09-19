@@ -7333,6 +7333,12 @@ fn an_exhaustive_fusion_carries_zero_width_intervals() {
         );
     }
     assert_eq!(
+        fused.trailer.unemitted_ceiling,
+        Some(Fixed::ZERO),
+        "every stream ran out and none of them could have missed a row, so \
+         there is nothing outside this answer worth anything at all"
+    );
+    assert_eq!(
         fused.trailer.certain_prefix(&fused.rows),
         fused.rows.len(),
         "so the whole answer is certain, which is what this engine always said"
@@ -7711,5 +7717,328 @@ fn tied_rows_stop_being_certain_once_a_stratum_declares_a_loss() {
         fused.trailer.certain_prefix(&fused.rows) < fused.rows.len(),
         "now the tied rows could have been ordered differently, because the \
          lossy stratum may have withheld from one and promoted the other"
+    );
+}
+
+/// The prefix a comparison among the rows in hand alone would report.
+///
+/// The term `certain_prefix` used to be the whole of, kept here as the thing it
+/// is measured against: it can only ever say that the emitted rows are ordered
+/// consistently with each other, which is a statement about a list and not
+/// about membership of an answer.
+fn pairwise_only_prefix(rows: &[FusedRow]) -> usize {
+    let mut certain = 0;
+    for (position, row) in rows.iter().enumerate() {
+        let ScoreInterval::Bounded { inflation, .. } = &row.interval else {
+            break;
+        };
+        let mine = row.score.checked_sub(*inflation).expect("a floor fits");
+        let settled = rows[position + 1..].iter().all(|rival| {
+            matches!(
+                &rival.interval,
+                ScoreInterval::Bounded { deficit, .. }
+                    if mine >= rival.score.checked_add(*deficit).expect("a ceiling fits")
+            )
+        });
+        if !settled {
+            break;
+        }
+        certain = position + 1;
+    }
+    certain
+}
+
+// T9.10. THE MEMBERSHIP TERM. A candidate a lossy stratum never named is
+// exactly the candidate that can take an emitted row's place, and no comparison
+// among the rows in hand can see it: it is not among them. This fixture is the
+// smallest one in which that is provable rather than merely conceivable, and a
+// prefix computed from the rows alone reports the opposite answer on it.
+#[test]
+fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
+    // `vector` outweighs `text` two to one, so the only emitted row is mostly
+    // made of a contribution the declaration says could be spurious -- and a
+    // candidate `vector` never found could have held its rank one, which is
+    // worth more than everything `text` has to give.
+    let heavy = Fixed::ONE.checked_add(Fixed::ONE).expect("two fits");
+    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", heavy)], K);
+    let streams = |lossy: bool| {
+        let vector = MockStream::new(vec![row(1, heavy, K, "a")], exhausted(1));
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                if lossy {
+                    vector.declaring(lossy_contract())
+                } else {
+                    vector
+                },
+            ),
+        ]
+    };
+
+    let exhaustive = block_on(run_fuse(streams(false), &fusion_profile));
+    assert_eq!(
+        exhaustive.trailer.certain_prefix(&exhaustive.rows),
+        exhaustive.rows.len(),
+        "with both strata exhaustive there is nothing outside the answer: a \
+         stratum that found everything it had cannot have hidden a rival"
+    );
+
+    let degraded = block_on(run_fuse(streams(true), &fusion_profile));
+    assert_eq!(
+        degraded.rows.len(),
+        exhaustive.rows.len(),
+        "the same rows either way -- a declaration changes what the answer may \
+         be read to claim, never what the answer is"
+    );
+
+    // The numbers the claim rests on, from the profile rather than from the
+    // output: the emitted row's floor is what `text` alone gave it, and the
+    // absentee's ceiling is `vector`'s rank one.
+    let from_text = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
+    let held_back = contribution(heavy, 1, K).expect("fixture contribution");
+    assert!(
+        held_back > from_text,
+        "the fixture must put more at stake in the lossy stratum than the \
+         exhaustive one can defend, or it proves nothing: {held_back:?} vs \
+         {from_text:?}"
+    );
+    assert_eq!(
+        degraded.trailer.unemitted_ceiling,
+        Some(held_back),
+        "every stream is exhausted, so nothing is still on offer; what remains \
+         is the rank-one contribution the lossy stratum could have awarded a \
+         row it never emitted"
+    );
+    let (_, inflation) = bounds(&degraded.rows[0]);
+    assert_eq!(
+        degraded.rows[0]
+            .score
+            .checked_sub(inflation)
+            .expect("a floor fits"),
+        from_text,
+        "and the emitted row's floor is what the exhaustive stratum gave it, \
+         the rest of its score being the part that could be spurious"
+    );
+
+    assert_eq!(
+        pairwise_only_prefix(&degraded.rows),
+        degraded.rows.len(),
+        "the rows in hand are consistent with each other -- there is only one \
+         -- so a prefix computed from them alone certifies the whole answer"
+    );
+    assert_eq!(
+        degraded.trailer.certain_prefix(&degraded.rows),
+        0,
+        "but the answer is not certain: a candidate the lossy stratum never \
+         named could have scored the whole of its rank one, which beats \
+         everything the emitted row can prove it is worth"
+    );
+}
+
+// T9.11. The same defect from the other side. A bounded read leaves candidates
+// it named and never certified, and one of those can be lifted past an emitted
+// row by the loss too -- so the unemitted term is a bound over the frontier as
+// well as over the candidates nobody ever named. The threshold cannot answer
+// for these: it bounds what an *unseen* item could still collect, and these are
+// not unseen.
+#[test]
+fn a_rival_left_in_the_frontier_by_the_bound_is_bounded_too() {
+    // `vector` is light, so it promotes the leader by very little -- and the
+    // runner-up it never named lost by less than that little.
+    let light = Fixed::from_raw(20_000_000_000);
+    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", light)], K);
+    let leader = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
+    let runner_up = contribution(Fixed::ONE, 2, K).expect("fixture contribution");
+    let held_back = contribution(light, 1, K).expect("fixture contribution");
+    assert!(
+        runner_up.checked_add(held_back).expect("a ceiling fits") > leader,
+        "the fixture must let the abandoned rival overtake the emitted row, or \
+         it proves nothing: {runner_up:?} + {held_back:?} vs {leader:?}"
+    );
+
+    let streams = || {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    exhausted(2),
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, light, K, "a")], exhausted(1))
+                    .declaring(lossy_contract()),
+            ),
+        ]
+    };
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams(),
+        &fusion_profile,
+        TopK::new(1),
+    ))
+    .expect("fusion succeeds");
+
+    assert_eq!(
+        fused.rows.len(),
+        1,
+        "the bound stopped the answer at one row"
+    );
+    assert_eq!(
+        fused.rows[0].entity,
+        Term::new("a"),
+        "and the leader is the row it kept"
+    );
+    assert_eq!(
+        fused.trailer.unemitted_ceiling,
+        Some(
+            runner_up
+                .checked_add(held_back)
+                .expect("the fixture's ceiling fits")
+        ),
+        "the rival the bound abandoned had already collected the exhaustive \
+         stratum's second rank, and the lossy stratum could have owed it a \
+         rank one on top of that"
+    );
+    assert_eq!(
+        pairwise_only_prefix(&fused.rows),
+        fused.rows.len(),
+        "nothing in the answer contradicts anything else in it"
+    );
+    assert_eq!(
+        fused.trailer.certain_prefix(&fused.rows),
+        0,
+        "yet the abandoned rival could outscore the row that was kept, so the \
+         place is not settled -- a bounded read is where this is decided, and \
+         it is the ordinary case rather than a corner"
+    );
+}
+
+// T9.12. The linear pass is the quadratic one. `certain_prefix` runs on the
+// default path of every fused search, so it carries the suffix maximum
+// backwards instead of walking the suffix per row -- and a rewrite of a
+// published number has to be measured against the definition it replaced, over
+// intervals no scripted producer would ever generate.
+#[test]
+fn the_backward_pass_agrees_with_the_quadratic_definition() {
+    // The trailer is real -- a degraded fusion, so no exhaustive short-circuit
+    // applies -- and only the two quantities under test are substituted:
+    // arbitrary rows, and the ceiling on what the answer does not contain.
+    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
+                    .declaring(lossy_contract()),
+            ),
+        ],
+        &fusion_profile,
+    ));
+    assert!(
+        matches!(fused.trailer.exactness, ScoreExactness::Estimated { .. }),
+        "the fixture trailer must be an estimate, or the exhaustive \
+         short-circuit answers instead of the pass under test"
+    );
+
+    /// The definition, spelled as the suffix scan it is: a row is certain when
+    /// its floor reaches every later row's ceiling and the ceiling on what the
+    /// answer does not contain. Quadratic, and here for exactly that reason.
+    fn reference(rows: &[FusedRow], unemitted: Fixed) -> usize {
+        let floor = |row: &FusedRow| match &row.interval {
+            ScoreInterval::Bounded { inflation, .. } => {
+                row.score.checked_sub(*inflation).unwrap_or(Fixed::ZERO)
+            }
+            ScoreInterval::Unbounded { .. } => Fixed::ZERO,
+        };
+        let ceiling = |row: &FusedRow| match &row.interval {
+            ScoreInterval::Bounded { deficit, .. } => row.score.checked_add(*deficit).ok(),
+            ScoreInterval::Unbounded { .. } => None,
+        };
+        let mut certain = 0;
+        for (position, row) in rows.iter().enumerate() {
+            let mine = floor(row);
+            let settled = mine >= unemitted
+                && rows[position + 1..]
+                    .iter()
+                    .all(|rival| ceiling(rival).is_some_and(|reach| mine >= reach));
+            if !settled {
+                break;
+            }
+            certain = position + 1;
+        }
+        certain
+    }
+
+    // A fixed-seed xorshift, because a test that cannot be replayed from its
+    // failure message is not evidence. The values are small enough that no sum
+    // can overflow, so every case exercises the comparison rather than the
+    // arithmetic's refusal.
+    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+
+    let mut saw_empty = 0_u32;
+    let mut saw_partial = 0_u32;
+    let mut saw_whole = 0_u32;
+    for _ in 0..2_000 {
+        let length = usize::try_from(next(8)).expect("a small length fits");
+        let rows: Vec<FusedRow> = (0..length)
+            .map(|index| {
+                let score = next(40);
+                let deficit = next(6);
+                // An inflation is a sum of contributions that are themselves
+                // summands of the score, so it never exceeds it -- the
+                // invariant the floor is computed under.
+                let inflation = next(score + 1);
+                FusedRow {
+                    entity: Term::new(format!("item-{index}")),
+                    score: Fixed::from_raw(i128::from(score)),
+                    contributions: Vec::new(),
+                    interval: ScoreInterval::Bounded {
+                        deficit: Fixed::from_raw(i128::from(deficit)),
+                        inflation: Fixed::from_raw(i128::from(inflation)),
+                    },
+                    threshold_witness: Fixed::ZERO,
+                }
+            })
+            .collect();
+        let unemitted = Fixed::from_raw(i128::from(next(12)));
+
+        let mut trailer = fused.trailer.clone();
+        trailer.unemitted_ceiling = Some(unemitted);
+        let got = trailer.certain_prefix(&rows);
+        let want = reference(&rows, unemitted);
+        assert_eq!(
+            got, want,
+            "the backward pass and the definition disagree on {rows:?} under \
+             an unemitted ceiling of {unemitted:?}"
+        );
+
+        if got == 0 {
+            saw_empty += 1;
+        } else if got == rows.len() {
+            saw_whole += 1;
+        } else {
+            saw_partial += 1;
+        }
+    }
+    assert!(
+        saw_empty > 0 && saw_partial > 0 && saw_whole > 0,
+        "the cases must cover all three outcomes, or agreement proves only \
+         that both functions return the same constant: {saw_empty} empty, \
+         {saw_partial} partial, {saw_whole} whole"
     );
 }

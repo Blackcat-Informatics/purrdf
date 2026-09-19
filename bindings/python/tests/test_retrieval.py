@@ -2411,7 +2411,32 @@ def test_a_declared_loss_bounds_each_row_and_can_shorten_the_certain_prefix() ->
             "missed, so its whole contribution from that stratum is suspect"
         )
 
-    assert degraded["certain_prefix"] <= exhaustive["certain_prefix"]
+    # Both directions, and the evidence behind them. `degraded <= exhaustive`
+    # alone is satisfied by `0 <= n` for ANY implementation -- including one that
+    # always answered zero -- so it is the exhaustive side that has to be pinned
+    # to a real number for the comparison to mean anything.
+    assert exhaustive["certain_prefix"] == len(exhaustive["rows"]), (
+        "nothing was withheld and nothing was promoted, so every row keeps its "
+        "place and the whole answer is certain"
+    )
+    assert degraded["certain_prefix"] < exhaustive["certain_prefix"], (
+        "and a declared loss really does cost certainty rather than being "
+        "recorded and ignored"
+    )
+
+    # The bound the verdict rests on, on both answers. Exhaustive: every stream
+    # ran out and none could have missed a row, so nothing outside the answer
+    # can be worth anything at all. Degraded: the lossy stratum could have owed
+    # an unnamed candidate a rank-one contribution, so the ceiling is a real
+    # number and that is exactly what shortens the prefix.
+    assert _is_zero(exhaustive["unemitted_ceiling"]), (
+        "no candidate outside an exhaustive answer can be worth anything"
+    )
+    assert not _is_zero(degraded["unemitted_ceiling"]), (
+        "a lossy stratum's whole failure mode is not naming things, so a "
+        "candidate it never named is owed the most it could have held back"
+    )
+
     assert _ranking(degraded) == _ranking(exhaustive), (
         "and the rows are identical either way: a declaration changes what the "
         "answer may be read to claim, never what the answer is"

@@ -260,6 +260,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   caller with a completeness obligation can still act on, since the alternative
   is to downgrade a whole answer over one degraded stratum. It claims membership
   and never absence: a row past the prefix is possible rather than excluded.
+- **retrieval:** `FusionTrailer::unemitted_ceiling`, the bound the prefix above
+  rests on: the most any candidate OUTSIDE the answer could be worth. It counts
+  two populations, and both are needed for the prefix to be a claim about the
+  answer rather than about the ranking -- the candidates no stream ever named,
+  charged each degraded stratum's rank-one contribution because a row such a
+  stratum missed could have been due at any rank, and the candidates a bounded
+  read named and abandoned, which a degraded stratum could still owe a
+  contribution on top of what they had already accumulated. It is `None` where a
+  stratum declared a perturbed order: that breaks the one inequality every bound
+  here rests on, so no finite ceiling exists and `certain_prefix` is zero. It
+  speaks for the reads this trailer describes; a producer stopped at its plan
+  depth, or one that declined its terms, states that shortfall in `statuses`.
 - **hnsw:** `HnswRelation` declares its own `RankFidelity`, so the workspace's
   one approximate producer states what it is to a consumer of composed rows
   instead of being indistinguishable from an exhaustive one. The evidence is the
@@ -274,7 +286,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   position, each member a `str` or `None`, shaped like the attestation position
   beside it and read on the same terms -- `None` is silence on that axis, a
   string is that axis declared degraded with the host's own words carried
-  verbatim. `search` reports `"fidelities"`, `"certain_prefix"` and a per-row
+  verbatim. `search` reports `"fidelities"`, `"certain_prefix"`,
+  `"unemitted_ceiling"` and a per-row
   `"interval"` beside the existing keys, and `"exactness"` gains `"deficit"`,
   `"inflation"` and `"unbounded"` in place of `"lower_bounds_for"`.
 - **retrieval:** `EvidenceId`, the third identity a fused answer carries, on both

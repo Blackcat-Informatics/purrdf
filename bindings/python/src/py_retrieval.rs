@@ -1789,12 +1789,31 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     // one safe move is to downgrade the whole answer, and this lets it present
     // the certain part as settled and mark the rest.
     //
-    // It claims membership and never absence. A row past the prefix is
-    // POSSIBLE, not excluded, and a candidate no producer named is not spoken
-    // for at all -- not naming things is precisely what a lossy search does.
+    // It claims membership and never absence: a row PAST the prefix is
+    // possible rather than excluded.
     out.set_item(
         "certain_prefix",
         result.trailer.certain_prefix(&result.rows),
+    )?;
+
+    // The evidence the verdict above rests on, so a caller can audit it rather
+    // than take it: the most any candidate outside the answer could be worth.
+    // A leading row is certain exactly when its own floor clears this, which is
+    // what lets the prefix speak about candidates no producer ever named -- a
+    // lossy stratum's whole failure mode is not naming things, so a bound that
+    // covered only the rows in hand would be a claim about the ranking rather
+    // than about the answer.
+    //
+    // `None` where a stratum declared a PERTURBED order: that breaks the one
+    // inequality every bound here rests on, so no finite ceiling exists and
+    // reporting a number would be the fabrication this channel exists to
+    // prevent. `certain_prefix` is then zero, for the same reason.
+    out.set_item(
+        "unemitted_ceiling",
+        result
+            .trailer
+            .unemitted_ceiling
+            .map(Fixed::to_decimal_lexical),
     )?;
 
     // Rank resolution at two altitudes, kept apart by name because they answer
@@ -2132,8 +2151,15 @@ fn compile<'py>(
 /// whatever the degraded strata did or did not find — the answer a caller with a
 /// completeness obligation actually has, since without it the only safe move is
 /// to downgrade the whole answer. It claims membership and never absence: a row
-/// past the prefix is POSSIBLE, not excluded, and a candidate no producer named
-/// is not spoken for at all.
+/// PAST the prefix is possible rather than excluded.
+///
+/// `"unemitted_ceiling"` is the evidence that verdict rests on, in the same
+/// fixed-point lexical as `"score"`: the most any candidate outside the answer
+/// could be worth, counting both the candidates no stream ever named and the
+/// ones a bounded read abandoned. A leading row is certain exactly when its own
+/// floor clears it. It is `None` where a stratum declared a perturbed order,
+/// because that breaks the one inequality every bound here rests on and no
+/// finite ceiling exists — `"certain_prefix"` is then `0`.
 ///
 /// `"domains"` reports the candidate-domain declaration each handed stream fused
 /// under — `None` where the producer promised only that it may name anything, a
