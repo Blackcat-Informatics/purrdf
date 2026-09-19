@@ -56,10 +56,12 @@
 //! * **the evidence identity**, a digest of exactly those attestations. Two
 //!   answers assembled from differently-aged indexes carry different ids even
 //!   when the plan, the profile and every row match;
-//! * **what that makes of the scores** — exact, or a lower bound naming the
-//!   strata whose shortfall made it one. A lower bound is still a real order over
-//!   real rows; what it withdraws is the claim that a missing row would have
-//!   stayed missing;
+//! * **what that makes of the scores** — exact, or an estimate naming the strata
+//!   whose shortfall made it one, on both sides. The error runs in two
+//!   directions because this layer scores by rank alone: a stratum that misses a
+//!   row withholds that row's contribution *and* promotes every row behind it.
+//!   An estimate is still a real order over real rows; what it withdraws is the
+//!   claim that a missing row would have stayed missing;
 //! * **the candidate domains in force**, which say what each producer could ever
 //!   have named. Both producers here rank the same four documents and so promise
 //!   nothing narrower than "anything".

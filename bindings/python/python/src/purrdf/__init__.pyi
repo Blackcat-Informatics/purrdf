@@ -2341,9 +2341,12 @@ class retrieval:
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
     # `"status"` string has exactly five spellings. `"exhausted"` (with
-    # `"rows_emitted"`: int) is the ONLY completeness claim among them — that
-    # producer emitted every row it had. The other four each name who stopped the
-    # read and where, and none may be read as "that was all of it":
+    # `"rows_emitted"`: int) is the only one that names no stopper — that producer
+    # emitted every row ITS SEARCH PRODUCED. On its own that is not a claim that
+    # everything matching was returned, which is why it is read beside the
+    # stratum's `"fidelities"` entry and never instead of it. The other four each
+    # name who stopped the read and where, and none may be read as "that was all
+    # of it":
     # `"depth_reached"` (with `"rank"`: int) is the producer stopping at the depth
     # the plan gave it, verified against the rows fusion pulled, so ranks one
     # through `"rank"` were read and nothing below was looked at;

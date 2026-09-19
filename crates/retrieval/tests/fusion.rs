@@ -5287,10 +5287,11 @@ fn a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer() {
     );
 }
 
-// T3.4. An incomplete stratum makes every score a lower bound — and the rows
-// are still returned, because a short index produced real rows in a real order.
+// T3.4. An incomplete stratum makes every score an ESTIMATE whose error runs in
+// both directions — and the rows are still returned, because a short index
+// produced real rows in a real order.
 #[test]
-fn an_incomplete_stratum_makes_the_scores_lower_bounds_without_refusing_the_rows() {
+fn an_incomplete_stratum_makes_the_scores_estimates_without_refusing_the_rows() {
     let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let streams = |vector: PfAttestation| {
         vec![
@@ -5313,11 +5314,13 @@ fn an_incomplete_stratum_makes_the_scores_lower_bounds_without_refusing_the_rows
     assert_eq!(
         exact.trailer.exactness,
         ScoreExactness::Exact,
-        "no stratum declared itself short, so nothing makes these scores floors"
+        "no stratum declared itself short, so nothing makes these scores estimates"
     );
 
-    // One stratum short: every score in the answer is a floor, and the trailer
-    // names the stratum to rebuild rather than raising an anonymous flag.
+    // One stratum short: every score in the answer is an estimate, and the
+    // trailer names the stratum to rebuild on BOTH sides rather than raising an
+    // anonymous flag. Both sides, because scoring by rank means a missed row is
+    // withheld from its own candidate and promotes every candidate behind it.
     let bounded = block_on(run_fuse(
         streams(attests_short("b", "segment rebuilding")),
         &profile,

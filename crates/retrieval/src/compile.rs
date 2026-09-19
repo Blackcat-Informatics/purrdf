@@ -90,7 +90,7 @@
 //! No admitted plan carries a depth of zero, so nothing here emits `LIMIT 0`.
 //! That bound reads no rows: whatever the relation holds, the unit hands back
 //! nothing, and the stratum is then reported exhausted having emitted nothing —
-//! the strongest completeness claim this layer makes, made about the bound rather
+//! the one ending that names no stopper, said about the bound rather
 //! than about the data, and indistinguishable in every trailer field from an
 //! honest empty answer. A bound may narrow a read and
 //! must never eliminate one, so the planner floors every derived depth at one,
@@ -135,8 +135,8 @@
 //! probe inside the `min` — `min(depth + 1, declared)` — erases it at precisely
 //! that depth, because the `min` then selects `declared`, which is the depth.
 //! The unit would be emitted at its own depth, the probe slot would not exist,
-//! and the read would be reported `Exhausted` — the strongest completeness claim
-//! this layer has, minted for a read a bound cut, with nothing anywhere saying
+//! and the read would be reported `Exhausted` — the one ending that names no
+//! stopper — minted for a read a bound cut, with nothing anywhere saying
 //! so. That is the same fault as `LIMIT 0`, one size smaller, and it is the
 //! fault this whole header exists to close.
 //!

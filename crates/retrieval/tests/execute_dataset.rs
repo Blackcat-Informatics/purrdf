@@ -1164,8 +1164,8 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
 /// stratum's depth, so the plan lands at exactly three — the depth at which the
 /// probe row used to be erased, and therefore the depth at which this read was
 /// reported [`ProducerStatus::Exhausted`] for three of its ten rows, with nothing
-/// anywhere saying so. That is the strongest completeness claim this layer has,
-/// minted for a read a wrong declaration truncated.
+/// anywhere saying so. That is the one ending that names no stopper, minted for
+/// a read a wrong declaration truncated.
 ///
 /// With the probe slot present the fourth row arrives, and it cannot be the
 /// ordinary `DepthReached`: the producer promised there is no fourth. It is the

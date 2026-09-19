@@ -432,9 +432,13 @@ would then assert a completeness the fusion never established. The
 trailer reports the state each producer is in; it does not put producers
 into a state so that it has something to report.
 
-**There are five read endings, and exactly one of them is a completeness
-claim.** `Exhausted` — the producer emitted every row it had — is that
-one, and it is the only one. The other four name the stopper rather than
+**There are five read endings, and exactly one of them names no stopper.**
+`Exhausted` — the producer emitted every row *its search produced* — is that
+one. It is not on its own a claim that everything matching was returned: a
+producer whose search does not find every row that was due still runs out of
+the rows it found and reports exactly this, which is why a stratum's declared
+`RankFidelity` sits beside its status and the two are read together. The other
+four name the stopper rather than
 the state: the planned depth, stated in rank space, for a producer that
 stopped where it was told and had more to give; a contribution bound,
 stated in the profile's fixed-point space, written by the producer or by a

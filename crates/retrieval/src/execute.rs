@@ -139,8 +139,8 @@
 //! stream, never ranked, and never counted anywhere. All it does is decide the
 //! stream's ending — [`StreamEnding::DepthReached`] when it arrived,
 //! [`StreamEnding::Exhausted`] when it did not. Without it an executor could
-//! only ever say `Exhausted`, which is the strongest completeness claim this
-//! layer makes, uttered about a read the plan itself cut short.
+//! only ever say `Exhausted`, which is the one ending that names no
+//! stopper, uttered about a read the plan itself cut short.
 //!
 //! The slot exists at every depth, including a depth that already equals the
 //! producer's declared row bound, and that last case is why the slot's arrival
@@ -346,8 +346,8 @@ pub enum ExecutionError {
     ///
     /// The alternative to refusing is what this layer did before the slot
     /// reached this depth: truncate to the depth and report the stratum
-    /// [`ProducerStatus::Exhausted`] — the strongest completeness claim in the
-    /// vocabulary, minted for a read that demonstrably had more rows behind it.
+    /// [`ProducerStatus::Exhausted`] — the one ending that names no stopper —
+    /// minted for a read that demonstrably had more rows behind it.
     ///
     /// Both numbers are carried because either alone is unactionable. `declared`
     /// is the promise a host has to go and fix in its producer, and `pulled` is
