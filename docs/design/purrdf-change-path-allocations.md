@@ -162,6 +162,33 @@ path it was mistaken for, and it belongs to `purrdf-sparql-eval` rather than to 
 validator: the plan-cache probe, the evaluation context, the variable schema, the
 solution sequence, and the intermediates a query allocates by running once.
 
+## The instrument's blind spot
+
+An allocation count cannot see work that was skipped if the skipped work allocates
+nothing. That sounds obvious stated plainly and it is not obvious in practice,
+because the better this path gets the larger the blind spot grows.
+
+The conformance memo is the worked example. It lets a shape named at two sites
+reuse the first site's answer instead of traversing the inner shape twice, and a
+test was written to prove it saves work by comparing allocation counts for a named
+and an inlined spelling of the same constraint. The test could not fail: it
+measured parsing and preparation alongside validation, and the two spellings are
+different documents, so the parse alone satisfied the comparison.
+
+Excluding the parse made it read equal — and the tempting conclusion, that the
+memo never fires and is a dark feature to delete, was wrong. Instrumenting the
+memo directly shows it hitting on that same fixture. What it saves is a Core
+traversal, and this work made the conforming Core traversal allocation-free, which
+is the result the change-path suite pins. The memo was skipping work the counter
+was structurally unable to price.
+
+The fix is to measure it against a constraint whose evaluation has a real
+per-focus-node cost, which on this surface means a SPARQL-backed one. So the
+general rule: an allocation count proves a fast path only where the slow path
+allocates. Anywhere the slow path is already free, a saving has to be demonstrated
+some other way, and a comparison that reads equal is evidence about the
+instrument before it is evidence about the code.
+
 ## The rule that produced all of this
 
 Every claim above obliges a test, and every number above is the reading of one.
