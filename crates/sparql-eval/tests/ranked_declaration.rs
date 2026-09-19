@@ -465,9 +465,19 @@ fn an_empty_domain_restriction_is_refused_while_a_named_one_registers() {
         }))
     });
     assert!(outcome.is_err());
+    // Both halves, because they are written in order and only one of them is
+    // what `is_empty` reports. `register_ranked` inserts the declaration into the
+    // ranked side table BEFORE it inserts the relation, and `is_empty` answers
+    // over the relations alone — so a refusal that had already recorded the
+    // declaration would leave `is_empty` true and this assertion would pass over
+    // exactly the state it claims to rule out. The side table is asked directly.
     assert!(
         refused.is_empty(),
-        "nothing was inserted before the refusal"
+        "no relation was inserted before the refusal"
+    );
+    assert!(
+        refused.ranked_declaration(EX_REL).is_none(),
+        "and no declaration was recorded in the side table the insert writes first"
     );
 
     // THE VALID NEIGHBOURS, and they are what this refusal must not touch. A
