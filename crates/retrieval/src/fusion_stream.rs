@@ -921,6 +921,47 @@ struct EmittedRecord {
 /// `hash` module for the workspace policy this follows.
 type EmittedHasher = core::hash::BuildHasherDefault<ahash::AHasher>;
 
+/// The emitted-candidate table, wrapping the one hash map in this crate so that
+/// **the type enforces what the argument above claims**.
+///
+/// The claim is that this map's iteration order reaches no answer, and it is
+/// true because the map is consulted by key and never walked. Left as a bare
+/// [`HashMap`] that would be a property of today's call sites: `.iter()`,
+/// `.values()`, `.keys()`, `.drain()` and `.retain()` are all one keystroke
+/// away, each of them a way for a hash order to become part of a row order, a
+/// status map or an [`EvidenceId`] — and nothing about the field would object.
+///
+/// So the operations the engine actually needs are the only operations that
+/// exist: record a certification, and ask about one candidate. There is no
+/// iterator, no `len`, and no accessor that hands the inner map out, which
+/// means a future edit that wanted to walk this table would have to add the
+/// method here — beside the reason it must not — rather than reach for one that
+/// was already there.
+#[derive(Debug, Default)]
+struct EmittedTable {
+    /// The certified candidates, keyed by canonical term. Private with no
+    /// escape hatch: see this type's own docs for why that is the point.
+    entries: HashMap<Term, EmittedRecord, EmittedHasher>,
+}
+
+impl EmittedTable {
+    /// Record that `item` has certified, under the record its frontier state
+    /// left behind.
+    ///
+    /// The displaced value, if any, is dropped rather than returned: a candidate
+    /// leaves the frontier exactly once, so a second insertion under one key
+    /// cannot happen, and returning a value no caller may read would only
+    /// invite one to start reading it.
+    fn record(&mut self, item: Term, record: EmittedRecord) {
+        self.entries.insert(item, record);
+    }
+
+    /// What `item` carried when it certified, or `None` if it never has.
+    fn get(&self, item: &Term) -> Option<&EmittedRecord> {
+        self.entries.get(item)
+    }
+}
+
 /// The NRA fusion engine over a set of verified ranked streams.
 ///
 /// `FusionStream` is generic over the stream type and produces [`FusedRow`]s on
@@ -999,7 +1040,7 @@ pub struct FusionStream<S: RankedStream> {
     /// grows with the rows this fusion **returns**, never with the rows it
     /// pulls, so a bounded [`TopK`](crate::TopK) bounds it and a drain pays for
     /// something strictly smaller than the frontier entry it replaces.
-    emitted: HashMap<Term, EmittedRecord, EmittedHasher>,
+    emitted: EmittedTable,
     threshold: Fixed,
     /// Whether the most recently emitted row took its place over a rival it tied
     /// with exactly on score.
@@ -1109,7 +1150,7 @@ impl<S: RankedStream> FusionStream<S> {
             attestations,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
-            emitted: HashMap::default(),
+            emitted: EmittedTable::default(),
             threshold: Fixed::ZERO,
             last_row_won_a_tie: false,
         }
@@ -1168,7 +1209,7 @@ impl<S: RankedStream> FusionStream<S> {
                     seen_streams,
                     block,
                 } = state;
-                self.emitted.insert(
+                self.emitted.record(
                     id.clone(),
                     EmittedRecord {
                         named_by: seen_streams,
