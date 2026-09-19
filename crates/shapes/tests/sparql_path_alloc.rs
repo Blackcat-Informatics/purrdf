@@ -5,7 +5,7 @@
 //! backed by SPARQL.**
 //!
 //! `tests/change_path_alloc.rs` pins the conforming change path at a constant six
-//! allocations across thirty-six constraint and path cases — and not one of those
+//! allocations across thirty-nine constraint and path cases — and not one of those
 //! cases contains a SPARQL-bearing shape. That is not an oversight in the counting;
 //! it is a hole in the COVERAGE, and it is precisely the hole a SHACL-SPARQL
 //! surface hides in. Every figure in that file can be perfect while `sh:sparql`
@@ -247,7 +247,7 @@ fn focus_nodes(multiple: u64) -> usize {
 /// What validating a conforming focus set costs BEFORE the first focus node.
 ///
 /// Six, which is not a number this file discovered: it is the constant
-/// `tests/change_path_alloc.rs` pins across all thirty-six of its constraint and
+/// `tests/change_path_alloc.rs` pins across all thirty-nine of its constraint and
 /// path cases, and it is the entry cost of the change path itself — the same six
 /// whether the population is one focus node or four thousand. It appears here as
 /// the intercept of the closed form, so what this file's per-case constants

@@ -36,7 +36,7 @@
 //! An allocation count can only see a skipped traversal that would have
 //! allocated, and on this revision a CONFORMING SHACL Core traversal allocates
 //! nothing: that is the whole result `tests/change_path_alloc.rs` pins, where
-//! thirty-six constraint and path cases validate thousands of conforming focus
+//! thirty-nine constraint and path cases validate thousands of conforming focus
 //! nodes for six allocations in total. A memo that skips such a traversal saves
 //! real work and saves ZERO allocations, so an allocation instrument pointed at a
 //! Core inner shape reads equal whether the memo fires or is deleted outright.

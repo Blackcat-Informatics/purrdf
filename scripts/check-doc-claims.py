@@ -180,6 +180,31 @@ _JSONLD_COMPACTION_VECTORS = (
     / "compaction_vectors.json"
 )
 
+# The two design documents that publish the SHACL allocation figures, and the three
+# sources those figures come from.
+#
+# `purrdf-prepared-products.md` diagnosed its own drift mechanism in its own prose —
+# a figure copied out of a bench log has no generated source, so nothing derived it
+# and nothing noticed when the model and the fixture moved underneath it — and then
+# the same section acquired new hand-copied figures. `purrdf-change-path-allocations.md`
+# joined it with the change path's decomposition.
+#
+# The PINNED TEST CONSTANTS are the preferred source and are used wherever they exist:
+# `change_path_alloc.rs` and `sparql_path_alloc.rs` assert them as exact equalities with
+# no tolerance, so a documented figure checked against one cannot drift without a test
+# going red first. The bench is report-only by design — it asserts nothing — so it pins
+# nothing; what it can still supply is the SHAPE of the block the products document
+# quotes (which phases it prints, under which stage, with which four field names), and
+# the prose restatements of that block are derived from the block itself. That is the
+# same relationship `load_matrix` has with the generated conformance-matrix block: the
+# committed block is the measurement, and every number restated around it is checked
+# against it rather than against a second hand-maintained copy.
+_PRODUCTS_DESIGN = _REPO / "docs" / "design" / "purrdf-prepared-products.md"
+_CHANGE_PATH_DESIGN = _REPO / "docs" / "design" / "purrdf-change-path-allocations.md"
+_PRODUCT_ALLOC_BENCH = _REPO / "crates" / "shapes" / "benches" / "shacl_product_alloc.rs"
+_CHANGE_PATH_TEST = _REPO / "crates" / "shapes" / "tests" / "change_path_alloc.rs"
+_SPARQL_PATH_TEST = _REPO / "crates" / "shapes" / "tests" / "sparql_path_alloc.rs"
+
 _MATRIX_BEGIN = "<!-- BEGIN GENERATED: conformance-matrix -->"
 _MATRIX_END = "<!-- END GENERATED: conformance-matrix -->"
 
@@ -3431,12 +3456,35 @@ def baseline_note_claim(
 
     # The DL note's subset/exclusion tally, sourced from the same frozen census
     # docs/CONFORMANCE.md's three restatements of it are sourced from.
-    dl = suites.get("Entailment (OWL 2 DL consistency)")
-    if isinstance(dl, dict) and isinstance(dl.get("note"), str):
+    #
+    # The note is NARROWED WHERE IT LEAVES THE JSON TABLE, into a name, rather than by
+    # testing `dl.get("note")` in the condition and then reading `dl["note"]` again in
+    # the call. `suites` is a `dict[str, dict[str, object]]`, so the second read was a
+    # second lookup whose declared type is `object`: the thing checked and the thing
+    # used were two different expressions that only happen to agree because
+    # `json.loads` returns plain dicts. Nothing in the code said so, and the value
+    # `_check_note` documents as a `str` arrived untyped.
+    #
+    # And a note that is absent or not a string is now REFUSED rather than skipped.
+    # That is the substantive half: the sibling loop above refuses exactly that state
+    # for this suite's other note, while this arm dropped the eleven-figure tally and
+    # let the gate print a green line — a conditional nothing satisfies is the same
+    # green light as the check it guards.
+    dl_suite = "Entailment (OWL 2 DL consistency)"
+    dl = suites.get(dl_suite)
+    dl_note = dl.get("note") if isinstance(dl, dict) else None
+    if not isinstance(dl_note, str):
+        problems.append(
+            f"{rel}: suite {dl_suite!r} carries no string `note` (found "
+            f"{type(dl_note).__name__}), so the DL subset/exclusion tally — eleven "
+            f"census figures this baseline restates in prose — is checked against "
+            f"nothing"
+        )
+    else:
         problems.extend(
             _check_note(
                 rel,
-                "Entailment (OWL 2 DL consistency)",
+                dl_suite,
                 "the DL subset/exclusion tally",
                 _flow(
                     r"it vendors (?P<graded>\d+) of the (?P<shaped>\d+) "
@@ -3455,7 +3503,7 @@ def baseline_note_claim(
                     r"(?P<wp>\d+) parse\) and (?P<nopremise>\d+) carry no RDF/XML "
                     r"premise\. Reading (?P<agreed>\d+)/(?P<total>\d+) as coverage"
                 ),
-                dl["note"],
+                dl_note,
                 {
                     "graded": census["dl_graded"],
                     "shaped": census["consistency_shaped"],
@@ -3468,8 +3516,8 @@ def baseline_note_claim(
                     "wr": census["dl_withholds_reasoner"],
                     "wp": census["dl_withholds_parse"],
                     "nopremise": census["dl_no_premise"],
-                    "agreed": matrix["Entailment (OWL 2 DL consistency)"][0],
-                    "total": sum(matrix["Entailment (OWL 2 DL consistency)"]),
+                    "agreed": matrix[dl_suite][0],
+                    "total": sum(matrix[dl_suite]),
                 },
                 "census.tsv and the matrix block",
             )
@@ -4479,6 +4527,499 @@ def rl_matrix_agreement_claim(
             f"but owl2_rl.rs::LEDGER holds {lanes['ledgered']} entries"
         )
     return problems
+
+
+# The constants `crates/shapes/tests/change_path_alloc.rs` asserts, by the name the
+# test spells them with. Each is an exact equality with no tolerance, so a document
+# checked against one cannot drift without that test going red first — which is the
+# property that makes a test constant a better source than a bench log for the same
+# quantity.
+_CHANGE_PATH_PINS = ("FOCUS_NODES", "SEAM_FOCUS_NODES", "BIND_ALLOC_CONST", "REPETITIONS")
+
+
+def load_change_path_pins() -> dict[str, int]:
+    """The change-path suite's pinned sizes and allocation constants, plus its scope.
+
+    ``cases`` is the length of ``CASES`` — one entry per constraint kind and path form
+    the change path must keep cheap — and ``excluded`` the length of
+    ``ALLOCATION_EXCLUSIONS``, the cases held out of the two exact-equality comparisons
+    for a named third-party cause. The products design document states both in one
+    sentence ("across the **N** measured constraint and path cases, all but one of
+    which are held to exact equality"), and that sentence said 36 while the file
+    carried 39: adding a case is exactly the edit that leaves it behind.
+    """
+    text = _read(_CHANGE_PATH_TEST)
+    rel = _CHANGE_PATH_TEST.relative_to(_REPO)
+    pins: dict[str, int] = {}
+    for name in _CHANGE_PATH_PINS:
+        found = re.search(rf"^const {name}: \w+ = ([\d_]+);", text, re.MULTILINE)
+        if not found:
+            raise SystemExit(
+                f"check-doc-claims: no `const {name}` in {rel}; the allocation claims "
+                f"derived from it cannot be checked, so do not leave them unchecked"
+            )
+        pins[name] = int(found.group(1).replace("_", ""))
+    pins["cases"] = len(re.findall(r"^    ConstraintCase \{$", text, re.MULTILINE))
+    if pins["cases"] == 0:
+        raise SystemExit(
+            f"check-doc-claims: parsed zero `ConstraintCase` entries out of {rel}; the "
+            f"measured-case count would be documented against nothing"
+        )
+    # The list closes on `)];` when its last entry is a multi-line tuple and on `];`
+    # otherwise. Both are accepted; anchoring on only one of them walked past the list
+    # to the next `];` in the file and counted five exclusions where there is one.
+    exclusions = re.search(
+        r"const ALLOCATION_EXCLUSIONS: &\[\(&str, &str\)\] = &\[(.*?)\n\)?\];",
+        text,
+        re.DOTALL,
+    )
+    if not exclusions:
+        raise SystemExit(
+            f"check-doc-claims: no `ALLOCATION_EXCLUSIONS` list in {rel}; the "
+            f"'all but one' qualifier in the design document cannot be checked"
+        )
+    pins["excluded"] = len(re.findall(r'\(\s*"[a-z_]+",', exclusions.group(1)))
+    if pins["excluded"] == 0:
+        raise SystemExit(
+            f"check-doc-claims: parsed zero entries out of `ALLOCATION_EXCLUSIONS` in "
+            f"{rel}; an empty list would document a qualifier the suite does not carry"
+        )
+    return pins
+
+
+# The four SPARQL-bearing surfaces, as the change-path design document's table names
+# them on the left and as `sparql_path_alloc.rs` names the case that measures them.
+# Written out rather than matched loosely because the two spellings differ on purpose:
+# the document says what a reader writes in a shapes graph, the test says which case
+# produced the number. `sparql_surface_coverage_claim` requires the mapping to be total
+# in both directions, so a fifth surface cannot be measured and left undocumented.
+_SPARQL_SURFACE_ROWS: tuple[tuple[str, str], ...] = (
+    ("`sh:sparql` constraint", "sh:sparql"),
+    ("custom `sh:ask` component", "sh:ask component"),
+    ("custom `sh:select` component", "sh:select component"),
+    ("`sh:expression` function call", "sh:expression call"),
+)
+
+
+def load_sparql_surface_allocations() -> dict[str, int]:
+    """Case name -> the allocations one conforming focus node costs that surface.
+
+    Read from the ``per_focus_node`` field of every ``SparqlCase`` in
+    ``crates/shapes/tests/sparql_path_alloc.rs``'s ``CASES``, which the file asserts as
+    the slope of ``CHANGE_PATH_CONSTANT + per_focus_node * N`` over N and 2N focus
+    nodes. The design document restates the four numbers as a table.
+    """
+    text = _read(_SPARQL_PATH_TEST)
+    rel = _SPARQL_PATH_TEST.relative_to(_REPO)
+    block = re.search(r"const CASES: &\[SparqlCase\] = &\[(.*?)\n\];", text, re.DOTALL)
+    if not block:
+        raise SystemExit(
+            f"check-doc-claims: no `const CASES: &[SparqlCase]` list in {rel}; the "
+            f"per-focus-node table cannot be checked, so do not leave it unchecked"
+        )
+    surfaces: dict[str, int] = {}
+    for entry in block.group(1).split("SparqlCase {")[1:]:
+        name = re.search(r'name: "([^"]+)",', entry)
+        cost = re.search(r"per_focus_node: (\d+),", entry)
+        if not name or not cost:
+            raise SystemExit(
+                f"check-doc-claims: a `SparqlCase` in {rel} carries no `name` or no "
+                f"`per_focus_node`; the table row for it would be derived from nothing"
+            )
+        surfaces[name.group(1)] = int(cost.group(1))
+    if not surfaces:
+        raise SystemExit(f"check-doc-claims: parsed zero `SparqlCase` entries out of {rel}")
+    return surfaces
+
+
+def sparql_surface_coverage_claim(surfaces: dict[str, int]) -> list[str]:
+    """Every measured SPARQL surface has a documented row, and every row a case.
+
+    A table that names its own scope only covers what someone remembered to add to it,
+    which is the same defect ``rule_coverage_table_claims`` and ``py_service_table_claim``
+    are written against. A fifth surface measured in the test and missing from the
+    document would otherwise leave this gate reporting that every documented row agrees.
+    """
+    documented = {case for _, case in _SPARQL_SURFACE_ROWS}
+    measured = set(surfaces)
+    problems: list[str] = []
+    for case in sorted(measured - documented):
+        problems.append(
+            f"docs/design/purrdf-change-path-allocations.md: "
+            f"crates/shapes/tests/sparql_path_alloc.rs measures the {case!r} surface at "
+            f"{surfaces[case]} allocations per focus node and the per-focus-node table "
+            f"has no row for it; add the row and register it in "
+            f"scripts/check-doc-claims.py"
+        )
+    for case in sorted(documented - measured):
+        problems.append(
+            f"scripts/check-doc-claims.py: the per-focus-node table registers a row for "
+            f"the {case!r} surface, which `CASES` in "
+            f"crates/shapes/tests/sparql_path_alloc.rs no longer measures; a row derived "
+            f"from a case that does not exist is a row checked against nothing"
+        )
+    return problems
+
+
+def sparql_surface_table_claims(surfaces: dict[str, int]) -> list[Claim]:
+    """The change-path document's per-focus-node table, row by row."""
+    src = (
+        "the `per_focus_node` field of each `SparqlCase` in "
+        "crates/shapes/tests/sparql_path_alloc.rs, asserted as the exact slope over N "
+        "and 2N focus nodes"
+    )
+    return [
+        Claim(
+            f"the {row} row of the per-focus-node table",
+            _CHANGE_PATH_DESIGN,
+            r"\| " + re.escape(row) + r" \| (?P<allocations>\d+) \|",
+            {"allocations": surfaces[case]},
+            src,
+        )
+        for row, case in _SPARQL_SURFACE_ROWS
+        if case in surfaces
+    ]
+
+
+# One line of the `shacl_product_alloc` probe, as the bench prints it and as the
+# products design document quotes it.
+_PRODUCT_ALLOC_LINE = re.compile(
+    r"^\[shacl_product_alloc\] stage=(?P<stage>\d+) (?P<label>\S+):\s+(?P<fields>.+)$",
+    re.MULTILINE,
+)
+
+
+def load_product_alloc_shape() -> tuple[dict[str, str], tuple[str, ...]]:
+    """What `shacl_product_alloc` actually prints: phase -> stage, and its field names.
+
+    The bench is report-only — it asserts no threshold, no ratio and no baseline — so it
+    pins no VALUE this gate could quote. What it does fix is the SHAPE of every line it
+    emits, and that is what ties the block quoted in the design document to a committed
+    source: a phase the bench no longer reports, a phase re-staged from 0 to 1, or a
+    field renamed all make the quoted block a transcript of a run that can no longer
+    happen, and the prose derived from it unsourced.
+    """
+    text = _read(_PRODUCT_ALLOC_BENCH)
+    rel = _PRODUCT_ALLOC_BENCH.relative_to(_REPO)
+    stages = dict(re.findall(r'Self::(\w+) => "(\d)"', text))
+    if not stages:
+        raise SystemExit(
+            f"check-doc-claims: no `Stage::label` arms in {rel}; every reported line "
+            f"names its binding time, so a stage table that parses to nothing means the "
+            f"quoted block could not be checked against the phase that pays it"
+        )
+    phases: dict[str, str] = {}
+    for variant, label in re.findall(r'report\(\s*Stage::(\w+),\s*"([^"]+)"', text):
+        if variant not in stages:
+            raise SystemExit(
+                f"check-doc-claims: {rel} reports {label!r} under `Stage::{variant}`, "
+                f"which `Stage::label` does not name"
+            )
+        phases[label] = stages[variant]
+    if not phases:
+        raise SystemExit(
+            f"check-doc-claims: parsed zero `report(Stage::…, …)` call sites out of "
+            f"{rel}; the quoted block would be checked against no phase at all"
+        )
+    printed = re.search(
+        r'println!\(\s*"(\[shacl_product_alloc\] stage=\{\}[^"]*)"', text, re.DOTALL
+    )
+    if not printed:
+        raise SystemExit(
+            f"check-doc-claims: no `[shacl_product_alloc] stage=…` format string in "
+            f"{rel}; the four quantities the document quotes cannot be checked against "
+            f"the four the probe reports"
+        )
+    fields = tuple(
+        name for name in re.findall(r"(\w+)=\{\}", printed.group(1)) if name != "stage"
+    )
+    if not fields:
+        raise SystemExit(
+            f"check-doc-claims: the `[shacl_product_alloc]` format string in {rel} "
+            f"reports no named quantity"
+        )
+    return phases, fields
+
+
+def load_product_alloc_report() -> dict[str, dict[str, int]]:
+    """The `shacl_product_alloc` transcript quoted in the products design document.
+
+    The block plays the part ``load_matrix``'s generated block plays for the conformance
+    scoreboard: it is the committed measurement, and the prose around it — "**603, not
+    544**", "`admit` adds **555 allocations**" — is a restatement that must agree with
+    it rather than a second number someone typed. Its SHAPE is checked against the
+    bench (:func:`load_product_alloc_shape`); its values come from the run whose command
+    the section prints beside it.
+    """
+    text = _read(_PRODUCTS_DESIGN)
+    rel = _PRODUCTS_DESIGN.relative_to(_REPO)
+    phases, fields = load_product_alloc_shape()
+    report: dict[str, dict[str, int]] = {}
+    for line in _PRODUCT_ALLOC_LINE.finditer(text):
+        label = line["label"]
+        if label not in phases:
+            raise SystemExit(
+                f"check-doc-claims: {rel} quotes a `{label}` line, which "
+                f"{_PRODUCT_ALLOC_BENCH.relative_to(_REPO)} does not report; the figures "
+                f"on it cannot be reproduced by the command the section prints"
+            )
+        if line["stage"] != phases[label]:
+            raise SystemExit(
+                f"check-doc-claims: {rel} quotes `{label}` at stage={line['stage']}, but "
+                f"the bench reports it at stage={phases[label]}. A figure whose binding "
+                f"time is wrong cannot be compared to anything"
+            )
+        measured = {
+            name: int(value)
+            for name, value in re.findall(r"(\w+)=(\d+)", line["fields"])
+        }
+        if tuple(measured) != fields:
+            raise SystemExit(
+                f"check-doc-claims: {rel} quotes `{label}` with "
+                f"{sorted(measured)}, but the bench reports {sorted(fields)}; the "
+                f"quoted transcript is not one this probe produces"
+            )
+        report[label] = measured
+    if not report:
+        raise SystemExit(
+            f"check-doc-claims: no `[shacl_product_alloc]` transcript in {rel}; the "
+            f"allocation prose derived from it would be derived from nothing"
+        )
+    return report
+
+
+def product_alloc_prose_claims(report: dict[str, dict[str, int]]) -> list[Claim]:
+    """Both prose restatements of the quoted `shacl_product_alloc` transcript.
+
+    This is the figure that drifted, and the section says why in its own words: it was
+    not among the claims this script derives from a source, so only the log moved. Both
+    restatements are now derived — the headline from the `restore/admit` line, and the
+    remainder from the difference between the two lines the same run prints, which is
+    exactly how the section states it.
+    """
+    rel = _PRODUCTS_DESIGN.relative_to(_REPO)
+    for label in ("restore/open", "restore/admit"):
+        if label not in report:
+            raise SystemExit(
+                f"check-doc-claims: the `[shacl_product_alloc]` transcript in {rel} no "
+                f"longer quotes `{label}`; the `admit` allocation prose is stated from "
+                f"both lines, so it cannot be checked without it"
+            )
+    admit = report["restore/admit"]["allocations"]
+    opened = report["restore/open"]["allocations"]
+    src = (
+        "the `[shacl_product_alloc]` transcript quoted in the same section, whose "
+        "phases, stages and field names are checked against "
+        "crates/shapes/benches/shacl_product_alloc.rs"
+    )
+    return [
+        Claim(
+            "the `admit` allocation headline",
+            _PRODUCTS_DESIGN,
+            _flow(r"\*\*(?P<allocations>\d+), not 544\.\*\*"),
+            {"allocations": admit},
+            src,
+        ),
+        Claim(
+            "the `admit` remainder over the structural `restore/open`",
+            _PRODUCTS_DESIGN,
+            _flow(
+                r"`admit` adds \*\*(?P<remainder>\d+) allocations\*\* over the "
+                r"structural `restore/open`"
+            ),
+            {"remainder": admit - opened},
+            src,
+        ),
+    ]
+
+
+def change_path_pin_claims(pins: dict[str, int]) -> list[Claim]:
+    """The products document's change-path invariant section, against the suite's pins.
+
+    Every number in §11.2 that the suite actually asserts: the measured case count and
+    its one exclusion, the two focus-node sizes the ``delta(2N) == delta(N)``
+    comparisons run at, the bind cost over the seam dataset, and the repetition count
+    the `rayon` residual is removed by. The "before" figures beside them are a dated
+    measurement of a revision that no longer exists and are deliberately not registered:
+    there is nothing committed left to derive them from, and a figure derived from a
+    second copy of itself is the drift this file exists to stop.
+    """
+    src = (
+        "the constants asserted in crates/shapes/tests/change_path_alloc.rs "
+        "(exact equality, no tolerance)"
+    )
+    return [
+        Claim(
+            "the measured constraint-and-path case count and its one exclusion",
+            _PRODUCTS_DESIGN,
+            _flow(
+                r"across the \*\*(?P<cases>\d+)\*\* measured constraint and path cases, "
+                r"all but (?P<excluded>[a-z]+) of which are held to exact equality"
+            ),
+            {"cases": pins["cases"], "excluded": pins["excluded"]},
+            src,
+        ),
+        Claim(
+            "the focus-node sizes and the seam bind cost",
+            _PRODUCTS_DESIGN,
+            _flow(r"allocations at (?P<focus>[\d,]+) and at (?P<seam>[\d,]+) focus nodes")
+            + ANY
+            + _flow(r"binding the seam dataset costs (?P<bind>\d+) either way"),
+            {
+                "focus": pins["FOCUS_NODES"],
+                # The sentence states N and 2N of the comparison, and the seam suite
+                # binds at the same size — so this is derived from N rather than read
+                # from SEAM_FOCUS_NODES, and the two agreeing is the point.
+                "seam": 2 * pins["FOCUS_NODES"],
+                "bind": pins["BIND_ALLOC_CONST"],
+            },
+            src,
+        ),
+        Claim(
+            "the repetition count the rayon injector residual is removed by",
+            _PRODUCTS_DESIGN,
+            _flow(r"\*\*minimum over (?P<repetitions>[a-z]+) repetitions\*\*"),
+            {"repetitions": pins["REPETITIONS"]},
+            src,
+        ),
+    ]
+
+
+# The change-path document's allocation decomposition, by the row label it publishes.
+# The three `—` rows are the components of the row above them; the last two sit beside
+# it. Nothing in the repository measures this table — it was taken by inserting one
+# extra discarded copy of each slice into the live path and differencing — so what is
+# gated is the arithmetic it asserts about itself and the figures DERIVED from it,
+# which is every figure in the document that a later re-measurement would leave behind.
+_DECOMPOSITION_TOTAL = "pre-binding rewrite, total"
+_DECOMPOSITION_PARTS = (
+    "— the algebra clone",
+    "— term and string materialization",
+    "— pushdown, seed and expression walks",
+)
+_DECOMPOSITION_EVALUATOR = "**evaluator per-query execution setup**"
+_DECOMPOSITION_REMAINDER = "SHACL-side remainder"
+
+
+def _decomposition_row(text: str, label: str) -> list[int]:
+    """One row of the decomposition table, as one integer per surface column."""
+    rel = _CHANGE_PATH_DESIGN.relative_to(_REPO)
+    row = re.search(rf"^\| {re.escape(label)} \|(.+)\|$", text, re.MULTILINE)
+    if not row:
+        raise SystemExit(
+            f"check-doc-claims: no {label!r} row in the allocation decomposition table "
+            f"in {rel}; the figures derived from that row cannot be checked, so do not "
+            f"leave them unchecked"
+        )
+    cells = [int(cell) for cell in re.findall(r"\d+", row.group(1))]
+    if not cells:
+        raise SystemExit(
+            f"check-doc-claims: the {label!r} row in {rel} carries no numbers"
+        )
+    return cells
+
+
+def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
+    """The decomposition table's own arithmetic, and the two figures derived from it.
+
+    Three identities hold by construction and are checked per surface: the three
+    component rows sum to the pre-binding total; the pre-binding total, the evaluator's
+    per-query setup and the SHACL-side remainder sum to the stated baseline; and the
+    residual an id-native pre-binding would leave is the baseline less the pre-binding
+    total. The document states that residual twice, in two different spellings, and
+    both are derived here — a re-measurement that updates the table and not the
+    sentences is precisely the edit this catches.
+    """
+    text = _read(_CHANGE_PATH_DESIGN)
+    rel = _CHANGE_PATH_DESIGN.relative_to(_REPO)
+    baseline_row = re.search(
+        _flow(
+            r"against the baseline of (?P<a>\d+) / (?P<b>\d+) / (?P<c>\d+) / (?P<d>\d+) "
+            r"that held before"
+        ),
+        text,
+    )
+    if not baseline_row:
+        raise SystemExit(
+            f"check-doc-claims: no 'against the baseline of A / B / C / D' sentence in "
+            f"{rel}; the decomposition's columns would add up to nothing stated"
+        )
+    baseline = [int(value) for value in baseline_row.groups()]
+    total = _decomposition_row(text, _DECOMPOSITION_TOTAL)
+    parts = [_decomposition_row(text, label) for label in _DECOMPOSITION_PARTS]
+    evaluator = _decomposition_row(text, _DECOMPOSITION_EVALUATOR)
+    remainder = _decomposition_row(text, _DECOMPOSITION_REMAINDER)
+    widths = {len(baseline), len(total), len(evaluator), len(remainder)} | {
+        len(part) for part in parts
+    }
+    if len(widths) != 1:
+        raise SystemExit(
+            f"check-doc-claims: the allocation decomposition in {rel} has rows of "
+            f"differing widths {sorted(widths)}; the table cannot be read by column"
+        )
+    problems: list[str] = []
+    for column in range(len(total)):
+        summed = sum(part[column] for part in parts)
+        if summed != total[column]:
+            problems.append(
+                f"{rel}: the allocation decomposition's column {column + 1} — its "
+                f"component rows sum to {summed}, but {_DECOMPOSITION_TOTAL!r} says "
+                f"{total[column]}"
+            )
+        whole = total[column] + evaluator[column] + remainder[column]
+        if whole != baseline[column]:
+            problems.append(
+                f"{rel}: the allocation decomposition's column {column + 1} — its rows "
+                f"sum to {whole}, but the stated baseline is {baseline[column]}"
+            )
+    residual = {
+        name: baseline[column] - total[column]
+        for column, name in enumerate(("a", "b", "c", "d")[: len(total)])
+    }
+    src = (
+        "the allocation decomposition table in the same document, less its "
+        "pre-binding rewrite row"
+    )
+    claims = [
+        Claim(
+            "the residual an id-native pre-binding would leave",
+            _CHANGE_PATH_DESIGN,
+            _flow(
+                r"That leaves (?P<a>\d+), (?P<b>\d+), (?P<c>\d+) and (?P<d>\d+) "
+                r"allocations per focus node"
+            ),
+            residual,
+            src,
+        ),
+        Claim(
+            "the ceiling the contained spellings still reach",
+            _CHANGE_PATH_DESIGN,
+            _flow(
+                r"for a ceiling that is still (?P<a>\d+) / (?P<b>\d+) / (?P<c>\d+) / "
+                r"(?P<d>\d+)\."
+            ),
+            residual,
+            src,
+        ),
+        Claim(
+            "how many surfaces the evaluator's setup outweighs the whole rewrite on",
+            _CHANGE_PATH_DESIGN,
+            _flow(
+                r"larger than the entire pre-binding rewrite on (?P<surfaces>[a-z]+) of "
+                r"the (?P<columns>[a-z]+) surfaces"
+            ),
+            {
+                "surfaces": sum(
+                    1
+                    for column in range(len(total))
+                    if evaluator[column] > total[column]
+                ),
+                "columns": len(total),
+            },
+            src,
+        ),
+    ]
+    return problems, claims
 
 
 def build_claims(
@@ -5621,6 +6162,17 @@ def main(argv: list[str]) -> int:
     checked += 1
     problems.extend(governor_profile_digest_claim())
     checked += 1
+    # The SHACL allocation figures in the two design documents that publish them. The
+    # coverage arm runs before the rows it guards: a surface measured and undocumented
+    # would otherwise leave this gate reporting that every documented row agrees.
+    surfaces = load_sparql_surface_allocations()
+    problems.extend(sparql_surface_coverage_claim(surfaces))
+    checked += 1
+    decomposition_problems, decomposition_claims = change_path_decomposition_claims()
+    problems.extend(decomposition_problems)
+    # Two column identities per surface: the components against their total, and the
+    # whole table against the stated baseline.
+    checked += 2 * len(_SPARQL_SURFACE_ROWS)
     # The ban walk reports how many files it scanned, which is COVERAGE, not a claim
     # count — folding ~1,900 scanned files into the "documented claims" headline would
     # inflate a number readers take as the count of gated statements. The ban is one
@@ -5639,6 +6191,10 @@ def main(argv: list[str]) -> int:
         build_claims(inventory, matrix, census, lanes, mechanisms, extend_families)
         + jsonld_lens_claims()
         + rdf12_canon_profile_claim(matrix)
+        + sparql_surface_table_claims(surfaces)
+        + product_alloc_prose_claims(load_product_alloc_report())
+        + change_path_pin_claims(load_change_path_pins())
+        + decomposition_claims
     ):
         claim.check()
         problems.extend(claim.failures)
