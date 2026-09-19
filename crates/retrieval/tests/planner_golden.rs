@@ -1338,9 +1338,9 @@ fn a_selectivity_rounds_up_and_never_raises_a_declared_depth() {
     // Zero is a measurement, not an absence, and it is also not a verdict. The
     // provider says no row under this stratum matches; the planner narrows the
     // read to one row and lets the producer be the thing that reports the
-    // emptiness, because a depth of zero invokes no relation and would still be
-    // reported as an exhausted stratum. An estimate narrows a read; it never
-    // eliminates one.
+    // emptiness, because a depth of zero never lets the relation answer and would
+    // still be reported as an exhausted stratum. An estimate narrows a read; it
+    // never eliminates one.
     let none = selectivity_statistics(vec![(iri(&ex("stratum/text")), lexical_term(), 0)]);
     assert_eq!(
         plan(&lexical_request(), &mixed_registry(), &none)

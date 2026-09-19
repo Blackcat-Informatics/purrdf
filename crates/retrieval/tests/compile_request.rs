@@ -618,11 +618,11 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
 ///
 /// A provider that measured an empty stratum is reporting honestly, and the
 /// plan still asks. The old behaviour scaled the declared bound to zero,
-/// compiled `LIMIT 0`, invoked no relation, and reported the stratum exhausted
-/// having emitted nothing — the strongest completeness claim this layer makes,
-/// minted from an estimate. Both halves are asserted here: the depth is one,
-/// and the emptiness that comes back is the *producer's*, because the producer
-/// was actually opened.
+/// compiled `LIMIT 0`, took no row from the relation whatever its index held, and
+/// reported the stratum exhausted having emitted nothing — the strongest
+/// completeness claim this layer makes, minted from an estimate. Both halves are
+/// asserted here: the depth is one, and the emptiness that comes back is the
+/// *producer's*, because the producer was allowed to answer.
 #[test]
 fn a_zero_statistic_still_plans_one_row_and_the_producer_reports_the_emptiness() {
     for cardinality in [0_u64, 1] {
@@ -960,12 +960,13 @@ fn a_mandatory_producer_under_a_zero_selectivity_plans_admits_and_runs() {
 }
 
 // ---------------------------------------------------------------------------
-// 2b. A producer that declares no rows is refused at placement
+// 2b. A producer that declares no rows is planned at one row and answers
 // ---------------------------------------------------------------------------
 
 /// The registry side of the same invariant: a producer whose every declared
-/// access mode promises zero rows has said nothing ranks in its stratum, and the
-/// honest answer is to leave it out rather than to plan it at a depth of zero.
+/// access mode promises zero rows has described its data, not forbidden its own
+/// invocation, and the honest answer is to read the one floored row from it so
+/// the emptiness is reported in its own receipt.
 ///
 /// `rows` is the row count each declared mode reports, so the same two
 /// producers can be built promising nothing and promising one row.
@@ -1003,23 +1004,21 @@ fn split_request() -> Vec<RequestTerm> {
 }
 
 #[test]
-fn a_producer_declaring_no_rows_is_rejected_and_its_term_reports_the_rejection() {
+fn a_producer_declaring_no_rows_is_planned_at_one_row_and_still_serves_its_term() {
     let (registry, _) = split_registry(0, false);
     let stats = statistics(&[("text", 10), ("narrow", 10)]);
-    let planned =
-        plan(&request(split_request()), &registry, &stats).expect("the other producer plans");
+    let planned = plan(&request(split_request()), &registry, &stats).expect("both producers plan");
 
     assert_eq!(
         rejection(&planned, &ex("pf/narrow")),
-        Some(RejectionReason::DeclaresNoRows),
-        "the decision names the declaration that promised nothing: {:?}",
+        None,
+        "a declaration of zero rows describes the data and is not a rejection: {:?}",
         planned.producer_decisions
     );
-    assert!(
-        !planned
-            .stratum_depths
-            .contains_key(&iri(&ex("stratum/narrow"))),
-        "a rejected producer's stratum records no depth at all, not a depth of zero"
+    assert_eq!(
+        planned.stratum_depths[&iri(&ex("stratum/narrow"))],
+        1,
+        "its stratum records the floored row — the probe that lets it report its own emptiness"
     );
     assert_eq!(
         planned.stratum_depths[&iri(&ex("stratum/text"))],
@@ -1027,15 +1026,23 @@ fn a_producer_declaring_no_rows_is_rejected_and_its_term_reports_the_rejection()
         "and the other producer plans exactly as it would have"
     );
 
-    // The term only the rejected producer accepts: something accepted it and was
-    // then rejected, which is not the same fact as nothing accepting it.
+    // The term only this producer accepts is bound to it, so nothing goes
+    // unserved: a producer that reads and finds nothing has served the term, and
+    // reporting it unserved would be reporting that the request never reached a
+    // producer at all.
+    assert!(
+        planned.producer_bindings.iter().any(|binding| {
+            binding.producer == ex("pf/narrow") && binding.request_terms == vec![1]
+        }),
+        "the zero-declaring producer receives the term only it accepts: {:?}",
+        planned.producer_bindings
+    );
     assert_eq!(
         planned.unserved_terms,
-        vec![UnservedTerm {
-            request_term: 1,
-            reason: UnservedReason::EveryAcceptingProducerRejected,
-        }],
-        "the rejected acceptor is the reason the term went unserved"
+        Vec::<UnservedTerm>::new(),
+        "nothing is unserved, and in particular nothing reports \
+         {:?}",
+        UnservedReason::EveryAcceptingProducerRejected
     );
 
     let env = AdmissionEnvironment {
@@ -1043,8 +1050,28 @@ fn a_producer_declaring_no_rows_is_rejected_and_its_term_reports_the_rejection()
         statistics: &stats,
         fusion_profile: None,
     };
-    let compiled = compile(&planned, &env).expect("the surviving producer still admits");
-    assert_eq!(compiled.units.len(), 1, "one stratum emits: {compiled:?}");
+    let compiled = compile(&planned, &env).expect("both strata admit");
+    assert_eq!(compiled.units.len(), 2, "both strata emit: {compiled:?}");
+    let narrow = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == iri(&ex("stratum/narrow")))
+        .expect("the zero-declaring producer's stratum emits a unit");
+    assert_eq!(narrow.depth, 1, "the unit reads one row");
+    // The emitted bound is the floor rather than `min(depth + 1, 0)`. A `LIMIT 0`
+    // here would hand back no row whatever the relation holds, and the stratum
+    // would then be reported exhausted with nothing — a completeness claim about
+    // the bound, which is the exact defect this arm exists to keep out of the tree.
+    assert!(
+        narrow.sparql.ends_with("LIMIT 1"),
+        "a declared zero still emits one row, never `LIMIT 0`: {}",
+        narrow.sparql
+    );
+    assert!(
+        !narrow.sparql.contains("LIMIT 0"),
+        "no part of the unit is bounded at nothing: {}",
+        narrow.sparql
+    );
 }
 
 #[test]
@@ -1081,18 +1108,19 @@ fn the_same_producer_declaring_one_row_plans_and_serves_its_term() {
 }
 
 #[test]
-fn a_mandatory_producer_that_declares_no_rows_is_a_registry_contradiction() {
-    // A producer the registry insists must answer, whose own declaration
-    // promises it never will. The plan records why it was dropped, and the
-    // waist — which is where every coverage claim is enforced — refuses the
-    // plan by name rather than emitting a stratum bounded at nothing.
+fn a_mandatory_producer_that_declares_no_rows_is_served_rather_than_missing() {
+    // A producer the registry insists must answer, whose own declaration says it
+    // currently holds nothing. There is no contradiction to refuse: it is bound,
+    // planned at one row, and the waist — where every coverage claim is enforced
+    // — finds the mandatory producer present rather than missing, because it is.
     let (registry, _) = split_registry(0, true);
     let stats = statistics(&[("text", 10), ("narrow", 10)]);
-    let planned =
-        plan(&request(split_request()), &registry, &stats).expect("the other producer still plans");
+    let planned = plan(&request(split_request()), &registry, &stats).expect("both producers plan");
     assert_eq!(
         rejection(&planned, &ex("pf/narrow")),
-        Some(RejectionReason::DeclaresNoRows)
+        None,
+        "a mandatory producer is not dropped for declaring its data empty: {:?}",
+        planned.producer_decisions
     );
 
     let env = AdmissionEnvironment {
@@ -1100,16 +1128,22 @@ fn a_mandatory_producer_that_declares_no_rows_is_a_registry_contradiction() {
         statistics: &stats,
         fusion_profile: None,
     };
-    let error = compile(&planned, &env).expect_err("a mandatory producer is missing");
-    match error {
-        AdmissionError::MissingMandatoryProducer { producer } => {
-            assert_eq!(*producer, iri(&ex("pf/narrow")));
-        }
-        other => panic!("expected MissingMandatoryProducer, got {other:?}"),
-    }
+    let compiled =
+        compile(&planned, &env).expect("the mandatory producer is served, so this admits");
+    assert!(
+        compiled
+            .units
+            .iter()
+            .any(|unit| unit.stratum == iri(&ex("stratum/narrow"))),
+        "the mandatory producer's stratum emits a unit: {compiled:?}"
+    );
 
-    // And where it is the registry's only producer, the request reaches nothing
-    // at all, which is the planner's own refusal.
+    // And where it is the registry's only producer — the shape a host with one
+    // index actually has — the request is planned rather than refused. Dropping
+    // the producer here left `bindings` empty and produced
+    // `PlanError::NoApplicableProducers`, whose message ("no registered producer
+    // accepts any term of the request") denies the acceptance the matching pass
+    // had already recorded.
     let (alone, _) = registry_of(vec![(
         "narrow",
         Spec::new(
@@ -1122,14 +1156,29 @@ fn a_mandatory_producer_that_declares_no_rows_is_a_registry_contradiction() {
         .rows(0, 3)
         .mandatory(),
     )]);
-    match plan(
+    let solo_stats = statistics(&[("narrow", 10)]);
+    let solo = plan(
         &request(vec![lexical("quick brown fox", None)]),
         &alone,
-        &statistics(&[("narrow", 10)]),
-    ) {
-        Err(PlanError::NoApplicableProducers) => {}
-        other => panic!("expected NoApplicableProducers, got {other:?}"),
-    }
+        &solo_stats,
+    )
+    .expect("a lone zero-declaring producer is planned, not refused");
+    assert_eq!(
+        solo.stratum_depths[&iri(&ex("stratum/narrow"))],
+        1,
+        "at the floored depth of one"
+    );
+    assert!(
+        solo.unserved_terms.is_empty(),
+        "and the term it accepts is served: {:?}",
+        solo.unserved_terms
+    );
+    let solo_env = AdmissionEnvironment {
+        registry: &alone,
+        statistics: &solo_stats,
+        fusion_profile: None,
+    };
+    compile(&solo, &solo_env).expect("and the sole-producer plan admits");
 }
 
 // ---------------------------------------------------------------------------

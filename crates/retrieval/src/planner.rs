@@ -130,14 +130,22 @@
 //! registry already set, and a stratum no provider spoke about keeps exactly
 //! the depth it had.
 //!
-//! And no statistic narrows a depth to nothing. A bound on the read never
-//! becomes a value: an estimate may narrow a read, but only the producer can
-//! report that there was nothing to read, through a receipt fusion checks
-//! against the rows it pulled. So the derived depth is floored at one — see
-//! [`capped`] — and a stratum planned at depth one over a provider that
-//! measured zero is a stratum whose relation is still invoked and still asked.
-//! What promises nothing is a registry declaration, not a statistic, and that
-//! is refused at placement rather than compiled into a `LIMIT 0`.
+//! And nothing here narrows a depth to nothing. A bound on the read never
+//! becomes a value: an estimate may narrow a read, and a declaration may bound
+//! it, but only the producer can report that there was nothing to read, through
+//! a receipt fusion checks against the rows it pulled. So the derived depth is
+//! floored at one — see [`capped`] — and a stratum planned at depth one is a
+//! stratum whose relation is still invoked and still asked.
+//!
+//! That floor covers the registry's own zero as well as the provider's. A
+//! producer whose every declared access mode promises zero rows per invocation
+//! is an ordinary state, not a contradiction: a text index built before its
+//! documents land, or one over a predicate no triple carries yet, declares
+//! exactly that and still answers. Such a producer is placed like any other and
+//! its stratum is planned at the floored depth of one, so the relation runs,
+//! reads, and reports its own emptiness. Refusing it here would have thrown the
+//! producer's receipt away and reported "no registered producer accepts any term
+//! of the request" about a producer that accepts the term.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -306,27 +314,15 @@ pub fn plan(
                 ..
             } => (*descriptor, *declaration, stratum, carried),
         };
-        // A producer whose every declared mode promises zero rows has said, in
-        // its own declaration, that nothing ranks in its stratum. Rejected here
-        // and not bound: a bound producer's stratum records a depth, and the
-        // floor in `capped` would record a depth of one over a declaration that
-        // promised none, while removing the floor would record zero and read the
-        // producer's silence back as an exhausted stratum. Refusing the
-        // declaration is the only answer that keeps the emptiness the producer's
-        // own claim.
-        //
-        // This is the placement pass and not the first one, and the position
-        // matters: `unserved_terms` reads the accepted and carried sets off a
-        // matched candidate, so a term only this producer accepts is reported
-        // `EveryAcceptingProducerRejected` — something accepted it and was then
-        // rejected — rather than the false `NoProducerAccepts`.
-        if declares_no_rows(descriptor) {
-            decisions.push(ProducerDecision::Rejected {
-                producer: candidate.producer.clone(),
-                reason: RejectionReason::DeclaresNoRows,
-            });
-            continue;
-        }
+        // A producer whose every declared mode promises zero rows is *not*
+        // filtered here. Its declaration says its data is empty right now, which
+        // is an ordinary state and not a contradiction, and the honest answer to
+        // it is to invoke the producer at the floored depth of one and let it
+        // report `Exhausted { rows_emitted: 0 }` — a completeness claim it earned
+        // by reading. Dropping it instead bound it nowhere, and where it was the
+        // registry's only producer the plan then failed with
+        // `NoApplicableProducers`, a message that denies the very acceptance the
+        // matching pass had just recorded.
         let depth = provisional.get(stratum).copied().unwrap_or(u32::MAX);
         if place(
             &candidate.producer,
@@ -489,7 +485,10 @@ enum Outcome<'a> {
 /// Every finite depth here carries [`capped`]'s floor of one, which matters
 /// more at this step than at the final one: this is the depth [`place`] renders
 /// into a producer's declared depth argument, so a zero would hand a relation a
-/// literal instruction to return nothing before anything had read a row.
+/// literal instruction to return nothing before anything had read a row. The
+/// floor applies to a registry bound of zero exactly as it does to a measured
+/// zero, and for the same reason — the one row it asks for is the probe that lets
+/// the producer say, in its own receipt, that it has none.
 fn depth_bounds(
     candidates: &[Candidate<'_>],
     terms: &[RequestTerm],
@@ -618,7 +617,8 @@ fn unserved_terms(
 }
 
 /// A declared row bound, lowered (never raised) by what the provider measured,
-/// and never lowered past the first row.
+/// and never lowered past the first row — nor read as zero when the declaration
+/// itself was zero.
 ///
 /// Two independent statistics narrow one number. A measured cardinality says
 /// how many rows the stratum holds at all; a measured selectivity says what
@@ -629,28 +629,38 @@ fn unserved_terms(
 ///
 /// # The finite bound is floored at one
 ///
-/// An estimate narrows a read; it never eliminates one. Emptiness is the
+/// A bound narrows a read; it never eliminates one. Emptiness is the
 /// **producer's** to report, through a receipt fusion verifies against the rows
-/// it actually pulled — so a statistic must never be the thing that decides a
-/// stratum is empty. A bound of zero would: it compiles to `LIMIT 0`, the
-/// relation is never invoked, and the stratum is then reported exhausted with
-/// no rows, which is the strongest completeness claim this layer has, minted
-/// from a number nobody checked against the data.
+/// it actually pulled — so nothing upstream of the producer may be the thing
+/// that decides a stratum is empty. A bound of zero would be exactly that: it
+/// compiles to `LIMIT 0`, which hands back no row whatever the relation holds,
+/// and the stratum is then reported exhausted with no rows — the strongest
+/// completeness claim this layer has, minted from a number nobody checked against
+/// the data and indistinguishable afterwards from an honest empty answer.
 ///
 /// A tiny non-zero selectivity already lands on one row through `div_ceil`;
-/// zero was the one input that escaped that protection, and it arrives by two
-/// roads — a provider honestly reporting `selectivity_ppm` of zero, and a
-/// measured cardinality of zero, which lands in the bound before the ratio is
-/// applied. Both are floored here, so both narrow the read to a single probing
-/// row and leave the verdict to the producer.
+/// zero was the one input that escaped that protection, and it arrives by three
+/// roads — a provider honestly reporting `selectivity_ppm` of zero, a measured
+/// cardinality of zero, which lands in the bound before the ratio is applied,
+/// and `declared` itself, when the registry's every access mode promises zero
+/// rows per invocation. All three are floored here, so all three narrow the read
+/// to a single probing row and leave the verdict to the producer.
 ///
-/// The floor is unconditional, and it cannot manufacture a read the registry
-/// did not declare: a producer whose every declared access mode promises zero
-/// rows is rejected at placement with
-/// [`RejectionReason::DeclaresNoRows`], and a producer that declares no access
-/// mode at all cannot be invoked and is rejected there too. Neither reaches
-/// this function, so every zero it can see is the provider's estimate rather
-/// than the registry's declaration.
+/// The floor is unconditional, and the one row it can add past `declared` is the
+/// point rather than an overreach. A producer declaring zero rows has described
+/// its data, not forbidden its own invocation — an index built before its
+/// documents land declares exactly that, and it answers a query against it
+/// perfectly well by returning nothing. Reading one row from it asks the question
+/// its declaration cannot answer on the registry's behalf: is that still true?
+/// The producer answers with [`crate::ProducerStatus::Exhausted`] and a row count of
+/// zero, which is a true completeness claim, because it really did read. So
+/// [`crate::admission`] admits a depth of one against a declared zero, and the
+/// compiler's `emitted_limit` never writes a `LIMIT 0`; the floor and those two
+/// are one rule in three places.
+///
+/// A producer that declares no access mode at all is a different fact and is
+/// still refused: it admits no invocation, so placement cannot render one, and it
+/// never reaches this function.
 ///
 /// The genuinely unbounded case returns before the floor and keeps returning
 /// [`u64::MAX`]: the caller turns that into
@@ -793,32 +803,6 @@ fn declared_row_bound(descriptor: &PfDescriptor) -> u64 {
         .map(|mode| mode.rows_per_invocation)
         .max()
         .unwrap_or(0)
-}
-
-/// Whether the producer's own declaration promises that nothing ranks in its
-/// stratum.
-///
-/// True only when the descriptor declares **at least one** access mode and every
-/// declared mode reports zero rows per invocation. The two halves of that
-/// condition are both load-bearing, and the empty case is the one that is easy
-/// to get wrong: a producer declaring no mode at all declared no row count —
-/// `rows_per_invocation` is reported per mode, so there was nowhere for it to
-/// say a number — and reading its absent declaration back as a promise of zero
-/// would tell a host its registry guarantees emptiness when its registry in fact
-/// said nothing. That producer is refused on a different ground (it admits no
-/// invocation, so placement cannot render one) and its stratum bounds no depth
-/// at admission. `max() == Some(0)` says exactly this: `None` for no modes,
-/// `Some(0)` only when every mode declared zero.
-///
-/// Read from the registry's own descriptor, like [`declared_row_bound`] beside
-/// it; the planner keeps no parallel copy of the seam's cost declaration.
-fn declares_no_rows(descriptor: &PfDescriptor) -> bool {
-    descriptor
-        .modes
-        .iter()
-        .map(|mode| mode.rows_per_invocation)
-        .max()
-        == Some(0)
 }
 
 /// The predicate a request term names, when it names one.

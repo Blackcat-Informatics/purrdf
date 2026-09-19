@@ -425,31 +425,49 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
-- **retrieval:** A statistics-derived stratum depth is floored at one row. An
-  estimate narrows a read; it never eliminates one. A provider reporting a
-  selectivity of zero parts per million, or a cardinality of zero, scaled a
-  stratum's depth to zero: the compiled unit read nothing and the trailer still
-  reported exhaustion with zero rows, which is the strongest completeness claim
-  the vocabulary has, minted for a query that was never run. A tiny non-zero
-  selectivity was already safe through ceiling division; zero was the one input
-  that escaped it, and it arrives by two roads -- an honest `selectivity_ppm` of
-  zero, and a measured cardinality of zero, which lands in the bound before the
-  ratio is applied. Emptiness is now reported by the producer's own receipt
-  against rows fusion verified rather than by a plan that declined to ask.
-- **retrieval:** A producer whose every declared mode promises no rows is rejected
-  at the placement pass as `RejectionReason::DeclaresNoRows`, rather than floored
-  to one row. The position is the point: the rejection is recorded where the
-  accepted and carried sets are populated, so a request term only that producer
-  accepts is reported as "every accepting producer rejected it" rather than as
-  "nothing accepts it", which are different facts about a registry. "Declared no
-  rows" and "declared nothing" also stay distinct -- a producer that declared no
-  access mode bounds no depth, and inventing a zero for it would refuse a plan the
+- **retrieval:** A stratum depth is floored at one row, whether the zero came from
+  a statistics provider or from the registry's own declaration. A bound narrows a
+  read; it never eliminates one. A provider reporting a selectivity of zero parts
+  per million, or a cardinality of zero, scaled a stratum's depth to zero: the
+  compiled unit read nothing and the trailer still reported exhaustion with zero
+  rows, which is the strongest completeness claim the vocabulary has, minted for a
+  query that was never run. A tiny non-zero selectivity was already safe through
+  ceiling division; zero was the one input that escaped it, and it arrives by three
+  roads -- an honest `selectivity_ppm` of zero, a measured cardinality of zero,
+  which lands in the bound before the ratio is applied, and a producer whose every
+  declared access mode promises zero rows per invocation. Emptiness is now reported
+  by the producer's own receipt against rows fusion verified rather than by a plan
+  that declined to ask.
+- **retrieval:** A producer whose every declared mode promises no rows is selected,
+  bound and planned at that floored row, so it runs and reports its own
+  `Exhausted { rows_emitted: 0 }`. That declaration describes the producer's data
+  -- a text index built before its documents land, or one over a predicate no
+  triple carries yet, declares exactly it -- and the producer is perfectly
+  invocable. Dropping it instead bound it nowhere, and where it was the registry's
+  only producer, which is the shape of a host with one index, the whole plan then
+  failed with `PlanError::NoApplicableProducers`: "no registered producer accepts
+  any term of the request", about a producer that accepts the term. It also threw
+  away the only receipt that could have made the emptiness the producer's claim.
+  "Declared no rows" and "declared nothing" still stay distinct -- a producer that
+  declared no access mode admits no invocation, so placement refuses it and its
+  stratum bounds no depth, and inventing a zero for it would refuse a plan the
   registry never spoke against.
+- **retrieval:** Admission admits a depth of one against a declared row bound of
+  zero, and refuses every depth past it. The one row is the probe that lets the
+  producer speak; a stratum no ranked producer emits under is still refused at
+  every depth, because there is no producer there to hand a row to.
+- **retrieval:** A compiled unit's emitted bound is floored at one row, so a
+  producer declaring zero rows is bounded at `LIMIT 1` rather than at `LIMIT 0`.
+  For every declared bound of one or more this changes nothing: an admitted depth
+  is at least one, so the probe is at least two and the minimum was already at
+  least one.
 - **retrieval:** A recorded stratum depth of zero is refused at the admission waist
-  as `AdmissionError::ZeroDepth`. Given the floor and the rejection above, a zero
-  can now only come from an edited plan; admitted, it would emit `LIMIT 0`, invoke
-  no relation, and report the stratum exhausted with nothing. A stratum that is to
-  read nothing carries no depth entry at all.
+  as `AdmissionError::ZeroDepth`. Given the floors above, a zero can now only come
+  from an edited plan; admitted, it would emit `LIMIT 0`, which hands back no row
+  whatever the relation holds, and report the stratum exhausted with nothing -- a
+  completeness claim about the bound rather than about the data, indistinguishable
+  afterwards from an honest empty answer. A stratum that is to read nothing carries
+  no depth entry at all.
 - **retrieval:** A compiled unit is emitted one row deeper than its stratum reads,
   bounded by whatever row count the producer declared, and the executor hands on
   only the rows the depth allows. The extra row is read and never reported: it

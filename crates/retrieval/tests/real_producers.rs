@@ -32,6 +32,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
@@ -48,8 +49,9 @@ use purrdf_retrieval::{
     Term, TopK, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace, KnnGuard,
-    PropertyFunctionRegistry, TermKind,
+    BindingPattern, CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace,
+    EvalError, KnnGuard, PfArgs, PfArity, PfCursor, PropertyFunction, PropertyFunctionRegistry,
+    TermKind, Volatility,
 };
 use purrdf_text::{GraphSelector, TextError, TextIndex, TextIndexConfig, TextSearchRelation};
 
@@ -1327,5 +1329,272 @@ fn the_knn_producer_names_each_target_once_when_two_rows_share_one_vector() {
          distances tie exactly, so the order between them is ascending row number, \
          and a row number is a position in the target set's canonical target-id \
          order rather than in the order this fixture lists its rows"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 6. The sole producer over an empty corpus
+// ---------------------------------------------------------------------------
+//
+// An index built before its documents land, or built over a predicate no triple
+// carries yet, holds no documents. Its declared `rows_per_invocation` is
+// therefore zero — an honest measurement of the data, not a refusal of the
+// relation — and a host with one text index has exactly one registered producer.
+//
+// That pairing is the whole of this section, and it is the shape every other
+// test of a zero-row declaration left out: each of those registered a second,
+// surviving producer, so the plan always had something else to bind and the
+// sole-producer registry was never driven. The claim here is that the relation
+// is INVOKED at the floored depth of one and reports its own
+// `Exhausted { rows_emitted: 0 }` — a completeness claim it earned by reading —
+// rather than the request being refused before anything ran.
+
+/// A real index over a corpus holding no documents at all.
+///
+/// The configuration is [`text_config`], unchanged, so nothing about the index's
+/// shape differs from the populated fixtures; only the data does. The dataset is
+/// returned alongside it because the same rows have to reach `search`.
+fn empty_text_index() -> (Arc<RdfDataset>, TextIndex) {
+    let data = dataset_of(&[]);
+    let index = TextIndex::from_dataset(&*data, &text_config())
+        .expect("an empty corpus is a valid corpus to index");
+    assert_eq!(
+        index.document_count(),
+        0,
+        "the fixture's premise is that the index holds nothing"
+    );
+    (data, index)
+}
+
+/// The shipped text relation, wrapped so that its invocation is observable.
+///
+/// Every method delegates to the real [`TextSearchRelation`], which does all of
+/// the work; the only thing the wrapper adds is a counter bumped in `open`. The
+/// point is that "the producer reports the emptiness" is a claim about a call, and
+/// a status of `Exhausted { rows_emitted: 0 }` does not evidence one: a plan that
+/// bound the producer nowhere and refused outright made no call at all, and there
+/// was no receipt to read. The counter checks the call happened rather than
+/// inferring it.
+///
+/// It is deliberately *not* the check that the emitted bound is not `LIMIT 0`. The
+/// evaluator opens a relation and applies the bound afterwards, so the counter
+/// rises either way — measured, not assumed. That bound is asserted separately,
+/// against the compiled text, in [`sole_producer_answer`].
+struct CountingTextRelation {
+    inner: TextSearchRelation,
+    opened: Arc<AtomicU64>,
+}
+
+impl PropertyFunction for CountingTextRelation {
+    fn volatility(&self) -> Volatility {
+        self.inner.volatility()
+    }
+
+    fn arity(&self) -> PfArity {
+        self.inner.arity()
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        self.inner.modes()
+    }
+
+    fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        self.inner.rows_per_invocation(mode)
+    }
+
+    fn open(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.opened.fetch_add(1, Ordering::Relaxed);
+        self.inner.open(args, ceiling)
+    }
+}
+
+/// Register the shipped text relation, alone, behind [`CountingTextRelation`].
+///
+/// The declaration is the shipped relation's own — read off the relation before it
+/// is wrapped — so the registry describes the real producer and not the wrapper.
+fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
+    let mut registry = PropertyFunctionRegistry::new();
+    let inner = TextSearchRelation::new(Arc::new(index));
+    let declaration = inner
+        .ranked_declaration(
+            kernel_iri(TEXT_STRATUM),
+            Some(NOTE.to_owned()),
+            CandidateDomains::Unrestricted,
+        )
+        .expect("a single-partition index declares a ranked order");
+    let opened = Arc::new(AtomicU64::new(0));
+    registry.register_ranked(
+        TEXT_PF,
+        Arc::new(CountingTextRelation {
+            inner,
+            opened: Arc::clone(&opened),
+        }),
+        declaration,
+    );
+    (registry, opened)
+}
+
+/// Plan, admit and answer `request` against a registry holding one producer.
+///
+/// Returns the plan beside the answer, because the two claims this section makes
+/// live in different places: the depth is the plan's, and the receipt is the
+/// answer's. The compiled unit is checked on the way through, because the emitted
+/// bound is the one thing neither of those two can report.
+fn sole_producer_answer(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry,
+    data: &RdfDataset,
+) -> (purrdf_retrieval::Plan, SearchResult) {
+    let statistics = NoStatistics;
+    let planned = plan(request, registry, &statistics)
+        .expect("a registry holding one accepting producer plans the request");
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: &statistics,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("the sole-producer plan is admitted");
+    let unit = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == iri(TEXT_STRATUM))
+        .expect("the one stratum emits a unit");
+    assert!(
+        !unit.sparql.contains("LIMIT 0"),
+        "a unit bounded at nothing hands back no row whatever the index holds, so its \
+         stratum's exhaustion would be the bound's claim and not the producer's — and \
+         it reads identically to an honest empty answer in every field of the trailer: \
+         {}",
+        unit.sparql
+    );
+    let profile = one_stratum_profile(TEXT_STRATUM);
+    let result = block_on(search(
+        request,
+        registry,
+        &statistics,
+        data,
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the sole producer answers rather than the request being refused");
+    (planned, result)
+}
+
+/// Every stratum status of `result`, so a claim about one of them can be made
+/// against the whole report rather than against a lookup that might miss.
+fn statuses(result: &SearchResult) -> Vec<(String, purrdf_retrieval::ProducerStatus)> {
+    result
+        .trailer
+        .statuses
+        .iter()
+        .map(|(stratum, status)| (stratum.as_str().to_owned(), status.clone()))
+        .collect()
+}
+
+#[test]
+fn the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness() {
+    let (data, index) = empty_text_index();
+    let (registry, opened) = counting_text_registry(index);
+    let request = lexical_request("alpha beta");
+    let (planned, result) = sole_producer_answer(&request, &registry, &data);
+
+    // The plan. The producer accepts the lexical term and is bound to it — the
+    // declaration promising zero rows describes the data, so it is no ground for
+    // dropping the producer — and its stratum reads the one floored row.
+    assert!(
+        planned
+            .producer_bindings
+            .iter()
+            .any(|binding| binding.producer == TEXT_PF && binding.request_terms == vec![0]),
+        "the sole producer receives the needle: {:?}",
+        planned.producer_bindings
+    );
+    assert_eq!(
+        planned.stratum_depths[&iri(TEXT_STRATUM)],
+        1,
+        "the stratum records the floored depth of one, which is the probing read"
+    );
+    assert!(
+        planned.unserved_terms.is_empty(),
+        "and the needle is served: a producer that reads and finds nothing has \
+         answered the term, {:?}",
+        planned.unserved_terms
+    );
+
+    // The answer. No rows, and the reason there are none is the producer's own
+    // receipt rather than a planner verdict: `Exhausted` is the strongest
+    // completeness claim this vocabulary has, and here it is true, because the
+    // relation really did run and really found nothing.
+    assert!(
+        result.rows.is_empty(),
+        "an empty corpus ranks nothing: {:?}",
+        ranking(&result)
+    );
+    assert!(
+        opened.load(Ordering::Relaxed) > 0,
+        "the relation was called at all — which a refused plan, the defect this \
+         section pins, never managed, leaving no receipt for the exhaustion below \
+         to be read off"
+    );
+    assert_eq!(
+        statuses(&result),
+        vec![(
+            TEXT_STRATUM.to_owned(),
+            purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: 0 },
+        )],
+        "the one stratum reports the producer's own exhaustion at zero rows"
+    );
+    // Stated separately, because it is the one status that would mean the read
+    // was cut rather than complete — and a `LIMIT 0` unit would have produced
+    // `Exhausted` here too, so the count above is only half the claim.
+    assert!(
+        !result.trailer.statuses.values().any(|status| matches!(
+            status,
+            purrdf_retrieval::ProducerStatus::DepthReached { .. }
+        )),
+        "nothing was cut by the depth: {:?}",
+        statuses(&result)
+    );
+}
+
+#[test]
+fn the_sole_text_producer_over_one_document_still_returns_that_document() {
+    // The neighbour that must still work, and the arm that proves the producer
+    // accepts the term the empty-corpus arm asserts it accepts. Nothing changes
+    // but the number of documents the index holds.
+    let data = dataset_of(&[("only", "alpha beta gamma delta", None)]);
+    let index =
+        TextIndex::from_dataset(&*data, &text_config()).expect("the one-document corpus indexes");
+    assert_eq!(index.document_count(), 1);
+    let (registry, opened) = counting_text_registry(index);
+    let request = lexical_request("alpha beta");
+    let (planned, result) = sole_producer_answer(&request, &registry, &data);
+
+    assert!(
+        opened.load(Ordering::Relaxed) > 0,
+        "the same registry over one document invokes the same relation"
+    );
+    assert_eq!(
+        planned.stratum_depths[&iri(TEXT_STRATUM)],
+        1,
+        "one document is one row of declared depth"
+    );
+    assert_eq!(
+        candidates(&result),
+        vec![format!("<{}>", ex("only"))],
+        "the document the index holds is the answer"
+    );
+    assert_eq!(
+        statuses(&result),
+        vec![(
+            TEXT_STRATUM.to_owned(),
+            purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: 1 },
+        )],
+        "and the receipt counts the row it emitted"
     );
 }

@@ -52,7 +52,7 @@ precise cost several of these declarations exist to avoid.
 | [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound) | Declare the honest unfiltered worst case for the row bound | producer |
 | [A10](#a10--the-engine-pushed-ceiling-is-honoured-for-efficiency-only) | The engine-pushed ceiling is honoured for efficiency only | engine withholds, producer honours |
 | [A11](#a11--volatility-must-be-true-of-the-snapshot-held) | Volatility must be true of the snapshot held, and the snapshot is pinned for the query | producer |
-| [A12](#a12--statistics-narrow-they-never-zero) | Statistics narrow; they never zero | layer, three times |
+| [A12](#a12--bounds-narrow-they-never-zero) | Bounds narrow; they never zero | layer, three times |
 | [A13](#a13--attest-the-generation-of-the-snapshot-that-answered) | Attest the generation of the snapshot that answered | producer declares, layer carries |
 | [A14](#a14--declare-incompleteness-rather-than-refusing-or-faking-exhaustion) | Declare incompleteness rather than refusing or faking exhaustion | producer declares, layer refuses an unrecordable one |
 | [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, and never name a candidate outside them | both |
@@ -385,7 +385,7 @@ one answer to one question, bought at three different altitudes because no singl
 altitude can answer it.
 
 The layer's own purchase — the middle one — is the depth probe.
-[`compile`] emits `LIMIT min(depth + 1, declared row bound)`, so a
+[`compile`] emits `LIMIT max(1, min(depth + 1, declared row bound))`, so a
 unit whose producer still had rows past the planned depth hands back one more row
 than its stratum may contribute. That row is a **probe**: never emitted onto the
 stream, never ranked, never counted, present in no plan field, no identity and no
@@ -396,7 +396,12 @@ keeps the probe from becoming an over-refusal of its own: where the depth alread
 equals the producer's declared bound there is nothing further to promise, the
 registry already answered the question, and no probe is emitted. Without it an
 executor could only ever say `Exhausted` — the strongest completeness claim this
-layer makes — about a read the plan itself had cut short. Pinned by
+layer makes — about a read the plan itself had cut short. The outer `max(1)` is
+the other side of that same care: a producer declaring zero rows would otherwise
+be bounded at `LIMIT 0`, which hands back nothing whatever its index holds, so its
+emptiness would be the bound's claim rather than its own
+(see [A12](#a12--bounds-narrow-they-never-zero)).
+Pinned by
 `the_probe_separates_a_cut_read_from_an_exhausted_one` in
 `tests/execute_dataset.rs` and `the_probe_row_changes_the_ending_and_nothing_else`
 in `src/execute.rs`.
@@ -499,52 +504,72 @@ is read immediately after `open` precisely because that is the instant the snaps
 is pinned, so a producer that rebuilt underneath a drain would attest a generation
 that did not produce the rows it produced.
 
-## A12 — Statistics narrow; they never zero
+## A12 — Bounds narrow; they never zero
 
 **The obligation.** A [`Statistics`] provider's cardinality and
 selectivity **lower** a stratum's depth and never raise it, and a measurement of
 zero is an honest report about the data rather than a licence to skip the read. An
 unknown cardinality is not a zero one, which is why the provider returns an option
-rather than a number.
+rather than a number. The same holds for a registry's own
+`rows_per_invocation`: a declaration of zero rows reports what the producer holds
+right now, and it too is read rather than obeyed.
 
-**The failure it prevents.** A depth of zero compiles to `LIMIT 0`, invokes no
-relation, and the trailer still reports the stratum exhausted with zero rows —
-the strongest completeness claim the vocabulary has, minted for a query that was
-never run. A tiny non-zero selectivity was already safe through ceiling division;
-zero was the one input that escaped it, and it arrives by two roads: a provider
-honestly reporting a selectivity of zero parts per million, and a measured
-cardinality of zero, which lands in the bound before the ratio is applied.
+**The failure it prevents.** A depth of zero compiles to `LIMIT 0`, which hands
+back no row whatever the relation holds, and the trailer still reports the stratum
+exhausted with zero rows — the strongest completeness claim the vocabulary has,
+made about the bound rather than about the data, and identical in every trailer
+field to an honest empty answer, so nothing downstream can tell them apart.
+A tiny non-zero selectivity was already safe through ceiling division;
+zero was the one input that escaped it, and it arrives by three roads: a provider
+honestly reporting a selectivity of zero parts per million, a measured
+cardinality of zero, which lands in the bound before the ratio is applied, and a
+producer whose every declared access mode promises zero rows per invocation.
 
-**Who enforces it.** The layer, in three places that do three different things, so
-that "this stratum is empty" is always said by a producer's receipt against rows
-fusion verified and never by a plan that declined to ask.
+**Who enforces it.** The layer, in three places that are one rule, so that "this
+stratum is empty" is always said by a producer's receipt against rows fusion
+verified and never by a plan that declined to ask. Any one of the three missing
+brings the `LIMIT 0` back.
 
-1. **The derived depth is floored at one row.** Emptiness is then reported by the
-   producer. Pinned by `a_zero_statistic_still_plans_one_row_and_the_producer_reports_the_emptiness`,
+1. **The derived depth is floored at one row**, whichever road the zero arrived
+   by. Emptiness is then reported by the producer. Pinned by
+   `a_zero_statistic_still_plans_one_row_and_the_producer_reports_the_emptiness`,
    `a_zero_selectivity_narrows_to_one_row_and_the_relation_is_still_invoked`,
-   `a_cardinality_of_zero_is_floored_with_or_without_a_selectivity` and
-   `a_mandatory_producer_under_a_zero_selectivity_plans_admits_and_runs`, all in
-   `tests/compile_request.rs`.
-2. **A producer whose every declared mode promises no rows is not floored — it is
-   rejected**, at the placement pass where the accepted and carried sets are
-   populated, as
-   [`RejectionReason::DeclaresNoRows`]. The
-   position matters: a term only that producer accepts is then reported as *every
-   accepting producer rejected it* rather than as *nothing accepts it*, which are
-   different facts about the registry. Pinned by
-   `a_producer_declaring_no_rows_is_rejected_and_its_term_reports_the_rejection`
-   and `a_mandatory_producer_that_declares_no_rows_is_a_registry_contradiction`.
+   `a_cardinality_of_zero_is_floored_with_or_without_a_selectivity`,
+   `a_mandatory_producer_under_a_zero_selectivity_plans_admits_and_runs`,
+   `a_producer_declaring_no_rows_is_planned_at_one_row_and_still_serves_its_term`
+   and `a_mandatory_producer_that_declares_no_rows_is_served_rather_than_missing`,
+   all in `tests/compile_request.rs`.
+2. **Admission admits that floored row against a declared bound of zero** and
+   refuses every depth past it, while a stratum no ranked producer emits under is
+   still refused at every depth — there is no producer there to hand a probing row
+   to. Pinned by `a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it`
+   in `tests/admission_tests.rs`, whose four arms hold the declared zero, the row
+   past it, a recorded zero and the absent bound apart.
 3. **A recorded depth of zero is refused at admission** as
-   [`AdmissionError::ZeroDepth`]. Given the two
-   above, a zero can only have come from an edited plan. A stratum that is to read
-   nothing carries no entry at all. Pinned by
+   [`AdmissionError::ZeroDepth`], and the compiler's emitted bound is floored at
+   one row so a declared zero cannot write `LIMIT 0` either. Given the two above,
+   a recorded zero can only have come from an edited plan. A stratum that is to
+   read nothing carries no entry at all. Pinned by
    `a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under`,
    with `a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all` as
    its valid neighbour.
 
-"Declared no rows" and "declared nothing" stay distinct all the way down: a
-producer that declared no access mode bounds no depth, and inventing a zero for it
-would refuse a plan the registry never spoke against.
+"Declared no rows" and "declared nothing" stay distinct all the way down, and they
+are distinct in a way worth stating precisely. A producer that declared **zero
+rows** described its data: it is invocable, so it is selected, bound, planned at
+the floored row and asked, and it answers with its own
+`Exhausted { rows_emitted: 0 }`. A producer that declared **no access mode**
+described nothing: it admits no invocation, so placement refuses it as
+[`RejectionReason::UnsatisfiedConstraint`], its stratum bounds no depth, and
+inventing a zero for it would refuse a plan the registry never spoke against.
+
+The end-to-end case is the one a host actually meets — an index built before its
+documents land, registered as the only producer — and it is driven over the
+shipped `TextSearchRelation` by
+`the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness` in
+`tests/real_producers.rs`, with
+`the_sole_text_producer_over_one_document_still_returns_that_document` as its
+valid neighbour.
 
 ## A13 — Attest the generation of the snapshot that answered
 

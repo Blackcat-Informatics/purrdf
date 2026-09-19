@@ -114,10 +114,14 @@ pub trait Statistics {
     /// answer for a provider that measured no matching rows, and the plan records
     /// the value verbatim in its snapshot. What the planner declines to do is
     /// turn it into a depth of zero, because that depth compiles to `LIMIT 0`,
-    /// invokes no relation, and reports the stratum exhausted having emitted
-    /// nothing — an emptiness claim the provider's estimate would have made on
-    /// the producer's behalf. Floored at one, the relation is still invoked,
-    /// still asked, and still the thing that says whether anything was there.
+    /// which hands back no row whatever the index holds, and then reports the
+    /// stratum exhausted having emitted nothing — an emptiness claim the
+    /// provider's estimate would have made on the producer's behalf. The
+    /// relation is still opened; what it is never allowed to do is answer. So the
+    /// exhaustion is the bound's claim rather than the data's, and it is
+    /// indistinguishable in every trailer field from an honestly empty answer.
+    /// Floored at one, the relation is asked, and its answer is the thing that
+    /// says whether anything was there.
     ///
     /// A provider is free to report under a request predicate instead, or as
     /// well; a plan records every selectivity it was told, whatever the subject

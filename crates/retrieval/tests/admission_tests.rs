@@ -260,11 +260,12 @@ fn registry_with_different_declaration() -> PropertyFunctionRegistry {
 
 /// A ranked producer that declares **no access mode at all**.
 ///
-/// A host can register a relation that reports no invocation pattern — an index
-/// that is not built yet, a relation gated on configuration the host has not
-/// supplied. Such a producer declares no worst-case row count either, because a
-/// row count is declared per mode, and "declared nothing" is not "declared
-/// zero": zero is a promise that nothing ranks there.
+/// A host can register a relation that reports no invocation pattern — a relation
+/// gated on configuration the host has not supplied. Such a producer declares no
+/// worst-case row count either, because a row count is declared per mode, and
+/// "declared nothing" is not "declared zero": a declared zero is a measurement of
+/// the producer's data, and it is read at the floored depth of one so the producer
+/// reports the emptiness itself.
 struct NoModeProducer {
     arity: PfArity,
 }
@@ -319,6 +320,36 @@ fn registry_with_a_modeless_producer() -> PropertyFunctionRegistry {
         }),
         ranked(
             &ex("stratum/modeless"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            false,
+        ),
+    );
+    registry
+}
+
+/// The fixture's mandatory catch-all producer, plus a producer whose one declared
+/// access mode promises **zero rows** under a stratum of its own.
+///
+/// This is the shape of a host whose index is built but empty — no document
+/// landed yet, or no triple carries the configured predicate. The registry's
+/// declaration is honest and the relation is perfectly invocable; it simply has
+/// nothing to return, which is a fact only the relation can report.
+fn registry_with_an_empty_producer() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/any"),
+        producer(200, "universal/", 3),
+        ranked(
+            &ex("stratum/universal"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
+    );
+    registry.register_ranked(
+        ex("pf/empty"),
+        producer(0, "empty/", 0),
+        ranked(
+            &ex("stratum/empty"),
             vec![TermPattern::of_kind(TermKind::Any)],
             false,
         ),
@@ -1682,10 +1713,10 @@ fn a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero() {
     }
 
     // A depth of zero for the same stratum is refused on the other dimension,
-    // and refused it must be: a zero reads no rows, invokes no relation, and
-    // would still be reported as an exhausted stratum — a completeness claim
-    // about a query that never ran. A caller that wants this stratum left out of
-    // the answer leaves out its entry.
+    // and refused it must be: a zero takes no row from the relation whatever its
+    // index holds, and would still be reported as an exhausted stratum — a
+    // completeness claim about a read that was never allowed to answer. A caller
+    // that wants this stratum left out of the answer leaves out its entry.
     plan.stratum_depths.insert(iri(&ex("stratum/ghost")), 0);
     let error = compile(&plan, &env).expect_err("a depth of zero reads nothing");
     match error {
@@ -1700,6 +1731,88 @@ fn a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero() {
     plan.stratum_depths.remove(&iri(&ex("stratum/ghost")));
     plan.stratum_depths.insert(iri(&ex("stratum/text")), 1);
     compile(&plan, &env).expect("a depth of one over a ranked stratum admits");
+}
+
+#[test]
+fn a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it() {
+    // The fourth case, and the one the three above left out: a stratum whose one
+    // producer declared a bound of zero because its data is empty right now. That
+    // is a measurement, not a contradiction, and the answer is to read the one
+    // floored row so the producer reports the emptiness in its own receipt. So a
+    // depth of one is admitted here — while everything the other three cases
+    // refuse stays refused.
+    let registry = registry_with_an_empty_producer();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&registry, &stats);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    assert_eq!(
+        plan.stratum_depths[&iri(&ex("stratum/empty"))],
+        1,
+        "the planner floors a declared zero at the one probing row"
+    );
+    let compiled = compile(&plan, &env).expect("a depth of one over a declared zero admits");
+    let unit = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == iri(&ex("stratum/empty")))
+        .expect("the stratum emits a unit, so its relation is actually invoked");
+    assert_eq!(unit.depth, 1);
+    assert!(
+        unit.sparql.ends_with("LIMIT 1") && !unit.sparql.contains("LIMIT 0"),
+        "the emitted bound is the floor and never `LIMIT 0`: {}",
+        unit.sparql
+    );
+
+    // Only the floor. A declared zero admits one row because one row is what the
+    // probe costs; the second row is a depth the registry's number does not carry.
+    let mut deeper = plan.clone();
+    deeper.stratum_depths.insert(iri(&ex("stratum/empty")), 2);
+    match compile(&deeper, &env).expect_err("two rows exceed a declared zero's floor") {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+        } => {
+            assert_eq!(*stratum, iri(&ex("stratum/empty")));
+            assert_eq!(declared, 1, "the floor is the whole of the bound");
+            assert_eq!(requested, 2);
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+
+    // A recorded zero is still not a read, here as everywhere.
+    let mut zeroed = plan.clone();
+    zeroed.stratum_depths.insert(iri(&ex("stratum/empty")), 0);
+    match compile(&zeroed, &env).expect_err("a zero reads nothing, declared zero or not") {
+        AdmissionError::ZeroDepth { stratum } => {
+            assert_eq!(*stratum, iri(&ex("stratum/empty")));
+        }
+        other => panic!("expected ZeroDepth, got {other:?}"),
+    }
+
+    // And the stratum no ranked producer emits under at all is still refused at
+    // every positive depth. Its bound is absent rather than declared, so there is
+    // no producer here to hand a probing row to and nothing to floor: the two
+    // zeroes stay two facts.
+    let mut ghost = plan;
+    ghost.stratum_depths.insert(iri(&ex("stratum/ghost")), 1);
+    match compile(&ghost, &env).expect_err("nothing ranks under a stratum nothing declared") {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+        } => {
+            assert_eq!(*stratum, iri(&ex("stratum/ghost")));
+            assert_eq!(declared, 0, "an absent bound is not floored to one");
+            assert_eq!(requested, 1);
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
 }
 
 #[test]

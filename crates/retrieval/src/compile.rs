@@ -88,14 +88,17 @@
 //! `LIMIT`; the outer one still applies.
 //!
 //! No admitted plan carries a depth of zero, so nothing here emits `LIMIT 0`.
-//! That bound reads no rows: it invokes no relation, and the stratum is then
-//! reported exhausted having emitted nothing — the strongest completeness claim
-//! this layer makes, about a query that never ran. An estimate may narrow a read
-//! and must never eliminate one, so the planner floors every derived depth at
-//! one and admission refuses a zero outright
-//! ([`AdmissionError::ZeroDepth`]). Emptiness is reported by the producer, in
-//! the receipt fusion verifies against the rows it actually pulled, and a
-//! stratum that is to run at all runs deep enough to ask.
+//! That bound reads no rows: whatever the relation holds, the unit hands back
+//! nothing, and the stratum is then reported exhausted having emitted nothing —
+//! the strongest completeness claim this layer makes, made about the bound rather
+//! than about the data, and indistinguishable in every trailer field from an
+//! honest empty answer. A bound may narrow a read and
+//! must never eliminate one, so the planner floors every derived depth at one,
+//! admission refuses a zero outright ([`AdmissionError::ZeroDepth`]), and
+//! [`emitted_limit`] floors the emitted bound at one even where the registry's
+//! declared row count is zero. Emptiness is reported by the producer, in the
+//! receipt fusion verifies against the rows it actually pulled, and a stratum
+//! that is to run at all runs deep enough to ask.
 //!
 //! A stratum that is to read nothing is expressed by carrying no depth entry —
 //! which is also how the planner expresses it, since it records a depth only for
@@ -369,14 +372,33 @@ fn ranked_declaration<'a>(
 /// A declared bound wider than a `u32` is clamped before the `min`, which cannot
 /// change the answer: `depth + 1` is a `u32`, so a wider bound can never be the
 /// smaller of the two.
+///
+/// # A declared zero still emits one row
+///
+/// `min` alone would write `LIMIT 0` for a producer whose every access mode
+/// declares zero rows per invocation — and that bound reads nothing: it invokes
+/// no relation, and the stratum is then reported exhausted having emitted
+/// nothing, which is this layer's strongest completeness claim made about a query
+/// that never ran. So the result is floored at one, which is the same floor the
+/// planner applies to the depth and admission applies to the bound; the three are
+/// one rule, and any one of them missing brings the `LIMIT 0` back.
+///
+/// The floor changes nothing for any `declared >= 1`. An admitted `depth` is at
+/// least one, so `probe` is at least two, so `min(declared, probe)` is already at
+/// least one and `max(1)` is the identity there.
 fn emitted_limit(depth: u32, bound: RowBound) -> u32 {
     let probe = depth.saturating_add(1);
     match bound {
         // The producer already promised there is no row past `declared`, so a
         // probe for one asks a question the registry answered at registration —
         // and at `depth == declared` it would also push the emitted bound past
-        // the very number admission holds the depth to.
-        RowBound::Declared(declared) => u32::try_from(declared).unwrap_or(u32::MAX).min(probe),
+        // the very number admission holds the depth to. The exception is
+        // `declared == 0`, where the registry's promise is about data that may
+        // since have arrived and the one row is the only way to ask.
+        RowBound::Declared(declared) => u32::try_from(declared)
+            .unwrap_or(u32::MAX)
+            .min(probe)
+            .max(1),
         // Nothing was declared, so there is no promise to read the answer off
         // and the probe is the only way to learn whether the depth cut the read.
         RowBound::Undeclared => probe,

@@ -206,7 +206,6 @@ fn every_rejection_reason_round_trips_under_its_own_tag() {
         RejectionReason::NoAcceptedTerm,
         RejectionReason::DepthExceeded,
         RejectionReason::UnsatisfiedConstraint,
-        RejectionReason::DeclaresNoRows,
     ];
     let mut ids = Vec::with_capacity(reasons.len());
     for reason in reasons {
@@ -229,6 +228,79 @@ fn every_rejection_reason_round_trips_under_its_own_tag() {
         distinct.len(),
         ids.len(),
         "each reason takes its own byte, so each plan takes its own identity"
+    );
+}
+
+/// The plan carrying `reason` as its one rejection decision.
+fn plan_rejecting_with(reason: RejectionReason) -> Plan {
+    let mut plan = baseline();
+    plan.producer_decisions = vec![ProducerDecision::Rejected {
+        producer: "http://example.org/pf/knn".to_owned(),
+        reason,
+    }];
+    plan
+}
+
+/// A rejection-reason byte no variant is written as is refused, not substituted.
+///
+/// The vocabulary is closed and its bytes are dense, so the first byte past the
+/// last variant is the one a plan written by a differently-versioned peer — or by
+/// hand — would carry. Decoding it as *some* reason would hand a caller a verdict
+/// about its own query that nothing in this process ever decided: the point of
+/// the reason is that it is evidence.
+///
+/// The tag's position is located rather than hard-coded, by encoding two plans
+/// that differ in nothing but the reason and taking the one byte that moved.
+#[test]
+fn a_rejection_reason_byte_no_variant_is_written_as_is_refused() {
+    let depth = plan_rejecting_with(RejectionReason::DepthExceeded).canonical_bytes();
+    let mut constraint =
+        plan_rejecting_with(RejectionReason::UnsatisfiedConstraint).canonical_bytes();
+    assert_eq!(
+        depth.len(),
+        constraint.len(),
+        "two reasons are one byte each, so the encodings are the same length"
+    );
+    let moved: Vec<usize> = depth
+        .iter()
+        .zip(&constraint)
+        .enumerate()
+        .filter(|(_, (left, right))| left != right)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        moved.len(),
+        1,
+        "the reason is the only thing that differs, so exactly one byte moved"
+    );
+    let tag = moved[0];
+    assert_eq!(
+        (depth[tag], constraint[tag]),
+        (2, 3),
+        "and the bytes at that position are the two reasons' own dense tags"
+    );
+
+    // One past the last variant: the byte a peer that still wrote a reason this
+    // vocabulary no longer has would put here.
+    constraint[tag] = 4;
+    let error = Plan::from_canonical_bytes(&constraint)
+        .expect_err("an unknown rejection reason is refused");
+    match error {
+        PlanError::InvalidTag { what, tag: byte } => {
+            assert_eq!(what, "rejection reason");
+            assert_eq!(byte, 4);
+        }
+        other => panic!("expected InvalidTag, got {other:?}"),
+    }
+
+    // The neighbour that must still decode: the same bytes with the real tag back
+    // in place. A decoder that refused every reason would pass the assertion
+    // above and be useless.
+    constraint[tag] = 3;
+    let decoded = Plan::from_canonical_bytes(&constraint).expect("the real tag still decodes");
+    assert_eq!(
+        decoded.producer_decisions,
+        plan_rejecting_with(RejectionReason::UnsatisfiedConstraint).producer_decisions
     );
 }
 
