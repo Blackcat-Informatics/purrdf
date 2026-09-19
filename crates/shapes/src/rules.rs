@@ -75,7 +75,7 @@ use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
 
 use crate::constraints::conforms_with_plan;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
-use crate::engine::{FocusNode, resolve_focus_nodes};
+use crate::engine::resolve_focus_nodes;
 use crate::expression::{NodeExpr, RecursionGuard, eval_planned_node_expr};
 use crate::shapes::{Shape, Shapes};
 use crate::term::{Term, term_id_to_native};
@@ -912,7 +912,15 @@ impl<'a> RulePlan<'a> {
             &self.binding,
             self.lowered.classes(),
         )
-        .map(|nodes| nodes.into_iter().map(FocusNode::into_term).collect())
+        .map(|nodes| {
+            // The rules engine drives the owned-term SHACL-AF surfaces, so this
+            // is one of the boundaries that really does need every focus node
+            // materialized.
+            nodes
+                .into_iter()
+                .map(|node| node.to_term(data.core_view()))
+                .collect()
+        })
     }
 
     /// The plan of the `position`-th `sh:condition` shape.

@@ -750,11 +750,18 @@ fn build_index(
     let mut parents: FastMap<TermId, Vec<TermId>> = FastMap::default();
     let mut asserted_type_classes = FastSet::default();
     let mut previous_type = None;
+    // The `rdf:type` rows are counted on THIS pass so the row buffer below can be
+    // sized exactly instead of doubling its way up. A `Vec` that grows to R
+    // reallocates about log2(R) times, and R is the instance count — so an
+    // unsized buffer is a term in the graph size charged once per bind, which is
+    // precisely what the bind seam is asserted not to carry.
+    let mut type_rows = 0usize;
     for quad in dataset.quads() {
         if quad.g.is_some() {
             continue;
         }
         if quad.p == rdf_type {
+            type_rows += 1;
             if previous_type != Some(quad.o) {
                 asserted_type_classes.insert(quad.o);
                 previous_type = Some(quad.o);
@@ -820,14 +827,18 @@ fn build_index(
         return None;
     }
 
-    let mut rows: Vec<_> = dataset
-        .quads()
-        .filter(|quad| quad.g.is_none() && quad.p == rdf_type && retained_classes.contains(&quad.o))
-        .map(|quad| TypeRow {
-            class: quad.o,
-            subject: quad.s,
-        })
-        .collect();
+    let mut rows: Vec<TypeRow> = Vec::with_capacity(type_rows);
+    rows.extend(
+        dataset
+            .quads()
+            .filter(|quad| {
+                quad.g.is_none() && quad.p == rdf_type && retained_classes.contains(&quad.o)
+            })
+            .map(|quad| TypeRow {
+                class: quad.o,
+                subject: quad.s,
+            }),
+    );
     rows.sort_unstable();
     rows.dedup();
 

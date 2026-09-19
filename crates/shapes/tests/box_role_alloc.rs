@@ -29,15 +29,13 @@
 //!   allocate the same amount at `N` and at `2N`, so the vocabulary contributes
 //!   neither a constant nor a growth term to a conforming focus node.
 //! * [`conforming_box_role_validation_has_no_growth_term_in_focus_count`] — the
-//!   same claim stated ABSOLUTELY, `delta(2N) == delta(N)`. It is `#[ignore]`d
-//!   and RED, for a reason that has nothing to do with box roles: the change path
-//!   still materializes per focus node, which is the growth term
-//!   `change_path_alloc.rs`'s first two tests are ignored for. This file cannot
-//!   subtract that term from an absolute figure, only hold it identical on both
-//!   sides of a difference — which is what the headline above does. Both
-//!   statements ship, because the absolute one is the invariant a reader expects
-//!   to find here and its absence would read as an oversight rather than as a
-//!   measured fact about a neighbouring defect.
+//!   same claim stated ABSOLUTELY, `delta(2N) == delta(N)`. It was red, and it
+//!   was red for a reason that had nothing to do with box roles: the change path
+//!   materialized every focus node before any constraint ran. That term is gone,
+//!   so this now holds outright rather than only as a difference. Both statements
+//!   ship, because the differential one keeps saying what the absolute one
+//!   cannot: that the vocabulary contributes nothing even if the route around it
+//!   ever acquires a cost again.
 //! * [`violating_box_role_validation_still_stamps_every_role`] — the companion
 //!   that makes the headline mean anything. "The vocabulary allocates nothing"
 //!   is satisfied perfectly by a validator that stopped stamping roles, so this
@@ -70,10 +68,10 @@
 //! change path's allocation count. It now costs exactly zero, to the single
 //! allocation: the configured and unconfigured rows are identical at both sizes.
 //!
-//! The 8,196 that both remaining rows still grow by is the change path's own
-//! focus materialization, not box roles. It is what
-//! [`conforming_box_role_validation_has_no_growth_term_in_focus_count`] is red
-//! on and what `change_path_alloc.rs`'s first two tests are ignored for.
+//! The growth term both rows used to carry was the change path's own focus
+//! materialization, not box roles, and it has since been removed —
+//! [`conforming_box_role_validation_has_no_growth_term_in_focus_count`] now holds
+//! absolutely as well as differentially.
 //!
 //! # The instrument, and the traps it is threaded around
 //!
@@ -116,7 +114,6 @@
 //!
 //! ```text
 //! cargo test -p purrdf-shapes --test box_role_alloc
-//! cargo test -p purrdf-shapes --test box_role_alloc -- --ignored
 //! ```
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -404,13 +401,12 @@ fn assert_measured_fixture_roles(result: &ValidationResult) {
 /// node, at `N` focus nodes and at `2N`.**
 ///
 /// The claim is stated as a DIFFERENCE between two bindings rather than as an
-/// absolute figure, and that is not a softening. The absolute figure still
-/// carries the change path's own per-focus-node materialization term — the
-/// defect `change_path_alloc.rs`'s first two tests are ignored for — and that
-/// term is identical on both sides here, so it cancels exactly. What survives the
-/// subtraction is the box-role feature's entire contribution, and the assertion
-/// is that it is ZERO: not small, not bounded, but not a single allocation, at
-/// either size.
+/// absolute figure, and that is not a softening. Whatever the route around the
+/// feature costs — it used to carry a per-focus-node materialization term, and
+/// could acquire another — it is identical on both sides here, so it cancels
+/// exactly. What survives the subtraction is the box-role feature's entire
+/// contribution, and the assertion is that it is ZERO: not small, not bounded,
+/// but not a single allocation, at either size.
 ///
 /// Equality is asserted EXACTLY. An allocation count is a fact about the code,
 /// not about the host, so two runs of the same work produce the same number and
@@ -492,23 +488,14 @@ fn a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path() {
 /// **With a box-role vocabulary configured, validating a conforming focus set
 /// costs the same whether it holds `N` nodes or `2N`.**
 ///
-/// This is the invariant a reader arrives looking for, and it is RED — for a
-/// reason that is not about box roles. The change path materializes per focus
-/// node before any constraint runs, which is the growth term
-/// `change_path_alloc.rs`'s first two tests carry `#[ignore]` for, and it is
-/// present here under either configuration.
-/// [`a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path`] is the
-/// same statement with that term cancelled rather than subtracted away by hand,
-/// and it is green today.
-///
-/// It ships anyway, as an executable specification rather than a disabled test:
-/// when focus materialization is deferred this goes green with no edit, and until
-/// then its absence from this file would read as an oversight instead of as a
-/// measured fact about a neighbouring defect.
+/// This is the invariant a reader arrives looking for. It was red on the change
+/// path's own per-focus-node materialization term, under either configuration,
+/// and it went green with no edit to this file when that term was removed —
+/// which is exactly what an executable specification is supposed to do.
+/// [`a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path`] states the
+/// same thing with whatever the surrounding route costs cancelled rather than
+/// assumed away, and the two are kept side by side for that reason.
 #[test]
-#[ignore = "with a box-role vocabulary configured the change path must allocate the same amount \
-            for N and 2N conforming focus nodes; red on the change path's own per-focus-node \
-            materialization term, not on the box-role feature, and un-ignored with it"]
 fn conforming_box_role_validation_has_no_growth_term_in_focus_count() {
     let _guard = measure_lock();
     assert_parallel_path_is_reachable();

@@ -16,6 +16,7 @@ use ::purrdf::{FastMap, FastSet, IdSet, TermId, TermRef};
 use smallvec::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
+use crate::engine::FocusNode;
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
 use crate::plan::{PlannedConstraint, PropertyPlan, RangeBound, ShapePlan};
@@ -52,6 +53,28 @@ impl ValueNode {
         match self {
             Self::Interned(id) => term_id_to_native(ds, *id),
             Self::Foreign(term) => term.clone(),
+        }
+    }
+
+    /// This value node as a focus node, for the constraints that recurse into a
+    /// shape at it.
+    ///
+    /// Free for the interned arm, which is the arm the change path produces:
+    /// the recursion focus is the id, and nothing is materialized. The foreign
+    /// arm clones the term it already owns — the same clone the owned-term
+    /// recursion boundary used to make for EVERY value node, interned or not.
+    fn as_focus(&self, ds: &impl ShaclRead) -> FocusNode {
+        match self {
+            Self::Interned(id) => FocusNode::Interned(*id),
+            Self::Foreign(term) => FocusNode::resolve(ds, term),
+        }
+    }
+
+    /// The single value node a NODE-level constraint sees: the focus node itself.
+    fn of_focus(focus: &FocusNode) -> Self {
+        match focus {
+            FocusNode::Interned(id) => Self::Interned(*id),
+            FocusNode::Foreign(term) => Self::Foreign(term.clone()),
         }
     }
 
@@ -400,7 +423,7 @@ struct PropertyLazies {
 struct PropertyStamp<'a> {
     store: &'a ShaclData,
     box_role_vocab: Option<&'a BoxRoleVocab>,
-    focus: &'a Term,
+    focus: &'a FocusNode,
     ps: &'a PropertyShape,
     parent_box_roles: &'a [NamedNode],
     lazy: &'a PropertyLazies,
@@ -444,7 +467,9 @@ impl PropertyStamp<'_> {
                     }
                 }));
         }
-        result.focus_node = self.focus.clone();
+        // THE materialization boundary for the focus node on the property path:
+        // a result is being built, so the owned term is finally needed.
+        result.focus_node = self.focus.to_term(self.store.core_view());
         result.apply_box_roles(self.source_roles(), self.path_roles());
     }
 }
@@ -602,14 +627,13 @@ impl<'a> ConformanceMemo<'a> {
 fn conforms_memoized<'a>(
     context: ValidationContext<'a, '_>,
     plan: ShapePlan<'a>,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
 ) -> Result<bool, String> {
     // Both halves of the key must be present for this question to be memoizable:
     // a non-interned value node has no identity to key on (two non-interned terms
     // can be equal), and a blank-node-identified shape has no second site to share
     // an answer with. Either missing simply means the question is recomputed.
-    let key = match (focus_id, &plan.shape().id) {
+    let key = match (focus.id(), &plan.shape().id) {
         (Some(node), Term::NamedNode(iri)) => Some(MemoKey {
             node,
             depth: context.depth,
@@ -623,7 +647,7 @@ fn conforms_memoized<'a>(
         return Ok(recorded);
     }
     let mut probe = AnyViolation::default();
-    walk_shape(context.inner(plan), focus, focus_id, &mut probe)?;
+    walk_shape(context.inner(plan), focus, &mut probe)?;
     let verdict = probe.conforms();
     if let Some(key) = key {
         context.memo.insert(key, verdict);
@@ -676,18 +700,17 @@ pub fn validate_shape_with(
     // lowering is derived here for this one call. A caller validating MANY focus
     // nodes should hold a `PreparedShapes`, which memoizes it.
     let lowering = OneShotLowering::of(store, shape);
-    let focus_id = resolve_id(store.core_view(), focus);
-    validate_shape_with_plan_at(store, focus, focus_id, box_role_vocab, lowering.plan()?)
+    let focus = FocusNode::resolve(store.core_view(), focus);
+    validate_shape_with_plan_at(store, &focus, box_role_vocab, lowering.plan()?)
 }
 
 pub(crate) fn validate_shape_with_plan_at(
     store: &ShaclData,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
     box_role_vocab: Option<&BoxRoleVocab>,
     plan: ShapePlan<'_>,
 ) -> Result<Vec<ValidationResult>, String> {
-    validate_shape_with_depth(store, focus, focus_id, box_role_vocab, plan, 0)
+    validate_shape_with_depth(store, focus, box_role_vocab, plan, 0)
 }
 
 /// A shape lowering built for ONE call, for the entry points that are handed a
@@ -733,8 +756,7 @@ impl<'a> OneShotLowering<'a> {
 /// native stack.
 fn validate_shape_with_depth(
     store: &ShaclData,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
     box_role_vocab: Option<&BoxRoleVocab>,
     plan: ShapePlan<'_>,
     depth: u32,
@@ -747,18 +769,17 @@ fn validate_shape_with_depth(
         depth,
         memo: &memo,
     };
-    collect_shape(context, focus, focus_id)
+    collect_shape(context, focus)
 }
 
 /// [`walk_shape`] with the reporting sink: every result the focus node produces,
 /// in traversal order.
 fn collect_shape(
     context: ValidationContext<'_, '_>,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
 ) -> Result<Vec<ValidationResult>, String> {
     let mut sink = Collect::default();
-    walk_shape(context, focus, focus_id, &mut sink)?;
+    walk_shape(context, focus, &mut sink)?;
     Ok(sink.results)
 }
 
@@ -774,8 +795,7 @@ fn collect_shape(
 /// overflowing the native stack.
 fn walk_shape<S: ResultSink>(
     context: ValidationContext<'_, '_>,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
     sink: &mut S,
 ) -> Result<Flow, String> {
     let plan = context.plan;
@@ -795,8 +815,7 @@ fn walk_shape<S: ResultSink>(
     // --- Node-level constraints (value nodes = [focus], no path) ---
     // The single value node IS the focus term. Keep an interned focus id-native;
     // only a genuinely foreign SHACL-AF term needs an owned clone.
-    let node_value_nodes =
-        [focus_id.map_or_else(|| ValueNode::Foreign(focus.clone()), ValueNode::Interned)];
+    let node_value_nodes = [ValueNode::of_focus(focus)];
     {
         // A node-level result carries the shape's roles and no path roles.
         let mut node_sink = NodeRoles {
@@ -822,16 +841,7 @@ fn walk_shape<S: ResultSink>(
 
     // --- Property shapes ---
     for (ps, property_plan) in plan.properties()? {
-        if eval_property_shape(
-            context,
-            focus,
-            focus_id,
-            ps,
-            property_plan,
-            &shape.box_roles,
-            sink,
-        )?
-        .stopped()
+        if eval_property_shape(context, focus, ps, property_plan, &shape.box_roles, sink)?.stopped()
         {
             return Ok(Flow::Stop);
         }
@@ -844,7 +854,7 @@ fn walk_shape<S: ResultSink>(
     // must not drop their predicate role.
     for (constraint, lowered) in plan.constraints()? {
         if let PlannedConstraint::Closed { permitted } = plan.planned(constraint, lowered)?
-            && eval_closed(context, focus, focus_id, shape, permitted, sink).stopped()
+            && eval_closed(context, focus, shape, permitted, sink).stopped()
         {
             return Ok(Flow::Stop);
         }
@@ -887,8 +897,7 @@ fn walk_shape<S: ResultSink>(
 /// its subject.
 fn eval_closed<S: ResultSink>(
     context: ValidationContext<'_, '_>,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
     shape: &Shape,
     permitted: &FastSet<TermId>,
     sink: &mut S,
@@ -896,12 +905,12 @@ fn eval_closed<S: ResultSink>(
     // A focus node this data graph does not intern has no outgoing quads at all,
     // so a closed shape has nothing to report against it — the same empty answer
     // the materializing probe gave, reached without a dictionary lookup.
-    let (Some(focus_id), true) = (focus_id, focus.is_subject()) else {
-        return Flow::Continue;
-    };
     let store = context.store;
     let box_role_vocab = context.box_role_vocab;
     let ds = store.core_view();
+    let (Some(focus_id), true) = (focus.id(), focus.is_subject(ds)) else {
+        return Flow::Continue;
+    };
     for quad in quads_for_pattern_ids(ds, Some(focus_id), None, None, GraphFilter::AnyGraph) {
         if permitted.contains(&quad.p) {
             continue;
@@ -922,7 +931,7 @@ fn eval_closed<S: ResultSink>(
             let path_roles =
                 path_box_roles(store, &Path::Predicate(predicate.clone()), box_role_vocab);
             let mut result = ValidationResult {
-                focus_node: focus.clone(),
+                focus_node: focus.to_term(ds),
                 result_path: Some(Term::NamedNode(predicate)),
                 path_structure: None,
                 value: Some(term_id_to_native(ds, quad.o)),
@@ -962,8 +971,7 @@ pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, 
     let lowering = OneShotLowering::of(store, shape);
     conforms_with_id_depth(
         store,
-        focus,
-        resolve_id(store.core_view(), focus),
+        &FocusNode::resolve(store.core_view(), focus),
         lowering.plan()?,
         0,
     )
@@ -984,7 +992,12 @@ pub(crate) fn conforms_with_plan(
     focus: &Term,
     plan: ShapePlan<'_>,
 ) -> Result<bool, String> {
-    conforms_with_id_depth(store, focus, resolve_id(store.core_view(), focus), plan, 0)
+    conforms_with_id_depth(
+        store,
+        &FocusNode::resolve(store.core_view(), focus),
+        plan,
+        0,
+    )
 }
 
 /// The conformance entry for a caller OUTSIDE one validation run — `sh:condition`
@@ -996,8 +1009,7 @@ pub(crate) fn conforms_with_plan(
 /// reuses the memo their ambient context already carries.
 pub(crate) fn conforms_with_id_depth(
     store: &ShaclData,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
     plan: ShapePlan<'_>,
     depth: u32,
 ) -> Result<bool, String> {
@@ -1010,7 +1022,7 @@ pub(crate) fn conforms_with_id_depth(
         memo: &memo,
     };
     let mut probe = AnyViolation::default();
-    walk_shape(context, focus, focus_id, &mut probe)?;
+    walk_shape(context, focus, &mut probe)?;
     Ok(probe.conforms())
 }
 
@@ -1018,8 +1030,7 @@ pub(crate) fn conforms_with_id_depth(
 
 fn eval_property_shape<'a, S: ResultSink>(
     context: ValidationContext<'a, '_>,
-    focus: &Term,
-    focus_id: Option<TermId>,
+    focus: &FocusNode,
     ps: &'a PropertyShape,
     property_plan: PropertyPlan<'a>,
     parent_box_roles: &[NamedNode],
@@ -1040,15 +1051,19 @@ fn eval_property_shape<'a, S: ResultSink>(
     // focus nodes hashes its predicate IRI zero times.
     let lowered_path = property_plan.path();
     let binding = context.plan.binding();
-    let value_nodes: SmallVec<[ValueNode; 4]> = match focus_id {
-        Some(id) => path::eval_planned_ids_from_id(store.core_view(), id, lowered_path, binding)?
-            .into_iter()
-            .map(ValueNode::Interned)
-            .collect(),
-        None => path::eval_planned(store.core_view(), focus, lowered_path, binding)?
-            .into_iter()
-            .map(ValueNode::Foreign)
-            .collect(),
+    let value_nodes: SmallVec<[ValueNode; 4]> = match focus {
+        FocusNode::Interned(id) => {
+            path::eval_planned_ids_from_id(store.core_view(), *id, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Interned)
+                .collect()
+        }
+        FocusNode::Foreign(term) => {
+            path::eval_planned(store.core_view(), term, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Foreign)
+                .collect()
+        }
     };
     // Report-only materialization is lazy: a conforming focus node never
     // allocates a native path term, clones a complex path structure, merges the
@@ -1102,13 +1117,12 @@ fn eval_property_shape<'a, S: ResultSink>(
     // fires once per reach, so results are NOT deduplicated here).
     for (nested, nested_plan) in property_plan.properties(ps)? {
         for value in &value_nodes {
-            // A value node becomes the focus of the nested shape: resolve it to an
-            // owned term at the recursion boundary (recursion is not the hot
-            // conforming path).
+            // A value node becomes the focus of the nested shape, and it becomes
+            // one in whichever representation it already has: an interned value
+            // node recurses as an interned focus node, with nothing materialized.
             if eval_property_shape(
                 context,
-                &value.to_term(store.core_view()),
-                value.as_id(store.core_view()),
+                &value.as_focus(store.core_view()),
                 nested,
                 nested_plan,
                 stamp.source_roles(),
@@ -1129,10 +1143,14 @@ fn eval_property_shape<'a, S: ResultSink>(
             .iter()
             .map(|v| v.to_term(store.core_view()))
             .collect();
+        // Reifier shapes build quoted triple terms whose SUBJECT is the focus
+        // node, so this branch — and only this branch — needs it owned. It is
+        // materialized once here rather than once per value node.
+        let focus_term = focus.to_term(store.core_view());
         return eval_reifier_shapes(
             ReifierEvalContext {
                 context,
-                focus,
+                focus: &focus_term,
                 value_nodes: &value_terms,
                 ps,
                 source_roles: stamp.source_roles(),
@@ -1231,14 +1249,14 @@ fn eval_reifier_shapes<S: ResultSink>(
                     plan: reifier_plan,
                     ..context
                 };
-                let reifier_id = resolve_id(store.core_view(), reifier);
+                let reifier_focus = FocusNode::resolve(store.core_view(), reifier);
                 if !S::RECORDS_RESULTS {
                     // Conformance only: the inner results exist solely to supply
                     // this result's message, and this sink keeps no message. Probe
                     // for the first inner violation and stop there rather than
                     // collecting the rest.
                     let mut probe = AnyViolation::default();
-                    walk_shape(reifier_context, reifier, reifier_id, &mut probe)?;
+                    walk_shape(reifier_context, &reifier_focus, &mut probe)?;
                     if probe.conforms() {
                         continue;
                     }
@@ -1251,7 +1269,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     }
                     continue;
                 }
-                for inner in collect_shape(reifier_context, reifier, reifier_id)? {
+                for inner in collect_shape(reifier_context, &reifier_focus)? {
                     let flow = sink.violation(|| {
                         let message = inner
                             .message
@@ -1406,7 +1424,7 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
 /// `path` is `None` for node-level constraints, `Some` for property shapes.
 fn eval_constraint<'a, S: ResultSink>(
     context: ValidationContext<'a, '_>,
-    focus_node: &Term,
+    focus_node: &FocusNode,
     value_nodes: &[ValueNode],
     constraint: PlannedConstraint<'a>,
     path: Option<&Path>,
@@ -1429,7 +1447,7 @@ fn eval_constraint<'a, S: ResultSink>(
     macro_rules! result {
         ($component:expr, $value:expr) => {
             ValidationResult {
-                focus_node: focus_node.clone(),
+                focus_node: focus_node.to_term(ds),
                 result_path: result_path(),
                 path_structure: path_structure(),
                 value: $value,
@@ -1688,7 +1706,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 };
                 if violates {
                     emit!(ValidationResult {
-                        focus_node: focus_node.clone(),
+                        focus_node: focus_node.to_term(ds),
                         result_path: result_path(),
                         path_structure: path_structure(),
                         value: Some(value.to_term(ds)),
@@ -1772,14 +1790,16 @@ fn eval_constraint<'a, S: ResultSink>(
         // ── Not (per value node, recursive) ────────────────────────────────────
         PlannedConstraint::Not(inner_shape) => {
             for value in value_nodes {
-                // Preserve interned identity before materializing the recursion
-                // focus; reverse-resolving the owned term would add a hash probe.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The recursion focus IS the value node, in the representation it
+                // already has: no materialization, and no reverse hash probe to
+                // recover an identity the value node was already carrying.
+                let focus = value.as_focus(ds);
                 // Violation iff the value node DOES conform to the negated shape.
-                if conforms_memoized(context, inner_shape, value, value_id)? {
-                    emit!(result!(sh::NOT_CONSTRAINT_COMPONENT, Some(value.clone())));
+                if conforms_memoized(context, inner_shape, &focus)? {
+                    emit!(result!(
+                        sh::NOT_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
             Flow::Continue
@@ -1794,7 +1814,16 @@ fn eval_constraint<'a, S: ResultSink>(
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
         PlannedConstraint::UniqueLang(true) => {
-            let mut seen_langs: FastMap<String, usize> = FastMap::default();
+            // Tallied over BORROWED tags in an inline buffer, and the buffer is
+            // indexed by DISTINCT language rather than by value node — a focus
+            // node carries a handful of languages however many labels it has, so
+            // the scan is over a few entries and the whole tally allocates
+            // nothing. The two things this replaced both cost one allocation per
+            // conforming focus node: the map's table on its first insert, and an
+            // owned lowercased key per value node. Case folding is now a
+            // comparison rather than a new string, which is the same relation
+            // BCP 47 tags are compared under (they are ASCII).
+            let mut seen_langs: SmallVec<[(&str, usize); UNIQUE_LANG_INLINE]> = SmallVec::new();
             for value in value_nodes {
                 // Content arm on the BORROWED language tag: `ValueNode::language`
                 // is `None` for every node that is not a language-tagged literal,
@@ -1802,13 +1831,24 @@ fn eval_constraint<'a, S: ResultSink>(
                 // counted population is unchanged and no value node is
                 // materialized to be counted.
                 if let Some(lang) = value.language(ds) {
-                    *seen_langs.entry(lang.to_lowercase()).or_insert(0) += 1;
+                    if let Some(entry) = seen_langs
+                        .iter_mut()
+                        .find(|(seen, _)| seen.eq_ignore_ascii_case(lang))
+                    {
+                        entry.1 += 1;
+                    } else {
+                        seen_langs.push((lang, 1));
+                    }
                 }
             }
+            // First-seen order, where the map this replaced iterated in hash
+            // order. Both are re-sorted by `finish_report` on the full serialized
+            // result identity, so the report bytes are unchanged — and this one
+            // does not depend on the hasher.
             for (lang, count) in &seen_langs {
                 if *count > 1 {
                     emit!(ValidationResult {
-                        focus_node: focus_node.clone(),
+                        focus_node: focus_node.to_term(ds),
                         result_path: result_path(),
                         path_structure: path_structure(),
                         value: None,
@@ -1817,9 +1857,10 @@ fn eval_constraint<'a, S: ResultSink>(
                         ),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
-                        message: message
-                            .clone()
-                            .or_else(|| Some(format!("duplicate language tag: {lang}"))),
+                        message: message.clone().or_else(|| Some(format!(
+                            "duplicate language tag: {}",
+                            lang.to_lowercase()
+                        ))),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
@@ -1914,19 +1955,21 @@ fn eval_constraint<'a, S: ResultSink>(
         // ── And (per value node, recursive) ───────────────────────────────────
         PlannedConstraint::And(members) => {
             for value in value_nodes {
-                // Resolve identity once even when several member shapes recurse.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The recursion focus keeps the value node's own representation,
+                // so an interned one is never materialized to be recursed into.
+                let focus = value.as_focus(ds);
                 let mut all_conform = true;
                 for member in members.iter(context.plan) {
-                    if !conforms_memoized(context, member, value, value_id)? {
+                    if !conforms_memoized(context, member, &focus)? {
                         all_conform = false;
                         break;
                     }
                 }
                 if !all_conform {
-                    emit!(result!(sh::AND_CONSTRAINT_COMPONENT, Some(value.clone())));
+                    emit!(result!(
+                        sh::AND_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
             Flow::Continue
@@ -1935,19 +1978,21 @@ fn eval_constraint<'a, S: ResultSink>(
         // ── Or (per value node, recursive) ────────────────────────────────────
         PlannedConstraint::Or(members) => {
             for value in value_nodes {
-                // Resolve identity once even when several member shapes recurse.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // As `sh:and`: the recursion focus keeps the value node's own
+                // representation.
+                let focus = value.as_focus(ds);
                 let mut any_conforms = false;
                 for member in members.iter(context.plan) {
-                    if conforms_memoized(context, member, value, value_id)? {
+                    if conforms_memoized(context, member, &focus)? {
                         any_conforms = true;
                         break;
                     }
                 }
                 if !any_conforms {
-                    emit!(result!(sh::OR_CONSTRAINT_COMPONENT, Some(value.clone())));
+                    emit!(result!(
+                        sh::OR_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
             Flow::Continue
@@ -1962,18 +2007,20 @@ fn eval_constraint<'a, S: ResultSink>(
         // against one afterwards.
         PlannedConstraint::Xone(members) => {
             for value in value_nodes {
-                // Resolve identity once even when several member shapes recurse.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // As `sh:and`: the recursion focus keeps the value node's own
+                // representation.
+                let focus = value.as_focus(ds);
                 let mut count = 0usize;
                 for member in members.iter(context.plan) {
-                    if conforms_memoized(context, member, value, value_id)? {
+                    if conforms_memoized(context, member, &focus)? {
                         count += 1;
                     }
                 }
                 if count != 1 {
-                    emit!(result!(sh::XONE_CONSTRAINT_COMPONENT, Some(value.clone())));
+                    emit!(result!(
+                        sh::XONE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
             Flow::Continue
@@ -1982,13 +2029,15 @@ fn eval_constraint<'a, S: ResultSink>(
         // ── Node (per value node, recursive) ──────────────────────────────────
         PlannedConstraint::Node(inner_shape) => {
             for value in value_nodes {
-                // Preserve interned identity before materializing the recursion
-                // focus; reverse-resolving the owned term would add a hash probe.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
-                if !conforms_memoized(context, inner_shape, value, value_id)? {
-                    emit!(result!(sh::NODE_CONSTRAINT_COMPONENT, Some(value.clone())));
+                // The recursion focus IS the value node, in the representation it
+                // already has: no materialization, and no reverse hash probe to
+                // recover an identity the value node was already carrying.
+                let focus = value.as_focus(ds);
+                if !conforms_memoized(context, inner_shape, &focus)? {
+                    emit!(result!(
+                        sh::NODE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
             Flow::Continue
@@ -2011,7 +2060,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     if seen.insert(term.clone()) {
                         emit!(result!(
                             sh::EQUALS_CONSTRAINT_COMPONENT,
-                            focus_node.clone(),
+                            focus_node.to_term(ds),
                             Some(term)
                         ));
                     }
@@ -2028,7 +2077,7 @@ fn eval_constraint<'a, S: ResultSink>(
                         if seen.insert(other.clone()) {
                             emit!(result!(
                                 sh::EQUALS_CONSTRAINT_COMPONENT,
-                                focus_node.clone(),
+                                focus_node.to_term(ds),
                                 Some(other)
                             ));
                         }
@@ -2045,7 +2094,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 if others.contains_value(ds, v) {
                     emit!(result!(
                         sh::DISJOINT_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
+                        focus_node.to_term(ds),
                         Some(v.to_term(ds))
                     ));
                 }
@@ -2059,7 +2108,7 @@ fn eval_constraint<'a, S: ResultSink>(
             for value in pair_order_offenders(ds, focus_node, value_nodes, pred, false) {
                 emit!(result!(
                     sh::LESS_THAN_CONSTRAINT_COMPONENT,
-                    focus_node.clone(),
+                    focus_node.to_term(ds),
                     Some(value)
                 ));
             }
@@ -2069,7 +2118,7 @@ fn eval_constraint<'a, S: ResultSink>(
             for value in pair_order_offenders(ds, focus_node, value_nodes, pred, true) {
                 emit!(result!(
                     sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
-                    focus_node.clone(),
+                    focus_node.to_term(ds),
                     Some(value)
                 ));
             }
@@ -2088,18 +2137,17 @@ fn eval_constraint<'a, S: ResultSink>(
             // under sibling disjointness — conforms to NO sibling qualified shape.
             let mut count = 0u64;
             for v in value_nodes {
-                // Each value node is a recursion focus for the qualified shape;
-                // retain its interned identity across every recursive check.
-                let v_id = v.as_id(ds);
-                let v_term = v.to_term(ds);
-                let v = &v_term;
-                if !conforms_memoized(context, qshape, v, v_id)? {
+                // Each value node is a recursion focus for the qualified shape,
+                // in the representation it already has, across every recursive
+                // check.
+                let focus = v.as_focus(ds);
+                if !conforms_memoized(context, qshape, &focus)? {
                     continue;
                 }
                 let mut sibling_conforms = false;
                 if disjoint {
                     for sibling in siblings.iter(context.plan) {
-                        if conforms_memoized(context, sibling, v, v_id)? {
+                        if conforms_memoized(context, sibling, &focus)? {
                             sibling_conforms = true;
                             break;
                         }
@@ -2114,7 +2162,7 @@ fn eval_constraint<'a, S: ResultSink>(
             {
                 emit!(result!(
                     sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
-                    focus_node.clone(),
+                    focus_node.to_term(ds),
                     None
                 ));
             }
@@ -2123,7 +2171,7 @@ fn eval_constraint<'a, S: ResultSink>(
             {
                 emit!(result!(
                     sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
-                    focus_node.clone(),
+                    focus_node.to_term(ds),
                     None
                 ));
             }
@@ -2153,9 +2201,13 @@ fn eval_constraint<'a, S: ResultSink>(
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
+            // SHACL-SPARQL binds `$this` as an owned term in a pre-binding, so
+            // this arm materializes the focus node — beside a query evaluation
+            // that dwarfs it, and only for shapes that carry a `sh:sparql`.
+            let focus_term = focus_node.to_term(ds);
             let produced = crate::sparql::eval_sparql_constraint_view(
                 store.sparql_view(),
-                focus_node,
+                &focus_term,
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 source_shape,
@@ -2303,8 +2355,10 @@ fn eval_constraint<'a, S: ResultSink>(
                     // because the walk ENTERS the index itself.
                     let conforms = conforms_with_id_depth(
                         store,
-                        &value_node,
-                        value_id,
+                        &value_id.map_or_else(
+                            || FocusNode::Foreign(value_node.clone()),
+                            FocusNode::Interned,
+                        ),
                         shape_plan,
                         next_depth,
                     )
@@ -2342,10 +2396,13 @@ fn eval_constraint<'a, S: ResultSink>(
             // The custom-component validators run over the owned term model; resolve
             // the value nodes for the ASK validator's per-value binding.
             let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
+            // As `sh:sparql`: the validators speak owned terms, so the focus node
+            // is materialized here, once, for a shape that declares one.
+            let focus_term = focus_node.to_term(ds);
             let produced = match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
                     dataset,
-                    focus_node,
+                    &focus_term,
                     &value_terms,
                     validator,
                     bindings,
@@ -2359,7 +2416,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 ),
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
                     dataset,
-                    focus_node,
+                    &focus_term,
                     validator,
                     bindings,
                     component,
@@ -2850,6 +2907,14 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
 /// A property-pair constraint compares against the objects of ONE predicate from
 /// ONE focus node, which in practice is a handful of terms; inline storage is what
 /// makes the conforming change path allocate nothing for the comparand set.
+/// Distinct language tags one `sh:uniqueLang` tally holds before spilling.
+///
+/// The tally is indexed by DISTINCT tag, not by value node, so this is a bound
+/// on how many languages one focus node labels itself in — not on how many
+/// labels it has. A focus node past this bound spills the buffer once and keeps
+/// working; nothing about the verdict or the reported messages changes.
+const UNIQUE_LANG_INLINE: usize = 8;
+
 const PAIR_COMPARANDS_INLINE: usize = 4;
 
 /// Distinct comparands past which [`PairComparands`] builds a membership index.
@@ -2889,13 +2954,14 @@ struct PairComparands {
 
 impl PairComparands {
     /// Collect the comparands of `(focus, pred, ?)` from the default graph.
-    fn collect(ds: &impl ShaclRead, focus: &Term, pred: Option<TermId>) -> Self {
+    fn collect(ds: &impl ShaclRead, focus: &FocusNode, pred: Option<TermId>) -> Self {
         let mut out = Self::default();
         // The comparand predicate's identity was resolved at BIND. `None` means
         // this data graph interns no such IRI, so it has no objects at all — an
         // ordinary empty comparand set, not a failure. A focus node that is not
-        // interned has no outgoing quads for the same reason.
-        let (Some(predicate), Some(focus)) = (pred, resolve_id(ds, focus)) else {
+        // interned has no outgoing quads for the same reason — and it says so
+        // from the identity it already carries, without a dictionary probe.
+        let (Some(predicate), Some(focus)) = (pred, focus.id()) else {
             return out;
         };
         for quad in quads_for_pattern_ids(
@@ -3023,7 +3089,7 @@ impl<'a> ValueNodeIds<'a> {
 /// not allocate.
 fn pair_order_offenders(
     ds: &impl ShaclRead,
-    focus: &Term,
+    focus: &FocusNode,
     value_nodes: &[ValueNode],
     pred: Option<TermId>,
     allow_equal: bool,

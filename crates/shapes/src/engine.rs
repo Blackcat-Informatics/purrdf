@@ -14,26 +14,83 @@ use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
 
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
-use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
+use crate::data::{DatasetIdentity, GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
 use crate::plan::{ClassCatalog, DatasetBinding, LoweredShapes, PreparedTargets, ShapePlan};
 use crate::provenance::ValidatorProvenance;
 use crate::report::ValidationReport;
 use crate::shapes::{Shape, Shapes, Target};
-use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
+use crate::term::{
+    NamedNode, Term, canonical_cmp, canonical_cmp_id_term, canonical_cmp_ids, term_id_to_native,
+};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
 
-/// Canonically order focus nodes without allocating one rendered key per node.
-/// Large target sets use Rayon's deterministic stable parallel merge sort; small
-/// bounded requests avoid scheduler overhead.
-fn sort_focus_nodes(nodes: &mut [FocusNode]) {
+/// Canonically order focus nodes without allocating one rendered key per node —
+/// and now without materializing the nodes themselves.
+///
+/// The order is the byte order of the rendered terms, which is what
+/// [`finish_report`] keys on and what the pinned report golden holds. An interned
+/// focus node's key is derived from what its id DENOTES, never from the id's
+/// numeric value: ids are handed out in insertion order, so comparing them would
+/// produce a deterministic order that is simply not the canonical one — and it
+/// would pass an all-interned test and an all-foreign test alike, since both
+/// would merely be self-consistent. See [`canonical_cmp_ids`].
+///
+/// Large target sets use Rayon's deterministic parallel sort; small bounded
+/// requests avoid scheduler overhead.
+///
+/// # Why an UNSTABLE sort, and why that changes nothing
+///
+/// [`focus_cmp`] is a strict total order over the set it is handed: every focus
+/// set reaching here has been deduplicated (by id for interned nodes, by term for
+/// foreign ones), two distinct ids in one dataset denote two distinct term values
+/// because interning is by value, and where the rendered bytes nonetheless
+/// coincide the comparator falls through to the ids themselves. A strict total
+/// order admits exactly one sorted permutation, so a stable and an unstable sort
+/// return the same array — and the unstable pair allocates NOTHING, where the
+/// stable pair allocates a merge scratch buffer whose size, and whose very
+/// existence on the parallel branch, is a function of the focus count. That was
+/// the last growth term standing between this route and
+/// `delta(2N) == delta(N)`, and it was a step at exactly the parallel threshold
+/// rather than a slope, which is the kind a per-node figure hides completely.
+fn sort_focus_nodes(dataset: &impl ShaclRead, nodes: &mut [FocusNode]) {
     const PARALLEL_SORT_MIN_NODES: usize = 4_096;
 
+    let order = |left: &FocusNode, right: &FocusNode| focus_cmp(dataset, left, right);
     if nodes.len() >= PARALLEL_SORT_MIN_NODES && rayon::current_num_threads() > 1 {
         use rayon::prelude::*;
-        nodes.par_sort_by(|left, right| canonical_cmp(&left.term, &right.term));
+        nodes.par_sort_unstable_by(order);
     } else {
-        nodes.sort_by(|left, right| canonical_cmp(&left.term, &right.term));
+        nodes.sort_unstable_by(order);
+    }
+}
+
+/// [`canonical_cmp`] over focus nodes in either representation.
+///
+/// All four pairings reduce to the same rendered-byte order: two interned nodes
+/// through the interner, two foreign nodes through their owned terms, and a mixed
+/// pair by streaming one of each. The mixed arm is the one a same-shape test
+/// never reaches, and the one that decides whether a focus set holding both kinds
+/// is ordered or merely partitioned.
+///
+/// The interned/interned arm carries a final tiebreak on the ids, and it is the
+/// only place in this file where an id's NUMBER is looked at. It is not the sort
+/// key and it cannot become one: it is consulted only after the canonical
+/// renderings have compared EQUAL, which for two distinct dataset terms takes a
+/// literal whose datatype is one of the two the rendering suppresses. That makes
+/// the order strict and total, which is what lets the sort be unstable.
+fn focus_cmp(dataset: &impl ShaclRead, left: &FocusNode, right: &FocusNode) -> std::cmp::Ordering {
+    match (left, right) {
+        (FocusNode::Interned(left), FocusNode::Interned(right)) => {
+            canonical_cmp_ids(dataset, *left, *right).then_with(|| left.index().cmp(&right.index()))
+        }
+        (FocusNode::Foreign(left), FocusNode::Foreign(right)) => canonical_cmp(left, right),
+        (FocusNode::Interned(left), FocusNode::Foreign(right)) => {
+            canonical_cmp_id_term(dataset, *left, right)
+        }
+        (FocusNode::Foreign(left), FocusNode::Interned(right)) => {
+            canonical_cmp_id_term(dataset, *right, left).reverse()
+        }
     }
 }
 
@@ -244,7 +301,9 @@ impl PreparedTargets {
     #[cfg(test)]
     fn contains(&self, data: &ShaclData, focus: &FocusNode) -> bool {
         let Some(id) = focus.id() else {
-            return self.explicit_foreign.contains(focus.term());
+            return focus
+                .foreign()
+                .is_some_and(|term| self.explicit_foreign.contains(term));
         };
         if self.explicit_ids.contains(&id) {
             return true;
@@ -276,19 +335,13 @@ impl PreparedTargets {
             .explicit_ids
             .iter()
             .copied()
-            .map(|id| FocusNode {
-                term: term_id_to_native(dataset, id),
-                id: Some(id),
-            })
+            .map(FocusNode::Interned)
             .collect();
 
         for &class in &self.target_class_ids {
             for subject in data.class_view().instances_of(class) {
                 if seen_ids.insert(subject) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(dataset, subject),
-                        id: Some(subject),
-                    });
+                    nodes.push(FocusNode::Interned(subject));
                 }
             }
         }
@@ -297,10 +350,7 @@ impl PreparedTargets {
                 quads_for_pattern_ids(dataset, None, Some(predicate), None, GraphFilter::AnyGraph)
             {
                 if seen_ids.insert(quad.s) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(dataset, quad.s),
-                        id: Some(quad.s),
-                    });
+                    nodes.push(FocusNode::Interned(quad.s));
                 }
             }
         }
@@ -319,10 +369,7 @@ impl PreparedTargets {
                 quads_for_pattern_ids(dataset, None, Some(predicate), None, GraphFilter::AnyGraph)
             {
                 if seen_ids.insert(quad.o) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(dataset, quad.o),
-                        id: Some(quad.o),
-                    });
+                    nodes.push(FocusNode::Interned(quad.o));
                 }
             }
         }
@@ -330,9 +377,9 @@ impl PreparedTargets {
             self.explicit_foreign
                 .iter()
                 .cloned()
-                .map(|term| FocusNode { term, id: None }),
+                .map(FocusNode::Foreign),
         );
-        sort_focus_nodes(&mut nodes);
+        sort_focus_nodes(dataset, &mut nodes);
         nodes
     }
 }
@@ -420,7 +467,7 @@ impl TargetDispatch {
             // target: every other target form is a fact ABOUT the data graph, and
             // a node absent from it participates in none of them. That is exactly
             // the answer `contains` gives an id-less focus node.
-            if let Some(positions) = self.foreign.get(focus.term()) {
+            if let Some(positions) = focus.foreign().and_then(|term| self.foreign.get(term)) {
                 out.extend(positions.iter().copied());
             }
             return;
@@ -466,9 +513,16 @@ impl TargetDispatch {
         focus_nodes: &[FocusNode],
         shape_count: usize,
     ) -> Vec<ClaimedFocus> {
-        let mut claims: Vec<ClaimedFocus> = Vec::new();
+        // Both of these are INPUT-sized and both are sized here, because an
+        // unhinted collection that fills to N reallocates about log2(N) times and
+        // that is a real growth term in the focus count — small enough to have
+        // been invisible under the per-node materialization this dispatch sits
+        // behind, and the whole remaining difference once that is gone. The claim
+        // rows are one per shape and a shape's claimed set is bounded by the focus
+        // set; the claimant buffer is bounded by the shape count.
+        let mut claims: Vec<ClaimedFocus> = Vec::with_capacity(shape_count);
         claims.resize_with(shape_count, ClaimedFocus::default);
-        let mut positions: Vec<usize> = Vec::new();
+        let mut positions: Vec<usize> = Vec::with_capacity(shape_count);
         for focus in focus_nodes {
             self.claimants(data, focus, &mut positions);
             for &position in &positions {
@@ -477,7 +531,7 @@ impl TargetDispatch {
                 // what keeps that impossible case from being a panic across the
                 // PyO3 and C ABI boundaries.
                 if let Some(claimed) = claims.get_mut(position) {
-                    claimed.insert(focus);
+                    claimed.insert(focus, focus_nodes.len());
                 }
             }
         }
@@ -499,14 +553,25 @@ struct ClaimedFocus {
 }
 
 impl ClaimedFocus {
-    /// Record a claim.
-    fn insert(&mut self, focus: &FocusNode) {
-        match focus.id() {
-            Some(id) => {
-                self.ids.insert(id);
+    /// Record a claim, sizing this row's table on its first entry.
+    ///
+    /// `focus_count` is the dispatched focus set's length, which is the exact
+    /// upper bound on what one row can hold. Taking it here rather than at
+    /// construction means only a row that really claims something allocates at
+    /// all, while the row that does allocates ONCE instead of growing.
+    fn insert(&mut self, focus: &FocusNode, focus_count: usize) {
+        match focus {
+            FocusNode::Interned(id) => {
+                if self.ids.capacity() == 0 {
+                    self.ids.reserve(focus_count);
+                }
+                self.ids.insert(*id);
             }
-            None => {
-                self.foreign.insert(focus.term().clone());
+            FocusNode::Foreign(term) => {
+                if self.foreign.capacity() == 0 {
+                    self.foreign.reserve(focus_count);
+                }
+                self.foreign.insert(term.clone());
             }
         }
     }
@@ -514,9 +579,9 @@ impl ClaimedFocus {
     /// Whether this position claims `focus`.
     #[inline]
     fn contains(&self, focus: &FocusNode) -> bool {
-        match focus.id() {
-            Some(id) => self.ids.contains(&id),
-            None => self.foreign.contains(focus.term()),
+        match focus {
+            FocusNode::Interned(id) => self.ids.contains(id),
+            FocusNode::Foreign(term) => self.foreign.contains(term),
         }
     }
 
@@ -545,27 +610,170 @@ fn instances_of_class(
     Ok(data.class_view().instances_of(class).collect())
 }
 
-/// A resolved focus node carrying its already-known interned identity.
-#[derive(Debug, Clone)]
-pub(crate) struct FocusNode {
-    term: Term,
-    id: Option<TermId>,
+/// A resolved focus node: an interned identity, or a term the dataset does not
+/// hold.
+///
+/// **Two states, and exactly the two that occur.** The shape this replaced was a
+/// struct pairing an owned [`Term`] with an `Option<TermId>`, which spells four
+/// states for a value that only ever takes two: a term WITH an id duplicates
+/// what the id already denotes, and a value with neither is not a focus node at
+/// all. Every construction site builds one of the two arms below.
+///
+/// The interned arm carries NO term, and that is the point. Resolving one costs
+/// between one and three heap `String`s — an IRI, a blank label, or a literal's
+/// lexical form plus its datatype plus its tag — and on a conforming graph every
+/// one of them is discarded unread, because the only consumers are the canonical
+/// sort (which reads the interner instead, see
+/// [`canonical_cmp_ids`](crate::term::canonical_cmp_ids)) and the focus-node slot
+/// of a [`ValidationResult`](crate::report::ValidationResult) that a conforming
+/// node never produces. [`Self::to_term`] is where the cost is paid, at the one
+/// boundary that needs it.
+///
+/// `Send + Sync` and free of a lifetime parameter: rayon focus-chunk workers
+/// share the focus set, and this is deferred MATERIALIZATION rather than a borrow
+/// of the dataset.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum FocusNode {
+    /// A focus node the bound dataset interns, held as its identity alone.
+    Interned(TermId),
+    /// A focus node the bound dataset does not intern — an explicit
+    /// `sh:targetNode`, or a SHACL-SPARQL target result, naming a term absent
+    /// from the data graph. It has no identity to carry, so its term is.
+    Foreign(Term),
 }
 
+// `FocusNode` is stored one per focus node in a change-path request, so the
+// discriminant must not cost a word beside the term it is discriminating, and
+// `Option<FocusNode>` must stay niche-packed into that discriminant. This is the
+// same pin `SolutionTerm` carries in `purrdf_sparql_eval::scratch` and `TermId`
+// carries in `purrdf_core::ir::term`; it fails the build if either regresses.
+const _: () = assert!(size_of::<FocusNode>() == size_of::<Term>());
+const _: () = assert!(size_of::<Option<FocusNode>>() == size_of::<FocusNode>());
+
 impl FocusNode {
-    #[inline]
-    pub(crate) fn term(&self) -> &Term {
-        &self.term
+    /// Resolve `term` against `dataset` into the arm that describes it.
+    pub(crate) fn resolve(dataset: &impl ShaclRead, term: &Term) -> Self {
+        resolve_id(dataset, term).map_or_else(|| Self::Foreign(term.clone()), Self::Interned)
     }
 
+    /// The interned identity of this focus node, if it has one.
     #[inline]
     pub(crate) fn id(&self) -> Option<TermId> {
-        self.id
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(_) => None,
+        }
     }
 
+    /// The owned term this focus node denotes — **the materialization boundary**.
+    ///
+    /// Every call site is one that is building a
+    /// [`ValidationResult`](crate::report::ValidationResult), handing the focus
+    /// node to a SPARQL surface that speaks owned terms, or recursing into a
+    /// shape at a value node. None of them runs for a conforming focus node on
+    /// the Core constraint path.
+    pub(crate) fn to_term(&self, dataset: &impl ShaclRead) -> Term {
+        match self {
+            Self::Interned(id) => term_id_to_native(dataset, *id),
+            Self::Foreign(term) => term.clone(),
+        }
+    }
+
+    /// The foreign term this focus node carries, or `None` when it is interned.
+    ///
+    /// The explicit-target indexes are keyed by term for exactly the nodes this
+    /// answers `Some` for, so a lookup never needs to materialize.
     #[inline]
-    pub(crate) fn into_term(self) -> Term {
-        self.term
+    pub(crate) fn foreign(&self) -> Option<&Term> {
+        match self {
+            Self::Interned(_) => None,
+            Self::Foreign(term) => Some(term),
+        }
+    }
+
+    /// Whether this focus node can occupy a subject position (IRI or blank node),
+    /// answered from the interner rather than from a materialized term.
+    pub(crate) fn is_subject(&self, dataset: &impl ShaclRead) -> bool {
+        match self {
+            Self::Interned(id) => matches!(
+                dataset.resolve(*id),
+                ::purrdf::TermRef::Iri(_) | ::purrdf::TermRef::Blank { .. }
+            ),
+            Self::Foreign(term) => term.is_subject(),
+        }
+    }
+}
+
+/// A focus set together with the identity of the dataset its ids were resolved
+/// against.
+///
+/// [`TermId`]s are DATASET-LOCAL (C0.8): the same integer addresses a different
+/// term in every dataset, and an in-range id from the wrong one does not fail —
+/// it silently validates a different node and reports a conforming verdict about
+/// a node nobody asked about. `PreparedShapes::bind_delta_with_shapes_graph`
+/// exists precisely so a caller can hold a base binding and a delta binding at
+/// once, so two live id spaces is the DESIGNED situation rather than a mistake
+/// nobody would make; and now that a focus node is carried id-natively, a wrong
+/// id travels through target dispatch, claim indexing and constraint evaluation
+/// before anything renders it, if anything ever does.
+///
+/// So the set records which dataset it was built from, and
+/// [`Self::nodes_of`] refuses to hand it to a different one. The check is one
+/// integer comparison per validation, not per focus node.
+///
+/// # What this does NOT claim
+///
+/// The public id-native entry point receives a bare `&[TermId]`, and a bare
+/// `TermId` carries no provenance whatever; nothing in this type can tell where
+/// a caller got one. What it pins is that an id resolved against one binding's
+/// view is never INTERPRETED against another's inside this crate — the leg of the
+/// hazard that grew when focus nodes stopped materializing.
+pub(crate) struct FocusSet {
+    /// The dataset this set's ids are addressed against.
+    dataset: DatasetIdentity,
+    nodes: Vec<FocusNode>,
+}
+
+impl FocusSet {
+    /// An empty set over `data`, with room for `capacity` nodes.
+    fn with_capacity(data: &ShaclData, capacity: usize) -> Self {
+        Self {
+            dataset: data.identity(),
+            nodes: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Admit one focus node. Callers admit only nodes resolved against the
+    /// dataset this set was opened over.
+    #[inline]
+    fn push(&mut self, node: FocusNode) {
+        self.nodes.push(node);
+    }
+
+    /// Order this set canonically.
+    fn sort(&mut self, data: &ShaclData) {
+        debug_assert_eq!(
+            self.dataset,
+            data.identity(),
+            "a focus set is ordered against the dataset it was resolved from"
+        );
+        sort_focus_nodes(data.core_view(), &mut self.nodes);
+    }
+
+    /// The focus nodes, if `data` is the dataset they were resolved against.
+    ///
+    /// # Errors
+    /// Refuses a set whose ids address a different dataset.
+    fn nodes_of(&self, data: &ShaclData) -> Result<&[FocusNode], String> {
+        if self.dataset == data.identity() {
+            return Ok(&self.nodes);
+        }
+        Err(
+            "focus node TermIds were resolved against a different dataset than the one this \
+             validator is bound to; TermIds are dataset-local and an in-range id from another \
+             dataset addresses a different term"
+                .to_owned(),
+        )
     }
 }
 
@@ -604,10 +812,7 @@ pub(crate) fn resolve_focus_nodes(
             nodes.reserve(ids.len());
             for id in ids {
                 if seen_ids.insert(id) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(ds, id),
-                        id: Some(id),
-                    });
+                    nodes.push(FocusNode::Interned(id));
                 }
             }
             continue;
@@ -630,15 +835,15 @@ pub(crate) fn resolve_focus_nodes(
         for term in candidates {
             if let Some(id) = resolve_id(ds, &term) {
                 if seen_ids.insert(id) {
-                    nodes.push(FocusNode { term, id: Some(id) });
+                    nodes.push(FocusNode::Interned(id));
                 }
             } else if seen_foreign.insert(term.clone()) {
-                nodes.push(FocusNode { term, id: None });
+                nodes.push(FocusNode::Foreign(term));
             }
         }
     }
 
-    sort_focus_nodes(&mut nodes);
+    sort_focus_nodes(ds, &mut nodes);
     Ok(nodes)
 }
 
@@ -662,8 +867,7 @@ fn evaluate_shape_focus_nodes(
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,
-                    focus.term(),
-                    focus.id(),
+                    focus,
                     shapes.box_role_vocab.as_ref(),
                     plan,
                 )?);
@@ -699,8 +903,7 @@ fn evaluate_shape_focus_nodes(
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,
-                    focus.term(),
-                    focus.id(),
+                    focus,
                     shapes.box_role_vocab.as_ref(),
                     plan,
                 )?);
@@ -769,8 +972,10 @@ where
             resolve_focus_nodes(data, &shape.targets, bound.binding(), bound.classes())?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
-        // the retained set to workers.
-        focus_nodes.retain(|focus| include_focus(shape, focus.term()));
+        // the retained set to workers. The filter is a caller-supplied predicate
+        // over an owned term, so this route — and only this route — materializes
+        // one per focus node; the change path, which has no filter, does not.
+        focus_nodes.retain(|focus| include_focus(shape, &focus.to_term(data.core_view())));
         all_results.extend(evaluate_shape_focus_nodes(
             data,
             shapes,
@@ -1290,8 +1495,13 @@ impl PreparedValidator {
         &self,
         focus_node_ids: &[TermId],
     ) -> Result<ValidationReport, String> {
-        let mut seen = IdSet::default();
-        let mut focus_nodes = Vec::with_capacity(focus_node_ids.len());
+        // INPUT-sized, and sized: `focus_node_ids.len()` is an exact upper bound
+        // on the distinct ids this loop admits, and an unhinted set filling to N
+        // reallocates about log2(N) times — a growth term in the focus count,
+        // which is the one thing the change path may not carry.
+        let mut seen: IdSet =
+            IdSet::with_capacity_and_hasher(focus_node_ids.len(), ::purrdf::FastHasher::default());
+        let mut focus_nodes = FocusSet::with_capacity(&self.data, focus_node_ids.len());
         for &id in focus_node_ids {
             if id.index() >= self.data.core_view().term_count() {
                 return Err(format!(
@@ -1301,40 +1511,36 @@ impl PreparedValidator {
                 ));
             }
             if seen.insert(id) {
-                focus_nodes.push(FocusNode {
-                    term: term_id_to_native(self.data.core_view(), id),
-                    id: Some(id),
-                });
+                focus_nodes.push(FocusNode::Interned(id));
             }
         }
-        sort_focus_nodes(&mut focus_nodes);
+        focus_nodes.sort(&self.data);
         self.validate_bounded(&focus_nodes)
     }
 
-    fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> Vec<FocusNode> {
-        let mut seen_ids = IdSet::default();
-        let mut seen_foreign = FastSet::default();
-        let mut normalized = Vec::with_capacity(focus_nodes.len());
+    fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> FocusSet {
+        // Both sets are INPUT-sized, from the same slice, for the same reason the
+        // id-native route's is.
+        let mut seen_ids: IdSet =
+            IdSet::with_capacity_and_hasher(focus_nodes.len(), ::purrdf::FastHasher::default());
+        let mut seen_foreign: FastSet<Term> =
+            FastSet::with_capacity_and_hasher(focus_nodes.len(), ::purrdf::FastHasher::default());
+        let mut normalized = FocusSet::with_capacity(&self.data, focus_nodes.len());
         for term in focus_nodes {
             if let Some(id) = resolve_id(self.data.core_view(), term) {
                 if seen_ids.insert(id) {
-                    normalized.push(FocusNode {
-                        term: term_id_to_native(self.data.core_view(), id),
-                        id: Some(id),
-                    });
+                    normalized.push(FocusNode::Interned(id));
                 }
             } else if seen_foreign.insert(term.clone()) {
-                normalized.push(FocusNode {
-                    term: term.clone(),
-                    id: None,
-                });
+                normalized.push(FocusNode::Foreign(term.clone()));
             }
         }
-        sort_focus_nodes(&mut normalized);
+        normalized.sort(&self.data);
         normalized
     }
 
-    fn validate_bounded(&self, focus_nodes: &[FocusNode]) -> Result<ValidationReport, String> {
+    fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, String> {
+        let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
             return Ok(finish_report(Vec::new()));
         }
@@ -1929,18 +2135,15 @@ mod tests {
         let view = validator.data.core_view();
         let mut candidates: Vec<FocusNode> = (0..view.term_count())
             .map(|index| {
-                let id = TermId::from_index(u32::try_from(index).expect("fixture fits in u32"));
-                FocusNode {
-                    term: term_id_to_native(view, id),
-                    id: Some(id),
-                }
+                FocusNode::Interned(TermId::from_index(
+                    u32::try_from(index).expect("fixture fits in u32"),
+                ))
             })
             .collect();
         for local in ["neverInterned", "neverInternedAndNotATarget"] {
-            candidates.push(FocusNode {
-                term: Term::NamedNode(NamedNode::new_unchecked(format!("{TARGET_NS}{local}"))),
-                id: None,
-            });
+            candidates.push(FocusNode::Foreign(Term::NamedNode(
+                NamedNode::new_unchecked(format!("{TARGET_NS}{local}")),
+            )));
         }
         candidates
     }
@@ -1961,7 +2164,7 @@ mod tests {
             &candidates,
             shapes.node_shapes.len(),
         );
-        let key = |focus: &FocusNode| focus.term().to_string();
+        let key = |focus: &FocusNode| focus.to_term(validator.data.core_view()).to_string();
         (0..shapes.node_shapes.len())
             .map(|position| {
                 let targets = &validator.bound.targets[position];
@@ -4043,5 +4246,206 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Focus-set ordering and dataset identity ──────────────────────────────
+
+    /// A dataset whose interning order is deliberately the REVERSE of its
+    /// canonical order, plus the shapes graph that targets every node in it.
+    ///
+    /// Interning descending means a focus comparator that reached for an id's
+    /// NUMBER — directly, or by shortcutting the interned/interned pair to an
+    /// integer compare — sorts the set exactly backwards rather than plausibly
+    /// wrong, which is the only way that mistake is visible in a test.
+    fn anti_canonical_focus_dataset() -> Arc<RdfDataset> {
+        let mut builder = ::purrdf::RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let class = builder.intern_iri("http://example.org/ns#Focus");
+        // Descending locals, so ids ascend as the rendered IRIs descend.
+        for local in ["n9", "n8", "n7", "n6", "n5", "n4", "n3", "n2", "n1", "n0"] {
+            let node = builder.intern_iri(&format!("http://example.org/ns#{local}"));
+            builder.push_quad(node, rdf_type, class, None);
+        }
+        builder.freeze().expect("the fixture dataset freezes")
+    }
+
+    /// Every interned focus node of [`anti_canonical_focus_dataset`], in id
+    /// order.
+    fn anti_canonical_focus_ids(data: &ShaclData) -> Vec<TermId> {
+        (0..data.core_view().term_count())
+            .map(|index| TermId::from_index(u32::try_from(index).expect("fixture fits in u32")))
+            .filter(|id| {
+                matches!(
+                    data.core_view().resolve(*id),
+                    ::purrdf::TermRef::Iri(iri) if iri.contains("/ns#n")
+                )
+            })
+            .collect()
+    }
+
+    /// Bind the anti-canonical fixture to a shapes graph that targets it.
+    fn anti_canonical_validator() -> PreparedValidator {
+        let shapes = load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:property [ sh:path ex:absent ; sh:maxCount 1 ] ."
+        ));
+        PreparedShapes::new(Arc::new(shapes))
+            .bind_shared_dataset(anti_canonical_focus_dataset())
+            .expect("the fixture binds")
+    }
+
+    /// **The focus comparator orders by what a node DENOTES, in all three
+    /// populations: all-interned, all-foreign, and interleaved.**
+    ///
+    /// The interleaved case is the one that matters. A comparator that shortcut
+    /// the interned/interned pair to an integer compare, or that partitioned the
+    /// two representations instead of interleaving them, passes the first two
+    /// cases — each is internally self-consistent — and reorders every mixed
+    /// focus set silently. The dataset is interned ANTI-CANONICALLY so that
+    /// comparing ids by number cannot accidentally look right.
+    #[test]
+    fn focus_order_is_canonical_across_interned_and_foreign_nodes() {
+        let validator = anti_canonical_validator();
+        let data = &validator.data;
+        let view = data.core_view();
+        let interned = anti_canonical_focus_ids(data);
+        assert!(
+            interned.len() >= 10,
+            "the fixture must hold every focus node"
+        );
+
+        // The fixture really is anti-canonical: id order is not canonical order.
+        assert!(
+            interned.windows(2).any(|pair| {
+                focus_cmp(
+                    view,
+                    &FocusNode::Interned(pair[0]),
+                    &FocusNode::Interned(pair[1]),
+                ) == std::cmp::Ordering::Greater
+            }),
+            "the fixture must intern its focus nodes out of canonical order"
+        );
+
+        // Terms this dataset never interned, so they can only be `Foreign`, and
+        // chosen to INTERLEAVE with the interned locals rather than sort as a
+        // block on either side of them.
+        let foreign: Vec<Term> = ["n05", "n15", "n25", "n35", "n45", "n55"]
+            .iter()
+            .map(|local| {
+                Term::NamedNode(NamedNode::new_unchecked(format!(
+                    "http://example.org/ns#{local}"
+                )))
+            })
+            .collect();
+        for term in &foreign {
+            assert!(
+                resolve_id(view, term).is_none(),
+                "a foreign fixture term must not be interned: {term}"
+            );
+        }
+
+        let all_interned: Vec<FocusNode> =
+            interned.iter().copied().map(FocusNode::Interned).collect();
+        let all_foreign: Vec<FocusNode> = foreign.iter().cloned().map(FocusNode::Foreign).collect();
+        let mut interleaved = Vec::new();
+        for (index, node) in all_interned.iter().enumerate() {
+            interleaved.push(node.clone());
+            if let Some(term) = foreign.get(index) {
+                interleaved.push(FocusNode::Foreign(term.clone()));
+            }
+        }
+        assert!(
+            interleaved.len() > all_interned.len() && interleaved.len() > all_foreign.len(),
+            "the interleaved population must really mix both representations"
+        );
+
+        for (label, mut population) in [
+            ("all-interned", all_interned),
+            ("all-foreign", all_foreign),
+            ("interleaved", interleaved),
+        ] {
+            // The reference order: materialize, render, sort the strings. That is
+            // the definition the comparator has to reproduce without rendering.
+            let mut expected: Vec<String> = population
+                .iter()
+                .map(|focus| focus.to_term(view).to_string())
+                .collect();
+            expected.sort();
+            sort_focus_nodes(view, &mut population);
+            let actual: Vec<String> = population
+                .iter()
+                .map(|focus| focus.to_term(view).to_string())
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "{label}: the focus comparator did not reproduce rendered byte order"
+            );
+        }
+    }
+
+    /// **A focus set resolved against one binding is refused by another, and the
+    /// binding it came from still accepts it.**
+    ///
+    /// Both directions, because a refusal that fires on everything is not a
+    /// check: the accepting half is what says the guard distinguishes the
+    /// datasets rather than distrusting every caller. The refused ids are IN
+    /// RANGE for the receiving binding — that is the whole hazard, since an
+    /// out-of-range id is already rejected and a wrong-dataset one resolves
+    /// quietly to a different term.
+    #[test]
+    fn a_focus_set_from_another_binding_is_refused_and_its_own_is_accepted() {
+        let shapes = Arc::new(load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:property [ sh:path ex:absent ; sh:maxCount 1 ] ."
+        )));
+        let prepared = PreparedShapes::new(shapes);
+        let here = prepared
+            .bind_shared_dataset(anti_canonical_focus_dataset())
+            .expect("the first binding binds");
+        // A SECOND, independently interned snapshot of the same shape of data —
+        // exactly what `bind_delta_with_shapes_graph` leaves a caller holding
+        // beside a base binding.
+        let there = prepared
+            .bind_shared_dataset(anti_canonical_focus_dataset())
+            .expect("the second binding binds");
+
+        let ids = anti_canonical_focus_ids(&there.data);
+        assert!(!ids.is_empty(), "the fixture must hold focus nodes");
+        for &id in &ids {
+            assert!(
+                id.index() < here.data.core_view().term_count(),
+                "the refused ids must be IN RANGE for the receiving binding, or the existing \
+                 range check would be what rejected them"
+            );
+        }
+
+        // Built against `there`, handed to `there`: accepted.
+        let mut own = FocusSet::with_capacity(&there.data, ids.len());
+        for &id in &ids {
+            own.push(FocusNode::Interned(id));
+        }
+        own.sort(&there.data);
+        let accepted = there
+            .validate_bounded(&own)
+            .expect("a focus set from this very binding must be accepted");
+        assert!(
+            accepted.conforms,
+            "the fixture focus nodes conform, so the accepting half is a real validation"
+        );
+
+        // Built against `there`, handed to `here`: refused.
+        let mut foreign_set = FocusSet::with_capacity(&there.data, ids.len());
+        for &id in &ids {
+            foreign_set.push(FocusNode::Interned(id));
+        }
+        foreign_set.sort(&there.data);
+        let refused = here.validate_bounded(&foreign_set);
+        let message = refused.expect_err("a focus set from another binding must be refused");
+        assert!(
+            message.contains("dataset-local"),
+            "the refusal must say why TermIds are not portable: {message}"
+        );
     }
 }

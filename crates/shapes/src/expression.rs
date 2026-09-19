@@ -1991,8 +1991,7 @@ fn conforms_guarded(
     // through an expression costs a plan lookup, not a fresh walk of the shape.
     let verdict = crate::constraints::conforms_with_id_depth(
         store,
-        node,
-        crate::data::resolve_id(store.core_view(), node),
+        &crate::engine::FocusNode::resolve(store.core_view(), node),
         shape,
         next_depth,
     );
