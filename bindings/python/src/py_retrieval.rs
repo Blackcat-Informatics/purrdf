@@ -302,6 +302,23 @@
 //! column, so nothing registered here can emit such a row. What a Python host
 //! can actually meet is the two stratum-level messages above and the
 //! registration refusal.
+//!
+//! One terminal *status* is unreachable here for the same kind of reason, and it
+//! is recorded next to those refusals because a reader checking whether a status
+//! is testable from Python will look in one place for both. `"row_bound_reached"`
+//! — the producer stopping at the row count it declared it can serve per
+//! invocation — needs a **self-bounding** producer: one whose declaration places
+//! the depth as an argument the producer itself reads, so the read cannot reach
+//! for the row past it and how that read ended is not observable. The only
+//! relation this module registers is the text-search one, whose ranked
+//! declaration places no depth argument, so every stratum a Python host can
+//! configure is bounded by the unit's own emitted `LIMIT` and ends
+//! `"exhausted"`, `"depth_reached"` or `"ceiling_reached"` instead. The status is
+//! documented on [`search`] and mapped here because a host fusing streams from
+//! the Rust surface can be handed it, and reading it as "that was all of it"
+//! would be the exact mistake the six spellings exist to prevent. Making it
+//! reachable from Python means letting a caller register a producer of its own,
+//! which this surface does not do.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -1380,6 +1397,17 @@ fn planned_resolution_dict<'py>(
 /// rows it may keep — the depth is not recoverable from the text, and
 /// `planned_resolution` answers only when the call named a fusion law — so the
 /// bound travels with the text it bounds.
+///
+/// `"declared_rows"` travels beside it because the depth alone does not say which
+/// of two situations a host is in. A depth *below* the declaration leaves rows
+/// underneath the read; a depth *on* it means the producer has promised there is
+/// nothing further, and the probe row is what checks that promise. Those are
+/// different facts about the same run, and the difference is not recoverable from
+/// the depth, the text or the plan — only from the number the registry declared.
+/// It is `None` for a producer that declared no access mode and therefore no row
+/// count at all, because "declared nothing" and "declared zero" are different
+/// facts here too: an absent declaration can refuse nothing, while a zero is a
+/// measurement of the producer's data.
 fn compile_dict<'py>(
     py: Python<'py>,
     planned: &Plan,
@@ -1399,6 +1427,11 @@ fn compile_dict<'py>(
         // rather than re-derived from the text or looked up again in the plan:
         // the text's `LIMIT` is the emitted bound, which includes the probe.
         entry.set_item("depth", unit.depth())?;
+        // The declaration the depth above was checked against, projected and never
+        // defaulted: `None` stays `None` all the way out to the host, because a
+        // producer that declared no access mode declared no row count, and a zero
+        // put there in its place would be a measurement nobody took.
+        entry.set_item("declared_rows", unit.declared_rows())?;
         units.append(entry)?;
     }
     out.set_item("units", units)?;
@@ -1681,6 +1714,14 @@ fn plan<'py>(
 /// unconditional: the declared row bound does not cap it, including a declared bound
 /// of zero, because a bound equal to its own depth admits no row for the probe to
 /// arrive in and every such read would be reported as an exhaustion.
+///
+/// `"declared_rows"` is that declared bound, on the unit beside the depth it was
+/// checked against, and `None` for a producer that declared no access mode and so
+/// declared no row count at all. It is the one number that distinguishes a depth
+/// with rows still under it from a depth sitting *on* the producer's own promise
+/// that there are none — the case the probe row exists to check — and a host
+/// reading `"depth"` to know how many rows it may report is entitled to know which
+/// of the two it has.
 ///
 /// One relation shape is bounded by something the text does not carry: one that
 /// takes the depth as an argument bounds itself by the number it was handed, which

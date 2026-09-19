@@ -412,6 +412,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   registration, because a promise to name nothing is not a restriction, and
   because the refusal on the far side of the boundary is a panic that must never
   cross it.
+- **python:** A compiled retrieval unit carries `"declared_rows"` beside its
+  `"stratum"`, `"sparql"` and `"depth"`: the row count the registry declared for
+  that stratum's one producer, or `None` where the producer declared no access mode
+  and therefore declared no row count at all. Rust callers have read it off
+  `StratumUnit::declared_rows()` all along, and the depth alone does not say which
+  of two situations a host is in -- a depth BELOW the declaration leaves rows under
+  the read, while a depth EQUAL to it means the producer has already promised there
+  is nothing further and the probe row is what checks that promise rather than
+  taking it. Neither is recoverable from `"depth"`, from the emitted text, or from
+  the plan, so a host reading `"depth"` to know how many rows it may report has the
+  same claim on the declaration that `retrieval.search` does. "Declared nothing"
+  and "declared zero" stay different facts across the boundary: an absent
+  declaration can refuse nothing, while a zero is a measurement of the producer's
+  data, so the absence arrives as `None` rather than as a number nobody took.
 - **python:** `MutableDataset` answers the native validation snapshot protocol, so
   `Shapes.validate_store` accepts one for real: both quad containers on this
   surface hold a frozen dataset behind a copy-on-write overlay, and validation
@@ -805,6 +819,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   depth that already sits on the producer's declared row bound -- so the text's own
   number is never the reportable one. `"planned_resolution"` was no fallback
   either: it is empty unless the call names a fusion law.
+- **python:** Two binding tests over the compiled unit claimed coverage they did not
+  have. The one for a probe row emitted where the producer's declaration leaves no
+  room asserted only that the emitted bound is one past the depth -- which holds for
+  every unit -- so it was its own sibling under a second name, and it could not
+  detect a bound wrongly capped at the declaration, the single regression it exists
+  for, because it never checked that the depth had reached the declaration. Both
+  tests now assert the configuration they rest on, read off the unit's
+  `"declared_rows"`: equal to the depth in the one, strictly above it in the other.
+- **python:** The test over the six terminal status spellings asserted them against
+  `retrieval.search`'s docstring -- the binding suite's only assertion on a
+  `__doc__`. A docstring that contains a string proves nothing about which string
+  the mapping emits, and that test would have passed with the mapping deleted or
+  emitting the wrong word. It now pins the three endings this surface can actually
+  produce (`"exhausted"`, `"depth_reached"`, `"ceiling_reached"`) and says which
+  three it cannot, with the reason recorded beside the refusals in the binding's own
+  header: `"row_bound_reached"` needs a self-bounding producer -- one whose
+  declaration places the depth as an argument the producer reads -- and the one
+  relation this surface registers places none; `"terms_rejected"` is a receipt a
+  producer writes for itself; and `"execution_failed"` needs a unit whose text could
+  not be prepared or run. All three remain live for a host driving the Rust surface
+  with a bundle of its own, and all six stay spelled and mapped.
+- **python:** The stub-signature sweep held three engines to the built extension and
+  not the fourth. Its own docstring explained that the sweep runs over each engine's
+  whole surface so a future entry point is covered without anyone remembering to add
+  it, while the engine list was a hand-written triple that `retrieval` was missing
+  from -- so the entire `class retrieval:` stub shipped with nothing mechanically
+  holding it to the PyO3 signatures that mypy approves callers against. `retrieval`
+  is in the sweep and its six entry points match their bindings. The vacuity guard
+  is now per engine as well as overall, because a total floor cannot tell a sweep
+  that visited every engine from one whose stub block stopped parsing.
+- **python:** The `retrieval.compile` stub claimed one exception to the emitted
+  bound: that a producer declaring no rows at all is read with a `LIMIT` equal to
+  its `"depth"`. The text carries `depth + 1` unconditionally, and the number a
+  self-bounding producer is *asked* for is the one its declaration caps -- two
+  different numbers -- so the sentence contradicted the paragraph two above it and
+  told a host running the text itself to expect a bound it will never see.
 - **retrieval:** A fused answer could contain the same entity twice. Certifying a
   candidate removes it from the frontier, and the check that held a stream to its
   declared uniqueness read only the frontier, so a stream naming that entity again

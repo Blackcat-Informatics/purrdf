@@ -2219,9 +2219,10 @@ class retrieval:
     ) -> dict[str, builtins.object]: ...
     # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
     #
-    # Each entry under `"units"` is `{"stratum": str, "sparql": str, "depth":
-    # int}`. `"depth"` is the REPORTABLE bound — the most rows that stratum may
-    # contribute to an answer — and it is deliberately NOT the `LIMIT` in
+    # Each entry under `"units"` is `{"stratum": str, "sparql": str, "depth": int,
+    # "declared_rows": int | None}`. `"depth"` is the REPORTABLE bound — the most
+    # rows that stratum may contribute to an answer — and it is deliberately NOT
+    # the `LIMIT` in
     # `"sparql"`. The text is emitted exactly `depth + 1` rows deep, and that last
     # row is a probe: it exists only so a reader can tell a producer that ran out
     # of rows from a read the planned depth cut short, two endings a text bounded
@@ -2249,16 +2250,34 @@ class retrieval:
     # exactly `depth` rows and no row past them can arrive, however many its index
     # holds. That stratum's status is `"row_bound_reached"`, which names the
     # declared bound as the stopper and claims nothing about what lies below it.
+    # No relation THIS module registers has that shape — the text producers it
+    # wires place no depth argument — so the shape is described for a host driving
+    # the Rust surface, and `"declared_rows"` equalling `"depth"` here does not put
+    # a Python caller in it.
     #
     # The extra row is in the `LIMIT` only — a ceiling the evaluator applies to a
     # cursor the producer never hears about, so probing costs nothing and a
     # producer that reads a depth argument is never asked to exceed what it
-    # registered. The single exception is a producer that declared no rows at all:
-    # there the floor of one row is the whole read, so the `LIMIT` equals
-    # `"depth"`, and the emptiness that comes back is the producer's own.
+    # registered. That is why `depth + 1` holds with no exception: what a
+    # self-bounding producer is asked for is capped at its declaration, but the
+    # `LIMIT` the text carries is not, and those are two different numbers.
     #
-    # Read the bound off `"depth"`, never off the text's `LIMIT`, which is the
-    # larger of the two everywhere else. `"planned_resolution"` is not a fallback
+    # `"declared_rows"` is the row count the registry declared for that stratum's
+    # one producer — the number the depth was checked against — and it is `None`
+    # for a producer that declared no access mode and therefore declared no row
+    # count at all. "Declared nothing" and "declared zero" are different facts and
+    # do not share a representation: an absent declaration can refuse nothing,
+    # while a zero is a measurement of the producer's data. It is here because the
+    # depth alone cannot say which situation a host is in. A depth BELOW
+    # `"declared_rows"` leaves rows underneath the read; a depth EQUAL to it means
+    # the producer has already promised there is nothing further, and the probe row
+    # is what checks that promise rather than taking it. The distinction is not
+    # recoverable from `"depth"`, from the text, or from the plan — and a host
+    # reading `"depth"` to know how many rows it may report has the same claim on
+    # it that `search` does.
+    #
+    # Read the bound off `"depth"`, never off the text's `LIMIT`, which is always
+    # the larger of the two. `"planned_resolution"` is not a fallback
     # source for it: that map is empty unless the call names a fusion law.
     #
     # `weights`, `k` and `decay` are the fusion law the caller means to fuse
@@ -2347,6 +2366,16 @@ class retrieval:
     # could not run at all; and `"terms_rejected"` is one that declined the
     # request terms it was handed. "Answered with nothing" and "could not answer"
     # stay distinguishable, because none of the six is reduced to a flag.
+    #
+    # Three of the six can come out of THIS surface: `"exhausted"`,
+    # `"depth_reached"` and `"ceiling_reached"`. The other three belong to
+    # producers this module does not register — `"row_bound_reached"` needs one
+    # that takes its depth as an argument, `"terms_rejected"` is a receipt a
+    # producer writes for itself, and `"execution_failed"` needs a unit whose text
+    # could not be prepared or run — so they are reachable for a host driving the
+    # Rust surface with a bundle of its own. They are spelled and mapped here
+    # regardless: the mapping is what makes a status a host DOES receive readable,
+    # and the six-way vocabulary is the engine's, not this binding's.
     #
     # `"attestations"` maps a stratum to what the index behind its stream
     # attested, as `{"generation": str | None, "incomplete": str | None}`, read
