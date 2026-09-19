@@ -39,12 +39,13 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
-    ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
-    Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
-    ProducerStatus, ProtocolError, RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl,
-    ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult,
-    Statistics, StatisticsSnapshot, StreamContract, StreamEnding, Term, TopK, UnservedReason,
-    UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    DepthApplication, ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile,
+    FusionResult, FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin,
+    ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedRow, RankedStream,
+    RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock,
+    ScoreExactness, SearchError, SearchResult, Statistics, StatisticsSnapshot, StratumUnit,
+    StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm, compile,
+    contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,
@@ -602,6 +603,128 @@ fn start_at_compile_hand_built_plan() {
     // have compiled to this same text while reporting the needle answered.
     assert_eq!(planned.producer_bindings, hand_built.producer_bindings);
     assert_eq!(planned.unserved_evidence(), hand_built.unserved_evidence());
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Start at execute: a hand-built bundle, checked on the same dimensions
+// ---------------------------------------------------------------------------
+
+/// A hand-built [`StratumUnit`] is admitted on the same terms the compiler's own
+/// output is, and refused on the same terms a hand-edited *plan* is.
+///
+/// A bundle is what [`execute`] is handed, and the three numbers on a unit are the
+/// whole of what the run may claim about how its read ended. While they were plain
+/// public fields, a bundle could say anything: a depth raised past the range the
+/// emitted bound can probe made `Exhausted` reportable for a read the `LIMIT` cut,
+/// and a declared bound lowered below the depth bypassed the admission waist's
+/// `DepthBoundViolation` dimension on the one number all of this is about. Admission
+/// refuses a hand-edited plan on both; trusting a hand-edited bundle on the same two
+/// was the same hole with one stage skipped.
+///
+/// So the numbers are reachable only through [`StratumUnit::new`], and every refusal
+/// below is executed beside the neighbouring value that must still build — because a
+/// checked surface that refused the honest cases would have closed the seam instead
+/// of holding it.
+#[test]
+fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
+    let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 12, 3);
+    let stats = single_statistics(&ex("stratum/hand"), 12);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
+    let planned = plan(&request, &registry, &stats).expect("plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("the plan is admitted");
+    let emitted = &compiled.units[0];
+    let rebuild = |depth: u32, declared: Option<u64>| {
+        StratumUnit::new(
+            emitted.stratum.clone(),
+            emitted.sparql.clone(),
+            emitted.contract.clone(),
+            depth,
+            declared,
+            DepthApplication::Evaluator,
+        )
+    };
+
+    // The seam is open: the compiler's own numbers, handed to the constructor, build
+    // the very unit the compiler emitted.
+    let by_hand = rebuild(emitted.depth(), emitted.declared_rows())
+        .expect("the compiler's own numbers are admitted");
+    assert_eq!(
+        &by_hand, emitted,
+        "a hand-built unit over the compiler's numbers IS the compiler's unit"
+    );
+
+    // A depth of zero reads nothing and proves nothing, and one row is the
+    // neighbouring read that must still build.
+    assert_eq!(rebuild(0, Some(12)), Err(UnitError::ZeroDepth));
+    assert!(rebuild(1, Some(12)).is_ok(), "one row is a real read");
+
+    // A depth whose probe row is not expressible could report no ending at all, so
+    // `Exhausted` would be reportable for a read the emitted bound cut. One rank
+    // shallower is the deepest readable depth and must still build.
+    assert_eq!(
+        rebuild(u32::MAX, Some(u64::MAX)),
+        Err(UnitError::DepthWithoutProbe {
+            depth: u32::MAX,
+            ceiling: u32::MAX - 1,
+        })
+    );
+    assert!(
+        rebuild(u32::MAX - 1, Some(u64::MAX)).is_ok(),
+        "the deepest depth whose ending can be observed still builds"
+    );
+
+    // A depth above the declared row bound: the read it describes cannot be taken,
+    // and the rows that do come back are not that depth's. This is the waist's
+    // `DepthBoundViolation` dimension, held at the stage that was trusting it.
+    assert_eq!(
+        rebuild(4, Some(1)),
+        Err(UnitError::DepthBeyondDeclaration {
+            depth: 4,
+            declared: 1,
+        })
+    );
+    assert!(
+        rebuild(1, Some(1)).is_ok(),
+        "a depth at the declaration is the ordinary case, not a violation"
+    );
+    // A declared zero is read as the floor of one here too, exactly as the planner
+    // and the waist read it — and only the floor.
+    assert!(
+        rebuild(1, Some(0)).is_ok(),
+        "the floored probing row is admitted against a declared zero"
+    );
+    assert_eq!(
+        rebuild(2, Some(0)),
+        Err(UnitError::DepthBeyondDeclaration {
+            depth: 2,
+            declared: 0,
+        })
+    );
+    // And a producer that declared no access mode declared no bound, so there is no
+    // number here for a depth to exceed.
+    assert!(
+        rebuild(9, None).is_ok(),
+        "silence bounds no read, at any depth a read can reach"
+    );
+
+    // The hand-built bundle runs, which is the point of the seam: the checks are a
+    // gate on dishonest numbers and not a lock on the door.
+    let bundle = CompiledRetrieval {
+        units: vec![by_hand],
+        ..compiled
+    };
+    let execution =
+        block_on(execute(&bundle, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&stratum("hand")],
+        ProducerStatus::Exhausted { rows_emitted: 3 },
+        "three rows behind a twelve-row declaration, read to their end"
+    );
 }
 
 // ---------------------------------------------------------------------------

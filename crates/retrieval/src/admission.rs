@@ -382,9 +382,8 @@ pub enum AdmissionError {
     /// exhausted. Saturating the bound there is exactly the fault the probe exists
     /// to close, reappearing at the one depth where the mitigation is dropped.
     ///
-    /// The planner cannot write this: it refuses a derived bound no recordable
-    /// depth can serve ([`PlanError::DepthBeyondPlanRange`](crate::PlanError)), so
-    /// a depth here was hand-built or edited. `ceiling` is the deepest depth that
+    /// The planner cannot write this: it records a derived bound past the ceiling
+    /// *at* the ceiling, so a depth here was hand-built or edited. `ceiling` is the deepest depth that
     /// **can** be read — one shallower than the deepest a plan can express,
     /// because the read goes one row deeper than the depth — and a plan wanting
     /// more rows than that from one stratum is past what this layer's rank
@@ -581,10 +580,10 @@ impl ProbedDepth {
     ///
     /// Neither end is a value the planner can produce — it records a depth only
     /// for a stratum a surviving producer ranks under, floors what it derives at
-    /// one and refuses a bound past the ceiling — so a depth refused here came
-    /// from a plan that was hand-built or edited, whatever the registry says about
-    /// that stratum. The refusals name that stratum because the value belongs to
-    /// the plan in hand and a caller has to be able to find it.
+    /// one and records a derived bound past the ceiling at the ceiling — so a depth
+    /// refused here came from a plan that was hand-built or edited, whatever the
+    /// registry says about that stratum. The refusals name that stratum because the
+    /// value belongs to the plan in hand and a caller has to be able to find it.
     fn admit(depth: u32, stratum: &Iri) -> Result<Self, AdmissionError> {
         if depth == 0 {
             return Err(AdmissionError::ZeroDepth {
@@ -693,6 +692,20 @@ pub(crate) enum RowBound {
     /// The stratum's one producer declared no worst-case row count at all, so
     /// the registry set no bound here and admission enforces none.
     Undeclared,
+}
+
+impl RowBound {
+    /// The declared count, or `None` where nothing was declared.
+    ///
+    /// A projection of the variant and never a defaulting of it: the absence stays
+    /// an absence all the way onto the compiled unit, because a missing declaration
+    /// can refuse nothing and a zero is a measurement.
+    pub(crate) const fn rows(self) -> Option<u64> {
+        match self {
+            Self::Declared(rows) => Some(rows),
+            Self::Undeclared => None,
+        }
+    }
 }
 
 /// A descriptor's worst-case declared row count across its access modes, or

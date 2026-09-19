@@ -184,7 +184,7 @@
 //! is total and its next key is the stratum rank they win on. Nothing at rank
 //! `k + 1` can enter a top `k`, so nothing is gained by reading it *as a value*.
 //! One row past the depth is nonetheless read, and always has been: the probe
-//! slot [`compile`](crate::compile) emits at `min(depth, declared) + 1` is what
+//! slot [`compile`](crate::compile) emits at `depth + 1` is what
 //! separates "the plan stopped me" from "this is all there is", and it matters
 //! more at a tight depth than at a loose one. That row is a read and never a
 //! value, so it is the probe that supplies it and not the depth.
@@ -265,20 +265,43 @@
 //! depth is a 32-bit rank, and the read is emitted one row deeper than the depth so
 //! the executor can tell a read the bound cut from a read that ran out — so the
 //! deepest depth that can be *read* is one shallower than the deepest a plan can
-//! *express* ([`MAX_READ_DEPTH`]). A derived bound past that used to be truncated
-//! to [`u32::MAX`], which recorded a depth below the bound it was derived to serve
-//! and, at that exact value, left the compiler no room for the probe row: the read
-//! would then have been reported exhausted however many rows the relation held.
-//! Both halves are completeness claims made about a number rather than about the
-//! data, so the bound is refused by name instead —
-//! [`PlanError::DepthBeyondPlanRange`] for a stratum's own derived bound, and
-//! [`PlanError::ReadBoundBeyondDepthRange`] for a request bound above what any rank
-//! addresses, which is checked once at the request because no registry could serve
-//! it.
+//! *express* ([`MAX_READ_DEPTH`]). Every depth recorded here is at or below that
+//! number, and the two sides of the ceiling are handled differently because they
+//! are two different kinds of number.
 //!
-//! Neither is reachable by an ordinary request: a depth at the ceiling is over four
-//! billion rows from one producer per invocation, and every depth below it is
-//! derived, recorded and emitted exactly as it was.
+//! A **declared** row bound past the ceiling is recorded at the ceiling. A
+//! registry declaring more rows per invocation than a read can be taken to has
+//! described its data honestly, and the read the caller asked for may be tiny: an
+//! index of ten billion rows read for a top-ten answer is an ordinary request, and
+//! it is ordinary for exactly the shapes that cannot narrow a depth to the
+//! request's bound — a producer whose rows are not its candidates
+//! ([`DuplicatePolicy::Allowed`]) or one that restricts no block of the candidate
+//! universe ([`CandidateDomains::Unrestricted`]), which is the shipped
+//! nearest-neighbour relation's own default. Refusing those would have left a host
+//! two ways out, both dishonest: under-declare `rows_per_invocation`, or invent a
+//! cardinality statistic. So the depth is recorded at the ceiling, and what the
+//! ceiling *costs* is reported rather than hidden — the read is still emitted one
+//! row deeper than it, the probe row still arrives if the producer had more, and
+//! the ending is then [`ProducerStatus::DepthReached`](crate::ProducerStatus),
+//! which says precisely that the planned depth and not the data stopped the read.
+//! That is the comparison the truncation to [`u32::MAX`] lacked: it recorded a
+//! depth below the bound it was derived to serve with nothing anywhere reporting
+//! the difference, and at that exact value it also left the compiler no room for
+//! the probe row, so the read was reported exhausted however many rows the relation
+//! held. Clamping to [`MAX_READ_DEPTH`] keeps the probe and therefore keeps the
+//! ending truthful.
+//!
+//! A **requested** bound past the ceiling is refused
+//! ([`PlanError::ReadBoundBeyondDepthRange`]). That number is the caller's own and
+//! names how many fused rows the answer is for; where the declarations license it
+//! that count *is* every stratum's depth, so a count no readable depth can express
+//! is a request for something this layer cannot represent, and serving it at the
+//! ceiling would answer a different question than the one asked. It is checked once
+//! at the request, because no registry could serve it.
+//!
+//! Neither boundary is reachable by an ordinary request: a depth at the ceiling is
+//! over four billion rows from one producer per invocation, and every depth below
+//! it is derived, recorded and emitted exactly as it was.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -338,9 +361,10 @@ const PPM_UNIT: u64 = 1_000_000;
 ///   unbounded row count, statistics supply no cardinality to bound it, and the
 ///   request's own bound licenses no prefix either.
 /// * [`PlanError::ReadBoundBeyondDepthRange`] when the request's own bound is
-///   above [`u32::MAX`], which no per-stratum depth can address.
-/// * [`PlanError::DepthBeyondPlanRange`] when a stratum's derived bound is deeper
-///   than a read can be taken to, so no recordable depth would serve it.
+///   above the deepest depth a read can be taken to, which no per-stratum depth
+///   can address. A *declared* row bound above that ceiling is not an error: it is
+///   recorded at the ceiling, and the ending says the planned depth stopped the
+///   read — see this module's header.
 pub fn plan(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry,
@@ -577,23 +601,21 @@ pub fn plan(
                 predicate: Box::new(stratum.clone()),
             });
         }
-        // Recorded only where the number is a depth a read can actually be taken
-        // to. Truncating it to `u32::MAX` recorded a depth **below** the bound it
-        // was derived to serve, with nothing anywhere comparing the two — and the
-        // truncated value was then the one depth the compiler could not emit a
-        // probe row past, so the read would have been reported exhausted whatever
-        // the relation held. Both halves of that are refusals, so this is one:
-        // the number and the ceiling, named.
-        let depth = match u32::try_from(bound) {
-            Ok(depth) if depth <= MAX_READ_DEPTH => depth,
-            Ok(_) | Err(_) => {
-                return Err(PlanError::DepthBeyondPlanRange {
-                    stratum: Box::new(stratum.clone()),
-                    bound,
-                    ceiling: MAX_READ_DEPTH,
-                });
-            }
-        };
+        // Recorded at the deepest depth a read can be taken to wherever the
+        // declared bound is deeper than that. The old truncation to `u32::MAX` was
+        // wrong for two reasons and only one of them was the number: it recorded a
+        // depth **below** the bound it was derived to serve with nothing anywhere
+        // reporting the difference, and `u32::MAX` was also the one depth whose
+        // probe row the compiler cannot express, so the read was then reported
+        // exhausted whatever the relation held. `MAX_READ_DEPTH` fixes the second
+        // outright — the probe row fits — and the probe is what reports the first:
+        // a read this ceiling cuts arrives with a row past the depth and ends as
+        // `DepthReached`, which names the planned depth as the stopper. Refusing
+        // instead would refuse an honest declaration of a large index for a read the
+        // caller asked one page of; see this module's header.
+        let depth = u32::try_from(bound)
+            .unwrap_or(MAX_READ_DEPTH)
+            .min(MAX_READ_DEPTH);
         stratum_depths.insert(stratum.clone(), depth);
     }
 
@@ -669,19 +691,18 @@ enum Outcome<'a> {
 /// This is the provisional bound placement is run against, not the bound the
 /// plan records: it is computed over the widest set (every producer whose terms
 /// matched), so a producer can only ever be handed a depth at least as large as
-/// the one its stratum finally records. A stratum whose bound no depth can serve
-/// — an unbounded declaration with no statistic to bound it, or a bound above
-/// [`MAX_READ_DEPTH`] — has no finite depth here; it is carried as
-/// [`MAX_READ_DEPTH`] rather than refused, because the refusal belongs to the
-/// surviving set and is raised there.
+/// the one its stratum finally records. A stratum whose bound no depth can express
+/// — an unbounded declaration with no statistic to bound it, or a declared bound
+/// above [`MAX_READ_DEPTH`] — is carried as [`MAX_READ_DEPTH`] here.
 ///
 /// Carried as the read ceiling rather than as [`u32::MAX`], and the distinction is
-/// the point of the number. Such a stratum has no final depth to be smaller than:
-/// either its producer is dropped at placement, or the surviving-set loop refuses
-/// the plan by name ([`PlanError::DepthBeyondPlanRange`]). So the invariant above
-/// still holds, and no depth this planner hands to anything is one no plan could
-/// record. Nothing reads this value as a row count and no plan records it: it
-/// decides only whether a producer's declared depth placement *renders*.
+/// the point of the number: it is the deepest depth `plan` itself can record, so no
+/// depth this planner hands to anything is one no plan could record. Such a stratum
+/// has no smaller final depth to contradict either — its producer is dropped at
+/// placement, or `plan` records the same ceiling, or the unbounded case is refused
+/// there by name ([`PlanError::StatisticsUnavailable`]). Nothing reads this value as
+/// a row count and no plan records it: it decides only whether a producer's declared
+/// depth placement *renders*.
 ///
 /// The terms read are the **carried** ones, matching what `plan` finally
 /// records. Reading the accepted set instead would let a stratum's provisional
@@ -1089,26 +1110,35 @@ fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
     })
 }
 
-/// Refuse a read bound no depth can address.
+/// Refuse a read bound no read this layer plans can reach.
 ///
 /// A [`ReadBound::Bounded`] states a count of fused rows, and where the surviving
 /// declarations license the prefix that count *is* every stratum's depth. A depth
-/// is a 32-bit rank, so a bound above [`u32::MAX`] names a row no rank addresses
-/// and no read this layer plans could ever reach — under any registry, which is
-/// why it is refused here rather than at the stratum it happens to bind.
+/// is a 32-bit rank and the read is emitted one row deeper than the depth, so the
+/// deepest depth a read can be taken to is [`MAX_READ_DEPTH`] and a bound above
+/// that names a read no registry could serve — which is why it is refused here
+/// rather than at the stratum it happens to bind.
 ///
-/// A bound at exactly [`u32::MAX`] is expressible as a rank and is admitted, and
-/// so is every ordinary bound below it. Whether some stratum can be *read* that
-/// deep is a different question with a different ceiling — the read goes one row
-/// past the depth — and it is answered per stratum, by name, where the depth is
-/// derived. A bound of zero is admitted too, and floored to the single probing row
-/// by [`capped`]: a bound may narrow a read and may never eliminate one.
+/// The ceiling is the deepest *readable* depth rather than the deepest expressible
+/// one, and that is what makes the refusal's message true: a bound of exactly
+/// [`MAX_READ_DEPTH`] is admitted here, becomes that depth where the declarations
+/// license the prefix, and is emitted with the probe row one past it — served, end
+/// to end. A bound of [`u32::MAX`] is expressible as a rank and nothing else: the
+/// probe row past that depth is not a number an emitted bound can hold, so
+/// admitting it here would have named a ceiling the layer cannot serve a read at.
+/// A bound of zero is admitted too, and floored to the single probing row by
+/// [`capped`]: a bound may narrow a read and may never eliminate one.
+///
+/// A *declared* row bound past the same ceiling is not refused anywhere — it is
+/// recorded at the ceiling, for the reason in this module's header. The asymmetry
+/// is deliberate: this number is the caller's request, and that one is a producer's
+/// description of its own data.
 ///
 /// [`ReadBound::Complete`] states no number, so there is none to refuse: the
 /// depths are the declarations' and the statistics', each of which is checked
 /// where it is derived.
 fn validate_bound(bound: ReadBound) -> Result<(), PlanError> {
-    let ceiling = u64::from(u32::MAX);
+    let ceiling = u64::from(MAX_READ_DEPTH);
     match bound {
         ReadBound::Bounded(top_k) if top_k.get() as u64 > ceiling => {
             Err(PlanError::ReadBoundBeyondDepthRange {

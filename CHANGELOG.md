@@ -513,11 +513,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   ran out from a read which was stopped, and it was emitted at
   `min(depth + 1, declared)`: at that one depth the `min` selected the
   declaration, the unit was emitted at exactly its own depth, and there was no
-  probe slot left to answer the question. It is now
-  `max(1, min(depth, declared) + 1)`, so the slot exists at every depth. Only the
-  emitted `LIMIT` moves; the recorded depth is what admission holds a plan to and
+  probe slot left to answer the question. It is now `depth + 1`, at every depth and
+  against every declaration -- the declared row bound does not cap the emitted bound
+  at all, because admission has already refused a depth above that declaration, so a
+  `min` over the two selects the depth in every case a unit can be emitted for. Only
+  the emitted `LIMIT` moves; the recorded depth is what admission holds a plan to and
   is unchanged, as are every plan field, identity and planned-resolution number
   keyed to it.
+
+  A declared row bound of **zero** was the one arm where the two numbers parted, and
+  it was the arm the `min` got wrong: the planner floors that depth at one, and a
+  bound capped to the declaration was then `LIMIT 1`, a bound *equal* to its own
+  depth. No row past it could arrive, so the stratum was certified `Exhausted`
+  whatever the index turned out to hold -- an index that really was empty and one
+  holding nine rows produced byte-identical trailers. A zero declaration is read
+  rather than obeyed everywhere else in this layer, so it is read here too. An empty
+  index now reports `Exhausted { rows_emitted: 0 }` as a verified claim, and an index
+  that turns out to hold rows breaches its declaration by name exactly as a wrong
+  declaration of any other size does.
 
   A row arriving in that slot is past the declaration rather than merely past the
   depth, which means the producer yielded a row it promised did not exist. That
@@ -542,8 +555,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so a self-bounding producer that returns more rows than it declared is still
   caught; it is simply never asked to.
 
-  `StratumUnit` gains a `declared_rows` field carrying the registry's declaration
-  for the stratum, which is what lets the executor tell the two kinds of extra row
+  `StratumUnit` carries the registry's declaration for the stratum, readable as
+  `declared_rows()`, which is what lets the executor tell the two kinds of extra row
   apart. `None` there is a registry that declared no access mode and therefore no
   bound, which promises nothing for a row to breach.
 
@@ -565,23 +578,93 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `LIMIT` equals its own depth is unwritable rather than merely unwritten, and the
   row past the depth is added with exact arithmetic.
 
-  The planner no longer truncates a bound no such depth can serve. A derived row
-  bound above the range was clamped to `u32::MAX` with nothing saying so, which
-  recorded a depth *below* the bound it claimed to serve -- and in exactly the
-  configuration where the bound is supposed to *be* the depth, disjoint strata
-  declaring unique candidates, that contradiction was internal to the plan and
-  nothing downstream compared the two. It is `PlanError::DepthBeyondPlanRange` now,
-  naming the stratum, the number and the ceiling. A request bound above what a
-  32-bit rank addresses is refused once at the request itself, as
-  `PlanError::ReadBoundBeyondDepthRange`, rather than wherever it happens to bind:
-  deferred, one such bound was served silently against a registry whose
-  declarations were smaller and truncated against one whose were not.
+  The planner no longer truncates a derived bound to `u32::MAX` either, and the two
+  sides of that ceiling are now handled differently because they are two different
+  kinds of number. A *declared* row bound past the ceiling is recorded **at** the
+  ceiling: the truncation's real defect was not the clamp but that it recorded a depth
+  below the bound it claimed to serve with nothing anywhere reporting the difference,
+  and that at `u32::MAX` exactly it also left no room for the probe row. At the
+  readable ceiling the probe row fits, so a read this ceiling cuts arrives with a row
+  past the depth and ends `ProducerStatus::DepthReached`, which names the planned
+  depth as the stopper -- the comparison the truncation lacked. A *requested* bound
+  past the ceiling is refused, as `PlanError::ReadBoundBeyondDepthRange`, once at the
+  request itself rather than wherever it happens to bind: that number is the caller's
+  own, and deferred it was served silently against a registry whose declarations were
+  smaller and truncated against one whose were not.
 
-  Nothing an ordinary request reaches moves. The refusals begin at a read of four
+  Declaring more rows per invocation than a read can be taken to is therefore served
+  rather than refused, and it had to be. An honest declaration of a ten-billion-row
+  index read for a top-ten answer is an ordinary request, and it is ordinary for
+  exactly the shapes that cannot narrow a depth to that answer's bound -- a producer
+  whose rows are not its candidates (`DuplicatePolicy::Allowed`), or one that
+  restricts no block of the candidate universe (`CandidateDomains::Unrestricted`,
+  which is the shipped nearest-neighbour relation's own documented default). Refusing
+  those left a host two ways out and both were dishonest: under-declare
+  `rows_per_invocation`, or fabricate a cardinality statistic.
+
+  `PlanError::ReadBoundBeyondDepthRange`'s ceiling is the deepest *readable* depth
+  rather than `u32::MAX`, so the sentence it prints is true: a bound of exactly the
+  number it names plans, records that depth and is emitted with its probe row, while
+  the number it used to name was then refused where it bound.
+
+  Nothing an ordinary request reaches moves. Both boundaries begin at a read of four
   billion rows from one producer per invocation; the deepest depth below them
   still plans, admits and compiles, with its probe row present and its emitted
   bound exactly where it was, and no plan identity, recorded depth or emitted
   `LIMIT` changes anywhere else.
+
+- **retrieval:** One class of producer had its exhaustion minted from a
+  declaration rather than read off the data, and it is the shipped
+  nearest-neighbour relation's own shape. A producer that declares a depth
+  *placement* is handed the number instead of being bounded by a `LIMIT`, and that
+  argument is never raised past the row count it registered -- asking for more asks
+  the relation to contradict its own registration, which a conforming relation
+  refuses. So at a depth already sitting on that declaration the read is asked for
+  exactly `depth` rows, returns at most `depth` rows, and the slot past the depth can
+  never be filled however many rows the index holds. The stratum was reported
+  `ProducerStatus::Exhausted` anyway, which made an index of a thousand rows and an
+  index of exactly `depth` rows indistinguishable in every field of the answer. The
+  depth cannot rise to go looking, either: the derived depth is bounded by the
+  declaration, so no plan asks for more.
+
+  How that read ended is genuinely unobservable, and neither existing ending was
+  true of it -- `DepthReached` would blame a planned depth that cut nothing, and
+  `Exhausted` would claim the rows ran out when nobody could know. So there is a
+  sixth ending, named for the stopper it actually had:
+  `ProducerReceipt::RowBoundReached`, `ProducerStatus::RowBoundReached` and
+  `StreamEnding::RowBoundReached`, all carrying the rank the read stopped at, spelled
+  `"row_bound_reached"` in the Python answer's `"statuses"` beside its `"rank"`.
+  `Exhausted` remains the only completeness claim in the vocabulary, and a consumer
+  that wants this read taken further has one honest move, different from either
+  neighbour's: raise the producer's declared row bound.
+
+  It is reported only where the ending really is unobservable. A producer the
+  evaluator bounds always receives the probe row and is unaffected. A self-bounding
+  producer planned *below* its declaration receives the probe too and still reports
+  `DepthReached` or `Exhausted`. One that returned fewer rows than it was allowed is
+  `Exhausted`, verified, because it stopped before anything stopped it. And one that
+  returns more rows than it declared is still caught by the unit's own bound and still
+  refused as `ExecutionError::RowBoundBreached`.
+
+- **retrieval:** `StratumUnit`'s depth was a plain public `u32`, which re-opened at
+  the compile/execute boundary the exact hole the admission waist closes one stage
+  earlier. A bundle whose depth was raised past the range its emitted bound can probe
+  reported `Exhausted` for a read the `LIMIT` cut, and one whose declared row bound
+  was lowered below its depth bypassed the waist's `DepthBoundViolation` dimension --
+  on the one number all of this is about. Admission refuses a hand-edited *plan* on
+  both of those, for the reason every dimension is re-derived at the waist; trusting a
+  hand-edited *bundle* on the same two was the same fault with one stage skipped.
+
+  The depth and the declared row bound are now private, read through
+  `StratumUnit::depth()` and `StratumUnit::declared_rows()`, and reachable only
+  through a checked constructor: `StratumUnit::new` takes both numbers plus a
+  `DepthApplication` saying whether the evaluator or the producer applies the depth,
+  and refuses a zero depth, a depth whose probe row is inexpressible, and a depth
+  above the declared bound as the three variants of a new `UnitError`. The seam stays
+  open -- the compiler's own numbers handed to the constructor build the compiler's
+  own unit, and that unit executes -- and the unit's `sparql` stays public and
+  writable, because replacing the text is how a caller drives the executor over a
+  query of its own.
 
 - **python:** A ranked producer declared with more than one candidate-domain tag
   failed at the wrong time. One tag entails where every row of that producer

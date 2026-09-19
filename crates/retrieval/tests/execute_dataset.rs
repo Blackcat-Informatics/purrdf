@@ -1042,7 +1042,8 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
         bundle.units[0].sparql
     );
     assert_eq!(
-        bundle.units[0].depth, 3,
+        bundle.units[0].depth(),
+        3,
         "and the unit records the depth, not the bound it was emitted under"
     );
     let mut execution =
@@ -1117,11 +1118,12 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
         bundle.units[0].sparql
     );
     assert_eq!(
-        bundle.units[0].depth, 3,
+        bundle.units[0].depth(),
+        3,
         "and only the emitted bound moved: the recorded depth is still three"
     );
     assert_eq!(
-        bundle.units[0].declared_rows,
+        bundle.units[0].declared_rows(),
         Some(3),
         "the unit carries the declaration the probe row will be read against"
     );
@@ -1180,7 +1182,8 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
         bundle.units[0].sparql
     );
     assert_eq!(
-        bundle.units[0].depth, 3,
+        bundle.units[0].depth(),
+        3,
         "the recorded depth did not move with the emitted bound"
     );
     let error = block_on(execute(&bundle, &registry, &*dataset_of(&[])))

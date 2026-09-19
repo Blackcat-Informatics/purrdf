@@ -132,8 +132,7 @@
 //!
 //! # The unit is read one row deeper than the stratum is
 //!
-//! [`compile`](crate::compile) emits
-//! `LIMIT max(1, min(depth, declared row bound) + 1)`, so a unit whose producer
+//! [`compile`](crate::compile) emits `LIMIT depth + 1`, so a unit whose producer
 //! still had rows past the planned depth hands back one more row than the
 //! stratum may contribute. That row is a **probe**: it is never emitted onto the
 //! stream, never ranked, and never counted anywhere. All it does is decide the
@@ -142,24 +141,53 @@
 //! only ever say `Exhausted`, which is the strongest completeness claim this
 //! layer makes, uttered about a read the plan itself cut short.
 //!
-//! The slot exists at every depth a plan can carry — including a depth that
-//! already equals the producer's declared row bound, and that last case is why the
-//! slot's arrival is read against the declaration rather than reported blind. It
-//! exists at every such depth because the one depth whose slot would not fit a
-//! 32-bit `LIMIT` is refused before it reaches this stage, at the admission waist
-//! ([`AdmissionError::DepthWithoutProbe`](crate::AdmissionError)) and in the
-//! planner ([`PlanError::DepthBeyondPlanRange`](crate::PlanError)): a read whose
-//! ending nobody could have observed must not arrive here to be reported as an
-//! exhaustion.
+//! The unit's own bound leaves that slot open at every depth a plan can carry. It
+//! can, because the one depth whose slot would not fit a 32-bit `LIMIT` cannot reach
+//! this stage: the admission waist refuses it
+//! ([`AdmissionError::DepthWithoutProbe`](crate::AdmissionError)) and the planner
+//! records a derived bound past that ceiling *at* the ceiling rather than past it. A
+//! read whose ending nobody could have observed must not arrive here to be reported
+//! as an exhaustion.
 //!
 //! Below the declaration, the extra row means the *depth* stopped the read, which
-//! is `DepthReached`. At the declaration, it means the producer yielded a row it
+//! is `DepthReached`. Past the declaration, it means the producer yielded a row it
 //! promised did not exist, and [`bound_to_depth`] refuses the whole run
 //! ([`ExecutionError::RowBoundBreached`]) rather than truncating to the depth
 //! and calling the result exhausted. When the declaration is honest the slot
 //! comes back empty and costs nothing, and `Exhausted` is then verified against
 //! a read that was allowed to go one row further rather than believed on the
 //! strength of a bound.
+//!
+//! # One class of producer cannot be asked for the probe row, and says so
+//!
+//! A producer that declared a depth *placement* is handed the number instead of
+//! being bounded by it, and a request is not a ceiling: asking such a producer for
+//! one row more than its registration allows asks it to contradict that
+//! registration, which a well-built relation refuses — the shipped
+//! nearest-neighbour relation refuses exactly that against its configured guard. So
+//! [`compile`](crate::compile) caps the *argument* at the declaration while leaving
+//! the unit's own bound one row deeper.
+//!
+//! At a depth that already sits on the declaration those two cap at the same place:
+//! the producer is asked for exactly `depth` rows, returns at most `depth` rows, and
+//! the slot past the depth can never be filled however many rows its index holds. The
+//! ending is then **genuinely unobservable**, and neither of the two endings above is
+//! true of it — `DepthReached` would claim the planned depth cut a read it did not,
+//! and `Exhausted` would claim rows ran out when nobody could know. So it is reported
+//! as its own ending, [`StreamEnding::RowBoundReached`], which names the stopper it
+//! actually had: the producer's own declared row bound. It is reported only where
+//! that is true — where the read returned every row it was allowed and no further row
+//! could have been asked for. A producer planned below its declaration is still asked
+//! for the probe and still reports `DepthReached` or `Exhausted`; one that returned
+//! fewer rows than it was allowed is `Exhausted`, verified, because it stopped before
+//! anything stopped it.
+//!
+//! A declared **zero** is read rather than obeyed, and the emitted bound is what
+//! reads it: the floored depth of one is emitted one row deeper like every other
+//! depth, so an empty index reports `Exhausted { rows_emitted: 0 }` as a verified
+//! claim and an index that turns out to hold rows breaches the declaration
+//! ([`ExecutionError::RowBoundBreached`]) exactly as a wrong declaration of any other
+//! size does.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -170,7 +198,7 @@ use purrdf_sparql_eval::{
     ServiceLevel,
 };
 
-use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval};
+use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, ReadReach};
 use crate::fuse::TopK;
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
@@ -383,7 +411,7 @@ pub enum ExecutionError {
         /// for on every call that returns `Ok`.
         stratum: Box<Iri>,
         /// The row bound the registry declared for this stratum, as
-        /// [`StratumUnit::declared_rows`](crate::StratumUnit) carries it.
+        /// [`StratumUnit::declared_rows()`](crate::StratumUnit::declared_rows) carries it.
         declared: u64,
         /// How many rows the read actually returned, which is one past
         /// `declared`: the probe slot is the only row past the declaration the
@@ -422,7 +450,7 @@ pub struct RankedStreamImpl {
 
 /// How a materialized stream ends, decided before the first row is pulled.
 ///
-/// The two endings answer "what stopped this read", and only the producer's own
+/// The endings answer "what stopped this read", and only the producer's own
 /// side of the seam can tell them apart: an empty cursor looks identical whether
 /// the rows ran out or the bound did. [`execute`] can tell, because
 /// [`compile`](crate::compile) emits a bound one row deeper than the stratum
@@ -443,6 +471,19 @@ pub enum StreamEnding {
     DepthReached {
         /// The last 1-based rank the stream carries, which is the planned depth
         /// and also the number of rows the stream holds.
+        rank: u64,
+    },
+    /// The producer's own declared row bound stopped the read, so whether a further
+    /// row existed could not be observed.
+    ///
+    /// Written for the one shape whose probe row cannot be asked for: a producer
+    /// that takes its depth as an argument, planned at a depth that already sits on
+    /// its declared row count, which therefore returned every row it was allowed and
+    /// could not be asked for one more. See this module's header, and
+    /// [`ProducerReceipt::RowBoundReached`] for why neither neighbour is true of it.
+    RowBoundReached {
+        /// The last 1-based rank the stream carries, which is both the planned depth
+        /// and the declared row bound the read stopped at.
         rank: u64,
     },
 }
@@ -492,8 +533,9 @@ impl RankedStreamImpl {
     ///
     /// A [`StreamEnding::Exhausted`] stream reports the rows it actually
     /// emitted; a [`StreamEnding::DepthReached`] stream reports the rank the
-    /// depth stopped it at. Fusion measures either number against the rows it
-    /// pulled and refuses a disagreement
+    /// depth stopped it at, and a [`StreamEnding::RowBoundReached`] stream the rank
+    /// its producer's own declaration stopped it at. Fusion measures every one of
+    /// those numbers against the rows it pulled and refuses a disagreement
     /// ([`ProtocolError::ForgedReceipt`]), which is why the rank is the depth
     /// the rows were truncated to and not the number of rows the unit returned.
     ///
@@ -512,6 +554,7 @@ impl RankedStreamImpl {
                 rows_emitted: self.pulled,
             },
             StreamEnding::DepthReached { rank } => ProducerReceipt::DepthReached { rank },
+            StreamEnding::RowBoundReached { rank } => ProducerReceipt::RowBoundReached { rank },
         })
     }
 }
@@ -631,8 +674,13 @@ pub async fn execute<D: DatasetView + Sync>(
                         // stratum's admission and ordering rested on, and the
                         // only ending left for this one is a completeness claim
                         // the extra row has already falsified.
-                        let (ranked, ending, status) =
-                            bound_to_depth(ranked, unit.depth, unit.declared_rows, &unit.stratum)?;
+                        let (ranked, ending, status) = bound_to_depth(
+                            ranked,
+                            unit.depth(),
+                            unit.declared_rows(),
+                            unit.reach(),
+                            &unit.stratum,
+                        )?;
                         streams.push(StratumStream {
                             stratum: unit.stratum.clone(),
                             plan_id: compiled.plan_id,
@@ -717,6 +765,19 @@ type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
 /// The status returned is the mirror of the ending, so the terminal report and
 /// the stream's own receipt cannot say different things about the same read.
 ///
+/// # The three endings, and which observation each one rests on
+///
+/// * `depth + 1` rows came back — the read had more, and the planned depth is what
+///   stopped it: `DepthReached`.
+/// * fewer rows than the read was allowed came back — the producer stopped before
+///   anything stopped it: `Exhausted`, verified.
+/// * exactly `depth` rows came back and the read was allowed no more than `depth`
+///   ([`ReadReach::AtDepth`]) — the producer's own declared row bound is the
+///   stopper, and whether a further row exists was not observable:
+///   `RowBoundReached`. `reach` is the only thing that distinguishes this from the
+///   second case, which is why it travels on the unit rather than being guessed
+///   from the row count.
+///
 /// # Errors
 ///
 /// [`ExecutionError::RowBoundBreached`] where the extra row is past
@@ -740,18 +801,18 @@ fn bound_to_depth(
     mut ranked: Vec<(u64, Term, RowBlock)>,
     depth: u32,
     declared_rows: Option<u64>,
+    reach: ReadReach,
     stratum: &Iri,
 ) -> Result<BoundedRead, ExecutionError> {
     let ceiling = usize::try_from(depth).unwrap_or(usize::MAX);
     if ranked.len() > ceiling {
         let pulled = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
         // Consulted only here, on the one row the declaration could possibly be
-        // breached by: the emitted bound never asks for a second. A declared
-        // zero cannot reach this arm at all — its emitted bound is the floor of
-        // one and an admitted depth is at least one, so `ranked.len()` is at
-        // most `depth` — which is deliberate, because at a declared zero the
-        // layer reads the declaration rather than obeying it and the row it
-        // asked for on purpose is not a breach.
+        // breached by: the emitted bound never asks for a second. A declared zero
+        // reaches this arm like any other wrong declaration — the emitted bound is
+        // one row past the floored depth of one, so a producer that declared an
+        // empty index and then returned two rows is caught here rather than
+        // certified exhausted on the strength of the first.
         if let Some(declared) = declared_rows
             && pulled > declared
         {
@@ -767,6 +828,18 @@ fn bound_to_depth(
             ranked,
             StreamEnding::DepthReached { rank },
             ProducerStatus::DepthReached { rank },
+        ));
+    }
+    // A read that filled a depth it could not be taken past has an ending nobody
+    // observed, and the honest report names the bound that made the row past it
+    // unaskable. `Exhausted` here would be this layer's strongest completeness
+    // claim, minted from the producer's registration rather than from a read.
+    if reach == ReadReach::AtDepth && ranked.len() == ceiling {
+        let rank = u64::from(depth);
+        return Ok((
+            ranked,
+            StreamEnding::RowBoundReached { rank },
+            ProducerStatus::RowBoundReached { rank },
         ));
     }
     let rows_emitted = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
@@ -1018,7 +1091,7 @@ mod tests {
         ExecutionError, ProducerStatus, RowBlock, StreamEnding, bound_to_depth, entailed_block,
         rank_candidates, read_attestation, sole_attestation, term_candidate,
     };
-    use crate::compile::{BLOCK_NAME, CANDIDATE_NAME};
+    use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, ReadReach};
     use crate::iri::{Iri, Term};
     use crate::render::decode_term;
 
@@ -1501,8 +1574,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let stratum = Iri::parse("http://example.org/stratum/alpha").expect("a valid fixture IRI");
-        let bounded =
-            |count, depth, declared| bound_to_depth(rows(count), depth, declared, &stratum);
+        // Every case here is a producer the evaluator bounds, so the read always
+        // reaches one row past the depth; the self-bounding shape has its own test
+        // below.
+        let bounded = |count, depth, declared| {
+            bound_to_depth(rows(count), depth, declared, ReadReach::PastDepth, &stratum)
+        };
 
         let (kept, ending, status) = bounded(4, 3, Some(100)).expect("below the declaration");
         assert_eq!(
@@ -1556,7 +1633,7 @@ mod tests {
         };
         let stratum = Iri::parse("http://example.org/stratum/alpha").expect("a valid fixture IRI");
 
-        let breach = bound_to_depth(rows(4), 3, Some(3), &stratum)
+        let breach = bound_to_depth(rows(4), 3, Some(3), ReadReach::PastDepth, &stratum)
             .expect_err("a fourth row from a producer that declared three is a breach");
         match &breach {
             ExecutionError::RowBoundBreached {
@@ -1576,8 +1653,9 @@ mod tests {
             "both numbers reach a host that only reads the message: {breach}"
         );
 
-        let (kept, ending, status) = bound_to_depth(rows(3), 3, Some(3), &stratum)
-            .expect("a producer that declared three and holds three is not a liar");
+        let (kept, ending, status) =
+            bound_to_depth(rows(3), 3, Some(3), ReadReach::PastDepth, &stratum)
+                .expect("a producer that declared three and holds three is not a liar");
         assert_eq!(
             kept.len(),
             3,
@@ -1589,6 +1667,78 @@ mod tests {
             ProducerStatus::Exhausted { rows_emitted: 3 },
             "and its exhaustion is now verified by the empty slot rather than \
              believed on the strength of the bound"
+        );
+    }
+
+    /// A producer that bounds itself at its own declaration reports that bound as
+    /// the stopper, because at that depth no ending is observable.
+    ///
+    /// The read was asked for exactly `depth` rows and returned exactly `depth`
+    /// rows, so an index holding a thousand and an index holding three are
+    /// indistinguishable from here. `Exhausted` would be a completeness claim minted
+    /// from the declaration and `DepthReached` would blame a depth that cut nothing,
+    /// so neither is written.
+    ///
+    /// Both neighbours are executed beside it, because this ending must not spread:
+    /// the same producer that returned *fewer* rows than it was allowed really did
+    /// run out, and the same producer read below its declaration still receives the
+    /// probe and still reports the ordinary endings.
+    #[test]
+    fn a_self_bounding_producer_at_its_declaration_reports_the_bound_that_stopped_it() {
+        let rows = |count: u64| {
+            (1..=count)
+                .map(|rank| {
+                    (
+                        rank,
+                        Term::new(format!("<http://example.org/doc{rank}>")),
+                        RowBlock::Undeclared,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let stratum = Iri::parse("http://example.org/stratum/alpha").expect("a valid fixture IRI");
+
+        // Asked for three, returned three, and the fourth row could not have been
+        // requested: the declaration is the stopper and the ending says so.
+        let (kept, ending, status) =
+            bound_to_depth(rows(3), 3, Some(3), ReadReach::AtDepth, &stratum)
+                .expect("a producer at its own declared bound is not a liar");
+        assert_eq!(kept.len(), 3, "every row it was allowed reaches the stream");
+        assert_eq!(ending, StreamEnding::RowBoundReached { rank: 3 });
+        assert_eq!(status, ProducerStatus::RowBoundReached { rank: 3 });
+
+        // Fewer rows than it was allowed: nothing stopped it, so this really is
+        // exhaustion and it must not be reported as a bound.
+        let (kept, ending, status) =
+            bound_to_depth(rows(2), 3, Some(3), ReadReach::AtDepth, &stratum)
+                .expect("a short answer to a request for three");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(ending, StreamEnding::Exhausted);
+        assert_eq!(status, ProducerStatus::Exhausted { rows_emitted: 2 });
+
+        // And the same producer read below its declaration: the argument carries the
+        // probe there, so the ending is observable and stays `DepthReached`.
+        let (kept, ending, status) =
+            bound_to_depth(rows(4), 3, Some(9), ReadReach::PastDepth, &stratum)
+                .expect("a depth below the declaration is probed like any other");
+        assert_eq!(kept.len(), 3);
+        assert_eq!(ending, StreamEnding::DepthReached { rank: 3 });
+        assert_eq!(status, ProducerStatus::DepthReached { rank: 3 });
+
+        // A self-bounding producer that beats the argument it was handed is still
+        // caught by the unit's own bound rather than reported as any ending.
+        let breach = bound_to_depth(rows(4), 3, Some(3), ReadReach::AtDepth, &stratum)
+            .expect_err("a fourth row from a producer asked for three is a breach");
+        assert!(
+            matches!(
+                breach,
+                ExecutionError::RowBoundBreached {
+                    declared: 3,
+                    pulled: 4,
+                    ..
+                }
+            ),
+            "got {breach:?}"
         );
     }
 }

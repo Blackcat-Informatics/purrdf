@@ -545,9 +545,21 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
         "ex:a's score is 1/(K+1) from each of the two producers"
     );
 
-    // Both strata ran to completion, with the row counts their own data
-    // supports: two documents hold the needle's terms, and the space returns
-    // the four nearest of its four rows.
+    // Both strata reported an ending, and the two endings are deliberately
+    // different because the two producers are bounded differently.
+    //
+    // The text relation is bounded by the unit's own `LIMIT`, which is emitted one
+    // row past the planned depth, so the empty probe slot VERIFIES that the two
+    // documents holding the needle's terms were all there were: `Exhausted`.
+    //
+    // The nearest-neighbour relation takes its depth as an argument and this
+    // fixture's guard puts the declared bound (four rows) exactly at the depth, so
+    // the relation was asked for four, returned four, and a fifth could not have been
+    // requested — asking for it would ask the relation to breach the guard it
+    // registered. This fixture's space does hold exactly four rows, but the read
+    // could not see that, and reporting `Exhausted` here would be a completeness
+    // claim minted from the declaration rather than from the read. So it names the
+    // stopper it had: the row bound the producer itself declared.
     assert_eq!(result.trailer.statuses.len(), 2);
     assert!(
         matches!(
@@ -560,7 +572,7 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
     assert!(
         matches!(
             result.trailer.statuses.get(&iri(KNN_STRATUM)),
-            Some(purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: 4 })
+            Some(purrdf_retrieval::ProducerStatus::RowBoundReached { rank: 4 })
         ),
         "got {:?}",
         result.trailer.statuses.get(&iri(KNN_STRATUM))
@@ -610,7 +622,8 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
          probe row is emitted at every depth including one that sits on the declaration"
     );
     assert_eq!(
-        text.depth, 4,
+        text.depth(),
+        4,
         "and the recorded depth is four: only the emitted bound carries the probe"
     );
 
@@ -632,13 +645,14 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
          count, so this branch bounds itself and carries no LIMIT of its own"
     );
     assert_eq!(
-        knn.declared_rows,
+        knn.declared_rows(),
         Some(4),
         "this producer's declaration is its guard, and the depth sits on it"
     );
 }
 
-/// The depth **argument** stops at the declaration; the emitted `LIMIT` does not.
+/// The depth **argument** stops at the declaration, the emitted `LIMIT` does not,
+/// and the read's own ending says which of the two stopped it.
 ///
 /// The two numbers differ for this producer and only at this depth, and the
 /// difference is the point: a `LIMIT` is a ceiling the evaluator applies to a
@@ -650,10 +664,25 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
 ///
 /// Without this split the probe would have turned a valid query into a refused
 /// one, which is the mirror of the silent truncation it exists to prevent.
+///
+/// The consequence is then executed rather than described, because the split leaves
+/// a read this layer cannot see the end of. The relation is asked for exactly the
+/// four rows it declared, returns four, and no fifth can be requested — so the
+/// stratum reports the bound that stopped it and not an exhaustion nobody verified.
+/// This is not a property of THIS fixture's guard: `rows_per_invocation` is
+/// `min(max_neighbours, rows)` and the planner takes that declaration for the depth,
+/// so for the shipped nearest-neighbour relation under a statistics provider that
+/// measures nothing, the depth always lands on the declaration and this is always
+/// the ending. The wrong-declaration case a mock CAN reach — a self-bounding
+/// producer that returns more rows than it registered, still caught by the unit's
+/// own bound — is
+/// `a_self_bounding_producer_reports_the_bound_that_stopped_it_and_still_catches_a_wrong_one`
+/// in `tests/compile_request.rs`.
 #[test]
-fn the_neighbour_count_stays_inside_the_guard_while_the_limit_probes_past_it() {
+fn the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it() {
     let registry = registry();
     let statistics = NoStatistics;
+    let data = dataset();
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &statistics,
@@ -678,6 +707,30 @@ fn the_neighbour_count_stays_inside_the_guard_while_the_limit_probes_past_it() {
         "while the unit's own bound still reaches one row past the declaration, so a \
          relation that returned five would still be caught: {}",
         knn.sparql
+    );
+    assert_eq!(
+        (knn.depth(), knn.declared_rows()),
+        (4, Some(4)),
+        "the depth sits ON the declaration, which is the state that has no probe"
+    );
+
+    // And the ending it actually has. The four rows the relation returned are every
+    // row it was allowed to return, so `Exhausted` would be a completeness claim
+    // minted from the guard rather than read off the data, and `DepthReached` would
+    // blame a planned depth that cut nothing.
+    let execution = block_on(execute(&compiled, &registry, &data)).expect("both relations run");
+    assert_eq!(
+        execution.statuses.get(&iri(KNN_STRATUM)),
+        Some(&purrdf_retrieval::ProducerStatus::RowBoundReached { rank: 4 }),
+        "the producer's own declared bound is what stopped this read"
+    );
+    // The neighbour in the same bundle, so the ending is not simply what this
+    // executor writes for everything: the text relation is bounded by the unit's
+    // `LIMIT`, its probe slot came back empty, and its exhaustion is verified.
+    assert_eq!(
+        execution.statuses.get(&iri(TEXT_STRATUM)),
+        Some(&purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: 2 }),
+        "a producer the evaluator bounds still reports a verified exhaustion"
     );
 }
 
@@ -1346,10 +1399,13 @@ fn the_knn_producer_names_each_target_once_when_two_rows_share_one_vector() {
 
     let result = answer_under_the_declared_contract(&request, &registry, &data, &profile);
 
+    // Every row of the space was reached, and the ending names the bound that
+    // stopped the read rather than claiming the rows ran out: the depth sits on this
+    // producer's declared row bound, so the row past it could not be asked for.
     assert_eq!(
-        rows_emitted(&result, KNN_STRATUM),
-        row_count,
-        "the guard admits the whole space, so every row was reached"
+        result.trailer.statuses.get(&iri(KNN_STRATUM)),
+        Some(&purrdf_retrieval::ProducerStatus::RowBoundReached { rank: row_count }),
+        "the guard admits the whole space, so the read went to the declared bound"
     );
     assert_candidates_are_distinct(&result);
 

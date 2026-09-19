@@ -514,11 +514,12 @@ fn admission_accepts_fresh_plan() {
         )
     );
     assert_eq!(
-        graph.depth, 50,
+        graph.depth(),
+        50,
         "the recorded depth is the fifty the plan holds and does not move with the emitted bound"
     );
     assert_eq!(
-        graph.declared_rows,
+        graph.declared_rows(),
         Some(50),
         "and the unit carries the declaration the probe row is read against"
     );
@@ -965,7 +966,8 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
         compiled.units[0].sparql
     );
     assert_eq!(
-        compiled.units[0].depth, REQUIRED_DEPTH,
+        compiled.units[0].depth(),
+        REQUIRED_DEPTH,
         "and the unit still records the depth the plan recorded, not the probe"
     );
 
@@ -1800,10 +1802,16 @@ fn a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it() {
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/empty")))
         .expect("the stratum emits a unit, so its relation is actually invoked");
-    assert_eq!(unit.depth, 1);
+    assert_eq!(unit.depth(), 1);
+    // One row past the floored depth, exactly as at every other depth. Never
+    // `LIMIT 0`, which would read nothing — and never `LIMIT 1` either, which at a
+    // depth of one is a bound EQUAL to the depth: no row past it could arrive, so the
+    // read would be certified exhausted however many rows the index turned out to
+    // hold. A declared zero is read rather than obeyed here as everywhere else, which
+    // is what makes the emptiness this producer reports a verified claim.
     assert!(
-        unit.sparql.ends_with("LIMIT 1") && !unit.sparql.contains("LIMIT 0"),
-        "the emitted bound is the floor and never `LIMIT 0`: {}",
+        unit.sparql.ends_with("LIMIT 2"),
+        "the emitted bound is one row past the floored depth: {}",
         unit.sparql
     );
 
@@ -1901,7 +1909,8 @@ fn a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under()
         unit.sparql
     );
     assert_eq!(
-        unit.depth, 1,
+        unit.depth(),
+        1,
         "the depth is one; the probe row is a read and never a recorded value"
     );
 }
@@ -1962,7 +1971,7 @@ fn a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling() 
         .iter()
         .find(|unit| unit.stratum == deep)
         .expect("the stratum emits a unit");
-    assert_eq!(unit.depth, u32::MAX - 1);
+    assert_eq!(unit.depth(), u32::MAX - 1);
     assert!(
         unit.sparql.ends_with(&format!("LIMIT {}", u32::MAX)),
         "the emitted bound is one row deeper than the depth, at the ceiling as \
@@ -1970,7 +1979,7 @@ fn a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling() 
         unit.sparql
     );
     assert!(
-        emitted_bound(&unit.sparql) > unit.depth,
+        emitted_bound(&unit.sparql) > unit.depth(),
         "and the probe slot is what that inequality is: a bound equal to its own \
          depth could never report how the read ended"
     );
