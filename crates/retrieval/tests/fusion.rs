@@ -15,12 +15,17 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    CandidateDomains, ClassWidth, DecayRule, DomainTag, DuplicatePolicy, EvidenceId, Fixed,
-    FusedRow, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream,
-    IndexGeneration, Iri, MonotoneDepth, PfAttestation, PlanId, ProducerReceipt, ProducerStatus,
-    ProtocolError, RECIP_K, RankedRow, RankedStream, RankedStreamImpl, RowBlock, ScoreExactness,
-    ServiceLevel, StreamContract, StreamEnding, Term, ToleratedDepth, TopK, contribution,
-    contribution_under,
+    AdmissionEnvironment, CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag,
+    DuplicatePolicy, EvidenceId, Fixed, FusedRow, FusionError, FusionProfile, FusionProfileId,
+    FusionResult, FusionStream, IndexGeneration, Iri, MonotoneDepth, OrderFidelity, PfAttestation,
+    PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow,
+    RankedStream, RankedStreamImpl, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness,
+    ScoreInterval, ServiceLevel, Statistics, StreamContract, StreamEnding, Term, ToleratedDepth,
+    TopK, contribution, contribution_under,
+};
+use purrdf_sparql_eval::{
+    AcceptedTerm, MemoryRelation, PropertyFunctionRegistry, RankedDeclaration, TermKind,
+    TermPattern,
 };
 
 const K: u32 = 60;
@@ -91,7 +96,11 @@ enum Step {
 /// ascending ranks those scripts emit are not part of it -- that law holds for
 /// every stream and is checked rank by rank rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 /// A producer whose rows and failures are pre-scripted.
@@ -2091,7 +2100,11 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
 
 /// `DuplicatePolicy::Allowed`, with the strict ordering the fixtures' rows keep.
 fn allowed_duplicates() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Allowed, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Allowed,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 /// Two streams: `dense` as scripted, and a one-row `sparse` stream that stays
@@ -2518,7 +2531,11 @@ fn no_fused_answer_ever_contains_one_entity_twice() {
                             (
                                 stratum(NAMES[position]),
                                 MockStream::new(steps, exhausted(emitted)).declaring(
-                                    StreamContract::new(policy, CandidateDomains::Unrestricted),
+                                    StreamContract::new(
+                                        policy,
+                                        RankFidelity::EXACT,
+                                        CandidateDomains::Unrestricted,
+                                    ),
                                 ),
                             )
                         })
@@ -5275,10 +5292,11 @@ fn a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer() {
     );
 }
 
-// T3.4. An incomplete stratum makes every score a lower bound — and the rows
-// are still returned, because a short index produced real rows in a real order.
+// T3.4. An incomplete stratum makes every score an ESTIMATE whose error runs in
+// both directions — and the rows are still returned, because a short index
+// produced real rows in a real order.
 #[test]
-fn an_incomplete_stratum_makes_the_scores_lower_bounds_without_refusing_the_rows() {
+fn an_incomplete_stratum_makes_the_scores_estimates_without_refusing_the_rows() {
     let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let streams = |vector: PfAttestation| {
         vec![
@@ -5301,21 +5319,27 @@ fn an_incomplete_stratum_makes_the_scores_lower_bounds_without_refusing_the_rows
     assert_eq!(
         exact.trailer.exactness,
         ScoreExactness::Exact,
-        "no stratum declared itself short, so nothing makes these scores floors"
+        "no stratum declared itself short, so nothing makes these scores estimates"
     );
 
-    // One stratum short: every score in the answer is a floor, and the trailer
-    // names the stratum to rebuild rather than raising an anonymous flag.
+    // One stratum short: every score in the answer is an estimate, and the
+    // trailer names the stratum to rebuild on BOTH sides rather than raising an
+    // anonymous flag. Both sides, because scoring by rank means a missed row is
+    // withheld from its own candidate and promotes every candidate behind it.
     let bounded = block_on(run_fuse(
         streams(attests_short("b", "segment rebuilding")),
         &profile,
     ));
     assert_eq!(
         bounded.trailer.exactness,
-        ScoreExactness::LowerBounds {
-            strata: BTreeSet::from([stratum("vector")])
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([stratum("vector")]),
+            inflation: BTreeSet::from([stratum("vector")]),
+            unbounded: BTreeSet::new(),
         },
-        "exactly the stratum that declared itself short, and no other"
+        "exactly the stratum that declared itself short, and no other, named on \
+         both sides: a missing shard withholds its own rows and promotes every \
+         row that was behind them"
     );
     assert_eq!(
         bounded.rows.len(),
@@ -5497,10 +5521,14 @@ fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
     );
     assert_eq!(
         late.exactness,
-        ScoreExactness::LowerBounds {
-            strata: BTreeSet::from([stratum("text")])
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([stratum("text")]),
+            inflation: BTreeSet::from([stratum("text")]),
+            unbounded: BTreeSet::new(),
         },
-        "which is `LowerBounds` throughout, because the index was short throughout"
+        "which is `Estimated` throughout, because the index was short throughout \
+         — how deep a caller read changes which streams are still open, never \
+         whether an index was whole"
     );
 }
 
@@ -5640,8 +5668,11 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
             };
             (
                 stratum(entry.name),
-                MockStream::new(steps, exhausted(emitted))
-                    .declaring(StreamContract::new(DuplicatePolicy::Unique, domains)),
+                MockStream::new(steps, exhausted(emitted)).declaring(StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    domains,
+                )),
             )
         })
         .collect()
@@ -6288,6 +6319,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             stratum("docs"),
             docs().declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
             )),
         ),
@@ -6311,6 +6343,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             )
             .declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
             )),
         ),
@@ -6354,6 +6387,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             stratum("docs"),
             docs().declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
             )),
         ),
@@ -6374,6 +6408,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             )
             .declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
             )),
         ),
@@ -6423,6 +6458,7 @@ fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
     let overlapping = || {
         StreamContract::new(
             DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
             within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
         )
     };
@@ -6506,7 +6542,13 @@ fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
 fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses() {
     let shared = "http://example.org/doc/000001";
     let law = profile(&[("wide", Fixed::ONE), ("people", Fixed::ONE)], K);
-    let restricted = || StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_PEOPLE]));
+    let restricted = || {
+        StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            within(&[DOMAIN_PEOPLE]),
+        )
+    };
     let pair = |volunteered: Step| {
         vec![
             (
@@ -6570,6 +6612,7 @@ fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
     let repeating = || {
         StreamContract::new(
             DuplicatePolicy::Allowed,
+            RankFidelity::EXACT,
             within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
         )
     };
@@ -6682,11 +6725,19 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
     let agreeing = block_on(run_fuse(
         both_naming(
             (
-                StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    within(&[DOMAIN_DOCS]),
+                ),
                 in_docs(),
             ),
             (
-                StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    within(&[DOMAIN_DOCS]),
+                ),
                 in_docs(),
             ),
         ),
@@ -6704,12 +6755,17 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
     let overlapping = block_on(run_fuse(
         both_naming(
             (
-                StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    within(&[DOMAIN_DOCS]),
+                ),
                 in_docs(),
             ),
             (
                 StreamContract::new(
                     DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
                 ),
                 // The cross-cutting producer names two blocks and says which one
@@ -6778,7 +6834,13 @@ fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification
     );
     let dense_contribution = contribution(Fixed::ONE, 1, K).expect("fits");
     let target = "http://example.org/doc/000001";
-    let same_block = || StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS]));
+    let same_block = || {
+        StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            within(&[DOMAIN_DOCS]),
+        )
+    };
 
     let streams = vec![
         (
@@ -6866,5 +6928,1627 @@ fn the_trailer_reports_the_declarations_the_fusion_ran_under() {
         unrestricted.trailer.attestations.keys().collect::<Vec<_>>(),
         "the key set is the streams this fusion was handed, exactly as the \
          attestation map's is"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T8. The fidelity a producer declared reaches the answer, and the answer's
+//     completeness verdict accounts for it.
+//
+//     A stratum served by an approximate search and one served exhaustively are
+//     reported identically by every OTHER field of a trailer: both say
+//     `Exhausted`, both carry contiguous ranks, both look like a producer that
+//     ran out. The whole of the difference is here.
+// ---------------------------------------------------------------------------
+
+/// A producer's own words about what its search does not promise. Carries the
+/// characters the canonical framing must survive, so the route from declaration
+/// to answer is proved on prose a real producer would publish rather than on a
+/// token.
+const LOSS: &str = "approximate: beam search; recall UNMEASURED above 10^6 rows, and an \
+                    empty result is never a proof of absence";
+
+/// A contract declaring an incomplete but order-faithful search -- what an HNSW
+/// graph is: exact distances for the candidates it visits, and it only fails to
+/// visit.
+fn lossy_contract() -> StreamContract {
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from(LOSS),
+            },
+            order: OrderFidelity::Faithful,
+        },
+        CandidateDomains::Unrestricted,
+    )
+}
+
+// T8.1. An approximate stratum and an exact one are distinguishable in the
+// trailer alone, and the producer's own string arrives byte for byte.
+#[test]
+fn an_approximate_stratum_is_distinguishable_from_an_exact_one_in_the_trailer() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                )
+                .declaring(lossy_contract()),
+            ),
+        ],
+        &profile,
+    ));
+
+    // Read from the trailer alone. No registry is in scope here, which is the
+    // point: a consumer holding only an answer can tell the two apart.
+    assert_eq!(
+        fused.trailer.fidelities[&stratum("text")],
+        RankFidelity::EXACT,
+        "the exhaustive stratum reports the top of the lattice"
+    );
+    let approximate = &fused.trailer.fidelities[&stratum("vector")];
+    assert!(approximate.may_omit(), "and the approximate one does not");
+
+    let evidence: Vec<&str> = approximate.evidence().map(|e| &**e).collect();
+    assert_eq!(
+        evidence,
+        vec![LOSS],
+        "the string the producer published is the string the consumer reads: \
+         not a boolean derived here, and not re-worded"
+    );
+}
+
+// T8.2. An exhaustive stratum is REPORTED exact, never omitted. A consumer must
+// never have to read an absent key as a claim.
+#[test]
+fn an_exhaustive_stratum_is_reported_rather_than_left_out() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(
+                vec![(row(1, Fixed::ONE, K, "a"))],
+                ProducerReceipt::Exhausted { rows_emitted: 1 },
+            ),
+        )],
+        &profile,
+    ));
+
+    assert!(
+        fused.trailer.fidelities.contains_key(&stratum("text")),
+        "present, not absent -- a future change that omits exactness instead of \
+         stating it fails here"
+    );
+    assert_eq!(fused.trailer.exactness, ScoreExactness::Exact);
+}
+
+// T8.3. The key set is the streams this fusion was handed, exactly as the two
+// neighbouring maps are. One key, three facts, no disagreement about how many
+// producers there were.
+#[test]
+fn the_fidelity_map_is_keyed_like_the_maps_beside_it() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(Vec::new(), ProducerReceipt::Exhausted { rows_emitted: 0 }),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(Vec::new(), ProducerReceipt::Exhausted { rows_emitted: 0 })
+                    .declaring(lossy_contract()),
+            ),
+        ],
+        &profile,
+    ));
+
+    let fidelities: BTreeSet<_> = fused.trailer.fidelities.keys().cloned().collect();
+    let attestations: BTreeSet<_> = fused.trailer.attestations.keys().cloned().collect();
+    let domains: BTreeSet<_> = fused.trailer.domains.keys().cloned().collect();
+    assert_eq!(fidelities, attestations);
+    assert_eq!(fidelities, domains);
+}
+
+// T8.4. A status is not, on its own, a completeness claim -- the defect this
+// work exists to remove. `Exhausted` beside a lossy declaration is not a
+// completeness claim, and the answer-level verdict says so rather than leaving
+// it to prose.
+#[test]
+fn exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![(row(1, Fixed::ONE, K, "a"))],
+                ProducerReceipt::Exhausted { rows_emitted: 1 },
+            )
+            .declaring(lossy_contract()),
+        )],
+        &profile,
+    ));
+
+    // The status alone is exactly what an exhaustive producer reports.
+    assert_eq!(
+        fused.trailer.statuses[&stratum("vector")],
+        ProducerStatus::Exhausted { rows_emitted: 1 },
+        "the read ending is unchanged -- which is precisely why it cannot be the \
+         channel that carries the approximation"
+    );
+    // And the verdict beside it refuses to call the answer exact.
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([stratum("vector")]),
+            inflation: BTreeSet::from([stratum("vector")]),
+            unbounded: BTreeSet::new(),
+        },
+        "named on BOTH sides: the rows the search missed are absent (deficit), \
+         and every row behind a missed one moved up a rank and collected more \
+         than it earned (inflation)"
+    );
+}
+
+// T8.5. Existing statuses are unchanged for exact producers. The neighbouring
+// case that must not move: a fusion of exhaustive producers reports exactly what
+// it reported before this term existed.
+#[test]
+fn a_fusion_of_exhaustive_producers_is_still_exact() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "b"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Exact,
+        "an empty `Estimated` must never appear in place of `Exact`"
+    );
+    for stratum_iri in [stratum("text"), stratum("vector")] {
+        assert_eq!(
+            fused.trailer.statuses[&stratum_iri],
+            ProducerStatus::Exhausted { rows_emitted: 1 },
+        );
+        assert_eq!(fused.trailer.fidelities[&stratum_iri], RankFidelity::EXACT);
+    }
+}
+
+// T8.6. A bounded read must not be able to destroy the disclosure. This is the
+// test that proves the declaration leg was the right choice: a stream a `TopK`
+// stopped never returns a receipt at all, so a fidelity fetched at the END would
+// go missing in exactly the runs where the caller read shallowly.
+#[test]
+fn a_top_k_that_stops_an_approximate_stream_still_reports_its_fidelity() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let mut fusion = FusionStream::new(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![
+                    (row(1, Fixed::ONE, K, "a")),
+                    (row(2, Fixed::ONE, K, "b")),
+                    (row(3, Fixed::ONE, K, "c")),
+                ],
+                ProducerReceipt::Exhausted { rows_emitted: 3 },
+            )
+            .declaring(lossy_contract()),
+        )],
+        profile,
+    );
+
+    // Pull one row and stop, leaving the stream open and unreceipted.
+    let first = block_on(fusion.next()).expect("a row");
+    assert!(first.is_some());
+    let trailer = block_on(fusion.trailer()).expect("a trailer");
+
+    assert!(
+        trailer.fidelities[&stratum("vector")].may_omit(),
+        "the disclosure survives a stop that destroys the receipt"
+    );
+    assert!(matches!(
+        trailer.exactness,
+        ScoreExactness::Estimated { .. }
+    ));
+}
+
+// T8.7. The verdict is INVARIANT under read depth. Its inputs are pinned before
+// the first row, so certifying more rows moves the statuses and never this.
+#[test]
+fn the_exactness_verdict_does_not_move_as_a_caller_reads_deeper() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let mut fusion = FusionStream::new(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![(row(1, Fixed::ONE, K, "a")), (row(2, Fixed::ONE, K, "b"))],
+                ProducerReceipt::Exhausted { rows_emitted: 2 },
+            )
+            .declaring(lossy_contract()),
+        )],
+        profile,
+    );
+
+    block_on(fusion.next()).expect("a row");
+    let early = block_on(fusion.trailer()).expect("a trailer");
+    while block_on(fusion.next()).expect("a row").is_some() {}
+    let late = block_on(fusion.trailer()).expect("a trailer");
+
+    assert_eq!(
+        early.exactness, late.exactness,
+        "how deep a caller read changes which streams are still open, never \
+         whether a producer's search was exhaustive"
+    );
+    assert_eq!(
+        early.fidelities, late.fidelities,
+        "and the declarations behind it are equally immovable"
+    );
+}
+
+// T8.8. A stratum that never became a stream is ABSENT, not filled in with the
+// top of the lattice. "Was never asked" and "promised everything" are different
+// facts, and fabricating the second would be the strongest possible claim put
+// into the mouth of a producer that never spoke.
+#[test]
+fn a_stratum_added_after_the_fact_declares_nothing() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(Vec::new(), ProducerReceipt::Exhausted { rows_emitted: 0 }),
+        )],
+        &profile,
+    ));
+
+    let failed = stratum("vector");
+    let trailer = fused.trailer.completed_with([(
+        failed.clone(),
+        ProducerStatus::ExecutionFailed {
+            reason: "the unit could not run".to_owned(),
+        },
+    )]);
+
+    assert!(
+        trailer.statuses.contains_key(&failed),
+        "the status grows, because the executor really did report one"
+    );
+    assert!(
+        !trailer.fidelities.contains_key(&failed),
+        "the fidelity map does not: no producer of that stratum was ever asked"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T9. The per-row interval: how far a degraded stratum could have moved this
+//     row, in both directions, and which prefix of the answer is certain.
+// ---------------------------------------------------------------------------
+
+/// The interval's two terms, or a panic naming what arrived instead.
+fn bounds(row: &FusedRow) -> (Fixed, Fixed) {
+    match &row.interval {
+        ScoreInterval::Bounded { deficit, inflation } => (*deficit, *inflation),
+        ScoreInterval::Unbounded { perturbed } => {
+            panic!("expected a bounded interval, got unbounded over {perturbed:?}")
+        }
+    }
+}
+
+/// A contract declaring an order a consumer cannot bound: a producer comparing
+/// approximated values, which can rank a row it found BETTER than it was due.
+fn perturbed_contract() -> StreamContract {
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from("approximate: beam search"),
+            },
+            order: OrderFidelity::Perturbed {
+                evidence: Arc::from("quantized: distances compared in 8-bit space"),
+            },
+        },
+        CandidateDomains::Unrestricted,
+    )
+}
+
+// T9.1. THE SOUNDNESS TEST. A row a lossy stratum NAMED carries a non-zero
+// inflation, because a missing row ahead of it promoted it into a rank it did
+// not earn. A one-sided implementation returns zero here and fails.
+#[test]
+fn a_row_a_lossy_stratum_named_carries_an_inflation_term() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                ProducerReceipt::Exhausted { rows_emitted: 2 },
+            )
+            .declaring(lossy_contract()),
+        )],
+        &profile,
+    ));
+
+    for emitted in &fused.rows {
+        let (_, inflation) = bounds(emitted);
+        assert!(
+            inflation > Fixed::ZERO,
+            "reciprocal-rank fusion scores by RANK, so a row the lossy stratum \
+             named may have been promoted by a row it missed -- its whole \
+             contribution is therefore suspect, and calling the score a mere \
+             lower bound would be wrong in the one direction the name forbids \
+             looking; got {inflation:?} for {:?}",
+            emitted.entity
+        );
+        assert_eq!(
+            inflation, emitted.score,
+            "one stratum served this row, and all of its contribution is the \
+             part that could be spurious"
+        );
+    }
+}
+
+// T9.2. The neighbour: an exhaustive fusion has zero-width intervals on every
+// row, so an answer over undegraded producers reads exactly as it always did.
+#[test]
+fn an_exhaustive_fusion_carries_zero_width_intervals() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                ProducerReceipt::Exhausted { rows_emitted: 2 },
+            ),
+        )],
+        &profile,
+    ));
+
+    for emitted in &fused.rows {
+        assert_eq!(
+            bounds(emitted),
+            (Fixed::ZERO, Fixed::ZERO),
+            "nothing was withheld and nothing was promoted"
+        );
+    }
+    assert_eq!(
+        fused.trailer.unemitted_ceiling,
+        Some(Fixed::ZERO),
+        "every stream ran out and none of them could have missed a row, so \
+         there is nothing outside this answer worth anything at all"
+    );
+    assert_eq!(
+        fused.trailer.certain_prefix(&fused.rows),
+        fused.rows.len(),
+        "so the whole answer is certain, which is what this engine always said"
+    );
+}
+
+// T9.3. The `Dom(x)` narrowing. A lossy stratum that PROVABLY cannot name a
+// candidate withheld nothing from it, so it must not be charged. An aggregate
+// per-stratum bound has no way to express this and over-charges here.
+#[test]
+fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let docs = within(&["documents"]);
+    let people = within(&["people"]);
+
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    // The row names the block its stream declared: a restricted
+                    // declaration is backed row by row, and an unbacked one is
+                    // refused rather than believed.
+                    vec![row_in(1, Fixed::ONE, K, "a", "documents")],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                )
+                .declaring(StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    docs,
+                )),
+            ),
+            (
+                // Lossy, and declared over a DISJOINT block: it could never have
+                // named the text stratum's candidate, however much it missed.
+                stratum("vector"),
+                MockStream::new(
+                    vec![row_in(1, Fixed::ONE, K, "z", "people")],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                )
+                .declaring(StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity {
+                        completeness: Completeness::Lossy {
+                            evidence: Arc::from("approximate: beam search"),
+                        },
+                        order: OrderFidelity::Faithful,
+                    },
+                    people,
+                )),
+            ),
+        ],
+        &profile,
+    ));
+
+    let from_text = fused
+        .rows
+        .iter()
+        .find(|emitted| emitted.entity == Term::new("a"))
+        .expect("the text stratum's row is in the answer");
+    let (deficit, inflation) = bounds(from_text);
+    assert_eq!(
+        deficit,
+        Fixed::ZERO,
+        "the lossy stratum's declaration proves it could not have named this \
+         candidate, so it withheld nothing from it -- charging it anyway would \
+         bound the answer by a contribution that was never possible"
+    );
+    assert_eq!(
+        inflation,
+        Fixed::ZERO,
+        "and it did not name it, so it promoted nothing either"
+    );
+}
+
+// T9.4. A perturbed order removes the bound entirely, and says so by naming the
+// strata rather than by inventing a number.
+#[test]
+fn a_perturbed_order_leaves_no_finite_bound() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a")],
+                ProducerReceipt::Exhausted { rows_emitted: 1 },
+            )
+            .declaring(perturbed_contract()),
+        )],
+        &profile,
+    ));
+
+    assert_eq!(
+        fused.rows[0].interval,
+        ScoreInterval::Unbounded {
+            perturbed: BTreeSet::from([stratum("vector")]),
+        },
+        "the inequality every bound rests on -- a named row's true rank is at \
+         least its emitted rank -- does not hold for a producer comparing \
+         approximated values, so there is no number to report and none is made up"
+    );
+    let ScoreExactness::Estimated { ref unbounded, .. } = fused.trailer.exactness else {
+        panic!("a perturbed stratum makes the answer an estimate");
+    };
+    assert_eq!(unbounded, &BTreeSet::from([stratum("vector")]));
+    assert_eq!(
+        fused.trailer.certain_prefix(&fused.rows),
+        0,
+        "an unbounded row could outscore anything, so nothing is certain of \
+         outranking it"
+    );
+}
+
+// T9.5. `certain_prefix`, both directions. A well-separated answer has a
+// non-empty certain prefix; widening the loss until the intervals overlap
+// shrinks it. Asserting only the first direction would pass against a function
+// that always returned the whole length.
+#[test]
+fn the_certain_prefix_shrinks_as_the_declared_loss_widens() {
+    // Two strata. The leader is named by both; the runner-up by one. With the
+    // second stratum exhaustive the gap is clean.
+    let separated = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let clean = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a")],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                ),
+            ),
+        ],
+        &separated,
+    ));
+    assert_eq!(
+        clean.trailer.certain_prefix(&clean.rows),
+        clean.rows.len(),
+        "every stratum exhaustive, so every row keeps its place whatever else \
+         is true"
+    );
+
+    // The same shape, with the second stratum declaring a lossy search. Now the
+    // runner-up could have been withheld from, and the leader could have been
+    // promoted, so their intervals overlap and neither place is certain.
+    let degraded = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a")],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                )
+                .declaring(lossy_contract()),
+            ),
+        ],
+        &separated,
+    ));
+    assert!(
+        degraded.trailer.certain_prefix(&degraded.rows) < degraded.rows.len(),
+        "a declared loss must be able to SHORTEN the certain prefix, or the \
+         function is reporting a constant"
+    );
+    assert_eq!(
+        degraded
+            .rows
+            .iter()
+            .map(|r| r.entity.clone())
+            .collect::<Vec<_>>(),
+        clean
+            .rows
+            .iter()
+            .map(|r| r.entity.clone())
+            .collect::<Vec<_>>(),
+        "and the ROWS are identical either way: a declaration changes what the \
+         answer may be read to claim, never what the answer is"
+    );
+}
+
+// T9.6. The interval is reporting, not certification. Two fusions differing
+// only in a fidelity declaration emit byte-identical rows, scores and
+// provenance -- the decay-tie law, the threshold and the top-k bound are read
+// here and never written.
+#[test]
+fn a_fidelity_declaration_changes_no_certified_row() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let script = || {
+        vec![
+            row(1, Fixed::ONE, K, "a"),
+            row(2, Fixed::ONE, K, "b"),
+            row(3, Fixed::ONE, K, "c"),
+        ]
+    };
+    let ranking = |result: &FusionResult<Term>| {
+        result
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    r.entity.clone(),
+                    r.score,
+                    r.threshold_witness,
+                    r.contributions.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let exact = block_on(run_fuse(
+        vec![(
+            stratum("vector"),
+            MockStream::new(script(), ProducerReceipt::Exhausted { rows_emitted: 3 }),
+        )],
+        &profile,
+    ));
+    let lossy = block_on(run_fuse(
+        vec![(
+            stratum("vector"),
+            MockStream::new(script(), ProducerReceipt::Exhausted { rows_emitted: 3 })
+                .declaring(lossy_contract()),
+        )],
+        &profile,
+    ));
+
+    assert_eq!(
+        ranking(&exact),
+        ranking(&lossy),
+        "the certified order, every score and every threshold witness are \
+         identical: what a producer declares about itself is read into the \
+         answer's claims and never into its arithmetic"
+    );
+    assert_eq!(
+        exact.trailer.statuses, lossy.trailer.statuses,
+        "and so are the read endings"
+    );
+}
+
+// T9.7. An open exhaustive stream contributes only its head to the deficit --
+// what it has not yet offered -- while a lossy one contributes its rank-one
+// contribution, because a row it never found could have been due at any rank.
+#[test]
+fn an_open_stream_is_charged_its_head_and_a_lossy_one_its_first_rank() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let rank_one = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
+
+    // `b` is named only by `text`. `vector` is exhausted having named only `a`,
+    // so for `b` it is a closed stream that never named it.
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a")],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                )
+                .declaring(lossy_contract()),
+            ),
+        ],
+        &profile,
+    ));
+
+    let runner_up = fused
+        .rows
+        .iter()
+        .find(|emitted| emitted.entity == Term::new("b"))
+        .expect("the runner-up is in the answer");
+    let (deficit, inflation) = bounds(runner_up);
+    assert_eq!(
+        deficit, rank_one,
+        "the lossy stratum closed without naming this row, and a row it never \
+         found could have been due at rank one -- so what it could have \
+         withheld is the rank-one contribution, not zero and not a head it no \
+         longer has"
+    );
+    assert_eq!(
+        inflation,
+        Fixed::ZERO,
+        "but it did not name this row, so it promoted nothing here"
+    );
+}
+
+// T9.8. Tied scores with zero uncertainty are still certain.
+//
+// Found by the Python suite, whose fixture ties where the Rust fixtures above
+// happen not to. Fixed-point reciprocal-rank decay quantizes adjacent ranks to
+// one value routinely, so a tie inside an exhaustive answer is the ordinary
+// case, not a corner. A strict comparison reported a certain prefix ending at
+// the tie -- claiming doubt about an answer in which nothing was degraded and
+// nothing could have been different.
+#[test]
+fn tied_rows_in_an_exhaustive_answer_are_all_certain() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    // `a` is named by both strata and leads. `b` and `c` are named once each at
+    // the same rank, so they carry identical scores.
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "c")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    let scores: Vec<Fixed> = fused.rows.iter().map(|r| r.score).collect();
+    assert!(
+        scores.windows(2).any(|pair| pair[0] == pair[1]),
+        "the fixture must actually tie, or this test proves nothing: {scores:?}"
+    );
+    assert_eq!(
+        fused.trailer.certain_prefix(&fused.rows),
+        fused.rows.len(),
+        "every interval is zero-width, so nothing could have been different and \
+         every row keeps its place -- a tie is decided by the engine's own total \
+         tie-break, which is not uncertainty about the answer"
+    );
+}
+
+// T9.9. The same tie under a declared loss is NOT certain, which is what makes
+// the test above a statement about uncertainty rather than a rubber stamp.
+#[test]
+fn tied_rows_stop_being_certain_once_a_stratum_declares_a_loss() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "c")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                )
+                .declaring(lossy_contract()),
+            ),
+        ],
+        &profile,
+    ));
+
+    assert!(
+        fused.trailer.certain_prefix(&fused.rows) < fused.rows.len(),
+        "now the tied rows could have been ordered differently, because the \
+         lossy stratum may have withheld from one and promoted the other"
+    );
+}
+
+/// The prefix a comparison among the rows in hand alone would report.
+///
+/// The term `certain_prefix` used to be the whole of, kept here as the thing it
+/// is measured against: it can only ever say that the emitted rows are ordered
+/// consistently with each other, which is a statement about a list and not
+/// about membership of an answer.
+fn pairwise_only_prefix(rows: &[FusedRow]) -> usize {
+    let mut certain = 0;
+    for (position, row) in rows.iter().enumerate() {
+        let ScoreInterval::Bounded { inflation, .. } = &row.interval else {
+            break;
+        };
+        let mine = row.score.checked_sub(*inflation).expect("a floor fits");
+        let settled = rows[position + 1..].iter().all(|rival| {
+            matches!(
+                &rival.interval,
+                ScoreInterval::Bounded { deficit, .. }
+                    if mine >= rival.score.checked_add(*deficit).expect("a ceiling fits")
+            )
+        });
+        if !settled {
+            break;
+        }
+        certain = position + 1;
+    }
+    certain
+}
+
+// T9.10. THE MEMBERSHIP TERM. A candidate a lossy stratum never named is
+// exactly the candidate that can take an emitted row's place, and no comparison
+// among the rows in hand can see it: it is not among them. This fixture is the
+// smallest one in which that is provable rather than merely conceivable, and a
+// prefix computed from the rows alone reports the opposite answer on it.
+#[test]
+fn a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row() {
+    // `vector` outweighs `text` two to one, so the only emitted row is mostly
+    // made of a contribution the declaration says could be spurious -- and a
+    // candidate `vector` never found could have held its rank one, which is
+    // worth more than everything `text` has to give.
+    let heavy = Fixed::ONE.checked_add(Fixed::ONE).expect("two fits");
+    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", heavy)], K);
+    let streams = |lossy: bool| {
+        let vector = MockStream::new(vec![row(1, heavy, K, "a")], exhausted(1));
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                if lossy {
+                    vector.declaring(lossy_contract())
+                } else {
+                    vector
+                },
+            ),
+        ]
+    };
+
+    let exhaustive = block_on(run_fuse(streams(false), &fusion_profile));
+    assert_eq!(
+        exhaustive.trailer.certain_prefix(&exhaustive.rows),
+        exhaustive.rows.len(),
+        "with both strata exhaustive there is nothing outside the answer: a \
+         stratum that found everything it had cannot have hidden a rival"
+    );
+
+    let degraded = block_on(run_fuse(streams(true), &fusion_profile));
+    assert_eq!(
+        degraded.rows.len(),
+        exhaustive.rows.len(),
+        "the same rows either way -- a declaration changes what the answer may \
+         be read to claim, never what the answer is"
+    );
+
+    // The numbers the claim rests on, from the profile rather than from the
+    // output: the emitted row's floor is what `text` alone gave it, and the
+    // absentee's ceiling is `vector`'s rank one.
+    let from_text = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
+    let held_back = contribution(heavy, 1, K).expect("fixture contribution");
+    assert!(
+        held_back > from_text,
+        "the fixture must put more at stake in the lossy stratum than the \
+         exhaustive one can defend, or it proves nothing: {held_back:?} vs \
+         {from_text:?}"
+    );
+    assert_eq!(
+        degraded.trailer.unemitted_ceiling,
+        Some(held_back),
+        "every stream is exhausted, so nothing is still on offer; what remains \
+         is the rank-one contribution the lossy stratum could have awarded a \
+         row it never emitted"
+    );
+    let (_, inflation) = bounds(&degraded.rows[0]);
+    assert_eq!(
+        degraded.rows[0]
+            .score
+            .checked_sub(inflation)
+            .expect("a floor fits"),
+        from_text,
+        "and the emitted row's floor is what the exhaustive stratum gave it, \
+         the rest of its score being the part that could be spurious"
+    );
+
+    assert_eq!(
+        pairwise_only_prefix(&degraded.rows),
+        degraded.rows.len(),
+        "the rows in hand are consistent with each other -- there is only one \
+         -- so a prefix computed from them alone certifies the whole answer"
+    );
+    assert_eq!(
+        degraded.trailer.certain_prefix(&degraded.rows),
+        0,
+        "but the answer is not certain: a candidate the lossy stratum never \
+         named could have scored the whole of its rank one, which beats \
+         everything the emitted row can prove it is worth"
+    );
+}
+
+// T9.11. The same defect from the other side. A bounded read leaves candidates
+// it named and never certified, and one of those can be lifted past an emitted
+// row by the loss too -- so the unemitted term is a bound over the frontier as
+// well as over the candidates nobody ever named. The threshold cannot answer
+// for these: it bounds what an *unseen* item could still collect, and these are
+// not unseen.
+#[test]
+fn a_rival_left_in_the_frontier_by_the_bound_is_bounded_too() {
+    // `vector` is light, so it promotes the leader by very little -- and the
+    // runner-up it never named lost by less than that little.
+    let light = Fixed::from_raw(20_000_000_000);
+    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", light)], K);
+    let leader = contribution(Fixed::ONE, 1, K).expect("fixture contribution");
+    let runner_up = contribution(Fixed::ONE, 2, K).expect("fixture contribution");
+    let held_back = contribution(light, 1, K).expect("fixture contribution");
+    assert!(
+        runner_up.checked_add(held_back).expect("a ceiling fits") > leader,
+        "the fixture must let the abandoned rival overtake the emitted row, or \
+         it proves nothing: {runner_up:?} + {held_back:?} vs {leader:?}"
+    );
+
+    let streams = || {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    exhausted(2),
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, light, K, "a")], exhausted(1))
+                    .declaring(lossy_contract()),
+            ),
+        ]
+    };
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams(),
+        &fusion_profile,
+        TopK::new(1),
+    ))
+    .expect("fusion succeeds");
+
+    assert_eq!(
+        fused.rows.len(),
+        1,
+        "the bound stopped the answer at one row"
+    );
+    assert_eq!(
+        fused.rows[0].entity,
+        Term::new("a"),
+        "and the leader is the row it kept"
+    );
+    assert_eq!(
+        fused.trailer.unemitted_ceiling,
+        Some(
+            runner_up
+                .checked_add(held_back)
+                .expect("the fixture's ceiling fits")
+        ),
+        "the rival the bound abandoned had already collected the exhaustive \
+         stratum's second rank, and the lossy stratum could have owed it a \
+         rank one on top of that"
+    );
+    assert_eq!(
+        pairwise_only_prefix(&fused.rows),
+        fused.rows.len(),
+        "nothing in the answer contradicts anything else in it"
+    );
+    assert_eq!(
+        fused.trailer.certain_prefix(&fused.rows),
+        0,
+        "yet the abandoned rival could outscore the row that was kept, so the \
+         place is not settled -- a bounded read is where this is decided, and \
+         it is the ordinary case rather than a corner"
+    );
+}
+
+// T9.12. The linear pass is the quadratic one. `certain_prefix` runs on the
+// default path of every fused search, so it carries the suffix maximum
+// backwards instead of walking the suffix per row -- and a rewrite of a
+// published number has to be measured against the definition it replaced, over
+// intervals no scripted producer would ever generate.
+#[test]
+fn the_backward_pass_agrees_with_the_quadratic_definition() {
+    // The trailer is real -- a degraded fusion, so no exhaustive short-circuit
+    // applies -- and only the two quantities under test are substituted:
+    // arbitrary rows, and the ceiling on what the answer does not contain.
+    let fusion_profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
+                    .declaring(lossy_contract()),
+            ),
+        ],
+        &fusion_profile,
+    ));
+    assert!(
+        matches!(fused.trailer.exactness, ScoreExactness::Estimated { .. }),
+        "the fixture trailer must be an estimate, or the exhaustive \
+         short-circuit answers instead of the pass under test"
+    );
+
+    /// The definition, spelled as the suffix scan it is: a row is certain when
+    /// its floor reaches every later row's ceiling and the ceiling on what the
+    /// answer does not contain. Quadratic, and here for exactly that reason.
+    fn reference(rows: &[FusedRow], unemitted: Fixed) -> usize {
+        let floor = |row: &FusedRow| match &row.interval {
+            ScoreInterval::Bounded { inflation, .. } => {
+                row.score.checked_sub(*inflation).unwrap_or(Fixed::ZERO)
+            }
+            ScoreInterval::Unbounded { .. } => Fixed::ZERO,
+        };
+        let ceiling = |row: &FusedRow| match &row.interval {
+            ScoreInterval::Bounded { deficit, .. } => row.score.checked_add(*deficit).ok(),
+            ScoreInterval::Unbounded { .. } => None,
+        };
+        let mut certain = 0;
+        for (position, row) in rows.iter().enumerate() {
+            let mine = floor(row);
+            let settled = mine >= unemitted
+                && rows[position + 1..]
+                    .iter()
+                    .all(|rival| ceiling(rival).is_some_and(|reach| mine >= reach));
+            if !settled {
+                break;
+            }
+            certain = position + 1;
+        }
+        certain
+    }
+
+    // A fixed-seed xorshift, because a test that cannot be replayed from its
+    // failure message is not evidence. The values are small enough that no sum
+    // can overflow, so every case exercises the comparison rather than the
+    // arithmetic's refusal.
+    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = |bound: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % bound
+    };
+
+    let mut saw_empty = 0_u32;
+    let mut saw_partial = 0_u32;
+    let mut saw_whole = 0_u32;
+    for _ in 0..2_000 {
+        let length = usize::try_from(next(8)).expect("a small length fits");
+        let rows: Vec<FusedRow> = (0..length)
+            .map(|index| {
+                let score = next(40);
+                let deficit = next(6);
+                // An inflation is a sum of contributions that are themselves
+                // summands of the score, so it never exceeds it -- the
+                // invariant the floor is computed under.
+                let inflation = next(score + 1);
+                FusedRow {
+                    entity: Term::new(format!("item-{index}")),
+                    score: Fixed::from_raw(i128::from(score)),
+                    contributions: Vec::new(),
+                    interval: ScoreInterval::Bounded {
+                        deficit: Fixed::from_raw(i128::from(deficit)),
+                        inflation: Fixed::from_raw(i128::from(inflation)),
+                    },
+                    threshold_witness: Fixed::ZERO,
+                }
+            })
+            .collect();
+        let unemitted = Fixed::from_raw(i128::from(next(12)));
+
+        let mut trailer = fused.trailer.clone();
+        trailer.unemitted_ceiling = Some(unemitted);
+        let got = trailer.certain_prefix(&rows);
+        let want = reference(&rows, unemitted);
+        assert_eq!(
+            got, want,
+            "the backward pass and the definition disagree on {rows:?} under \
+             an unemitted ceiling of {unemitted:?}"
+        );
+
+        if got == 0 {
+            saw_empty += 1;
+        } else if got == rows.len() {
+            saw_whole += 1;
+        } else {
+            saw_partial += 1;
+        }
+    }
+    assert!(
+        saw_empty > 0 && saw_partial > 0 && saw_whole > 0,
+        "the cases must cover all three outcomes, or agreement proves only \
+         that both functions return the same constant: {saw_empty} empty, \
+         {saw_partial} partial, {saw_whole} whole"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T10. What `Exact` claims, what a refusal does instead of reporting a zero,
+//      and where the emitted order and the plan identity are read from.
+//
+//      Each of the four below pins a law that an otherwise-green rewrite can
+//      break silently, because breaking it produces a *plausible* answer: a
+//      stricter exactness verdict, a zero bound where the arithmetic gave out,
+//      an order that is consistently wrong, and an identity that stops moving
+//      when a declaration does.
+// ---------------------------------------------------------------------------
+
+// T10.1. THE LAW: `Exact` says *no stratum declared itself degraded*, and it
+// says nothing wider. A stratum the caller's depth STOPPED is not a stratum
+// that failed to name a row it could see -- it stated, in its own status, the
+// rank it read to and stopped. Reading any shortfall as degradation is the
+// tempting-but-wrong generalisation, and it would make `Exact` unreachable for
+// every bounded read: the verdict would become a paraphrase of "nothing was
+// bounded", and a consumer could no longer tell a depth it chose from an
+// approximation it did not.
+//
+// It can regress from either side. A rewrite that folds `DepthReached` into the
+// `deficit` set turns every depth-bounded read into an estimate; one that
+// derives exactness from the statuses rather than from the declarations does
+// the same by a different route. This is the case that goes red for both.
+#[test]
+fn a_depth_bounded_exact_stratum_is_still_exact() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::DepthReached { rank: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+        ],
+        &profile,
+    ));
+
+    // The precondition: the stratum really did stop at a depth, so this is not
+    // an exhaustive fusion wearing a bounded label.
+    assert_eq!(
+        fused.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::DepthReached { rank: 2 }),
+        "the fixture must actually reach the depth-bounded ending"
+    );
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Exact,
+        "a stratum that was STOPPED has not declared itself degraded: what it \
+         left unread is already stated in its own status, in the rank space the \
+         producer was handed, and repeating it as an unnamed score error would \
+         charge the answer twice for one fact"
+    );
+    // And the disclosure channel is not merely empty -- it is present and says
+    // the strongest thing it can, which is what a consumer reads.
+    assert_eq!(
+        fused.trailer.fidelities[&stratum("text")],
+        RankFidelity::EXACT
+    );
+}
+
+// T10.2. The same law from its farthest edge: a producer that could not run at
+// all is still `Exact`. It emitted nothing, so it withheld nothing it had; what
+// it did not do is recorded, by name and with its own words, in
+// `ProducerStatus::ExecutionFailed`. Calling the answer an *estimate* here would
+// claim a score error nobody can bound and would hide a hard failure behind a
+// soft word -- the fused rows are exactly the sum of what the strata that ran
+// contributed, and that is the narrow true claim.
+#[test]
+fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
+    const REASON: &str = "index unavailable: the segment generation was reaped mid-read";
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    Vec::new(),
+                    ProducerReceipt::ExecutionFailed {
+                        reason: REASON.to_owned(),
+                    },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    assert_eq!(
+        fused.trailer.statuses.get(&stratum("vector")),
+        Some(&ProducerStatus::ExecutionFailed {
+            reason: REASON.to_owned(),
+        }),
+        "the failure is reported where a failure belongs, verbatim"
+    );
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Exact,
+        "a stratum that never ran declared no loss: the rows are the exact sum \
+         of the contributions that arrived, and the one that did not arrive is \
+         named in the status rather than smeared into an unbounded estimate"
+    );
+    // The neighbour that must still move it, so this is not the verdict being
+    // stuck at `Exact`: the same fusion with the same failure and one declared
+    // loss is an estimate.
+    let estimated = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
+                    .declaring(lossy_contract()),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    Vec::new(),
+                    ProducerReceipt::ExecutionFailed {
+                        reason: REASON.to_owned(),
+                    },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+    assert!(
+        matches!(
+            estimated.trailer.exactness,
+            ScoreExactness::Estimated { .. }
+        ),
+        "a declared loss still moves the verdict; only the failure does not"
+    );
+}
+
+// T10.3. THE HARD-FAILS PROPERTY, executed. `score_interval` documents that a
+// refusal is propagated and NEVER rendered as a zero bound -- reporting
+// `Fixed::ZERO` where the arithmetic gave out would say "nothing was withheld"
+// at exactly the moment nothing is known, which is a bound on the read silently
+// becoming a value. Nothing executed it, so a rewrite that answered
+// `.unwrap_or(Fixed::ZERO)` on either summand would have passed every test in
+// this file while publishing a certain-looking answer built on an overflow.
+//
+// # The shape, and why it is the one available
+//
+// The deficit charges every degraded stratum that could still have named the
+// row its RANK-ONE contribution, because a row it never found could have been
+// due at any rank. Three such charges at a weight whose own ceiling is the whole
+// fixed-point range leave that range on the third addition.
+//
+// A repeated stratum is what makes three charges reachable: `fuse` refuses one
+// before a row is read, so this drives `FusionStream` directly, exactly as
+// `checked_addition_overflow_is_refused` above does. It has to. `contribution_under`
+// at rank one cannot itself refuse under any profile `FusionProfile::with_decay`
+// admits -- the reciprocal at rank one is at most one half, so a rank-one
+// contribution is at most its own weight, and the derived ceiling
+// (`max_weight x stratum count`) already had to fit. The refusal is therefore in
+// the SUM, which is the summand `score_interval` guards, and it is reached by
+// charging one stratum's weight more than once.
+//
+// The degraded streams are EMPTY on purpose. A degraded stream holding a head
+// would have its contribution counted by `compute_threshold` first, and the
+// refusal under test would be pre-empted by a different one, several frames
+// earlier, in a function this test is not about.
+#[test]
+fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
+    let huge = Fixed::from_raw(i128::MAX);
+    let whole_range = profile(&[("only", huge)], 1);
+    let only = stratum("only");
+    let mut streams = vec![(
+        only.clone(),
+        MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
+    )];
+    for _ in 0..3 {
+        streams.push((
+            only.clone(),
+            MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
+        ));
+    }
+    let mut fusion = FusionStream::new(streams, whole_range);
+
+    let refused = block_on(fusion.next());
+    assert!(
+        matches!(refused, Err(FusionError::Overflow)),
+        "the interval's arithmetic left the fixed-point range, so there is no \
+         bound to report and the refusal is the answer; got {refused:?}"
+    );
+
+    // The neighbouring case that must still SUCCEED, and must succeed with a
+    // real number. Over-refusal is the mirror of the fault above: a rewrite that
+    // refused every multiply-charged deficit would pass the assertion above and
+    // be wrong about every fusion that fits.
+    let large = Fixed::from_raw(i128::MAX / 8);
+    let narrow = profile(&[("only", large)], 1);
+    let mut streams = vec![(
+        only.clone(),
+        MockStream::new(vec![row(1, large, 1, "a")], exhausted(1)),
+    )];
+    for _ in 0..3 {
+        streams.push((
+            only.clone(),
+            MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
+        ));
+    }
+    let mut fusion = FusionStream::new(streams, narrow);
+    let emitted = block_on(fusion.next())
+        .expect("three rank-one charges at an eighth of the range still sum")
+        .expect("the fusion certifies its one candidate");
+    let rank_one = contribution_under(DecayRule::ReciprocalRank { k: 1 }, large, 1)
+        .expect("the fixture rank-one contribution fits");
+    let (deficit, _) = bounds(&emitted);
+    assert_eq!(
+        deficit,
+        rank_one
+            .checked_add(rank_one)
+            .and_then(|sum| sum.checked_add(rank_one))
+            .expect("three eighths of the range fits"),
+        "each of the three lossy strata is charged its rank-one contribution, \
+         and the sum is reported as the number it is"
+    );
+    assert!(
+        deficit > Fixed::ZERO,
+        "the bound the refusal above declined to invent is non-zero here, which \
+         is what makes a zero in its place a lie rather than a coincidence"
+    );
+}
+
+// T10.4. The emitted order against an EXPLICIT list, derived from the profile's
+// own arithmetic rather than from a run.
+//
+// Every other ordering test in this file compares one fusion with another, or a
+// fusion with an oracle assembled from the same helpers the engine uses. Both
+// pass when the engine and its comparator are wrong the same way -- a decay rule
+// that truncated one digit too many, a tie-break that reversed, a sum that
+// dropped a stratum would move BOTH sides together. A literal is the only
+// comparator that cannot move.
+//
+// # The arithmetic, spelled out
+//
+// A `Fixed` is a multiple of `10^-12`, and under `ReciprocalRank { k }` a
+// unit-weighted row at rank `r` contributes exactly `trunc(10^12 / (k + r))`
+// raw units. At `k = 60`:
+//
+// | rank | raw contribution |
+// |---|---|
+// | 1 | `10^12 / 61` = `16393442622` (`.95...` truncated) |
+// | 2 | `10^12 / 62` = `16129032258` (`.06...` truncated) |
+// | 3 | `10^12 / 63` = `15873015873` (`.01...` truncated) |
+//
+// The two strata below name `a b c` and `c a d`, so the fused scores are:
+//
+// * `a` = rank 1 in text + rank 2 in vector = `16393442622 + 16129032258` = `32522474880`
+// * `c` = rank 3 in text + rank 1 in vector = `15873015873 + 16393442622` = `32266458495`
+// * `b` = rank 2 in text alone = `16129032258`
+// * `d` = rank 3 in vector alone = `15873015873`
+//
+// which is a strict descent, so the order is decided by score alone and no
+// tie-break is consulted. `c` beating `b` is the whole point of fusing: `b` is
+// ranked ABOVE `c` by the only stratum that named both, and the second stratum's
+// agreement is what moves `c` past it.
+#[test]
+fn the_emitted_sequence_matches_an_explicit_expected_order() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![
+                        row(1, Fixed::ONE, K, "a"),
+                        row(2, Fixed::ONE, K, "b"),
+                        row(3, Fixed::ONE, K, "c"),
+                    ],
+                    exhausted(3),
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![
+                        row(1, Fixed::ONE, K, "c"),
+                        row(2, Fixed::ONE, K, "a"),
+                        row(3, Fixed::ONE, K, "d"),
+                    ],
+                    exhausted(3),
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    let emitted: Vec<(Term, Fixed)> = fused
+        .rows
+        .iter()
+        .map(|emitted| (emitted.entity.clone(), emitted.score))
+        .collect();
+    let expected: Vec<(Term, Fixed)> = vec![
+        (Term::new("a"), Fixed::from_raw(32_522_474_880)),
+        (Term::new("c"), Fixed::from_raw(32_266_458_495)),
+        (Term::new("b"), Fixed::from_raw(16_129_032_258)),
+        (Term::new("d"), Fixed::from_raw(15_873_015_873)),
+    ];
+    assert_eq!(
+        emitted, expected,
+        "the answer is compared against numbers written down from the decay \
+         rule, not against a second computation that could be wrong the same way"
+    );
+}
+
+// T10.5. THE LAW: a producer's declared fidelity reaches the compiled bundle's
+// `plan_id`. Two wirings that differ in NOTHING but one producer's fidelity must
+// compile to two identities.
+//
+// This matters because a plan identity is what a caller caches against and what
+// a host compares to decide "is this the same read?". Two registries that differ
+// only here FUSE DIFFERENTLY -- one answer's scores are values and the other's
+// are estimates with a reported interval -- so a shared identity would let a
+// plan admitted against the exhaustive wiring be served, silently, by the
+// approximate one. The route is declaration -> registry content fingerprint ->
+// plan bytes -> `Plan::id` -> `CompiledRetrieval::plan_id`, and this walks all
+// of it rather than asserting a link in the middle. Only the first hop is tested
+// elsewhere (`canonical_description` injectivity, in `purrdf-sparql-eval`),
+// which is precisely the hop that cannot show the identity moved.
+//
+// # The registries share an instance id, and that is what makes this sharp
+//
+// A plan records the registry's instance id as well as its content fingerprint,
+// so two independently built registries produce two identities whatever they
+// declare -- an assertion over such a pair would pass on a build that had
+// dropped the fidelity from the digest entirely. Cloning one empty registry
+// inherits the id rather than re-minting it, so the ONLY difference between the
+// wirings below is the declaration under test.
+
+/// A `Statistics` provider that measures nothing. The claim here is about a
+/// declaration reaching an identity; a cardinality it did not report cannot be
+/// what moved one.
+struct SilentStatistics {
+    /// Owned rather than a literal, because the trait hands back a borrow of
+    /// the provider and a provider that reads its own source from configuration
+    /// is the shape this stands in for.
+    source: String,
+    revision: String,
+}
+
+impl SilentStatistics {
+    fn new() -> Self {
+        Self {
+            source: "fusion-fixture-statistics".to_owned(),
+            revision: "r1".to_owned(),
+        }
+    }
+}
+
+impl Statistics for SilentStatistics {
+    fn source(&self) -> &str {
+        &self.source
+    }
+
+    fn revision(&self) -> &str {
+        &self.revision
+    }
+
+    fn cardinality(&self, _predicate: &Iri) -> Option<u64> {
+        None
+    }
+
+    fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
+        None
+    }
+}
+
+/// `base`, with one ranked producer registered that declares `fidelity` and is
+/// otherwise fixed. The registry is taken by value so its instance id -- cloned
+/// from one empty registry by every caller -- is carried into the result.
+fn registry_declaring_fidelity(
+    mut base: PropertyFunctionRegistry,
+    fidelity: RankFidelity,
+) -> PropertyFunctionRegistry {
+    base.register_ranked(
+        "http://example.org/pf/ranked",
+        Arc::new(MemoryRelation::new(1, 1, Vec::new()).expect("an empty table is uniform")),
+        RankedDeclaration {
+            stratum: purrdf_core::parse_iri("http://example.org/stratum/text")
+                .expect("fixture IRI"),
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(TermKind::Any),
+                placements: Vec::new(),
+            }],
+            depth_placement: None,
+            candidate_position: 0,
+            duplicates: DuplicatePolicy::Unique,
+            fidelity,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
+            mandatory: false,
+        },
+    );
+    base
+}
+
+/// The identity `compile` publishes for a bundle built against `registry`.
+fn compiled_plan_id(registry: &PropertyFunctionRegistry) -> PlanId {
+    let statistics = SilentStatistics::new();
+    let request = RetrievalRequest::bounded(
+        vec![RequestTerm::Lexical {
+            text: "quick brown".to_owned(),
+            language: Some("en".to_owned()),
+            predicate: Some(iri("http://example.org/p")),
+        }],
+        TopK::new(8),
+    );
+    let planned =
+        purrdf_retrieval::plan(&request, registry, &statistics).expect("the fixture request plans");
+    let compiled = purrdf_retrieval::compile(
+        &planned,
+        &AdmissionEnvironment {
+            registry,
+            statistics: &statistics,
+            fusion_profile: None,
+        },
+    )
+    .expect("a freshly planned bundle is admitted against the registry it was planned on");
+    assert_eq!(
+        compiled.plan_id,
+        planned.id(),
+        "the compiled bundle republishes the plan's own identity"
+    );
+    compiled.plan_id
+}
+
+#[test]
+fn a_declared_fidelity_moves_the_compiled_plan_identity() {
+    let base = PropertyFunctionRegistry::new();
+    let exhaustive = registry_declaring_fidelity(base.clone(), RankFidelity::EXACT);
+    let approximate = registry_declaring_fidelity(
+        base.clone(),
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from(LOSS),
+            },
+            order: OrderFidelity::Faithful,
+        },
+    );
+    let twin = registry_declaring_fidelity(base.clone(), RankFidelity::EXACT);
+    let other_reason = registry_declaring_fidelity(
+        base,
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from("approximate: sampled one segment in a thousand"),
+            },
+            order: OrderFidelity::Faithful,
+        },
+    );
+
+    // The precondition: the wirings share an instance id, so nothing but the
+    // declaration can move an identity below.
+    assert_eq!(
+        exhaustive.instance_id(),
+        approximate.instance_id(),
+        "the fixture registries must be clones of one, or every assertion here \
+         passes on the instance id alone"
+    );
+    assert_ne!(
+        exhaustive.content_fingerprint().expect("readable"),
+        approximate.content_fingerprint().expect("readable"),
+        "the declaration reaches the registry's durable fingerprint"
+    );
+
+    assert_ne!(
+        compiled_plan_id(&exhaustive),
+        compiled_plan_id(&approximate),
+        "and through it the compiled bundle's identity: a plan cached against \
+         the exhaustive wiring must not be served by the approximate one, whose \
+         every score is an estimate"
+    );
+
+    // The valid neighbour, and the property that makes the identity usable at
+    // all: two wirings declaring the SAME fidelity compile to the same
+    // identity. An id that moved between identical wirings would invalidate
+    // every cached plan on every rebuild.
+    assert_eq!(
+        compiled_plan_id(&exhaustive),
+        compiled_plan_id(&twin),
+        "the identity is a function of what was declared, not of when it was \
+         declared"
+    );
+
+    // And the producer's own words are part of the declaration, not merely the
+    // fact that a loss exists: two lossy wirings that differ only in the reason
+    // they publish are two identities. A digest that recorded "lossy" and
+    // dropped the evidence would pass every assertion above and fail here.
+    assert_ne!(
+        compiled_plan_id(&approximate),
+        compiled_plan_id(&other_reason),
+        "the evidence a producer publishes is part of what it declared"
     );
 }

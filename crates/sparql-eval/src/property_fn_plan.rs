@@ -1164,6 +1164,25 @@ pub(crate) fn registry_fingerprint(
 /// collide, and a caller binding both would be unable to tell which it had).
 const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
 
+/// The schema version of the field sequence this fingerprint folds.
+///
+/// The domain separator above keeps a property-function digest from colliding
+/// with *another kind* of registry's digest. It does nothing about a collision
+/// between two *versions of this one*, and that is a real gap: the fields below
+/// are length-framed, which makes each version's encoding self-delimiting and
+/// injective **within** a version, but says nothing across versions. A field
+/// added between two existing ones shifts every byte after it, and there is no
+/// argument that the resulting string cannot equal some older declaration's —
+/// only the observation that nobody has found a pair. A digest that two
+/// different schemas can produce is a digest a caller cannot rely on, so the
+/// version is folded in and the question stops being open.
+///
+/// Bumped to 2 when a ranked declaration gained its fidelity term: what a
+/// producer promises about the completeness and order of its own rows now
+/// changes the registry's identity, because a plan drawn from producers that
+/// approximate is not the plan drawn from producers that do not.
+const CONTENT_VERSION: u16 = 2;
+
 /// A **content-only** fingerprint of `relations`: every registered IRI's subject
 /// and object arity, its declared volatility, its declared modes with their row
 /// bounds, and its ranked-retrieval declaration, IRI-sorted — with the registry's
@@ -1233,6 +1252,7 @@ pub fn content_fingerprint(
 ) -> Result<ContentDigest, EvalError> {
     let mut bytes = Vec::new();
     append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
+    append_framed_part(&mut bytes, "version", &CONTENT_VERSION.to_be_bytes());
     for descriptor in relations.describe()? {
         append_framed_part(&mut bytes, "iri", descriptor.iri.as_bytes());
         append_framed_part(
@@ -1405,7 +1425,7 @@ mod content_fingerprint_tests {
     use crate::error::EvalError;
     use crate::property_fn::{
         CandidateDomains, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-        PropertyFunctionRegistry, RankedDeclaration,
+        PropertyFunctionRegistry, RankFidelity, RankedDeclaration,
     };
     use crate::user_fn::Volatility;
 
@@ -1497,6 +1517,8 @@ mod content_fingerprint_tests {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            // The fixture producer is an in-memory table read end to end.
+            fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,
@@ -1728,6 +1750,24 @@ mod content_fingerprint_tests {
     ///
     /// The canonical `EMPTY` constant and a freshly built empty registry agree, the
     /// same way they do under `registry_fingerprint`'s empty-string short circuit.
+    ///
+    /// # Why this literal moved, and why that is the mechanism working
+    ///
+    /// "Silently" is the word the paragraph above is really about, and it is what
+    /// `CONTENT_VERSION` exists to remove. The digest folds a *schema* — a fixed
+    /// sequence of framed fields — and when a field is added to that sequence every
+    /// digest under it changes whether or not the new field carries a value; an empty
+    /// registry has no declarations at all and still moves, because what moved is the
+    /// schema, not the contents. Before the version was folded in there was nothing to
+    /// distinguish "computed under an older schema" from "computed over different
+    /// declarations", and a stale artifact could only ever present as the second.
+    /// Bumping the constant is the deliberate, visible act that invalidates the old
+    /// value; a literal here that never moved across a schema change would mean the
+    /// schema change had gone unrecorded.
+    ///
+    /// The re-pin is therefore expected on any release that changes the field
+    /// sequence, and it is not licence to re-pin one that changes only behaviour: a
+    /// digest that moves without a version bump beside it is a defect.
     #[test]
     fn content_fingerprint_empty_registry_is_pinned() {
         let empty = content_fingerprint(&PropertyFunctionRegistry::EMPTY).expect("ok");
@@ -1738,7 +1778,7 @@ mod content_fingerprint_tests {
         );
         assert_eq!(
             empty.to_hex(),
-            "8eff9bd84a3475cacc74c92f7149b15d09717c24dfde5b0e0ce4350cbc152259",
+            "d73476de4655573c5093e8c6a85b5653d03b7562d9bbcd8846b9d5c7b930c62a",
             "the empty property-function registry digest is a persisted constant"
         );
         assert_ne!(

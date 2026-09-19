@@ -24,9 +24,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, ExecutionError, Fixed,
-    FusionProfile, IndexGeneration, Iri, ProducerStatus, RankedStream, RankedStreamAdapter,
-    RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel, Statistics,
-    StreamContract, Term, TopK, compile, execute, plan, search,
+    FusionProfile, IndexGeneration, Iri, ProducerStatus, RankFidelity, RankedStream,
+    RankedStreamAdapter, RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel,
+    Statistics, StreamContract, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -307,8 +307,9 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
         candidate_position: 0,
         duplicates,
         // These fixtures fuse strata that rank the same dataset, so the widest
-        // promise is the honest one; the domain term is exercised where it is
+        // promise is the honest one on both terms; each is exercised where it is
         // the subject, in `fusion.rs`.
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory: true,
@@ -751,8 +752,16 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
 
         let stats = statistics();
         let bundle = compiled(&registry, &stats);
-        let expected = StreamContract::new(duplicates, CandidateDomains::Unrestricted);
-        let beta = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
+        let expected = StreamContract::new(
+            duplicates,
+            RankFidelity::EXACT,
+            CandidateDomains::Unrestricted,
+        );
+        let beta = StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            CandidateDomains::Unrestricted,
+        );
 
         let unit = bundle
             .units
@@ -938,11 +947,15 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
     );
     assert_eq!(
         result.trailer.exactness,
-        ScoreExactness::LowerBounds {
-            strata: BTreeSet::from([alpha]),
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([alpha.clone()]),
+            inflation: BTreeSet::from([alpha]),
+            unbounded: BTreeSet::new(),
         },
-        "one stratum served from a short index, so every fused score is a lower \
-         bound — and the answer names exactly which stratum made it one"
+        "one stratum served from a short index, so every fused score is an \
+         estimate — and the answer names exactly which stratum made it one, on \
+         both sides: the rows that shard held are missing (deficit) AND every row \
+         behind them moved up a rank and over-contributed (inflation)"
     );
 
     // The neighbour that must still be reported plainly: a stratum that attested
@@ -956,12 +969,22 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
         ProducerStatus::Exhausted { rows_emitted: 2 },
         "the silent stratum reports its own ordinary exhaustion"
     );
-    let ScoreExactness::LowerBounds { ref strata } = result.trailer.exactness else {
+    let ScoreExactness::Estimated {
+        ref deficit,
+        ref inflation,
+        ref unbounded,
+    } = result.trailer.exactness
+    else {
         panic!("asserted above");
     };
     assert!(
-        !strata.contains(&beta),
-        "and it is not named among the strata that made the scores a lower bound"
+        !deficit.contains(&beta) && !inflation.contains(&beta),
+        "and it is not named on either side of the shortfall its sibling declared"
+    );
+    assert!(
+        unbounded.is_empty(),
+        "a short index still ranks truly among the rows it kept, so the error \
+         stays bounded; only a perturbed ORDER removes the bound"
     );
 }
 
@@ -1147,8 +1170,8 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
 /// stratum's depth, so the plan lands at exactly three — the depth at which the
 /// probe row used to be erased, and therefore the depth at which this read was
 /// reported [`ProducerStatus::Exhausted`] for three of its ten rows, with nothing
-/// anywhere saying so. That is the strongest completeness claim this layer has,
-/// minted for a read a wrong declaration truncated.
+/// anywhere saying so. That is the one ending that names no stopper, minted for
+/// a read a wrong declaration truncated.
 ///
 /// With the probe slot present the fourth row arrives, and it cannot be the
 /// ordinary `DepthReached`: the producer promised there is no fourth. It is the

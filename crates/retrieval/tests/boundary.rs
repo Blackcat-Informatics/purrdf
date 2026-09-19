@@ -41,11 +41,11 @@ use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
     DepthApplication, ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile,
     FusionResult, FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin,
-    ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedRow, RankedStream,
-    RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock,
-    ScoreExactness, SearchError, SearchResult, Statistics, StatisticsSnapshot, StratumUnit,
-    StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm, compile,
-    contribution, execute, fuse, plan, search,
+    ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow,
+    RankedStream, RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest,
+    RowBlock, ScoreExactness, SearchError, SearchResult, Statistics, StatisticsSnapshot,
+    StratumUnit, StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm,
+    compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,
@@ -124,6 +124,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory,
@@ -137,7 +138,11 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
 /// not part of it — that law holds for every stream and is checked rank by rank
 /// rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 fn lexical_term() -> RequestTerm {

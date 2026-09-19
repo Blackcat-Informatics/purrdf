@@ -346,8 +346,8 @@ pub enum AdmissionError {
     /// verifies against the rows it pulled. A zero here is therefore a plan that
     /// was hand-built or edited, and admitting it would compile a `LIMIT 0`,
     /// take no row from the relation whatever its index holds, and then report
-    /// the stratum exhausted with no rows — the strongest completeness claim this
-    /// layer has, made about a read that was never allowed to answer.
+    /// the stratum exhausted with no rows — the one ending that names no stopper,
+    /// made about a read that was never allowed to answer.
     ///
     /// Distinct from [`Self::DepthBoundViolation`], and in the opposite
     /// direction: that one refuses a depth *above* what the registry declared,

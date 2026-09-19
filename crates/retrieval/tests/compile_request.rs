@@ -24,8 +24,8 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, ExecutionError, Iri, Metric, Plan, PlanError,
-    ProducerStatus, RankedStreamImpl, ReadBound, RejectionReason, RequestTerm, RetrievalRequest,
-    Statistics, Term, TopK, UnservedReason, UnservedTerm, compile, execute, plan,
+    ProducerStatus, RankFidelity, RankedStreamImpl, ReadBound, RejectionReason, RequestTerm,
+    RetrievalRequest, Statistics, Term, TopK, UnservedReason, UnservedTerm, compile, execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
@@ -283,6 +283,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 depth_placement: spec.depth,
                 candidate_position: spec.candidate,
                 duplicates: spec.duplicates,
+                fidelity: RankFidelity::EXACT,
                 domains: spec.domains,
                 block_position: None,
                 mandatory: spec.mandatory,

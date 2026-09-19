@@ -86,7 +86,7 @@
 //! Losing it on this path would not be a missing field, it would be a wrong
 //! claim: with no stratum attesting an incomplete index the trailer says every
 //! fused score is [`ScoreExactness::Exact`](crate::ScoreExactness), and a score
-//! that is really a lower bound would be published as the whole number. So
+//! that is really an estimate would be published as the whole number. So
 //! `search` attaches it rather than letting the adapter's honest default stand
 //! in for a producer that did say something.
 //!

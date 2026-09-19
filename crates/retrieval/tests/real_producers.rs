@@ -44,9 +44,10 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, DecayRule, Fixed, FusionError, FusionProfile, Iri, ProtocolError,
-    RankedStreamAdapter, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
-    Term, TopK, compile, contribution, execute, fuse, plan, search,
+    AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionError, FusionProfile, Iri,
+    OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest,
+    ScoreExactness, SearchError, SearchResult, Statistics, Term, TopK, compile, contribution,
+    execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace,
@@ -316,6 +317,7 @@ fn registry() -> PropertyFunctionRegistry {
         .ranked_declaration(
             kernel_iri(TEXT_STRATUM),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             // This fixture's notes and its embedded entities are the SAME
             // entities — the whole point of the file is a candidate both real
             // producers name — so neither restricts its domain, and the fusion
@@ -332,6 +334,10 @@ fn registry() -> PropertyFunctionRegistry {
         // requests name.
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        // This space holds a vector for every document the fixture corpus has,
+        // so the exhaustive declaration is the true one — and it is stated here
+        // rather than asserted by the relation.
+        RankFidelity::EXACT,
         // As above: one entity space, ranked twice under two laws.
         CandidateDomains::Unrestricted,
     );
@@ -1053,6 +1059,7 @@ fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry {
         .ranked_declaration(
             kernel_iri(TEXT_STRATUM),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");
@@ -1073,6 +1080,7 @@ fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry {
         kernel_iri(KNN_STRATUM),
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
     );
     assert_eq!(
@@ -1304,6 +1312,7 @@ fn the_text_producer_declares_unique_only_where_one_subject_can_appear_once() {
         .ranked_declaration(
             stratum.clone(),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect_err("a multi-partition index has no one ranked order to declare");
@@ -1323,6 +1332,7 @@ fn the_text_producer_declares_unique_only_where_one_subject_can_appear_once() {
         .ranked_declaration(
             stratum,
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");
@@ -1534,6 +1544,7 @@ fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<At
         .ranked_declaration(
             kernel_iri(TEXT_STRATUM),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");
@@ -1700,4 +1711,198 @@ fn the_sole_text_producer_over_one_document_still_returns_that_document() {
         )],
         "and the receipt counts the row it emitted"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 6. The vector stratum that covers half a corpus
+// ---------------------------------------------------------------------------
+
+/// The IRI of the disclosure a host makes when its vector space is a sample.
+///
+/// Prose a reader can act on, naming the measurement, its limit, and what an
+/// absence does not prove — which is what the producer contract asks a declared
+/// loss to carry.
+const SAMPLE_EVIDENCE: &str = "this space was embedded over the first half of \
+     the corpus only; a document the lexical stratum names and this one does \
+     not may be an unembedded document rather than a distant one";
+
+/// The whole text index, and a nearest-neighbour space over **half** the
+/// vectors, under whatever fidelity the host states about it.
+///
+/// The space really is short — it is built from a truncated row list, not
+/// labelled as though it were — so the declaration beside it is a statement a
+/// reader can falsify by deleting the truncation.
+fn registry_over_a_partial_vector_space(fidelity: RankFidelity) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+
+    let text = TextSearchRelation::new(Arc::new(text_index()));
+    let text_declaration = text
+        .ranked_declaration(
+            kernel_iri(TEXT_STRATUM),
+            Some(NOTE.to_owned()),
+            // The control beside the producer under test: this index holds every
+            // document the corpus has, so its exhaustive declaration is true and
+            // any deficit the answer reports is the other stratum's.
+            RankFidelity::EXACT,
+            CandidateDomains::Unrestricted,
+        )
+        .expect("a single-partition index declares a ranked order");
+    registry.register_ranked(TEXT_PF, Arc::new(text), text_declaration);
+
+    let rows = vector_rows();
+    let half = &rows[..rows.len() / 2];
+    let knn = EmbeddingKnnRelation::new(Arc::new(space_over(
+        half,
+        KnnGuard::new(10, 5).expect("the fixture guard bounds are positive"),
+    )));
+    let knn_declaration = knn.ranked_declaration(
+        kernel_iri(KNN_STRATUM),
+        TermKind::Iri,
+        XSD_INTEGER.to_owned(),
+        fidelity,
+        CandidateDomains::Unrestricted,
+    );
+    registry.register_ranked(KNN_PF, Arc::new(knn), knn_declaration);
+
+    registry
+}
+
+/// Run the standard request against `registry` over the whole dataset.
+fn answer_from(registry: &PropertyFunctionRegistry) -> SearchResult {
+    let data = dataset();
+    let statistics = NoStatistics;
+    let environment = AdmissionEnvironment {
+        registry,
+        statistics: &statistics,
+        fusion_profile: None,
+    };
+    block_on(search(
+        &request(),
+        registry,
+        &statistics,
+        &data,
+        &environment,
+        &profile(),
+    ))
+    .expect("the partial-space fixture answers rather than being refused")
+}
+
+/// A vector space holding half the corpus, with the host declaring the
+/// shortfall, stops the answer certifying that every stratum was whole.
+///
+/// This is the failure the exhaustive declaration used to make unreportable.
+/// The kNN relation's own search is exact — it scans every row it holds, prunes
+/// nothing, exits early nowhere — so the relation had every reason to believe
+/// `EXACT` of itself, and asserting it put the top of the lattice into the mouth
+/// of the one party that knew the space was a sample. Downstream nothing could
+/// recover it: a stream that ran out of rows and a stream whose space never held
+/// them both stop yielding, both leave contiguous ranks, both report exhaustion.
+/// The answer read as complete while a document the whole space would have
+/// ranked was silently absent.
+#[test]
+fn a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness() {
+    let evidence: Arc<str> = Arc::from(SAMPLE_EVIDENCE);
+    let declared = answer_from(&registry_over_a_partial_vector_space(RankFidelity {
+        completeness: Completeness::Lossy {
+            evidence: Arc::clone(&evidence),
+        },
+        // The rows it DOES hold are compared at exact distances and ordered
+        // truly, so an emitted rank still bounds a true rank and the answer's
+        // error stays finite. The two axes fail independently and only one of
+        // them failed here.
+        order: OrderFidelity::Faithful,
+    }));
+
+    // The shortfall is real, not a label. `ex:d` is the document the whole
+    // vector space ranks third from this seed, and it is absent from the
+    // truncated one — so it reaches the answer through no stratum at all,
+    // because the needle does not match its text either.
+    assert!(
+        !candidates(&declared).contains(&format!("<{}>", ex("d"))),
+        "the fixture is genuinely short: {:?}",
+        candidates(&declared)
+    );
+
+    // And the answer says so, where a consumer looks.
+    let ScoreExactness::Estimated {
+        deficit,
+        inflation,
+        unbounded,
+    } = &declared.trailer.exactness
+    else {
+        panic!("a lossy stratum must not leave the answer certifying exact scores");
+    };
+    assert_eq!(
+        deficit.iter().map(Iri::as_str).collect::<Vec<_>>(),
+        vec![KNN_STRATUM],
+        "the stratum that may have withheld a row is the short one, and only it"
+    );
+    assert_eq!(
+        inflation.iter().map(Iri::as_str).collect::<Vec<_>>(),
+        vec![KNN_STRATUM],
+        "a withheld row promotes every row behind it, so loss runs both ways"
+    );
+    assert!(
+        unbounded.is_empty(),
+        "order is still faithful, so a finite bound on the error survives"
+    );
+
+    // The host's words arrive byte for byte. A consumer renders these; nothing
+    // in the workspace parses them, and nothing re-words them.
+    let carried = declared
+        .trailer
+        .fidelities
+        .get(&iri(KNN_STRATUM))
+        .expect("the short stratum declared a fidelity");
+    assert_eq!(
+        carried.evidence().map(|e| &**e).collect::<Vec<_>>(),
+        vec![SAMPLE_EVIDENCE]
+    );
+
+    // Nothing was routed through the attestation channel to get here. That
+    // channel answers "was the index version that served this invocation
+    // whole", and an `Incomplete` reading there is a REFUSAL on every lane that
+    // carries no witness — so a host stating a permanent fact about its corpus
+    // there would take out its ordinary SPARQL queries as well.
+    assert_eq!(
+        declared
+            .trailer
+            .attestations
+            .get(&iri(KNN_STRATUM))
+            .map(|attestation| attestation.service.clone()),
+        Some(purrdf_sparql_eval::ServiceLevel::Undeclared),
+        "the index really was whole; it is the corpus behind it that was not"
+    );
+}
+
+/// The neighbour that must keep working: a host with nothing to disclose gets
+/// the exact answer it always did.
+///
+/// The failure mode of a fidelity term is not only that it can be omitted — it
+/// is also that it can degrade every answer into an estimate and make the
+/// certified score unreachable. This is the case that proves it did not: the
+/// whole corpus, both producers exhaustive, and a trailer that still certifies
+/// its scores as values.
+#[test]
+fn a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores() {
+    let whole = answer_from(&registry());
+    assert_eq!(
+        whole.trailer.exactness,
+        ScoreExactness::Exact,
+        "every stratum was exhaustive and whole, and the answer may say so"
+    );
+    assert!(
+        candidates(&whole).contains(&format!("<{}>", ex("d"))),
+        "including the document the truncated space above could not name"
+    );
+    for stratum in [TEXT_STRATUM, KNN_STRATUM] {
+        assert_eq!(
+            whole
+                .trailer
+                .fidelities
+                .get(&iri(stratum))
+                .expect("both producers declared a fidelity"),
+            &RankFidelity::EXACT
+        );
+    }
 }

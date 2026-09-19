@@ -12,7 +12,7 @@
 //! it never gets to return a plausible-looking answer that quietly omitted a
 //! row.
 //!
-//! # One fixed rank law, and two declared promises
+//! # One fixed rank law, and three declared promises
 //!
 //! The rank check is absolute. Ranks are 1-based, contiguous and ascending for
 //! every ranked stream there is, with no registration able to soften it, and the
@@ -20,20 +20,34 @@
 //! stream ([`ProtocolError::OutOfOrderRanks`],
 //! [`ProtocolError::NonContiguousRanks`]).
 //!
-//! The other two checks are not absolute, because the registry does not state
-//! them absolutely. A ranked producer declares its duplicate handling and the
-//! blocks of the candidate universe it may name where it is registered
-//! ([`RankedDeclaration`]), and the consumer of its rows is this layer — so the
-//! consumer reads those declarations and holds the stream to the promises it
-//! actually made. [`StreamContract`] carries both with the stream through
-//! [`RankedStream::contract`], and the two refusals below —
-//! [`ProtocolError::DuplicateItem`] and
-//! [`ProtocolError::OutsideDeclaredDomain`] — each say which declaration the
-//! row was measured against.
+//! The other checks are not absolute, because the registry does not state them
+//! absolutely. A ranked producer declares its duplicate handling, the blocks of
+//! the candidate universe it may name, and the fidelity of the rows it can name
+//! where it is registered ([`RankedDeclaration`]), and the consumer of its rows
+//! is this layer — so the consumer reads those declarations and holds the stream
+//! to the promises it actually made. [`StreamContract`] carries all three with
+//! the stream through [`RankedStream::contract`].
 //!
-//! Both are promises about rows nobody has read yet, so both are verified
-//! exactly as far as the rows actually pulled reach, and no further. That is
-//! stated on each term rather than implied: a declaration no pulled row
+//! # Two of the three are refusable; the third is not, and that is the point
+//!
+//! A false duplicate policy and a false domain declaration are both contradicted
+//! by a row that *arrives* — the repeat, or the candidate outside the declared
+//! block — so each has a refusal below naming the declaration the row was
+//! measured against ([`ProtocolError::DuplicateItem`],
+//! [`ProtocolError::OutsideDeclaredDomain`]).
+//!
+//! [`StreamContract::fidelity`] has no refusal and can have none, because what
+//! would falsify it is precisely what never arrives. A stream that ran out of
+//! rows and a stream whose search merely stopped finding them are
+//! indistinguishable from here: both stop yielding, both leave contiguous ranks
+//! behind. So an undeclared approximation is invisible to this layer by
+//! construction, and silence about it reads as completeness — which is the
+//! reading the term exists to stop being automatic. It is carried into the
+//! answer rather than checked at the door.
+//!
+//! All three are promises about rows nobody has read yet, so all three are
+//! verified exactly as far as the rows actually pulled reach, and no further.
+//! That is stated on each term rather than implied: a declaration no pulled row
 //! contradicts is believed, because there is nothing else a consumer could do
 //! with it short of reading the whole stream, which is the cost the declaration
 //! exists to avoid.
@@ -66,7 +80,7 @@
 //! claim otherwise.
 
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, DuplicatePolicy, PfAttestation, RankedDeclaration,
+    CandidateDomains, DomainTag, DuplicatePolicy, PfAttestation, RankFidelity, RankedDeclaration,
 };
 use purrdf_text::Fixed;
 
@@ -125,6 +139,43 @@ pub struct StreamContract {
     /// violation; a [`DuplicatePolicy::Allowed`] stream is de-duplicated by the
     /// consumer, which is what that policy says a consumer must do.
     pub duplicates: DuplicatePolicy,
+    /// What the producer declared about the rows it can name: whether its search
+    /// finds every row that was due, and whether a row it does name arrives at a
+    /// rank no better than the one it earned.
+    ///
+    /// [`RankFidelity::EXACT`] is what every stream promised before this term
+    /// existed, and a fusion of such streams behaves exactly as it always did.
+    /// A degraded declaration is what lets the answer stop claiming more than it
+    /// can support — see [`ScoreExactness`](crate::ScoreExactness), which reads
+    /// this term, and [`RankFidelity`] for why the two axes fail independently.
+    ///
+    /// # Why this is declared rather than observed
+    ///
+    /// Because a consumer cannot tell the difference. A stream that ran out of
+    /// rows and a stream whose search merely stopped finding them both simply
+    /// stop yielding, and the ranks are contiguous either way. Nothing in the
+    /// input protocol distinguishes them, so an undeclared approximation is
+    /// invisible here by construction and is read as completeness — which is
+    /// the reading this term exists to stop being automatic.
+    ///
+    /// # Why there is no default, when one looks obviously safe
+    ///
+    /// [`RankFidelity::EXACT`] is the top of the lattice, so defaulting to it
+    /// would put the *strongest* claim in the mouth of a producer that said
+    /// nothing. That is the one direction a default must never go. This is the
+    /// identical refusal [`Self::domains`] already makes, for the identical
+    /// reason: the value is a promise about the producer's own search, and only
+    /// the host that wired it up knows it.
+    ///
+    /// # It is believed, on the same terms as its neighbours
+    ///
+    /// Fusion cannot verify a fidelity declaration any more than it can verify
+    /// that a [`DuplicatePolicy::Unique`] stream will not repeat — the rows that
+    /// would falsify it are exactly the rows that never arrived. A producer
+    /// declaring [`RankFidelity::EXACT`] while quietly missing rows yields an
+    /// answer that declaration made wrong, and this layer does not claim
+    /// otherwise.
+    pub fidelity: RankFidelity,
     /// Which blocks of the candidate universe the producer declared it may
     /// name.
     ///
@@ -166,15 +217,59 @@ impl StreamContract {
     pub fn declared(declaration: &RankedDeclaration) -> Self {
         Self {
             duplicates: declaration.duplicates,
+            // Cloned, never rebuilt. The evidence inside is an `Arc<str>` the
+            // producer authored, and a consumer reads those bytes rather than a
+            // summary of them, so this hop must move the string itself — one
+            // refcount bump, and the same characters out as in.
+            fidelity: declaration.fidelity.clone(),
             domains: declaration.domains.clone(),
         }
     }
 
     /// A contract stated directly, for a stream a caller built itself.
+    ///
+    /// Every term is positional and none may be omitted, which is the other half
+    /// of what lets a consumer read an absent declaration as
+    /// [`RankFidelity::EXACT`]: a caller assembling a stream by hand states its
+    /// fidelity or does not compile.
+    ///
+    /// ```compile_fail
+    /// # use purrdf_retrieval::{StreamContract, DuplicatePolicy, CandidateDomains};
+    /// // The arity before the fidelity term existed. There is no overload and no
+    /// // default to fall back to.
+    /// let _ = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
+    /// ```
+    ///
+    /// ```
+    /// # use purrdf_retrieval::{StreamContract, DuplicatePolicy, CandidateDomains, RankFidelity};
+    /// let contract = StreamContract::new(
+    ///     DuplicatePolicy::Unique,
+    ///     RankFidelity::EXACT,
+    ///     CandidateDomains::Unrestricted,
+    /// );
+    /// assert_eq!(contract.fidelity, RankFidelity::EXACT);
+    /// ```
+    ///
+    /// The pair is the proof: the `compile_fail` block alone would pass for any
+    /// error at all, so the twin differing only in the supplied term is what
+    /// shows the term is the reason.
+    ///
+    /// Not a `const fn`: the fidelity term carries the producer's own evidence,
+    /// which is a string, and a string cannot cross a `const fn`. Nothing in
+    /// this workspace declared a `StreamContract` in a `const` context, so the
+    /// loss costs a caller nothing — and the alternative, keeping `const` by
+    /// making the evidence a `&'static str`, would have confined the term to
+    /// producers whose disclosure is compiled in and shut out every producer
+    /// that reads its own from a loaded artifact.
     #[must_use]
-    pub const fn new(duplicates: DuplicatePolicy, domains: CandidateDomains) -> Self {
+    pub fn new(
+        duplicates: DuplicatePolicy,
+        fidelity: RankFidelity,
+        domains: CandidateDomains,
+    ) -> Self {
         Self {
             duplicates,
+            fidelity,
             domains,
         }
     }
@@ -279,7 +374,17 @@ impl<I> RankedRow<I> {
 /// to one aggregate flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerReceipt {
-    /// The producer emitted every row it had.
+    /// The producer emitted every row **its search produced**, and stopped
+    /// because there were no more rather than because something stopped it.
+    ///
+    /// The count is checked against the rows fusion actually pulled, so a
+    /// producer may not miscount what it emitted. Nothing here checks — or
+    /// could check — that what it emitted was everything that was due: that is
+    /// what [`StreamContract::fidelity`] declares, and the two are read
+    /// together in the answer. A producer whose search is exhaustive says the
+    /// stronger thing with this receipt; one that declared
+    /// [`Completeness::Lossy`](purrdf_sparql_eval::Completeness::Lossy) says
+    /// only that its search ran out.
     Exhausted {
         /// How many rows it emitted. Must equal the number fusion pulled.
         rows_emitted: u64,

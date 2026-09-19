@@ -90,7 +90,7 @@
 //! No admitted plan carries a depth of zero, so nothing here emits `LIMIT 0`.
 //! That bound reads no rows: whatever the relation holds, the unit hands back
 //! nothing, and the stratum is then reported exhausted having emitted nothing —
-//! the strongest completeness claim this layer makes, made about the bound rather
+//! the one ending that names no stopper, said about the bound rather
 //! than about the data, and indistinguishable in every trailer field from an
 //! honest empty answer. A bound may narrow a read and
 //! must never eliminate one, so the planner floors every derived depth at one,
@@ -857,7 +857,7 @@ fn ranked_declaration<'a>(
 /// argument's type. A saturating `+ 1` at `u32::MAX` emitted a bound *equal* to
 /// the depth: no probe row could arrive, `execute` writes `DepthReached` only when
 /// a row arrives past the depth, and the read was therefore reported `Exhausted`
-/// — the strongest completeness claim this layer has — for a stratum the `LIMIT`
+/// — the one ending that names no stopper — for a stratum the `LIMIT`
 /// may well have cut. That is the fault this whole header is about, surviving at
 /// the one depth where the mitigation was dropped. So the depth arrives as a
 /// [`ProbedDepth`], which the waist mints only for a depth whose probe row fits
