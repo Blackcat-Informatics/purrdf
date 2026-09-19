@@ -28,8 +28,17 @@
 //!   earlier-source predicate rejects a row on every probe;
 //! * the delta overlay's SUPPRESSION mask — a snapshot with base statement-layer rows
 //!   removed, which the narrowed seam must not resurrect;
-//! * the delta overlay's DUPLICATE masks — a snapshot holding a delta row that folds
-//!   onto a row the base already has, which the narrowed seam must not double-count.
+//! * term resolution at the overlay's own boundary — a row spelled non-canonically,
+//!   which must resolve onto the term the base already holds so that no layer gains a
+//!   second copy and the narrowed seam has nothing to double-count.
+//!
+//! The delta overlay's DUPLICATE masks (`duplicate_reifiers` / `duplicate_annotations`)
+//! are deliberately NOT on that list. No supported mutation path populates them: base
+//! membership is probed on the canonicalized value, so a row the base already holds is
+//! absorbed rather than admitted to the delta. The narrowed overrides still carry those
+//! filters, verbatim from the unkeyed overrides they mirror — dropping them from only
+//! the narrowed seam would make the two paths disagree if some future path ever did
+//! populate a mask — but no fixture here charges them, and none claims to.
 //!
 //! Residue keeping lives on the bundle carrier, not on a wrapper built here; it is
 //! pinned by `ir::pipeline_bundle`'s own tests.
@@ -356,21 +365,29 @@ fn delta_graph_seam_matches_the_filtered_stream_for_a_blank_graph_name() {
     assert_graph_seam_agrees(&view, "delta/blank-graph");
 }
 
-/// A delta snapshot whose DUPLICATE masks are non-empty — the overlay's third row
-/// predicate, and the only one the fixtures above cannot charge.
-///
-/// A statement-layer row reaches the delta while the base already holds it whenever
-/// the caller spells a term in a form the base's value lookup does not recognize but
-/// interning normalizes onto a term the base already has. That is exactly the C0.1
-/// literal identity policy: `MutableDataset` probes base membership on the value AS
-/// AUTHORED, while freezing the delta lowercases the language tag and lets the tag —
-/// not the stated datatype — name the datatype. So `"high"@EN` misses a base holding
-/// `"high"@en`, is added to the delta, and freezes back onto the base's OWN term. The
-/// row is then in both layers, and `duplicate_reifiers`/`duplicate_annotations` are
-/// what keep the union from yielding it twice — on the narrowed seam exactly as on
+/// A term spelled non-canonically must resolve onto the term the base already holds,
+/// so no layer ever gains a second copy of a row — on the narrowed seam exactly as on
 /// the unkeyed one.
+///
+/// The hazard is the C0.1 literal identity policy. Interning normalizes before it
+/// stores: a language tag names the datatype whatever the explicit one says, and the
+/// tag itself is lowercased. A lookup that probed the caller's spelling verbatim would
+/// therefore miss a term the dataset genuinely holds — `"high"@EN` would not find a
+/// base holding `"high"@en` — and `MutableDataset` reads that miss as "new term". The
+/// row would land in the delta, freeze back onto the base's OWN term, and exist in
+/// both layers.
+///
+/// Resolution canonicalizes on the same policy, so the miss cannot happen and the
+/// insert is absorbed. That matters most on the ORDINARY QUAD stream, which carries no
+/// duplicate mask at all: a copy admitted there has nothing downstream to hide it and
+/// reaches the reader as a genuinely duplicated quad. The statement-layer streams do
+/// carry `duplicate_reifiers`/`duplicate_annotations`, but those are a second line of
+/// defence, not the one being pinned here.
+///
+/// `TermValue::lang_literal` folds the tag itself, so the non-canonical spelling has
+/// to be stated as a struct literal to reach the boundary at all.
 #[test]
-fn delta_graph_seam_matches_the_filtered_stream_when_the_duplicate_masks_are_charged() {
+fn a_respelled_term_resolves_onto_the_base_row_and_never_duplicates_it() {
     let mut b = RdfDatasetBuilder::new();
     let s = b.intern_iri("http://example.org/s");
     let p = b.intern_iri(P);
@@ -403,40 +420,60 @@ fn delta_graph_seam_matches_the_filtered_stream_when_the_duplicate_masks_are_cha
         o: Box::new(shouted.clone()),
     };
 
+    let base_quads = base.quads().count();
     let mut mutable = MutableDataset::new(Arc::clone(&base));
     for graph in [None, Some(iri("g1"))] {
         assert!(
-            mutable
+            !mutable
                 .insert(QuadValues {
                     s: iri("r"),
                     p: TermValue::iri(REIFIES),
                     o: quoted.clone(),
                     g: graph.clone(),
                 })
-                .expect("the shouted declaration inserts"),
-            "the shouted declaration must reach the delta, not be absorbed as present"
+                .expect("the shouted declaration resolves"),
+            "a re-spelled declaration names a row the base already holds and must be \
+             absorbed, not admitted as new"
         );
         assert!(
-            mutable
+            !mutable
                 .insert(QuadValues {
                     s: iri("r"),
                     p: TermValue::iri(CONFIDENCE),
                     o: shouted.clone(),
+                    g: graph.clone(),
+                })
+                .expect("the shouted annotation resolves"),
+            "a re-spelled annotation must be absorbed, not admitted as new"
+        );
+        assert!(
+            !mutable
+                .insert(QuadValues {
+                    s: iri("s"),
+                    p: TermValue::iri(P),
+                    o: shouted.clone(),
                     g: graph,
                 })
-                .expect("the shouted annotation inserts"),
-            "the shouted annotation must reach the delta, not be absorbed as present"
+                .expect("the shouted quad resolves"),
+            "a re-spelled ORDINARY quad must be absorbed too — the quad stream carries \
+             no duplicate mask, so an admitted copy would survive to the reader"
         );
     }
-    // Four rows really are in the delta — the masks below are charged, not vacuous.
+    // Nothing reached the delta: the fold happens at the resolve boundary, so no layer
+    // ever holds a second copy for the seam to have to hide.
     assert_eq!(
         mutable.added_len(),
-        4,
-        "both graphs must carry a delta declaration and a delta annotation"
+        0,
+        "every re-spelled row resolved onto the term the base already holds"
     );
 
     let view = mutable.snapshot_view().expect("the snapshot publishes");
-    assert_graph_seam_agrees(&view, "delta/duplicate-mask");
+    assert_graph_seam_agrees(&view, "delta/respelled-terms");
+    assert_eq!(
+        view.quads().count(),
+        base_quads,
+        "a re-spelled quad must not appear twice across the set-union seam"
+    );
 
     // Every delta row folded back onto a row the base already holds, so the union
     // grew by nothing. Counted per graph as well as in total: equality between the
