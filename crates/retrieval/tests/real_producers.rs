@@ -1441,8 +1441,8 @@ fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<At
 /// Plan, admit and answer `request` against a registry holding one producer.
 ///
 /// Returns the plan beside the answer, because the two claims this section makes
-/// live in different places: the depth is the plan's, and the receipt is the
-/// answer's. The compiled unit is checked on the way through, because the emitted
+/// live in different places: the depth comes from the plan, and the receipt from
+/// the answer. The compiled unit is checked on the way through, because the emitted
 /// bound is the one thing neither of those two can report.
 fn sole_producer_answer(
     request: &RetrievalRequest,

@@ -877,7 +877,7 @@ def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> No
 
     A text bounded at exactly the depth cannot tell the two endings apart that
     a consumer has to distinguish: a producer that ran out of rows, and a read
-    the plan's depth cut short. So wherever the producer's declared row bound
+    the planned depth cut short. So wherever the producer's declared row bound
     leaves room, the unit is emitted one row deeper and that last row is a
     probe — a READ and never a value. Here a measured cardinality lowers the
     depth below what the producer declared, which is exactly the room the probe
@@ -1151,6 +1151,23 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
         one_language, [_lexical("quick", NOTE)], text_producers=NOTE_ONLY, statistics=STATISTICS
     )
     assert planned["producer_bindings"], "a single-partition index declares a ranked order"
+
+    # …and the declaration is worth having: the whole ladder runs over it and both
+    # documents holding the needle come back ranked. "It planned" alone would be
+    # satisfied by a declaration nothing could execute.
+    answer = retrieval.search(
+        one_language,
+        [_lexical("quick", NOTE)],
+        text_producers=NOTE_ONLY,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )
+    assert sorted(row["entity"] for row in answer["rows"]) == [f"<{EX}a>", f"<{EX}b>"], (
+        "one partition, one ranking, and every document holding the needle in it"
+    )
 
 
 def test_an_unknown_request_kind_names_what_is_accepted() -> None:
@@ -1695,3 +1712,301 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
             f"{decay}, raw {raw}: the reported depth is never the one a "
             "'separated from both neighbours' reading would predict"
         )
+
+
+# ── the declarations a call is assembled from ──────────────────────────────────
+
+
+def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> None:
+    """The cost is quoted against the depth this plan records, not one of its own.
+
+    ``planned_resolution`` answers "what will this plan cost", so the depth it
+    prices has to be the depth recorded beside it. A resolution derived from some
+    other number — the producer's declared bound, say, or a fresh re-derivation —
+    would be a true statement about a plan that is not the one being compiled, and
+    the two agree on a small fixture often enough that nothing would look wrong.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        k=60,
+        decay=TRUNCATED,
+    )
+    assert (
+        compiled["planned_resolution"][NOTE_STRATUM]["requested_depth"]
+        == compiled["plan"]["stratum_depths"][NOTE_STRATUM]
+    ), "the evidence names the depth the plan recorded"
+
+    # And it follows the plan when the plan moves: a measured cardinality lowers
+    # the recorded depth, and the priced depth goes with it.
+    bounded = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        k=60,
+        decay=TRUNCATED,
+    )
+    assert bounded["plan"]["stratum_depths"][NOTE_STRATUM] == 1
+    assert bounded["planned_resolution"][NOTE_STRATUM]["requested_depth"] == 1
+    assert (
+        bounded["planned_resolution"][NOTE_STRATUM]["requested_depth"]
+        < compiled["planned_resolution"][NOTE_STRATUM]["requested_depth"]
+    ), "the priced depth moved with the plan rather than staying put"
+
+
+def test_a_non_positive_weight_is_refused_naming_the_stratum() -> None:
+    """A weight of zero or less orders nothing, and the refusal says whose.
+
+    A weight is a stratum's share of every fused score. Zero contributes nothing
+    at any rank, so a stratum weighted zero is a stream read and discarded — and a
+    negative weight orders the ranking backwards. Neither is a weight, and a
+    ``weights`` map holds several, so the message names the one to fix.
+
+    The neighbouring positive weights are executed here because "positive" reaches
+    all the way down to one raw unit: an implementation that refused anything it
+    considered too small to matter would be discarding exactly the low-weight
+    strata a host tunes by hand.
+    """
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick fox", NOTE)]
+
+    for refused_weight in (0, -1, -retrieval.SCALE):
+        with pytest.raises(ValueError, match="non-positive weight") as refused:
+            retrieval.search(DATA, request, weights={NOTE_STRATUM: refused_weight}, **common)
+        assert NOTE_STRATUM in str(refused.value), (
+            f"the refusal names the stratum whose weight was rejected: {refused.value}"
+        )
+
+    # The neighbouring valid weights, down to the smallest positive one there is.
+    for accepted in (1, retrieval.SCALE // 2, retrieval.SCALE, 1000 * retrieval.SCALE):
+        answer = retrieval.search(DATA, request, weights={NOTE_STRATUM: accepted}, **common)
+        assert answer["rows"], f"a raw weight of {accepted} is a weight and answers"
+
+
+def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
+    """``"any"``, ``"default"`` and a graph IRI are three readings of one corpus.
+
+    A selector accepted and then ignored is the failure this catches, and it needs
+    a corpus where the three disagree: one row in a named graph and one in the
+    default graph, so ``"default"`` reaches exactly the second, the graph IRI
+    reaches exactly the first, and each is the wrong answer for the other. A
+    single-graph fixture makes all three identical.
+
+    ``"any"`` is the third reading and is exercised over a single-graph corpus,
+    because a graph is a partition of the index and a rank is computed within one
+    partition — so ``"any"`` over two graphs cannot honestly declare a ranking at
+    all, which is the neighbouring refusal held below.
+    """
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+        "data_format": "nquads",
+    }
+    request = [_lexical("quick fox", NOTE)]
+    named_graph = f"{EX}g"
+    split = (
+        f'<{EX}a> <{NOTE}> "the quick brown fox" <{named_graph}> .\n'
+        f'<{EX}b> <{NOTE}> "a quick red fox" .\n'
+    )
+
+    def _entities(selector: str, corpus: str) -> list[str]:
+        answer = retrieval.search(
+            corpus,
+            request,
+            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, selector)},
+            **common,
+        )
+        return [row["entity"] for row in answer["rows"]]
+
+    assert _entities("default", split) == [f"<{EX}b>"], (
+        "the default graph holds ex:b and nothing else"
+    )
+    assert _entities(named_graph, split) == [f"<{EX}a>"], (
+        "and the named graph holds ex:a — so the selector really routes"
+    )
+
+    # "any" over ONE graph is the widest reading and reaches both rows.
+    one_graph = (
+        f'<{EX}a> <{NOTE}> "the quick brown fox" <{named_graph}> .\n'
+        f'<{EX}b> <{NOTE}> "a quick red fox" <{named_graph}> .\n'
+    )
+    assert sorted(_entities("any", one_graph)) == [f"<{EX}a>", f"<{EX}b>"]
+
+    # A fourth spelling is refused naming what a selector may be — and the
+    # refusal names the producer that carried it, since a map holds several.
+    with pytest.raises(ValueError, match="unknown graph selector") as refused:
+        retrieval.search(
+            split,
+            request,
+            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every")},
+            **common,
+        )
+    message = str(refused.value)
+    assert NOTE_PRODUCER in message, message
+    for accepted in ('"any"', '"default"'):
+        assert accepted in message, f"the refusal names {accepted}: {message}"
+
+
+def test_each_data_format_name_routes_the_document_and_an_unknown_one_is_refused() -> None:
+    """Three document syntaxes, named, with no default beyond ``"turtle"``.
+
+    Each is proved by syntax only its own codec reads, so a name routed to the
+    wrong codec fails on its own document rather than being masked by a grammar
+    that happens to accept both.
+    """
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick fox", NOTE)]
+    turtle = f'PREFIX ex: <{EX}> ex:a ex:note "the quick brown fox" .\n'
+    ntriples = f'<{EX}a> <{NOTE}> "the quick brown fox" .\n'
+    nquads = f'<{EX}a> <{NOTE}> "the quick brown fox" <{EX}g> .\n'
+
+    for document, data_format in (
+        (turtle, "turtle"),
+        (ntriples, "ntriples"),
+        (nquads, "nquads"),
+    ):
+        answer = retrieval.search(document, request, data_format=data_format, **common)
+        assert [row["entity"] for row in answer["rows"]] == [f"<{EX}a>"], data_format
+
+    # …and each syntax the others cannot read is refused, so the three above are
+    # routing rather than one lenient grammar read three times.
+    with pytest.raises(ValueError):
+        retrieval.search(nquads, request, data_format="ntriples", **common)
+    with pytest.raises(ValueError):
+        retrieval.search(turtle, request, data_format="nquads", **common)
+
+    with pytest.raises(ValueError, match="unknown data format") as refused:
+        retrieval.search(ntriples, request, data_format="trix", **common)
+    message = str(refused.value)
+    for accepted in ('"turtle"', '"ntriples"', '"nquads"'):
+        assert accepted in message, f"the refusal names {accepted}: {message}"
+
+
+def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
+    """All six proper subsets of the three, each told apart from the others.
+
+    A law is ``weights``, ``k`` and ``decay`` together. There are six ways to name
+    some and not the rest, and a refusal that described them with one sentence
+    would be useless in exactly the case a caller needs it: they wrote two of the
+    three and cannot see which one is missing. So each message is checked to name
+    the parts that arrived AND the parts that did not, and the two lists are
+    checked against each other — a message that named all three on both sides
+    would match either half alone.
+    """
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "statistics": STATISTICS,
+    }
+    request = [_lexical("quick fox", NOTE)]
+    weights = {NOTE_STRATUM: retrieval.SCALE}
+    labels = {
+        "weights": "`weights`",
+        "k": "the smoothing constant `k`",
+        "decay": "the `decay` rule",
+    }
+    whole = {"weights": weights, "k": 60, "decay": TRUNCATED}
+
+    # The three parts in the order the message lists them, so an expectation can
+    # be derived rather than transcribed six times.
+    order = ("weights", "k", "decay")
+    for supplied in (
+        ("weights",),
+        ("k",),
+        ("decay",),
+        ("weights", "k"),
+        ("weights", "decay"),
+        ("k", "decay"),
+    ):
+        absent = tuple(part for part in order if part not in supplied)
+        with pytest.raises(ValueError) as refused:
+            retrieval.compile(
+                DATA, request, **{part: whole[part] for part in supplied}, **common
+            )
+        message = str(refused.value)
+        arrived = " and ".join(labels[part] for part in order if part in supplied)
+        missing = " and ".join(labels[part] for part in absent)
+        assert f"named {arrived}, and left {missing} unnamed" in message, (
+            f"supplied {supplied}: {message}"
+        )
+
+    # The two neighbouring cases that are NOT refusals: all three name a law, and
+    # none of them names no law — which is compiled without one, not refused.
+    named = retrieval.compile(DATA, request, **whole, **common)
+    assert named["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
+    lawless = retrieval.compile(DATA, request, **common)
+    assert lawless["planned_resolution"] == {}
+    assert lawless["units"], "a call that names no law is still a compiled plan"
+
+
+def test_a_multi_block_declaration_reports_its_blocks_in_canonical_order() -> None:
+    """The blocks a producer declared are carried in canonical order, not the host's.
+
+    A declaration is a SET of blocks, so the order it was written in carries no
+    information and must not survive into anything a consumer reads — two hosts
+    that declared the same two blocks in different orders declared the same thing,
+    and a consumer comparing declarations has to see that.
+
+    It is read here out of the protocol refusal, which is where a multi-block
+    declaration lands with the shipped text producer: a stream restricted to more
+    than one block owes a block on every row, so that it can be held to the
+    declaration, and the shipped producer names none. The refusal is the honest
+    outcome — and it carries the declared set, in order.
+    """
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick fox", NOTE)]
+    assert NOTE_DOMAIN < TITLE_DOMAIN, "canonical order is over the tag IRIs"
+
+    for declared in ([NOTE_DOMAIN, TITLE_DOMAIN], [TITLE_DOMAIN, NOTE_DOMAIN]):
+        with pytest.raises(ValueError, match="restricted its candidates") as refused:
+            retrieval.search(
+                DATA,
+                request,
+                text_producers=_declared(
+                    (NOTE_PRODUCER, NOTE_STRATUM, NOTE, declared)
+                ),
+                **common,
+            )
+        message = str(refused.value)
+        assert f'["{NOTE_DOMAIN}", "{TITLE_DOMAIN}"]' in message, (
+            f"declared as {declared}, reported canonically: {message}"
+        )
+        assert NOTE_STRATUM in message, "and the stratum whose stream owed a block"
+
+    # The neighbouring single-block declaration IS satisfiable, because one block
+    # leaves nothing to disambiguate — so the refusal is about the ambiguity and
+    # not about declaring domains at all.
+    restricted = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN])),
+        **common,
+    )
+    assert restricted["domains"] == {NOTE_STRATUM: [NOTE_DOMAIN]}
+    assert restricted["rows"]

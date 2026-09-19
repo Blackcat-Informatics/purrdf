@@ -41,8 +41,11 @@
 //!   native engine's results into owned `Vec`s before returning, so a borrow of the
 //!   store never escapes into a `'static` `#[pyclass]`.
 //! * **Pure-Rust cores** — [`parse_quads`] and [`canonicalize_quads`] hold the
-//!   load-bearing logic and are unit-tested without a Python interpreter; the
-//!   `#[pymethods]` are thin wrappers over them.
+//!   load-bearing logic and stay PyO3-free; the `#[pymethods]` are thin wrappers
+//!   over them. Their coverage lives in `bindings/python/tests`, because this
+//!   crate builds no Rust test target: it is a PyO3 `extension-module`, so an
+//!   ordinary test executable has no interpreter to resolve the CPython API
+//!   against and fails at link (see this crate's `Cargo.toml`).
 //! * **Faithful object model** — the term/result classes mirror the slice of the
 //!   `pyoxigraph` API the codebase relies on, so the Python migration is a
 //!   mechanical import swap rather than a rewrite of ~150 call sites.

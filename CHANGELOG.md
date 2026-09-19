@@ -10,6 +10,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **build:** `scripts/check-python-binding-tests.py`, wired into `make check`,
+  `make pytest`, `make python-binding-hygiene` and CI. It fails if a `test`
+  predicate appears in any `cfg` invocation, or a `#[test]` attribute anywhere,
+  under `bindings/python/src`. That crate's manifest sets `test = false` because
+  the library is a PyO3 `extension-module`: it leaves the CPython API unresolved
+  for the interpreter to supply at `dlopen` time, which is what makes the `abi3`
+  manylinux wheel portable, so an ordinary test executable has no interpreter and
+  fails at link. A Rust test module there is consequently compiled by nothing and
+  run by nothing while looking exactly like coverage in a diff. Neither of the
+  textbook remedies is available -- a Cargo feature gating `extension-module` is
+  forbidden here, and dropping the attribute would link libpython into the
+  `cdylib` -- so the gate names the one route that works: the coverage belongs in
+  `bindings/python/tests`. `--self-test` proves it fires on both shapes and, just
+  as importantly, that it does not fire on prose describing them, so this crate's
+  own source can keep explaining the rule.
+
 - **retrieval:** A new publishable crate, `purrdf-retrieval`: the composition
   layer over the ranked property-function producers. One request becomes one
   answer across them through four stages -- a pure planner returning an
@@ -388,8 +404,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   is read and never reported. Rust callers have carried the reportable bound on
   the unit all along; the Python unit dict exposed only `"stratum"` and
   `"sparql"`, so the text's `LIMIT` was the only number in reach and it is the
-  wrong one. Each unit now carries `"depth"` beside its text -- the plan's own
-  recorded bound, not a number re-derived from the emitted `LIMIT` -- and the
+  wrong one. Each unit now carries `"depth"` beside its text -- the bound the
+  plan itself recorded, not a number re-derived from the emitted `LIMIT` -- and the
   surface states the obligation: keep at most `"depth"` rows. Where the
   producer's declared row bound already equals the depth no probe is emitted and
   the two numbers coincide, which is exactly why the bound cannot be read off the
@@ -443,6 +459,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   coarser rank resolution.
 
 ### Removed
+
+- **python:** Every Rust test module under `bindings/python/src` -- roughly
+  fifteen hundred lines across ten files, holding fifty-six `#[test]` functions
+  that no gate has ever built. The crate sets `test = false` for a sound and
+  documented reason (see the new hygiene gate above), so those modules were
+  compiled by nothing and run by nothing; one of them had silently accumulated a
+  shadowing error that no gate could have reported. Every property each asserted
+  is now asserted where it runs. Most were already covered by the pytest suite or
+  by a live test in the crate that owns the logic; the rest are covered by new
+  pytest tests -- the whole `purrdf.shex` surface (which had none at all), the
+  native term model's own identity and RDF 1.2 refusals, blank-node scoping across
+  and within a `Store.load`, the validation snapshot seam behind
+  `Shapes.validate_store`, codec fidelity for private-use language tags and
+  non-canonical lexical forms, the eight-format egress registry, RDFC-1.0
+  determinism over isomorphic graphs, the per-call SPARQL engine configuration,
+  `RdfDataset`'s layer classification, and seven further properties of the ranked
+  retrieval surface.
 
 - **retrieval:** `ProtocolError::RepeatedContribution` and
   `AdmissionError::DepthBeyondMonotoneRange`, the two refusals above, at the
