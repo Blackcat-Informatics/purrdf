@@ -39,6 +39,9 @@
 //! the fallible read-session seams, and it is meaningful only once those seams
 //! carry the bounded local buffers it is built to stress.
 
+pub mod alloc;
+
+use alloc::metered;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -49,7 +52,7 @@ use purrdf_core::{
 use purrdf_rdf::gts_fixtures::{keystone_base, keystone_contribution};
 use purrdf_rdf::{
     NativeRdfFormat, SerializeGraph, SerializeOptions, StatementLayer, import_gts_events,
-    parse_dataset, serialize_dataset_with,
+    parse_dataset, serialize_dataset_to_writer_with, serialize_dataset_with,
 };
 use purrdf_shapes::engine::{self as shacl_engine, GovernedValidation};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
@@ -298,26 +301,92 @@ fn roundtrip(profile: &Profile) -> Result<Vec<Metric>, String> {
             statement_layer: StatementLayer::PerFormatCapability,
             jsonld_options: None,
         };
-        let outcome = serialize_dataset_with(&*dataset, *format, None, &options)
-            .map_err(|d| format!("{label} serialize: {d}"))?;
+        // The EAGER leg: the whole document in one allocation, as before. Metered on
+        // its own so its cost is attributable rather than folded into the workload.
+        let (eager, eager_peak) = metered(|| {
+            serialize_dataset_with(&*dataset, *format, None, &options)
+        });
+        let outcome = eager.map_err(|d| format!("{label} serialize: {d}"))?;
         let dropped = (outcome.statement_rows_dropped
             + outcome.directional_literals_dropped
             + outcome.named_graph_rows_dropped) as u64;
-        let reparsed = parse_dataset(&outcome.bytes, media_type, None)
-            .map_err(|d| format!("{label} reparse: {d}"))?;
+        let eager_bytes = outcome.bytes.len() as u64;
+
+        // The round-trip conservation check, on the eager bytes. This is the
+        // workload's integrity obligation and it is NOT weakened to make a memory
+        // number move: every format still round-trips at full profile scale.
+        let (reparsed, reparse_peak) =
+            metered(|| parse_dataset(&outcome.bytes, media_type, None));
+        let reparsed = reparsed.map_err(|d| format!("{label} reparse: {d}"))?;
         let back = reparsed.rdf_row_count() as u64;
         if back + dropped != rows {
             return Err(format!(
                 "{label} round-trip lost rows: {rows} out, {back} back, {dropped} declared dropped"
             ));
         }
+        drop(reparsed);
+        drop(outcome);
+
+        // The STREAMED leg: identical dataset, identical options, identical scale —
+        // only the destination differs. Comparing these two is what attributes the
+        // difference to the sink rather than to a reshaped measurement.
+        let mut counted = CountingSink(0);
+        let (streamed, streamed_peak) = metered(|| {
+            serialize_dataset_to_writer_with(&*dataset, *format, None, &options, &mut counted)
+        });
+        let report = streamed.map_err(|d| format!("{label} streamed serialize: {d}"))?;
+
+        // Three independent counts of the same document must agree: what the eager
+        // path produced, what the serializer says it wrote, and what the sink
+        // actually received. A disagreement is a defect, not a metric.
+        if report.bytes_written != counted.0 || counted.0 != eager_bytes {
+            return Err(format!(
+                "{label} byte counts disagree: eager {eager_bytes}, reported \
+                 {}, received {}",
+                report.bytes_written, counted.0
+            ));
+        }
+
         metrics.push(match *label {
-            "nquads" => ("nquads_bytes", outcome.bytes.len() as u64),
-            "trig" => ("trig_bytes", outcome.bytes.len() as u64),
-            _ => ("jsonld_bytes", outcome.bytes.len() as u64),
+            "nquads" => ("nquads_bytes", eager_bytes),
+            "trig" => ("trig_bytes", eager_bytes),
+            _ => ("jsonld_bytes", eager_bytes),
+        });
+        metrics.push(match *label {
+            "nquads" => ("nquads_eager_peak_bytes", eager_peak),
+            "trig" => ("trig_eager_peak_bytes", eager_peak),
+            _ => ("jsonld_eager_peak_bytes", eager_peak),
+        });
+        metrics.push(match *label {
+            "nquads" => ("nquads_reparse_peak_bytes", reparse_peak),
+            "trig" => ("trig_reparse_peak_bytes", reparse_peak),
+            _ => ("jsonld_reparse_peak_bytes", reparse_peak),
+        });
+        metrics.push(match *label {
+            "nquads" => ("nquads_streamed_peak_bytes", streamed_peak),
+            "trig" => ("trig_streamed_peak_bytes", streamed_peak),
+            _ => ("jsonld_streamed_peak_bytes", streamed_peak),
         });
     }
     Ok(metrics)
+}
+
+/// Counts bytes and retains none of them.
+///
+/// The probe's OWN counter, deliberately not the serializer's: the two are
+/// cross-checked against each other every run, which they could not be if one were
+/// derived from the other.
+struct CountingSink(u64);
+
+impl std::io::Write for CountingSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The join query every profile measures: touches every group through both

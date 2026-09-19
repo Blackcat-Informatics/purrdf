@@ -22,6 +22,7 @@
 
 use std::sync::Arc;
 
+use purrdf_core::sink::TextSink;
 use purrdf_iri::BaseScope;
 
 use super::media_type::NativeRdfFormat;
@@ -75,17 +76,11 @@ pub(super) trait RdfCodec {
     /// Implementors MUST append. `out` may already hold a document's worth of text, and
     /// a codec that cleared it or assumed it began empty would corrupt a caller writing
     /// more than one graph into one buffer.
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic>;
-
-    /// Serialize a first-party [`SerGraph`] to this format's text.
-    ///
-    /// Provided in terms of [`serialize_into`](Self::serialize_into), so a codec gets it
-    /// for nothing and the two can never disagree about what the format emits.
-    fn serialize(&self, graph: &SerGraph) -> Result<String, RdfDiagnostic> {
-        let mut out = String::new();
-        self.serialize_into(graph, &mut out)?;
-        Ok(out)
-    }
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic>;
 }
 
 /// The shared implementor for the four line/Turtle-family formats, keyed by the wrapped
@@ -108,7 +103,11 @@ impl RdfCodec for LineCodec {
         super::parse::dataset_from_text_ser_graph(&graph)
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
         // The four text formats append directly, so `out` is the only buffer their
         // bytes ever occupy — no per-line `String`, no join, no trailing-newline copy.
         match self.0 {

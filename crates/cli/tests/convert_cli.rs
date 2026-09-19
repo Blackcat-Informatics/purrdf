@@ -2546,3 +2546,86 @@ fn the_base_hint_for_an_absolute_path_is_derived_and_encoded() {
         "the absolute-path suggestion is derived and encoded: {err}"
     );
 }
+
+/// A mid-document serializer failure removes the partial file rather than leaving a
+/// short one behind.
+///
+/// Streaming truncates the target when the write begins, so a failure part-way
+/// through leaves fewer rows than the caller asked for — and a short N-Triples
+/// document still PARSES. Silently losing rows is the worst shape this failure can
+/// take, so the partial file is removed and the message says so.
+#[test]
+fn file_target_partial_output_is_removed_on_failure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("in.nt");
+    // Many good rows, then a literal carrying U+FFFF — a scalar XML 1.0 cannot
+    // represent even by character reference. The refusal therefore fires PART WAY
+    // through, after earlier rows have already been written.
+    use std::fmt::Write as _;
+    let mut doc = String::new();
+    for i in 0..500 {
+        let _ = writeln!(
+            doc,
+            "<https://example.org/s{i}> <https://example.org/p> \"value {i}\" ."
+        );
+    }
+    doc.push_str(
+        "<https://example.org/bad> <https://example.org/p> \"bad\\uFFFF\" .\n",
+    );
+    std::fs::write(&source, doc).expect("write source");
+    let out = dir.path().join("out.rdf");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_purrdf"))
+        .args(["convert", "--from", "nt", "--to", "rdfxml"])
+        .arg(&source)
+        .arg(&out)
+        .output()
+        .expect("run convert");
+
+    assert!(
+        !result.status.success(),
+        "an XML-unrepresentable scalar must be refused; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        !out.exists(),
+        "the partial output file must not be left behind"
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("was removed"),
+        "the message must say the partial file was removed; got: {stderr}"
+    );
+}
+
+/// Overwriting an existing file truncates it, leaving no tail of the old contents.
+///
+/// `fs::write` gave this for free; streaming has to keep it.
+#[test]
+fn file_target_overwrite_truncates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("in.nt");
+    std::fs::write(
+        &source,
+        "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n",
+    )
+    .expect("write source");
+
+    let out = dir.path().join("out.nt");
+    std::fs::write(&out, "X".repeat(200_000)).expect("pre-existing long file");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_purrdf"))
+        .args(["convert", "--from", "nt", "--to", "nt"])
+        .arg(&source)
+        .arg(&out)
+        .output()
+        .expect("run convert");
+    assert!(result.status.success(), "conversion succeeds");
+
+    let written = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        !written.contains('X'),
+        "the previous contents must be fully truncated, not partially overwritten"
+    );
+    assert!(written.contains("https://example.org/s"));
+}

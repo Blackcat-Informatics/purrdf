@@ -23,17 +23,24 @@ const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
 pub(super) fn expand_document(
-    document: &JsonValue,
+    mut document: JsonValue,
     context: &CompiledJsonLdContext,
 ) -> Result<Document, RdfDiagnostic> {
-    let mut builder = Builder::new(document);
-    match document {
+    // The reserved-label pre-pass reads the whole parsed document, for the same
+    // reason the lowering pass does: a minted blank label must not collide with one
+    // used anywhere. It retains labels, not values.
+    let mut builder = Builder::new(&document);
+    match &mut document {
+        // Top-level entries are DRAINED, so each parsed entry is released as soon as
+        // it has been expanded rather than the whole parsed document standing beside
+        // the whole carrier. The expansion itself is unchanged — same entries, same
+        // order, same context.
         JsonValue::Array(entries) => {
-            for entry in entries {
-                builder.expand_graph_entry(entry, None, context)?;
+            for entry in core::mem::take(entries) {
+                builder.expand_graph_entry(&entry, None, context)?;
             }
         }
-        JsonValue::Object(_) => builder.expand_graph_entry(document, None, context)?,
+        JsonValue::Object(_) => builder.expand_graph_entry(&document, None, context)?,
         _ => {
             return Err(decode(
                 "JSON-LD document must be an object or array of objects",
@@ -79,15 +86,28 @@ pub(super) fn document_base(
     Ok(base)
 }
 
-pub(super) fn carrier_to_dataset(document: &Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let mut lowerer = Lowerer::new(document);
-    for node in &document.default_nodes {
-        lowerer.lower_node(node, None)?;
+pub(super) fn carrier_to_dataset(
+    mut document: Document,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    // The reserved-label pre-pass reads the whole carrier, and has to: a minted
+    // list node must not collide with a blank label used ANYWHERE in the document,
+    // which is not knowable from one node. But what it retains is labels — an
+    // index — not node bodies, so it does not stand in the way of releasing each
+    // node once its quads exist.
+    let mut lowerer = Lowerer::new(&document);
+
+    // Nodes are DRAINED rather than borrowed. Each is dropped as soon as it has
+    // been lowered, so the carrier shrinks while the quad table grows instead of
+    // the two standing at full size together. The emitted quads are unchanged:
+    // this is the same walk in the same order, differing only in who owns the node
+    // while it happens.
+    for node in core::mem::take(&mut document.default_nodes) {
+        lowerer.lower_node(&node, None)?;
     }
-    for graph in &document.named_graphs {
+    for mut graph in core::mem::take(&mut document.named_graphs) {
         let graph_name = id_term(&graph.id)?;
-        for node in &graph.nodes {
-            lowerer.lower_node(node, Some(&graph_name))?;
+        for node in core::mem::take(&mut graph.nodes) {
+            lowerer.lower_node(&node, Some(&graph_name))?;
         }
     }
     crate::dataset_from_quads(&lowerer.quads)
