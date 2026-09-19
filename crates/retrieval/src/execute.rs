@@ -228,7 +228,9 @@ pub struct ExecutionResult {
 /// change if one were ever found. [`Self::InconsistentWitness`] is that second
 /// condition, and it is added on the terms that argument set rather than
 /// against them: a variant no path can construct is worse than no variant, and
-/// this one is reached by a real observation the executor now makes.
+/// this one is reached by a real observation the executor now makes — an index
+/// that moved between two of one run's invocations, executed end to end in
+/// `tests/execute_dataset.rs`.
 ///
 /// What makes it whole-run rather than per-stratum is *what it observes*. A
 /// witness that does not describe exactly one relation, one index generation
@@ -237,6 +239,34 @@ pub struct ExecutionResult {
 /// admission waist about what was registered, or an index moving underneath the
 /// query. Neither fact is confined to the stratum that noticed it, and the
 /// remaining strata's answers rest on the same two assumptions.
+///
+/// # The witness rule is the reachable construction; the budget arm is not
+///
+/// [`execute`] raises [`Self::InconsistentWitness`] from two places, and they
+/// are not equal. The witness rule is the observation just described. The other
+/// is the `GovernedOutcome::BudgetExhausted` arm, and **nothing a compiled unit
+/// can do reaches it today** — which is worth writing down plainly rather than
+/// leaving a reader to infer that the executor has seen one.
+///
+/// It is not removable, and that is the honest resolution rather than an excuse.
+/// `GovernedOutcome` is deliberately *not* `#[non_exhaustive]`: its two variants
+/// are the whole taxonomy a governor can produce, so the compiler requires both
+/// to be handled and the only open question is what this stage does with the
+/// second. The two alternatives are worse than a refusal nothing reaches. Taking
+/// the partial rows as an answer would report a truncated read as a stratum that
+/// exhausted — the silent drop, certified. Panicking would turn a condition this
+/// crate cannot rule out *by type* into a crash in a library.
+///
+/// What rules it out is the lane's configuration, which is a fact about two
+/// values rather than about this enum: [`QueryGovernors::UNBOUNDED`] engages no
+/// caller-settable ceiling and carries no stop signal, leaving only the
+/// evaluator's fixed recursion guard on user-function depth engaged; and the
+/// options built below inject no user-function registry, so a unit cannot enter
+/// a user function at all, let alone nest one past a build constant. Both halves
+/// are executed in `tests/execute_dataset.rs` beside the witness test, so a
+/// later change to either — a ceiling added to the lane, a registry injected —
+/// reddens a test rather than quietly making a documented impossibility
+/// possible.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ExecutionError {
@@ -265,6 +295,12 @@ pub enum ExecutionError {
     /// The invocation count is deliberately not part of the rule; see this
     /// module's header for why tightening it to include the count would be a
     /// flake rather than a check.
+    ///
+    /// One other condition is reported here, for want of a whole-run refusal
+    /// that would mean anything different: a governed outcome that tripped on a
+    /// lane which declined every ceiling. It is the same shape of fact — the run
+    /// did not happen under the assumptions it was compiled against — and it is
+    /// unreachable through this lane's configuration, per this type's own docs.
     #[error("stratum {stratum}: the relation witness is not a compiled unit's: {reason}")]
     InconsistentWitness {
         /// The stratum whose unit produced the witness. Boxed because an
@@ -540,12 +576,19 @@ pub async fn execute<D: DatasetView + Sync>(
                 );
             }
             Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
-                // `UNBOUNDED` declines every caller-settable ceiling, so a trip
-                // is the same class of impossibility the witness rule catches:
+                // A required arm over an outcome no unit on this lane can reach
+                // — the enum is exhaustive by design, so this case is handled
+                // here or nowhere. `UNBOUNDED` declines every caller-settable
+                // ceiling and carries no stop signal, and these options inject
+                // no user-function registry, so the one ceiling that remains has
+                // no charge site a unit can enter; see `ExecutionError` for the
+                // full argument and the tests that pin both halves.
+                //
+                // What it must not do is take the partial rows: a trip means
                 // something other than this call's governors stopped the run,
-                // and whatever rows it reached are a partial answer nothing here
-                // asked for. It is reported as the whole-run refusal it is,
-                // naming the governor, rather than as a stratum that answered.
+                // and reporting its rows as a stratum's answer would certify a
+                // truncated read as an exhausted one. So it is the whole-run
+                // refusal it would be, naming the governor that did it.
                 return Err(ExecutionError::InconsistentWitness {
                     stratum: Box::new(unit.stratum.clone()),
                     reason: format!(
