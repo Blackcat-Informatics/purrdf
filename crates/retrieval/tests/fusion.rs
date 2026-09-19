@@ -6956,8 +6956,8 @@ fn lossy_contract() -> StreamContract {
     )
 }
 
-// T8.1. AC1 + AC2: the two strata are distinguishable in the trailer alone, and
-// the producer's own string arrives byte for byte.
+// T8.1. An approximate stratum and an exact one are distinguishable in the
+// trailer alone, and the producer's own string arrives byte for byte.
 #[test]
 fn an_approximate_stratum_is_distinguishable_from_an_exact_one_in_the_trailer() {
     let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
@@ -7001,8 +7001,8 @@ fn an_approximate_stratum_is_distinguishable_from_an_exact_one_in_the_trailer() 
     );
 }
 
-// T8.2. AC3: an exhaustive stratum is REPORTED exact, never omitted. A consumer
-// must never have to read an absent key as a claim.
+// T8.2. An exhaustive stratum is REPORTED exact, never omitted. A consumer must
+// never have to read an absent key as a claim.
 #[test]
 fn an_exhaustive_stratum_is_reported_rather_than_left_out() {
     let profile = profile(&[("text", Fixed::ONE)], K);
@@ -7053,9 +7053,10 @@ fn the_fidelity_map_is_keyed_like_the_maps_beside_it() {
     assert_eq!(fidelities, domains);
 }
 
-// T8.4. AC4, and the defect this work exists to remove. `Exhausted` beside a
-// lossy declaration is not a completeness claim, and the answer-level verdict
-// says so rather than leaving it to prose.
+// T8.4. A status is not, on its own, a completeness claim -- the defect this
+// work exists to remove. `Exhausted` beside a lossy declaration is not a
+// completeness claim, and the answer-level verdict says so rather than leaving
+// it to prose.
 #[test]
 fn exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact() {
     let profile = profile(&[("vector", Fixed::ONE)], K);
@@ -7092,8 +7093,9 @@ fn exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact() {
     );
 }
 
-// T8.5. AC5. The neighbouring case that must not move: a fusion of exhaustive
-// producers reports exactly what it reported before this term existed.
+// T8.5. Existing statuses are unchanged for exact producers. The neighbouring
+// case that must not move: a fusion of exhaustive producers reports exactly what
+// it reported before this term existed.
 #[test]
 fn a_fusion_of_exhaustive_producers_is_still_exact() {
     let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);

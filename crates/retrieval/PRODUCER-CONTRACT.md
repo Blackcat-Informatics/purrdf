@@ -985,12 +985,12 @@ whether the rows that ended it were all the rows that were *due*. It also drives
 index does and for the identical reason — see
 [A14](#a14--attest-the-generation-that-answered-and-say-when-it-was-short).
 
-**It is part of the plan's identity.** The declaration folds into the registry's
-content fingerprint and so into the plan id: a plan drawn from producers that
-approximate is not the plan drawn from producers that do not, and the two answers
-differ in what they may be read to claim. **A consequence worth knowing before
-you edit an evidence string:** changing that sentence changes every plan that
-names the producer.
+**It is part of a compiled plan's identity.** The declaration folds into the
+registry's content fingerprint and so into the plan id: a plan drawn from
+producers that approximate is not the plan drawn from producers that do not, and
+the two answers differ in what they may be read to claim. **A consequence worth
+knowing before you edit an evidence string:** changing that sentence changes
+every plan that names the producer.
 
 Pinned by `the_declaration_carries_the_profile_evidence_byte_for_byte` and
 `the_order_axis_is_a_function_of_the_loss_contract_and_not_a_literal` in

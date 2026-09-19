@@ -231,7 +231,8 @@ fn a_fused_answer_names_which_stratum_was_served_approximately() {
     let text = stratum(TEXT_STRATUM);
     let hnsw = stratum(HNSW_STRATUM);
 
-    // AC1, read from the returned answer alone. No registry is consulted here.
+    // The two strata are distinguishable from the returned answer alone. No
+    // registry is consulted here.
     assert_eq!(
         result.trailer.fidelities[&text],
         RankFidelity::EXACT,
@@ -243,7 +244,8 @@ fn a_fused_answer_names_which_stratum_was_served_approximately() {
         "and the approximate one does not: {approximate:?}"
     );
 
-    // AC2, through the whole ladder, against the shipped constant.
+    // The producer's own loss evidence, verbatim through the whole ladder,
+    // against the shipped constant.
     let Completeness::Lossy { evidence } = &approximate.completeness else {
         panic!("an HNSW search offers candidates and never certifies absence");
     };
@@ -292,7 +294,8 @@ fn the_answer_is_estimated_and_names_only_the_responsible_stratum() {
 
 #[test]
 fn a_status_and_a_fidelity_are_read_together_end_to_end() {
-    // AC4 on the shipped producers. The status the approximate stratum reports
+    // A status is not, on its own, a completeness claim -- on the shipped
+    // producers. The status the approximate stratum reports
     // is an ordinary read ending -- the same one an exhaustive producer
     // reports -- which is exactly why it cannot be the channel that carries
     // the approximation.
