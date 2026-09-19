@@ -90,6 +90,29 @@ pub struct Measurement {
     /// allocates (a `WholeProcessWindow` sees only the frees that occur inside
     /// it, so releasing a structure built before the window opened reads as a
     /// negative retention).
+    ///
+    /// # Reading this from a [`CurrentThreadWindow`]: it is a per-thread
+    /// ledger, not process-wide ownership accounting
+    ///
+    /// When this [`Measurement`] came from a [`CurrentThreadWindow`], this
+    /// field is the OPENING THREAD's live-byte delta — `alloc`/`dealloc`
+    /// calls made ON THAT THREAD, nothing else. It does not track which
+    /// thread logically *owns* a buffer, only which thread's ledger recorded
+    /// the call. A buffer allocated on the window's thread and later freed by
+    /// a different thread (a `rayon` worker, a spawned thread the caller
+    /// handed it to) never records a `dealloc` on the opening thread's
+    /// ledger, so it reads here as still retained even though it has, in
+    /// fact, been freed. The mirror case under-reports: a buffer allocated on
+    /// another thread and freed on the window's thread lowers this thread's
+    /// live-byte count (and can drive it negative) for a buffer this window
+    /// never saw allocated. Both are the ledger doing exactly what it is
+    /// documented to do — count this thread's calls — not a bug; the bug
+    /// would be trusting this figure as ownership accounting when allocation
+    /// and deallocation of the measured region's results can cross threads.
+    /// When ownership crosses threads, use [`WholeProcessWindow`] instead: it
+    /// reads one ledger that every thread's `alloc`/`dealloc` calls update,
+    /// so a cross-thread free is still counted against the region that freed
+    /// it.
     pub retained_bytes: i64,
     /// The largest working-set span observed during the window: the
     /// high-water mark of live bytes minus the low-water mark, both measured
@@ -107,6 +130,13 @@ pub struct Measurement {
     /// opened, which used to pull live below the anchor and depress the
     /// reported peak below the measured region's true working set. Fixing
     /// that can only move this figure upward, never down.
+    ///
+    /// From a [`CurrentThreadWindow`], both marks derive from the same
+    /// per-thread live-byte cell as [`Measurement::retained_bytes`], so this
+    /// span carries the identical cross-thread-ownership caveat documented
+    /// there: it is the opening thread's high-water span, not the measured
+    /// region's, when the region's allocations and deallocations do not all
+    /// happen on that one thread.
     pub peak_working_bytes: i64,
 }
 
@@ -414,6 +444,28 @@ unsafe impl GlobalAlloc for CountingAllocator {
 /// under measurement is parallel, [`WholeProcessWindow`] is the only correct
 /// choice.
 ///
+/// # Hazard: its byte fields are a per-thread ledger, not ownership accounting
+///
+/// [`Measurement::retained_bytes`] and [`Measurement::peak_working_bytes`]
+/// read this window's OPENING THREAD's live-byte cell — they track which
+/// thread's `alloc`/`dealloc` calls the counting allocator recorded, not
+/// which thread logically owns the memory. If the measured region hands a
+/// buffer it allocated to another thread, and that thread is the one that
+/// drops it, no `dealloc` is ever recorded against the opening thread's
+/// ledger, so the buffer reads here as still retained after it has actually
+/// been freed. The inverse also happens: a buffer allocated elsewhere and
+/// freed on this thread lowers this thread's live-byte count for memory this
+/// window never saw allocated, which can even drive the reported trough (and
+/// so the peak span) below what the opening thread's own work produced. Both
+/// readings are the ledger doing exactly what it is documented to do; the
+/// mistake would be reading them as a process-wide ownership account when the
+/// measured region's allocations and frees do not all happen on the one
+/// thread that opened the window. [`WholeProcessWindow`] is the correct
+/// choice whenever object ownership can cross threads, precisely because it
+/// reads one ledger every thread's calls update, so a cross-thread free is
+/// still counted against the region that freed it rather than misattributed
+/// to whichever thread happened to hold the token.
+///
 /// The window is neither `Send` nor `Sync`: the thread that opens it is the
 /// thread it measures, and moving the token elsewhere would read a ledger that
 /// is not the one it opened over.
@@ -677,6 +729,40 @@ mod tests {
         assert!(
             measured.requested_bytes < PROBE_BYTES as u64,
             "a per-thread window counted another thread's allocation: {measured:?}"
+        );
+    }
+
+    /// Executes the documented cross-thread-ownership hazard rather than just
+    /// asserting it in prose: a buffer this thread allocates, then hands off
+    /// to a DIFFERENT thread to free, never records a `dealloc` against this
+    /// window's per-thread ledger, so it must read here as still retained
+    /// even though the process has, in fact, freed it. `CurrentThreadWindow`
+    /// counts allocator calls made on the thread that opened it, not object
+    /// ownership — this is that distinction observed operationally, matching
+    /// the semantics documented on [`Measurement::retained_bytes`] and on
+    /// [`CurrentThreadWindow`] itself.
+    #[test]
+    fn a_current_thread_window_reads_a_buffer_freed_on_another_thread_as_retained() {
+        let _exclusive = exclusive();
+        let window = CurrentThreadWindow::open();
+        // Allocated HERE, on the thread that opened the window.
+        let buffer = probe_buffer();
+
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let dropper = thread::spawn(move || {
+            let buffer = rx.recv().expect("the buffer is sent");
+            // Freed on the OTHER thread — the dealloc lands on ITS ledger,
+            // never on the opening thread's.
+            drop(buffer);
+        });
+        tx.send(buffer).expect("the dropper thread is alive");
+        dropper.join().expect("the dropper thread completes");
+
+        let measured = window.close();
+        assert!(
+            measured.retained_bytes >= PROBE_BYTES as i64,
+            "a buffer freed on another thread must still read as retained on \
+             the allocating thread's per-thread ledger: {measured:?}"
         );
     }
 

@@ -12,13 +12,20 @@
 //! deterministic snapshot emission over a representative folded graph.
 //! Reader cases vary blob count independently of payload size and compare
 //! standalone decryption with encrypted frame streaming. Allocation counters
-//! report cumulative traffic on the calling thread, not peak memory or a
-//! process-wide total; parallel full folds can allocate on other threads.
+//! report cumulative traffic on the calling thread, not peak memory, unless
+//! noted otherwise at the probe: `read`'s full fold always reaches
+//! `reader::parallel_content_ids`'s `rayon::par_iter` (every segment's frame
+//! ids are hashed in parallel, unconditionally, not just above a segment-count
+//! threshold), so that one probe uses a [`purrdf_alloc_probe::WholeProcessWindow`]
+//! instead — a per-thread window there would miss every worker's traffic and
+//! report the parallel fold as nearly free. The streaming-sink reader
+//! (`read_to_sink_with_options`) never reaches rayon: it walks frames one at a
+//! time on the calling thread, so its probes stay per-thread.
 
 use ciborium::value::Value;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ed25519_dalek::SigningKey;
-use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
@@ -387,7 +394,13 @@ fn bench_reader_scaling(c: &mut Criterion) {
                     });
                 },
             );
-            let window = CurrentThreadWindow::open();
+            // `read` always folds through `reader::parallel_content_ids`, which
+            // hashes every frame's content id via `rayon::par_iter`
+            // unconditionally (not gated on segment count or a content-key
+            // resolver) — so this probe MUST be a `WholeProcessWindow`. A
+            // `CurrentThreadWindow` here would miss every worker thread's
+            // traffic and report the fold as far cheaper than it is.
+            let window = WholeProcessWindow::open();
             let graph = read(&data, true, None);
             let allocated = window.close();
             assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
