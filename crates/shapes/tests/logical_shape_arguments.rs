@@ -286,3 +286,49 @@ ex:bare      a ex:Thing ; ex:p ex:v2 {| ex:source ex:s |} .
         "only the statement whose reifier lacks ex:certainty is reported"
     );
 }
+
+/// The same reifier shape, reached through `sh:node` rather than evaluated at the
+/// top level.
+///
+/// A shape reached through a logical constraint is asked only whether it HOLDS,
+/// so its traversal never builds the results the top-level one reports — and a
+/// `sh:reifierShape` is the one place where an inner result is an INPUT rather
+/// than discarded output, because a reported reifier violation inherits the
+/// inner result's message. That makes it the one place where the conformance
+/// traversal has to answer the question a different way, and therefore the one
+/// place where it could answer it differently.
+///
+/// Both directions are asserted: the holder whose thing has a well-formed
+/// reifier must conform, and the holder whose thing does not must be reported.
+#[test]
+fn reifier_shape_reached_through_sh_node() {
+    let shapes_ttl = r"
+ex:Inner a sh:NodeShape ;
+    sh:property [
+        sh:path ex:p ;
+        sh:reifierShape [ sh:path ex:certainty ; sh:minCount 1 ] ;
+    ] .
+ex:S a sh:NodeShape ; sh:targetClass ex:Holder ;
+    sh:property [ sh:path ex:thing ; sh:node ex:Inner ] .
+";
+    let data_ttl = r#"
+ex:goodHolder a ex:Holder ; ex:thing ex:annotated .
+ex:badHolder  a ex:Holder ; ex:thing ex:bare .
+ex:annotated ex:p ex:v1 {| ex:certainty "high" |} .
+ex:bare      ex:p ex:v2 {| ex:source ex:s |} .
+"#;
+    let shapes = parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).expect("shapes parse");
+    let data: Arc<_> =
+        parse_turtle_to_dataset(&format!("{PREFIXES}{data_ttl}"), None).expect("data parse");
+    let report = validate_dataset(&data, &shapes).expect("validation runs");
+    let focus: Vec<String> = report
+        .results
+        .iter()
+        .map(|r| r.focus_node.to_string())
+        .collect();
+    assert_eq!(
+        focus,
+        vec!["<http://example.org/ns#badHolder>".to_owned()],
+        "only the holder whose thing carries an unannotated statement is reported"
+    );
+}
