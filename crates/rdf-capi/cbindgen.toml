@@ -40,7 +40,8 @@ prefix = ""
 # out-of-range value), so cbindgen would drop them — force-export them so C
 # callers retain the named constants. `PurrdfResultKind` plus the eight governor
 # enums below are likewise force-included because governed structs and out-parameter
-# representations carry their discriminants as `int32_t`.
+# representations carry their discriminants as `int32_t` — and so is
+# `PurrdfShaclChangeScopeKind`, the SHACL change-path scope, for the same reason.
 include = [
     "PurrdfStatus",
     "PurrdfTermKind",
@@ -55,6 +56,7 @@ include = [
     "PurrdfEntailmentQueryOutcomeKind",
     "PurrdfUpdateOutcomeKind",
     "PurrdfPartialKind",
+    "PurrdfShaclChangeScopeKind",
 ]
 
 [enum]

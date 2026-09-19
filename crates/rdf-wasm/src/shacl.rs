@@ -8,6 +8,21 @@
 //! boundary: validate a data graph (N-Triples) against a shapes graph (Turtle)
 //! and return a SARIF 2.1.0 JSON string that editors and CI dashboards consume.
 //!
+//! # Validating a CHANGE rather than a graph
+//!
+//! `shaclValidateChangesToSarif` is the incremental twin: hand it both halves of
+//! a delta — the rows joining the data graph and the rows leaving it — and the
+//! engine expands the change into the focus nodes it can move and re-validates
+//! exactly those. A browser host that edits a graph as the user types asks *what
+//! did my last change break?* and pays for the change rather than for the graph.
+//!
+//! It returns a [`ShaclChangeValidation`] rather than a bare string, because the
+//! log alone cannot say which question it answered: a bounded run reports about
+//! the affected focus nodes, while a shapes graph whose constraints read through
+//! SPARQL query text has no bounded footprint and falls back to validating the
+//! whole mutated graph. The fallback is not optional — a short expansion and a
+//! clean bill of health are indistinguishable in a report.
+//!
 //! # Prepared products, and why a refusal is a CLASS here rather than a message
 //!
 //! `shaclPackProduct` compiles a shapes graph once into a digest-chained product a
@@ -77,6 +92,144 @@ pub fn shacl_validate_to_sarif(
 ) -> Result<String, JsError> {
     validate_to_sarif_impl(shapes_ttl, shapes_base.as_deref(), data_nt)
         .map_err(|e| JsError::new(&e))
+}
+
+/// The outcome of `shaclValidateChangesToSarif`: the SARIF log, and the SCOPE that
+/// log describes.
+///
+/// Two facts rather than one, because a report alone cannot say which question it
+/// answered. `bounded === true` means the log covers the focus nodes the change
+/// could move — for those nodes it is identical, results and ordering alike, to a
+/// full validation of the mutated graph — and is silent about a pre-existing
+/// violation the change cannot reach, so an empty log means *this change
+/// introduced no violation*. `bounded === false` means the shapes graph reads
+/// through SPARQL query text, no bounded footprint exists for it, the call fell
+/// back to a FULL validation of the mutated graph, and an empty log means *the
+/// graph conforms*. The weaker reading is the dangerous one, so it is stated
+/// rather than left to be assumed.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and
+/// is released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclChangeValidation {
+    /// The SARIF 2.1.0 log, rendered once here rather than on each read.
+    sarif: String,
+    /// Which question `sarif` answered, carried as the engine's own two-armed
+    /// answer rather than re-spelled as a pair of nullable fields — a pair admits
+    /// a fourth state the engine cannot produce.
+    scope: purrdf_validate::ChangeScope,
+}
+
+#[wasm_bindgen]
+impl ShaclChangeValidation {
+    /// The SARIF 2.1.0 JSON log. See `bounded` for what it describes.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn sarif(&self) -> String {
+        self.sarif.clone()
+    }
+
+    /// Whether the change's footprint could be bounded.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn bounded(&self) -> bool {
+        self.scope.is_bounded()
+    }
+
+    /// How many focus nodes the change was expanded into, or `undefined` when the
+    /// footprint could not be bounded and the whole graph was validated.
+    ///
+    /// `undefined` rather than the graph's node count on the fallback path: "every
+    /// focus node in the graph" and a number are different statements, and
+    /// collapsing them would make a fallback indistinguishable from a large
+    /// bounded expansion.
+    #[wasm_bindgen(getter = focusNodes)]
+    #[must_use]
+    pub fn focus_nodes(&self) -> Option<usize> {
+        self.scope.focus_nodes()
+    }
+
+    /// Which construct made this shapes graph's change footprint unbounded, or
+    /// `undefined` when it was bounded.
+    ///
+    /// Actionable rather than decorative: it names what to change to get
+    /// incremental validation back.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn reason(&self) -> Option<String> {
+        self.scope.reason().map(ToOwned::to_owned)
+    }
+}
+
+/// Validate a CHANGE to `data_nt` against `shapes_ttl`, returning the SARIF log
+/// beside the scope it describes. Native-testable core.
+///
+/// Returns a plain `String` error (NOT a `JsError`) for the reason
+/// [`validate_to_sarif_impl`] does, and the engine's own `ChangeScope` rather than
+/// the guest class, so the loop is exercisable off wasm.
+pub(crate) fn validate_changes_to_sarif_impl(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+    added_nt: Option<&str>,
+    removed_nt: Option<&str>,
+) -> Result<(String, purrdf_validate::ChangeScope), String> {
+    purrdf_validate::validate_changes_to_sarif_string(
+        shapes_ttl,
+        shapes_base,
+        data_nt,
+        added_nt,
+        removed_nt,
+        &purrdf_validate::SarifOptions::default(),
+    )
+}
+
+/// `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?)`
+/// → a `ShaclChangeValidation` carrying a SARIF 2.1.0 JSON string and its scope.
+///
+/// The incremental twin of [`shacl_validate_to_sarif`]: instead of re-validating
+/// the whole graph after an edit, hand it both halves of the delta and the engine
+/// expands the change into the focus nodes it can move and re-validates exactly
+/// those. A host that edits a graph and asks *what did my last change break?* pays
+/// for the change rather than for the graph.
+///
+/// `addedNt` is the rows joining `dataNt` and `removedNt` the rows leaving it,
+/// each an N-Triples string or omitted. Both halves, because a verdict moves when
+/// a row leaves the graph as readily as when one joins, and one parameter would be
+/// half a delta. Additions apply before removals, so a change naming the same row
+/// on both halves settles on *removed*; a removal naming a row `dataNt` does not
+/// carry retracts nothing rather than throwing, because a change set describes
+/// what moved and does not assert what the base contained.
+///
+/// `shapesBase` carries the same meaning it does on [`shacl_validate_to_sarif`] —
+/// the shapes document's own base IRI, supplied by the host because a wasm guest
+/// has no retrieval IRI to derive one from.
+///
+/// **Read `bounded` before the log.** It decides what the log MEANS; see
+/// [`ShaclChangeValidation`]. The unbounded fallback is not optional — a short
+/// expansion and a clean bill of health are indistinguishable in a report.
+///
+/// Throws (rejects) if the shapes graph or any of the three N-Triples documents
+/// fails to parse. Call `.free()` on the returned object when done.
+#[wasm_bindgen(js_name = shaclValidateChangesToSarif)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_validate_changes_to_sarif(
+    shapes_ttl: &str,
+    data_nt: &str,
+    added_nt: Option<String>,
+    removed_nt: Option<String>,
+    shapes_base: Option<String>,
+) -> Result<ShaclChangeValidation, JsError> {
+    let (sarif, scope) = validate_changes_to_sarif_impl(
+        shapes_ttl,
+        shapes_base.as_deref(),
+        data_nt,
+        added_nt.as_deref(),
+        removed_nt.as_deref(),
+    )
+    .map_err(|e| JsError::new(&e))?;
+    Ok(ShaclChangeValidation { sarif, scope })
 }
 
 /// Entail `data_nt` under `shapes_ttl` and render the MATERIALIZED dataset (base
@@ -489,6 +642,95 @@ mod tests {
     #[test]
     fn malformed_shapes_is_an_error() {
         assert!(validate_to_sarif_impl("@@@ not turtle", None, DATA).is_err());
+    }
+
+    /// A conforming base, so every violation a change test sees is the change's.
+    const CHANGE_BASE: &str = "<http://example.org/alice> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+
+    /// The row that breaks it.
+    const BAD_AGE: &str = "<http://example.org/alice> <http://example.org/age> \"nope\" .\n";
+
+    /// The bounded arm: the change is validated, the scope says what the log is
+    /// about, and the log is the one a full validation of the merged graph
+    /// produces — a cheaper route to ONE answer, never a second answer.
+    #[test]
+    fn a_change_reaches_the_full_validations_own_log() {
+        let (sarif, scope) =
+            validate_changes_to_sarif_impl(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
+                .expect("the change validates");
+        assert_eq!(scope.focus_nodes(), Some(1));
+        assert!(scope.is_bounded());
+        assert_eq!(
+            sarif,
+            validate_to_sarif_impl(SHAPES, None, &format!("{CHANGE_BASE}{BAD_AGE}"))
+                .expect("full validation"),
+        );
+
+        // The retract half is a real half: taking the row back out restores
+        // conformance through the same one call.
+        let merged = format!("{CHANGE_BASE}{BAD_AGE}");
+        let (sarif, scope) =
+            validate_changes_to_sarif_impl(SHAPES, None, &merged, None, Some(BAD_AGE))
+                .expect("the retraction validates");
+        assert!(scope.is_bounded());
+        assert!(!sarif.contains("\"level\": \"error\""), "{sarif}");
+    }
+
+    /// The fallback arm, and the guest class that carries it: a shapes graph
+    /// reading through query text validates EVERYTHING and says why.
+    #[test]
+    fn an_unbounded_footprint_is_reported_as_such_across_the_boundary() {
+        const SPARQL_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:PersonShape a sh:NodeShape ;\n\
+              sh:targetClass ex:Person ;\n\
+              sh:sparql [ a sh:SPARQLConstraint ;\n\
+                sh:message \"every person needs a name\" ;\n\
+                sh:select \"\"\"SELECT $this WHERE { FILTER NOT EXISTS \
+                  { $this <http://example.org/name> ?n } }\"\"\" ] .\n";
+        let (sarif, scope) =
+            validate_changes_to_sarif_impl(SPARQL_SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
+                .expect("the change validates");
+        let validation = ShaclChangeValidation { sarif, scope };
+
+        assert!(!validation.bounded());
+        assert_eq!(
+            validation.focus_nodes(),
+            None,
+            "a fallback covers no COUNT: every focus node is not a number",
+        );
+        assert!(validation.reason().is_some_and(|reason| !reason.is_empty()));
+        assert!(
+            validation.sarif().contains("alice"),
+            "the fallback validated the whole graph",
+        );
+
+        // The neighbouring BOUNDED case still reports a count and no reason.
+        let (sarif, scope) =
+            validate_changes_to_sarif_impl(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
+                .expect("the change validates");
+        let bounded = ShaclChangeValidation { sarif, scope };
+        assert!(bounded.bounded());
+        assert_eq!(bounded.focus_nodes(), Some(1));
+        assert_eq!(bounded.reason(), None);
+    }
+
+    #[test]
+    fn a_malformed_change_document_is_an_error() {
+        assert!(
+            validate_changes_to_sarif_impl(
+                SHAPES,
+                None,
+                CHANGE_BASE,
+                Some("@@@ not n-triples"),
+                None,
+            )
+            .is_err()
+        );
+        // The neighbouring VALID case still succeeds — a refusal is a claim too.
+        validate_changes_to_sarif_impl(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
+            .expect("a well-formed change document still validates");
     }
 
     // A shapes graph with a `sh:TripleRule` that types every `ex:Person` as an

@@ -8,6 +8,23 @@
 //! SHACL engine and its SARIF reporting boundary, writing the report bytes into
 //! the shared [`PurrdfBuffer`].
 //!
+//! # Validating a CHANGE rather than a graph
+//!
+//! `purrdf_shacl_validate_changes_to_sarif` is the incremental twin: hand it both
+//! halves of a delta — the rows joining the data graph and the rows leaving it —
+//! and the engine expands the change into the focus nodes it can move and
+//! re-validates exactly those. A host that edits a graph and asks *what did my
+//! last change break?* pays for the change rather than for the graph.
+//!
+//! It returns the scope beside the report, and that is not decoration. A bounded
+//! run reports about the affected focus nodes, so an empty log means "this change
+//! introduced no violation"; a shapes graph whose constraints read through SPARQL
+//! query text has no bounded footprint, so the run falls back to validating the
+//! whole mutated graph and an empty log means "the graph conforms". The fallback
+//! is not optional — a short expansion and a clean bill of health are
+//! indistinguishable in a report — and a caller that cannot tell the two readings
+//! apart has been handed the weaker one believing it is the stronger.
+//!
 //! # Prepared products, and the one thing this ABI cannot carry
 //!
 //! `purrdf_shapes_product_encode` compiles a shapes graph once into a
@@ -45,7 +62,8 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::{
-    SarifOptions, ShapesProductRefusal, entail_to_ntriples_string, validate_to_sarif_string,
+    ChangeScope, SarifOptions, ShapesProductRefusal, entail_to_ntriples_string,
+    validate_changes_to_sarif_string, validate_to_sarif_string,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -104,6 +122,150 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
             let data = cstr_to_str(data_nt)?;
             let bytes = validate_to_sarif_bytes(shapes, base, data)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            *out_buffer = PurrdfBuffer::into_raw(bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Which question a change-path report answered, written to
+/// `purrdf_shacl_validate_changes_to_sarif`'s `out_scope`.
+///
+/// Append-only, like every other discriminant this ABI exports: never renumber a
+/// variant. It is carried as an `int32_t` out-parameter rather than as this enum
+/// type so a C caller writing an out-of-range value cannot produce an invalid
+/// discriminant, exactly as the governed query/update outcomes are carried.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfShaclChangeScopeKind {
+    /// The change's footprint was bounded: the report covers the affected focus
+    /// nodes, and `conforms` means THIS CHANGE introduced no violation.
+    Bounded = 0,
+    /// No bounded footprint exists for this shapes graph: the report covers the
+    /// whole mutated graph, and `conforms` means THE GRAPH conforms.
+    Everything = 1,
+}
+
+/// Validate a CHANGE to `data_nt` against `shapes_ttl` and render the report to
+/// SARIF 2.1.0 bytes, beside the scope it describes. Native-testable,
+/// pointer-free core.
+///
+/// The expand-then-validate sequence lives in
+/// [`validate_changes_to_sarif_string`]; this only adds the C-ABI byte framing.
+fn validate_changes_to_sarif_bytes(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+    added_nt: Option<&str>,
+    removed_nt: Option<&str>,
+) -> Result<(Vec<u8>, ChangeScope), String> {
+    let (sarif, scope) = validate_changes_to_sarif_string(
+        shapes_ttl,
+        shapes_base,
+        data_nt,
+        added_nt,
+        removed_nt,
+        &SarifOptions::default(),
+    )?;
+    Ok((sarif.into_bytes(), scope))
+}
+
+/// Validate a CHANGE to a data graph (N-Triples) against a shapes graph (Turtle),
+/// writing the SARIF 2.1.0 report bytes to `*out_buffer` and the scope that report
+/// describes to `*out_scope`, `*out_focus_nodes` and `*out_reason`.
+///
+/// The incremental twin of `purrdf_shacl_validate_to_sarif`. `added_nt` and
+/// `removed_nt` are the two halves of the delta — rows joining and rows leaving
+/// `data_nt` — and each may be NULL for "nothing on this half". Both halves are
+/// real: a verdict moves when a row leaves the graph as readily as when one joins,
+/// and one parameter would be half a delta. Additions apply before removals, so a
+/// change set naming the same row on both halves settles on *removed*. A removal
+/// naming a row `data_nt` does not carry retracts nothing rather than failing: a
+/// change set describes what moved, it does not assert what the base contained.
+///
+/// `shapes_base_iri` carries the same meaning it does on
+/// `purrdf_shacl_validate_to_sarif` — the shapes document's own base IRI, nullable.
+/// The three N-Triples documents need no counterpart; N-Triples admits no relative
+/// IRI by grammar.
+///
+/// # Read the scope before the report
+///
+/// `*out_scope` is a `PurrdfShaclChangeScopeKind` and it decides what the SARIF log
+/// MEANS. On `PURRDF_SHACL_CHANGE_SCOPE_KIND_BOUNDED` the log covers the focus
+/// nodes the change could move — for those nodes it is identical, results and
+/// ordering alike, to a full validation of the mutated graph — and is silent about
+/// a pre-existing violation the change cannot reach, so an empty log means *this
+/// change introduced no violation*. On
+/// `PURRDF_SHACL_CHANGE_SCOPE_KIND_EVERYTHING` the shapes graph reads through
+/// SPARQL query text, no bounded footprint exists for it, the call fell back to a
+/// FULL validation of the mutated graph, and an empty log means *the graph
+/// conforms*. The fallback is not optional, and a caller that cannot tell the two
+/// apart has been handed the more dangerous of the two readings.
+///
+/// `*out_focus_nodes` is how many focus nodes a bounded expansion named. It is
+/// written `0` on the `EVERYTHING` arm, where it is NOT a node count: "every focus
+/// node in the graph" is not a number, so branch on the kind, never on this.
+///
+/// `*out_reason` is a `PurrdfBuffer` of UTF-8 prose naming the construct that made
+/// the footprint unbounded — actionable rather than decorative, because it names
+/// what to change to get incremental validation back. It is NULL — never an empty
+/// buffer — on the `BOUNDED` arm. Free a non-NULL one with `purrdf_buffer_free`,
+/// exactly as `*out_buffer` is freed.
+///
+/// # Safety
+/// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+/// `shapes_base_iri`, `added_nt` and `removed_nt` must be null or NUL-terminated C
+/// strings; `out_buffer`, `out_scope`, `out_focus_nodes` and `out_reason` must be
+/// writable pointers; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    data_nt: *const c_char,
+    added_nt: *const c_char,
+    removed_nt: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_scope: *mut i32,
+    out_focus_nodes: *mut usize,
+    out_reason: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if shapes_ttl.is_null()
+                || data_nt.is_null()
+                || out_buffer.is_null()
+                || out_scope.is_null()
+                || out_focus_nodes.is_null()
+                || out_reason.is_null()
+            {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shacl_validate_changes_to_sarif",
+                ));
+            }
+            let shapes = cstr_to_str(shapes_ttl)?;
+            let base = opt_cstr_to_str(shapes_base_iri)?;
+            let data = cstr_to_str(data_nt)?;
+            let added = opt_cstr_to_str(added_nt)?;
+            let removed = opt_cstr_to_str(removed_nt)?;
+            let (bytes, scope) =
+                validate_changes_to_sarif_bytes(shapes, base, data, added, removed)
+                    .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            // Written before the buffer so a caller reading the outputs in
+            // declaration order never sees a report without the scope it is about.
+            match scope {
+                ChangeScope::Bounded { focus_nodes } => {
+                    *out_scope = PurrdfShaclChangeScopeKind::Bounded as i32;
+                    *out_focus_nodes = focus_nodes;
+                    *out_reason = std::ptr::null_mut();
+                }
+                ChangeScope::Everything { reason } => {
+                    *out_scope = PurrdfShaclChangeScopeKind::Everything as i32;
+                    *out_focus_nodes = 0;
+                    *out_reason = PurrdfBuffer::into_raw(reason.as_bytes().to_vec());
+                }
+            }
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
         })
@@ -682,6 +844,160 @@ mod tests {
     #[test]
     fn malformed_shapes_is_an_error() {
         assert!(validate_to_sarif_bytes("@@@ not turtle", None, DATA).is_err());
+    }
+
+    /// A conforming base, so every violation a change test sees is the change's.
+    const CHANGE_BASE: &str = "<http://example.org/alice> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+
+    /// The row that breaks it, and the row that un-breaks it again.
+    const BAD_AGE: &str = "<http://example.org/alice> <http://example.org/age> \"nope\" .\n";
+
+    #[test]
+    fn a_change_is_validated_against_the_graph_it_joins() {
+        let (bytes, scope) =
+            validate_changes_to_sarif_bytes(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
+                .expect("the change validates");
+        assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
+        let text = String::from_utf8(bytes).expect("utf8");
+        assert!(text.contains("DatatypeConstraintComponent"), "{text}");
+
+        // The retract half is a real half: taking the bad row back out of the
+        // merged graph restores conformance, through the same one call.
+        let merged = format!("{CHANGE_BASE}{BAD_AGE}");
+        let (bytes, scope) =
+            validate_changes_to_sarif_bytes(SHAPES, None, &merged, None, Some(BAD_AGE))
+                .expect("the retraction validates");
+        assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
+        let text = String::from_utf8(bytes).expect("utf8");
+        assert!(!text.contains("\"level\": \"error\""), "{text}");
+    }
+
+    /// The exported entry point, driven through pointers exactly as a C host
+    /// drives it — including the scope outputs, which are what stop a caller from
+    /// reading "this change introduced no violation" as "the graph conforms".
+    #[test]
+    fn the_exported_change_entry_point_reports_its_scope_through_pointers() {
+        use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+
+        /// The bytes behind a buffer, as UTF-8.
+        unsafe fn text_of(buffer: *mut PurrdfBuffer) -> String {
+            let mut ptr: *const u8 = std::ptr::null();
+            let mut len: usize = 0;
+            unsafe {
+                assert_eq!(
+                    purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                    PurrdfStatus::Ok as i32
+                );
+                std::str::from_utf8(std::slice::from_raw_parts(ptr, len))
+                    .expect("utf8")
+                    .to_owned()
+            }
+        }
+
+        let shapes = std::ffi::CString::new(SHAPES).expect("no interior NUL");
+        let data = std::ffi::CString::new(CHANGE_BASE).expect("no interior NUL");
+        let added = std::ffi::CString::new(BAD_AGE).expect("no interior NUL");
+
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut reason: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut scope: i32 = -1;
+        let mut focus_nodes: usize = usize::MAX;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        unsafe {
+            let status = purrdf_shacl_validate_changes_to_sarif(
+                shapes.as_ptr(),
+                std::ptr::null(),
+                data.as_ptr(),
+                added.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut scope,
+                &raw mut focus_nodes,
+                &raw mut reason,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert!(error.is_null());
+            assert_eq!(scope, PurrdfShaclChangeScopeKind::Bounded as i32);
+            assert_eq!(focus_nodes, 1);
+            assert!(reason.is_null(), "a bounded scope names no reason");
+            assert!(text_of(buffer).contains("DatatypeConstraintComponent"));
+            purrdf_buffer_free(buffer);
+        }
+
+        // The fallback arm, through the same pointers: a shapes graph reading
+        // through query text reports EVERYTHING, with the reason a host needs to
+        // get incremental validation back.
+        const SPARQL_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:PersonShape a sh:NodeShape ;\n\
+              sh:targetClass ex:Person ;\n\
+              sh:sparql [ a sh:SPARQLConstraint ;\n\
+                sh:message \"every person needs a name\" ;\n\
+                sh:select \"\"\"SELECT $this WHERE { FILTER NOT EXISTS \
+                  { $this <http://example.org/name> ?n } }\"\"\" ] .\n";
+        let sparql_shapes = std::ffi::CString::new(SPARQL_SHAPES).expect("no interior NUL");
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut reason: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut scope: i32 = -1;
+        let mut focus_nodes: usize = usize::MAX;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        unsafe {
+            let status = purrdf_shacl_validate_changes_to_sarif(
+                sparql_shapes.as_ptr(),
+                std::ptr::null(),
+                data.as_ptr(),
+                added.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut scope,
+                &raw mut focus_nodes,
+                &raw mut reason,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert_eq!(scope, PurrdfShaclChangeScopeKind::Everything as i32);
+            assert_eq!(focus_nodes, 0, "a fallback covers no COUNT");
+            assert!(!reason.is_null(), "a fallback names what made it one");
+            assert_ne!(text_of(reason), "");
+            // The fallback validated the WHOLE graph, so the untouched node is in
+            // the log too — which is what makes it a full validation.
+            assert!(text_of(buffer).contains("alice"));
+            purrdf_buffer_free(reason);
+            purrdf_buffer_free(buffer);
+        }
+
+        // A malformed change document is refused, and writes no buffer. The
+        // neighbouring well-formed call above succeeded, so this is strictness
+        // rather than a route that cannot run.
+        let malformed = std::ffi::CString::new("@@@ not n-triples").expect("no interior NUL");
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut reason: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut scope: i32 = -1;
+        let mut focus_nodes: usize = usize::MAX;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        unsafe {
+            let status = purrdf_shacl_validate_changes_to_sarif(
+                shapes.as_ptr(),
+                std::ptr::null(),
+                data.as_ptr(),
+                malformed.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut scope,
+                &raw mut focus_nodes,
+                &raw mut reason,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::ParseError as i32);
+            assert!(
+                buffer.is_null() && reason.is_null(),
+                "a refused call writes no buffer"
+            );
+            assert!(!error.is_null());
+            purrdf_error_free(error);
+        }
     }
 
     // A shapes graph with a `sh:TripleRule` typing every `ex:Person` an `ex:adult`.

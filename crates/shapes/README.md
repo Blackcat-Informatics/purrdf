@@ -107,6 +107,15 @@ direction. Feed that answer to `validate_focus_node_ids` (or
 `validate_focus_nodes` for owned terms); use `term_id` to turn a `Term` into an
 id in the binding's own space.
 
+`engine::validate_change(&validator, &delta)` is that loop as one call, and
+`engine::validate_change_with_governors` is its governed twin — the same
+one-per-validation budget `validate_with_governors` installs, over the same scope
+guard. Both return the report beside a `ChangeScope`, because a report alone
+cannot say which question it answered, and both honour the `Everything` answer
+rather than leaving that to each caller. Every surface below drives one of those
+two functions; the halves are public for a caller that needs to interleave work
+between them.
+
 Those ids are `FocusId` values, and the type is the guard. A `TermId` is an
 index into one binding's term table: an index from another binding is very
 probably in range, so it resolves to a different term and validates the wrong
@@ -135,6 +144,21 @@ so the delta is the mutation you are asking about, and
 `PreparedShapes.validate_store_changes(store)` runs the same loop, returning a
 `ChangeValidation` that carries the report beside the scope it describes
 (`bounded`, `focus_nodes`, `reason`).
+
+Over the **C ABI**, `purrdf_shacl_validate_changes_to_sarif` takes the data graph
+and both halves of the change as N-Triples and writes the SARIF 2.1.0 log to one
+buffer, the scope to `*out_scope` as a `PurrdfShaclChangeScopeKind`, the bounded
+focus-node count to `*out_focus_nodes`, and — only on the fallback — the reason
+to a second buffer. Branch on the kind, never on the count.
+
+In **JavaScript/WebAssembly**, `shaclValidateChangesToSarif(shapesTtl, dataNt,
+addedNt?, removedNt?, shapesBase?)` returns a `ShaclChangeValidation` whose
+`sarif`, `bounded`, `focusNodes` and `reason` getters carry the same four facts.
+
+All four are one implementation. A surface that wired only the bounded arm would
+pass every happy-path test and silently under-validate exactly the shapes graphs
+too complex to analyze, so the arm that cannot be bounded is not each caller's to
+remember.
 
 **API note.** `validate_focus_node_ids` shipped taking `&[TermId]` and now takes
 `&[FocusId]`. That is a deliberate signature break with no deprecated `&[TermId]`

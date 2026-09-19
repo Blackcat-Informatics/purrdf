@@ -179,14 +179,13 @@
 
 use std::sync::Arc;
 
-use purrdf::shapes::engine::{self, FocusExpansion, GovernedValidation};
+use purrdf::shapes::engine::{self, GovernedValidation};
 use purrdf::shapes::provenance::ValidatorProvenance;
 use purrdf::shapes::report::ValidationReport;
 use purrdf::shapes::shapes::Shapes;
 use purrdf_core::ir::{MutableDataset, QuadValues, ViewLimits};
 use purrdf_core::{DatasetMut, RdfDataset};
 use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat};
-use purrdf_sparql_eval::GovernorState;
 use purrdf_validate::SarifOptions;
 
 use crate::cli::{CliRdfFormat, LedgerTarget, ValidateFormat};
@@ -494,30 +493,32 @@ impl<'a> ChangePlan<'a> {
 
 /// Run the INCREMENTAL lane: expand the change, then validate only what it can move.
 ///
-/// This is the `delta` → `affected_focus_node_ids` → `validate_focus_node_ids` loop the
-/// engine documents, driven from the command line. Nothing about validation is decided
-/// here: the expansion is the engine's, the fallback condition is the engine's, and both
-/// reports come from the same `PreparedValidator` bound to the same mutation snapshot, so
-/// this lane cannot reach a verdict the engine would not.
+/// The `delta` → `affected_focus_node_ids` → `validate_focus_node_ids` loop, driven from
+/// the command line through the engine's own [`engine::validate_change`]. Nothing about
+/// validation is decided here — not the expansion, not the fallback condition, not the
+/// governor arrangement — so this lane cannot reach a verdict the engine would not, and
+/// the three other surfaces that drive the change path run the same code rather than a
+/// second copy of it.
 ///
 /// # The `Everything` arm is not optional
 ///
 /// A shapes graph that reads through SPARQL query text has no footprint anyone can bound,
-/// and the engine says so rather than returning a short answer. Honouring that with a full
-/// [`engine::PreparedValidator::validate`] is what keeps this lane from silently
+/// and the engine says so rather than returning a short answer. It honours that with a
+/// full validation of the mutated graph, which is what keeps this lane from silently
 /// under-validating — a short expansion and a clean bill of health are indistinguishable
-/// in a report, which is exactly why the engine refuses to guess. Which of the two
-/// happened is written to stderr either way.
+/// in a report. Which of the two happened is written to stderr either way, by
+/// [`render_expansion`].
 ///
 /// # Governors bound this lane too
 ///
-/// Engaging a governor installs the same one-per-validation [`GovernorState`]
-/// `engine::validate_with_governors` installs, over the same public scope guard, so a
-/// `--fuel`/`--deadline`/`--max-*` ceiling means here what it means on the full-graph
-/// route. It matters most on the `Everything` fallback, which is precisely the case where
-/// the shapes graph runs SPARQL; a bounded expansion executes no query text at all (that
-/// is *why* it could be bounded) and so consumes nothing, which is the honest answer
-/// rather than an oversight.
+/// `engine::validate_change_with_governors` installs the same one-per-validation governor
+/// state `engine::validate_with_governors` installs, so a `--fuel`/`--deadline`/`--max-*`
+/// ceiling means here what it means on the full-graph route. It matters most on the
+/// `Everything` fallback, which is precisely the case where the shapes graph runs SPARQL;
+/// a bounded expansion executes no query text at all (that is *why* it could be bounded)
+/// and so consumes nothing, which is the honest answer rather than an oversight. The
+/// scope is reported even when a budget trips, because it is settled before the first
+/// query runs.
 ///
 /// # Errors
 ///
@@ -543,54 +544,43 @@ fn validate_change(
         .map_err(CliError::Runtime)?;
 
     if !options.governors.is_engaged() {
-        return run_change_loop(&validator, &snapshot).map(Some);
+        let validation =
+            engine::validate_change(&validator, &snapshot).map_err(CliError::Runtime)?;
+        render_expansion(validation.scope);
+        return Ok(Some(validation.report));
     }
 
-    // The identical arrangement `engine::validate_with_governors` uses, over the identical
-    // public scope guard: one state for the whole validation, the TYPED trip read back off
-    // the state that latched it rather than parsed out of an error string, so the outcome
-    // and the evidence cannot be two independently-derived answers about one trip.
-    let state = Arc::new(GovernorState::new(&options.governors.to_governors()));
-    let outcome = {
-        let _governor_scope = purrdf::shapes::sparql::enter_governor_scope(Arc::clone(&state));
-        run_change_loop(&validator, &snapshot)
-    };
-    let evidence = state.evidence();
-    match (outcome, state.tripped()) {
-        (_, Some(tripped)) => {
+    let governed = engine::validate_change_with_governors(
+        &validator,
+        &snapshot,
+        &options.governors.to_governors(),
+    )
+    .map_err(CliError::Runtime)?;
+    // Before the trip or the report, so an operator reading a run that stopped still
+    // learns the scope the verdict was about to describe.
+    render_expansion(governed.scope);
+    match governed.outcome {
+        GovernedValidation::BudgetExhausted { tripped, evidence } => {
             eprint!("{}", governors::render_validation_trip(tripped, &evidence));
             Ok(None)
         }
-        (Ok(report), None) => Ok(Some(report)),
-        (Err(error), None) => Err(error),
+        GovernedValidation::Complete { report, .. } => Ok(Some(report)),
     }
 }
 
-/// The loop itself: expand the bound snapshot, then validate what the expansion named.
+/// Write the change-expansion receipt to stderr.
 ///
-/// Written as one function because the two halves must stay adjacent: the ids
-/// `affected_focus_node_ids` answers are stamped with the binding that minted them and
-/// `validate_focus_node_ids` refuses ids from any other, so the expansion feeds the
-/// validator UNCONVERTED — there is nothing between them for this lane to get wrong.
-fn run_change_loop(
-    validator: &engine::PreparedValidator,
-    snapshot: &purrdf_core::ir::DeltaDatasetView,
-) -> Result<ValidationReport, CliError> {
-    let expansion = validator
-        .affected_focus_node_ids(snapshot)
-        .map_err(CliError::Runtime)?;
-    match &expansion {
-        FocusExpansion::Bounded(ids) => {
-            // Before the report, so an operator reading a failed run still learns the
-            // scope the verdict below was about to describe.
-            eprintln!("shacl change-expansion bounded {}", ids.len());
-            validator
-                .validate_focus_node_ids(ids)
-                .map_err(CliError::Runtime)
+/// Load-bearing rather than decorative: a bounded report describes the affected focus
+/// nodes and the fallback report describes the whole graph, so a conforming verdict means
+/// two different things on the two arms, and a verdict whose scope has to be inferred is
+/// a verdict nobody can act on. It goes to stderr so `OUT` stays the report alone.
+fn render_expansion(scope: engine::ChangeScope) {
+    match scope {
+        engine::ChangeScope::Bounded { focus_nodes } => {
+            eprintln!("shacl change-expansion bounded {focus_nodes}");
         }
-        FocusExpansion::Everything { reason } => {
+        engine::ChangeScope::Everything { reason } => {
             eprintln!("shacl change-expansion everything {reason}");
-            validator.validate().map_err(CliError::Runtime)
         }
     }
 }

@@ -2158,6 +2158,198 @@ pub fn validate_dataset_with_governors(
     validate_with_governors(&data, shapes, governors)
 }
 
+/// WHICH QUESTION a change-path report answered.
+///
+/// A [`ValidationReport`] alone cannot say. An incremental run reports about the
+/// focus nodes the change could move, so `conforms` means *this change introduced
+/// no violation*; a run whose footprint could not be bounded validated the whole
+/// graph, so `conforms` means *the graph conforms*. Both are honest answers and
+/// they are not the same answer, which is why [`validate_change`] returns this
+/// beside the report rather than leaving a caller to assume one of them.
+///
+/// The two-answer shape of [`FocusExpansion`] is preserved deliberately: an empty
+/// bounded expansion and "every focus node in the graph" are opposite
+/// instructions, and a single count — with the fallback spelled as some large
+/// number — would collapse them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeScope {
+    /// The change's footprint was bounded, and the report covers exactly the
+    /// focus nodes named by that expansion.
+    Bounded {
+        /// How many focus nodes the expansion named. `0` means the change moved
+        /// nothing the shapes graph reads — not that nothing was checked.
+        focus_nodes: usize,
+    },
+    /// No bounded footprint exists for this shapes graph, so the run fell back to
+    /// a full [`PreparedValidator::validate`] of the mutated graph.
+    Everything {
+        /// Which construct made the footprint unreadable — actionable rather than
+        /// decorative: it names what to change to get incremental validation back.
+        reason: &'static str,
+    },
+}
+
+impl ChangeScope {
+    /// Whether the change's footprint could be bounded.
+    #[must_use]
+    pub const fn is_bounded(&self) -> bool {
+        matches!(self, Self::Bounded { .. })
+    }
+
+    /// How many focus nodes the bounded expansion named, or `None` on the
+    /// fallback — where "every focus node in the graph" is not a number.
+    #[must_use]
+    pub const fn focus_nodes(&self) -> Option<usize> {
+        match self {
+            Self::Bounded { focus_nodes } => Some(*focus_nodes),
+            Self::Everything { .. } => None,
+        }
+    }
+
+    /// Why the footprint was unbounded, or `None` when it was bounded.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Bounded { .. } => None,
+            Self::Everything { reason } => Some(*reason),
+        }
+    }
+}
+
+/// A change-path validation: the report, plus the [`ChangeScope`] it describes.
+#[derive(Debug)]
+pub struct ChangeValidation {
+    /// The SHACL report. See [`Self::scope`] for what it is a report ABOUT.
+    pub report: ValidationReport,
+    /// Which question [`Self::report`] answered.
+    pub scope: ChangeScope,
+}
+
+/// A governed change-path validation: the [`ChangeScope`], plus the governed
+/// outcome — a report and its evidence, or the budget that stopped it.
+///
+/// The scope sits OUTSIDE the outcome because it is known before any constraint
+/// is evaluated, so it survives a tripped budget: an operator whose incremental
+/// run ran out of fuel still learns which question the run was asking.
+#[derive(Debug)]
+pub struct GovernedChangeValidation {
+    /// Which question the run was asking, known before the first query ran.
+    pub scope: ChangeScope,
+    /// The governed outcome, exactly as [`validate_with_governors`] reports it.
+    pub outcome: GovernedValidation,
+}
+
+/// Expand a bound mutation snapshot into the focus nodes it can move, then
+/// validate exactly those — the `delta` → [`PreparedValidator::affected_focus_node_ids`]
+/// → [`PreparedValidator::validate_focus_node_ids`] loop, as ONE call.
+///
+/// `validator` must be bound to `delta` through
+/// [`PreparedShapes::bind_delta_with_shapes_graph`]; binding is the caller's,
+/// because a caller owns how its change was assembled (a parsed patch document, a
+/// store's copy-on-write delta, a pair of change graphs) and this owns only what
+/// is done with it afterwards.
+///
+/// # The fallback is not optional
+///
+/// A shapes graph whose constraints read through SPARQL query text has no
+/// footprint anyone can bound, and [`PreparedValidator::affected_focus_node_ids`]
+/// says so rather than returning a short answer. This honours that by running a
+/// full [`PreparedValidator::validate`] and reporting
+/// [`ChangeScope::Everything`] — because a short expansion and a clean bill of
+/// health are indistinguishable in a report, which is exactly why the expansion
+/// refuses to guess.
+///
+/// # Nothing sits between the two halves
+///
+/// The ids the expansion answers are stamped with the binding that minted them
+/// and [`PreparedValidator::validate_focus_node_ids`] refuses ids from any other,
+/// so the expansion feeds the validator UNCONVERTED. That is the property this
+/// entry point exists to hold in ONE place rather than in each surface that
+/// drives the change path.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `validator` is not bound to `delta`, and on a hard
+/// validation failure (see [`validate_with`]).
+pub fn validate_change(
+    validator: &PreparedValidator,
+    delta: &::purrdf::ir::DeltaDatasetView,
+) -> Result<ChangeValidation, String> {
+    let (scope, report) = change_pass(validator, delta)?;
+    report.map(|report| ChangeValidation { report, scope })
+}
+
+/// [`validate_change`] under caller-supplied execution governors.
+///
+/// # One budget for the whole change validation
+///
+/// The same arrangement [`validate_with_governors`] makes, over the same scope
+/// guard: **one** [`GovernorState`], built here and dropped with this call, so a
+/// ceiling bounds the incremental validation a caller asked about rather than
+/// each of the queries it decomposes into. The trip is read back off the state
+/// that latched it rather than parsed out of an error string, so the outcome and
+/// the evidence cannot be two independently-derived answers about one trip.
+///
+/// It matters most on the [`ChangeScope::Everything`] fallback, which is
+/// precisely the case where the shapes graph runs SPARQL. A bounded expansion
+/// executes no query text at all — that is *why* it could be bounded — and so
+/// consumes nothing, which is the honest answer rather than an oversight.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `validator` is not bound to `delta`, and on a hard
+/// validation failure. A tripped governor is **not** an error: it is the
+/// [`GovernedValidation::BudgetExhausted`] outcome, carried beside the scope.
+pub fn validate_change_with_governors(
+    validator: &PreparedValidator,
+    delta: &::purrdf::ir::DeltaDatasetView,
+    governors: &QueryGovernors,
+) -> Result<GovernedChangeValidation, String> {
+    let state = Arc::new(GovernorState::new(governors));
+    let pass = {
+        let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
+        change_pass(validator, delta)
+    };
+    let evidence = state.evidence();
+    // `?` before the trip is read, and it cannot swallow one: the expansion
+    // executes no query text, so nothing can charge the state until the scope is
+    // already decided. An `Err` here is therefore a refusal of the binding, never
+    // a budget that stopped a query nobody ran.
+    let (scope, outcome) = pass?;
+    match (outcome, state.tripped()) {
+        (_, Some(tripped)) => Ok(GovernedChangeValidation {
+            scope,
+            outcome: GovernedValidation::BudgetExhausted { tripped, evidence },
+        }),
+        (Ok(report), None) => Ok(GovernedChangeValidation {
+            scope,
+            outcome: GovernedValidation::Complete { report, evidence },
+        }),
+        (Err(message), None) => Err(message),
+    }
+}
+
+/// The loop itself, with the scope reported SEPARATELY from the validation's own
+/// result so a governed caller can still say which question was asked when the
+/// answer is a tripped budget rather than a report.
+fn change_pass(
+    validator: &PreparedValidator,
+    delta: &::purrdf::ir::DeltaDatasetView,
+) -> Result<(ChangeScope, Result<ValidationReport, String>), String> {
+    let expansion = validator.affected_focus_node_ids(delta)?;
+    Ok(match &expansion {
+        FocusExpansion::Bounded(ids) => (
+            ChangeScope::Bounded {
+                focus_nodes: ids.len(),
+            },
+            validator.validate_focus_node_ids(ids),
+        ),
+        FocusExpansion::Everything { reason } => {
+            (ChangeScope::Everything { reason }, validator.validate())
+        }
+    })
+}
+
 /// Validate with an explicit focus-node filter.
 ///
 /// The filter is called after target resolution and before constraint evaluation.
@@ -5099,6 +5291,151 @@ mod tests {
             1,
             "the new focus node carries no ex:absent, so re-validating the expansion must report \
              its violation"
+        );
+    }
+
+    /// Bind the one-row change of the test above against `shapes`, returning the
+    /// snapshot and the validator every change-path entry point below drives.
+    fn change_fixture(
+        shapes: Arc<Shapes>,
+    ) -> (Arc<::purrdf::ir::DeltaDatasetView>, PreparedValidator) {
+        let base = focus_dataset_interning(&DESCENDING_FOCUS_LOCALS);
+        let mut mutation = ::purrdf::MutableDataset::new(base);
+        assert!(
+            ::purrdf::DatasetMut::insert(
+                &mut mutation,
+                ::purrdf::QuadValues {
+                    s: ::purrdf::TermValue::iri("http://example.org/ns#n10"),
+                    p: ::purrdf::TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
+                    o: ::purrdf::TermValue::iri("http://example.org/ns#Focus"),
+                    g: None,
+                }
+            )
+            .expect("the insert applies"),
+            "the fixture row must really change the graph"
+        );
+        let snapshot = Arc::new(mutation.snapshot_view().expect("the mutation snapshots"));
+        let validator = PreparedShapes::new(shapes)
+            .bind_delta_with_shapes_graph(
+                Arc::clone(&snapshot),
+                None,
+                ::purrdf::ir::ViewLimits::default(),
+            )
+            .expect("the delta binds");
+        (snapshot, validator)
+    }
+
+    /// A shapes graph whose constraint reads through SPARQL query text, so its
+    /// change footprint is TOP and the entry points below must fall back.
+    fn opaque_footprint_shapes() -> Arc<Shapes> {
+        Arc::new(load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:sparql [ a sh:SPARQLConstraint ;
+                    sh:message \"every focus node needs an ex:absent\" ;
+                    sh:select \"\"\"SELECT $this WHERE {{ \
+                        FILTER NOT EXISTS {{ $this <http://example.org/ns#absent> ?v }} }}\"\"\" ] ."
+        )))
+    }
+
+    /// **[`validate_change`] IS the loop, and it says which arm it took.**
+    ///
+    /// Both arms are executed, because the fallback is the one a surface can omit
+    /// and still pass every happy-path test: a bounded expansion and a full
+    /// validation are indistinguishable in a report, and the scope is the only
+    /// thing that distinguishes them.
+    #[test]
+    fn the_change_entry_point_reaches_both_arms_and_names_which() {
+        let (snapshot, validator) = change_fixture(focus_provenance_shapes());
+        let validation =
+            validate_change(&validator, &snapshot).expect("the bounded change validates");
+        assert_eq!(validation.scope, ChangeScope::Bounded { focus_nodes: 1 });
+        assert_eq!(validation.scope.focus_nodes(), Some(1));
+        assert_eq!(validation.scope.reason(), None);
+        let expansion = validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("the expansion succeeds");
+        assert_eq!(
+            validation.report.to_ntriples(),
+            validator
+                .validate_focus_node_ids(expansion.ids().expect("bounded"))
+                .expect("the hand-driven loop validates")
+                .to_ntriples(),
+            "the one call and the hand-driven loop must reach one report, content and ORDER alike",
+        );
+
+        let (snapshot, validator) = change_fixture(opaque_footprint_shapes());
+        let validation =
+            validate_change(&validator, &snapshot).expect("the unbounded change validates");
+        assert!(!validation.scope.is_bounded(), "{:?}", validation.scope);
+        assert_eq!(
+            validation.scope.focus_nodes(),
+            None,
+            "a fallback covers no COUNT: every focus node in the graph is not a number",
+        );
+        assert!(validation.scope.reason().is_some_and(|why| !why.is_empty()));
+        assert_eq!(
+            validation.report.to_ntriples(),
+            validator
+                .validate()
+                .expect("the full validation succeeds")
+                .to_ntriples(),
+            "the fallback must BE the full validation, not a short answer wearing its name",
+        );
+    }
+
+    /// **The governed change entry point installs ONE budget and reports the
+    /// scope either way — including when the budget stops the run.**
+    ///
+    /// The scope is settled before the first query executes, so a tripped budget
+    /// cannot take it away; an operator whose incremental run ran out of fuel
+    /// still learns which question it was asking.
+    #[test]
+    fn the_governed_change_entry_point_reports_its_scope_through_a_trip() {
+        // A SPARQL-free shapes graph spends no evaluator budget, so it completes
+        // under a ZERO one. That is the honest answer rather than an oversight,
+        // and it is the neighbouring valid case for the trip below.
+        let (snapshot, validator) = change_fixture(focus_provenance_shapes());
+        let ungoverned =
+            validate_change(&validator, &snapshot).expect("the bounded change validates");
+        for governors in [
+            QueryGovernors::UNBOUNDED,
+            QueryGovernors::UNBOUNDED.with_fuel(0),
+        ] {
+            let governed = validate_change_with_governors(&validator, &snapshot, &governors)
+                .expect("the governed change validates");
+            assert_eq!(governed.scope, ungoverned.scope);
+            let GovernedValidation::Complete { report, .. } = governed.outcome else {
+                panic!("core constraint evaluation charges no evaluator budget, so this completes");
+            };
+            assert_eq!(report.to_ntriples(), ungoverned.report.to_ntriples());
+        }
+
+        // The fallback arm is where the budget bites, because it is the arm that
+        // runs the query text. The scope survives the trip.
+        let (snapshot, validator) = change_fixture(opaque_footprint_shapes());
+        let governed =
+            validate_change_with_governors(&validator, &snapshot, &QueryGovernors::UNBOUNDED)
+                .expect("the unbounded run completes");
+        assert!(!governed.scope.is_bounded());
+        assert!(matches!(
+            governed.outcome,
+            GovernedValidation::Complete { .. }
+        ));
+
+        let stopped = validate_change_with_governors(
+            &validator,
+            &snapshot,
+            &QueryGovernors::UNBOUNDED.with_fuel(0),
+        )
+        .expect("a trip is an outcome, not an error");
+        assert!(
+            !stopped.scope.is_bounded(),
+            "the scope is decided before the first query, so a trip cannot erase it",
+        );
+        assert!(
+            matches!(stopped.outcome, GovernedValidation::BudgetExhausted { .. }),
+            "zero fuel against a shapes graph that runs SPARQL must stop the run",
         );
     }
 }

@@ -482,7 +482,7 @@ impl PyPreparedShapes {
         // and the validation below run detached with nothing py-bound in hand.
         let snapshot = Arc::new(store.borrow().change_snapshot()?);
         let prepared = &self.inner;
-        let (report, focus_nodes, reason) = py.detach(|| {
+        let validation = py.detach(|| {
             let validator = prepared
                 .bind_delta_with_shapes_graph(
                     Arc::clone(&snapshot),
@@ -490,28 +490,16 @@ impl PyPreparedShapes {
                     ::purrdf::ir::ViewLimits::default(),
                 )
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
-            // The loop, with nothing between its halves: the ids the expansion
-            // answers are stamped with the binding that minted them and
-            // `validate_focus_node_ids` refuses ids from any other, so the expansion
-            // feeds the validator unconverted.
-            let expansion = validator
-                .affected_focus_node_ids(&snapshot)
-                .map_err(pyo3::exceptions::PyValueError::new_err)?;
-            match expansion {
-                engine::FocusExpansion::Bounded(ids) => validator
-                    .validate_focus_node_ids(&ids)
-                    .map(|report| (report, Some(ids.len()), None))
-                    .map_err(pyo3::exceptions::PyValueError::new_err),
-                engine::FocusExpansion::Everything { reason } => validator
-                    .validate()
-                    .map(|report| (report, None, Some(reason)))
-                    .map_err(pyo3::exceptions::PyValueError::new_err),
-            }
+            // The engine's own expand-then-validate entry point, which is what the
+            // command line, the C ABI and the WebAssembly guest all drive: one
+            // implementation of the loop, so no surface can answer a question the
+            // others would not.
+            engine::validate_change(&validator, &snapshot)
+                .map_err(pyo3::exceptions::PyValueError::new_err)
         })?;
         Ok(PyChangeValidation {
-            report: Py::new(py, PyValidationReport::new(report))?,
-            focus_nodes,
-            reason,
+            report: Py::new(py, PyValidationReport::new(validation.report))?,
+            scope: validation.scope,
         })
     }
 
@@ -549,10 +537,11 @@ pub struct PyChangeValidation {
     /// The report, built once here rather than on each `report` read, so two reads
     /// cannot hand back two independently-constructed objects.
     report: Py<PyValidationReport>,
-    /// How many focus nodes the bounded expansion named, or `None` on the fallback.
-    focus_nodes: Option<usize>,
-    /// Which construct made the footprint unbounded, or `None` when it was bounded.
-    reason: Option<&'static str>,
+    /// Which question the report answered, carried as the engine's own two-armed
+    /// answer rather than re-spelled as a pair of `Option`s here. A pair admits a
+    /// fourth state — neither set — that the engine cannot produce, and this class
+    /// would then have to render something for it.
+    scope: engine::ChangeScope,
 }
 
 #[pymethods]
@@ -571,7 +560,7 @@ impl PyChangeValidation {
     /// mutated graph, and `conforms` means the whole graph conforms.
     #[getter]
     const fn bounded(&self) -> bool {
-        self.reason.is_none()
+        self.scope.is_bounded()
     }
 
     /// How many focus nodes the change was expanded into, or `None` when the
@@ -582,7 +571,7 @@ impl PyChangeValidation {
     /// would make a fallback indistinguishable from a large bounded expansion.
     #[getter]
     const fn focus_nodes(&self) -> Option<usize> {
-        self.focus_nodes
+        self.scope.focus_nodes()
     }
 
     /// Which construct made this shapes graph's change footprint unbounded, or
@@ -592,22 +581,18 @@ impl PyChangeValidation {
     /// validation back.
     #[getter]
     const fn reason(&self) -> Option<&'static str> {
-        self.reason
+        self.scope.reason()
     }
 
     fn __repr__(&self, py: Python<'_>) -> String {
         let conforms = self.report.borrow(py).inner.conforms;
-        match (self.focus_nodes, self.reason) {
-            (Some(focus_nodes), _) => {
+        match self.scope {
+            engine::ChangeScope::Bounded { focus_nodes } => {
                 format!("<ChangeValidation bounded focus_nodes={focus_nodes} conforms={conforms}>")
             }
-            (None, Some(reason)) => {
+            engine::ChangeScope::Everything { reason } => {
                 format!("<ChangeValidation everything reason={reason} conforms={conforms}>")
             }
-            // Unreachable through the constructor, which sets exactly one of the two.
-            // Rendered rather than panicked: a `__repr__` that aborts a debugger is
-            // worse than one that says it found a shape it does not recognize.
-            (None, None) => "<ChangeValidation indeterminate>".to_owned(),
         }
     }
 }
