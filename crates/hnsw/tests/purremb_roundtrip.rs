@@ -18,12 +18,24 @@
 mod purremb;
 
 use purrdf_core::{EmbeddingView, IndexUseRole, verify_embedding};
-use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, relation::HnswSpace};
-use purrdf_sparql_eval::{KnnGuard, PropertyFunction};
+use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, profile, relation::HnswSpace};
+use purrdf_sparql_eval::{Completeness, KnnGuard, OrderFidelity, PropertyFunction};
 
 fn params() -> Params {
     Params::new(4, 8, 16, 8).expect("valid")
 }
+
+/// The refusal `guard::validate_guard` raises for a foreign evidence revision, verbatim.
+///
+/// Asserted as a whole sentence rather than matched by error variant alone: `GuardProfile`
+/// carries a dozen different refusals, and a check that started rejecting these artifacts
+/// for an unrelated reason would still be a `GuardProfile`.
+const FOREIGN_REVISION_REFUSAL: &str = "the implementation evidence revision is not the profile's approximation statement; an \
+     HNSW guard must publish what it does not promise";
+
+/// The refusal `guard::validate_guard` raises for a loss contract that transforms vectors.
+const TRANSFORMING_LOSS_REFUSAL: &str = "the loss contract claims an HNSW payload transforms vectors; this profile stores no \
+     vectors, so the claim is false";
 
 #[test]
 fn the_payload_round_trips_through_the_real_sections() {
@@ -83,7 +95,7 @@ fn a_reloaded_space_searches_over_the_target_row_order() {
         let term = space.term(row).expect("a term").clone();
         assert_eq!(space.row_of(&term), Some(row));
     }
-    assert_eq!(space.evidence(), purrdf_hnsw::profile::LOSS_EVIDENCE);
+    assert_eq!(space.evidence(), profile::LOSS_EVIDENCE);
 
     let relation = space.relation();
     let seed = space.term(7).expect("a term").clone();
@@ -246,5 +258,115 @@ fn a_search_over_a_coarse_prefix_still_answers() {
         space.dimension(),
         4,
         "the space searches the declared prefix, not the stored width"
+    );
+}
+
+// --- What `HnswRelation::fidelity` is allowed to assume --------------------
+//
+// `HnswRelation::fidelity` reports `profile::LOSS_EVIDENCE` as its completeness evidence and
+// computes its order axis from this build's compiled-in `profile::loss_contract()` -- neither
+// is decoded out of the artifact the space was bound from. That is equivalent to reading the
+// artifact only because the two refusals below fire: a guard publishing a different evidence
+// revision, or a different loss contract, never becomes a space at all, so an artifact this
+// space could have been built from cannot disagree with the constants. Loosening either check
+// loosens what `HnswRelation::fidelity` may assume, and this is where that shows up.
+
+#[test]
+fn a_foreign_evidence_revision_is_refused_at_bind_time() {
+    let fixture = purremb::Fixture::new(24, 4, params());
+    let foreign = fixture.foreign_evidence_revision();
+
+    // The container is intact: real builder, real sections, a guard that still names this
+    // profile. The only thing wrong with the artifact is the sentence it publishes about
+    // what it does not promise.
+    let mut view = EmbeddingView::from_bytes(&foreign).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard still names the profile");
+    let error = guard::validate_guard(&selected).expect_err("a foreign revision must be refused");
+    assert!(
+        matches!(&error, HnswError::GuardProfile { description } if description == FOREIGN_REVISION_REFUSAL),
+        "the refusal must name the evidence revision, got {error}"
+    );
+
+    // And the outermost entry point a host actually calls refuses for the same reason, not
+    // merely somewhere deeper for an incidental one.
+    let refusal = HnswSpace::from_artifact(
+        &foreign,
+        fixture.target_set,
+        fixture.vector_space,
+        fixture.bindings(),
+        KnnGuard::new(24, 24).expect("valid"),
+    )
+    .expect_err("no space binds over a foreign evidence revision");
+    assert!(
+        refusal.to_string().contains(FOREIGN_REVISION_REFUSAL),
+        "the host-facing refusal must name the evidence revision, got {refusal}"
+    );
+}
+
+#[test]
+fn a_guard_claiming_transformed_vectors_is_refused_at_bind_time() {
+    // PURREMB writes the loss contract's `approximate` field itself and always writes it
+    // true, so no encoder can produce a non-approximate HNSW guard; `transforms_vectors` is
+    // the field a producer chooses, and it is the one a consumer's order axis turns on.
+    let fixture = purremb::Fixture::new(24, 4, params());
+    let transforming = fixture.transforming_loss_contract();
+
+    let mut view = EmbeddingView::from_bytes(&transforming).expect("the artifact opens");
+    verify_embedding(&mut view).expect("the artifact verifies");
+    let selected = guard::select(&view).expect("the guard still names the profile");
+    let error =
+        guard::validate_guard(&selected).expect_err("a transforming loss contract is refused");
+    assert!(
+        matches!(&error, HnswError::GuardProfile { description } if description == TRANSFORMING_LOSS_REFUSAL),
+        "the refusal must name the loss contract, got {error}"
+    );
+
+    let refusal = HnswSpace::from_artifact(
+        &transforming,
+        fixture.target_set,
+        fixture.vector_space,
+        fixture.bindings(),
+        KnnGuard::new(24, 24).expect("valid"),
+    )
+    .expect_err("no space binds over a transforming loss contract");
+    assert!(
+        refusal.to_string().contains(TRANSFORMING_LOSS_REFUSAL),
+        "the host-facing refusal must name the loss contract, got {refusal}"
+    );
+}
+
+#[test]
+fn the_profiles_own_evidence_and_loss_contract_still_bind_and_are_what_fidelity_reports() {
+    // The neighbouring valid case for BOTH refusals above, built by the same fixture that
+    // produced the two tampered artifacts and differing from each in exactly one guard field.
+    // A guard check that had tightened into rejecting every artifact would satisfy the two
+    // refusal tests and fail here, which is the only reason those tests mean anything.
+    let fixture = purremb::Fixture::new(24, 4, params());
+    let space = std::sync::Arc::new(
+        HnswSpace::from_artifact(
+            &fixture.bytes,
+            fixture.target_set,
+            fixture.vector_space,
+            fixture.bindings(),
+            KnnGuard::new(24, 24).expect("valid"),
+        )
+        .expect("the untampered artifact binds"),
+    );
+
+    let fidelity = space.relation().fidelity();
+    let Completeness::Lossy { evidence } = &fidelity.completeness else {
+        panic!("an HNSW search offers candidates and never certifies absence");
+    };
+    assert_eq!(
+        &**evidence,
+        profile::LOSS_EVIDENCE,
+        "the evidence a bound space reports is the profile's own sentence, byte for byte"
+    );
+    assert_eq!(
+        fidelity.order,
+        OrderFidelity::Faithful,
+        "a graph over untransformed vectors compares exact distances for every candidate it \
+         visits, so the rows it does return are in true relative order"
     );
 }

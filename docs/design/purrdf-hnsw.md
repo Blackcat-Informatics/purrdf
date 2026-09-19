@@ -309,12 +309,21 @@ Four governed channels carry it:
    `FusionTrailer::fidelities`.
 
    The completeness axis is this profile's own evidence string. The order axis
-   is **derived from the loaded loss contract** rather than asserted: an index
+   is **computed from a loss contract** rather than typed as a literal: an index
    whose guard says `transforms_vectors` compares approximated values and can
    rank a row it found *better* than that row was due, which removes the one
    inequality every score bound rests on. This profile does not transform
    vectors, so it is lossy but order-faithful, and a fused answer's error stays
    bounded.
+
+   The contract it is computed from is the build's own, not one decoded out of
+   the artifact, and the two cannot differ: a guard publishing a different
+   evidence revision or a different loss contract is refused at bind time, so an
+   artifact a space could have been built from cannot disagree with the
+   constant. It has to be the build's own in any case, because a space built
+   from an in-process graph has no artifact to decode a contract out of, and a
+   field derived one way on one construction path and another way on the other
+   is the modal optionality this workspace refuses.
 
    A relation registered *without* a ranked declaration is not silently fused:
    it forms no stratum, contributes no trailer entry, and the request reports

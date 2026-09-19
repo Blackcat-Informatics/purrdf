@@ -437,11 +437,25 @@ impl HnswRelation {
     /// matched. The evidence is the string this space carries, verbatim — the
     /// one the guard checked at bind time, not a re-wording of it.
     ///
-    /// The order axis is **derived from the artifact's own loss contract**
-    /// rather than asserted here, through [`order_fidelity`]. That keeps the
-    /// classification a fact about what was loaded: a profile that begins
-    /// quantizing vectors would report a perturbed order without anyone
+    /// The order axis is **computed from a loss contract** by
+    /// [`order_fidelity`] rather than typed as a literal here, so a profile
+    /// that begins quantizing vectors reports a perturbed order without anyone
     /// remembering to come back and retype it.
+    ///
+    /// The contract it is computed from is this build's
+    /// [`profile::loss_contract`], not one decoded out of the artifact, and
+    /// that is equivalent rather than merely convenient: a loaded artifact
+    /// whose guard publishes a different evidence revision or a different loss
+    /// contract is REFUSED at bind time by
+    /// [`crate::guard::validate_guard`], so an artifact this space could have
+    /// been built from cannot disagree with the constant. The equivalence is
+    /// enforced, and the enforcement is what this reads through.
+    ///
+    /// It has to be the compiled-in one for the other constructor in any case:
+    /// [`HnswSpace::from_index`] is handed a graph this process built and there
+    /// is no artifact to decode a contract out of. A field derived one way on
+    /// one construction path and another way on the other is the modal
+    /// optionality this workspace refuses.
     #[must_use]
     pub fn fidelity(&self) -> RankFidelity {
         let evidence: Arc<str> = Arc::from(self.space.evidence());
