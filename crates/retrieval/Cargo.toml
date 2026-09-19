@@ -38,9 +38,10 @@ purrdf-core.workspace = true
 purrdf-sparql-eval.workspace = true
 # The SPARQL front end the evaluator above parses with, used at exactly one seam:
 # `StratumUnit::new` reads a caller-supplied query text through it, so a text that
-# is not a query is refused at construction and the prologue the caller wrote can
-# be hoisted above the wrapping `SELECT` that bounds it. Nothing else in this crate
-# looks at SPARQL as anything but a string.
+# is not a query (or not a `SELECT`) is refused at construction, and the two clauses
+# the wrapping `SELECT` has no place for — the prologue and the dataset clause — are
+# found and moved onto the wrapper that bounds it. Nothing else in this crate looks
+# at SPARQL as anything but a string.
 purrdf-sparql-algebra.workspace = true
 # The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
 # so a plan never carries a float where exactness is the whole point.
