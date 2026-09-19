@@ -91,8 +91,22 @@ pub struct Measurement {
     /// it, so releasing a structure built before the window opened reads as a
     /// negative retention).
     pub retained_bytes: i64,
-    /// The high-water mark of live bytes during the window, relative to where
-    /// the window started — the peak working set of the measured region.
+    /// The largest working-set span observed during the window: the
+    /// high-water mark of live bytes minus the low-water mark, both measured
+    /// relative to the live-byte level the window held when it opened.
+    ///
+    /// Both marks are anchored at the value live bytes held at open, so the
+    /// low-water mark can never rise above that anchor and the high-water
+    /// mark can never fall below it — the span is therefore non-negative by
+    /// construction. In the common case, where nothing allocated before the
+    /// window is freed inside it, the low-water mark never drops below the
+    /// anchor and this is exactly the old high-water-mark-relative-to-open
+    /// figure: a previously reported number does not move. The only case
+    /// where it changes is the one that used to be wrong — a window (chiefly
+    /// [`WholeProcessWindow`]) freeing memory that was allocated before it
+    /// opened, which used to pull live below the anchor and depress the
+    /// reported peak below the measured region's true working set. Fixing
+    /// that can only move this figure upward, never down.
     pub peak_working_bytes: i64,
 }
 
@@ -120,6 +134,8 @@ thread_local! {
     static THREAD_LIVE_BYTES: Cell<i64> = const { Cell::new(0) };
     /// High-water mark of [`THREAD_LIVE_BYTES`] since the last window opened.
     static THREAD_PEAK_BYTES: Cell<i64> = const { Cell::new(0) };
+    /// Low-water mark of [`THREAD_LIVE_BYTES`] since the last window opened.
+    static THREAD_TROUGH_BYTES: Cell<i64> = const { Cell::new(0) };
     /// Whether a [`CurrentThreadWindow`] is already open on this thread.
     static THREAD_WINDOW_OPEN: Cell<bool> = const { Cell::new(false) };
 }
@@ -149,7 +165,15 @@ fn thread_record_allocation(size: usize) {
 
 /// Record `size` bytes returned on the current thread.
 fn thread_record_deallocation(size: usize) {
-    let _ = THREAD_LIVE_BYTES.try_with(|live| live.set(live.get().saturating_sub(widen_i64(size))));
+    let _ = THREAD_LIVE_BYTES.try_with(|live| {
+        let now = live.get().saturating_sub(widen_i64(size));
+        live.set(now);
+        let _ = THREAD_TROUGH_BYTES.try_with(|trough| {
+            if now < trough.get() {
+                trough.set(now);
+            }
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +223,8 @@ static PROCESS_REQUESTED_BYTES: AtomicU64 = AtomicU64::new(0);
 static PROCESS_LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
 /// High-water mark of [`PROCESS_LIVE_BYTES`] since the window opened.
 static PROCESS_PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
+/// Low-water mark of [`PROCESS_LIVE_BYTES`] since the window opened.
+static PROCESS_TROUGH_BYTES: AtomicI64 = AtomicI64::new(0);
 
 /// Try to enter the counted region: atomically check the armed bit and, if
 /// set, register one more in-flight recorder in [`PROCESS_STATE`].
@@ -288,7 +314,22 @@ fn process_record_deallocation(size: usize) {
     if !process_enter() {
         return;
     }
-    PROCESS_LIVE_BYTES.fetch_sub(widen_i64(size), Ordering::Relaxed);
+    let size = widen_i64(size);
+    let live = PROCESS_LIVE_BYTES
+        .fetch_sub(size, Ordering::Relaxed)
+        .saturating_sub(size);
+    let mut trough = PROCESS_TROUGH_BYTES.load(Ordering::Relaxed);
+    while live < trough {
+        match PROCESS_TROUGH_BYTES.compare_exchange_weak(
+            trough,
+            live,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => trough = observed,
+        }
+    }
     process_leave();
 }
 
@@ -409,6 +450,7 @@ impl CurrentThreadWindow {
         );
         let live_bytes = THREAD_LIVE_BYTES.with(Cell::get);
         THREAD_PEAK_BYTES.with(|peak| peak.set(live_bytes));
+        THREAD_TROUGH_BYTES.with(|trough| trough.set(live_bytes));
         Self {
             allocations: THREAD_ALLOCATIONS.with(Cell::get),
             requested_bytes: THREAD_REQUESTED_BYTES.with(Cell::get),
@@ -421,6 +463,7 @@ impl CurrentThreadWindow {
     pub fn sample(&self) -> Measurement {
         let live = THREAD_LIVE_BYTES.with(Cell::get);
         let peak = THREAD_PEAK_BYTES.with(Cell::get);
+        let trough = THREAD_TROUGH_BYTES.with(Cell::get);
         Measurement {
             allocations: THREAD_ALLOCATIONS
                 .with(Cell::get)
@@ -429,7 +472,7 @@ impl CurrentThreadWindow {
                 .with(Cell::get)
                 .saturating_sub(self.requested_bytes),
             retained_bytes: live.saturating_sub(self.live_bytes),
-            peak_working_bytes: peak.saturating_sub(self.live_bytes),
+            peak_working_bytes: peak.saturating_sub(trough),
         }
     }
 
@@ -490,6 +533,7 @@ impl WholeProcessWindow {
         PROCESS_REQUESTED_BYTES.store(0, Ordering::Relaxed);
         PROCESS_LIVE_BYTES.store(0, Ordering::Relaxed);
         PROCESS_PEAK_BYTES.store(0, Ordering::Relaxed);
+        PROCESS_TROUGH_BYTES.store(0, Ordering::Relaxed);
         // Release: every thread that observes the armed bit must also observe
         // the zeroed counters, or it would add to a total from the last
         // window. The in-flight count starts at zero here because the
@@ -507,7 +551,9 @@ impl WholeProcessWindow {
             allocations: PROCESS_ALLOCATIONS.load(Ordering::Relaxed),
             requested_bytes: PROCESS_REQUESTED_BYTES.load(Ordering::Relaxed),
             retained_bytes: PROCESS_LIVE_BYTES.load(Ordering::Relaxed),
-            peak_working_bytes: PROCESS_PEAK_BYTES.load(Ordering::Relaxed),
+            peak_working_bytes: PROCESS_PEAK_BYTES
+                .load(Ordering::Relaxed)
+                .saturating_sub(PROCESS_TROUGH_BYTES.load(Ordering::Relaxed)),
         }
     }
 
@@ -580,20 +626,6 @@ mod tests {
     /// How large the buffer the cross-thread tests allocate is; big enough that
     /// no incidental traffic could be mistaken for it.
     const PROBE_BYTES: usize = 1 << 20;
-
-    /// How far a whole-process window's live-byte baseline may drift below
-    /// where it opened before the peak assertion stops meaning anything.
-    ///
-    /// A whole-process window opens over a RUNNING process and reports deltas
-    /// from that instant, so memory allocated before it and freed inside it
-    /// reads as negative retention — the documented behaviour of
-    /// [`Measurement::retained_bytes`]. `peak_working_bytes` is a high-water
-    /// mark of that same signed delta, so the identical drift puts the peak of
-    /// a `PROBE_BYTES` buffer just UNDER `PROBE_BYTES`, and a bound at exactly
-    /// `PROBE_BYTES` claims a baseline of zero that this window never promised.
-    /// Ambient drift is a few hundred bytes; this slack is far above that and
-    /// far below the buffer, so nothing but the buffer can clear the bound.
-    const BASELINE_DRIFT_SLACK: i64 = 64 * 1024;
 
     /// A vector of `PROBE_BYTES` bytes, returned so the caller decides when it
     /// is freed.
@@ -688,7 +720,7 @@ mod tests {
         );
         assert!(measured.allocations >= 1, "{measured:?}");
         assert!(
-            measured.peak_working_bytes >= PROBE_BYTES as i64 - BASELINE_DRIFT_SLACK,
+            measured.peak_working_bytes >= PROBE_BYTES as i64,
             "a whole-process window missed another thread's working set: {measured:?}"
         );
         // The buffer was freed inside the window, so it is traffic and peak but
@@ -713,6 +745,53 @@ mod tests {
         assert!(
             !PROCESS_WINDOW_HELD.load(Ordering::Relaxed),
             "the closed window left its nesting guard held"
+        );
+    }
+
+    /// The regression test for the defect trough-tracking fixes: memory
+    /// allocated BEFORE the window opened, then freed INSIDE it, must not
+    /// depress the reported peak below a buffer allocated later in the same
+    /// window.
+    ///
+    /// Against the old code — a bare high-water mark of a live-byte delta
+    /// that opens at zero — freeing `baseline` here drives `PROCESS_LIVE_BYTES`
+    /// negative before the probe buffer is allocated, so the probe's own peak
+    /// landed under `PROBE_BYTES` and only a slack constant made the
+    /// assertion pass. Tracking the trough alongside the peak and reporting
+    /// their difference removes the need for slack: the span is exact, no
+    /// tolerance.
+    #[test]
+    fn peak_working_bytes_is_exact_when_a_pre_window_buffer_is_freed_inside_it() {
+        let _exclusive = exclusive();
+        let baseline = probe_buffer();
+        let window = WholeProcessWindow::open();
+        drop(baseline);
+        let probe = probe_buffer();
+        let measured = window.close();
+        drop(probe);
+
+        assert!(
+            measured.peak_working_bytes >= PROBE_BYTES as i64,
+            "freeing a pre-window buffer inside the window depressed the peak: {measured:?}"
+        );
+    }
+
+    /// A window that only frees memory allocated before it opened can never
+    /// report a negative working-set span: the low-water mark falls below the
+    /// anchor, but the high-water mark it is subtracted from can fall no
+    /// lower than that same anchor, since nothing inside the window raises
+    /// live bytes above it.
+    #[test]
+    fn peak_working_bytes_is_never_negative_for_a_window_that_only_frees() {
+        let _exclusive = exclusive();
+        let baseline = probe_buffer();
+        let window = WholeProcessWindow::open();
+        drop(baseline);
+        let measured = window.close();
+
+        assert!(
+            measured.peak_working_bytes >= 0,
+            "a window that only frees reported a negative working-set span: {measured:?}"
         );
     }
 
