@@ -472,11 +472,11 @@ fn stop_at_compile_run_directly() {
     // with no `execute` (and so no composition layer) in the path.
     let unit = &compiled.units[0];
     assert!(
-        unit.sparql.contains(&ex("pf/hand")),
+        unit.sparql().contains(&ex("pf/hand")),
         "the unit names its producer: {}",
-        unit.sparql
+        unit.sparql()
     );
-    let rows = run_query(&unit.sparql, &registry);
+    let rows = run_query(&unit.sparql(), &registry);
     assert_eq!(
         rows.len(),
         3,
@@ -612,19 +612,31 @@ fn start_at_compile_hand_built_plan() {
 /// A hand-built [`StratumUnit`] is admitted on the same terms the compiler's own
 /// output is, and refused on the same terms a hand-edited *plan* is.
 ///
-/// A bundle is what [`execute`] is handed, and the three numbers on a unit are the
-/// whole of what the run may claim about how its read ended. While they were plain
-/// public fields, a bundle could say anything: a depth raised past the range the
-/// emitted bound can probe made `Exhausted` reportable for a read the `LIMIT` cut,
-/// and a declared bound lowered below the depth bypassed the admission waist's
-/// `DepthBoundViolation` dimension on the one number all of this is about. Admission
-/// refuses a hand-edited plan on both; trusting a hand-edited bundle on the same two
-/// was the same hole with one stage skipped.
+/// A bundle is what [`execute`] is handed, and **four** things on a unit decide what
+/// the run may claim about how its read ended: its depth, its declared row bound, the
+/// reach derived from those two, and the bound the text is actually read under. Three
+/// of them were writable at once, and the fourth was writable on its own for one
+/// revision longer — which is why this test exists in the shape it does.
 ///
-/// So the numbers are reachable only through [`StratumUnit::new`], and every refusal
-/// below is executed beside the neighbouring value that must still build — because a
-/// checked surface that refused the honest cases would have closed the seam instead
-/// of holding it.
+/// While the numbers were plain public fields, a bundle could say anything: a depth
+/// raised past the range the emitted bound can probe made `Exhausted` reportable for a
+/// read the `LIMIT` cut, and a declared bound lowered below the depth bypassed the
+/// admission waist's `DepthBoundViolation` dimension. While the whole query *text* was
+/// a public field, the bound in it was a fourth input nobody compared against the
+/// other three: writing the natural `LIMIT <depth>` — the depth being the number this
+/// layer reasons about everywhere — left no slot for the probe row, and a depth of
+/// three over a producer holding nine rows was then reported
+/// `Exhausted { rows_emitted: 3 }` with `rows_emitted` equal to the rows pulled, so
+/// nothing downstream could catch it either.
+///
+/// So the depth and the declaration are reachable only through [`StratumUnit::new`],
+/// the reach is derived from them, and the bound is no longer an input at all: a unit
+/// carries the query **body** and [`StratumUnit::sparql`] renders the bound from the
+/// depth. Three checked numbers plus one rendered from them. Every refusal below is
+/// executed beside the neighbouring value that must still build — because a checked
+/// surface that refused the honest cases would have closed the seam instead of holding
+/// it — and the bound is varied by varying the depth, which is now the only way it
+/// can vary.
 #[test]
 fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 12, 3);
@@ -641,7 +653,7 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     let rebuild = |depth: u32, declared: Option<u64>| {
         StratumUnit::new(
             emitted.stratum.clone(),
-            emitted.sparql.clone(),
+            emitted.body.clone(),
             emitted.contract.clone(),
             depth,
             declared,
@@ -657,6 +669,30 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
         &by_hand, emitted,
         "a hand-built unit over the compiler's numbers IS the compiler's unit"
     );
+    assert_eq!(
+        by_hand.sparql(),
+        emitted.sparql(),
+        "including the text it runs, bound and all"
+    );
+
+    // THE FOURTH DIMENSION. One body, three depths, three bounds — and the bound is
+    // the depth's every time, because the unit renders it rather than carrying it.
+    // This is the arm that was missing: every case above and below varies a number
+    // while reusing the emitted text, so none of them could ever have observed a
+    // bound that disagreed with the depth beside it.
+    for depth in [1_u32, 3, 12] {
+        let unit = rebuild(depth, Some(12)).expect("a depth inside the declaration builds");
+        assert_eq!(
+            unit.sparql(),
+            format!("{}\nLIMIT {}", emitted.body, depth + 1),
+            "the text a unit runs is its body bounded one row past its own depth"
+        );
+        assert_eq!(
+            unit.body, emitted.body,
+            "and the body is untouched by the depth, so the bound is the only thing \
+             that moved"
+        );
+    }
 
     // A depth of zero reads nothing and proves nothing, and one row is the
     // neighbouring read that must still build.
@@ -724,6 +760,48 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
         execution.statuses[&stratum("hand")],
         ProducerStatus::Exhausted { rows_emitted: 3 },
         "three rows behind a twelve-row declaration, read to their end"
+    );
+
+    // And the run the fourth dimension was worth catching for: a hand-built unit at
+    // depth three over a producer holding NINE rows. The read is cut by the depth and
+    // says so. This is the observation a caller-written `LIMIT 3` destroyed — the
+    // probe slot vanished, no row could arrive past the depth, and the layer's
+    // strongest completeness claim was reported for a read with six rows behind it.
+    let nine = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 1_000, 9);
+    let nine_stats = single_statistics(&ex("stratum/hand"), 1_000);
+    let nine_env = AdmissionEnvironment {
+        registry: &nine,
+        statistics: &nine_stats,
+        fusion_profile: None,
+    };
+    let nine_compiled = compile(
+        &plan(&request, &nine, &nine_stats).expect("plans"),
+        &nine_env,
+    )
+    .expect("the plan is admitted");
+    let shallow = StratumUnit::new(
+        nine_compiled.units[0].stratum.clone(),
+        nine_compiled.units[0].body.clone(),
+        nine_compiled.units[0].contract.clone(),
+        3,
+        Some(1_000),
+        DepthApplication::Evaluator,
+    )
+    .expect("depth three inside a thousand-row declaration is admitted");
+    let cut = block_on(execute(
+        &CompiledRetrieval {
+            units: vec![shallow],
+            ..nine_compiled
+        },
+        &nine,
+        &*common::empty_dataset(),
+    ))
+    .expect("the unit runs");
+    assert_eq!(
+        cut.statuses[&stratum("hand")],
+        ProducerStatus::DepthReached { rank: 3 },
+        "nine rows read at depth three ended at the depth, and no text a caller \
+         supplies can make that read look exhausted"
     );
 }
 

@@ -472,15 +472,15 @@ fn admission_accepts_fresh_plan() {
     assert_eq!(compiled.units.len(), 3, "one unit per declared stratum");
     for unit in &compiled.units {
         assert!(
-            unit.sparql.starts_with("SELECT ?candidate WHERE"),
+            unit.sparql().starts_with("SELECT ?candidate WHERE"),
             "unit for {} is a SELECT over the common candidate variable: {}",
             unit.stratum,
-            unit.sparql
+            unit.sparql()
         );
         assert!(
-            unit.sparql.contains("( ?c0 ) <"),
+            unit.sparql().contains("( ?c0 ) <"),
             "the subject argument list is parenthesized even at arity one: {}",
-            unit.sparql
+            unit.sparql()
         );
     }
     let universal = compiled
@@ -488,7 +488,7 @@ fn admission_accepts_fresh_plan() {
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/universal")))
         .expect("the mandatory producer's stratum emits a unit");
-    assert!(universal.sparql.contains(&ex("pf/any")));
+    assert!(universal.sparql().contains(&ex("pf/any")));
     // The seed producer receives the seed itself as a rendered constant, which is
     // what "the request is in the text" means.
     let graph = compiled
@@ -504,7 +504,7 @@ fn admission_accepts_fresh_plan() {
     // Only the text moved: `compiled.plan_id` is asserted equal to the identity
     // the plan itself carries, above, and the recorded depth is checked below.
     assert_eq!(
-        graph.sparql,
+        graph.sparql(),
         format!(
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( <{}> ) }} LIMIT 51 }}\n\
@@ -961,9 +961,9 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     // stratum was exhausted. The depth the plan recorded is unchanged, and the
     // assertion below says so.
     assert!(
-        compiled.units[0].sparql.contains("LIMIT 14000001"),
+        compiled.units[0].sparql().contains("LIMIT 14000001"),
         "the admitted depth, plus its probe row, reaches the emitted text: {}",
-        compiled.units[0].sparql
+        compiled.units[0].sparql()
     );
     assert_eq!(
         compiled.units[0].depth(),
@@ -1641,10 +1641,10 @@ fn every_bound_stratum_with_a_depth_emits_its_branch() {
             .find(|unit| unit.stratum == binding.stratum)
             .unwrap_or_else(|| panic!("stratum {} emits a unit", binding.stratum));
         assert!(
-            unit.sparql.contains(&binding.producer),
+            unit.sparql().contains(&binding.producer),
             "producer {} has a branch in its stratum's unit: {}",
             binding.producer,
-            unit.sparql
+            unit.sparql()
         );
     }
 }
@@ -1810,9 +1810,9 @@ fn a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it() {
     // hold. A declared zero is read rather than obeyed here as everywhere else, which
     // is what makes the emptiness this producer reports a verified claim.
     assert!(
-        unit.sparql.ends_with("LIMIT 2"),
+        unit.sparql().ends_with("LIMIT 2"),
         "the emitted bound is one row past the floored depth: {}",
-        unit.sparql
+        unit.sparql()
     );
 
     // Only the floor. A declared zero admits one row because one row is what the
@@ -1904,9 +1904,9 @@ fn a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under()
     // leaves room for: the read is one row deep, and the emitted bound is what
     // lets the executor tell "there was only one" from "I stopped at one".
     assert!(
-        unit.sparql.ends_with("LIMIT 2"),
+        unit.sparql().ends_with("LIMIT 2"),
         "the shallowest honest read is one row, probed one deeper: {}",
-        unit.sparql
+        unit.sparql()
     );
     assert_eq!(
         unit.depth(),
@@ -1973,13 +1973,13 @@ fn a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling() 
         .expect("the stratum emits a unit");
     assert_eq!(unit.depth(), u32::MAX - 1);
     assert!(
-        unit.sparql.ends_with(&format!("LIMIT {}", u32::MAX)),
+        unit.sparql().ends_with(&format!("LIMIT {}", u32::MAX)),
         "the emitted bound is one row deeper than the depth, at the ceiling as \
          anywhere else: {}",
-        unit.sparql
+        unit.sparql()
     );
     assert!(
-        emitted_bound(&unit.sparql) > unit.depth(),
+        emitted_bound(&unit.sparql()) > unit.depth(),
         "and the probe slot is what that inequality is: a bound equal to its own \
          depth could never report how the read ended"
     );
@@ -2067,7 +2067,7 @@ fn one_stratum_failure_others_continue() {
     };
     let mut compiled = compile(&plan, &env).expect("the plan admits");
     let failing = compiled.units[1].stratum.clone();
-    compiled.units[1].sparql = "THIS IS NOT SPARQL".to_owned();
+    compiled.units[1].body = "THIS IS NOT SPARQL".to_owned();
 
     let result = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
         .expect("execution starts");
@@ -2437,11 +2437,11 @@ fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_manda
         1,
         "the surviving producer still emits"
     );
-    assert!(compiled.units[0].sparql.contains(&ex("pf/free")));
+    assert!(compiled.units[0].sparql().contains(&ex("pf/free")));
     assert!(
-        !compiled.units[0].sparql.contains(&ex("pf/renders")),
+        !compiled.units[0].sparql().contains(&ex("pf/renders")),
         "and the dropped producer is not in the text: {}",
-        compiled.units[0].sparql
+        compiled.units[0].sparql()
     );
     // The survivor declares no placement, so it is NOT serving the vector: the
     // plan says so per term, and the text it emits carries no embedding. Naming
@@ -2463,10 +2463,10 @@ fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_manda
     );
     assert!(
         !compiled.units[0]
-            .sparql
+            .sparql()
             .contains(&purrdf_retrieval::encode_embedding(&[0.25, -1.5, 3.0])),
         "and the embedding is nowhere in it: {}",
-        compiled.units[0].sparql
+        compiled.units[0].sparql()
     );
 
     // Declared mandatory: the very same plan is refused, because the registry
@@ -2774,9 +2774,9 @@ fn a_mandatory_producer_that_places_nothing_must_be_present_and_serves_no_term()
         .find(|unit| unit.stratum == iri(&ex("stratum/universal")))
         .expect("its stratum still emits");
     assert!(
-        universal.sparql.contains("( ?c0 ) <") && universal.sparql.contains("( ?c1 )"),
+        universal.sparql().contains("( ?c0 ) <") && universal.sparql().contains("( ?c1 )"),
         "and it is emitted with both arguments free: {}",
-        universal.sparql
+        universal.sparql()
     );
 
     // Presence is still enforced, and that is the whole of what `mandatory`

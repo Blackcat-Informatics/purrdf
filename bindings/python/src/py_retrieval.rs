@@ -1391,7 +1391,10 @@ fn compile_dict<'py>(
     for unit in &compiled.units {
         let entry = PyDict::new(py);
         entry.set_item("stratum", unit.stratum.as_str())?;
-        entry.set_item("sparql", &unit.sparql)?;
+        // Rendered rather than read off a field: the unit carries the query body
+        // and appends its own bound, so the text a host runs cannot disagree with
+        // the depth beside it. The value is byte-identical to what the field held.
+        entry.set_item("sparql", unit.sparql())?;
         // The unit's own reportable bound, read off the field that carries it
         // rather than re-derived from the text or looked up again in the plan:
         // the text's `LIMIT` is the emitted bound, which includes the probe.

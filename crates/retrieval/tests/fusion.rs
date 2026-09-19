@@ -6216,13 +6216,47 @@ fn the_differential_holds_under_declared_domains_over_many_configurations() {
     );
 }
 
+/// The smallest weight the fixed-point carries, and the one whose decay collides
+/// immediately: at this weight ranks one and two already share a contribution value.
+///
+/// `Fixed::ONE` collides too, but not until rank 1_000_941 — past the end of any
+/// fixture here — so a collision assertion over a `case_a` run at `Fixed::ONE` is an
+/// assertion that zero equals zero. It would pass with the collision counter emptied,
+/// and it would pass against the very estimate its own message forbids. This is the
+/// weight the two sibling tests that enter the collided regime already use.
+const COLLIDED_WEIGHT: Fixed = Fixed::from_raw(1);
+
+/// [`case_a`] at [`COLLIDED_WEIGHT`]: the same streams, the same blocks, the same
+/// lengths, weighted so that adjacent ranks collide from the second one on.
+fn case_a_collided() -> Vec<StratumSpec> {
+    case_a()
+        .into_iter()
+        .map(|entry| StratumSpec {
+            weight: COLLIDED_WEIGHT,
+            ..entry
+        })
+        .collect()
+}
+
 // T6.4. The two measured fields stay measurements. `collisions_observed` counts
 // what this run actually saw, and `separation` is the profile's own answer for
 // the stratum — neither is estimated from the other.
+//
+// The fixture is weighted into the collided regime on purpose, and the guard below
+// holds it there: a counter assertion over a read containing no collision is an
+// assertion about nothing, which is what this test used to be.
+//
+// That weight is also why the reading here is the full drain rather than the bounded
+// prefix T6.1 measures, and the two facts are the same fact. A declaration licenses an
+// early stop only when a threshold can fall below the live heads, and a collided
+// regime is precisely where it cannot: every rank carries one contribution value, so
+// nothing separates and nothing may be skipped. No single weight can put a collision
+// inside a read that a declaration shortened — what this test measures is the
+// counters, in the one regime where the collision counter has anything to count.
 #[test]
 fn the_resolution_counters_stay_observations_under_a_declared_domain() {
     let bound = TopK::new(5);
-    let spec = case_a();
+    let spec = case_a_collided();
     let result = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
     let law = spec_profile(&spec);
 
@@ -6248,6 +6282,15 @@ fn the_resolution_counters_stay_observations_under_a_declared_domain() {
                 expected += 1;
             }
         }
+        // Non-vacuity, the crossing guard its siblings carry: a fixture whose
+        // pulled ranks hold no collision makes the equality below `0 == 0`, which
+        // an emptied counter satisfies as readily as a correct one.
+        assert!(
+            expected > 0,
+            "{}: the pulled ranks must contain a collision, or the count below \
+             asserts nothing",
+            entry.name
+        );
         assert_eq!(
             measured.collisions_observed, expected,
             "the collision count must be what the pulled rows show, not an \
@@ -6257,8 +6300,8 @@ fn the_resolution_counters_stay_observations_under_a_declared_domain() {
             measured.separation,
             law.monotone_depth(&stratum(entry.name))
                 .expect("the profile weights this stratum"),
-            "separation is the profile's own answer for this stratum, and a \
-             bounded read does not move it"
+            "separation is the profile's own answer for this stratum, and what the \
+             read did does not move it"
         );
     }
 }

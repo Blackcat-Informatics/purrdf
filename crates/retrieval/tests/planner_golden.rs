@@ -1219,25 +1219,65 @@ fn statistics_lower_but_never_raise_the_declared_bound() {
     assert_eq!(plan.stratum_depths[&iri(&ex("stratum/universal"))], 1_000);
 }
 
+/// An unbounded declaration with no statistic to narrow it reads to the ceiling,
+/// and its finite neighbours read exactly where they always did.
+///
+/// This used to be `PlanError::StatisticsUnavailable`. What made the refusal
+/// obsolete is that the same planner now records *any* declaration larger than a
+/// read can reach at the deepest readable depth, with the probe row one past it: a
+/// declaration of `u64::MAX` and one of `u64::MAX - 1` produce the same depth, the
+/// same emitted bound and the same ending, so refusing the first while serving the
+/// second was a refusal one declared row wide. Nothing is claimed about the rows
+/// below the ceiling — the read ends `DepthReached`, which names the planned depth
+/// as the stopper.
 #[test]
-fn an_unbounded_stratum_without_statistics_is_refused() {
-    let mut registry = PropertyFunctionRegistry::new();
-    registry.register_ranked(
-        ex("pf/unbounded"),
-        relation(u64::MAX),
-        ranked(
-            &ex("stratum/endless"),
-            vec![TermPattern::of_kind(TermKind::Any)],
-            true,
-        ),
-    );
-    let error = plan(&lexical_request(), &registry, &no_stratum_cardinality())
-        .expect_err("an unbounded stratum with no statistic has no finite depth");
-    match error {
-        PlanError::StatisticsUnavailable { predicate } => {
-            assert_eq!(*predicate, iri(&ex("stratum/endless")));
-        }
-        other => panic!("expected StatisticsUnavailable, got {other:?}"),
+fn an_unbounded_stratum_without_statistics_reads_to_the_ceiling() {
+    let endless = |declared: u64| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            ex("pf/unbounded"),
+            relation(declared),
+            ranked(
+                &ex("stratum/endless"),
+                vec![TermPattern::of_kind(TermKind::Any)],
+                true,
+            ),
+        );
+        registry
+    };
+    // The deepest depth a read can be taken to: one shallower than the deepest a
+    // rank can express, because the read is emitted one row past the depth.
+    let deepest = u32::MAX - 1;
+
+    for declared in [u64::MAX, u64::MAX - 1, u64::from(u32::MAX)] {
+        let planned = plan(
+            &lexical_request(),
+            &endless(declared),
+            &no_stratum_cardinality(),
+        )
+        .expect("a declaration larger than a read can reach is planned, not refused");
+        assert_eq!(
+            planned.stratum_depths[&iri(&ex("stratum/endless"))],
+            deepest,
+            "a declaration of {declared} rows records the deepest readable depth"
+        );
+    }
+
+    // The valid neighbours a ceiling must not disturb: a declaration a read can
+    // reach, with no statistic in sight, is still exactly its own number.
+    for declared in [1, 40, u64::from(deepest)] {
+        let planned = plan(
+            &lexical_request(),
+            &endless(declared),
+            &no_stratum_cardinality(),
+        )
+        .expect("a reachable declaration plans");
+        let depth = u32::try_from(declared).expect("the fixture declarations fit a rank");
+        assert_eq!(
+            planned.stratum_depths[&iri(&ex("stratum/endless"))],
+            depth,
+            "a declaration of {declared} rows is the depth, untouched by the ceiling"
+        );
     }
 }
 

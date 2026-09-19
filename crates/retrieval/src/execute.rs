@@ -614,7 +614,11 @@ pub async fn execute<D: DatasetView + Sync>(
     };
 
     for unit in &compiled.units {
-        if unit.sparql.trim().is_empty() {
+        // The body is what a caller can replace, so the body is what "empty" is
+        // asked about: the text below is never empty — it always carries the bound
+        // the depth renders — and a bound with no query in front of it is not a
+        // query the evaluator's diagnostic would describe usefully.
+        if unit.body.trim().is_empty() {
             statuses.insert(
                 unit.stratum.clone(),
                 ProducerStatus::ExecutionFailed {
@@ -623,7 +627,10 @@ pub async fn execute<D: DatasetView + Sync>(
             );
             continue;
         }
-        let prepared = match engine.prepare_query_with_options(&unit.sparql, None, options()) {
+        // Rendered once and run once: the depth this loop reads the ending against
+        // is the depth that wrote the bound in this text.
+        let sparql = unit.sparql();
+        let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
             Ok(prepared) => prepared,
             Err(diagnostic) => {
                 statuses.insert(

@@ -609,7 +609,7 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
         .find(|unit| unit.stratum == iri(TEXT_STRATUM))
         .expect("the lexical stratum emits a unit");
     assert_eq!(
-        text.sparql,
+        text.sparql(),
         format!(
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{TEXT_PF}> \
@@ -633,7 +633,7 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
         .find(|unit| unit.stratum == iri(KNN_STRATUM))
         .expect("the neighbour stratum emits a unit");
     assert_eq!(
-        knn.sparql,
+        knn.sparql(),
         format!(
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{KNN_PF}> \
@@ -697,16 +697,16 @@ fn the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_st
         .expect("the neighbour stratum emits a unit");
 
     assert!(
-        knn.sparql.contains(&format!("\"4\"^^<{XSD_INTEGER}>")),
+        knn.sparql().contains(&format!("\"4\"^^<{XSD_INTEGER}>")),
         "the relation is asked for the four neighbours it declared it can serve, \
          never the five that would breach its guard: {}",
-        knn.sparql
+        knn.sparql()
     );
     assert!(
-        knn.sparql.ends_with("LIMIT 5"),
+        knn.sparql().ends_with("LIMIT 5"),
         "while the unit's own bound still reaches one row past the declaration, so a \
          relation that returned five would still be caught: {}",
-        knn.sparql
+        knn.sparql()
     );
     assert_eq!(
         (knn.depth(), knn.declared_rows()),
@@ -1575,12 +1575,12 @@ fn sole_producer_answer(
         .find(|unit| unit.stratum == iri(TEXT_STRATUM))
         .expect("the one stratum emits a unit");
     assert!(
-        !unit.sparql.contains("LIMIT 0"),
+        !unit.sparql().contains("LIMIT 0"),
         "a unit bounded at nothing hands back no row whatever the index holds, so its \
          stratum's exhaustion would be the bound's claim and not the producer's — and \
          it reads identically to an honest empty answer in every field of the trailer: \
          {}",
-        unit.sparql
+        unit.sparql()
     );
     let profile = one_stratum_profile(TEXT_STRATUM);
     let result = block_on(search(request, registry, &statistics, data, &env, &profile))

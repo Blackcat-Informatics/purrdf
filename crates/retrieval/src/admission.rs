@@ -560,23 +560,52 @@ pub(crate) const MAX_READ_DEPTH: u32 = u32::MAX - 1;
 /// depth and a false completeness claim, and a saturating operator makes no
 /// claim at all.
 ///
-/// The field is private to this module and the only constructor is
-/// [`ProbedDepth::admit`], so a value of this type *is* the proof that both
-/// checks were made. [`ProbedDepth::probe`] can therefore add its row with plain
-/// arithmetic: there is no case left for a saturation to hide.
+/// The field is private to this module and every constructor runs both checks,
+/// so a value of this type *is* the proof that they were made.
+/// [`ProbedDepth::probe`] can therefore add its row with plain arithmetic: there
+/// is no case left for a saturation to hide.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProbedDepth(u32);
 
+/// Why a depth cannot carry the probe row that makes its ending observable.
+///
+/// Returned by [`ProbedDepth::checked`] so the two conditions are decided in one
+/// place and *named* in two vocabularies: the waist reports them about a plan
+/// ([`AdmissionError`]) and [`StratumUnit::new`](crate::StratumUnit::new) reports
+/// them about a hand-built bundle ([`UnitError`](crate::UnitError)). Two
+/// re-derivations of "can this depth be probed" would be two chances to disagree
+/// about the one question every ending hangs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unprobeable {
+    /// The depth is zero: the read proves nothing, so there is no ending to
+    /// observe.
+    Zero,
+    /// The depth is past [`MAX_READ_DEPTH`], so the bound one row deeper than it
+    /// is not a number the emitted `LIMIT` can hold.
+    PastCeiling,
+}
+
 impl ProbedDepth {
-    /// Admit `depth` for `stratum`, refusing both ends of the range by name.
+    /// `depth` as a probeable depth, or the reason it is not one.
     ///
-    /// The floor and the ceiling are checked here, before anything is looked up
-    /// and for every recorded stratum, because neither has anything to do with
-    /// what the registry declared: a zero reads nothing whatever the registry
-    /// says about that stratum, and a depth whose probe row is inexpressible
-    /// cannot report its own ending whatever the registry says either. The
-    /// registry's own declared row bound is a third, separate dimension, decided
-    /// by the caller once it holds one of these.
+    /// The floor and the ceiling are checked here and nowhere else, because
+    /// neither has anything to do with what a registry declared: a zero reads
+    /// nothing whatever the registry says about that stratum, and a depth whose
+    /// probe row is inexpressible cannot report its own ending whatever the
+    /// registry says either. The registry's own declared row bound is a third,
+    /// separate dimension, decided by the caller once it holds one of these.
+    pub(crate) const fn checked(depth: u32) -> Result<Self, Unprobeable> {
+        if depth == 0 {
+            return Err(Unprobeable::Zero);
+        }
+        if depth > MAX_READ_DEPTH {
+            return Err(Unprobeable::PastCeiling);
+        }
+        Ok(Self(depth))
+    }
+
+    /// Admit `depth` for `stratum`, naming [`Self::checked`]'s refusal as the
+    /// plan's.
     ///
     /// Neither end is a value the planner can produce — it records a depth only
     /// for a stratum a surviving producer ranks under, floors what it derives at
@@ -585,19 +614,16 @@ impl ProbedDepth {
     /// registry says about that stratum. The refusals name that stratum because the
     /// value belongs to the plan in hand and a caller has to be able to find it.
     fn admit(depth: u32, stratum: &Iri) -> Result<Self, AdmissionError> {
-        if depth == 0 {
-            return Err(AdmissionError::ZeroDepth {
+        Self::checked(depth).map_err(|reason| match reason {
+            Unprobeable::Zero => AdmissionError::ZeroDepth {
                 stratum: Box::new(stratum.clone()),
-            });
-        }
-        if depth > MAX_READ_DEPTH {
-            return Err(AdmissionError::DepthWithoutProbe {
+            },
+            Unprobeable::PastCeiling => AdmissionError::DepthWithoutProbe {
                 stratum: Box::new(stratum.clone()),
                 depth,
                 ceiling: MAX_READ_DEPTH,
-            });
-        }
-        Ok(Self(depth))
+            },
+        })
     }
 
     /// The depth itself: the number the plan recorded, and the number every field
@@ -608,7 +634,7 @@ impl ProbedDepth {
 
     /// One row past the depth — the probe slot.
     ///
-    /// Exact, not saturating: [`Self::admit`] refused the one depth for which
+    /// Exact, not saturating: [`Self::checked`] refused the one depth for which
     /// this addition would have had to saturate, so there is no value of this
     /// type it can overflow on.
     pub(crate) const fn probe(self) -> u32 {

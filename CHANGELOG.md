@@ -702,9 +702,79 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and refuses a zero depth, a depth whose probe row is inexpressible, and a depth
   above the declared bound as the three variants of a new `UnitError`. The seam stays
   open -- the compiler's own numbers handed to the constructor build the compiler's
-  own unit, and that unit executes -- and the unit's `sparql` stays public and
-  writable, because replacing the text is how a caller drives the executor over a
-  query of its own.
+  own unit, and that unit executes -- and the query text stays caller-replaceable,
+  because writing it is how a caller drives the executor over a query of its own. The
+  entry below carries that half the rest of the way: what a caller replaces is the
+  query *body*, and the bound is rendered from the depth.
+
+- **retrieval:** A stratum's ending was decided from four things and only three of
+  them were checked. The fourth was the bound written in the unit's own query text,
+  which was a public, writable `String`, and the failure was the natural off-by-one: a
+  caller assembling a bundle by hand writes `LIMIT <depth>`, because the depth is the
+  number this layer reasons about everywhere. That text leaves no slot for the probe
+  row, `execute` writes `DepthReached` only when a row arrives *past* the depth, so an
+  evaluator-bounded `Unique` producer holding nine real rows read at depth three
+  reported `Exhausted { rows_emitted: 3 }` -- the strongest completeness claim this
+  layer has, for a read with six rows behind it. Nothing downstream could catch it
+  either: the rows emitted equalled the rows pulled, so the fused trailer above it read
+  `Exact`.
+
+  `StratumUnit` now carries the query **body** and renders its own bound:
+  `StratumUnit::body` is the public, writable field and `StratumUnit::sparql()` is the
+  body plus `LIMIT depth + 1`, derived from the same `ProbedDepth` the compiler emits
+  with. There is no longer a second spelling of the bound for a caller to contradict --
+  the text a unit runs is bounded one row past its own depth for a hand-built unit
+  exactly as for an emitted one, and the compiled text is byte-identical to what it was.
+  Replacing the body still drives the executor over a caller's own query, including a
+  malformed one, which still reports its parse failure as that stratum's status. The
+  refused alternative was inspecting the trailing `LIMIT` and comparing it: that
+  re-reads a number the layer already holds, and can only ever refuse a caller for
+  writing what the layer writes itself.
+
+- **retrieval:** The top-k narrowing was withheld from a single-stratum plan whose
+  producer declares `CandidateDomains::Unrestricted`, where the disjointness premise it
+  was withheld for is vacuous. Disjointness is a statement about pairs; with one
+  surviving stratum there is no pair, every candidate the answer can hold was named by
+  that one stream, and its rank order *is* the fused order -- so a `k`-row prefix is `k`
+  candidates under `DuplicatePolicy::Unique` alone, with no domain declaration needed.
+  The cost fell on the read rather than on the answer, which is why it was quiet:
+  identical rows, identical scores, and a top-five over a declared ten-billion-row index
+  recording a depth of 4294967294 and emitting `LIMIT 4294967295` where the same answer
+  came from five rows. Neither shipped ranked relation declares a domain, so this was
+  the ordinary single-index configuration rather than an exotic one. `licensed_prefix`
+  now returns the bound for exactly one surviving stratum whatever its domains; the
+  `Unique` condition still applies, and a second surviving stratum restores the pairwise
+  rule unchanged, re-derived per request from the registry in hand. Proved by a
+  differential through `search` at three bounds -- the narrowed answer is the
+  un-narrowed answer's prefix, row for row, score for score and stratum rank for
+  stratum rank.
+
+- **retrieval:** A producer declaring the genuinely unbounded `u64::MAX` rows per
+  invocation, with no cardinality statistic and no licensed prefix, was refused, while
+  the same producer declaring ten billion was served at the deepest readable depth and
+  reported `DepthReached`. Both reads are cut at the same depth by the same bound with
+  the same probe row, so the refusal separated a declaration from its own neighbour --
+  `u64::MAX` refused, `u64::MAX - 1` served -- and bought nothing the ending does not
+  already report. The refusal predated the clamp that made it obsolete: it existed
+  because recording `u32::MAX` claimed a bound no producer declared *and* left the
+  compiler no room for the probe row, and recording the read ceiling instead fixed both.
+  Such a stratum is now recorded at that ceiling like any other oversized declaration,
+  with its probe row one past it, so a read the ceiling cuts ends `DepthReached` and
+  claims nothing about the rows below it. The neighbours are executed rather than
+  reasoned about: the unbounded declaration, the one below it and an ordinary
+  declaration a read can reach all plan, and the last is untouched.
+
+- **retrieval:** A fusion test counted rank collisions in a fixture that cannot
+  collide. It walked the profile's curve over the ranks its bounded read pulled and
+  required the trailer's collision counter to equal that walk, "not an estimate from the
+  profile's bound" -- but at the fixture's weight of `Fixed::ONE` the first colliding
+  rank is 1000941, so the walk was provably zero over a read of seven ranks and the
+  assertion was `0 == 0`. It would have passed with the counter emptied, and with the
+  estimate its own message forbids. It now runs at the weight whose decay collides from
+  rank two, which is the weight its two sibling tests use to enter that regime, and
+  carries the non-vacuity guard those siblings carry: the pulled ranks must contain a
+  collision before the count over them is asserted. The separation half of the test,
+  which was never vacuous, is unchanged.
 
 - **python:** A ranked producer declared with more than one candidate-domain tag
   failed at the wrong time. One tag entails where every row of that producer
@@ -793,6 +863,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   coarser rank resolution.
 
 ### Removed
+
+- **retrieval:** `PlanError::StatisticsUnavailable`. It was the refusal of an unbounded
+  row-count declaration that no statistic narrowed, and nothing raises it any more: such
+  a stratum is recorded at the deepest depth a read can be taken to, exactly as every
+  other declaration larger than a read can reach already was, and the read's own ending
+  names the planned depth as the stopper. Leaving the variant in place would have left a
+  public error whose documentation described a plan this planner no longer refuses.
+  `PlanError` is `#[non_exhaustive]`, so a caller matching on it already carries a
+  wildcard arm; one matching this variant by name now matches a refusal that cannot
+  arrive.
 
 - **sparql-eval:** `RelationWitness::canonical_bytes`, and the encoding version tag
   behind it. It was a second canonical encoding of "what the indexes attested",

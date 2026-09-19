@@ -21,7 +21,7 @@ use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, Fixed, FusionError,
     FusionProfile, Iri, Metric, PlanError, ProducerStatus, ProtocolError, RankedStreamAdapter,
-    RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics, Term, TopK,
+    RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics, StratumUnit, Term, TopK,
     UnservedReason, UnservedTerm, compile, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
@@ -1370,11 +1370,7 @@ fn a_request_every_term_of_which_reached_a_producer_reports_nothing_unserved() {
         &fixture_env(&registry, &stats),
     )
     .expect("admits");
-    let all: String = compiled
-        .units
-        .iter()
-        .map(|unit| unit.sparql.clone())
-        .collect();
+    let all: String = compiled.units.iter().map(StratumUnit::sparql).collect();
     assert!(
         all.contains("\"quick brown fox\"@en") && all.contains(&format!("<{}>", ex("seed"))),
         "an empty unserved list means the text carries every term: {all}"
@@ -2467,12 +2463,44 @@ fn docs_depth(registry: &PropertyFunctionRegistry) -> u32 {
         .expect("the fixture stratum is planned")
 }
 
+/// The same request with no bound on it: everything the stratum holds.
+///
+/// This is the un-narrowed neighbour every differential below is measured against,
+/// and it is the same registry rather than a differently-declared one — a
+/// `ReadBound::Complete` request licenses no prefix whatever the producers declare,
+/// so the only thing that moves between the two runs is the depth.
+fn everything() -> RetrievalRequest {
+    RetrievalRequest::complete(vec![lexical_term()])
+}
+
+/// The depth the planner records for the fixture stratum under `registry` when the
+/// request states no bound.
+fn docs_complete_depth(registry: &PropertyFunctionRegistry) -> u32 {
+    *plan(&everything(), registry, &docs_statistics())
+        .expect("the fixture request plans")
+        .stratum_depths
+        .get(&iri(&ex("stratum/docs")))
+        .expect("the fixture stratum is planned")
+}
+
 /// The fixture request, searched through the whole ladder against `registry`.
 fn docs_search(registry: &PropertyFunctionRegistry) -> SearchResult {
+    docs_search_for(&top_five(), registry)
+}
+
+/// The un-narrowed search: the whole stratum, fused at the bound its depths sum to.
+fn docs_complete_search(registry: &PropertyFunctionRegistry) -> SearchResult {
+    docs_search_for(&everything(), registry)
+}
+
+fn docs_search_for(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry,
+) -> SearchResult {
     let stats = docs_statistics();
     let env = fixture_env(registry, &stats);
     block_on(search(
-        &top_five(),
+        request,
         registry,
         &stats,
         &*common::empty_dataset(),
@@ -2526,8 +2554,11 @@ fn an_allowed_stratum_keeps_the_read_its_repeats_need_and_answers_as_the_undecla
     );
 
     // The depth first: a stream that may repeat supplies no count of candidates,
-    // so the block declaration alone licenses nothing and the registry's own
-    // bound stands — the same two hundred rows the undeclared stratum reads.
+    // so neither the block declaration nor the fact that this is the only stratum
+    // licenses anything, and the registry's own bound stands. This is the shape that
+    // still does not narrow at one stratum: uniqueness is what makes a count of
+    // ranks a count of candidates, and it is absent here, so the vacuous
+    // disjointness a single stratum enjoys has no second premise to work with.
     assert_eq!(
         (docs_depth(&declared), docs_depth(&undeclared)),
         (200, 200),
@@ -2572,9 +2603,17 @@ fn an_allowed_stratum_keeps_the_read_its_repeats_need_and_answers_as_the_undecla
 
 #[test]
 fn the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave() {
-    // THE OVER-REFUSAL MIRROR. The same shape, the same six rows, the same block
-    // declaration — and the promise that no candidate is named twice, which is
-    // what makes a count of ranks a count of candidates. The bound must survive.
+    // THE OVER-REFUSAL MIRROR. The same shape, the same six rows, and the promise
+    // that no candidate is named twice, which is what makes a count of ranks a count
+    // of candidates. The bound must survive.
+    //
+    // Both declarations narrow, and that pair is the second claim here. With one
+    // surviving stratum there is no pair for a disjointness premise to be about, so
+    // the blocks a producer declares cannot add anything to what uniqueness alone
+    // already gives: its rank order IS the fused order. Withholding the narrowing
+    // from the undeclared stratum refused exactly the ordinary configuration —
+    // neither shipped ranked relation declares a domain — and the refusal was
+    // invisible, because the answer was identical and only the read was larger.
     let declared = docs_registry(
         &DISTINCT_ROWS,
         CandidateDomains::within([domain_tag("domain/docs")]),
@@ -2587,24 +2626,28 @@ fn the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave() 
     );
 
     assert_eq!(
-        docs_depth(&declared),
-        5,
-        "a `Unique` stratum over its own block still reads a five-row prefix for a \
-         top five, which is the bound the declarations were written to buy"
+        (docs_depth(&declared), docs_depth(&undeclared)),
+        (5, 5),
+        "a `Unique` stratum reads a five-row prefix for a top five whether or not it \
+         declares a block, because one stratum has no second one to overlap with"
     );
+
+    // The un-narrowed neighbour, and the only honest one available here: the SAME
+    // registry asked for everything it holds. That is what makes the comparison
+    // below a measurement of the depth rather than of two different fixtures.
     assert_eq!(
-        docs_depth(&undeclared),
+        docs_complete_depth(&undeclared),
         200,
-        "and the stratum that declared nothing still reads what it always read, \
-         which is what makes the bound above a narrowing rather than a default"
+        "a request that states no bound licenses no prefix, so the registry's own \
+         declaration still stands — which is what makes the depth above a narrowing"
     );
 
     let answered = docs_search(&declared);
     assert_eq!(
         fused_answers(&answered),
         fused_answers(&docs_search(&undeclared)),
-        "the narrowed read and the full one answer identically, which is what \
-         makes the narrowing exact rather than merely cheaper"
+        "the declared search and the undeclared one answer identically, row for row \
+         and score for score"
     );
     assert_eq!(
         entities(&answered),
@@ -2616,4 +2659,40 @@ fn the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave() 
         vec![1, 2, 3, 4, 5],
         "and no rank is missing, because no row repeated a candidate"
     );
+
+    // THE DIFFERENTIAL, which is what makes the narrowing exact rather than merely
+    // cheaper: the narrowed read answers with the leading rows of the two-hundred-row
+    // read, byte for byte, score for score and rank for rank. A depth check alone
+    // would pass for a narrowing that dropped the right answer.
+    //
+    // Three bounds, because the claim is about every `k` and not about five: one row,
+    // a bound inside the corpus, and a bound above everything the stratum holds —
+    // where the read runs out before the depth does and the narrowing must still not
+    // change the answer.
+    let whole = docs_complete_search(&undeclared);
+    for requested in [1_usize, 3, 20] {
+        let request = RetrievalRequest::bounded(vec![lexical_term()], TopK::new(requested));
+        let narrowed = docs_search_for(&request, &undeclared);
+        let depth = *plan(&request, &undeclared, &docs_statistics())
+            .expect("the fixture request plans")
+            .stratum_depths
+            .get(&iri(&ex("stratum/docs")))
+            .expect("the fixture stratum is planned");
+        assert_eq!(
+            depth,
+            u32::try_from(requested).expect("the fixture bounds fit a rank"),
+            "the bound IS the depth for a top {requested} over one unique stratum"
+        );
+        let rows = narrowed.rows.len();
+        assert_eq!(
+            fused_answers(&narrowed),
+            fused_answers(&whole)[..rows].to_vec(),
+            "a top {requested} returns the prefix of the un-narrowed answer, unchanged"
+        );
+        assert_eq!(
+            docs_ranks(&narrowed),
+            docs_ranks(&whole)[..rows].to_vec(),
+            "and each row arrives from the same stratum rank it did in the full read"
+        );
+    }
 }

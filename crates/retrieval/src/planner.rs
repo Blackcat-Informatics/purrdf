@@ -130,7 +130,15 @@
 //!   [`DuplicatePolicy::Unique`](purrdf_sparql_eval::DuplicatePolicy::Unique).**
 //!   Then depth `min(declared, statistics-narrowed, k)` is *exact* — the proof is
 //!   below, and it runs on two premises rather than one.
-//! * **Anything else** — two strata that share a block, any stratum declaring
+//! * **Exactly one surviving stratum, declaring
+//!   [`DuplicatePolicy::Unique`](purrdf_sparql_eval::DuplicatePolicy::Unique).**
+//!   The same depth, and the same proof with its first premise discharged for
+//!   free: disjointness is a statement about *pairs*, and there is no pair. What
+//!   the blocks are declared to be — including
+//!   [`Unrestricted`](purrdf_sparql_eval::CandidateDomains::Unrestricted) — cannot
+//!   change that, so no declaration is asked for.
+//! * **Anything else** — two strata that share a block, one of two-or-more strata
+//!   declaring
 //!   [`Unrestricted`](purrdf_sparql_eval::CandidateDomains::Unrestricted), or any
 //!   stratum declaring
 //!   [`DuplicatePolicy::Allowed`](purrdf_sparql_eval::DuplicatePolicy::Allowed) —
@@ -189,17 +197,42 @@
 //! more at a tight depth than at a loose one. That row is a read and never a
 //! value, so it is the probe that supplies it and not the depth.
 //!
+//! ## The one-stratum case, where the first premise is vacuous
+//!
+//! Take `m = 1`. The premise the disjointness is for — a candidate has at most one
+//! naming stratum — is then not *inferred* from the count; it is what "one
+//! stratum" means. There is exactly one stream, so every candidate the answer can
+//! hold was named by it, every fused score is that stream's single weighted
+//! contribution, and the proof above runs word for word with the pairwise step
+//! ranging over no pair. A `k`-row prefix of a `Unique` stream is `k` candidates,
+//! its rank order is the fused order, and reading past `k` can only produce rows
+//! the tie-break has already put below the `k` above them.
+//!
+//! So a single stratum is asked for no domain declaration at all, and
+//! `Unrestricted` is not withheld from it. Withholding it was an over-refusal of
+//! exactly the ordinary configuration: neither shipped ranked relation declares a
+//! domain, `Unrestricted` is what the text relation's own documentation calls the
+//! honest value where the host has no blocks to name, and the cost fell on the
+//! read rather than on the answer — a top-five over a declared ten-billion-row
+//! index recorded a depth at [`MAX_READ_DEPTH`] and emitted `LIMIT 4294967295`
+//! where five rows were wanted, with [`execute`](crate::execute) materializing
+//! every row the unit returned.
+//!
+//! What this does *not* do is rest a multi-stratum depth on a count. With a second
+//! surviving producer the pair exists, the premise is a promise again, and an
+//! `Unrestricted` declaration supplies none — so the narrowing stops, by the rule
+//! below, at the moment the pair appears rather than silently after it. The depth
+//! is derived per request from the registry in hand, so "a second producer is
+//! registered" is re-decided rather than inherited.
+//!
 //! ## Why `Unrestricted` and `Allowed` are excluded, and why neither is an
 //! over-refusal
 //!
-//! The first premise — each candidate has at most one naming stratum — is
+//! With two or more surviving strata the first premise — each candidate has at
+//! most one naming stratum — is
 //! supplied by the domain declarations and by nothing else. An `Unrestricted`
 //! declaration supplies none: it says the producer may name anything, which is
 //! exactly the promise that lets two strata name one candidate and sum into it.
-//! Inferring the premise from the *shape of the plan* instead — one stratum, so
-//! there is nobody to overlap with — would rest the depth on a count rather than
-//! on a promise, and it would stop holding the moment a second producer is
-//! registered, silently.
 //!
 //! The second premise — that the rows above rank `r` name `r-1` distinct
 //! candidates — is supplied by `DuplicatePolicy::Unique` and by nothing else. An
@@ -357,14 +390,12 @@ const PPM_UNIT: u64 = 1_000_000;
 /// * [`PlanError::NoApplicableProducers`] when no registered producer accepts any
 ///   term of the request, or when every producer that does accept one cannot be
 ///   invoked for it.
-/// * [`PlanError::StatisticsUnavailable`] when a selected producer declares an
-///   unbounded row count, statistics supply no cardinality to bound it, and the
-///   request's own bound licenses no prefix either.
 /// * [`PlanError::ReadBoundBeyondDepthRange`] when the request's own bound is
 ///   above the deepest depth a read can be taken to, which no per-stratum depth
-///   can address. A *declared* row bound above that ceiling is not an error: it is
-///   recorded at the ceiling, and the ending says the planned depth stopped the
-///   read — see this module's header.
+///   can address. A *declared* row bound above that ceiling is not an error, at any
+///   size up to and including the genuinely unbounded `u64::MAX`: it is recorded at
+///   the ceiling, and the ending says the planned depth stopped the read — see this
+///   module's header.
 pub fn plan(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry,
@@ -596,13 +627,15 @@ pub fn plan(
         let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
         let reached = terms_at(&request.terms, reaching.get(stratum));
         let bound = capped(declared, stratum, &reached, statistics, prefix);
-        if bound == u64::MAX {
-            return Err(PlanError::StatisticsUnavailable {
-                predicate: Box::new(stratum.clone()),
-            });
-        }
         // Recorded at the deepest depth a read can be taken to wherever the
-        // declared bound is deeper than that. The old truncation to `u32::MAX` was
+        // declared bound is deeper than that — including the genuinely unbounded
+        // `u64::MAX`, which is the same fact about the read: more rows than a read
+        // can reach. This used to be `PlanError::StatisticsUnavailable`, and what
+        // made that refusal obsolete is the line below. It refused `u64::MAX` and
+        // served `u64::MAX - 1`, two declarations of an index larger than any read,
+        // at the identical depth and with the identical ending — so the refusal
+        // separated a declaration from its own neighbour and bought nothing the
+        // ending does not already report. The old truncation to `u32::MAX` was
         // wrong for two reasons and only one of them was the number: it recorded a
         // depth **below** the bound it was derived to serve with nothing anywhere
         // reporting the difference, and `u32::MAX` was also the one depth whose
@@ -699,8 +732,8 @@ enum Outcome<'a> {
 /// the point of the number: it is the deepest depth `plan` itself can record, so no
 /// depth this planner hands to anything is one no plan could record. Such a stratum
 /// has no smaller final depth to contradict either — its producer is dropped at
-/// placement, or `plan` records the same ceiling, or the unbounded case is refused
-/// there by name ([`PlanError::StatisticsUnavailable`]). Nothing reads this value as
+/// placement, or `plan` records this same ceiling, which is where the unbounded
+/// declaration lands as well. Nothing reads this value as
 /// a row count and no plan records it: it decides only whether a producer's declared
 /// depth placement *renders*.
 ///
@@ -860,22 +893,27 @@ fn unserved_terms(
 /// surviving producers' own declarations. There is no caller hint, no mode and no
 /// heuristic.
 ///
-/// `Some(k)` requires **all three** of the conditions the proof's premises rest
-/// on:
+/// `Some(k)` requires every surviving stratum to declare
+/// [`DuplicatePolicy::Unique`] — which is what makes its depth-`k` prefix `k`
+/// *candidates* rather than `k` rows. A repeat under [`DuplicatePolicy::Allowed`]
+/// is validated, charged and then discarded by
+/// [`FusionStream`](crate::FusionStream), so such a prefix can hold fewer
+/// candidates than rows and is then not a superset of the top `k`.
 ///
-/// * every surviving stratum declares a block set — an `Unrestricted` stratum
+/// Beyond that the answer turns on how many strata survive, because the other
+/// premise — each candidate has at most one naming stratum — is about *pairs*:
+///
+/// * **one** surviving stratum: there is no pair, so the premise holds with
+///   nothing declared. Its rank order is the fused order, so its `k`-row prefix is
+///   the top `k`, whatever it says about which blocks it may name;
+/// * **two or more**: each must declare a block set — an `Unrestricted` stratum
 ///   promises nothing about which candidates it will not name, so it supplies no
-///   premise at all;
-/// * no two of those sets meet, which is what makes each candidate's naming
-///   stratum unique and its fused score a single term rather than a sum;
-/// * every one of those strata declares [`DuplicatePolicy::Unique`], which is what
-///   makes its depth-`k` prefix `k` *candidates* rather than `k` rows. A repeat
-///   under [`DuplicatePolicy::Allowed`] is validated, charged and then discarded
-///   by [`FusionStream`](crate::FusionStream), so such a prefix can hold fewer
-///   candidates than rows and is then not a superset of the top `k`.
+///   premise at all — and no two of those sets may meet, which is what makes each
+///   candidate's naming stratum unique and its fused score a single term rather
+///   than a sum.
 ///
-/// [`CandidateDomains::intersects`] decides the second, and it is the right
-/// question rather than a convenient one: it is true exactly when some candidate
+/// [`CandidateDomains::intersects`] decides the pairwise question, and it is the
+/// right one rather than a convenient one: it is true exactly when some candidate
 /// could satisfy both declarations, which is exactly the case the merge argument
 /// cannot survive.
 ///
@@ -890,9 +928,9 @@ fn licensed_prefix(
         return None;
     };
     // The duplicate policies are read first and in one pass, and a single
-    // `Allowed` stratum ends the question before any block set is compared: that
-    // stream's rows are not its candidates, so no arrangement of the declared
-    // blocks can make a depth of `k` hold `k` candidates.
+    // `Allowed` stratum ends the question before any block set is consulted: that
+    // stream's rows are not its candidates, so neither the declared blocks nor the
+    // stratum count can make a depth of `k` hold `k` candidates.
     let declared: Vec<&CandidateDomains> = declarations
         .values()
         .map(|(domains, duplicates)| match duplicates {
@@ -900,6 +938,13 @@ fn licensed_prefix(
             DuplicatePolicy::Allowed => None,
         })
         .collect::<Option<Vec<&CandidateDomains>>>()?;
+    // One stratum, so the disjointness premise is vacuous rather than unmet: the
+    // scan below would range over no pair, and a promise about blocks has nothing
+    // left to rule out. Uniqueness alone carries the prefix here — see this
+    // module's header.
+    if declared.len() == 1 {
+        return Some(top_k.get() as u64);
+    }
     if declared
         .iter()
         .any(|entry| matches!(entry, CandidateDomains::Unrestricted))
@@ -963,9 +1008,9 @@ fn licensed_prefix(
 /// never reaches this function.
 ///
 /// The genuinely unbounded case returns before the floor and keeps returning
-/// [`u64::MAX`]: the caller turns that into
-/// [`PlanError::StatisticsUnavailable`], and flooring it would be flooring an
-/// absent bound rather than a derived one.
+/// [`u64::MAX`]: flooring it would be flooring an absent bound rather than a
+/// derived one, and the caller records it at the deepest depth a read can be taken
+/// to, exactly as it records any other declaration larger than a read can reach.
 fn capped(
     declared: u64,
     stratum: &Iri,
@@ -977,16 +1022,15 @@ fn capped(
         Some(cardinality) => declared.min(cardinality),
         None => declared,
     };
-    // An unbounded stratum has no row count for a ratio to be a fraction of.
-    // Scaling `u64::MAX` would manufacture a finite bound out of a missing one
-    // and hide the condition `StatisticsUnavailable` exists to report.
+    // An unbounded stratum has no row count for a ratio to be a fraction of, so
+    // the selectivity step is skipped rather than applied: a fraction of an
+    // unmeasured total is not a measurement, and the caller is about to record this
+    // number at the read ceiling whatever fraction of it were taken.
     //
     // The request's own bound is the exception, and it is not a manufactured
     // bound: a stratum whose declaration promises unboundedly many rows, read for
     // an answer that provably cannot use more than `k` of them, is a read of `k`
-    // rows and not an unbounded read. Reporting `StatisticsUnavailable` there
-    // would refuse a plan whose depth is exactly known — the over-refusal mirror
-    // of the silent truncation the rest of this function guards against.
+    // rows and not an unbounded read.
     if bound == u64::MAX {
         return prefix.map_or(u64::MAX, |rows| rows.max(1));
     }
