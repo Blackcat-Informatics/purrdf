@@ -947,6 +947,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   condition is now measured and reported rather than refused; past that depth the
   declared tie-break is total, so the answer stays correct and deterministic at a
   coarser rank resolution.
+- **sparql-algebra:** A repeated `LIMIT` or `OFFSET` is refused instead of
+  overwriting the bound the caller already wrote.
+  `LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause LimitClause?`
+  admits at most one of each, in either order, but the parser read them in an
+  unbounded loop that reassigned the field every pass -- so `LIMIT 2 LIMIT 13`
+  parsed, the bound of two vanished, and a query asking for two rows returned
+  thirteen. A silent drop of the caller's own bound is the mirror of an
+  over-refusal, and the loop made it reachable from every SPARQL entry point at
+  once: the same parse backs `SELECT`, `CONSTRUCT`, `DESCRIBE`, `ASK` and the
+  sub-select. Accepting it was not leniency anyone could rely on either, because
+  the query means one thing to this engine and another to a conforming
+  processor. The refusal is a typed syntax error naming the clause that repeated
+  and pointing at that repeat's keyword, and the reading it replaced is the only
+  one that moved: both clause orders, either clause alone, neither clause,
+  `LIMIT 0` as a real zero-row bound, and a bound past any plausible row count
+  all parse exactly as before. No other solution modifier had the overwrite
+  shape -- each of the others is read by a single conditional, so a repeated
+  `GROUP BY`, `HAVING`, `ORDER BY` or `VALUES` was already refused, and that is
+  now pinned alongside.
 
 ### Removed
 
