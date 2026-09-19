@@ -173,6 +173,54 @@
 //! valid query where both producers name one entity, and certifies a score
 //! missing the other's contribution where they do not.
 //!
+//! # What only the host can say about the index behind a producer
+//!
+//! A fifth element may follow the four above — `(stratum, predicate, graph,
+//! domains, (generation, incompleteness))` — and it is the one part of a producer
+//! that nothing crossing this boundary can express. Two facts can change an
+//! answer while every input the engine sees stays identical: WHICH version of the
+//! host's index answered, and whether that index was WHOLE. A corpus read out of
+//! a search index mid-rebuild is the same document as one read out of a whole
+//! index, so if the host does not say, nothing can.
+//!
+//! Each member is a `str` or `None`, recorded verbatim and never parsed, and each
+//! axis is independently absent. `None` is SILENCE on both: never a claim that
+//! the index was current, and never a certificate that it was whole. A spec that
+//! writes no attestation position declares exactly that silence, which is what
+//! every `text_producers` value declared before this position existed.
+//!
+//! The two axes reach the answer differently, and only one of them is a
+//! shortfall:
+//!
+//! * `incompleteness` — the host's own reason the index was not whole, e.g.
+//!   `"shard 3 of 4 is still rebuilding"` — is reported verbatim under
+//!   `"attestations"[stratum]["incomplete"]`, and it makes `"exactness"` say
+//!   `{"exact": False, "lower_bounds_for": [stratum, …]}`. Every score in that
+//!   answer is then a LOWER BOUND on the score a whole index would have produced.
+//!   This lane REPORTS it rather than refusing, because its answer has a slot to
+//!   say it in — the same rule the SPARQL lane follows, decided by what the
+//!   return type can carry.
+//! * `generation` — the host's own name for the index version that answered — is
+//!   reported under `"attestations"[stratum]["generation"]` and is NOT a
+//!   shortfall: an answer whose producers named only generations is still exact.
+//!   It REPLACES what the shipped text relation would otherwise attest, which is
+//!   the content digest of the index this call built, because the kernel pins
+//!   exactly one generation per invocation and two distinct ones are its
+//!   diagnostic for an index that moved under the query. Declaring one is
+//!   therefore a choice to identify the index by the host's own spelling; a
+//!   spelling that does NOT move when the host's corpus does makes two answers
+//!   from two index states carry one `"evidence_id"`, which is the whole thing
+//!   that identity exists to prevent. Declaring an incompleteness alone changes
+//!   no generation: an axis left silent delegates to the relation's own.
+//!
+//! [`plan`] and [`compile`] read the same value, because one producer
+//! declaration serves all three entry points, and neither reports it: they
+//! execute nothing, so no index has answered yet and there is nothing to attest
+//! about. It reaches no plan, no compiled unit and no identity either of them
+//! returns — including the registry's content fingerprint, which is a function of
+//! what each producer declares to the PLANNER, and an attestation declares
+//! nothing there.
+//!
 //! # The evidence an answer carries about the indexes that served it
 //!
 //! [`search`]'s answer carries, beside its rows, what each stratum's index said
@@ -257,6 +305,7 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use crate::attestation::Attestation;
 use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
     Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason,
@@ -343,6 +392,14 @@ struct TextProducer {
     /// does not know, and it is exactly what this binding declared before the
     /// parameter existed.
     domains: Option<Vec<String>>,
+    /// What the host declares about the index this producer's rows came from:
+    /// which version of it answered, and whether it was **not** whole.
+    ///
+    /// [`Attestation::UNDECLARED`] — silence on both axes — is what a spec that
+    /// wrote no attestation position declares, and it leaves the registration
+    /// byte-for-byte what it was before that position existed. See this module's
+    /// header for what each axis does to the answer.
+    attestation: Attestation,
 }
 
 /// The statistics provider the host supplied, as owned data.
@@ -563,10 +620,20 @@ fn build_registry(
             )
         })?;
         let domains = candidate_domains(&producer.producer, producer.domains.as_deref())?;
+        // Read off the relation itself, BEFORE the host's attestation wraps it:
+        // what a producer declares to the planner is what the relation can
+        // honestly declare, and an attestation says nothing about arity, modes or
+        // ranked order. The wrapper delegates every one of those, so the
+        // declaration would be identical either way; taking it from the relation
+        // is what makes that true by construction rather than by inspection.
         let declaration = relation
             .ranked_declaration(stratum, Some(producer.predicate.clone()), domains)
             .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
-        registry.register_ranked(&producer.producer, Arc::new(relation), declaration);
+        registry.register_ranked(
+            &producer.producer,
+            producer.attestation.clone().wrap(Arc::new(relation)),
+            declaration,
+        );
     }
     Ok(registry)
 }
@@ -931,13 +998,33 @@ fn collect_request(request: &Bound<'_, PyAny>) -> PyResult<RetrievalRequest> {
 
 /// Collect the `text_producers` dict into the ordered declarations one call
 /// registers: `producer_iri -> (stratum_iri, predicate_iri, graph)`, or
-/// `producer_iri -> (stratum_iri, predicate_iri, graph, domains)`.
+/// `producer_iri -> (stratum_iri, predicate_iri, graph, domains)`, or the same
+/// four followed by one `(generation, incompleteness)` attestation.
 ///
 /// The fourth element is the producer's candidate-domain declaration: `None`
 /// for the unrestricted promise, or a list of domain-tag IRIs. Omitting it
 /// entirely is the same declaration as `None` — the widest promise, which
 /// licenses a consumer to skip nothing — so a host that never heard of domains
 /// keeps exactly the reading it had.
+///
+/// # The attestation is the FIFTH position, and that is not an accident
+///
+/// A `domains` value and an attestation are both sequences, so on a four-element
+/// value the two are genuinely ambiguous: `("a", "b")` is a well-formed
+/// two-tag restriction AND a well-formed attestation, and nothing in either value
+/// says which the host meant. Guessing between them is the silent-wrong reading
+/// this whole surface exists to refuse — one guess registers a producer whose
+/// rows cannot back a restriction it never made, the other reports a domain tag
+/// back to an operator as an index generation. So the position is fixed: a spec
+/// that attests writes its `domains` position explicitly, and `None` there
+/// restricts nothing. The shape refusal spells all three accepted widths.
+///
+/// # Errors
+///
+/// `TypeError` naming the accepted shapes when the value is not a sequence of
+/// three, four or five positions, or when the fifth is not a two-member sequence;
+/// `TypeError` naming the field when an attestation member is neither `str` nor
+/// `None`, or when a mandatory position is not a string.
 fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer>> {
     let mut declared = Vec::with_capacity(producers.len());
     for (key, value) in producers {
@@ -946,14 +1033,32 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             .map_err(|_| PyTypeError::new_err("text producer keys must be IRI strings"))?;
         let shape = || {
             PyTypeError::new_err(format!(
-                "text producer <{producer}>: the value is (stratum, predicate, graph) or \
-                 (stratum, predicate, graph, domains)"
+                "text producer <{producer}>: the value is (stratum, predicate, graph), \
+                 (stratum, predicate, graph, domains), or (stratum, predicate, graph, domains, \
+                 (generation, incompleteness)) — an attestation is the fifth position, because a \
+                 fourth-position sequence is already a `domains` list and guessing between the \
+                 two would report one back as the other"
             ))
         };
         let mut fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
-        // Read off the tail first: the three mandatory fields are destructured
-        // as an array, which consumes the vector, so the optional fourth has to
-        // leave before that happens.
+        // Read off the tail first, deepest position first: the three mandatory
+        // fields are destructured as an array, which consumes the vector, so both
+        // optional positions have to leave before that happens.
+        let attestation = match fields.len() {
+            3 | 4 => Attestation::UNDECLARED,
+            5 => {
+                let trailing = fields.remove(4);
+                // A fifth position that is not even SHAPED like an attestation
+                // reports the accepted widths rather than a diagnostic about a
+                // position the caller may never have meant to write; one that is
+                // shaped like an attestation but carries the wrong member types
+                // keeps its own precise diagnostic, which `Attestation::read`
+                // raises.
+                Attestation::read(&format!("text producer <{producer}>"), &trailing)?
+                    .ok_or_else(shape)?
+            }
+            _ => return Err(shape()),
+        };
         let domains = match fields.len() {
             3 => None,
             4 => Some(fields.remove(3)),
@@ -972,7 +1077,9 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             Some(value) if !value.is_none() => Some(value.extract::<Vec<String>>().map_err(|_| {
                 PyTypeError::new_err(format!(
                     "text producer <{producer}>: `domains` is a list of domain-tag IRI strings, \
-                     or None for the unrestricted declaration (this producer may name anything)"
+                     or None for the unrestricted declaration (this producer may name anything). \
+                     An attestation is the FIFTH position, written after a `domains` position of \
+                     its own"
                 ))
             })?),
             _ => None,
@@ -984,6 +1091,7 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             predicate: field("predicate", &predicate)?,
             graph,
             domains,
+            attestation,
             producer,
         });
     }
@@ -1651,6 +1759,15 @@ fn compile<'py>(
 /// producer stopped at the engine's row ceiling never looked at the rows it was
 /// licensed to skip. Read at the instant each stream was opened, so a stratum
 /// the `top_k` later stopped still reports both facts.
+///
+/// Either axis may be the HOST's word rather than the relation's: a
+/// `text_producers` value may carry a fifth `(generation, incompleteness)`
+/// position, each member a `str` or `None`, recorded verbatim. It is the only way
+/// an incompleteness reaches this answer at all, because the shipped text
+/// relation indexes the document it was handed and has no way to know what was
+/// missing from it. A declared generation replaces the content digest that
+/// relation would otherwise attest; a declared incompleteness is added beside it
+/// and leaves it alone. See this module's own documentation for both.
 ///
 /// `"exactness"` is `{"exact": bool, "lower_bounds_for": list[str]}`, derived
 /// from those attestations alone and therefore unmoved by how deep this call

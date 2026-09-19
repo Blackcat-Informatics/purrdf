@@ -401,6 +401,289 @@ def test_an_attestation_has_two_independently_absent_axes() -> None:
     assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
 
 
+# ── what only the HOST can attest about the index behind a producer ──────────
+#
+# The relation this surface builds indexes the document it was handed, so it can
+# attest which index answered — the content digest of that index — and nothing
+# else. Whether the corpus that document was assembled from was WHOLE is a fact
+# that never crosses this boundary in any other value: a corpus read out of a
+# search index mid-rebuild is the same document as one read out of a whole index.
+# Only the host knows, so a `text_producers` value may carry one trailing
+# `(generation, incompleteness)` attestation, in the same shape and with the same
+# refusals the SPARQL lane's relation declarations use.
+#
+# It is the FIFTH position, after an explicitly written `domains`, because a
+# four-element tail is already a domains list: `("a", "b")` is a well-formed
+# two-tag restriction and a well-formed attestation at once, and guessing which
+# the host meant would report one back as the other.
+
+#: The host's own name for the index version that produced a producer's rows.
+INDEX_GENERATION = "notes-index-7"
+
+#: The host's own reason its index was not whole, verbatim — a shard name and a
+#: phase, because that is what an operator can act on and ``True`` is not.
+REBUILDING = "shard 3 of 4 is still rebuilding"
+
+#: The fusion law and the request the attestation cases below all share, so the
+#: only thing that differs between any two of them is what a producer attested.
+ATTESTED_COMMON: dict[str, Any] = {
+    "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+    "statistics": STATISTICS,
+    "k": 60,
+    "decay": TRUNCATED,
+    "top_k": 10,
+}
+
+#: The request every attestation case runs, reaching both producers.
+ATTESTED_REQUEST = [_lexical("quick fox", NOTE), _lexical("quick", TITLE)]
+
+
+def _note_attesting(
+    attestation: tuple[str | None, str | None],
+) -> dict[str, tuple[Any, ...]]:
+    """``BOTH``, with only the note producer carrying the host's attestation.
+
+    The five-element spelling writes its ``domains`` position explicitly as
+    ``None`` — the unrestricted promise, which is the same declaration the
+    three-element title producer beside it makes — because the attestation is
+    the fifth position. Only one of the two attests, so every assertion below is
+    about a per-stratum fact rather than about a flag the answer carries once,
+    and the two widths in one dict are the proof that a producer which declares
+    nothing keeps its own reading.
+    """
+    return {
+        NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, attestation),
+        TITLE_PRODUCER: (TITLE_STRATUM, TITLE, "any"),
+    }
+
+
+def test_an_attested_incompleteness_makes_that_stratums_scores_lower_bounds() -> None:
+    """The host says its index was short, and the answer says so all the way down.
+
+    This is the whole point of the position: without it no producer this surface
+    registers can ever say it was short, so ``"exact"`` could only ever be
+    ``True`` and the ``"incomplete"`` key could only ever be ``None`` — a
+    structurally present receipt with no reachable content. With it, the reason
+    the host wrote arrives verbatim under the stratum that declared it, the
+    exactness derived from it names that stratum and no other, and the evidence
+    identity moves because the evidence did.
+
+    What does NOT change is the ranking. An attestation labels the bag; it never
+    reaches the rows, the scores or the provenance, and the run below is compared
+    against the identical one whose producers said nothing.
+    """
+    silent = retrieval.search(
+        DATA, ATTESTED_REQUEST, text_producers=BOTH, **ATTESTED_COMMON
+    )
+    short = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_note_attesting((None, REBUILDING)),
+        **ATTESTED_COMMON,
+    )
+
+    assert short["attestations"][NOTE_STRATUM]["incomplete"] == REBUILDING, (
+        "recorded verbatim: an operator acts on the shard and the phase, and "
+        "nothing here parses or summarises either"
+    )
+    assert short["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}, (
+        "every score in this answer is a LOWER BOUND on the score a whole index "
+        "would have produced, and the list names which index to rebuild"
+    )
+
+    # Per stratum, not per answer: the producer that said nothing still says
+    # nothing, and its silence is not upgraded to a shortfall by its neighbour's.
+    assert short["attestations"][TITLE_STRATUM]["incomplete"] is None
+    assert NOTE_STRATUM in short["exactness"]["lower_bounds_for"]
+    assert TITLE_STRATUM not in short["exactness"]["lower_bounds_for"]
+
+    # The rows are untouched — a short answer is still a real answer in this
+    # fusion's own certified order — and so is the generation the relation
+    # attests, because an axis the host left silent delegates to the relation.
+    assert _ranking(short) == _ranking(silent), (
+        "an attestation labels the answer and never changes it"
+    )
+    assert (
+        short["attestations"][NOTE_STRATUM]["generation"]
+        == silent["attestations"][NOTE_STRATUM]["generation"]
+    ), "declaring an incompleteness does not cost the index its own digest"
+
+    # And the third identity moved, because what the indexes attested moved —
+    # while the law it was fused under, which an attestation says nothing about,
+    # is the same content-addressed law it always was.
+    assert short["evidence_id"] != silent["evidence_id"]
+    assert short["profile_id"] == silent["profile_id"]
+
+
+def test_a_declared_generation_is_reported_and_is_not_a_shortfall() -> None:
+    """An absence is not a shortfall, and naming a version is not declaring one.
+
+    The two axes are independent, so a host that knows which version of its index
+    answered but has no reason to think it was short declares exactly that, and
+    the answer stays EXACT. Reading a named generation as a shortfall would be
+    the over-refusal mirror of the silent drop: nothing is wrong, and an answer
+    that called itself a lower bound would send an operator to rebuild an index
+    that was fine.
+
+    The generation the host names REPLACES the content digest the shipped
+    relation would otherwise attest, because exactly one generation is pinned per
+    invocation. That is asserted here rather than left to be discovered: a host
+    choosing its own spelling is choosing to identify the index by it.
+    """
+    silent = retrieval.search(
+        DATA, ATTESTED_REQUEST, text_producers=BOTH, **ATTESTED_COMMON
+    )
+    named = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_note_attesting((INDEX_GENERATION, None)),
+        **ATTESTED_COMMON,
+    )
+
+    assert named["attestations"][NOTE_STRATUM] == {
+        "generation": INDEX_GENERATION,
+        "incomplete": None,
+    }, "the host's own spelling, verbatim, and no shortfall declared beside it"
+    assert named["exactness"] == {"exact": True, "lower_bounds_for": []}, (
+        "naming which index answered says nothing about whether it was short"
+    )
+    assert _ranking(named) == _ranking(silent)
+
+    assert named["attestations"][NOTE_STRATUM]["generation"] != (
+        silent["attestations"][NOTE_STRATUM]["generation"]
+    ), "one generation is pinned per invocation, so the host's replaces the digest"
+    assert (
+        named["attestations"][TITLE_STRATUM]
+        == silent["attestations"][TITLE_STRATUM]
+    ), "the producer that declared nothing attests exactly what it always did"
+
+
+def test_a_producer_that_declares_no_attestation_is_unchanged() -> None:
+    """The valid neighbour: three widths, one answer, down to the evidence id.
+
+    A position that changed what a spec without it means would be a silent
+    migration of every host already using this surface. So the three-element
+    spelling, the four-element one with an explicit ``None`` domains, and the
+    five-element one attesting ``(None, None)`` must all be the same declaration
+    — silence — and must produce the same answer, the same attestations and the
+    same content identity for them.
+
+    ``(None, None)`` is the case that makes silence genuinely silence rather than
+    a third declaration with a meaning of its own.
+    """
+    omitted = retrieval.search(
+        DATA, ATTESTED_REQUEST, text_producers=BOTH, **ATTESTED_COMMON
+    )
+    unrestricted = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_declared(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, None),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+        ),
+        **ATTESTED_COMMON,
+    )
+    silent = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_note_attesting((None, None)),
+        **ATTESTED_COMMON,
+    )
+
+    for answer in (unrestricted, silent):
+        assert _ranking(answer) == _ranking(omitted)
+        assert answer["attestations"] == omitted["attestations"]
+        assert answer["evidence_id"] == omitted["evidence_id"]
+        assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
+        assert answer["domains"] == omitted["domains"]
+
+    # And what a producer declares to the PLANNER is untouched by what it attests
+    # about its index, which is why the position can be read by all three entry
+    # points while only `search` reports it: an attestation names no arity, no
+    # mode and no ranked order, so the registry's durable content fingerprint is
+    # the same whether one is declared or not.
+    def _fingerprint(producers: dict[str, Any]) -> str:
+        planned = retrieval.plan(
+            DATA, ATTESTED_REQUEST, text_producers=producers, statistics=STATISTICS
+        )
+        return planned["registry_content_fingerprint"]
+
+    assert _fingerprint(_note_attesting((INDEX_GENERATION, REBUILDING))) == (
+        _fingerprint(BOTH)
+    )
+
+
+def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None:
+    """Each refusal, paired with the well-formed declaration one line away from it.
+
+    A refusal here is only evidence about what it excludes if the neighbouring
+    valid case is executed too — otherwise a shape check that swept up a legal
+    spelling would look exactly like correct strictness until a host wrote the
+    declaration that should work and did not. So every case below is a pair.
+    """
+    well_formed = _note_attesting((INDEX_GENERATION, REBUILDING))
+
+    def _search(producers: dict[str, Any]) -> dict[str, Any]:
+        return retrieval.search(
+            DATA, ATTESTED_REQUEST, text_producers=producers, **ATTESTED_COMMON
+        )
+
+    # The neighbour, first: the declaration all four refusals below are one
+    # mistake away from really does answer, and answers with both axes.
+    accepted = _search(well_formed)
+    assert accepted["attestations"][NOTE_STRATUM] == {
+        "generation": INDEX_GENERATION,
+        "incomplete": REBUILDING,
+    }
+    assert accepted["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}
+
+    # A member of the wrong type names the member, because both are recorded
+    # verbatim and neither has a spelling this binding could coerce one into.
+    with pytest.raises(TypeError, match="`generation` must be a str or None"):
+        _search(_note_attesting((7, REBUILDING)))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="`incompleteness` must be a str or None"):
+        _search(_note_attesting((INDEX_GENERATION, 7)))  # type: ignore[arg-type]
+
+    # A bare string in the fifth position is NOT destructured into its own two
+    # characters. `"ab"` extracts as a perfectly well-formed two-member sequence,
+    # so accepting it would have reported `generation="a"` back to an operator as
+    # though the host had said it. It is a shape error, like any other value in a
+    # position this spec does not have.
+    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+        _search({NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, "ab")})
+
+    # As is a sequence of the wrong width — three axes is not this declaration.
+    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+        _search(
+            {
+                NOTE_PRODUCER: (
+                    NOTE_STRATUM,
+                    NOTE,
+                    "any",
+                    None,
+                    (INDEX_GENERATION, REBUILDING, "extra"),
+                )
+            }
+        )
+
+    # And a value of the wrong number of positions altogether.
+    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+        _search({NOTE_PRODUCER: (NOTE_STRATUM, NOTE)})
+
+    # The fourth position is `domains` and stays `domains`, even when what was
+    # written there would have been a well-formed attestation: the two are
+    # genuinely ambiguous at that width, and this binding refuses to guess. A
+    # host that wrote one there is told which list it landed in.
+    with pytest.raises(ValueError, match="domain tag"):
+        _search(
+            {NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", (INDEX_GENERATION, REBUILDING))}
+        )
+
+    # None of which disturbed the neighbouring producer or the next call: the
+    # same map, once more, with the same answer.
+    assert _ranking(_search(well_formed)) == _ranking(accepted)
+
+
 def test_a_terminal_status_carries_one_of_five_spellings() -> None:
     """Five spellings, one of which is the only completeness claim among them.
 
@@ -898,14 +1181,23 @@ def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> No
     )
 
 
-def test_no_probe_row_is_emitted_where_the_declaration_leaves_no_room() -> None:
-    """At most one row deeper is EXACT: a probe is emitted only where it fits.
+def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> None:
+    """The emitted ``LIMIT`` is one past the depth even here, and that is the point.
 
     With no statistic to narrow it, the depth is already the producer's whole
-    declared row bound, and a probe past that asks a question the registry
-    answered at registration. None is emitted, so the emitted ``LIMIT`` equals
-    ``"depth"`` — which is why the bound is read off ``"depth"`` rather than off
-    the text, whose ``LIMIT`` carries whichever of the two cases applies.
+    declared row bound. A read that stopped exactly there could not tell a producer
+    that ran out from one the bound cut, so it would report the strongest
+    completeness claim this layer has on the strength of a number nobody checked.
+    The unit asks for one row more instead: if that row arrives the producer
+    contradicted its own registration and the read is refused by name, and if it
+    does not, the exhaustion is verified rather than believed.
+
+    The extra row lives in the ``LIMIT`` only — a ceiling the evaluator applies to
+    a cursor the producer never hears about, so probing costs nothing. A producer
+    that reads a depth argument is never asked to exceed what it registered.
+
+    The bound a host may report is still ``"depth"`` and never the text's
+    ``LIMIT``, which is now always the larger of the two.
     """
     compiled = retrieval.compile(
         DATA,
@@ -923,8 +1215,8 @@ def test_no_probe_row_is_emitted_where_the_declaration_leaves_no_room() -> None:
     assert unit["depth"] == planned["stratum_depths"][NOTE_STRATUM], (
         "the unit reports the depth the plan recorded, not a number of its own"
     )
-    assert _emitted_limit(unit["sparql"]) == unit["depth"], (
-        "the declared row bound already answers what a probe would ask"
+    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+        "the probe slot always exists, so exhaustion is checked rather than assumed"
     )
 
 

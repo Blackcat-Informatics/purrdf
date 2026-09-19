@@ -359,6 +359,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   audited against its own inputs; and `"evidence_id"` sits beside `"plan_id"` and
   `"profile_id"` in the same 64-character lowercase hex spelling, so one
   comparison over the three decides whether two answers are comparable.
+- **python:** `retrieval.search`'s `text_producers` value may carry a fifth
+  `(generation, incompleteness)` position -- each member a string or `None`, recorded
+  verbatim -- declaring what the host knows about the index behind that producer. A
+  declared incompleteness is reported under
+  `answer["attestations"][stratum]["incomplete"]` and makes `answer["exactness"]`
+  report `{"exact": False, "lower_bounds_for": [stratum, ...]}`, which was previously
+  unreachable from Python: no shipped producer can know what was missing from the
+  document it was handed, so the surface was structurally present and could never
+  carry a value. A declared generation is reported and is not a shortfall; it
+  replaces the content digest the shipped text relation attests, because one
+  generation is pinned per invocation, and a generation that does not move when the
+  host's corpus does will defeat the evidence identity. Declaring nothing is silence,
+  never a claim that the index was whole, and a value without the position behaves
+  exactly as before. The position is FIFTH -- after an explicitly written `domains`
+  -- because a fourth-position sequence is already a domains list and the two would
+  be indistinguishable: `("a", "b")` is a well-formed two-tag restriction and a
+  well-formed attestation at once, and guessing would report a domain tag back to an
+  operator as an index generation.
 - **python:** A governed outcome carries `relation_witness`, the record of what each
   relation attested about itself during the run: per relation IRI, how many times it
   was invoked, which index generations answered, and the verbatim reason wherever one
