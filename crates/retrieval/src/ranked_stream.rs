@@ -256,7 +256,17 @@ impl StreamContract {
 /// to one aggregate flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerReceipt {
-    /// The producer emitted every row it had.
+    /// The producer emitted every row **its search produced**, and stopped
+    /// because there were no more rather than because something stopped it.
+    ///
+    /// The count is checked against the rows fusion actually pulled, so a
+    /// producer may not miscount what it emitted. Nothing here checks — or
+    /// could check — that what it emitted was everything that was due: that is
+    /// what [`StreamContract::fidelity`] declares, and the two are read
+    /// together in the answer. A producer whose search is exhaustive says the
+    /// stronger thing with this receipt; one that declared
+    /// [`Completeness::Lossy`](purrdf_sparql_eval::Completeness::Lossy) says
+    /// only that its search ran out.
     Exhausted {
         /// How many rows it emitted. Must equal the number fusion pulled.
         rows_emitted: u64,

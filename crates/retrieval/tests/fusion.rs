@@ -15,12 +15,12 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    CandidateDomains, ClassWidth, DecayRule, DomainTag, DuplicatePolicy, EvidenceId, Fixed,
-    FusedRow, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream,
-    IndexGeneration, Iri, MonotoneDepth, PfAttestation, PlanId, ProducerReceipt, ProducerStatus,
-    ProtocolError, RECIP_K, RankFidelity, RankedStream, RankedStreamImpl, ScoreExactness,
-    ServiceLevel, StreamContract, StreamEnding, Term, ToleratedDepth, TopK, contribution,
-    contribution_under,
+    CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag, DuplicatePolicy, EvidenceId,
+    Fixed, FusedRow, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream,
+    IndexGeneration, Iri, MonotoneDepth, OrderFidelity, PfAttestation, PlanId, ProducerReceipt,
+    ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedStream, RankedStreamImpl,
+    ScoreExactness, ServiceLevel, StreamContract, StreamEnding, Term, ToleratedDepth, TopK,
+    contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -5246,10 +5246,14 @@ fn an_incomplete_stratum_makes_the_scores_lower_bounds_without_refusing_the_rows
     ));
     assert_eq!(
         bounded.trailer.exactness,
-        ScoreExactness::LowerBounds {
-            strata: BTreeSet::from([stratum("vector")])
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([stratum("vector")]),
+            inflation: BTreeSet::from([stratum("vector")]),
+            unbounded: BTreeSet::new(),
         },
-        "exactly the stratum that declared itself short, and no other"
+        "exactly the stratum that declared itself short, and no other, named on \
+         both sides: a missing shard withholds its own rows and promotes every \
+         row that was behind them"
     );
     assert_eq!(
         bounded.rows.len(),
@@ -5431,10 +5435,14 @@ fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
     );
     assert_eq!(
         late.exactness,
-        ScoreExactness::LowerBounds {
-            strata: BTreeSet::from([stratum("text")])
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([stratum("text")]),
+            inflation: BTreeSet::from([stratum("text")]),
+            unbounded: BTreeSet::new(),
         },
-        "which is `LowerBounds` throughout, because the index was short throughout"
+        "which is `Estimated` throughout, because the index was short throughout \
+         — how deep a caller read changes which streams are still open, never \
+         whether an index was whole"
     );
 }
 
@@ -6510,5 +6518,317 @@ fn the_trailer_reports_the_declarations_the_fusion_ran_under() {
         unrestricted.trailer.attestations.keys().collect::<Vec<_>>(),
         "the key set is the streams this fusion was handed, exactly as the \
          attestation map's is"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T8. The fidelity a producer declared reaches the answer, and the answer's
+//     completeness verdict accounts for it.
+//
+//     A stratum served by an approximate search and one served exhaustively are
+//     reported identically by every OTHER field of a trailer: both say
+//     `Exhausted`, both carry contiguous ranks, both look like a producer that
+//     ran out. The whole of the difference is here.
+// ---------------------------------------------------------------------------
+
+/// A producer's own words about what its search does not promise. Carries the
+/// characters the canonical framing must survive, so the route from declaration
+/// to answer is proved on prose a real producer would publish rather than on a
+/// token.
+const LOSS: &str = "approximate: beam search; recall UNMEASURED above 10^6 rows, and an \
+                    empty result is never a proof of absence";
+
+/// A contract declaring an incomplete but order-faithful search -- what an HNSW
+/// graph is: exact distances for the candidates it visits, and it only fails to
+/// visit.
+fn lossy_contract() -> StreamContract {
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from(LOSS),
+            },
+            order: OrderFidelity::Faithful,
+        },
+        CandidateDomains::Unrestricted,
+    )
+}
+
+// T8.1. AC1 + AC2: the two strata are distinguishable in the trailer alone, and
+// the producer's own string arrives byte for byte.
+#[test]
+fn an_approximate_stratum_is_distinguishable_from_an_exact_one_in_the_trailer() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                )
+                .declaring(lossy_contract()),
+            ),
+        ],
+        &profile,
+    ));
+
+    // Read from the trailer alone. No registry is in scope here, which is the
+    // point: a consumer holding only an answer can tell the two apart.
+    assert_eq!(
+        fused.trailer.fidelities[&stratum("text")],
+        RankFidelity::EXACT,
+        "the exhaustive stratum reports the top of the lattice"
+    );
+    let approximate = &fused.trailer.fidelities[&stratum("vector")];
+    assert!(approximate.may_omit(), "and the approximate one does not");
+
+    let evidence: Vec<&str> = approximate.evidence().map(|e| &**e).collect();
+    assert_eq!(
+        evidence,
+        vec![LOSS],
+        "the string the producer published is the string the consumer reads: \
+         not a boolean derived here, and not re-worded"
+    );
+}
+
+// T8.2. AC3: an exhaustive stratum is REPORTED exact, never omitted. A consumer
+// must never have to read an absent key as a claim.
+#[test]
+fn an_exhaustive_stratum_is_reported_rather_than_left_out() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(
+                vec![(row(1, Fixed::ONE, K, "a"))],
+                ProducerReceipt::Exhausted { rows_emitted: 1 },
+            ),
+        )],
+        &profile,
+    ));
+
+    assert!(
+        fused.trailer.fidelities.contains_key(&stratum("text")),
+        "present, not absent -- a future change that omits exactness instead of \
+         stating it fails here"
+    );
+    assert_eq!(fused.trailer.exactness, ScoreExactness::Exact);
+}
+
+// T8.3. The key set is the streams this fusion was handed, exactly as the two
+// neighbouring maps are. One key, three facts, no disagreement about how many
+// producers there were.
+#[test]
+fn the_fidelity_map_is_keyed_like_the_maps_beside_it() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(Vec::new(), ProducerReceipt::Exhausted { rows_emitted: 0 }),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(Vec::new(), ProducerReceipt::Exhausted { rows_emitted: 0 })
+                    .declaring(lossy_contract()),
+            ),
+        ],
+        &profile,
+    ));
+
+    let fidelities: BTreeSet<_> = fused.trailer.fidelities.keys().cloned().collect();
+    let attestations: BTreeSet<_> = fused.trailer.attestations.keys().cloned().collect();
+    let domains: BTreeSet<_> = fused.trailer.domains.keys().cloned().collect();
+    assert_eq!(fidelities, attestations);
+    assert_eq!(fidelities, domains);
+}
+
+// T8.4. AC4, and the defect this work exists to remove. `Exhausted` beside a
+// lossy declaration is not a completeness claim, and the answer-level verdict
+// says so rather than leaving it to prose.
+#[test]
+fn exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![(row(1, Fixed::ONE, K, "a"))],
+                ProducerReceipt::Exhausted { rows_emitted: 1 },
+            )
+            .declaring(lossy_contract()),
+        )],
+        &profile,
+    ));
+
+    // The status alone is exactly what an exhaustive producer reports.
+    assert_eq!(
+        fused.trailer.statuses[&stratum("vector")],
+        ProducerStatus::Exhausted { rows_emitted: 1 },
+        "the read ending is unchanged -- which is precisely why it cannot be the \
+         channel that carries the approximation"
+    );
+    // And the verdict beside it refuses to call the answer exact.
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([stratum("vector")]),
+            inflation: BTreeSet::from([stratum("vector")]),
+            unbounded: BTreeSet::new(),
+        },
+        "named on BOTH sides: the rows the search missed are absent (deficit), \
+         and every row behind a missed one moved up a rank and collected more \
+         than it earned (inflation)"
+    );
+}
+
+// T8.5. AC5. The neighbouring case that must not move: a fusion of exhaustive
+// producers reports exactly what it reported before this term existed.
+#[test]
+fn a_fusion_of_exhaustive_producers_is_still_exact() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "a"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![(row(1, Fixed::ONE, K, "b"))],
+                    ProducerReceipt::Exhausted { rows_emitted: 1 },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Exact,
+        "an empty `Estimated` must never appear in place of `Exact`"
+    );
+    for stratum_iri in [stratum("text"), stratum("vector")] {
+        assert_eq!(
+            fused.trailer.statuses[&stratum_iri],
+            ProducerStatus::Exhausted { rows_emitted: 1 },
+        );
+        assert_eq!(fused.trailer.fidelities[&stratum_iri], RankFidelity::EXACT);
+    }
+}
+
+// T8.6. A bounded read must not be able to destroy the disclosure. This is the
+// test that proves the declaration leg was the right choice: a stream a `TopK`
+// stopped never returns a receipt at all, so a fidelity fetched at the END would
+// go missing in exactly the runs where the caller read shallowly.
+#[test]
+fn a_top_k_that_stops_an_approximate_stream_still_reports_its_fidelity() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let mut fusion = FusionStream::new(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![
+                    (row(1, Fixed::ONE, K, "a")),
+                    (row(2, Fixed::ONE, K, "b")),
+                    (row(3, Fixed::ONE, K, "c")),
+                ],
+                ProducerReceipt::Exhausted { rows_emitted: 3 },
+            )
+            .declaring(lossy_contract()),
+        )],
+        profile,
+    );
+
+    // Pull one row and stop, leaving the stream open and unreceipted.
+    let first = block_on(fusion.next()).expect("a row");
+    assert!(first.is_some());
+    let trailer = block_on(fusion.trailer()).expect("a trailer");
+
+    assert!(
+        trailer.fidelities[&stratum("vector")].may_omit(),
+        "the disclosure survives a stop that destroys the receipt"
+    );
+    assert!(matches!(
+        trailer.exactness,
+        ScoreExactness::Estimated { .. }
+    ));
+}
+
+// T8.7. The verdict is INVARIANT under read depth. Its inputs are pinned before
+// the first row, so certifying more rows moves the statuses and never this.
+#[test]
+fn the_exactness_verdict_does_not_move_as_a_caller_reads_deeper() {
+    let profile = profile(&[("vector", Fixed::ONE)], K);
+    let mut fusion = FusionStream::new(
+        vec![(
+            stratum("vector"),
+            MockStream::new(
+                vec![(row(1, Fixed::ONE, K, "a")), (row(2, Fixed::ONE, K, "b"))],
+                ProducerReceipt::Exhausted { rows_emitted: 2 },
+            )
+            .declaring(lossy_contract()),
+        )],
+        profile,
+    );
+
+    block_on(fusion.next()).expect("a row");
+    let early = block_on(fusion.trailer()).expect("a trailer");
+    while block_on(fusion.next()).expect("a row").is_some() {}
+    let late = block_on(fusion.trailer()).expect("a trailer");
+
+    assert_eq!(
+        early.exactness, late.exactness,
+        "how deep a caller read changes which streams are still open, never \
+         whether a producer's search was exhaustive"
+    );
+    assert_eq!(
+        early.fidelities, late.fidelities,
+        "and the declarations behind it are equally immovable"
+    );
+}
+
+// T8.8. A stratum that never became a stream is ABSENT, not filled in with the
+// top of the lattice. "Was never asked" and "promised everything" are different
+// facts, and fabricating the second would be the strongest possible claim put
+// into the mouth of a producer that never spoke.
+#[test]
+fn a_stratum_added_after_the_fact_declares_nothing() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(Vec::new(), ProducerReceipt::Exhausted { rows_emitted: 0 }),
+        )],
+        &profile,
+    ));
+
+    let failed = stratum("vector");
+    let trailer = fused.trailer.completed_with([(
+        failed.clone(),
+        ProducerStatus::ExecutionFailed {
+            reason: "the unit could not run".to_owned(),
+        },
+    )]);
+
+    assert!(
+        trailer.statuses.contains_key(&failed),
+        "the status grows, because the executor really did report one"
+    );
+    assert!(
+        !trailer.fidelities.contains_key(&failed),
+        "the fidelity map does not: no producer of that stratum was ever asked"
     );
 }

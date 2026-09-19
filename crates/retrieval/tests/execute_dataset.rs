@@ -902,11 +902,15 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
     );
     assert_eq!(
         result.trailer.exactness,
-        ScoreExactness::LowerBounds {
-            strata: BTreeSet::from([alpha]),
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([alpha.clone()]),
+            inflation: BTreeSet::from([alpha]),
+            unbounded: BTreeSet::new(),
         },
-        "one stratum served from a short index, so every fused score is a lower \
-         bound — and the answer names exactly which stratum made it one"
+        "one stratum served from a short index, so every fused score is an \
+         estimate — and the answer names exactly which stratum made it one, on \
+         both sides: the rows that shard held are missing (deficit) AND every row \
+         behind them moved up a rank and over-contributed (inflation)"
     );
 
     // The neighbour that must still be reported plainly: a stratum that attested
@@ -920,12 +924,22 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
         ProducerStatus::Exhausted { rows_emitted: 2 },
         "the silent stratum reports its own ordinary exhaustion"
     );
-    let ScoreExactness::LowerBounds { ref strata } = result.trailer.exactness else {
+    let ScoreExactness::Estimated {
+        ref deficit,
+        ref inflation,
+        ref unbounded,
+    } = result.trailer.exactness
+    else {
         panic!("asserted above");
     };
     assert!(
-        !strata.contains(&beta),
-        "and it is not named among the strata that made the scores a lower bound"
+        !deficit.contains(&beta) && !inflation.contains(&beta),
+        "and it is not named on either side of the shortfall its sibling declared"
+    );
+    assert!(
+        unbounded.is_empty(),
+        "a short index still ranks truly among the rows it kept, so the error \
+         stays bounded; only a perturbed ORDER removes the bound"
     );
 }
 
