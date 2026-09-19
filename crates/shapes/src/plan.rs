@@ -352,13 +352,23 @@ pub(crate) enum LoweredPath {
     /// `sh:inversePath` over a plain predicate — the one inverse form that needs no
     /// structural rewriting, so it lowers to its predicate's slot directly.
     InversePredicate(TermSlot),
-    /// `sh:inversePath` over a COMPOSITE path.
+    /// `sh:inversePath` over a COMPOSITE path, ALREADY INVERTED.
     ///
-    /// Carried as the composite itself, which the evaluator inverts exactly as it
-    /// always has. Inverting a composite is a rewrite of the path STRUCTURE rather
-    /// than a resolution of a term, so hoisting it is a separate piece of work from
-    /// this one; the variant is here so that hoist has somewhere to land.
-    InverseComposite(Path),
+    /// The inversion is a rewrite of the path STRUCTURE — `^(p/q)` becomes
+    /// `^q/^p`, `^(p|q)` becomes `^p|^q`, and so on down the subtree — and the
+    /// rewrite depends on nothing but the shapes graph, so it is stage-0 work. It
+    /// used to be done inside the evaluator, which meant cloning the whole path
+    /// subtree once per focus node and then resolving every predicate in the clone
+    /// against the dataset dictionary, because a freshly built `Path` carries no
+    /// slots. Inverting here instead means the clone happens once per shapes graph
+    /// and the result is an ordinary lowered path whose predicates are slots like
+    /// any other.
+    ///
+    /// It stays its own variant rather than collapsing into the lowering of the
+    /// inverted path because the DECLARED path is still `sh:inversePath`, and the
+    /// evaluator's totality check pairs a lowering against the declaration beside
+    /// it: a bare `Sequence` here would claim the shape declared a sequence.
+    InvertedComposite(Box<Self>),
     /// A sequence path — the frontier is folded through each step in order.
     Sequence(Box<[Self]>),
     /// An alternative path — the union of the branches.
@@ -370,6 +380,26 @@ pub(crate) enum LoweredPath {
     /// `sh:zeroOrOnePath` — the inner path's values plus the focus node.
     ZeroOrOne(Box<Self>),
 }
+
+/// The stage-0 numeric parse of one range-facet bound (`sh:minInclusive` and its
+/// three siblings).
+///
+/// The bound is a constant of the shape, so the strip-prefix, the datatype test
+/// over the XSD numeric lattice and the `f64` parse that decide it are stage-0
+/// work; they used to run once per VALUE NODE, on a term that never changed.
+///
+/// `None` means the bound is not an XSD numeric literal, or is one whose lexical
+/// form does not parse as an `f64`. **That is an ordinary shapes graph, not a
+/// refusal.** [`crate::constraints`]'s range-facet comparison documents the rule
+/// and this lowering preserves it verbatim: a comparison whose numeric half
+/// yields nothing falls through to the XSD temporal value-space comparison, and
+/// only when THAT also yields nothing is the pair incomparable — which every
+/// facet reports as a violation, per spec. So an `xsd:dateTime` bound still
+/// reaches its temporal comparison, and a lexically invalid numeric bound still
+/// produces the violation it produces today. Turning either into a hard error
+/// here would refuse shapes graphs that validate now, which is the exact mirror
+/// of a silently dropped result.
+pub(crate) type BoundParse = Option<f64>;
 
 /// The stage-0 lowering of one constraint.
 ///
@@ -413,21 +443,27 @@ pub(crate) enum LoweredConstraint {
     LanguageIn,
     /// `sh:not` — the lowering of the negated shape.
     Not(Box<LoweredShape>),
-    /// `sh:closed` — the permitted predicate set is still derived per focus node.
+    /// `sh:closed` — the slot holding the PERMITTED predicates' id set.
     ///
-    /// Hoisting it is a rewrite of how the permitted set is COMPUTED (it is the
-    /// union of the sibling property shapes' simple paths plus
-    /// `sh:ignoredProperties`), so it is separate work from resolving a term; the
-    /// variant is here so that hoist has somewhere to land.
-    Closed,
-    /// `sh:minInclusive` — the bound is parsed in the value space per comparison.
-    MinInclusive,
-    /// `sh:maxInclusive` — the bound is parsed in the value space per comparison.
-    MaxInclusive,
-    /// `sh:minExclusive` — the bound is parsed in the value space per comparison.
-    MinExclusive,
-    /// `sh:maxExclusive` — the bound is parsed in the value space per comparison.
-    MaxExclusive,
+    /// The permitted set is the union of every simple-predicate `sh:path` among
+    /// the owning shape's property shapes and every `sh:ignoredProperties` entry,
+    /// which is a function of the shapes graph alone. It used to be rebuilt, as a
+    /// set of borrowed IRI strings, once per focus node; here it is one id set
+    /// resolved once per bind, and the evaluator probes it with the predicate id
+    /// of a quad it never materializes.
+    ///
+    /// Dropping a permitted predicate this data graph does not intern is not a
+    /// loss: an IRI with no dataset identity is the predicate of no quad in that
+    /// dataset, so it can never be the predicate the probe is asking about.
+    Closed(SetSlot),
+    /// `sh:minInclusive` — the bound, with its numeric parse already done.
+    MinInclusive(BoundParse),
+    /// `sh:maxInclusive` — the bound, with its numeric parse already done.
+    MaxInclusive(BoundParse),
+    /// `sh:minExclusive` — the bound, with its numeric parse already done.
+    MinExclusive(BoundParse),
+    /// `sh:maxExclusive` — the bound, with its numeric parse already done.
+    MaxExclusive(BoundParse),
     /// `sh:and` — the lowering of each conjunct, in declaration order.
     And(Box<[LoweredShape]>),
     /// `sh:or` — the lowering of each disjunct, in declaration order.
@@ -813,6 +849,35 @@ impl<'a> ShapeList<'a> {
     }
 }
 
+/// One range-facet bound, paired with the numeric parse the lowering already did.
+///
+/// `Copy` and borrowed: a facet compared against a million value nodes reads the
+/// same two fields a million times and parses nothing.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RangeBound<'a> {
+    /// The DECLARED bound term, verbatim. Still carried because the temporal
+    /// fall-through compares the bound as a term, and because a violation's
+    /// message-free report never needs it but the comparison always does.
+    term: &'a Term,
+    /// Its stage-0 numeric parse — see [`BoundParse`] for why `None` is an
+    /// ordinary answer and never an error.
+    numeric: BoundParse,
+}
+
+impl<'a> RangeBound<'a> {
+    /// The declared bound term.
+    #[inline]
+    pub(crate) fn term(&self) -> &'a Term {
+        self.term
+    }
+
+    /// The bound's numeric value, or `None` when it has none.
+    #[inline]
+    pub(crate) fn numeric(&self) -> BoundParse {
+        self.numeric
+    }
+}
+
 /// ONE constraint, with every derivation it needs that does not depend on the
 /// focus node already resolved.
 ///
@@ -877,19 +942,23 @@ pub(crate) enum PlannedConstraint<'a> {
     LanguageIn(&'a [String]),
     /// `sh:not` — the plan of the shape the node must NOT conform to.
     Not(ShapePlan<'a>),
-    /// `sh:closed` — the explicitly exempted predicates.
+    /// `sh:closed` — the identities of every predicate the shape permits.
     Closed {
-        /// `sh:ignoredProperties`.
-        ignored: &'a [NamedNode],
+        /// The dataset identity of every permitted predicate: the shape's
+        /// simple-predicate property paths together with `sh:ignoredProperties`,
+        /// unioned at stage 0 and resolved at stage 1. Probed by the predicate id
+        /// of a focus node's outgoing quad, so nothing is materialized to decide
+        /// whether that quad is permitted.
+        permitted: &'a FastSet<TermId>,
     },
-    /// `sh:minInclusive` — the declared bound.
-    MinInclusive(&'a Term),
-    /// `sh:maxInclusive` — the declared bound.
-    MaxInclusive(&'a Term),
-    /// `sh:minExclusive` — the declared bound.
-    MinExclusive(&'a Term),
-    /// `sh:maxExclusive` — the declared bound.
-    MaxExclusive(&'a Term),
+    /// `sh:minInclusive` — the declared bound and its stage-0 numeric parse.
+    MinInclusive(RangeBound<'a>),
+    /// `sh:maxInclusive` — the declared bound and its stage-0 numeric parse.
+    MaxInclusive(RangeBound<'a>),
+    /// `sh:minExclusive` — the declared bound and its stage-0 numeric parse.
+    MinExclusive(RangeBound<'a>),
+    /// `sh:maxExclusive` — the declared bound and its stage-0 numeric parse.
+    MaxExclusive(RangeBound<'a>),
     /// `sh:and` — the plans of the conjuncts.
     And(ShapeList<'a>),
     /// `sh:or` — the plans of the disjuncts.
@@ -1046,20 +1115,34 @@ impl<'a> ShapePlan<'a> {
             (Constraint::Not(shape), LoweredConstraint::Not(lowered)) => {
                 PlannedConstraint::Not(self.nested(shape, lowered))
             }
-            (Constraint::Closed { ignored }, LoweredConstraint::Closed) => {
-                PlannedConstraint::Closed { ignored }
+            (Constraint::Closed { .. }, LoweredConstraint::Closed(slot)) => {
+                PlannedConstraint::Closed {
+                    permitted: self.binding.set(*slot)?,
+                }
             }
-            (Constraint::MinInclusive(bound), LoweredConstraint::MinInclusive) => {
-                PlannedConstraint::MinInclusive(bound)
+            (Constraint::MinInclusive(bound), LoweredConstraint::MinInclusive(numeric)) => {
+                PlannedConstraint::MinInclusive(RangeBound {
+                    term: bound,
+                    numeric: *numeric,
+                })
             }
-            (Constraint::MaxInclusive(bound), LoweredConstraint::MaxInclusive) => {
-                PlannedConstraint::MaxInclusive(bound)
+            (Constraint::MaxInclusive(bound), LoweredConstraint::MaxInclusive(numeric)) => {
+                PlannedConstraint::MaxInclusive(RangeBound {
+                    term: bound,
+                    numeric: *numeric,
+                })
             }
-            (Constraint::MinExclusive(bound), LoweredConstraint::MinExclusive) => {
-                PlannedConstraint::MinExclusive(bound)
+            (Constraint::MinExclusive(bound), LoweredConstraint::MinExclusive(numeric)) => {
+                PlannedConstraint::MinExclusive(RangeBound {
+                    term: bound,
+                    numeric: *numeric,
+                })
             }
-            (Constraint::MaxExclusive(bound), LoweredConstraint::MaxExclusive) => {
-                PlannedConstraint::MaxExclusive(bound)
+            (Constraint::MaxExclusive(bound), LoweredConstraint::MaxExclusive(numeric)) => {
+                PlannedConstraint::MaxExclusive(RangeBound {
+                    term: bound,
+                    numeric: *numeric,
+                })
             }
             (Constraint::And(shapes), LoweredConstraint::And(lowered)) => {
                 PlannedConstraint::And(shape_list(shapes, lowered)?)
@@ -1600,7 +1683,7 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
         }
     }
     LoweredShape {
-        constraints: lower_constraints(&shape.constraints, walk),
+        constraints: lower_constraints(&shape.constraints, &shape.property_shapes, walk),
         properties: shape
             .property_shapes
             .iter()
@@ -1618,7 +1701,7 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
 fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProperty {
     LoweredProperty {
         path: lower_path(&property.path, walk),
-        constraints: lower_constraints(&property.constraints, walk),
+        constraints: lower_constraints(&property.constraints, &property.property_shapes, walk),
         properties: property
             .property_shapes
             .iter()
@@ -1642,7 +1725,15 @@ fn lower_path(path: &Path, walk: &mut ShapeWalk) -> LoweredPath {
             Path::Predicate(predicate) => {
                 LoweredPath::InversePredicate(walk.slot(Term::NamedNode(predicate.clone())))
             }
-            composite => LoweredPath::InverseComposite(composite.clone()),
+            // Invert the composite ONCE, here, and lower the result: the rewrite
+            // depends on the shapes graph alone, and the path it produces is an
+            // ordinary lowered path whose predicates are slots. Doing it in the
+            // evaluator instead cloned this subtree, and re-resolved every
+            // predicate in the clone, once per focus node.
+            composite => LoweredPath::InvertedComposite(Box::new(lower_path(
+                &crate::path::invert(composite),
+                walk,
+            ))),
         },
         Path::Sequence(parts) => {
             LoweredPath::Sequence(parts.iter().map(|part| lower_path(part, walk)).collect())
@@ -1657,10 +1748,19 @@ fn lower_path(path: &Path, walk: &mut ShapeWalk) -> LoweredPath {
 }
 
 /// Lower a constraint list, in declaration order.
-fn lower_constraints(constraints: &[Constraint], walk: &mut ShapeWalk) -> Box<[LoweredConstraint]> {
+///
+/// `siblings` are the property shapes of whatever DECLARED these constraints, and
+/// they are here for exactly one kind: `sh:closed` is the only SHACL constraint
+/// whose meaning is a function of its declaring shape's other children, because
+/// the set of predicates it permits is read off their `sh:path`s.
+fn lower_constraints(
+    constraints: &[Constraint],
+    siblings: &[PropertyShape],
+    walk: &mut ShapeWalk,
+) -> Box<[LoweredConstraint]> {
     constraints
         .iter()
-        .map(|constraint| lower_constraint(constraint, walk))
+        .map(|constraint| lower_constraint(constraint, siblings, walk))
         .collect()
 }
 
@@ -1671,7 +1771,11 @@ fn lower_constraints(constraints: &[Constraint], walk: &mut ShapeWalk) -> Box<[L
 /// A kind that were silently omitted would evaluate against a lowering that did not
 /// describe it, and the evaluator would refuse it — a constraint that stopped
 /// constraining, with every existing test still green.
-fn lower_constraint(constraint: &Constraint, walk: &mut ShapeWalk) -> LoweredConstraint {
+fn lower_constraint(
+    constraint: &Constraint,
+    siblings: &[PropertyShape],
+    walk: &mut ShapeWalk,
+) -> LoweredConstraint {
     match constraint {
         Constraint::Class(class) => LoweredConstraint::Class(walk.class_slot(class)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
@@ -1686,11 +1790,43 @@ fn lower_constraint(constraint: &Constraint, walk: &mut ShapeWalk) -> LoweredCon
         Constraint::UniqueLang(_) => LoweredConstraint::UniqueLang,
         Constraint::LanguageIn(_) => LoweredConstraint::LanguageIn,
         Constraint::Not(shape) => LoweredConstraint::Not(Box::new(lower_shape(shape, walk))),
-        Constraint::Closed { .. } => LoweredConstraint::Closed,
-        Constraint::MinInclusive(_) => LoweredConstraint::MinInclusive,
-        Constraint::MaxInclusive(_) => LoweredConstraint::MaxInclusive,
-        Constraint::MinExclusive(_) => LoweredConstraint::MinExclusive,
-        Constraint::MaxExclusive(_) => LoweredConstraint::MaxExclusive,
+        // The permitted-predicate set, unioned once here rather than rebuilt per
+        // focus node. The membership rule is the evaluator's, restated nowhere: an
+        // INVERSE path constrains incoming triples and therefore permits no
+        // outgoing predicate, and `rdf:type` is permitted only when a shape lists
+        // it in `sh:ignoredProperties` (W3C `core/node/closed-001` vs `-002`).
+        Constraint::Closed { ignored } => LoweredConstraint::Closed(
+            walk.set_slot(
+                siblings
+                    .iter()
+                    .filter_map(|sibling| match &sibling.path {
+                        Path::Predicate(predicate) => Some(Term::NamedNode(predicate.clone())),
+                        Path::Inverse(_)
+                        | Path::Sequence(_)
+                        | Path::Alternative(_)
+                        | Path::ZeroOrMore(_)
+                        | Path::OneOrMore(_)
+                        | Path::ZeroOrOne(_) => None,
+                    })
+                    .chain(
+                        ignored
+                            .iter()
+                            .map(|predicate| Term::NamedNode(predicate.clone())),
+                    ),
+            ),
+        ),
+        Constraint::MinInclusive(bound) => {
+            LoweredConstraint::MinInclusive(crate::constraints::numeric_value(bound))
+        }
+        Constraint::MaxInclusive(bound) => {
+            LoweredConstraint::MaxInclusive(crate::constraints::numeric_value(bound))
+        }
+        Constraint::MinExclusive(bound) => {
+            LoweredConstraint::MinExclusive(crate::constraints::numeric_value(bound))
+        }
+        Constraint::MaxExclusive(bound) => {
+            LoweredConstraint::MaxExclusive(crate::constraints::numeric_value(bound))
+        }
         Constraint::And(shapes) => LoweredConstraint::And(lower_shape_list(shapes, walk)),
         Constraint::Or(shapes) => LoweredConstraint::Or(lower_shape_list(shapes, walk)),
         Constraint::Xone(shapes) => LoweredConstraint::Xone(lower_shape_list(shapes, walk)),
@@ -2139,11 +2275,11 @@ ex:RootShape a sh:NodeShape ;
             | LoweredConstraint::MaxLength
             | LoweredConstraint::UniqueLang
             | LoweredConstraint::LanguageIn
-            | LoweredConstraint::Closed
-            | LoweredConstraint::MinInclusive
-            | LoweredConstraint::MaxInclusive
-            | LoweredConstraint::MinExclusive
-            | LoweredConstraint::MaxExclusive
+            | LoweredConstraint::Closed(_)
+            | LoweredConstraint::MinInclusive(_)
+            | LoweredConstraint::MaxInclusive(_)
+            | LoweredConstraint::MinExclusive(_)
+            | LoweredConstraint::MaxExclusive(_)
             | LoweredConstraint::Sparql
             | LoweredConstraint::Equals(_)
             | LoweredConstraint::Disjoint(_)

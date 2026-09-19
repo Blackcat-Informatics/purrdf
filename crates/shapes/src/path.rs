@@ -119,6 +119,67 @@ pub(crate) fn eval_ids_from_id(ds: &impl ShaclRead, focus_id: TermId, path: &Pat
 // the one form a lowering does not yet carry — an inverse over a COMPOSITE path,
 // which is inverted structurally rather than resolved.
 
+/// First-seen-order membership over an id accumulator, allocation-free while the
+/// accumulator is small.
+///
+/// A path frontier needs a SET, and [`IdSet`] is the right shape for one — but a
+/// `HashSet` allocates its table on its first insert, and a path is evaluated
+/// once per focus node, so that first insert is one allocation per focus node,
+/// every focus node, for a set that in the overwhelming majority of real shapes
+/// holds one or two ids. It was the whole of `path_sequence`'s and both closure
+/// paths' measured cost above the floor.
+///
+/// So membership is answered by a linear scan over the accumulator the caller is
+/// already building, until that accumulator reaches [`Self::LINEAR_MAX`]; past
+/// that the set is built once from what is already there and every later probe
+/// hashes. Both regimes answer the same question, in the same order, so the value
+/// nodes a path produces and the order it produces them in are unchanged — and
+/// the asymptotics are unchanged too, because the quadratic regime is bounded by
+/// a constant.
+#[derive(Default)]
+struct FrontierDedup {
+    /// The hashed set, once the accumulator has outgrown the linear scan. `None`
+    /// until then, and a `None` here has never allocated.
+    hashed: Option<IdSet>,
+}
+
+impl FrontierDedup {
+    /// The accumulator length past which probing switches from a linear scan to a
+    /// hash lookup. A scan of this many `Copy` ids is a couple of cache lines and
+    /// beats hashing one; past it the scan would start to cost more than the
+    /// allocation it avoids.
+    const LINEAR_MAX: usize = 16;
+
+    /// Forget every id admitted so far, keeping any table already paid for.
+    ///
+    /// Used between the steps of a sequence, where each step dedups its own
+    /// frontier. Once spilled it stays spilled: the table is already allocated,
+    /// so there is nothing left to save by going back to the scan.
+    fn clear(&mut self) {
+        if let Some(set) = &mut self.hashed {
+            set.clear();
+        }
+    }
+
+    /// Whether `id` is new, given `accumulated` — every id admitted since the last
+    /// [`Self::clear`], in order. The caller appends `id` to `accumulated` exactly
+    /// when this returns `true`, which is what keeps the two in step.
+    fn insert(&mut self, accumulated: &[TermId], id: TermId) -> bool {
+        if let Some(set) = &mut self.hashed {
+            return set.insert(id);
+        }
+        if accumulated.len() < Self::LINEAR_MAX {
+            return !accumulated.contains(&id);
+        }
+        let mut set: IdSet =
+            IdSet::with_capacity_and_hasher(accumulated.len() * 2, ::purrdf::FastHasher::default());
+        set.extend(accumulated.iter().copied());
+        let fresh = set.insert(id);
+        self.hashed = Some(set);
+        fresh
+    }
+}
+
 /// Id-native value-node producer for a focus node whose interned identity is
 /// already known, driven by a lowered path.
 ///
@@ -138,10 +199,10 @@ pub(crate) fn eval_planned_ids_from_id(
     binding: &DatasetBinding,
 ) -> Result<IdVec, String> {
     let ids = eval_planned_inner_ids(ds, focus_id, path, binding)?;
-    let mut seen: IdSet = IdSet::default();
+    let mut seen = FrontierDedup::default();
     let mut out: IdVec = IdVec::with_capacity(ids.len());
     for id in ids {
-        if seen.insert(id) {
+        if seen.insert(&out, id) {
             out.push(id);
         }
     }
@@ -186,8 +247,9 @@ fn admits_empty_planned_path(path: &LoweredPath) -> bool {
     match path {
         // A predicate step is never zero-length.
         LoweredPath::Predicate(_) | LoweredPath::InversePredicate(_) => false,
-        // Inversion does not change reflexivity: `^p` admits empty iff `p` does.
-        LoweredPath::InverseComposite(composite) => admits_empty_path(composite),
+        // Inversion does not change reflexivity: `^p` admits empty iff `p` does,
+        // so the already-inverted lowering answers for the declared `^(…)`.
+        LoweredPath::InvertedComposite(inverted) => admits_empty_planned_path(inverted),
         LoweredPath::OneOrMore(inner) => admits_empty_planned_path(inner),
         // A sequence admits empty only if EVERY step can be taken in zero steps.
         LoweredPath::Sequence(parts) => parts.iter().all(admits_empty_planned_path),
@@ -222,11 +284,13 @@ fn eval_planned_inner_ids(
             }
             None => IdVec::new(),
         },
-        // Inverse of a composite path: push the inversion inward and evaluate. The
-        // rewrite is a restructuring of the path rather than a resolution of a
-        // term, so it is still performed here, on the parsed form the lowering
-        // carried for exactly this purpose.
-        LoweredPath::InverseComposite(composite) => eval_inner_ids(ds, focus, &invert(composite)),
+        // Inverse of a composite path. The inversion was pushed inward at stage 0
+        // and the result lowered like any other path, so there is nothing left to
+        // rewrite here and nothing to re-resolve: this is an ordinary recursive
+        // step over slots.
+        LoweredPath::InvertedComposite(inverted) => {
+            eval_planned_inner_ids(ds, focus, inverted, binding)?
+        }
         LoweredPath::Sequence(parts) => {
             // Fold the frontier through each step, deduplicating per step
             // (first-seen order) so diamond-shaped graphs stay linear. The
@@ -234,13 +298,13 @@ fn eval_planned_inner_ids(
             // iteration so their capacity is reused across steps.
             let mut frontier: IdVec = smallvec![focus];
             let mut next: IdVec = IdVec::new();
-            let mut seen: IdSet = IdSet::default();
+            let mut seen = FrontierDedup::default();
             for part in parts {
                 next.clear();
                 seen.clear();
                 for &node in &frontier {
                     for value in eval_planned_inner_ids(ds, node, part, binding)? {
-                        if seen.insert(value) {
+                        if seen.insert(&next, value) {
                             next.push(value);
                         }
                     }
@@ -274,31 +338,32 @@ fn planned_closure_ids(
     binding: &DatasetBinding,
     reflexive: bool,
 ) -> Result<IdVec, String> {
-    let mut seen: IdSet = IdSet::default();
+    // `order` IS the visited set: every id the dedup admits is pushed to it, and
+    // it is never popped, so the closure's membership question is answered against
+    // the output it is already building rather than against a second copy of it.
+    // The worklist is a cursor over that same sequence.
+    let mut seen = FrontierDedup::default();
     let mut order: IdVec = IdVec::new();
-    let mut worklist: IdVec = IdVec::new();
+    let mut cursor = 0;
 
     if reflexive {
-        seen.insert(focus);
+        // The first id needs no membership probe — nothing has been admitted yet
+        // — and the dedup reads `order` itself, so pushing IS recording it.
         order.push(focus);
-        worklist.push(focus);
     } else {
         for value in eval_planned_inner_ids(ds, focus, inner, binding)? {
-            if seen.insert(value) {
+            if seen.insert(&order, value) {
                 order.push(value);
-                worklist.push(value);
             }
         }
     }
 
-    let mut cursor = 0;
-    while cursor < worklist.len() {
-        let node = worklist[cursor];
+    while cursor < order.len() {
+        let node = order[cursor];
         cursor += 1;
         for value in eval_planned_inner_ids(ds, node, inner, binding)? {
-            if seen.insert(value) {
+            if seen.insert(&order, value) {
                 order.push(value);
-                worklist.push(value);
             }
         }
     }
@@ -427,7 +492,7 @@ pub fn primary_predicate(path: &Path) -> Option<&NamedNode> {
 /// - `^(a/b/…/z) = ^z/…/^b/^a`
 /// - `^(a|b)     = ^a|^b`
 /// - `^(p*)      = (^p)*` (and likewise `+`, `?`)
-fn invert(path: &Path) -> Path {
+pub(crate) fn invert(path: &Path) -> Path {
     match path {
         Path::Predicate(_) => Path::Inverse(Box::new(path.clone())),
         Path::Inverse(inner) => inner.as_ref().clone(),

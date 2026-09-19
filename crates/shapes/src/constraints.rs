@@ -17,7 +17,7 @@ use smallvec::SmallVec;
 use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
-use crate::plan::{PlannedConstraint, PropertyPlan, ShapePlan};
+use crate::plan::{PlannedConstraint, PropertyPlan, RangeBound, ShapePlan};
 use crate::report::ValidationResult;
 use crate::shapes::{ComponentValidator, NodeKindValue, Path, PropertyShape, Shape};
 use crate::term::{NamedNode, Term, Triple, term_id_to_native};
@@ -357,8 +357,15 @@ fn validate_shape_with_depth(
     // same predicate attribution that property-shape results do — violations
     // must not drop their predicate role.
     for (constraint, lowered) in plan.constraints()? {
-        if let PlannedConstraint::Closed { ignored } = plan.planned(constraint, lowered)? {
-            results.extend(eval_closed(store, focus, shape, ignored, box_role_vocab));
+        if let PlannedConstraint::Closed { permitted } = plan.planned(constraint, lowered)? {
+            results.extend(eval_closed(
+                store,
+                focus,
+                focus_id,
+                shape,
+                permitted,
+                box_role_vocab,
+            ));
         }
     }
 
@@ -380,38 +387,49 @@ fn validate_shape_with_depth(
 /// (`core/node/closed-002` does exactly that).
 ///
 /// One result per focus-node outgoing triple whose predicate is not permitted.
+///
+/// Both halves of this are id-native, and neither was:
+///
+/// * `permitted` is the stage-0 union resolved at BIND — see
+///   [`crate::plan::LoweredConstraint::Closed`]. It used to be rebuilt, as a set
+///   of borrowed IRI strings, once per focus node, even though it is a function
+///   of the shapes graph alone.
+/// * the outgoing quads are walked in id space. The previous `native_quads` call
+///   materialized an owned `(Term, NamedNode, Term)` for EVERY outgoing quad of
+///   every focus node, only to throw all three away again for the permitted ones
+///   — which, on a conforming graph, is all of them. Here the subject is never
+///   materialized (it is the focus node, which the caller already holds), and the
+///   predicate and object are materialized only inside a violation.
+///
+/// The subject-legality guard `native_quads` applied per quad is applied once,
+/// against the focus term, because every quad this probe matches has the focus as
+/// its subject.
 fn eval_closed(
     store: &ShaclData,
     focus: &Term,
+    focus_id: Option<TermId>,
     shape: &Shape,
-    ignored: &[NamedNode],
+    permitted: &FastSet<TermId>,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Vec<ValidationResult> {
-    // Borrowed keys: the set is only ever `contains`-probed (never iterated or
-    // returned), so it can point into `shape`/`ignored` — no per-predicate
-    // `String` copy per focus node.
-    let mut permitted: FastSet<&str> = FastSet::default();
-    for ps in &shape.property_shapes {
-        if let Path::Predicate(predicate) = &ps.path {
-            permitted.insert(predicate.as_str());
-        }
-    }
-    for ign in ignored {
-        permitted.insert(ign.as_str());
-    }
-
     let mut results = Vec::new();
-    let quads = native_quads(
-        store.core_view(),
-        Some(focus),
-        None,
-        None,
-        GraphFilter::AnyGraph,
-    );
-    for (_subject, predicate, object) in quads {
-        if permitted.contains(predicate.as_str()) {
+    // A focus node this data graph does not intern has no outgoing quads at all,
+    // so a closed shape has nothing to report against it — the same empty answer
+    // the materializing probe gave, reached without a dictionary lookup.
+    let (Some(focus_id), true) = (focus_id, focus.is_subject()) else {
+        return results;
+    };
+    let ds = store.core_view();
+    for quad in quads_for_pattern_ids(ds, Some(focus_id), None, None, GraphFilter::AnyGraph) {
+        if permitted.contains(&quad.p) {
             continue;
         }
+        // Past the permitted probe this quad IS a violation, so materializing its
+        // predicate and object is reporting work, not traversal work.
+        let Term::NamedNode(predicate) = term_id_to_native(ds, quad.p) else {
+            continue;
+        };
+        let object = term_id_to_native(ds, quad.o);
         // Resolve the offending predicate's graph-box roles (the same resolution
         // property shapes use for their path) so closed-world results are not left
         // with empty path attribution.
@@ -892,6 +910,28 @@ fn eval_constraint(
         };
     }
 
+    // The result GENERATOR a constraint folds to when stage 1 decided its verdict
+    // for every value node at once.
+    //
+    // A folded constraint may not collapse to a boolean, and this is the whole
+    // reason the fold is spelled as a generator: `sh:class` against a class this
+    // data graph does not intern violates for every value node, and SHACL reports
+    // ONE RESULT PER VIOLATING VALUE NODE, each stamped with that value node's own
+    // term. Folding to "violates — report once" would leave every allocation
+    // measurement green, every conformance boolean correct, and the report quietly
+    // short by n−1 results. So the constant verdict is expressed as the results it
+    // produces, in value-node order, which is byte-identical to what the unfolded
+    // arm produced.
+    macro_rules! violate_every_value_node {
+        ($component:expr) => {{
+            let mut results = Vec::with_capacity(value_nodes.len());
+            for value in value_nodes {
+                results.push(result!($component, Some(value.to_term(ds))));
+            }
+            results
+        }};
+    }
+
     Ok(match constraint {
         // ── Count constraints (operate on the SET) ─────────────────────────────
         PlannedConstraint::MinCount(n) => {
@@ -912,11 +952,18 @@ fn eval_constraint(
         }
 
         // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
+        //
+        // The CONSTANT-FOLDED branch: `None` = the data graph interns no term for
+        // this class, so no value node can be an instance of it and every one of
+        // them violates. That is a real verdict, not a failure to compute one, and
+        // it was decided at BIND — once for the whole validation, not once per
+        // value node of every focus node. The per-value-node arm below still runs
+        // its own `is_none_or` test, so this fold is a shortcut around work whose
+        // answer is already known and not a second statement of the rule.
+        PlannedConstraint::Class(None) => {
+            violate_every_value_node!(sh::CLASS_CONSTRAINT_COMPONENT)
+        }
         PlannedConstraint::Class(id) => {
-            // `None` = the data graph interns no term for this class, so no value
-            // node can be an instance of it and every one of them violates. That
-            // is a real verdict, not a failure to compute one — and it was decided
-            // at BIND, once, not here.
             let class_id = id;
             let mut results = Vec::new();
             let focus = focus_node;
@@ -1010,6 +1057,15 @@ fn eval_constraint(
         }
 
         // ── In (per value node) ────────────────────────────────────────────────
+        //
+        // The CONSTANT-FOLDED branch: `sh:in ()` permits nothing, so every value
+        // node violates whatever the data graph contains. This one is a constant
+        // of the SHAPE rather than of the binding, which is why it is stated on
+        // `allowed` and not on the id set — see the arm below for why an id set
+        // that is empty is NOT the same condition.
+        PlannedConstraint::In { allowed: &[], .. } => {
+            violate_every_value_node!(sh::IN_CONSTRAINT_COMPONENT)
+        }
         PlannedConstraint::In {
             allowed,
             ids: allowed_ids,
@@ -1017,15 +1073,26 @@ fn eval_constraint(
             // Membership is pure identity, and the allowed set was resolved to ids
             // ONCE, at bind: an interned value node's check is a `TermId` set
             // lookup with no materialization and no per-focus-node set to build.
+            //
             // The interner is injective, so an allowed term that is not interned
-            // can never equal an interned value node; a non-interned value node
-            // falls back to term equality against the declared list.
+            // can never equal an INTERNED value node. That is also why an empty
+            // `allowed_ids` is not a constant verdict: a value node produced by a
+            // SHACL-AF node expression need not be interned either, and two
+            // non-interned terms can perfectly well be equal. Folding "no member
+            // is interned" to "everything violates" would refuse a conforming
+            // graph. What the injectivity DOES buy is the shape of the match
+            // below: only a foreign value node with no identity of its own can
+            // reach the term comparison, so an interned value node is never
+            // materialized to run it.
             let mut results = Vec::new();
             let focus = focus_node;
             for vn in value_nodes {
-                let allowed_here = match vn.as_id(ds) {
-                    Some(id) => allowed_ids.contains(&id),
-                    None => allowed.iter().any(|a| terms_equal(a, &vn.to_term(ds))),
+                let allowed_here = match vn {
+                    ValueNode::Interned(id) => allowed_ids.contains(id),
+                    ValueNode::Foreign(term) => match resolve_id(ds, term) {
+                        Some(id) => allowed_ids.contains(&id),
+                        None => allowed.iter().any(|a| terms_equal(a, term)),
+                    },
                 };
                 if !allowed_here {
                     results.push(ValidationResult {
@@ -1056,9 +1123,23 @@ fn eval_constraint(
             // two it is was decided at bind.
             let found = match id {
                 Some(req_id) => value_nodes.iter().any(|v| v.as_id(ds) == Some(req_id)),
-                None => value_nodes
-                    .iter()
-                    .any(|v| terms_equal(&v.to_term(ds), required)),
+                // The required term has no identity in this data graph, so by the
+                // interner's injectivity no INTERNED value node can equal it: a
+                // term that is equal to a term the graph does not intern is itself
+                // not interned. Only a genuinely foreign value node — a SHACL-AF
+                // node expression's product — can still match, so the comparison
+                // is restricted to those and no interned value node is
+                // materialized to lose it.
+                //
+                // Note what this deliberately does NOT do: fold to "not found".
+                // Two non-interned terms can be equal, so a shape whose
+                // `sh:hasValue` names a term the data never mentions still
+                // CONFORMS against an expression that produces that very term, and
+                // declaring the whole constraint violated would refuse it.
+                None => value_nodes.iter().any(|v| match v {
+                    ValueNode::Interned(_) => false,
+                    ValueNode::Foreign(term) => terms_equal(term, required),
+                }),
             };
             if !found {
                 let focus = focus_node;
@@ -1331,14 +1412,12 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
                 );
                 if violates {
@@ -1346,7 +1425,7 @@ fn eval_constraint(
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
@@ -1366,14 +1445,12 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
                 );
                 if violates {
@@ -1381,7 +1458,7 @@ fn eval_constraint(
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
@@ -1403,14 +1480,12 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Greater)
                 );
                 if violates {
@@ -1418,7 +1493,7 @@ fn eval_constraint(
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
@@ -1438,14 +1513,12 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Less)
                 );
                 if violates {
@@ -1453,7 +1526,7 @@ fn eval_constraint(
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT,
                         ),
@@ -2315,11 +2388,26 @@ fn language_tag_matches_any(lang: &str, tags: &[String]) -> bool {
 }
 
 /// Parse a numeric value (xsd:integer, xsd:decimal, xsd:double) as `f64`.
-fn numeric_value(term: &Term) -> Option<f64> {
-    const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+///
+/// `pub(crate)` for [`crate::plan`], which runs it over a range facet's BOUND at
+/// stage 0 — the bound is a constant of the shape, so this whole test belongs
+/// there and not on the per-value-node path. `None` is an ordinary answer for a
+/// bound, never an error: see the range-facet comparison below for what happens
+/// to a bound that is not numeric.
+pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
     let Term::Literal(lit) = term else {
         return None;
     };
+    numeric_parts(lit.value(), lit.datatype_str())
+}
+
+/// [`numeric_value`] over a literal's BORROWED lexical form and datatype IRI.
+///
+/// The value-node side of every range facet reaches the comparison this way, out
+/// of [`ValueNode::literal_parts`], so a conforming value node is compared without
+/// ever being materialized into an owned [`Term`].
+fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
+    const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
     // The full XSD numeric lattice: the primitives plus EVERY derived integer
     // datatype. The set must match the rest of the engine (see
     // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
@@ -2329,7 +2417,7 @@ fn numeric_value(term: &Term) -> Option<f64> {
     // masked while data round-tripped through oxigraph's NT serializer, which
     // value-space-normalized such literals to `xsd:integer`; the oxigraph-free
     // path is the faithful one and exposes the gap.)
-    let local = lit.datatype_str().strip_prefix(XSD_NS)?;
+    let local = datatype.strip_prefix(XSD_NS)?;
     if matches!(
         local,
         "integer"
@@ -2352,7 +2440,7 @@ fn numeric_value(term: &Term) -> Option<f64> {
         // Every datatype listed above fixes `whiteSpace` = `collapse`, so the
         // lexical form is trimmed with the four code points that names — see
         // [`collapse_trim`].
-        collapse_trim(lit.value()).parse::<f64>().ok()
+        collapse_trim(lexical).parse::<f64>().ok()
     } else {
         None
     }
@@ -2369,30 +2457,74 @@ fn numeric_value(term: &Term) -> Option<f64> {
 ///   overlap is `None`;
 /// - anything else is incomparable → `None`, which every facet treats as a
 ///   violation (per spec, a value that cannot be compared to the bound fails).
-fn range_facet_cmp(value: &Term, bound: &Term) -> Option<std::cmp::Ordering> {
-    if let (Some(v), Some(b)) = (numeric_value(value), numeric_value(bound)) {
+///
+/// The BOUND arrives with its numeric parse already done — it is a constant of
+/// the shape, so [`numeric_value`] ran over it once at stage 0 instead of once
+/// per value node. The three-way structure below is unchanged and deliberately
+/// so: the bound's parse yielding `None` is **not** an error and never was. It
+/// means one of two ordinary things, and both still happen here exactly as they
+/// did when the parse ran inline:
+///
+/// * the bound is an `xsd:dateTime` / `xsd:date` / `xsd:time` literal, so the
+///   fall-through hands it to [`temporal_value_cmp`] and the facet compares in
+///   the XSD temporal value space; or
+/// * the bound is neither numeric nor temporal (including a numeric datatype
+///   whose lexical form does not parse), so the temporal comparison also yields
+///   `None`, the pair is incomparable, and every facet reports the violation the
+///   spec calls for.
+///
+/// Refusing such a shapes graph at preparation time would reject inputs that
+/// validate today — an over-refusal, which is the same defect as a dropped result
+/// wearing the costume of strictness.
+/// The VALUE NODE arrives as [`ValueNode::literal_parts`] — its borrowed lexical
+/// form and datatype IRI — rather than as an owned [`Term`], and `None` is a value
+/// node that is not a literal at all. Both halves of the comparison read exactly
+/// those two strings, so materializing the term to run them allocated a `String`
+/// per value node per facet and threw both away again for every conforming one.
+/// `None` reaches the same verdict it always did: a non-literal is neither numeric
+/// nor temporal, so it is incomparable, so it violates.
+fn range_facet_cmp(
+    value: Option<(&str, &str)>,
+    bound: RangeBound<'_>,
+) -> Option<std::cmp::Ordering> {
+    let (lexical, datatype) = value?;
+    if let (Some(v), Some(b)) = (numeric_parts(lexical, datatype), bound.numeric()) {
         return v.partial_cmp(&b);
     }
-    temporal_value_cmp(value, bound)
+    // The temporal fall-through, preserved verbatim. A bound that is not a literal
+    // is not a temporal one either, and was already `None` from the two-literal
+    // guard this replaces.
+    let Term::Literal(bound_literal) = bound.term() else {
+        return None;
+    };
+    temporal_parts_cmp(
+        lexical,
+        datatype,
+        bound_literal.value(),
+        bound_literal.datatype_str(),
+    )
 }
 
-/// XSD temporal value-space comparison of two literals, `None` when either
-/// term is not an `xsd:dateTime`/`xsd:date`/`xsd:time` literal, when a lexical
-/// form is invalid, or when the XSD partial order is indeterminate.
-fn temporal_value_cmp(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
+/// XSD temporal value-space comparison of two literals, by their borrowed lexical
+/// forms and datatype IRIs. `None` when either side is not an
+/// `xsd:dateTime`/`xsd:date`/`xsd:time` literal, when a lexical form is invalid,
+/// or when the XSD partial order is indeterminate.
+fn temporal_parts_cmp(
+    a_lexical: &str,
+    a_datatype: &str,
+    b_lexical: &str,
+    b_datatype: &str,
+) -> Option<std::cmp::Ordering> {
     const TEMPORAL: [&str; 3] = [
         "http://www.w3.org/2001/XMLSchema#dateTime",
         "http://www.w3.org/2001/XMLSchema#date",
         "http://www.w3.org/2001/XMLSchema#time",
     ];
-    let (Term::Literal(la), Term::Literal(lb)) = (a, b) else {
-        return None;
-    };
-    if !TEMPORAL.contains(&la.datatype_str()) || !TEMPORAL.contains(&lb.datatype_str()) {
+    if !TEMPORAL.contains(&a_datatype) || !TEMPORAL.contains(&b_datatype) {
         return None;
     }
-    let va = purrdf_xsd::parse_by_iri(la.value(), la.datatype_str()).ok()??;
-    let vb = purrdf_xsd::parse_by_iri(lb.value(), lb.datatype_str()).ok()??;
+    let va = purrdf_xsd::parse_by_iri(a_lexical, a_datatype).ok()??;
+    let vb = purrdf_xsd::parse_by_iri(b_lexical, b_datatype).ok()??;
     purrdf_xsd::value_cmp(&va, &vb)
 }
 
@@ -3855,6 +3987,84 @@ mod tests {
         assert!(component_iri(&results)[0].contains("MinInclusive"));
     }
 
+    /// **A range-facet bound that is not an XSD numeric literal is an ordinary
+    /// shapes graph, and must never become a refusal.**
+    ///
+    /// The bound's numeric parse moved to stage 0, which is exactly the shape of
+    /// change that turns a soft `None` into a hard error: the parse now happens
+    /// during PREPARATION, where returning `Err` looks like proper strictness and
+    /// costs nothing to write. It would reject shapes graphs that validate today.
+    ///
+    /// So both neighbours are executed here, not just the one that looks invalid:
+    ///
+    /// 1. an `xsd:dateTime` bound is not numeric, and must still fall through to
+    ///    the XSD temporal value-space comparison — which really compares, so this
+    ///    half asserts a CONFORMING case as well as a violating one. A refusal
+    ///    would take out a whole datatype's worth of working shapes.
+    /// 2. a lexically invalid numeric bound is not numeric either, and must still
+    ///    produce the outcome it always produced: incomparable, therefore a
+    ///    violation — a validation result, not an error.
+    #[test]
+    fn a_non_numeric_range_facet_bound_is_never_refused() {
+        // ── Half one: a temporal bound still reaches the temporal comparison ──
+        let temporal = load_store(&format!(
+            "@prefix ex: <{EX}> . \
+             ex:after  ex:at \"2020-06-01T00:00:00Z\"^^<{XSD}dateTime> . \
+             ex:before ex:at \"2019-06-01T00:00:00Z\"^^<{XSD}dateTime> ."
+        ));
+        let temporal_shape = prop_shape(
+            "S",
+            &format!("{EX}at"),
+            vec![Constraint::MinInclusive(xsd_lit(
+                "2020-01-01T00:00:00Z",
+                "dateTime",
+            ))],
+        );
+        assert!(
+            validate_shape(&temporal, &ex("after"), &temporal_shape).is_empty(),
+            "a dateTime at or after a dateTime bound must CONFORM: the non-numeric bound has to \
+             reach the temporal comparison, not be refused and not be treated as incomparable"
+        );
+        let later = validate_shape(&temporal, &ex("before"), &temporal_shape);
+        assert_eq!(
+            later.len(),
+            1,
+            "a dateTime before the bound must violate, which is what says the temporal \
+             comparison really ran rather than conforming vacuously"
+        );
+        assert!(component_iri(&later)[0].contains("MinInclusive"));
+
+        // ── Half two: an unparseable numeric bound still violates, not errors ──
+        let numeric = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"18\"^^<{XSD}integer> ."
+        ));
+        let broken_bound = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("not-a-number", "integer"))],
+        );
+        let incomparable = validate_shape(&numeric, &ex("a"), &broken_bound);
+        assert_eq!(
+            incomparable.len(),
+            1,
+            "a bound whose lexical form does not parse leaves every value node incomparable, \
+             which SHACL reports as a violation — preparing the shape must not fail instead"
+        );
+        assert!(component_iri(&incomparable)[0].contains("MinInclusive"));
+
+        // ...and the neighbouring VALID bound over the very same data still
+        // conforms, which is the half an over-refusal would silently take with it.
+        let good_bound = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("18", "integer"))],
+        );
+        assert!(
+            validate_shape(&numeric, &ex("a"), &good_bound).is_empty(),
+            "the valid neighbour of the refused case must still validate"
+        );
+    }
+
     // ── maxInclusive ───────────────────────────────────────────────────────────
 
     #[test]
@@ -4135,6 +4345,83 @@ mod tests {
         // ex:parent_node has 1 inverse-parent (ex:child) → passes minCount(1).
         let results = validate_shape(&store, &ex("parent_node"), &shape);
         assert!(results.is_empty(), "expected pass, got: {results:?}");
+    }
+
+    /// **An inverse over a COMPOSITE path still selects the same value nodes once
+    /// the inversion is performed at lowering time instead of per focus node.**
+    ///
+    /// `^(p/q)` is the one path form whose lowering is a structural REWRITE rather
+    /// than a slot resolution, and the rewrite is direction-sensitive: `^(p/q)` is
+    /// `^q/^p`, not `^p/^q`, so getting it backwards produces a perfectly
+    /// well-formed path that selects the wrong nodes. The `Path`-driven evaluator's
+    /// own tests cover `invert` itself; this one drives the LOWERED path, through
+    /// the validator, which is the route every prepared shape takes and the only
+    /// one where a mis-lowering could hide.
+    ///
+    /// Stated as a conforming case and a violating one over the same data, because
+    /// an inversion that selected nothing at all would satisfy a pass-only
+    /// assertion on `sh:maxCount` and a fail-only assertion on `sh:minCount`.
+    #[test]
+    fn inverse_of_a_composite_path_is_lowered_in_the_right_direction() {
+        use crate::shapes::Path;
+        // ex:a ex:p ex:b . ex:b ex:q ex:d .  so  ex:a  p/q  ex:d,
+        // and therefore  ex:d  ^(p/q)  ex:a  — while ex:a reaches nothing.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p ex:b . ex:b ex:q ex:d ."
+        ));
+        let composite = || {
+            Path::Inverse(Box::new(Path::Sequence(vec![
+                Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                Path::Predicate(NamedNode::new_unchecked(format!("{EX}q"))),
+            ])))
+        };
+        let shape_with = |constraints: Vec<Constraint>| Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("S-property"),
+                path: composite(),
+                constraints,
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                message: None,
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            message: None,
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+
+        // The tail of the sequence reaches its head: one value node, ex:a.
+        let at_tail = shape_with(vec![Constraint::MinCount(1), Constraint::MaxCount(1)]);
+        assert!(
+            validate_shape(&store, &ex("d"), &at_tail).is_empty(),
+            "^(p/q) from the sequence's tail must yield exactly its head"
+        );
+        assert_eq!(
+            validate_shape(
+                &store,
+                &ex("d"),
+                &shape_with(vec![Constraint::HasValue(ex("a"))])
+            )
+            .len(),
+            0,
+            "and that one value node must be ex:a itself, not merely some node"
+        );
+
+        // The head reaches nothing: an inversion applied in the WRONG direction
+        // would light up here instead.
+        assert_eq!(
+            validate_shape(&store, &ex("a"), &at_tail).len(),
+            1,
+            "^(p/q) from the sequence's HEAD must yield nothing, so sh:minCount 1 violates"
+        );
     }
 
     #[test]
