@@ -44,6 +44,55 @@ use crate::governed::{BudgetExhausted, RelationIdentity};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq};
 
+/// One pre-binding on an interned entry point: a **borrowed** variable name and
+/// the term it binds.
+///
+/// [`SparqlRequest::substitutions`](purrdf_core::SparqlRequest) spells the same
+/// thing as `&[(String, TermValue)]`, which charges a caller one freshly allocated
+/// `String` per pre-bound variable per REQUEST. For a generic consumer, which
+/// issues one query and names its variables once, that is nothing. For SHACL it is
+/// the wrong shape for the same reason the owned egress was: a validation runs one
+/// query per focus node and pre-binds the same three or four variables in every
+/// one of them — `this`, `value`, `shapesGraph`, `currentShape`, a component's
+/// parameters. Those names are text out of the SHAPE. They do not vary with the
+/// focus node, they are already allocated inside the loaded shapes graph, and
+/// re-allocating them per focus node was paying for a copy of a constant.
+///
+/// So the name borrows. The VALUE stays owned: a focus node's term is genuinely
+/// per-focus-node data, and the pre-binding rewrite needs it as an owned
+/// [`GroundTerm`](purrdf_sparql_algebra::GroundTerm) in the algebra regardless.
+///
+/// # This is additive
+///
+/// [`SparqlRequest`](purrdf_core::SparqlRequest) is untouched and remains the
+/// request type for every generic
+/// [`SparqlEngine`](purrdf_core::SparqlEngine) consumer, owned substitution list
+/// included. This is a different consumer, not a mode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prebinding<'a> {
+    /// The variable to pre-bind, spelled without the `?`/`$` sigil.
+    pub variable: &'a str,
+    /// The term to bind it to.
+    pub value: TermValue,
+}
+
+/// The request an interned entry point takes.
+///
+/// [`SparqlRequest`](purrdf_core::SparqlRequest)'s shape, differing in exactly one
+/// field: the pre-bindings are [`Prebinding`]s, whose variable names borrow. See
+/// that type for why.
+/// Every field is a borrow, so this is `Copy`: passing one costs no more than
+/// passing the query string alone.
+#[derive(Clone, Copy, Debug)]
+pub struct InternedRequest<'a> {
+    /// The query text.
+    pub query: &'a str,
+    /// The base IRI relative references in the query resolve against.
+    pub base_iri: Option<&'a str>,
+    /// The variables to pre-bind before evaluating.
+    pub substitutions: &'a [Prebinding<'a>],
+}
+
 /// A borrowed, still-interned SELECT result.
 ///
 /// The rows are the evaluator's own [`Solution`] rows over the query's shared

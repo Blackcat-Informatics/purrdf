@@ -165,7 +165,9 @@ pub use governor::{
 // The interned query egress: a result visited inside its own evaluation, so a
 // caller that reads two columns of a wide row does not pay for the other twenty.
 // Additive beside `SparqlResult`, never a replacement for it.
-pub use interned::{InternedGoverned, InternedOutcome, InternedSolutions};
+pub use interned::{
+    InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
+};
 pub use plan_cache::{CacheLimits, CacheStats};
 pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};
 // The value-level entry points to the ORDER BY comparator and the built-in

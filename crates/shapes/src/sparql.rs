@@ -10,20 +10,22 @@
 //!
 //! Both run the [`NativeSparqlEngine`] over the borrowed `Arc<RdfDataset>` — there is
 //! no oxigraph SPARQL engine and no materialized `Store`. Focus-node substitution
-//! uses [`SparqlRequest::substitutions`] (the native replacement for oxigraph's
-//! `PreparedSparqlQuery::substitute_variable`,  GAP-A).
+//! uses [`Prebinding`] (the native replacement for oxigraph's
+//! `PreparedSparqlQuery::substitute_variable`,  GAP-A) — the borrowed-name
+//! pre-binding list the evaluator's interned entry points take, so a validation
+//! does not re-allocate the shape's variable names once per focus node.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, RdfDataset};
-use ::purrdf::{SparqlRequest, TermValue};
 use purrdf_sparql_eval::{
-    AggregateRegistry, GovernorState, InternedGoverned, InternedOutcome, InternedSolutions,
-    NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions, ShaclPrebinding,
-    UserFunctionRegistry, ValueAggregate, fold_values, order_values,
+    AggregateRegistry, GovernorState, InternedGoverned, InternedOutcome, InternedRequest,
+    InternedSolutions, NativeSparqlEngine, Prebinding, PropertyFunctionRegistry, QueryOptions,
+    ShaclPrebinding, UserFunctionRegistry, ValueAggregate, fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -61,9 +63,14 @@ pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
     select: &str,
     substitutions: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
-    let subs: Vec<(String, TermValue)> = substitutions
+    // The NAME borrows: a target's variable names are text out of the shapes
+    // graph, already allocated there, and identical on every evaluation.
+    let subs: Vec<Prebinding<'_>> = substitutions
         .iter()
-        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
+        })
         .collect();
     let mut nodes = run_select_generic_view(dataset, select, &subs, |solutions| {
         let this_index = solutions.column("this");
@@ -159,8 +166,11 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     // unsubstituted query returns no rows and silently drops the violation. The parse
     // is memoized by the thread-local engine's plan cache, so per-focus evaluation
     // re-runs the plan, not the parse.
-    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(3);
-    subs.push(("this".to_owned(), focus.to_term_value()));
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3);
+    subs.push(Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    });
     push_shape_context(&mut subs, shapes_graph_iri, current_shape);
     run_select_with_shacl_prebinding_view(dataset, select, &subs, |solutions| {
         let path_index = solutions.column("path");
@@ -303,9 +313,12 @@ pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
     select: &str,
     args: &[(String, Term)],
 ) -> Result<Option<Term>, String> {
-    let subs: Vec<(String, TermValue)> = args
+    let subs: Vec<Prebinding<'_>> = args
         .iter()
-        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
+        })
         .collect();
     run_select_generic_view(dataset, select, &subs, |solutions| {
         if solutions.len() > 1 {
@@ -332,7 +345,7 @@ pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
 /// projected `variable`.
 ///
 /// `bindings` pre-binds the focus node (`this`) and every scope variable through
-/// the SAME [`SparqlRequest::substitutions`] mechanism [`eval_scalar_expr`] uses
+/// the SAME [`Prebinding`] mechanism [`eval_scalar_expr`] uses
 /// for its arguments — the specification's "focusNode pre-bound to variable
 /// `$this` and scope variables pre-bound with matching names".
 ///
@@ -355,9 +368,12 @@ pub(crate) fn eval_select_nodes_view<D: DatasetView + Sync + FocusGraphSource>(
     variable: &str,
     bindings: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
-    let subs: Vec<(String, TermValue)> = bindings
+    let subs: Vec<Prebinding<'_>> = bindings
         .iter()
-        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
+        })
         .collect();
     run_select_generic_view(dataset, select, &subs, |solutions| {
         let index = solutions.column(variable).ok_or_else(|| {
@@ -662,7 +678,7 @@ pub fn current_governors() -> Option<Arc<GovernorState>> {
 fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     query: &str,
-    substitutions: &[(String, TermValue)],
+    substitutions: &[Prebinding<'_>],
     prebind: ShaclPrebinding,
     bnode_mint_prefix: Option<&str>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
@@ -694,7 +710,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     let registry = functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS);
     let property_functions = relations.as_deref().unwrap_or(&EMPTY_RELATIONS);
     let agg_registry = aggregates.as_deref().unwrap_or(&EMPTY_AGGREGATES);
-    let request = SparqlRequest {
+    let request = InternedRequest {
         query,
         base_iri: None,
         substitutions,
@@ -899,15 +915,21 @@ pub fn current_call_depth() -> u32 {
 /// caller that runs the same query for many nodes now builds the whole
 /// substitution list once and overwrites only the cells that actually vary.
 pub(crate) fn push_shape_context(
-    subs: &mut Vec<(String, TermValue)>,
+    subs: &mut Vec<Prebinding<'_>>,
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) {
     if let Some(iri) = shapes_graph_iri {
-        subs.push(("shapesGraph".to_owned(), TermValue::Iri(iri.to_owned())));
+        subs.push(Prebinding {
+            variable: "shapesGraph",
+            value: TermValue::Iri(iri.to_owned()),
+        });
     }
     if let Some(shape) = current_shape {
-        subs.push(("currentShape".to_owned(), shape.to_term_value()));
+        subs.push(Prebinding {
+            variable: "currentShape",
+            value: shape.to_term_value(),
+        });
     }
 }
 
@@ -924,7 +946,7 @@ pub(crate) fn push_shape_context(
 fn run_select_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     select: &str,
-    substitutions: &[(String, TermValue)],
+    substitutions: &[Prebinding<'_>],
     prebind: ShaclPrebinding,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
@@ -955,7 +977,7 @@ fn run_select_view<D: DatasetView + Sync + FocusGraphSource, R>(
 pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     select: &str,
-    substitutions: &[(String, TermValue)],
+    substitutions: &[Prebinding<'_>],
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     run_select_view(
@@ -975,7 +997,7 @@ pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource, 
 pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     select: &str,
-    substitutions: &[(String, TermValue)],
+    substitutions: &[Prebinding<'_>],
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     run_select_view(
@@ -1009,7 +1031,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + Focu
 pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     construct: &str,
-    substitutions: &[(String, TermValue)],
+    substitutions: &[Prebinding<'_>],
     bnode_mint_prefix: Option<&str>,
 ) -> Result<Arc<RdfDataset>, String> {
     run_query_view(
@@ -1045,7 +1067,7 @@ pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync + F
 pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     ask: &str,
-    substitutions: &[(String, TermValue)],
+    substitutions: &[Prebinding<'_>],
 ) -> Result<bool, String> {
     run_query_view(
         dataset,

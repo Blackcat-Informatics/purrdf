@@ -28,11 +28,10 @@
 //! term in the focus count at all. **That does not hold here, and this file says
 //! so in its assertions rather than around them.** A SHACL-SPARQL shape runs one
 //! SPARQL query PER FOCUS NODE, and a query evaluation is not allocation-free:
-//! the pre-binding rewrite clones the prepared algebra and rebuilds it once per
-//! substitution, and every pre-bound term crosses as an owned `TermValue` whose
-//! IRI is a fresh `String`. Those are properties of the evaluator's query
-//! interface, not of the change path, and nothing in this task's scope removes
-//! them.
+//! the pre-binding rewrite clones the prepared algebra and rebuilds it, and every
+//! pre-bound term crosses as an owned `TermValue` whose IRI is a fresh `String`.
+//! Those are properties of the evaluator's query interface, not of the change
+//! path.
 //!
 //! So what is pinned here is the closed form, which CAN be pinned and which is
 //! where the defect actually lived:
@@ -50,36 +49,41 @@
 //!
 //! # What was measured
 //!
-//! Marginal allocations per conforming focus node, from this file's fixtures at
+//! Marginal cost per conforming focus node, from this file's fixtures at
 //! `N = 1,280` and `2N = 2,560`. The "before" column is this same file, unchanged,
-//! run against the revision this one replaced — the owned `SparqlResult` egress,
-//! the per-value-node rebuild of the ASK validator's substitution names, and the
-//! per-call assembly of the scalar-expression query text:
+//! run against the revision this one replaced:
 //!
-//! | surface | before | after | saved per focus node |
-//! |---|---|---|---|
-//! | `sh:sparql` constraint | 2,701 | 2,695 | 6 |
-//! | custom `sh:ask` component (2 value nodes) | 378 | 350 | 28 |
-//! | custom `sh:select` component | 2,751 | 2,738 | 13 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 255 | 236 | 19 |
+//! | surface | allocations before | after | requested bytes before | after |
+//! |---|---|---|---|---|
+//! | `sh:sparql` constraint | 2,695 | 100 | 1,277,672 | 8,399 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 218 | 16,156 | 16,156 |
+//! | custom `sh:select` component | 2,738 | 120 | 1,278,972 | 9,699 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 200 | 13,393 | 13,393 |
 //!
-//! # Read the savings against the totals, not on their own
+//! # The two big rows and the two small ones are two different findings
 //!
-//! These are real and they are small next to what a SHACL-SPARQL focus node
-//! costs. The two SELECT surfaces sit at roughly 2,700 allocations each, and
-//! almost none of that is egress: it is the per-focus query evaluation itself —
-//! the pre-binding rewrite clones the prepared algebra and rebuilds it once per
-//! substitution, and the substituted BGP is then evaluated. Removing the egress
-//! copy removes the egress copy; it does not remove the query.
+//! **The two SELECT surfaces were scanning the graph.** That is what the 1.28 MB
+//! is, and it is not the honest price of running a query — it is a planning
+//! defect, now fixed in `purrdf_sparql_eval`'s pre-binding rewrite. Pre-binding
+//! `$this` used to bind it ONLY by joining a single-row `VALUES` seed onto the
+//! core pattern, leaving the triple pattern's subject a VARIABLE; the join
+//! evaluates both operands in full, so every focus node enumerated every
+//! `ex:name` quad in the dataset and then discarded all but its own. The
+//! deciding measurement holds the focus count fixed at 64 and varies the data
+//! graph: before, the per-focus-node cost tracked the graph exactly (383
+//! allocations over 768 quads, 8,324 over 24,576); after, it is FLAT at 100 for
+//! every one of those sizes. The constant is pushed into the pattern now, so the
+//! bound position is an index probe.
 //!
-//! The two rows where the saving is proportionally largest are the two where
-//! there is no BGP to dominate it. `sh:ask` is the sharpest, and it needs a word,
-//! because the obvious reading of it is wrong: an ASK materializes **no rows on
-//! any path** — the evaluator answers the boolean from the emptiness of the
-//! solution bag and never crosses a cell into the egress model — so NONE of its
-//! 28 comes from the egress. All of it comes from the substitution list, which
-//! was rebuilt, names and all, once per value node, and which this fixture pays
-//! for twice per focus node.
+//! **The two non-SELECT surfaces were never scanning**, which is why their bytes
+//! do not move at all: an ASK materializes no rows on any path, and the
+//! expression call's body has no BGP with a pre-bound term in it. Their
+//! allocation savings come from the pre-binding rewrite getting cheaper rather
+//! than narrower — one combined `VALUES` seed carrying every pre-bound variable
+//! instead of one seed, one `Join` and one whole rebuild of the
+//! solution-modifier stack PER variable, and a pre-binding list whose variable
+//! names are borrowed from the shapes graph instead of re-allocated per focus
+//! node.
 //!
 //! # The instrument, and the traps it is threaded around
 //!
@@ -102,6 +106,9 @@
 //!   `rayon`'s work-stealing deque allocates a block every 63 pushes and a single
 //!   sample can read one extra. A minimum is not a tolerance: a real per-focus
 //!   term is charged to every execution and so to the minimum too.
+//! * Both the `N` and the `2N` warm-up run TWICE, because an `N`-sized fan-out
+//!   reaches a different set of workers than a `2N`-sized one and the engine's
+//!   plan cache is a thread-local. See the warm-up block in the headline test.
 //!
 //! One trap is specific to this file. The engine memoizes query PLANS in a
 //! thread-local cache keyed on query text, and a first-touch parse is a large,
@@ -301,7 +308,7 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 2695,
+        per_focus_node: 100,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -318,7 +325,7 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 350,
+        per_focus_node: 218,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -339,7 +346,7 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 2738,
+        per_focus_node: 120,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -354,7 +361,7 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 236,
+        per_focus_node: 200,
         results_per_violation: 1,
     },
 ];
@@ -491,6 +498,36 @@ impl Fixture {
     }
 }
 
+/// Initialise the per-worker lazies for `case` on EVERY thread of the pool.
+///
+/// The engine — and therefore the query plan cache it memoizes parses in — is a
+/// THREAD-LOCAL, so its first touch is charged once per worker per query text, not
+/// once per process. Measured here, that first touch is exactly 56 allocations,
+/// and this host's pool has 32 workers: the first `N`-sized pass of a fresh case
+/// reached 20 of them (1,120 allocations of excess) and the first `2N`-sized pass
+/// reached the other 12 (672), after which every subsequent pass was exact.
+///
+/// Warming by running the workload is therefore a RACE against which workers a
+/// chunking happens to reach, and it is one this file kept losing: a worker still
+/// cold when the window opened added its 56 to that sample, and [`measure_min`]'s
+/// minimum only removes it if at least one of the [`REPETITIONS`] samples found
+/// every worker warm. Left to chance it failed about half of a twelve-run stress
+/// on a 32-thread pool.
+///
+/// [`rayon::broadcast`] does not leave it to chance: it runs the closure ONCE ON
+/// EVERY THREAD in the pool, so no worker can still be cold afterwards. Each
+/// invocation validates a single focus node, which is below
+/// [`PARALLEL_MIN_FOCUS_NODES`] and so stays serial on the worker that runs it —
+/// exactly the per-worker initialisation wanted, with no nested fan-out.
+///
+/// This is not a tolerance. It changes which threads are warm BEFORE the window
+/// opens; it does not change, soften, or exclude anything counted once it is open.
+fn warm_every_worker(fixture: &Fixture, case: usize) {
+    rayon::broadcast(|_| {
+        drop(fixture.validate_conforming(case, 1));
+    });
+}
+
 /// Refuse to report a figure from a run where the parallel path cannot be taken.
 fn assert_parallel_path_is_reachable() {
     assert!(
@@ -542,16 +579,18 @@ fn every_sparql_surface_costs_a_constant_per_conforming_focus_node() {
         // allocator's arenas are first-touch lazies, and charging them to whichever
         // measurement ran first would make this a statement about start-up.
         //
-        // The `2N` pass runs TWICE. The SPARQL engine — and therefore its query
-        // PLAN CACHE — is a thread-local, so the first-touch cost is per WORKER,
-        // not per process, and which workers a chunking reaches is the one thing
-        // about this schedule that is not deterministic. A single pass can leave a
-        // worker cold; two independent chunkings of the largest population is the
-        // cheap way to make that vanishingly unlikely, and it costs only warm-up
-        // time. This is not a tolerance: it changes which workers are warm, never
-        // what is counted once the window opens.
+        // [`warm_every_worker`] first, because the SPARQL engine and its query plan
+        // cache are THREAD-LOCALS: their first touch is charged per worker, and
+        // running the workload only warms the workers that workload's chunking
+        // happened to reach. The broadcast reaches all of them by construction; see
+        // that function for the measurement that made the difference visible.
+        //
+        // Then one pass at each size, on the exact arguments measured, to take the
+        // process-wide first-touch costs the broadcast's single-focus-node runs do
+        // not exercise: rayon's global pool at THIS fan-out width, and the
+        // allocator's arenas at this working-set size.
+        warm_every_worker(&fixture, case);
         drop(fixture.validate_conforming(case, focus_nodes(1)));
-        drop(fixture.validate_conforming(case, focus_nodes(2)));
         drop(fixture.validate_conforming(case, focus_nodes(2)));
 
         let (half, half_measured) =
@@ -563,10 +602,19 @@ fn every_sparql_surface_costs_a_constant_per_conforming_focus_node() {
 
         let name = spec.name;
         let (n, two_n) = (half_measured.allocations, full_measured.allocations);
+        // Requested BYTES beside the allocation count, because the two answer
+        // different questions and the second one is what a reader wants when a
+        // figure moves: an allocation count says how many times the code went to
+        // the allocator, and the byte figure says how much traffic that was. The
+        // scan this file's constants used to include was visible in both, and far
+        // more dramatic in bytes.
+        let (n_bytes, two_n_bytes) = (half_measured.requested_bytes, full_measured.requested_bytes);
         let _ = writeln!(
             report,
-            "  {name}: N = {n}, 2N = {two_n}, marginal = {} per focus node, entry = {}",
+            "  {name}: N = {n}, 2N = {two_n}, marginal = {} allocations and {} requested bytes \
+             per focus node, entry = {}",
             (two_n - n) / FOCUS_NODES,
+            (two_n_bytes - n_bytes) / FOCUS_NODES,
             n.saturating_sub((two_n - n) / FOCUS_NODES * FOCUS_NODES),
         );
         for (label, measured, population) in [

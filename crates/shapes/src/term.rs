@@ -916,7 +916,7 @@ fn escape_literal(s: &str) -> String {
 /// components via the dataset's [`resolve`](::purrdf::RdfDataset::resolve).
 ///
 /// Blank labels are scope-qualified so two same-label blanks from different
-/// [`BlankScope`](::purrdf::BlankScope)s never conflate (C0.2); a DEFAULT-scope
+/// [`BlankScope`]s never conflate (C0.2); a DEFAULT-scope
 /// label outside the reserved marker namespace stays bare so single-scope data
 /// is byte-unchanged.
 pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {

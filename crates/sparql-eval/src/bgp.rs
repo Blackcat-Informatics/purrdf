@@ -438,6 +438,25 @@ fn plan_or_cached_order<D: DatasetView>(
     scope: &GraphScope<D::Id>,
     cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
 ) -> Arc<[usize]> {
+    // A one-pattern BGP has exactly one join order, so there is nothing to plan and
+    // nothing worth remembering. Short-circuiting it is not a micro-optimisation of
+    // a cheap case: it is what keeps the cache USEFUL once a pre-bound variable has
+    // been pushed into the pattern.
+    //
+    // `bgp_shape_key` hashes a `Pos::Bound`'s interned ID, so `<c1> <p> ?o` and
+    // `<c2> <p> ?o` are different keys. That is right for a multi-pattern BGP, where
+    // which constant is bound really can change the best order. For the single
+    // pattern a SHACL-SPARQL constraint body usually is, it meant one fresh key per
+    // FOCUS NODE — a cache that could never hit, charged the full `cost_based_order`
+    // walk anyway, and then evicted a live entry to store an answer nobody would ask
+    // for again. The order-cache traffic was the largest term left in the per-focus
+    // cost after the pre-binding pushdown, and it was the only one that was not
+    // exactly linear in the focus count, because what a bounded cache evicts depends
+    // on how the focus nodes were chunked across workers.
+    if compiled.len() == 1 {
+        static SINGLETON: std::sync::OnceLock<Arc<[usize]>> = std::sync::OnceLock::new();
+        return Arc::clone(SINGLETON.get_or_init(|| Arc::from(vec![0_usize])));
+    }
     let Some(cache) = cache else {
         return Arc::from(cost_based_order(compiled, dataset, scope));
     };

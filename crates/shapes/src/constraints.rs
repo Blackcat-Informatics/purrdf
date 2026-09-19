@@ -959,9 +959,9 @@ fn eval_closed<S: ResultSink>(
 ///
 /// This convenience entry point lowers `shape` on every call — the whole
 /// cycle-aware walk, plus one interning probe per constant it names. A caller that
-/// checks MANY focus nodes against the same shape should lower it once and drive
-/// [`conforms_with_plan`] instead; `rules` does exactly that for its
-/// `sh:condition` checks.
+/// checks MANY focus nodes against the same shape should lower it once instead:
+/// [`PreparedShapes`](crate::engine::PreparedShapes) is the public route, and it
+/// is what `rules` reuses internally for its `sh:condition` checks.
 ///
 /// # Errors
 ///

@@ -43,9 +43,10 @@ use crate::eval::{
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
 use crate::governor::{GovernorState, NonMonotoneBarrier, QueryExplanation, QueryGovernors};
-use crate::interned::{InternedGoverned, InternedOutcome, InternedSolutions};
+use crate::interned::{InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions};
 use crate::plan_cache::{BoundedCache, BoundedOrderCache};
 use crate::plan_memory::{PlanCharge, PlanMemoryObserver};
+use crate::substitute::Prebindings;
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
@@ -631,11 +632,13 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                prepared,
+                Prebindings::Owned(substitutions),
+                &mut ctx,
+            )?,
             ShaclPrebinding::None => {
-                evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
+                evaluate_with_substitutions(prepared, Prebindings::Owned(substitutions), &mut ctx)?
             }
         };
         Ok(materialize(outcome, &ctx))
@@ -679,12 +682,16 @@ impl NativeSparqlEngine {
                 let ctx = self.eval_ctx(dataset);
                 let mut ctx = apply_query_options(ctx, options)?;
                 let outcome = match options.prebinding {
-                    ShaclPrebinding::Applied => {
-                        evaluate_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
-                    }
-                    ShaclPrebinding::None => {
-                        evaluate_with_substitutions(prepared, substitutions, &mut ctx)?
-                    }
+                    ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                        prepared,
+                        Prebindings::Owned(substitutions),
+                        &mut ctx,
+                    )?,
+                    ShaclPrebinding::None => evaluate_with_substitutions(
+                        prepared,
+                        Prebindings::Owned(substitutions),
+                        &mut ctx,
+                    )?,
                 };
                 Ok(materialize(outcome, &ctx))
             })()
@@ -859,12 +866,16 @@ impl NativeSparqlEngine {
         }
         let mut ctx = apply_query_options(ctx, options)?;
         let evaluated = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_governed_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
+                prepared,
+                Prebindings::Owned(substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_governed_with_substitutions(
+                prepared,
+                Prebindings::Owned(substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(materialize_governed(evaluated, &ctx, state, identity))
     }
@@ -1796,12 +1807,16 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_with_substitutions(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(materialize(outcome, &ctx))
     }
@@ -1831,7 +1846,7 @@ impl NativeSparqlEngine {
     pub fn query_interned_view<'d, D: DatasetView + Sync, R>(
         &'d self,
         dataset: &'d D,
-        request: SparqlRequest<'_>,
+        request: InternedRequest<'_>,
         options: QueryOptions<'d>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
@@ -1844,12 +1859,16 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_with_substitutions(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(visit(borrow_outcome(&outcome, &ctx)))
     }
@@ -1872,7 +1891,7 @@ impl NativeSparqlEngine {
     pub fn query_governed_interned_in_operation<'d, D: DatasetView + Sync, R>(
         &'d self,
         dataset: &'d D,
-        request: SparqlRequest<'_>,
+        request: InternedRequest<'_>,
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
@@ -1897,12 +1916,16 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
         let mut ctx = apply_query_options(ctx, options)?;
         let evaluated = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_governed_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_governed_with_substitutions(&prepared, request.substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_governed_with_substitutions(
+                &prepared,
+                Prebindings::Borrowed(request.substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(match resolve_governed(evaluated, &ctx, state, identity) {
             GovernedResolution::Complete {
@@ -1975,12 +1998,16 @@ impl NativeSparqlEngine {
         let ctx = self.eval_ctx(dataset).with_remote(source);
         let mut ctx = apply_query_options(ctx, options)?;
         let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(&prepared, request.substitutions, &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_with_substitutions(&prepared, request.substitutions, &mut ctx)?
-            }
+            ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => evaluate_with_substitutions(
+                &prepared,
+                Prebindings::Owned(request.substitutions),
+                &mut ctx,
+            )?,
         };
         Ok(materialize(outcome, &ctx))
     }
@@ -2094,7 +2121,7 @@ pub(crate) fn eval_diagnostic_code(
 /// must never poison the shared, un-substituted plan-cache entry.
 fn evaluate_with_substitutions<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
@@ -2118,7 +2145,7 @@ fn evaluate_with_substitutions<D: DatasetView + Sync>(
 /// [`evaluate_query`] refuses by contract.
 fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
     let eval_err = |e: crate::error::EvalError| {
@@ -2426,7 +2453,7 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
 /// [`evaluate_governed_with_substitutions`] has to [`evaluate_with_substitutions`].
 fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, RdfDiagnostic> {
     let substituted =
@@ -2441,7 +2468,7 @@ fn evaluate_governed_with_shacl_prebinding<D: DatasetView + Sync>(
 
 fn evaluate_with_shacl_prebinding<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
-    substitutions: &[(String, TermValue)],
+    substitutions: Prebindings<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Outcome<D::Id>, RdfDiagnostic> {
     let substituted =
@@ -2861,6 +2888,90 @@ mod tests {
         );
         assert_eq!(got.len(), 1, "exactly one row for the blank focus: {got:?}");
         assert!(got[0].contains("http://ex/z"), "?o = :z : {got:?}");
+    }
+
+    // ── where the pre-binding pushdown stops, and why ─────────────────────────
+    //
+    // `crate::substitute` pushes a pre-bound constant into the triple-pattern
+    // positions it can match, so the pattern probes the index instead of being
+    // scanned and filtered by the seed join afterwards. That rewrite is only sound
+    // where restricting an OPERAND restricts the node's output the same way, and
+    // the three tests below are the boundary: each is a query whose answer DIFFERS
+    // between the join the algebra actually means and the substitution it might
+    // naively be confused with, so a pushdown that overreached would change the
+    // ANSWER and not merely the cost.
+
+    #[test]
+    fn prebinding_is_not_pushed_into_an_optional_right_arm() {
+        // `?s :p ?o OPTIONAL { ?s :p ?this }` with $this := :x.
+        //
+        // The right arm binds ?this from the DATA, once per subject: a→:x, b→:y,
+        // bn→:z. Every left row therefore MATCHES, so nothing is null-padded, and
+        // the seed join then keeps only the row whose ?this is :x — one row.
+        //
+        // Restricting the right arm to `?s :p <x>` instead would leave it matching
+        // only `a`; `b` and `bn` would become OPTIONAL MISSES, be null-padded with
+        // ?this UNBOUND, and an unbound cell is compatible with the seed — so all
+        // three rows would survive. Three rows against one: the divergence is the
+        // whole answer, not a rounding of it.
+        let got = run_subst(
+            "SELECT ?s WHERE { ?s <http://ex/p> ?o OPTIONAL { ?s <http://ex/p> ?this } }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/x".to_owned()))],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "only the subject whose object IS :x survives the seed join; three rows \
+             would mean the pushdown entered the OPTIONAL and turned matches into \
+             null-padded misses: {got:?}"
+        );
+        assert!(got[0].contains("http://ex/a"), "?s = :a : {got:?}");
+    }
+
+    #[test]
+    fn prebinding_is_not_pushed_into_a_minus_right_arm() {
+        // `?s :p ?o MINUS { ?s :p ?this }` with $this := :x.
+        //
+        // The right arm produces one row per subject and shares ?s with the left, so
+        // MINUS removes EVERY left row: the answer is empty. Restricting the right
+        // arm to `?s :p <x>` would leave it matching only `a`, so `b` and `bn` would
+        // survive — two rows where the algebra says none.
+        let got = run_subst(
+            "SELECT ?s WHERE { ?s <http://ex/p> ?o MINUS { ?s <http://ex/p> ?this } }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/x".to_owned()))],
+        );
+        assert!(
+            got.is_empty(),
+            "every left row has a compatible right row, so MINUS removes all of them; \
+             a non-empty answer would mean the pushdown narrowed the right arm: {got:?}"
+        );
+    }
+
+    #[test]
+    fn prebinding_pushdown_keeps_the_variable_bound_for_an_inner_filter() {
+        // Two UNION arms, each a BGP on ?this guarded by a FILTER that reads ?this.
+        //
+        // The arms are BELOW the core pattern the seed joins onto, so the seed's
+        // binding is not in scope while they are evaluated. Writing the constant into
+        // their triple patterns removes ?this from their schema — which is exactly
+        // what the pushdown does — so each rewritten leaf carries its own single-row
+        // VALUES restoring the column. Without that restore both FILTERs would be
+        // comparing an UNBOUND ?this and the answer would be empty rather than the
+        // one row the first arm's guard admits.
+        let got = run_subst(
+            "SELECT ?o WHERE { \
+             { ?this <http://ex/p> ?o FILTER(?this = <http://ex/a>) } UNION \
+             { ?this <http://ex/p> ?o FILTER(?this = <http://ex/b>) } }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "the :a arm's guard holds and the :b arm's does not; an EMPTY answer means \
+             the inner FILTERs saw ?this unbound, so a rewritten leaf lost its binding \
+             instead of restoring it: {got:?}"
+        );
+        assert!(got[0].contains("http://ex/x"), "?o = :x : {got:?}");
     }
 
     #[test]

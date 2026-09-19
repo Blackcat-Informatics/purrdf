@@ -19,6 +19,7 @@ use std::sync::OnceLock;
 use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{FastMap, FastSet};
+use purrdf_sparql_eval::Prebinding;
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs, sh, xsd};
@@ -281,11 +282,20 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     // value node; rebuilding it per value node re-allocated `"this"`, `"value"` and
     // every parameter name, plus their term values, for every value in the set.
     const VALUE_SLOT: usize = 1;
-    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(4 + bindings.len());
-    subs.push(("this".to_owned(), focus.to_term_value()));
-    subs.push(("value".to_owned(), TermValue::Iri(String::new())));
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(4 + bindings.len());
+    subs.push(Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    });
+    subs.push(Prebinding {
+        variable: "value",
+        value: TermValue::Iri(String::new()),
+    });
     for (name, value) in bindings {
-        subs.push((name.clone(), value.to_term_value()));
+        subs.push(Prebinding {
+            variable: name.as_str(),
+            value: value.to_term_value(),
+        });
     }
     crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
     // The violating branch's template buffer, hoisted for the same reason: its
@@ -300,7 +310,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
         Vec::new()
     };
     for v in value_nodes {
-        subs[VALUE_SLOT].1 = v.to_term_value();
+        subs[VALUE_SLOT].value = v.to_term_value();
         let conforms = run_ask_with_shacl_prebinding_view(dataset, ask, &subs)?;
         if !conforms {
             let message = message.map(|m| {
@@ -353,10 +363,16 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
     let ComponentValidator::Select { select } = validator else {
         return Err("expected SELECT validator, got ASK".to_owned());
     };
-    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(3 + bindings.len());
-    subs.push(("this".to_owned(), focus.to_term_value()));
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3 + bindings.len());
+    subs.push(Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    });
     for (name, value) in bindings {
-        subs.push((name.clone(), value.to_term_value()));
+        subs.push(Prebinding {
+            variable: name.as_str(),
+            value: value.to_term_value(),
+        });
     }
     crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
     let query = crate::constraints::substitute_path_placeholder(select, path);

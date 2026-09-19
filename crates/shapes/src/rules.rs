@@ -72,6 +72,7 @@ use std::sync::Arc;
 
 use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
 use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
+use purrdf_sparql_eval::Prebinding;
 
 use crate::constraints::conforms_with_plan;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
@@ -829,14 +830,17 @@ fn sparql_rule_producer(
     // of the three are constants of the RULE and so is every NAME, so the list is
     // built once here and only `$this` is overwritten per focus node.
     const THIS_SLOT: usize = 0;
-    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(3);
-    subs.push(("this".to_owned(), TermValue::Iri(String::new())));
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3);
+    subs.push(Prebinding {
+        variable: "this",
+        value: TermValue::Iri(String::new()),
+    });
     crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, Some(&shape.id));
     for focus in &focus_nodes {
         if !conditions_hold(data, focus, &plan)? {
             continue;
         }
-        subs[THIS_SLOT].1 = focus.to_term_value();
+        subs[THIS_SLOT].value = focus.to_term_value();
         // A CONSTRUCT template blank is minted from a per-evaluation counter that
         // resets each call, so two focus nodes would both mint `_:c1` and
         // conflate. The evaluation therefore mints under a per-focus prefix
