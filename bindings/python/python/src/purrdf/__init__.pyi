@@ -1927,6 +1927,48 @@ class slice:
 # Every weight crosses as an `int` of raw fixed-point units (`SCALE` is one whole
 # unit) and every score comes back as its exact decimal `str`, never a float.
 
+# One ranked text producer's declaration: `(stratum, predicate, graph)`, or the
+# same three followed by the producer's candidate domains.
+#
+# `domains` is `None` — which is also what omitting the fourth element declares —
+# or a list of domain-tag IRI strings. `None` is `Unrestricted`: "this producer
+# may name anything", which licenses a consumer to skip nothing and is exactly
+# what every answer this binding produced before the element existed. A list
+# promises every candidate this producer names lies in one of those blocks, which
+# is what lets a fused top-k stop reading a stream that provably cannot name the
+# candidate it is deciding about. It buys a shorter READ, never a different
+# answer: the rows, the scores and the provenance are identical either way.
+#
+# The tags are the HOST's, because which entities an index names is a fact about
+# the corpus that neither this layer nor the relation can see. A tag derived per
+# stratum would hand two producers over one entity space a pair a consumer reads
+# as disjoint, and that mistake is not conservative in either direction — it
+# refuses a valid query where both producers name one entity, and certifies a
+# score missing the other's contribution where they do not.
+#
+# An EMPTY list raises `ValueError` naming the producer. A promise to name
+# nothing is not a narrow producer but one that should not be registered: a
+# consumer holds a producer to its declaration row by row, so every row it
+# emitted would contradict it. Pass `None` to restrict nothing.
+#
+# A declaration is a promise, and `search` checks it against the rows it pulls.
+# Two producers whose declarations place one candidate in disjoint blocks cannot
+# both be telling the truth about it, so the fusion raises `ValueError` —
+# "stream for stratum S named item I, which its declared candidate domains
+# cannot reach; stratum T already named it" — naming the stratum that broke its
+# promise, the stratum whose already-applied declaration it collided with, and
+# the candidate. It is not silently widened instead: rows have already been
+# certified on the strength of that declaration, so merging the late
+# contribution would hand back a score its own provenance contradicts. The fix
+# is to declare the tag the two producers share, or `None`; producers that
+# really do rank the same entities fuse into one row carrying both
+# contributions under either. The sibling refusal on the same seam — "stream for
+# stratum S emitted item I more than once" — is a producer that declared unique
+# candidates and repeated one, and names its stratum for the same reason.
+_TextProducerSpec: TypeAlias = (
+    tuple[str, str, str] | tuple[str, str, str, list[str] | None]
+)
+
 class retrieval:
     # The decimal exponent of one whole fixed-point unit.
     SCALE_DIGITS: int
@@ -1959,8 +2001,13 @@ class retrieval:
     # ("numeric", predicate, lower_raw | None, upper_raw | None), or
     # ("entity", term).
     #
-    # `text_producers` maps a producer IRI to (stratum, predicate, graph), where
-    # `graph` is "any", "default", or a named-graph IRI. `statistics` must name
+    # `text_producers` maps a producer IRI to (stratum, predicate, graph) or to
+    # (stratum, predicate, graph, domains), where `graph` is "any", "default", or
+    # a named-graph IRI and `domains` is the producer's candidate-domain
+    # declaration (see `_TextProducerSpec`: `None` or an omitted fourth element
+    # promises nothing and restricts nothing, a list of tag IRIs restricts the
+    # producer to those blocks, and an empty list is refused by name).
+    # `statistics` must name
     # its "source" and "revision", and may carry "cardinality" (stratum IRI to
     # row count) and "selectivity" ((stratum IRI, request-term index) to an
     # integer of parts per million in [0, 1000000] — never a float, because the
@@ -1971,7 +2018,7 @@ class retrieval:
         data: str,
         request: list[tuple[builtins.object, ...]],
         *,
-        text_producers: dict[str, tuple[str, str, str]],
+        text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
         data_format: str = "turtle",
         base: str | None = None,
@@ -1995,7 +2042,7 @@ class retrieval:
         data: str,
         request: list[tuple[builtins.object, ...]],
         *,
-        text_producers: dict[str, tuple[str, str, str]],
+        text_producers: dict[str, _TextProducerSpec],
         statistics: dict[str, builtins.object],
         weights: dict[str, int] | None = None,
         k: int | None = None,
@@ -2031,12 +2078,76 @@ class retrieval:
     # `"collisions_observed"`. The two legitimately disagree — a top-k that
     # certified early never reaches its planned depth — and neither is a
     # correction of the other.
+    #
+    # `"statuses"` maps a stratum to its producer's own terminal status, and the
+    # `"status"` string has exactly five spellings. `"exhausted"` (with
+    # `"rows_emitted"`: int) is the ONLY completeness claim among them — that
+    # producer emitted every row it had. The other four each name who stopped the
+    # read and where, and none may be read as "that was all of it":
+    # `"depth_reached"` (with `"rank"`: int) is the producer stopping at the depth
+    # the plan gave it, verified against the rows fusion pulled, so ranks one
+    # through `"rank"` were read and nothing below was looked at;
+    # `"ceiling_reached"` (with `"bound"`: an exact decimal `str`) is a
+    # contribution bound, every row at or above it read and the rows below not —
+    # what a fusion the caller's `top_k` stopped writes over the streams it
+    # stopped; `"execution_failed"` (with `"reason"`: str) is a producer that
+    # could not run at all; and `"terms_rejected"` is one that declined the
+    # request terms it was handed. "Answered with nothing" and "could not answer"
+    # stay distinguishable, because none of the five is reduced to a flag.
+    #
+    # `"attestations"` maps a stratum to what the index behind its stream
+    # attested, as `{"generation": str | None, "incomplete": str | None}`, read
+    # at the instant that stream was opened — so a stratum a bounded read later
+    # stopped still reports both facts. The two axes are independent and each is
+    # independently absent, and an absence is an ABSENCE: `None` under
+    # `"generation"` is "this producer declared no generation", and `None` under
+    # `"incomplete"` is "this producer said nothing about whether its index was
+    # whole". The second is specifically NOT a claim that the index WAS whole.
+    # There is no value here that could carry such a claim: a producer stopped at
+    # the engine's row ceiling never looked at the rows it was licensed to skip,
+    # so it could not certify wholeness even if it were asked, and the seam
+    # therefore asks only the narrower question that has an honest answer on every
+    # path — was your index NOT whole? Reading the silence as certification would
+    # put a claim in the mouth of every producer that never spoke. Only the
+    # streams fusion was handed are keyed; a stratum that never became a stream is
+    # absent rather than reported as having declined to answer.
+    #
+    # `"exactness"` is `{"exact": bool, "lower_bounds_for": list[str]}`, derived
+    # from those attestations alone and therefore unmoved by how deep this call
+    # read. `True` says no stratum in this fusion declared itself short — the
+    # narrow true thing, not a certificate that every index was whole. When
+    # `"exact"` is `False`, every score in the answer is a LOWER BOUND on the
+    # score a whole index would have produced; the rows are still real rows in
+    # this fusion's own certified order, and what does NOT follow is that a row
+    # absent from the answer would have stayed absent, or that the emitted order
+    # would have survived the missing contributions. `"lower_bounds_for"` names
+    # exactly the strata that attested an incomplete index, in canonical order,
+    # and each one's verbatim reason is under the same key in `"attestations"` —
+    # so it is the list of indexes to rebuild rather than a flag to shrug at.
+    #
+    # `"domains"` maps a stratum to the candidate-domain declaration its stream
+    # fused under: `None` where the producer promised only that it may name
+    # anything, and a sorted list of tag IRIs where it restricted itself. It is on
+    # the answer because it is an input the answer cannot otherwise be audited
+    # against — these declarations decide which streams fusion was allowed to skip
+    # when it certified a row, so a reader asking why a stratum stopped at a bound
+    # instead of being read to its end is asking about this map. An answer whose
+    # every entry is `None` was certified with no licence to skip anything.
+    #
+    # `"evidence_id"` is the content identity of `"attestations"`, rendered
+    # exactly like `"plan_id"` and `"profile_id"`: 64 lowercase hex characters. It
+    # is the third of the three identities an answer carries — the plan pins the
+    # question, the profile pins the law, and this pins the index generations that
+    # answered — so one comparison over the triple decides whether two answers are
+    # comparable at all. Nothing else on the answer can show the difference: a
+    # rebuilt index moves neither the dataset passed in, nor the request, nor the
+    # registry fingerprint.
     @staticmethod
     def search(
         data: str,
         request: list[tuple[builtins.object, ...]],
         *,
-        text_producers: dict[str, tuple[str, str, str]],
+        text_producers: dict[str, _TextProducerSpec],
         weights: dict[str, int],
         statistics: dict[str, builtins.object],
         k: int,
