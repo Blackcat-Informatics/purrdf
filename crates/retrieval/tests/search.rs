@@ -19,15 +19,15 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, ExecutionError, Fixed, FusionError, FusionProfile, Iri,
-    Metric, PlanError, ProducerStatus, RankedStreamAdapter, RequestTerm, RetrievalRequest,
-    SearchError, SearchResult, Statistics, Term, TopK, UnservedReason, UnservedTerm, compile,
-    execute, fuse, plan, search,
+    AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, Fixed, FusionError,
+    FusionProfile, Iri, Metric, PlanError, ProducerStatus, RankedStreamAdapter, RequestTerm,
+    RetrievalRequest, SearchError, SearchResult, Statistics, Term, TopK, UnservedReason,
+    UnservedTerm, compile, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -96,7 +96,6 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         accepted_terms: accepted(patterns),
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
         mandatory,
     }
@@ -295,7 +294,8 @@ fn fixture_profile() -> FusionProfile {
     weights.insert(iri(&ex("stratum/universal")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/text")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/graph")), Fixed::ONE);
-    FusionProfile::new(weights, K).expect("the fixture profile is valid")
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid")
 }
 
 fn fixture_env<'a>(
@@ -358,7 +358,17 @@ async fn manual_composition(
     top_k: TopK,
 ) -> SearchResult {
     let planned = plan(request, registry, stats).expect("the fixture request plans");
-    let compiled = compile(&planned, env).expect("a fresh plan is admitted");
+    // The waist is held to the law this composition is about to fuse under, which
+    // is exactly what `search` does with the environment it is handed: the plan is
+    // unchanged and the planner still never sees the profile, but admission can
+    // now say what each planned depth costs in rank resolution. A caller composing
+    // by hand re-forms the environment here for the same reason.
+    let env = AdmissionEnvironment {
+        registry: env.registry,
+        statistics: env.statistics,
+        fusion_profile: Some(profile),
+    };
+    let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
     let execution = execute(&compiled, registry, dataset)
         .await
         .expect("the fixture registry executes");
@@ -383,6 +393,7 @@ async fn manual_composition(
         trailer: fused.trailer.completed_with(execution.statuses),
         unserved_terms: planned.unserved_evidence(),
         plan_id: planned.id(),
+        planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
     }
@@ -424,6 +435,16 @@ fn render(result: &SearchResult) -> String {
             out,
             "unserved term={} {:?}",
             unserved.request_term, unserved.reason
+        );
+    }
+    for (stratum, planned) in &result.planned_resolution {
+        let _ = writeln!(
+            out,
+            "planned-resolution {} separation={:?} depth={} separated={}",
+            stratum.as_str(),
+            planned.separation,
+            planned.requested_depth,
+            planned.fully_separated()
         );
     }
     let _ = writeln!(
@@ -551,9 +572,9 @@ fn fusion_error_propagates() {
     // A profile whose only weight names a stratum this plan never reaches. Every
     // stratum that ran is unweighted, so nothing that ran can contribute and
     // there is no partial answer to return.
-    let disjoint = FusionProfile::new(
+    let disjoint = FusionProfile::with_decay(
         BTreeMap::from([(iri(&ex("stratum/elsewhere")), Fixed::ONE)]),
-        K,
+        DecayRule::ReciprocalRank { k: K },
     )
     .expect("the disjoint profile is valid");
 
@@ -581,23 +602,38 @@ fn fusion_error_propagates() {
 }
 
 #[test]
-fn search_holds_the_plan_to_the_profile_it_is_about_to_fuse_under() {
+fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
     // `search` is the one place the plan and the law meet before a row is read,
-    // so it re-forms the admission environment around that law. The caller's own
-    // environment names no profile here, and the refusal still arrives: a
-    // per-stratum depth of a hundred outruns what a weight of `10^-9` can order.
+    // so it re-forms the admission environment around that law. This fixture is
+    // the case that used to be refused: a per-stratum depth of a hundred outruns
+    // what a weight of `10^-9` can still order, so the deepest ranks fuse at a
+    // coarser resolution.
+    //
+    // Coarser is not wrong. The declared tie-break is total, so the answer is a
+    // pure function of its inputs at every depth, and refusing it rejected a
+    // perfectly usable answer over a property of the consumer's own arithmetic.
     // `Fixed::from_raw(1_000)` is one thousand raw units of `10^-12`, which is
     // the sub-unit weight this fixture needs; a weight of *one* is `Fixed::ONE`.
     let registry = fixture_registry();
     let stats = statistics("r1");
     let env = fixture_env(&registry, &stats);
-    let shallow = FusionProfile::new(
+    let shallow = FusionProfile::with_decay(
         BTreeMap::from([(iri(&ex("stratum/text")), Fixed::from_raw(1_000))]),
-        1,
+        DecayRule::ReciprocalRank { k: 1 },
     )
     .expect("a strictly positive weight is a valid profile");
 
-    let error = block_on(search(
+    // The bound is real and this fixture is genuinely past it — otherwise the
+    // test would pass without exercising anything.
+    let separation = shallow
+        .monotone_depth(&iri(&ex("stratum/text")))
+        .expect("the profile weights this stratum");
+    assert!(
+        !separation.covers(100),
+        "this fixture must plan past the profile's separating depth, got {separation:?}"
+    );
+
+    block_on(search(
         &mixed_request(),
         &registry,
         &stats,
@@ -606,27 +642,10 @@ fn search_holds_the_plan_to_the_profile_it_is_about_to_fuse_under() {
         &shallow,
         TOP_K,
     ))
-    .expect_err("the depth outruns the profile's own arithmetic");
-    match error {
-        SearchError::AdmissionError(AdmissionError::DepthBeyondMonotoneRange {
-            stratum,
-            monotone,
-            requested,
-        }) => {
-            assert_eq!(*stratum, iri(&ex("stratum/text")));
-            assert_eq!(
-                monotone,
-                shallow
-                    .monotone_depth(&iri(&ex("stratum/text")))
-                    .expect("weighted"),
-            );
-            assert_eq!(requested, 100);
-        }
-        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
-    }
+    .expect("a depth past the profile's separating range still answers");
 
-    // The neighbouring valid case: the fixture profile's unit weights order far
-    // deeper than any depth this plan records, and the same search answers.
+    // The neighbouring case: the fixture profile's unit weights order far deeper
+    // than any depth this plan records, and the same search answers.
     assert!(
         block_on(search(
             &mixed_request(),
@@ -639,6 +658,167 @@ fn search_holds_the_plan_to_the_profile_it_is_about_to_fuse_under() {
         ))
         .is_ok(),
         "a profile whose arithmetic covers every recorded depth still answers"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2a-bis. The waist's resolution evidence reaches the answer
+//
+// `search` is the only entry point that plans and executes in one call, so it is
+// the only one where a caller cannot stop at the compiled bundle to read what the
+// plan's depths were going to cost. The pair below holds it to carrying that
+// evidence forward: the criterion is a profile whose plan is NOT fully separated,
+// and the neighbour is one that is — which must report itself as separated rather
+// than as an absence.
+// ---------------------------------------------------------------------------
+
+/// The compiled bundle a `search` under `profile` would produce, for comparing
+/// the answer's planned resolution against the plan that produced it.
+///
+/// It re-forms the environment exactly as `search` does, because the resolution
+/// is a property of the plan *and* the law: an environment naming no profile has
+/// nothing to measure against and would report nothing at all.
+fn compiled_under(
+    registry: &PropertyFunctionRegistry,
+    stats: &MockStatistics,
+    profile: &FusionProfile,
+) -> purrdf_retrieval::CompiledRetrieval {
+    let planned = plan(&mixed_request(), registry, stats).expect("the fixture request plans");
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: stats,
+        fusion_profile: Some(profile),
+    };
+    compile(&planned, &env).expect("a fresh plan is admitted")
+}
+
+#[test]
+fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    // The same sub-unit weight as the fixture above: `10^-9` cannot separate a
+    // hundred ranks under the truncated rule, so this plan is admitted and
+    // reported as coarse rather than refused.
+    let shallow = FusionProfile::with_decay(
+        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::from_raw(1_000))]),
+        DecayRule::ReciprocalRank { k: 1 },
+    )
+    .expect("a strictly positive weight is a valid profile");
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &shallow,
+        TOP_K,
+    ))
+    .expect("a depth past the profile's separating range still answers");
+
+    // The criterion: what the answer reports is what the admission waist
+    // recorded, not a number `search` derived a second time.
+    let compiled = compiled_under(&registry, &stats, &shallow);
+    assert_eq!(
+        result.planned_resolution, compiled.resolution,
+        "the answer carries the compiled plan's own resolution map"
+    );
+    let planned = result
+        .planned_resolution
+        .get(&iri(&ex("stratum/text")))
+        .copied()
+        .expect("the weighted stratum's planned resolution is on the answer");
+    assert_eq!(
+        planned.requested_depth, 100,
+        "the depth reported is the one the PLAN recorded for the stratum"
+    );
+    assert!(
+        !planned.fully_separated(),
+        "a hundred ranks at a weight of 10^-9 is not fully separated"
+    );
+
+    // …and it is emphatically not the trailer's observed number wearing another
+    // name. The mock yields two rows, so fusion pulled two ranks and observed no
+    // collision at all: the plan's estimate and the run's outcome disagree here
+    // precisely because a depth nothing reached cost nothing.
+    let observed = result
+        .trailer
+        .resolution
+        .get(&iri(&ex("stratum/text")))
+        .copied()
+        .expect("the fused stratum's observed resolution is in the trailer");
+    assert_eq!(observed.ranks_pulled, 2, "the mock holds two rows");
+    assert_eq!(
+        observed.collisions_observed, 0,
+        "two ranks is far short of where this law stops separating"
+    );
+    assert_ne!(
+        u64::from(planned.requested_depth),
+        observed.ranks_pulled,
+        "the planned depth and the ranks actually pulled are two different facts"
+    );
+
+    // A stratum with no weight has no contribution and so no resolution; it is
+    // named as unweighted instead, never reported at a fabricated depth.
+    assert_eq!(
+        result.planned_resolution.keys().collect::<Vec<_>>(),
+        vec![&iri(&ex("stratum/text"))],
+        "only the weighted stratum has a resolution to report"
+    );
+    assert_eq!(
+        result.unweighted_strata,
+        vec![iri(&ex("stratum/graph")), iri(&ex("stratum/universal"))],
+        "the strata this profile does not weight are named, not silently resolved"
+    );
+}
+
+#[test]
+fn a_fully_separated_plan_reports_itself_as_separated_rather_than_as_an_absence() {
+    // The neighbouring valid case. The fixture profile's unit weights order far
+    // deeper than any depth this plan records, and the honest report for that is
+    // an entry saying so — not a missing entry, which is what a stratum with no
+    // weight looks like, and not a refusal.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("a profile whose arithmetic covers every recorded depth answers");
+
+    let compiled = compiled_under(&registry, &stats, &profile);
+    assert_eq!(result.planned_resolution, compiled.resolution);
+    assert_eq!(
+        result.planned_resolution.keys().collect::<Vec<_>>(),
+        vec![
+            &iri(&ex("stratum/graph")),
+            &iri(&ex("stratum/text")),
+            &iri(&ex("stratum/universal")),
+        ],
+        "every stratum the plan reached is weighted, so every one has an entry"
+    );
+    for (stratum, planned) in &result.planned_resolution {
+        assert!(
+            planned.fully_separated(),
+            "a unit weight separates every rank {stratum} plans to read ({planned:?})"
+        );
+        assert!(
+            planned.requested_depth > 0,
+            "the entry names the depth it separates, not merely that it does"
+        );
+    }
+    assert!(
+        result.unweighted_strata.is_empty(),
+        "nothing was set aside, so nothing is missing from the resolution map"
     );
 }
 
@@ -660,8 +840,11 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
     let env = fixture_env(&registry, &stats);
     // Weights one of the three strata the plan reaches. The other two ran and
     // produced rows; they have no weight, so they have no contribution.
-    let narrow = FusionProfile::new(BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]), K)
-        .expect("the narrow profile is valid");
+    let narrow = FusionProfile::with_decay(
+        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("the narrow profile is valid");
 
     let result = block_on(search(
         &mixed_request(),
@@ -885,7 +1068,8 @@ fn profile_with_the_failing_stratum() -> FusionProfile {
     weights.insert(iri(&ex("stratum/text")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/graph")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/broken")), Fixed::ONE);
-    FusionProfile::new(weights, K).expect("the fixture profile is valid")
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid")
 }
 
 fn statistics_with_the_failing_stratum() -> MockStatistics {
@@ -1010,8 +1194,11 @@ fn literal_only_registry() -> PropertyFunctionRegistry {
 }
 
 fn text_only_profile() -> FusionProfile {
-    FusionProfile::new(BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]), K)
-        .expect("the fixture profile is valid")
+    FusionProfile::with_decay(
+        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("the fixture profile is valid")
 }
 
 #[test]
@@ -1290,9 +1477,9 @@ fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
     let registry = registry_of_only_the_failing_stratum();
     let stats = statistics_with_the_failing_stratum();
     let env = fixture_env(&registry, &stats);
-    let profile = FusionProfile::new(
+    let profile = FusionProfile::with_decay(
         BTreeMap::from([(iri(&ex("stratum/broken")), Fixed::ONE)]),
-        K,
+        DecayRule::ReciprocalRank { k: K },
     )
     .expect("the fixture profile is valid");
     let request = mixed_request();

@@ -1933,6 +1933,22 @@ class retrieval:
     # One whole fixed-point unit, in raw units: the weight `Fixed::ONE`.
     SCALE: int
 
+    # Every entry point that takes a smoothing constant `k` also takes the
+    # `decay` rule it belongs to, as one of two spellings, with no default:
+    #
+    # * "reciprocal_rank" truncates the reciprocal to the declared scale BEFORE
+    #   the weight is applied. The inner truncation is a ceiling no weight can
+    #   lift, so this rule stops separating adjacent ranks at the same depth —
+    #   just past a million — for every weight at or above one.
+    # * "weighted_reciprocal_rank" folds the weight into the numerator as one
+    #   exactly-rounded division. Its value is never below the other's, and its
+    #   reachable depth grows with the weight, so a heavier stratum is readable
+    #   deeper.
+    #
+    # The two compute different contributions from the same weights and name
+    # different content-addressed laws, so neither is a default and an omitted
+    # rule is refused. An unknown spelling raises `ValueError` naming both.
+
     # Plan one request against the declared ranked producers, executing nothing.
     #
     # Each `request` entry is a tuple whose first element names its kind:
@@ -1961,6 +1977,19 @@ class retrieval:
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
+    #
+    # `weights`, `k` and `decay` are the fusion law the caller means to fuse
+    # under, and naming it is what makes `"planned_resolution"` answerable: per
+    # weighted stratum, the `"separates_to"` depth this law still tells adjacent
+    # ranks apart at (`None` when it never stops inside a depth a plan can
+    # express), the `"requested_depth"` the plan recorded, and
+    # `"fully_separated"`. That is what the plan will cost in rank resolution,
+    # known without executing a single unit. Omit all three and the map is empty
+    # — no law is invented to measure against — and naming some of them and not
+    # the rest raises `ValueError` saying which part is missing, because the
+    # three are one law between them. The rule matters most here: a stratum the
+    # truncated rule reports as coarse may be fully separated under the folded
+    # one at the same weight.
     @staticmethod
     def compile(
         data: str,
@@ -1968,6 +1997,9 @@ class retrieval:
         *,
         text_producers: dict[str, tuple[str, str, str]],
         statistics: dict[str, builtins.object],
+        weights: dict[str, int] | None = None,
+        k: int | None = None,
+        decay: str | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -1980,10 +2012,25 @@ class retrieval:
     # factor-of-`SCALE` error: it runs, refuses nothing, and ranks as though the
     # smaller stratum were absent. Write every weight the same way.
     #
-    # `k` and `top_k` are required: the fusion law is the caller's and fused
-    # enumeration is top-k by construction. How many contributions a candidate
-    # may receive is not a parameter — it is the number of weighted strata,
-    # because a candidate surfaces at most once in each.
+    # `k`, `decay` and `top_k` are required: the fusion law is the caller's and
+    # fused enumeration is top-k by construction. How many contributions a
+    # candidate may receive is not a parameter — it is the number of weighted
+    # strata, because a candidate surfaces at most once in each. `decay` reaches
+    # every number in the answer, not only the law's identity: the two rules
+    # produce different contributions, different resolution maps and different
+    # `"profile_id"` values from the same weights.
+    #
+    # The answer reports rank resolution under two distinct keys.
+    # `"planned_resolution"` is the admission waist's map, identical to what
+    # `compile` reports for the same request under the same law: what the plan's
+    # depths were going to cost, knowable before any row was read.
+    # `"observed_resolution"` is what the rows this run actually pulled did cost,
+    # with an entry per weighted stratum a stream was fused for — including one
+    # that yielded no rows, whose `"ranks_pulled"` is zero rather than absent:
+    # `"separates_to"`, the `"ranks_pulled"` reached, and the
+    # `"collisions_observed"`. The two legitimately disagree — a top-k that
+    # certified early never reaches its planned depth — and neither is a
+    # correction of the other.
     @staticmethod
     def search(
         data: str,
@@ -1993,7 +2040,118 @@ class retrieval:
         weights: dict[str, int],
         statistics: dict[str, builtins.object],
         k: int,
+        decay: str,
         top_k: int,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
+    # The smallest stratum weight, in raw fixed-point units, that still separates
+    # every adjacent pair of ranks up to `depth` under the rule `decay` names.
+    #
+    # The profile-design calculus read in the direction an author needs: name the
+    # depth you must read to, get the weight that buys it. The answer is the true
+    # minimum rather than a safe over-estimate, because weights are read as
+    # ratios and an over-estimate would silently re-scale that stratum's share of
+    # every fused score.
+    #
+    # Raises `ValueError` for five distinct reasons and the message says which:
+    # an unknown `decay` spelling; a `k` of zero, which describes no law and is
+    # refused before `depth` is read, so a `depth` of one is refused rather than
+    # priced; a `depth` of zero, which names no rank to separate; a `depth` past
+    # `2 ** 32 - 1`, which is deeper than a plan can record and is the only one
+    # of the two walls "weighted_reciprocal_rank" ever meets; and a depth no
+    # weight reaches, which only "reciprocal_rank" raises because it rounds the
+    # reciprocal before the weight lands. That last message names the exact
+    # depth it does reach — the deepest any weight reaches, not the depth of one
+    # particular weight — and its remedy is reachable from this same call: ask
+    # again under "weighted_reciprocal_rank". A `k` of zero is deliberately not
+    # told that way, because switching rules does not make it usable.
+    @staticmethod
+    def weight_for_depth(depth: int, k: int, *, decay: str) -> int: ...
+    # How many consecutive ranks around `rank` a weight of `weight_raw` cannot
+    # tell apart under the rule `decay` names.
+    #
+    # One means the rank is still separated from both neighbours by score alone;
+    # `w` means `w` consecutive ranks share a contribution and their order falls
+    # through to the declared tie-break. This is the resolution curve, of which
+    # `weight_for_depth` prices a single point, and the curve belongs to the
+    # rule — the two answer differently at the same weight and rank.
+    #
+    # `None` means the class is still running at the deepest rank a plan can
+    # express, exactly as `deepest_rank_within_width` renders its own saturation.
+    # A plan records a per-stratum depth as a 32-bit rank, so there is no end
+    # inside its reach to count to, and `2 ** 32 - 1` would be the search's
+    # ceiling wearing a width's shape: under `"reciprocal_rank"` a raw weight of
+    # one truncates every contribution to zero, so rank one's class is the whole
+    # expressible range, and at a raw weight of fifty — fifty times heavier — it
+    # still is. An `int` there would say those two classes are the same size.
+    #
+    # No stratum is taken, because a width is a property of the rule, its
+    # smoothing constant, the weight and the rank and of nothing else.
+    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    #
+    # An operand the law cannot evaluate raises `ValueError` rather than
+    # returning a width: a rank of zero, a smoothing constant of zero, an unknown
+    # `decay` spelling, or a weight that is not strictly positive.
+    @staticmethod
+    def class_width(
+        weight_raw: int, k: int, rank: int, *, decay: str
+    ) -> int | None: ...
+    # The deepest depth that can be read with every rank in it sitting in a
+    # class no wider than `max_width`, for a weight of `weight_raw` under the
+    # rule `decay` names.
+    #
+    # This inverts `class_width`: name the tolerance you can live with, get the
+    # depth it buys. `max_width` of one is the separating depth itself — the
+    # deepest depth a read can stop at with every rank it *actually read*
+    # separated from both of its neighbours within that read. It is a depth, not
+    # a rank property: `class_width` at that rank never reports the one a "still
+    # separated from both neighbours" reading would predict, because the
+    # unbounded curve it walks also looks at the one rank the bounded read never
+    # reaches. Where it counts a width at all that width is at least
+    # `max_width + 1`, and it is exactly `max_width + 1` only where the run that
+    # ends the walk is one rank longer than the tolerance — the smooth case, not
+    # the rule. A light weight is where the difference shows: under
+    # `"reciprocal_rank"` with `k` of 60 and a raw weight of `10 ** 2`, a
+    # tolerance of one lands on depth one, whose class is forty ranks wide.
+    # Where that run reaches the end of the expressible range `class_width` is
+    # `None` there, having no width to compare. The two agree by answering a
+    # depth question and a rank question. The curve belongs to the rule — the
+    # two answer differently at the same weight and tolerance.
+    #
+    # `None` means no depth a plan can express ever exceeds the tolerance,
+    # exactly as `"separates_to"` is `None` on a `search` answer for a law that
+    # never stops separating. A plan records a per-stratum depth as a 32-bit
+    # rank, so there is no bound inside its reach to report, and `2 ** 32 - 1`
+    # would be a saturation point wearing a measurement's shape: two weights
+    # fifty times apart both land there.
+    #
+    # No stratum is taken, because the answer is a property of the rule, its
+    # smoothing constant, the weight and the tolerance and of nothing else.
+    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    #
+    # An operand the law cannot evaluate raises `ValueError` rather than
+    # returning a depth: a smoothing constant of zero, a `max_width` of zero —
+    # a class always contains its own rank, so a tolerance of zero is not a
+    # tolerance — an unknown `decay` spelling, or a weight that is not strictly
+    # positive. The constant and the tolerance are both checked before anything
+    # is measured, so neither refusal depends on the other argument; a tolerance
+    # of one does no walking, and letting it answer where a larger tolerance
+    # refuses would make one unusable rule usable or not according to the
+    # question asked of it.
+    #
+    # The answer is walked rank by rank — the class width is not monotone in the
+    # rank, so bisecting it would silently over-report — from the separating
+    # depth `weight_for_depth` prices, not from rank one. It lands near
+    # `sqrt(max_width)` times that depth, so the walk is about
+    # `sqrt(max_width) - 1` times it: a `max_width` of one does not walk at all
+    # and a small tolerance is cheap, while a large tolerance at a heavy weight
+    # under `"weighted_reciprocal_rank"` walks very far. The walk stops at the
+    # deepest depth a plan can record rather than running on — reporting `None`
+    # there — so it is bounded at fewer than `2**32` steps and always
+    # terminates, and the GIL is held throughout. It is a design-time query, not
+    # a hot-loop one.
+    @staticmethod
+    def deepest_rank_within_width(
+        weight_raw: int, k: int, max_width: int, *, decay: str
+    ) -> int | None: ...

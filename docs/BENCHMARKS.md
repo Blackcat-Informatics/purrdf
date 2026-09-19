@@ -20,12 +20,28 @@ unoptimized default it used to. It is still not a bench: `make bench` runs under
 `bench`/`release`, which additionally carries fat LTO and `codegen-units = 1`.
 Quote a criterion number, not a test's wall clock.
 
-There are two benchmark layers:
+There are five benchmark layers. The third is not a timing layer at all: it
+produces the *input* the other measurements are taken over, and it is here
+because a capacity number whose corpus nobody can regenerate is a number nobody
+can check. The last two are the only ones that measure PurRDF against *the
+outside world*: the first three compare PurRDF to itself, and a workload the
+literature already publishes numbers for is the one thing that cannot be tuned
+to flatter.
+
+Those two are not interchangeable, and they are not comparable with each other.
+LUBM asks what an engine can **derive** — eleven of its fourteen queries have no
+answers at all without an entailment regime. WatDiv asks how a planner copes
+with query **shape and selectivity** over a deliberately skewed dataset, and
+needs no inference whatsoever. A row from one lane set beside a row from the
+other compares two different questions.
 
 | Layer | What it measures | How to run |
 | --- | --- | --- |
 | **Rust criterion suites** | The native engine hot paths — IR layout, codecs, SPARQL evaluation, SHACL validation, GTS authoring, and wasm wrapper overhead. | `make bench` |
 | **Python compat harness** | `purrdf.compat.rdflib` (the native-backed drop-in) vs. the real `rdflib` 7.x, on the operations a drop-in user actually calls. | `make bench-python` |
+| **Scale corpus** | Nothing, by itself. It *generates* the deterministic mixed corpus (`purrdf-scale-mixed-v1`) that a capacity capture is measured against, and reports what it produced. | `make scale-corpus` |
+| **LUBM comparison workload** | The published LUBM generator, its 14 published queries, and the entailment regime each one needs — the workload the OWL knowledge-base literature compares engines on. | `make lubm` |
+| **WatDiv comparison workload** | A digest-pinned frozen WatDiv dataset and the 20 published query templates, instantiated deterministically — the workload the RDF-store literature compares planners on. Pure BGP, no entailment. | `make watdiv` |
 
 ## Native-layer benchmarks (criterion)
 
@@ -697,3 +713,711 @@ The takeaway is not a single multiplier but a shape: the shim's advantage is in
 native bulk work, and its cost is boundary-crossing per Python object. Which
 matters for *your* workload is exactly what `make bench-python` is for — run it
 on your host with a corpus close to your data before drawing conclusions.
+
+## Scale corpus (`purrdf-scale-mixed-v1`)
+
+The other two layers measure code. This one produces **input**: a deterministic,
+shardable N-Quads corpus whose IRI shapes are deliberately adversarial, so a
+capacity number measured over it cannot have been flattered by a corpus that
+front-codes perfectly. It times nothing and gates nothing. What it gives a
+reader is the ability to regenerate, byte for byte, the exact corpus a capacity
+claim was measured over.
+
+The generator is `crates/bench` (`bench-corpus`, unpublished tooling); the lane
+that drives it across shards is `scripts/scale-corpus.sh`, run as
+`make scale-corpus`. It is deliberately **not** part of `make bench`: criterion
+suites are a different layer, and this one produces bytes rather than timings.
+
+```sh
+make scale-corpus                                   # stream 10^6 rows over 8 shards, keep nothing
+make scale-corpus SCALE_QUADS=10000000 SCALE_SHARDS=32
+make scale-corpus SCALE_MODE=files SCALE_OUT=/mnt/big/corpus
+```
+
+### Piping the corpus into a consumer
+
+`SCALE_MODE=pipe` puts corpus bytes on standard output, so **nothing may share
+that stream**. Run the lane script, from the repository root:
+
+```sh
+SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader   # ordered whole run, nothing stored
+SCALE_MODE=pipe SCALE_QUADS=10000000 SCALE_SHARDS=32 bash scripts/scale-corpus.sh | your-loader
+```
+
+That is the **documented pipe idiom**, and it is the same lane `make
+scale-corpus` runs: every knob in the table below is read from the environment,
+so `make` is doing nothing here but forwarding them. Skipping it is deliberate.
+The payload is then byte-identical to an unsharded whole run on every GNU make
+version, at every recursion depth, and from inside another `Makefile`'s recipe —
+with **nothing for the caller to remember**.
+
+`make scale-corpus ... SCALE_MODE=pipe` remains the right form **interactively**,
+at a terminal, where a directory banner is a line you read rather than a line a
+loader parses.
+
+The reason the two differ, because the trap is easy to misdiagnose elsewhere:
+whenever `-w`/`--print-directory` is in effect, `make` writes `make: Entering
+directory '...'` (and a matching `Leaving directory` line) to standard output
+before the recipe runs. That flag can be inherited explicitly via a propagated
+`MAKEFLAGS`, but GNU make also turns it on **automatically** for any invocation
+it detects as a sub-make — i.e. whenever `MAKELEVEL` in the environment is
+already nonzero — regardless of what `MAKEFLAGS` says; the banner then reads
+`make[1]: Entering directory ...` (the bracketed number is the recursion depth).
+A real nested `$(MAKE)` shows an **empty `MAKEFLAGS` with `MAKELEVEL=1`**, and
+the banner appears anyway, so checking `MAKEFLAGS` and finding it clean proves
+nothing. Piped into a loader, that banner arrives as a corrupt first line the
+loader cannot parse as a corpus row.
+
+This repository's `Makefile` sets `MAKEFLAGS += --no-print-directory` at its
+top, which cancels that automatic `-w` — **on GNU make 4.4 or newer**. It does
+**not** on GNU make 4.3 or earlier, which decides `-w` at startup from the
+inherited `MAKELEVEL`, before a single line of makefile text is read; the
+assignment arrives too late, and no makefile-internal fix exists on those
+versions. The version boundary matters in practice: ubuntu-24.04 runners ship
+GNU make 4.3. So if you must pipe through `make` — this repository's or anyone
+else's — pass the flag yourself, which is parsed alongside the automatic `-w`
+and therefore works on every version:
+
+```sh
+make --no-print-directory scale-corpus SCALE_MODE=pipe | your-loader
+$(MAKE) --no-print-directory some-lane | your-loader                   # from a wrapper Makefile
+```
+
+### Parameters
+
+Every knob is an overridable `make` variable, in the same style as `BENCH_ARGS`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SCALE_QUADS` | `1000000` | Total rows across all shards. One slot emits exactly one line, so this is also the line count. |
+| `SCALE_IRIS` | `100000` | The entity **index space**: entity IRIs are minted from indexes `0..iris`, drawn with a `sqrt`-CDF skew. A target, **not** an achieved distinct-entity count — see below. |
+| `SCALE_SEED` | `1592642302` | The `splitmix64` seed folded into every derivation (the generator's own default, in decimal). |
+| `SCALE_SHARDS` | `8` | How many independent shards the row sequence is cut into. |
+| `SCALE_MODE` | `stream` | `stream` (parallel shards, each piped to a sink, nothing retained), `pipe` (ordered whole run on stdout), `files` (opt-in materialization). |
+| `SCALE_OUT` | *(unset)* | Output directory; **required** by `SCALE_MODE=files`, which refuses to run without it. Absolute or relative; a relative path is relative to where the lane runs. |
+| `SCALE_SINK` | *(unset)* | Replaces the built-in digest sink in `stream` mode with any command that reads standard input. |
+| `SCALE_MANIFEST` | *(unset)* | Writes the manifest to this path instead of the mode's default destination. |
+| `SCALE_BIN` | *(unset)* | A prebuilt `bench-corpus` to use instead of building one. Checked up front — a path that does not exist, is not a regular file, is not executable, or cannot produce the whole-run manifest fails the lane by name before any shard starts. |
+
+Every knob above except `SCALE_SINK` is **passed through literally**. `make`
+hands each one to the lane script as environment bytes rather than
+interpolating it into a recipe line, so a path is used exactly as typed —
+spaces, `$`, backticks and quotes are all just characters in a filename, none
+of them is expanded, and no shell ever parses them. A path the lane cannot open
+is a hard failure that quotes the bytes it used; the lane never writes
+somewhere else and reports success. The same holds for the `LUBM_*` and
+`WATDIV_*` knobs below.
+
+`SCALE_SINK` is the one deliberate exception, because it **is** a command: it
+replaces the built-in digest sink and is therefore executed by a shell. It is
+syntax-checked once, before any shard runs, and a value that cannot be run
+fails the lane with a diagnostic naming `SCALE_SINK` rather than a bare shell
+error.
+
+### What a capture records
+
+A capture of this lane is **the manifest plus the digest of the output** —
+neither half is evidence on its own. The manifest (`bench-corpus --manifest`,
+emitted by every mode) **records**; it computes no digest of anything. It
+carries the profile id, the seed, the quad and IRI parameters, the shard's row
+range, the shard's exact `emitted_lines` count, and both mixes:
+
+* `entity_class_mix_per_mille` over the entity **index space** (plain 400,
+  numeric-long 200, chinese 200, irregular 150, very-long 50), and
+* `row_mix_per_mille` over the **emitted rows** (entity-edge 500,
+  plain-literal 150, zh-literal 100, typed-literal 100, long-text-literal 50,
+  reified 60, blank-node 40).
+
+Those are **different axes** and the key names say so. An entity's class is a
+function of its *index*, and slots draw indexes under the `sqrt`-CDF skew, so
+the class distribution measured over rows is not the pinned entity-space
+distribution. A capture that recorded an unqualified "class mix" as its corpus
+description would misreport what it measured.
+
+The digest says which bytes were actually consumed. A manifest without a digest
+describes a corpus nobody proved was produced; a digest without a manifest is a
+number with no parameters attached.
+
+### `--iris` is a target, not an achieved distinct count
+
+`SCALE_IRIS` (the generator's `--iris`) is the size of the index space entities
+are drawn from. It is **not** the number of distinct entities a run produced,
+and no artifact this lane emits reports that number.
+
+The achieved distinct-entity count is at most `min(iris, emitted_lines)` and in
+practice well below both, because the skew concentrates draws on the head of
+the space and because only some row kinds name two entities. Measured over the
+emitted bytes at `--quads 200000 --iris 100000` with the default seed: the
+corpus names **89,569** distinct entity IRIs against an index space of 100,000,
+and only **75,548** of those ever appear in row-subject position. Which of
+those two a "distinct entity count" means is itself a choice a claim has to
+state.
+
+Nothing here computes the achieved count on purpose: establishing it means
+enumerating the corpus, which is exactly what streaming at full scale exists to
+avoid — at 10^10 rows there is no pass over the output to spend. So a capacity
+claim made from this lane **must name which number it is about**: the entity
+index space that was configured (`iris`, recorded in the manifest), or a
+distinct-entity count (which a consumer that ingested the stream can report,
+and which is a different number).
+
+### Density, and why full scale is streamed rather than stored
+
+Measured, not estimated, at `--quads 2000000 --seed 31337` across a run of
+`SCALE_IRIS` values: density is a **function of the index space**, not a
+single number, because a larger entity space means longer indexes inside the
+minted IRIs (the zero-padded numeric-long class and the host-scattered
+irregular class both carry the index itself). That figure is a property of the
+profile and its parameters rather than of the host — the same specification
+produces the same bytes on every target.
+
+| `SCALE_IRIS` | Bytes | Bytes per row |
+| ---: | ---: | ---: |
+| 10^5 | 351,119,043 | 175.560 |
+| 10^6 | 354,824,007 | 177.412 |
+| 10^7 | 357,694,926 | 178.847 |
+| 10^8 | 360,269,245 | 180.135 |
+| 10^9 | 362,774,790 | 181.387 |
+| 10^10 | 365,534,901 | 182.767 |
+
+The spread across those six decades of index space is **7.2 bytes per row**,
+not "a byte or two" — roughly 1.4 bytes per row per decade of `SCALE_IRIS`.
+The lane prints the density it actually observed on every run, so a change to
+the mixes shows up in the report instead of silently invalidating this table.
+
+The arithmetic that follows pairs each row count with an index space of the
+same order of magnitude — the pairing a run sized to keep a meaningful,
+non-repeating entity space would use — and applies that row's OWN measured
+density rather than one flat number carried up from a smaller scale:
+
+| Rows | `SCALE_IRIS` | Density (B/row) | Approximate N-Quads bytes |
+| ---: | ---: | ---: | ---: |
+| 10^6 | 10^6 | 177.412 | 177 MB |
+| 10^9 | 10^9 | 181.387 | 181 GB |
+| 10^10 | 10^10 | 182.767 | **1.83 TB** |
+
+So a run at 10^10 rows over a 10^10-entity index space is a **1.83 TB**
+corpus. That is an operator-driven, off-CI activity, and it should be
+**streamed into whatever consumes it rather than stored**: `SCALE_MODE=pipe`
+hands a loader the same bytes an unsharded run would have produced, and the
+default `stream` mode hands each shard to a sink and keeps nothing at all.
+`SCALE_MODE=files` exists for the operator who has a filesystem that can hold
+the run and a reason to keep it; it is opt-in, it demands an explicit
+`SCALE_OUT`, and no continuous-integration runner has the disk for it.
+
+### Sharding: what is a property of the algorithm, and what is not
+
+Every IRI is minted **purely from its index** under a fixed seed. Nothing in
+shard `k` depends on anything shard `j` computed, so the shards are independent
+processes over disjoint slices of one row sequence and need no coordination —
+no shared dictionary, no ordering barrier, no merge step. That independence is a
+property of the **algorithm**, and it holds at any scale, because it is a
+statement about what the generator reads (an index) rather than about how big
+the run is.
+
+What has actually been *run* is a different and smaller claim, and the two
+should not be confused. The driver runs shards concurrently, and byte-exact
+stitching is verified at sizes a disk can hold: a whole unsharded run and a
+sharded run of the same specification produce identical bytes, both through
+`SCALE_MODE=pipe` and through `cat` of the `SCALE_MODE=files` output. A
+10^10-row run over a 10^10-entity index space has a 1.83 TB storage
+requirement and is nobody's smoke test; the table above is the honest reason
+it is described as arithmetic rather than reported as a demonstration.
+
+In `files` mode each shard is written as:
+
+```
+purrdf-scale-mixed-v1.seed<SEED>.quads<QUADS>.iris<IRIS>.shard-00003-of-00016.nq
+```
+
+The shard index and shard count are zero-padded to at least five digits (wider
+counts widen the field), so the files sort lexicographically into shard order
+and `cat <prefix>.shard-*.nq` reproduces a whole run byte for byte. The
+whole-run manifest is written beside them as `<prefix>.manifest.json`, and each
+shard gets its own `<shard>.manifest.json` recording that shard's row range.
+
+That guarantee is only worth anything if a run that did not produce every shard
+cannot claim it, so **any shard that fails fails the whole run**, in every mode.
+The lane names the failing shards (`FAILED shards: 1`), exits non-zero, prints
+no shard sizes and no byte-for-byte guarantee, and leaves no
+`<shard>.manifest.json` certifying a shard whose corpus file was not written —
+including one left behind by an earlier, successful run into the same
+directory. A shard manifest is a certificate; it never outlives the shard it
+certifies, and neither does the whole-run manifest: a failed run removes both,
+and says so.
+
+**Every mode counts what actually left the lane**, and the run fails unless that
+count is the row count its manifest certifies. The manifest is produced by asking
+the binary what it intends to emit, so on its own it is a claim; the count is the
+evidence. In `stream` the built-in sink reports it, in `files` each shard file is
+measured, and in `pipe` and under `SCALE_SINK` the payload is copied through a
+counter on its way out — the two paths where the bytes leave for something
+outside the lane, and where the only place to count them is in passing. A run
+that delivers nothing, delivers less than the manifest says, or stops mid-row is
+a failed run, and no manifest is published for it.
+
+### What the corpus covers, and what it does not
+
+It covers, at pinned shares: five IRI classes chosen to defeat a single
+dictionary trick (front-codable plain, 36-digit zero-padded numerics beyond
+machine integer widths, raw-Han Chinese, host-scattered irregular with
+reserved-octet escapes, and very-long at ~628 bytes); entity-to-entity edges;
+plain, language-tagged (`@zh`), long-text and `xsd:`-typed literals over four
+datatypes with lexical forms valid for their datatype; blank nodes in subject
+and object position; RDF 1.2 reifier rows binding a triple term; 8 predicates;
+and a sixth of rows spread over 16 named graphs, drawn independently of row
+kind so literals appear inside named graphs at the corpus-wide rate. The entity
+draw is skewed (`sqrt`-CDF), so the corpus has hot subjects rather than a flat
+distribution.
+
+It does **not** cover: any workload. There is no query mix, no update stream,
+no schema or shapes, and no ingest timing here — this layer generates bytes, and
+the harness that consumes them is what records a capacity number. It is also a
+single synthetic profile: its mixes are pinned constants chosen to be
+adversarial, not a model of any real dataset's shape, and a corpus of your own
+data remains the only thing that answers a question about your own data.
+
+### Continuous integration
+
+`.github/workflows/benchmarks.yaml` runs a **smoke** of this lane — 10^6 rows
+(~177 MB) streamed through a digest with nothing retained — before the long
+bench steps, so a generator that stopped working is reported in a minute rather
+than after two hours. It is a liveness check on the generator and its driver,
+not a measurement, and like everything else in that workflow it does not gate a
+merge. Full scale never runs there: the runners do not have the disk, and a step
+that wrote a large file would be a bug in this document's arithmetic, not a
+better test.
+
+## LUBM comparison workload
+
+The first three layers compare PurRDF against PurRDF. This one compares it
+against the workload the OWL knowledge-base literature actually publishes
+numbers for: the **Lehigh University Benchmark**, a synthetic university domain
+with a data generator, an OWL ontology, and 14 queries chosen so that most of
+them have *no answers at all* without inference.
+
+Run it with `make lubm`. It is **report-only** — like every other layer here it
+gates nothing, asserts nothing, and prints what it measured on the host it ran
+on.
+
+```sh
+make lubm                                  # LUBM(1, 0), seed 0 — ~103k triples
+make lubm LUBM_UNIVERSITIES=10             # a larger corpus
+make lubm LUBM_SEED=7 LUBM_INDEX=0         # a different draw
+```
+
+Cite, in anything derived from it:
+
+> Y. Guo, Z. Pan and J. Heflin. "LUBM: A Benchmark for OWL Knowledge Base
+> Systems." *Journal of Web Semantics* 3(2).
+
+### Licence posture: everything is run, nothing is vendored
+
+No LUBM byte lives in this repository, and that is a licensing conclusion rather
+than a tidiness preference.
+
+* The **UBA data generator is GPL-2.0-or-later**. This tree is MIT OR
+  Apache-2.0, so the generator is **run, never copied in**: vendoring it would
+  place a copyleft work inside a permissively licensed distribution. Running a
+  GPL program to produce data is not distribution of that program, and the data
+  is what the benchmark consumes.
+* **`univ-bench.owl` and `queries-sparql.txt` carry no licence grant at all** —
+  no copyright line, no rights statement, and none on the project page. Absent
+  an explicit grant there is no permission to redistribute, so both are fetched
+  by digest at the moment of use and left in an ignored cache. A *mechanically
+  normalised* copy of the query file is still a copy of it, so the normalised
+  queries are build output too, never tracked files.
+
+`scripts/benchmark-acquire.py` fetches all of it into `target/bench-artifacts/`,
+verifying every byte against a pinned digest, and refuses to run at all unless
+the repository's own ignore rules already make that cache uncommittable.
+`python3 scripts/benchmark-acquire.py --list` prints each artifact's terms.
+
+### The generator writes to the wrong directory on Linux
+
+Stock UBA builds its output path as `user.dir + "\" + name` — a **Windows**
+separator. On Linux nothing splits that backslash, so the last `/` in the string
+is the one before the working directory's own name, and the files land in the
+**parent** of the working directory, named `work\University0_0.owl` with a
+literal backslash inside the filename.
+
+The file *contents* are valid RDF/XML; only the name is wrong. The lane
+therefore **renames the output after generation** instead of patching
+`Generator.java`, which keeps the GPL source unmodified and un-vendored, needs
+no Java compiler (the artifact ships prebuilt `classes/`, and a JRE is enough),
+and is checkable — the lane counts what it renamed and fails if nothing
+appeared. Each run generates inside its own directory, so concurrent runs cannot
+collide.
+
+### Determinism, and the one place it was not free
+
+UBA accepts `-index` and `-seed`, and the same pair reproduces the datasets the
+LUBM papers use. Conversion needed one fix to inherit that. Every generated file
+opens with `<owl:Ontology rdf:about="">` — an **empty relative IRI**, which
+resolves against the document base. Left to default that base is the input
+file's own `file://` path, so the converted N-Quads embedded the scratch
+directory and two runs in differently named directories differed.
+
+`--base` is therefore passed explicitly, built from the file's *name* only. It
+affects exactly two triples per file — the document's own `rdf:type
+owl:Ontology` and its `owl:imports` — and none of the 14 queries touches either.
+`LUBM_DOC_BASE` defaults to an `example.org` IRI: RFC 2606's reserved
+documentation domain and this repository's fixture convention, standing in for
+the publication IRI a locally generated corpus does not have. An operator who
+publishes a corpus sets it to where that corpus actually lives.
+
+### Entailment regimes are part of the query, not metadata about it
+
+This is the part of LUBM that is easiest to get quietly wrong.
+
+LUBM **never asserts** `Student`, `Professor` or `Chair`. Those memberships are
+derived — `univ-bench.owl` defines `Student` by `owl:intersectionOf`, makes
+`subOrganizationOf` an `owl:TransitiveProperty`, and declares `hasAlumnus` the
+`owl:inverseOf` of `degreeFrom`. So an engine that applies no inference answers
+eleven of the fourteen queries `0`, instantly, and would **win** any comparison
+that ignored the regime.
+
+> **Compare two engines on a query only when both answered it under the same
+> regime, over the same data.** A result count is meaningless without the regime
+> it was produced under. That rule is printed in the lane's own report, next to
+> the numbers it governs.
+
+Each query's regime is taken from the canonical description in the *Journal of
+Web Semantics* paper and corroborated against the axioms in `univ-bench.owl`:
+
+| Query | Regime it requires | `--entailment` |
+| --- | --- | --- |
+| Q1, Q2, Q14 | No inference | *(none)* |
+| Q3, Q4 | `subClassOf` | `rdfs` |
+| Q5 | `subClassOf` + `subPropertyOf` | `rdfs` |
+| Q6–Q10 | The derived `GraduateStudent`-to-`Student` membership | `owl-rl` |
+| Q11 | Transitive property (`subOrganizationOf`) | `owl-rl` |
+| Q12 | Realization of the defined class `Chair` | `owl-rl` |
+| Q13 | `inverseOf` + `subPropertyOf` | `owl-rl` |
+
+### The queries are normalised mechanically, and the normalisation is recorded
+
+`queries-sparql.txt` predates the final SPARQL 1.1 Recommendation and does not
+parse: it separates projection variables with commas, writes two IRIs without
+angle brackets, separates one triple pattern's terms with commas, and binds
+`ub:` to a 2004 draft namespace that no generated dataset has ever carried —
+which is the dangerous one, because a query in the wrong namespace does not
+fail, it silently answers zero.
+
+`scripts/lubm-queries.py` fixes all of that with five numbered, mechanical rules
+and writes `provenance.txt` recording **every application with its before and
+after text**, so a reader can audit that each query still asks what Lehigh
+published. Nothing is hand-rewritten. Its `--self-test` asserts the rules'
+*scope* as well as their effect — that the comma rule touches Q7 and only Q7,
+that no projection gained, lost or reordered a variable — because a
+"normalisation" that quietly became a rewrite is the failure mode that would
+make every number downstream worthless.
+
+### The dataset ladder, and the ceiling that makes it necessary
+
+Materializing an entailment closure passes through a **fixed internal ceiling**
+that no command-line flag raises. On this workload it bites well below one
+university, so the lane probes each regime against progressively smaller rungs —
+the full corpus, then one generated file, then a slice — and reports the first
+that closes, printing the observed and permitted counts verbatim for each rung
+that did not. The limit is therefore visible in the output rather than inferred
+from a missing row.
+
+Every reported row names the rung it was answered over, and the report states
+the rule plainly: **a row count on a rung below `full` is not the published LUBM
+answer.** It is the answer over a strict subset, so a query whose matching
+individuals fall outside that subset legitimately reports `0`. Those counts
+establish that the regime works and what it costs; only `full` rows are
+comparable against a published LUBM figure.
+
+### Parameters
+
+Every knob is an overridable `make` variable, in the same style as `SCALE_*`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LUBM_UNIVERSITIES` | `1` | Universities to generate (UBA's `-univ`). One is ~103k triples. |
+| `LUBM_SEED` | `0` | UBA's `-seed`. With `-index`, fixes the corpus. |
+| `LUBM_INDEX` | `0` | UBA's `-index`, the starting university id. |
+| `LUBM_ONTO` | Lehigh's ontology IRI | The `-onto` IRI stamped into the data, and the namespace `ub:` is rebound to. |
+| `LUBM_DOC_BASE` | `http://example.org/lubm/` | Base for each document's own two header triples. |
+| `LUBM_ENTAIL_SLICE` | `3000` | Triples in the smallest rung of the entailment ladder. |
+| `LUBM_OUT` | `target/lubm` | Where the lane works. An absolute path is used verbatim; a relative one resolves against the repository root, so the default keeps everything the lane writes inside `target/` as build output. |
+| `LUBM_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
+
+### What it covers, and what it does not
+
+It covers a real, published, externally defined workload end to end: generation,
+conversion **through PurRDF's own CLI**, and query evaluation under each query's
+own regime, with per-query timings and result counts.
+
+It does **not** cover: any other engine. The lane measures PurRDF and prints the
+regime and rung each number belongs to — which is what makes a comparison
+*possible* — but running another store and putting the two side by side is the
+operator's job, and the regime rule above is the thing that makes such a
+comparison honest rather than flattering. It is also not a conformance check:
+that a query returned *n* rows under `owl-rl` is a measurement, not a claim that
+the answer is complete under that regime.
+
+## WatDiv comparison workload
+
+The **Waterloo SPARQL Diversity Test Suite** is the other workload the RDF-store
+literature publishes numbers for, and it asks a different question from LUBM.
+LUBM asks what an engine can *derive*. WatDiv asks how a planner copes with
+query **shape and selectivity**: its 20 basic query templates are deliberately
+spread across four structural families — three complex (`C`), five snowflake
+(`F`), five linear (`L`) and seven star (`S`) — over a dataset whose predicate
+and object distributions are deliberately skewed, so a planner that only handles
+uniform data has nowhere to hide.
+
+Run it with `make watdiv`. It is **report-only** — like every other layer here
+it gates nothing, asserts nothing, and prints what it measured on the host it
+ran on.
+
+```sh
+make watdiv                      # the frozen 10M dataset, seed 0
+make watdiv WATDIV_SEED=7        # a DIFFERENT WORKLOAD, not a re-run
+```
+
+Cite, in anything derived from it — this one is not optional, see below:
+
+> G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee. "Diversified Stress Testing of
+> RDF Data Management Systems." In *Proc. The Semantic Web - ISWC 2014 - 13th
+> International Semantic Web Conference*, 2014, pages 197–212.
+
+### Licence posture: citation-ware, so the citation is a condition of use
+
+WatDiv's published terms are, in substance, that *provided you include a
+citation to the ISWC 2014 paper, you are free to download and use the WatDiv
+Data and Query Generator*, supplied "as is" with all use at your own risk.
+
+That has two consequences and this repository observes both.
+
+* The grant is a **use** grant, not a **redistribution** grant. So no WatDiv
+  byte lives in this tree — not the toolkit, not the dataset, not the query
+  templates — and neither do the queries the lane derives from those templates,
+  because a query mechanically derived from a template is still derived from it.
+  Everything is fetched by digest into `target/bench-artifacts/` and every file
+  the lane writes is build output.
+* **The citation is a condition, not a courtesy.** Publishing a number derived
+  from this lane without that citation is using WatDiv outside the terms it was
+  offered under. The lane prints the citation at the end of every run, and
+  `provenance.txt` carries it too, so it travels with the numbers rather than
+  living only here.
+
+### The generator cannot be pinned, so a frozen output is pinned instead
+
+This is the load-bearing difference from the LUBM lane, which *runs* its
+generator.
+
+Stock WatDiv v0.6 seeds itself from the wall clock and the operating system's
+entropy source and exposes **no seed flag of any kind**: `src/model.cpp` builds
+its Boost generator as `boost::mt19937(static_cast<unsigned>(time(0)))` and
+calls `srand(time(NULL))` again inside the generator, `src/statistics.cpp` calls
+`srand(time(NULL))`, and `src/volatility_gen.cpp` constructs an `mt19937` from
+`random_device`. Two runs of the same binary over the same model file therefore
+produce different data. (It would not build unmodified today in any case — it
+calls `std::random_shuffle`, which C++17 removed.)
+
+So **pinning the WatDiv tarball pins the generator's source and nothing else**.
+Treating a WatDiv run as reproducible because its source tarball is pinned is a
+false claim about the benchmark. The only reproducible WatDiv dataset is one
+that was generated **once** and then itself pinned by digest — a frozen
+*output*. Upstream publishes exactly those, and
+`scripts/benchmark-acquire.py` pins one:
+
+| | |
+| --- | --- |
+| Artifact | `watdiv.10M.tar.bz2` (contains `watdiv.10M.nt` and `saved.txt`) |
+| Size | 58 558 746 bytes |
+| SHA-256 | `1d0a8a4725c98974eb7347ce3e6d9cab44f9f40389589809674254151b745af6` |
+| Triples | 10 916 457 |
+
+**The generator is never built and never run here.** Upstream publishes no
+checksum beside its frozen datasets, so that size and digest are *ours*, taken
+from the bytes served on 2026-09-18 — exactly as the LUBM pins are ours. There
+is no publisher checksum to cross-check them against, so the artifact's `md5`
+field is `None` rather than invented.
+
+Upstream also publishes `watdiv.100M.tar.bz2` and `watdiv.1000M.tar.bz2`. They
+are **not** pinned. `WATDIV_SCALE` refuses them by name and says why: using one
+means fetching and hashing it yourself and adding it to the artifact table. A
+lane that quietly fell back to 10M would report a number for the wrong corpus
+under the right name.
+
+### Instantiation is deterministic here, which upstream's cannot be
+
+A WatDiv template is not a query. Each carries `#mapping` directives and `%vN%`
+placeholders that something must fill in:
+
+```text
+#mapping v1 wsdbm:Website uniform
+SELECT ?v0 ?v2 ?v3 WHERE {
+    ?v0  wsdbm:subscribes  %v1% .
+    ?v2  sorg:caption      ?v3 .
+    ?v0  wsdbm:likes       ?v2 .
+}
+```
+
+Upstream's own instantiator draws from the same time-seeded generators, so its
+query sets cannot be regenerated either — a published WatDiv number whose
+queries came out of it is not reproducible by the person reading it.
+
+Freezing the dataset fixes that, because it fixes the **candidate set** behind
+every mapping: the candidates are a property of those exact bytes.
+`scripts/watdiv-queries.py` therefore instantiates the placeholders itself, as a
+pure function of the dataset and a seed:
+
+1. Collect the candidates for each mapped type in **one pass** over the frozen
+   dataset. WatDiv names its entities `<namespace><Type><decimal>`, so a
+   candidate is a term in subject or object position whose IRI has exactly that
+   shape. Nothing is inferred from `rdf:type`: WatDiv asserts a type triple for
+   products and users but not for websites, topics or cities, so a type-triple
+   rule would find candidates for some mappings and none for others.
+2. Sort each set into a canonical order, by UTF-8 bytes, so the choice never
+   depends on the order the file happened to mention a term in.
+3. Select with **`splitmix64`** over `WATDIV_SEED` and a pinned per-mapping
+   stream — the same arithmetic-only idiom `crates/bench/src/lib.rs` uses, with
+   no RNG syscalls and no platform floats. Each mapping draws from its own
+   stream, so no two are correlated and adding a template cannot shift another
+   template's choice.
+4. Record every choice — which template, which mapping, which candidate, and
+   **out of how many** — in `provenance.txt`, together with the seed and the
+   dataset digest.
+
+The result is that **the same frozen dataset and the same seed reproduce the
+queries byte for byte**, and the lane prints a digest over the emitted query set
+so that is checkable rather than merely claimed. This is a deliberate
+improvement on upstream's time-seeded instantiation, not a reimplementation of
+it.
+
+> **A query set from a different seed is a DIFFERENT WORKLOAD.** Two numbers
+> taken under two seeds compare two workloads, not two engines. The seed is
+> printed in the lane's summary next to the numbers it governs, for the same
+> reason the LUBM lane prints each row's entailment regime.
+
+`uniform` is implemented as *actually* uniform — the draw is rejected and
+retaken when it lands in the short tail plain modulo would fold unevenly. At
+these candidate counts the bias would have been below one part in 2⁴⁴ and
+unobservable, but `uniform` is a claim the mappings make. **A distribution the
+instantiator does not implement is a hard failure naming it**, never a silent
+fallback to `uniform`: a fallback would emit a query set that looks fine, runs
+fine, and is not the workload the template asked for.
+
+### The candidate scrape is checked against the generator's own census
+
+The frozen tarball ships `saved.txt` — the generator's own record of how many
+entities of each type it emitted. Every scraped candidate set is cross-checked
+against it, and a disagreement stops the run naming the type, the scraped count
+and the declared count.
+
+This matters more than it looks. An incomplete candidate set does not make
+instantiation *fail*; it makes it quietly **biased**, and every query built from
+it would be subtly the wrong query while every step still printed `OK`. All 17
+declared types agree exactly on the pinned 10M dataset. A mapping naming a type
+the census does not declare is likewise refused: its candidates could still be
+scraped, but with nothing to check the scrape against the set would be
+unverified rather than merely unusual.
+
+### Pure BGP — no entailment, and that is not an omission
+
+Every one of the 20 templates is a basic graph pattern: triple patterns and
+nothing else. No `OPTIONAL`, no `UNION`, no `FILTER`, no `MINUS`, no `GRAPH`, no
+subquery. WatDiv stresses structure and selectivity and needs no inference at
+all, so **no entailment regime is chosen and none is used**.
+
+The instantiator's `--self-test` *asserts* that emptiness rather than trusting
+this paragraph, so a future template that smuggled in a `FILTER` would fail the
+self-test instead of quietly changing what the lane measures. The lane's
+`queries.tsv` carries a `regime` column that is always `-`, so the contrast is
+visible in the data and not only in prose.
+
+This is the exact opposite of the LUBM regime table above, and the two must not
+be read across:
+
+| | LUBM | WatDiv |
+| --- | --- | --- |
+| What it asks | What can be **derived** | How a planner handles **shape and selectivity** |
+| Entailment | 11 of 14 queries have *no* answers without it | None, anywhere |
+| Data | Generated per run from a pinned generator + seed | A digest-pinned **frozen output**; no generator is run |
+| Queries | 14 published queries, mechanically normalised | 20 published templates, deterministically instantiated |
+| Comparable with the other lane? | **No** | **No** |
+
+### What the reported timings include
+
+Each query is one process invocation, so its wall time includes opening the data
+source — which at this scale dominates. Reporting that as query cost would be a
+misleading number, so the lane **measures the open cost once** with a trivial
+one-row probe and reports it, then prints both `TOTAL_MS` (process wall time,
+open cost included) and `EVAL_MS` (the subtraction).
+
+`EVAL_MS` is an *estimate*, and at this scale it is a small difference between
+two large numbers on a host that is not quiet. Read it as an indication of where
+the work is, not as a measurement of evaluation cost.
+
+The dataset is loaded **through the CLI under test** into a native pack once per
+run, and the 20 queries are answered against that pack. This is not an
+optimization dodge: it is what a store does, and handing 20 queries the raw
+N-Triples file would re-parse well over a gigabyte twenty times and measure the
+parser rather than the planner.
+
+### A vacuous run is a failure, not a fast one
+
+Twenty basic graph patterns over ten million triples cannot all legitimately
+match nothing. So the lane **hard-fails** if no query executed, and hard-fails
+again if every query that executed returned zero rows — the shape a broken
+prefix table, a failed load, or a broken instantiation takes, and the shape that
+otherwise looks exactly like a very fast engine.
+
+An *individual* zero is a real answer and is reported as one — and it is the
+skew WatDiv exists to exercise, showing up. A property is concentrated on some
+entities and absent from others, so a star pattern demanding several at once can
+legitimately match nothing: on the pinned dataset, for instance, all 1 673
+products typed `wsdbm:ProductCategory10` carry `wsdbm:hasGenre`, 1 016 carry
+`sorg:description` and *none at all* carry `sorg:publisher`.
+
+Those queries are listed by name under their own heading, and the report
+distinguishes the two ways a zero arises. Where the query has a mapping, the
+uniform draw landed on a candidate the rest of the pattern does not join with,
+and `provenance.txt` says which candidate and out of how many. Where the query
+has **no** mapping — the `MAPPINGS` column reads `0` — nothing was chosen at
+all, and the zero is a fact about the published template over this corpus rather
+than about anything this lane did.
+
+### Parameters
+
+Every knob is an overridable `make` variable, in the same style as `LUBM_*`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `WATDIV_SCALE` | `10M` | Which pinned frozen dataset to use. Only `10M` is pinned; any other value is refused by name. |
+| `WATDIV_SEED` | `0` | The instantiation seed. **Changing it changes the workload**, not just the run. |
+| `WATDIV_OUT` | `target/watdiv` | Where the lane works. An absolute path is used verbatim; a relative one resolves against the repository root, so the default keeps everything the lane writes inside `target/` as build output. |
+| `WATDIV_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
+
+The extraction and the pack are each stamped with the digest they were built
+from — the dataset tarball's digest, and for the pack that plus the binary's own
+version — so a re-run reuses them only when they provably came from the same
+bytes, and a stale artifact is a cache miss rather than a silent stale hit.
+
+**Give concurrent runs separate arenas.** Instantiation begins by deleting
+`$WATDIV_OUT/queries`, so a second run starting while a first is partway through
+its twenty queries rewrites the query set underneath it — and the first run's
+printed rows would then belong to two different workloads. That is the most
+expensive kind of wrong number, because nothing about it looks wrong. The lane
+therefore re-digests the query set before the first query and again after the
+last, and **hard-fails naming the collision** if it changed. Two runs at once
+want two arenas: `make watdiv WATDIV_OUT=target/watdiv-$$`.
+
+### What it covers, and what it does not
+
+It covers a real, published, externally defined workload end to end: a frozen
+dataset verified by digest, deterministic query instantiation with a full
+provenance record, loading **through PurRDF's own CLI**, and evaluation of all
+20 queries with per-query row counts and timings.
+
+It does **not** cover: any other engine, WatDiv's `linear_incremental` and
+`linear_mixed` studies (separate suites, deliberately excluded from the twenty),
+or scales beyond the one pinned dataset. It is not a conformance check either —
+that a query returned *n* rows is a measurement, not a claim that *n* is the
+answer any other implementation would produce.

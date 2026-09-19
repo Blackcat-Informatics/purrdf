@@ -68,8 +68,8 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError,
-    RankOrdering, RankedStream, StreamContract, Term, TopK, contribution, fuse,
+    DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus,
+    ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -158,7 +158,7 @@ impl RankedStream for ScriptedStream {
     /// the contract decides what the engine holds and refuses, so a target that
     /// read it differently would fuse differently.
     fn contract(&self) -> StreamContract {
-        StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
+        StreamContract::new(DuplicatePolicy::Unique)
     }
 }
 
@@ -182,12 +182,12 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
 /// Both strata at unit weight and `K = 60`, which admits two contributions per
 /// candidate — one per stratum, derived from the two weights.
 fn profile() -> FusionProfile {
-    FusionProfile::new(
+    FusionProfile::with_decay(
         BTreeMap::from([
             (iri(STRATUM_ONE), Fixed::ONE),
             (iri(STRATUM_TWO), Fixed::ONE),
         ]),
-        K,
+        DecayRule::ReciprocalRank { k: K },
     )
     .expect("the fixture profile is valid")
 }
@@ -310,4 +310,98 @@ fn a_fusion_profile_names_the_same_identity_on_both_targets() {
     let decoded = FusionProfile::from_canonical_bytes(&bytes).expect("the canonical bytes decode");
     assert_eq!(decoded.canonical_bytes(), bytes);
     assert_eq!(decoded.id().to_hex(), PROFILE_ID_HEX);
+}
+
+/// **The collided regime is the same answer on both targets too.**
+///
+/// The other tests here fuse at a unit weight, where every adjacent rank carries
+/// a distinct contribution and the fused score alone decides the order. Past the
+/// depth a profile still separates, it does not: two candidates carry the same
+/// score and their order falls through to the declared tie-break's later keys —
+/// best stratum rank ascending, then canonical term bytes. That path is what the
+/// whole "reading deeper costs resolution and nothing else" claim rests on, and
+/// until now no test pinned it on a second target at all.
+///
+/// # The expectation, hand computed
+///
+/// A weight of one thousand raw units is `10^-9`, not the number one thousand.
+/// Under `K = 60` the contribution at rank `r` is
+/// `trunc(1000 * trunc(10^12 / (60 + r)) / 10^12)`:
+///
+/// ```text
+/// rank 1 -> 1000 * 16393442622 / 10^12 = 16.393442622 -> 16
+/// rank 2 -> 1000 * 16129032258 / 10^12 = 16.129032258 -> 16
+/// ```
+///
+/// Both truncate to **16 raw units**, which is `0.000000000016`. The two ranks
+/// are therefore indistinguishable by score, and the answer's order is decided
+/// entirely by the tie-break. A target that ordered ties differently — or that
+/// truncated either product differently — would return a different answer here
+/// while agreeing on every unit-weight fixture in this file.
+///
+/// Two ranks, deliberately: the collision is reachable at the shortest possible
+/// stream, so this costs nothing to run under Node.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
+    const COLLIDED: i128 = 16;
+
+    let stratum = iri(STRATUM_ONE);
+    let weight = Fixed::from_raw(1_000);
+    let profile = FusionProfile::with_decay(
+        BTreeMap::from([(stratum.clone(), weight)]),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("a strictly positive weight is a valid profile");
+
+    // The arithmetic claim, independent of the fusion: both ranks land on one
+    // value, and that value is the hand-computed one.
+    for rank in [1_u64, 2] {
+        assert_eq!(
+            contribution(weight, rank, K)
+                .expect("the contribution fits")
+                .into_raw(),
+            COLLIDED,
+            "rank {rank} must truncate to the hand-computed 16 raw units"
+        );
+    }
+
+    let stream = ScriptedStream {
+        steps: VecDeque::from([
+            (1, Fixed::from_raw(COLLIDED), Term::new("alpha")),
+            (2, Fixed::from_raw(COLLIDED), Term::new("beta")),
+        ]),
+        emitted: 0,
+    };
+    let fused = block_on(fuse::<ScriptedStream, Term>(
+        vec![(stratum.clone(), stream)],
+        &profile,
+        TopK::new(2),
+    ))
+    .expect("a collided pair is not a protocol violation");
+
+    let rows: Vec<(String, String)> = fused
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.entity.as_str().to_owned(),
+                row.score.to_decimal_lexical(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("alpha".to_owned(), decimal(COLLIDED)),
+            ("beta".to_owned(), decimal(COLLIDED)),
+        ],
+        "both targets order an exactly tied pair by best stratum rank ascending"
+    );
+
+    // And both agree that the tie was observed rather than inferred.
+    assert_eq!(
+        fused.trailer.resolution[&stratum].collisions_observed, 1,
+        "one adjacent pair collided, on every target"
+    );
 }

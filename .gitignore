@@ -1,8 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-/target/
-**/target/
+# No trailing slash, deliberately. A `target/` pattern matches a DIRECTORY only,
+# and a shared build tree is often a symlink to an out-of-tree cache rather than
+# a real directory here — so the build tree matched nothing in these rules and
+# showed up as an untracked entry in any clone whose owner had no personal
+# ignore covering it. Without the slash the pattern matches the symlink too.
+# `scripts/benchmark-acquire.py` proves this at run time before it downloads
+# anything, because it caches non-redistributable artifacts under `target/`.
+/target
+**/target
 /docs/book/book/
 !vectors/shacl/af/target/
 !vectors/shacl/af/target/**

@@ -189,8 +189,8 @@ pub use purrdf_sparql_algebra::ParserOptions;
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
 pub use property_fn::{
     AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PfArgs, PfArity, PfCursor,
-    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankOrdering,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement,
 };
 // The property-function registry's CONTENT-only identity. It lives in the private
 // planning module beside the instance-bearing fingerprint, which renders it rather

@@ -16,11 +16,23 @@
 //! serialized sizes, governor evidence — and the caller wraps them with
 //! allocator readings.
 //!
-//! The corpus is the shared deterministic keystone generator
+//! The corpus is the deterministic keystone fixture generator
 //! (`purrdf_rdf::gts_fixtures`): RNG-free, and deliberately shaped to exercise
 //! named graphs, scoped blank nodes, all three literal shapes, and the RDF 1.2
 //! statement layer, so a highly compressible flat corpus cannot under-report
 //! the envelope.
+//!
+//! It is one of **two** deterministic corpus generators in this repository,
+//! and the two own different regimes. The keystone fixture is small, fixed and
+//! statement-layer-focused, which is what makes an envelope ceiling meaningful
+//! on a constrained deployment: the workload has to be pinned before a memory
+//! budget can mean anything. The scale profile (`purrdf-bench`,
+//! `purrdf-scale-mixed-v1`) is the opposite regime — shardable,
+//! anti-compressible and parameterized, built to keep a *capacity* claim at
+//! scale honest against a corpus a single dictionary trick could flatter.
+//! Neither substitutes for the other: an envelope measured over the scale
+//! profile would not be an envelope, and a capacity claim measured over the
+//! keystone fixture would be measured over a corpus designed to be small.
 //!
 //! The 32-bit boundary workload (logical IDs above `2^32` through bounded
 //! local buffers) is absent because it has nothing to measure yet: it exercises

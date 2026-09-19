@@ -145,11 +145,42 @@ pub enum FusionError {
         k: u32,
     },
 
-    /// A contribution was asked for at rank zero. Ranks are 1-based.
+    /// A contribution was asked for at rank zero, or a depth of zero was asked
+    /// to be reached.
+    ///
+    /// Ranks are 1-based, and a depth is a count of them read from rank one, so
+    /// zero names no rank under either reading. The two share this variant
+    /// because they are the same fact about the same 1-based axis; a depth-zero
+    /// request is rejected rather than answered vacuously, which is what
+    /// returning the lightest weight there is would be.
     #[error("rank must be at least 1, got {rank}")]
     InvalidRank {
-        /// The rejected rank.
+        /// The rejected rank, or the rejected depth expressed as the rank it
+        /// would have to reach.
         rank: u64,
+    },
+
+    /// A class-width tolerance of zero was offered as a tolerance.
+    ///
+    /// An indifference class always contains its own rank, so the narrowest
+    /// class that exists is one rank wide and a tolerance of zero admits no
+    /// class at all. It is the same shape as a smoothing constant of zero —
+    /// a question with no evaluable content — and it is refused for the same
+    /// reason rather than quietly read as one, which would answer the most
+    /// favourable question available instead of the one that was asked.
+    ///
+    /// It does **not** share [`InvalidRank`](Self::InvalidRank), even though
+    /// both are "this count may not be zero". That variant is about the 1-based
+    /// rank axis, and its message says `rank must be at least 1`; a tolerance
+    /// is a width measured *across* that axis rather than a position on it, and
+    /// reporting a rejected tolerance as a rejected rank would send a caller to
+    /// inspect an argument that was never at fault.
+    #[error(
+        "class-width tolerance must be at least 1, got {max_width}; a tolerance of zero is not a tolerance, because a class always contains its own rank"
+    )]
+    InvalidWidth {
+        /// The rejected tolerance.
+        max_width: u64,
     },
 
     /// A fusion profile carried no stratum weights.
@@ -234,22 +265,75 @@ pub enum FusionError {
         max: u32,
     },
 
-    /// A candidate's accumulated score exceeded the profile's declared
-    /// ceiling.
+    /// No weight at all reaches the requested depth under this decay rule.
     ///
-    /// Checked immediately after the contribution that crossed the bound is
-    /// summed into the candidate's lower bound, so `score` is the exact sum
-    /// that first left the admitted range.
+    /// This is a property of the rule's arithmetic, not a budget or a policy,
+    /// and it is exact rather than conservative.
+    /// [`DecayRule::ReciprocalRank`](crate::DecayRule::ReciprocalRank) truncates
+    /// the reciprocal *before* applying the weight, so once `trunc(S / D)` and
+    /// `trunc(S / (D + 1))` are equal the two ranks have already merged at the
+    /// point the weight arrives and no weight can part them again. A caller that
+    /// needs depth past `saturates_at` names
+    /// [`DecayRule::WeightedReciprocalRank`](crate::DecayRule::WeightedReciprocalRank),
+    /// which folds the weight into the numerator and whose reachable depth does
+    /// grow with it.
+    ///
+    /// Reaching this is not an error in the answer: a profile read past its
+    /// separating range still produces a correct, deterministic result at a
+    /// coarser rank resolution. It is only a refusal to claim a depth the
+    /// arithmetic cannot deliver.
+    ///
+    /// `saturates_at` is a **maximum over every weight**, not a reading taken at
+    /// one of them. No weight was named in the question and none is named in the
+    /// answer: the depth is quoted for the best weight there is, which under
+    /// [`DecayRule::ReciprocalRank`](crate::DecayRule::ReciprocalRank) is any
+    /// weight at or above one — below one the weight binds and the separating
+    /// depth is shorter, at and above one the inner truncation binds instead and
+    /// every such weight shares the same depth. Reading it as a property of some
+    /// particular weight would invite the repair that does not exist, which is to
+    /// raise that weight.
+    ///
+    /// `saturates_at` is always a measured rank and never a saturating case
+    /// standing in for one: the rule was observed to stop separating, so there
+    /// is an exact rank to report, and it is strictly below the depth asked
+    /// for — that is what makes this refusal different from the one below. A
+    /// depth that no *plan* can carry is a different fact and carries a
+    /// different variant ([`DepthBeyondPlanRange`](Self::DepthBeyondPlanRange)),
+    /// because nothing about the rule's arithmetic failed there.
     #[error(
-        "candidate {item} reached score {score:?}, exceeding the fusion profile's declared ceiling of {ceiling:?}"
+        "no weight separates ranks to depth {depth} under this decay rule; it separates to depth {saturates_at} and no further"
     )]
-    CeilingExceeded {
-        /// The candidate that exceeded the bound, as its canonical term text.
-        item: String,
-        /// The accumulated score reached.
-        score: purrdf_text::Fixed,
-        /// The profile's declared ceiling.
-        ceiling: purrdf_text::Fixed,
+    DepthUnreachable {
+        /// The depth that was asked for.
+        depth: u64,
+        /// The deepest 1-based depth **any** weight separates every adjacent
+        /// pair within under this rule: the maximum of the per-weight
+        /// separating depths, not the depth of some one weight. Exact rather
+        /// than conservative, and the pair immediately past it carries one
+        /// contribution whatever weight is applied — so no heavier weight
+        /// reaches further, which is why the remedy is the other decay rule and
+        /// never a larger number here.
+        saturates_at: u64,
+    },
+
+    /// The requested depth is deeper than a plan is able to record.
+    ///
+    /// A plan carries a per-stratum depth as a `u32`, so `limit` is the deepest
+    /// depth anything downstream can name. This is a limit of that encoding and
+    /// says nothing about the decay rule: under
+    /// [`DecayRule::WeightedReciprocalRank`](crate::DecayRule::WeightedReciprocalRank)
+    /// the arithmetic separates ranks well past this point given a heavy enough
+    /// weight, and a weight quoted for such a depth would buy a depth no plan
+    /// could ever ask for. It is therefore refused as a range, never reported as
+    /// the rule saturating ([`DepthUnreachable`](Self::DepthUnreachable)).
+    #[error(
+        "depth {depth} is deeper than a plan can record; a plan carries a per-stratum depth as a 32-bit rank, so {limit} is the deepest expressible depth"
+    )]
+    DepthBeyondPlanRange {
+        /// The depth that was asked for.
+        depth: u64,
+        /// The deepest depth a plan's 32-bit depth field can carry.
+        limit: u64,
     },
 }
 

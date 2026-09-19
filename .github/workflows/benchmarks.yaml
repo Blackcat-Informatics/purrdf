@@ -60,6 +60,30 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
+      # The scale-corpus lane, at the only size a hosted runner can afford:
+      # one that keeps nothing. 10^6 rows is ~177 MB of N-Quads, streamed
+      # through a digest and dropped — the step retains NOT ONE BYTE, and it
+      # must stay that way. Density rises with the entity index space (~177
+      # bytes per row at a 10^6-entity space, ~183 at 10^10), so full scale
+      # (10^10 rows over a matching 10^10-entity space) is ~1.83 TB — an
+      # operator activity off CI, streamed into a consumer; a runner has
+      # neither the disk nor the hours for it, and `SCALE_MODE=files` must
+      # never appear here.
+      #
+      # This is a smoke, not a measurement: it proves the generator and its
+      # driver still run and still agree on a row count, and says nothing about
+      # speed. It runs before the long bench steps so a broken generator is
+      # reported in a minute rather than after two hours. The driver exits
+      # non-zero if any shard fails (`bench-corpus` exits 2 on a rejected
+      # specification and 1 on a write failure), so a failure is a red step
+      # rather than a green one with an apology in the log — the job's
+      # `continue-on-error` keeps that from gating a merge, per project rule.
+      - name: Smoke the scale-corpus lane (streamed, retains nothing)
+        run: |
+          set -euo pipefail
+          SCALE_QUADS=1000000 SCALE_IRIS=100000 SCALE_SHARDS=4 SCALE_MODE=stream \
+            bash scripts/scale-corpus.sh
+
       - name: Compile benchmark harnesses
         run: |
           cargo bench -p purrdf-gts --no-run --locked

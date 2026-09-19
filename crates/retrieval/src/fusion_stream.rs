@@ -43,14 +43,15 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, btree_map};
 
-use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering};
+use purrdf_sparql_eval::DuplicatePolicy;
 use purrdf_text::Fixed;
 
 use crate::error::FusionError;
 use crate::fusion_profile::FusionProfile;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
+use crate::reciprocal_rank::MonotoneDepth;
 
 /// A candidate's identity in the frontier: its canonical term.
 pub type CandidateId = Term;
@@ -172,6 +173,56 @@ pub struct FusedRow {
     pub threshold_witness: Fixed,
 }
 
+/// What one stratum's rank resolution actually cost this fusion.
+///
+/// [`PlannedResolution`](crate::PlannedResolution) answers the same question at
+/// the waist, from the depth a plan records, before anything runs. This answers
+/// it from the rows that were really pulled. They differ whenever a top-k
+/// certified early — and that gap is the point, because a bound a fusion never
+/// reached cost it nothing.
+///
+/// Every field is as of the moment [`FusionStream::trailer`] was called. That
+/// method does not consume the fusion, so a caller that reads a trailer and
+/// keeps pulling will see these numbers grow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StratumResolution {
+    /// Where this profile stops separating adjacent ranks in this stratum.
+    ///
+    /// A property of the law, identical to what
+    /// [`FusionProfile::monotone_depth`](crate::FusionProfile::monotone_depth)
+    /// reports, and independent of how deep this particular run read.
+    pub separation: MonotoneDepth,
+    /// The highest 1-based rank this fusion actually pulled from the stream.
+    ///
+    /// Named for ranks rather than depth because that is what it counts: under
+    /// [`DuplicatePolicy::Allowed`] a row discarded as a repeat still advances
+    /// the rank counter, so this is not the number of contributions merged.
+    ///
+    /// Zero means exactly one thing: this stream ended without ever emitting a
+    /// row. It does not mean the stream went unread. Producing a trailer
+    /// requires a terminal status per producer, which requires pulling from
+    /// every stream until it yields either its first row or its receipt — so a
+    /// [`TopK`](crate::TopK) of zero still reports one here for every stream
+    /// that has a first row to give, and a stream that has none is reported at
+    /// zero after being asked.
+    ///
+    /// A caller reading this as "how much did fusion spend on this stratum"
+    /// therefore gets the honest answer at both ends, and one reading zero as
+    /// "untouched" is wrong in the same way at both: the stream was pulled from
+    /// either way, and what differs is only whether it had anything to hand
+    /// back.
+    pub ranks_pulled: u64,
+    /// Adjacent ranks whose contributions this fusion could not tell apart.
+    ///
+    /// Counted by direct observation on every row, not inferred by comparing
+    /// `ranks_pulled` against `separation`. A non-zero count is proof this run
+    /// entered the range where the fused score stops ordering; zero is proof it
+    /// did not. Nothing is wrong when it is non-zero — those ranks are ordered
+    /// by the tie-break's later keys instead — but a caller that needs its
+    /// answer ordered by score alone has its answer here.
+    pub collisions_observed: u64,
+}
+
 /// The terminal report of a fusion: every producer's status and both identities.
 ///
 /// The trailer is the only place completeness may be asserted. A consumer that
@@ -185,6 +236,66 @@ pub struct FusionTrailer {
     pub plan_id: Option<PlanId>,
     /// The fusion profile in force.
     pub profile_id: crate::id::FusionProfileId,
+    /// What each stream's rank resolution cost this fusion, keyed by stratum.
+    ///
+    /// Keyed by every stream this fusion was handed whose stratum the profile
+    /// weights — *including* one that ended without emitting a row, which is
+    /// reported with [`StratumResolution::ranks_pulled`] of zero. That is the
+    /// more useful answer than omitting it: [`StratumResolution::separation`] is
+    /// the resolution recorded for that stratum whether or not rows arrived, and
+    /// the caller learns none arrived from the zero rather than from an absent
+    /// key it would have to interpret.
+    ///
+    /// A stratum the profile declares no weight for is absent, because a profile
+    /// silent about a stratum has said nothing about its resolution either. No
+    /// such stream can have contributed anyway — the first row of one is refused
+    /// as [`FusionError::UnknownStratum`](crate::FusionError::UnknownStratum),
+    /// and [`fuse`](crate::fuse) refuses one before pulling at all — so this
+    /// absence is reachable only by driving this type directly over a stream
+    /// that had no rows to offer.
+    ///
+    /// The key set is a subset of [`Self::statuses`]', never the other way
+    /// round. That map answers "what happened to this producer" and additionally
+    /// names producers fusion never saw at all, which
+    /// [`FusionTrailer::completed_with`] adds; this one answers "what did fusion
+    /// read from this stream", and a producer that never became a stream was
+    /// never read from.
+    pub resolution: BTreeMap<Iri, StratumResolution>,
+    /// Whether the last row in the answer ties on score with a *settled* rival
+    /// left outside it.
+    ///
+    /// `true` means the top-k boundary was decided by the tie-break's later keys
+    /// — best stratum rank ascending, then canonical term bytes — rather than by
+    /// relevance, so a different-but-equally-scoring candidate could have taken
+    /// the final place. It is the consequence of coarse resolution a caller
+    /// actually feels, and neither [`StratumResolution::separation`] nor
+    /// [`StratumResolution::ranks_pulled`] can reveal it.
+    ///
+    /// # What `false` does and does not say
+    ///
+    /// The scan behind this flag counts only rivals that were already final when
+    /// the last row was emitted, because only a final rival has a settled score
+    /// to tie with — one that can still accumulate contributions is not yet tied
+    /// with anything.
+    ///
+    /// So from `false` a caller may conclude exactly this: **no settled rival
+    /// tied with the emitted row.** That covers the cases where the answer was
+    /// not bounded by the top-k at all and where nothing was excluded, and it
+    /// covers a cut that fell on a strict score difference.
+    ///
+    /// A caller may **not** conclude from `false` that the cut was decided on a
+    /// strict score difference. A rival still live at that moment could have
+    /// risen to exactly the emitted row's score had fusion read further; it is
+    /// not counted here, and `false` is not evidence it does not exist. `false`
+    /// is therefore not proof the final place was earned on relevance.
+    ///
+    /// This is what the field means, not a shortfall standing in for a stronger
+    /// one. Settling every live rival would require pulling at least one row
+    /// past the top-k, and how deep this fusion read is itself reported — as
+    /// [`StratumResolution::ranks_pulled`], in this same trailer. Reading
+    /// further to sharpen this field would falsify that one, so the flag is
+    /// defined over what the bounded read had already settled.
+    pub cut_on_a_tie: bool,
 }
 
 impl FusionTrailer {
@@ -279,8 +390,13 @@ pub struct FusionStream<S: RankedStream> {
     next_ranks: Vec<u64>,
     rows_pulled: Vec<u64>,
     last_contribution: Vec<Option<Fixed>>,
-    /// Each stream's declared contract, read once at construction.
-    contracts: Vec<StreamContract>,
+    /// Per-stream count of adjacent ranks whose contributions were equal.
+    ///
+    /// Counted by [`Self::count_collision`] against the previous row's
+    /// contribution, one equality compare per row. It is the exact number of
+    /// ranks this run could not separate — an observation, not the profile's
+    /// a-priori bound.
+    collisions_observed: Vec<u64>,
     /// The identity set of every stream that declared
     /// [`DuplicatePolicy::Allowed`], and `None` for every stream that declared
     /// [`DuplicatePolicy::Unique`].
@@ -294,6 +410,13 @@ pub struct FusionStream<S: RankedStream> {
     statuses: BTreeMap<Iri, ProducerStatus>,
     frontier: BTreeMap<CandidateId, CandidateState>,
     threshold: Fixed,
+    /// Whether the most recently emitted row took its place over a rival it tied
+    /// with exactly on score.
+    ///
+    /// Reported for the *last* row an answer contains, where it is the fact a
+    /// caller needs: the rival it beat is precisely the candidate that fell
+    /// outside a top-k cut, and only the declared tie-break separated them.
+    last_row_won_a_tie: bool,
 }
 
 impl<S: RankedStream> fmt::Debug for FusionStream<S> {
@@ -312,11 +435,13 @@ impl<S: RankedStream> FusionStream<S> {
     /// Build a fusion engine over `streams` under `profile`.
     ///
     /// Every stream's declared contract is read here, before any row is pulled,
-    /// through [`RankedStream::contract`] — so what the engine holds and what it
-    /// refuses is decided by the producers' own declarations rather than by one
-    /// law applied to all of them. A stream declaring
-    /// [`DuplicatePolicy::Allowed`] gets an identity set to de-duplicate
-    /// against; one declaring [`DuplicatePolicy::Unique`] gets none.
+    /// through [`RankedStream::contract`] — so what the engine holds is decided
+    /// by the producers' own declarations rather than by one law applied to all
+    /// of them. A stream declaring [`DuplicatePolicy::Allowed`] gets an identity
+    /// set to de-duplicate against; one declaring [`DuplicatePolicy::Unique`]
+    /// gets none. The contract is consumed here rather than retained: its one
+    /// remaining term is already structural in `seen_items`, and nothing later
+    /// in the engine asks a stream what it declared.
     ///
     /// No plan identity is attached; use [`with_plan_id`](Self::with_plan_id) to
     /// name the pinned plan the streams came from. [`fuse`](crate::fuse) does
@@ -326,13 +451,9 @@ impl<S: RankedStream> FusionStream<S> {
     #[must_use]
     pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
         let count = streams.len();
-        let contracts: Vec<StreamContract> = streams
+        let seen_items = streams
             .iter()
-            .map(|(_, stream)| stream.contract())
-            .collect();
-        let seen_items = contracts
-            .iter()
-            .map(|contract| match contract.duplicates {
+            .map(|(_, stream)| match stream.contract().duplicates {
                 DuplicatePolicy::Unique => None,
                 DuplicatePolicy::Allowed => Some(BTreeSet::new()),
             })
@@ -347,11 +468,12 @@ impl<S: RankedStream> FusionStream<S> {
             next_ranks: vec![1; count],
             rows_pulled: vec![0; count],
             last_contribution: vec![None; count],
-            contracts,
+            collisions_observed: vec![0; count],
             seen_items,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
             threshold: Fixed::ZERO,
+            last_row_won_a_tie: false,
         }
     }
 
@@ -371,9 +493,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// protocol; [`FusionError::MaxContributionsExceeded`] when a candidate is
     /// contributed to more times than there are strata — an invariant
     /// violation, reachable only from a hand-built stream set that repeats a
-    /// stratum; and
-    /// [`FusionError::CeilingExceeded`] when a candidate's accumulated score
-    /// leaves the profile's declared ceiling.
+    /// stratum.
     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
         self.ensure_initialized().await?;
         loop {
@@ -384,6 +504,17 @@ impl<S: RankedStream> FusionStream<S> {
                         "selected candidate vanished from the frontier".to_owned(),
                     )
                 })?;
+                // Whether this row won its place on score or on the tie-break.
+                // Scanned here rather than counted inside `select_emittable`,
+                // because that pass filters an exactly-tied rival out as
+                // dominated — `outranks` settles a tie by the declared order —
+                // so the loser is already gone by the time a best is chosen. A
+                // rival must be final to have been a real contender: one that
+                // can still gain rank is not yet tied with anything.
+                self.last_row_won_a_tie = self
+                    .frontier
+                    .values()
+                    .any(|rival| rival.lower_bound == state.lower_bound && self.is_final(rival));
                 let mut contributions = state.contributions;
                 contributions.sort_by(|left, right| {
                     left.0
@@ -465,10 +596,35 @@ impl<S: RankedStream> FusionStream<S> {
             self.statuses
                 .insert(stratum, ProducerStatus::CeilingReached { bound });
         }
+        // Derived per stratum at trailer time, from counters the row loop
+        // already maintains. Nothing here runs per row: `separation` is a map
+        // lookup on a value the profile derived once at construction, and the
+        // other two are reads.
+        let resolution = (0..self.streams.len())
+            .filter_map(|index| {
+                let stratum = &self.streams[index].0;
+                self.profile.monotone_depth(stratum).map(|separation| {
+                    (
+                        stratum.clone(),
+                        StratumResolution {
+                            separation,
+                            // `next_ranks` starts at one and advances once per
+                            // row pulled, so this is the highest rank read and
+                            // cannot underflow.
+                            ranks_pulled: self.next_ranks[index] - 1,
+                            collisions_observed: self.collisions_observed[index],
+                        },
+                    )
+                })
+            })
+            .collect();
+
         Ok(FusionTrailer {
             statuses: self.statuses.clone(),
             plan_id: self.plan_id,
             profile_id: self.profile.id(),
+            resolution,
+            cut_on_a_tie: self.last_row_won_a_tie,
         })
     }
 
@@ -488,8 +644,8 @@ impl<S: RankedStream> FusionStream<S> {
     /// or the stream ends.
     ///
     /// Validation is the whole point of the boundary: rank contiguity, the
-    /// declared rank ordering, the profile's contribution value, the declared
-    /// duplicate handling, and a consistent terminal receipt. Every one of those
+    /// profile's contribution value, the declared duplicate handling, and a
+    /// consistent terminal receipt. Every one of those
     /// is checked on every row the producer emits — including a row this function
     /// then drops as a declared duplicate, because a dropped row is still a row
     /// the producer made claims about, and a claim nobody checks is a hole a
@@ -506,7 +662,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// once-per-stream check, which stays the exact refusal it was.
     ///
     /// The producer is still charged for it. The rank counter advances, the
-    /// monotone baseline advances, and `rows_pulled` counts it, so the terminal
+    /// collision baseline advances, and `rows_pulled` counts it, so the terminal
     /// receipt is still measured against every row the producer actually emitted
     /// ([`ProtocolError::ForgedReceipt`]).
     async fn fetch(&mut self, index: usize) -> Result<Option<Head>, FusionError> {
@@ -538,8 +694,6 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 .into());
             }
-            self.check_ordering(index, rank, producer_contribution)?;
-
             // The stratum is read by reference, not cloned: an `Iri` owns its
             // text, so cloning one here would be a heap allocation on every row
             // every stream emits, to serve a lookup that only borrows and an
@@ -561,6 +715,13 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 .into());
             }
+
+            // Ordered after the re-derivation on purpose: the collision count is
+            // a claim about the *profile's* value at this rank, so it must run
+            // on a value already proven to be that one. A forged contribution is
+            // rejected above as the mismatch it is, rather than counted as a
+            // shape of the decay curve.
+            self.count_collision(index, producer_contribution);
 
             self.last_contribution[index] = Some(producer_contribution);
             self.next_ranks[index] = rank + 1;
@@ -599,40 +760,29 @@ impl<S: RankedStream> FusionStream<S> {
         }
     }
 
-    /// Hold stream `index`'s contribution sequence to the ordering it declared.
+    /// Count the adjacent ranks the profile's arithmetic can no longer
+    /// separate.
     ///
-    /// Both declarations forbid a contribution that *rises* with rank, because
-    /// the threshold over the stream heads would otherwise not be an upper bound
-    /// and the whole certification argument would fail. They differ on equality:
-    /// a [`RankOrdering::NonIncreasing`] producer said equal scores may appear in
-    /// any order, so two adjacent ranks carrying one contribution is exactly
-    /// what it declared; a [`RankOrdering::StrictlyDescending`] producer said
-    /// every row has an unambiguous rank, and a repeated contribution is the
-    /// condition under which the fused sum can no longer tell those ranks apart.
-    fn check_ordering(
-        &self,
-        index: usize,
-        rank: u64,
-        contribution: Fixed,
-    ) -> Result<(), ProtocolError> {
-        let Some(previous) = self.last_contribution[index] else {
-            return Ok(());
-        };
-        if contribution > previous {
-            return Err(ProtocolError::NonMonotoneContribution {
-                previous,
-                got: contribution,
-            });
+    /// This measures; it refuses nothing, and there is nothing here left for it
+    /// to refuse. By the time a value reaches this function it has been proven
+    /// equal to `contribution_under(decay, weight, rank)` and the ranks that
+    /// produced it are contiguous and ascending, so the sequence is the
+    /// profile's own curve read left to right — and that curve never rises (see
+    /// [`ProtocolError::ContributionMismatch`], which is where a rising value is
+    /// actually caught, as the wrong number it is). A comparison for a rise here
+    /// would be a branch no input can take.
+    ///
+    /// Equality is **measured, not refused**. An equal adjacent pair carries no
+    /// information about the producer at all: it says the profile's fixed-point
+    /// decay stopped separating those two ranks at this depth, which is a
+    /// property of `(decay rule, K, weight, depth)`. Refusing it rejected
+    /// conforming streams for the consumer's own quantization. The count is
+    /// reported per stratum in the fused trailer, where it is an exact
+    /// observation rather than a bound inferred from the profile.
+    fn count_collision(&mut self, index: usize, contribution: Fixed) {
+        if self.last_contribution[index] == Some(contribution) {
+            self.collisions_observed[index] += 1;
         }
-        if contribution == previous
-            && self.contracts[index].ordering == RankOrdering::StrictlyDescending
-        {
-            return Err(ProtocolError::RepeatedContribution {
-                rank,
-                value: contribution,
-            });
-        }
-        Ok(())
     }
 
     /// Record a terminal receipt, refusing one the rows contradict.
@@ -888,10 +1038,9 @@ impl<S: RankedStream> FusionStream<S> {
     ///
     /// [`FusionError::Overflow`] when the checked sum leaves the fixed-point
     /// range, [`FusionError::MaxContributionsExceeded`] when the candidate has
-    /// been contributed to once more than there are strata,
-    /// [`FusionError::CeilingExceeded`] when its accumulated score leaves the
-    /// profile's declared ceiling, and [`ProtocolError::DuplicateItem`] when
-    /// this stream would contribute to one frontier candidate twice.
+    /// been contributed to once more than there are strata, and
+    /// [`ProtocolError::DuplicateItem`] when this stream would contribute to one
+    /// frontier candidate twice.
     ///
     /// # Where a declared-`Unique` stream's promise is actually checked
     ///
@@ -932,12 +1081,15 @@ impl<S: RankedStream> FusionStream<S> {
         // refused row then leaves the frontier exactly as it found it, instead
         // of a half-updated candidate no later call may read.
         //
-        // Both bounds are checked against the profile's own accessors, never
-        // recomputed, so a future change to either derivation cannot drift
-        // enforcement away from what the profile declares. The contribution
-        // bound is the profile's stratum count, so crossing it is not a budget
-        // a corpus spent — it says a stream named this candidate twice, or two
-        // streams were handed the same stratum tag.
+        // The bound is read from the profile's own accessor, never recomputed,
+        // so a future change to its derivation cannot drift enforcement away
+        // from what the profile declares. It is the profile's stratum count, so
+        // crossing it is not a budget a corpus spent — it says a stream named
+        // this candidate twice, or two streams were handed the same stratum
+        // tag. The profile's score ceiling needs no companion check: a
+        // contribution is at most half its stratum's weight, so a sum bounded by
+        // the count above is bounded by half the ceiling — see
+        // [`FusionProfile::ceiling`](crate::FusionProfile::ceiling).
         let existing = self.frontier.get(&head.item);
         let lower_bound = existing
             .map_or(Fixed::ZERO, |state| state.lower_bound)
@@ -952,14 +1104,6 @@ impl<S: RankedStream> FusionStream<S> {
                 max: self.profile.max_contributions(),
             });
         }
-        if lower_bound > self.profile.ceiling() {
-            return Err(FusionError::CeilingExceeded {
-                item: head.item.as_str().to_owned(),
-                score: lower_bound,
-                ceiling: self.profile.ceiling(),
-            });
-        }
-
         match self.frontier.entry(head.item) {
             btree_map::Entry::Vacant(vacant) => {
                 // A candidate nobody has contributed to yet cannot collide, so

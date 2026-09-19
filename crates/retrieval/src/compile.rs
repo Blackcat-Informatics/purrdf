@@ -100,6 +100,7 @@ use crate::iri::Iri;
 use crate::matching::{PlacementError, place, render_slots};
 use crate::plan::{Plan, ProducerBinding};
 use crate::ranked_stream::StreamContract;
+use crate::reciprocal_rank::MonotoneDepth;
 use crate::render::RenderError;
 
 /// One stratum's independently executable query text, and the contract the rows
@@ -142,6 +143,44 @@ pub struct CompiledRetrieval {
     /// The durable content fingerprint of the registry the units were compiled
     /// against.
     pub registry_fingerprint: String,
+    /// Per-stratum rank resolution this plan will fuse at, when the environment
+    /// named the profile it will be fused under.
+    ///
+    /// Empty when it did not. A profile is deliberately not a planning input, so
+    /// a caller that has not yet chosen one is not asked to, and gets no
+    /// resolution evidence because none can honestly be computed.
+    pub resolution: BTreeMap<Iri, PlannedResolution>,
+}
+
+/// What a planned depth costs in rank resolution under a named fusion profile.
+///
+/// This is evidence, not a verdict. A stratum read past its separating range
+/// still produces a correct, deterministic answer — the declared tie-break is
+/// total — at a coarser resolution, so the honest thing to hand back is the two
+/// numbers and let the caller decide, rather than refuse the plan. It is
+/// available here, at the waist, rather than only in the fused trailer, so a
+/// caller learns what a plan will cost *before* paying to execute it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlannedResolution {
+    /// Where this profile stops separating adjacent ranks in this stratum.
+    pub separation: MonotoneDepth,
+    /// The per-stratum depth the plan recorded.
+    pub requested_depth: u32,
+}
+
+impl PlannedResolution {
+    /// Whether every rank this plan reads is still separated from its
+    /// neighbours by score alone.
+    ///
+    /// `false` does not mean the answer is wrong. It means ranks past the
+    /// separating point are ordered by the tie-break's later keys — best stratum
+    /// rank ascending, then canonical term bytes — rather than by the fused
+    /// score. Ask [`FusionProfile::class_width`](crate::FusionProfile::class_width)
+    /// how coarse that is.
+    #[must_use]
+    pub const fn fully_separated(self) -> bool {
+        self.separation.covers(self.requested_depth as u64)
+    }
 }
 
 /// The name of the variable every branch projects its candidate under, without
@@ -191,11 +230,33 @@ pub fn compile(
     }
     units.sort_by(|left, right| left.stratum.cmp(&right.stratum));
 
+    // The profile the answer will be fused under is read here for what it can
+    // say about this plan's depths, and it says it rather than refusing it. A
+    // stratum the profile does not weight contributes nothing to that fusion, so
+    // a profile silent about it has nothing to report and gets no entry.
+    let resolution = env.fusion_profile.map_or_else(BTreeMap::new, |profile| {
+        plan.stratum_depths
+            .iter()
+            .filter_map(|(stratum, depth)| {
+                profile.monotone_depth(stratum).map(|separation| {
+                    (
+                        stratum.clone(),
+                        PlannedResolution {
+                            separation,
+                            requested_depth: *depth,
+                        },
+                    )
+                })
+            })
+            .collect()
+    });
+
     Ok(CompiledRetrieval {
         units,
         plan_id: plan.id(),
         registry_id: admitted.instance_id,
         registry_fingerprint: admitted.fingerprint,
+        resolution,
     })
 }
 

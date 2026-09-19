@@ -10,6 +10,143 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **retrieval:** A new publishable crate, `purrdf-retrieval`: the composition
+  layer over the ranked property-function producers. One request becomes one
+  answer across them through four stages -- a pure planner returning an
+  inspectable `Plan` with a canonical BLAKE3 identity, a semantic admission waist
+  that emits independently executable SPARQL per stratum, an executor that
+  isolates each stratum's failure in its own status, and an exact fixed-point
+  reciprocal-rank fusion over a verified ranked-stream protocol. Producers,
+  strata and weights are caller-supplied configuration with no fabricated
+  default. Reachable three ways: the crate directly, `purrdf::retrieval` on the
+  umbrella, and `purrdf_native.retrieval` from Python.
+- **retrieval:** A resolution algebra on the fusion law.
+  `FusionProfile::class_width` reports how many consecutive ranks a profile
+  cannot tell apart at a given depth, `deepest_rank_within_width` inverts it, and
+  `DecayRule::weight_for_depth` inverts the whole relation -- name the depth, get
+  the smallest weight that buys it. Reaching a depth is not monotone in the
+  weight, so the answer is not bisected: each adjacent-rank constraint names the
+  next weight that could satisfy it, and the search walks those candidates
+  without ever skipping one, so the weight it returns is the true minimum rather
+  than whichever side of an oscillation a probe happened to land on.
+  `MonotoneDepth` spells the separating depth's saturation point as a
+  distinct case so it cannot be mistaken for a measured depth, `ToleratedDepth`
+  does the same for the depth a tolerance buys, and `ClassWidth` does the same
+  for a class that never ends inside the range a plan can express. The same
+  surface is exposed to Python as `retrieval.weight_for_depth`,
+  `retrieval.class_width` and `retrieval.deepest_rank_within_width`.
+
+  Its five refusals are five separate facts and carry five separate variants.
+  `FusionError::InvalidWidth` means the tolerance was zero, which describes no
+  class at all because a class always contains its own rank.
+  `FusionError::DepthUnreachable` means the decay rule itself stopped separating
+  adjacent ranks at any weight, and it reports the exact depth it does reach --
+  the deepest any weight reaches, not the depth of one particular weight, and
+  only the truncated rule can raise it. `FusionError::DepthBeyondPlanRange`
+  means the depth is deeper than a plan can record, a plan carrying a
+  per-stratum depth as a 32-bit rank; that is a limit of the encoding and not of
+  the arithmetic, so the message names the encoding and the folded rule still
+  answers at the deepest depth a plan can hold. A depth of zero names no rank
+  and is refused as `FusionError::InvalidRank` rather than answered with the
+  lightest weight there is. And a smoothing constant of zero describes no law at
+  all: all three functions refuse it as `FusionError::InvalidK` before they read
+  the question they were asked, so the refusal no longer depends on the other
+  argument -- a depth of one, or a tolerance of one, previously answered from a
+  short-circuit and quoted a real number under a rule that cannot be evaluated,
+  while one step further along either axis reported the decay rule as having
+  saturated at depth one. A malformed law is not a saturated rule, and telling
+  it as one sent a caller to a remedy -- switch decay rules -- that cannot help.
+- **retrieval:** `DecayRule::class_width`, the same resolution curve
+  `FusionProfile::class_width` reports but asked of a weight rather than of a
+  stratum. A width is a property of the rule, its smoothing constant, the weight
+  and the rank and of nothing else, so a caller holding only arithmetic -- a
+  language binding, or a profile author sizing a weight before any stratum
+  exists -- asks the rule directly instead of building a throwaway one-stratum
+  profile to ask through. `DecayRule::weight_for_depth` already sat at that
+  altitude; the width now sits beside it. The profile-level call remains, is
+  unchanged for callers with a real stratum in hand, and now reaches the same
+  arithmetic through it rather than through a second path that could drift.
+- **retrieval:** `DecayRule::deepest_rank_within_width`, the inverse of
+  `DecayRule::class_width` asked at the same altitude: name the tolerance, get
+  the deepest depth that stays inside it. `FusionProfile::deepest_rank_within_width`
+  now reaches this rather than a private function of its own, so the two
+  arithmetic-only entry points -- `class_width` and its inverse -- sit beside
+  `weight_for_depth` the same way on `DecayRule`, and a caller holding only a
+  weight and a tolerance, with no stratum to name, asks here. Bound to Python
+  as `retrieval.deepest_rank_within_width`, alongside `retrieval.class_width`
+  and `retrieval.weight_for_depth`: it takes the same required `decay` keyword
+  they do, with no default rule, and raises `ValueError` rather than answering
+  where the arithmetic could not.
+- **retrieval:** Rank-resolution evidence on the answer. `CompiledRetrieval`
+  carries a `PlannedResolution` per weighted stratum, so the cost of a planned
+  depth is knowable before executing anything, and `FusionTrailer` carries a
+  `StratumResolution` for every weighted stratum it was handed a stream for --
+  where the profile stops separating ranks, how deep this run reached (zero for
+  a stream that ended without emitting a row, which was still pulled from), and
+  how many adjacent ranks its score could not separate, counted by direct
+  observation rather than inferred.
+  The trailer also reports whether the last row in a top-k beat a *settled*
+  rival it tied with exactly, which is the case where the final place was
+  decided by the declared tie-break rather than by relevance. Only rivals
+  already final when that row was emitted are counted, so a `false` there means
+  "no settled rival tied with it" and not "the cut fell on a strict score
+  difference" -- settling every live rival would mean reading past the top-k,
+  which would move the ranks-pulled evidence in the same trailer.
+
+  Both altitudes are readable from every entry point, and kept apart by name.
+  `SearchResult::planned_resolution` carries the compiled plan's own map onto the
+  fused answer, so the one call that plans and executes together is not the one
+  call that cannot see what it was about to pay; `FusionTrailer::resolution`
+  beside it is what the rows really cost. From Python the same pair is
+  `"planned_resolution"` and `"observed_resolution"` on the `search` answer, and
+  `retrieval.compile` now takes the `weights` and `k` that name a fusion law and
+  answers `"planned_resolution"` for it -- per weighted stratum, the depth the
+  law still separates, the depth the plan recorded, and whether every rank the
+  plan reads is still ordered by score alone -- with nothing executed. Omitting
+  both leaves the map empty rather than measuring against an invented law, and
+  naming one without the other is a `ValueError`.
+- **bench:** A new unpublished tooling crate, `purrdf-bench`, and its
+  `bench-corpus` binary: the deterministic, shardable scale-corpus generator
+  behind the `purrdf-scale-mixed-v1` profile. Every IRI is minted purely from
+  its index under a fixed seed, across five deliberately adversarial classes
+  (front-codable plain, long zero-padded numerics beyond machine integer widths,
+  raw-Han Chinese, host-scattered irregular with reserved-octet escapes, and
+  very-long), so no single dictionary trick can flatter a capacity claim. The
+  row mix pins a share for every row kind and spans the RDF 1.2 term space the
+  profile targets — reifier rows binding triple terms, `xsd:`-typed literals
+  whose lexical forms are valid for their datatype, language-tagged literals,
+  and blank nodes in both subject and object position — so term-kind coverage is
+  a property of the profile rather than an accident of it. Index-pure minting
+  makes generation shardable with no coordination between shards: shard `k` of
+  `n` emits exactly its slice, and concatenating every shard is byte-identical
+  to one whole run, pinned by a golden digest. `make scale-corpus` is the lane
+  that drives it across shards, in streaming, piped, or opt-in file modes.
+- **bench:** Two comparison lanes against the workloads the RDF literature
+  publishes against, `make lubm` and `make watdiv`. Both are REPORT-ONLY, neither
+  is a gate, and neither vendors a byte: every artifact is fetched by digest into
+  an ignored cache under `target/` at the moment of use, because the LUBM
+  generator is GPL-2.0-or-later and WatDiv is citation-ware. `make lubm`
+  generates LUBM(N), converts it to N-Quads through the `purrdf` CLI itself and
+  answers the 14 published queries, printing the entailment regime and the
+  dataset rung every row was answered under — eleven of the fourteen have no
+  answers at all without inference, so a row without its regime is not
+  comparable with anything. `make watdiv` consumes upstream's digest-pinned
+  frozen 10M dataset (WatDiv's own generator is time-seeded and has no seed
+  flag, so a dataset is reproducible only as a frozen output) and instantiates
+  the 20 published templates deterministically from it, publishing a query-set
+  digest: the same dataset and the same seed reproduce the workload byte for
+  byte, and a different seed is a different workload rather than a re-run. All
+  three lanes share one implementation of the laws that make their numbers
+  evidence — `scripts/lane-common.sh` — including the rule that a certificate
+  (a manifest, a reuse stamp, a published digest) is never written for output
+  that was not produced and never outlives the run that wrote it.
+- **envelope-probe:** A new unpublished tooling crate,
+  `purrdf-envelope-probe`: the capture side of the micro-hardware validation
+  envelope. A fixed, deterministic workload set runs per named profile over the
+  public APIs and the keystone fixture corpus, so a release can demonstrate that
+  a constrained deployment class still fits its pinned ceilings. Pass criteria
+  are completion and memory; wall time is recorded evidence, never a gate.
+||||||| 45ad8bb7
 - **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
   approximate nearest-neighbour index over a PURREMB embedding matrix, registered
   on the evaluator's property-function seam under a caller-supplied predicate IRI.
@@ -30,8 +167,223 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the resident memory while changing no arithmetic; the kernels now accept either
   width and widen per component inside the fold.
 
+### Fixed
+
+- **retrieval:** Fusion no longer refuses a well-formed producer stream when the
+  profile's own fixed-point decay gives two adjacent ranks one contribution. A
+  producer's ordering declaration is a claim about **ranks**, and the check was
+  applied to **contributions** -- a value the consumer computes from the decay
+  rule, `K`, the stratum weight and the rank, re-derives on arrival and refuses
+  on mismatch, and which the producer supplies no term of. Ranks are separately
+  held contiguous and ascending for every stream, so an equal adjacent pair only
+  ever meant the arithmetic had stopped separating those ranks at that depth. A
+  conforming stream read deep enough was rejected for the consumer's own
+  quantization: at a weight of `10^-6` this began at rank 973, and no weight at
+  all postpones it past about a million ranks under the truncated rule. The
+  condition is now measured and reported rather than refused; past that depth the
+  declared tie-break is total, so the answer stays correct and deterministic at a
+  coarser rank resolution.
+
+### Removed
+
+- **retrieval:** `ProtocolError::RepeatedContribution` and
+  `AdmissionError::DepthBeyondMonotoneRange`, the two refusals above, at the
+  fusion boundary and at the admission waist respectively. The plan depth the
+  second refused is now recorded as evidence on the compiled value instead.
+- **retrieval, sparql-eval:** The rank-ordering declaration, in both places it
+  stood: `StreamContract::ordering` on the consumer side and
+  `RankedDeclaration::ordering` with its `RankOrdering` enum on the producer
+  side. Its only reader in the workspace was the removed check, and a two-valued
+  declaration nothing consults is a knob with no behaviour. Rank order is one
+  law, not a choice: ranks are 1-based, contiguous and ascending for every ranked
+  stream, and fusion checks every row against the next rank it expects from that
+  stream -- a lower rank is `ProtocolError::OutOfOrderRanks`, a higher one
+  `ProtocolError::NonContiguousRanks`. Producers no longer state the field;
+  `TextSearchRelation::ranked_declaration` and
+  `EmbeddingKnnRelation::ranked_declaration` build one field fewer.
+
+  A registry's `content_fingerprint` covers a ranked declaration field by field,
+  so dropping that field changes the fingerprint of every registry holding a
+  ranked producer. A plan records the fingerprint it was admitted against, so
+  plans pinned under an earlier build no longer match a registry built by this
+  one and must be re-planned. Nothing else moved: a fusion profile's identity is
+  a function of the fusion law alone and is byte-for-byte unchanged.
+- **retrieval:** `ProtocolError::NonMonotoneContribution`, and with it the
+  per-row ordering comparison that raised it. Contributions still must not rise
+  with rank -- the threshold summed over the stream heads is an upper bound only
+  while they do not -- but that has stopped being a fact a stream can get wrong
+  on its own. Fusion re-derives every row's contribution from the decay rule,
+  `K`, the stratum weight and the rank and refuses a disagreement as
+  `ProtocolError::ContributionMismatch`, over ranks already held contiguous and
+  ascending, and the profile's own curve never rises, because a profile refuses a
+  weight at or below zero both when it is constructed and when it is decoded from
+  canonical bytes. A rising value is therefore necessarily a value the profile
+  did not compute, and it is refused as the wrong number it is rather than
+  reported as a shape of the stream -- so nothing conforming or hostile reached
+  the removed variant, in either direction. Non-increase is now stated where it
+  is enforced, and proven where it is true: as a property of the decay rule's
+  arithmetic over the weights a profile admits.
+- **retrieval:** `FusionError::CeilingExceeded`, and the per-row comparison of a
+  candidate's running score against `FusionProfile::ceiling()`. The ceiling is
+  still the profile's admitted maximum and `ceiling()` still reports it; it is
+  now enforced by construction rather than by testing each sum against it. A
+  candidate receives at most one contribution per stratum, which fusion does
+  check, and `K >= 1` with a 1-based rank caps every reciprocal at one half, so
+  every contribution is at most half its stratum's weight and the largest sum a
+  fusion can reach is exactly half the ceiling. The one configuration whose raw
+  arithmetic lands on the ceiling exactly needs two contributions under a
+  one-stratum profile, so the contribution count refuses it first --
+  `CeilingExceeded` was never observed for it, or for anything else.
+- **retrieval:** `FusionProfile::new`. It supplied a default decay rule while the
+  same type documents that neither rule is a default, and the one it chose has a
+  depth ceiling no weight can lift. Call sites name `with_decay` explicitly, which
+  preserves every previously computed profile identity byte for byte.
+
+  Every removal above, including the ordering declaration, touches no released
+  API: `RankOrdering`, `RankedDeclaration::ordering` and the producer-side field
+  they gave `purrdf-sparql-eval` were themselves added earlier in this same
+  unreleased cycle and never reached a release. What the ordering declaration's
+  removal does change is the registry content fingerprint, within this cycle: a
+  plan pinned against an intermediate build of it no longer matches a registry
+  built by this one and must be re-planned.
+
 ### Changed
 
+- **retrieval:** `DecayRule::class_width` and `FusionProfile::class_width`
+  answer with the new `ClassWidth` rather than a bare `u64`, and the Python
+  `retrieval.class_width` answers `int | None` rather than `int`. The search for
+  a class's far end stops at the deepest rank a plan can express, so a class
+  still running there has no counted end -- and it now says that, as
+  `ClassWidth::ExceedsAnyPlan` and as `None`, rather than handing back
+  `2**32 - 1` as though it were a width somebody measured. Raw weights of one
+  and fifty are fifty times apart and both saturate under either rule, because
+  every contribution has truncated to the same value; the bare number reported
+  them as the identical width `4294967295`, a number a caller can log, plot or
+  divide by, quoted precisely where nothing was counted. It also contradicted
+  the function's own stated meaning, which is that a width of `w` is `w`
+  consecutive ranks the fused score treats as equal. `ClassWidth` is a third
+  type rather than a reuse of `MonotoneDepth` or `ToleratedDepth` because a
+  width is a count of ranks and neither of those cases is: `SeparatesTo` asserts
+  that every adjacent pair up to a depth is distinct and `ReadsTo` asserts that
+  a read stopping at a depth stays inside a tolerance, and a width establishes
+  neither. Its saturating case is also the opposite polarity -- a class with no
+  end is inside no tolerance, where a depth that never collides is inside every
+  one -- which `ClassWidth::fits_within` spells out beside `covers`. Confined to
+  `purrdf-retrieval` and its binding, which have not yet been published, so no
+  released API changes.
+- **retrieval:** The documented relationship between a tolerance and the class
+  at the depth it buys no longer claims an equality that does not hold. Four
+  places -- `DecayRule::deepest_rank_within_width`,
+  `FusionProfile::deepest_rank_within_width`, the Python docstring and
+  `__init__.pyi` -- said the width there is "at least `max_width + 1`, two at a
+  tolerance of one". The bound is right; the parenthetical is not. Under the
+  truncated rule with `k` of 60 at a raw weight of `10^2` a tolerance of one
+  lands on depth one, whose class is **forty** ranks wide, and at `10^2 + 21` it
+  is sixty. Equality holds only where the run that ends the walk is one rank
+  longer than the tolerance, which is the smooth case and is exactly the regime
+  the two accompanying tests pinned -- a raw weight of `10^6` in Rust and
+  `1000 * SCALE` in Python -- so neither could fail on it. The four sites now
+  state only the bound, and a light-weight case is executed at both Rust
+  altitudes and on the Python surface so that the corrected claim is held by a
+  test that can fail.
+- **retrieval:** `DecayRule::deepest_rank_within_width` and
+  `FusionProfile::deepest_rank_within_width` answer with the new
+  `ToleratedDepth` rather than a bare `u64`, and the Python
+  `retrieval.deepest_rank_within_width` answers `int | None` rather than `int`.
+  A plan records a per-stratum depth as a 32-bit rank, so a walk that runs to
+  that ceiling has found no bound inside any plan's reach -- and it now says
+  that, as `ToleratedDepth::ReadsBeyondAnyPlan` and as `None`, rather than
+  handing back `2**32 - 1` as though it were a depth somebody measured. Two
+  weights fifty times apart both reach the ceiling, and the bare number said
+  they read to the same depth: a number a caller can log, plot or divide by,
+  quoted precisely where no bound exists. `MonotoneDepth` had already drawn that
+  line for the separating depth; the tolerated depth is a separate type because
+  its cases claim something different -- above a tolerance of one the ranks it
+  reports do share contributions, just never more than the tolerance of them
+  within the read, so carrying it in `MonotoneDepth::SeparatesTo` would attach a
+  separation claim to a depth measured under no such claim. The Python rendering
+  matches what a `search` answer already does with `"separates_to"`, which is
+  `None` for the same wall. Confined to `purrdf-retrieval` and its binding,
+  which have not yet been published, so no released API changes.
+- **retrieval:** A `max_width` of zero is refused as the new
+  `FusionError::InvalidWidth` -- "a tolerance of zero is not a tolerance,
+  because a class always contains its own rank" -- from `DecayRule`,
+  `FusionProfile` and `retrieval.deepest_rank_within_width` alike, instead of
+  being silently read as one. It is the only zero operand on this surface that
+  did not refuse: a rank of zero and a smoothing constant of zero already did,
+  and a tolerance of zero is the same shape as a constant of zero, a question
+  with no evaluable content. Reading it as one answered the narrowest real
+  tolerance in its place, which is the deepest fully-separated depth this
+  algebra can report -- the most favourable answer there is, returned precisely
+  where nothing was asked. It is a separate variant from
+  `FusionError::InvalidRank` because a tolerance is a count of ranks measured
+  across the 1-based axis rather than a position on it, and "rank must be at
+  least 1" would send a caller to inspect an argument that was never at fault.
+  The normalisation had also been documented only on the private implementation:
+  neither public entry point's `# Errors` section, nor the `.pyi` stub,
+  mentioned it. Confined to `purrdf-retrieval` and its binding, which have not
+  yet been published, so no released API changes.
+- **retrieval:** The documented meaning of a `max_width` of one now says what
+  the code does. It had claimed to report "the deepest rank still separated from
+  both its neighbours", and the branch's own tests assert the opposite: the
+  answer is the deepest depth a *read* can stop at with every rank it actually
+  read separated, and `class_width` at that rank is never one. `class_width`
+  measures the unbounded curve, which also looks at the one rank the bounded
+  read never reaches, so it reports at least `max_width + 1` there -- exactly
+  `max_width + 1` where the run that ends the walk is one rank longer than the
+  tolerance, and wider where that run is longer still, which is measured under
+  the truncated rule at a raw weight of `10^6` with a tolerance of fifty. The
+  two functions agree in all of those cases; they are answering a depth question
+  and a rank question. The corrected relationship is carried into
+  `DecayRule::deepest_rank_within_width`,
+  `FusionProfile::deepest_rank_within_width`, the Python docstring and
+  `__init__.pyi`, and is asserted rather than described.
+- **retrieval:** Every Python entry point that takes a smoothing constant now
+  takes the decay rule that constant belongs to, and none of them defaults it.
+  `retrieval.search`, `retrieval.weight_for_depth` and `retrieval.class_width`
+  take a required `decay` keyword, and `retrieval.compile` takes it as the third
+  part of the fusion law beside `weights` and `k`. It is spelled the way every
+  other closed set on that surface is -- `"reciprocal_rank"` or
+  `"weighted_reciprocal_rank"`, alongside a request term's `metric` and a
+  producer's `graph` -- and an unknown spelling raises `ValueError` naming both.
+
+  Before this, the Python surface hardwired the truncated rule everywhere it
+  named one, so a Python caller could not build, search under, or ask any
+  question about a folded-rule law. That mattered most where
+  `weight_for_depth` refused: its message says the remedy for a depth past the
+  truncated rule's wall is to name the folded rule, and Python had no way to
+  name it, so the surface handed out a diagnosis with no cure. The folded rule
+  now reaches every number in an answer -- contributions, both resolution maps
+  and the `"profile_id"` the law names itself by -- rather than only the
+  profile's constructor.
+
+  A `compile` call naming some of `weights`, `k` and `decay` but not the rest is
+  a `ValueError` that says which part arrived and which did not; naming none of
+  them still compiles without a law and reports no resolution. Confined to
+  `purrdf-retrieval` and its binding, which have not yet been published, so no
+  released API changes.
+- **retrieval:** The Python `search` answer spells the trailer's measured rank
+  resolution `"observed_resolution"` rather than `"resolution"`. The answer now
+  reports two resolutions -- what the plan was going to cost and what the rows
+  actually cost -- and an unqualified name beside a qualified one reads as the
+  general case of it, which these are not: a top-k that certifies early never
+  reaches its planned depth, so the two differ by design. Confined to
+  `purrdf-retrieval` and its binding, which have not yet been published, so no
+  released API changes.
+- **retrieval:** `FusionProfile::class_width` and
+  `FusionProfile::deepest_rank_within_width` answer with
+  `Result<Option<u64>, FusionError>` rather than `Option<u64>`, so the two facts
+  they carry stay two facts. `Ok(None)` is a stratum the profile declares no
+  weight for -- an absence, not a failure -- while an operand the decay rule
+  cannot evaluate is now the refusal it is. A rank of zero is the reachable one:
+  ranks are 1-based, so there is no rank zero for a class to form around, and
+  such a call previously came back as a width of **one** -- the claim that the
+  rank is perfectly separated from both its neighbours, which is the most
+  favourable thing the resolution algebra can say, returned precisely where it
+  had measured nothing. The same call from Python, `retrieval.class_width`,
+  raises `ValueError` there instead of returning a number. Confined to
+  `purrdf-retrieval`, which has not yet been published, so no released API
+  changes.
 - **sparql-eval:** `knn::Kernel::distance` and `knn::norm` are generic over
   `knn::Scalar`. This is **source-breaking for inference-dependent callers**: an
   expression whose operand type the compiler previously inferred may now need an
