@@ -45,7 +45,8 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, FusionStream,
-    Iri, ProducerReceipt, ProtocolError, RankedStream, StreamContract, Term, contribution,
+    Iri, ProducerReceipt, ProtocolError, RankFidelity, RankedStream, StreamContract, Term,
+    contribution,
 };
 
 // ---------------------------------------------------------------------------
@@ -286,9 +287,14 @@ impl RankedStream for LazyStream {
     /// does draw from one block, and says so.
     fn contract(&self) -> StreamContract {
         match self.block {
-            None => StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted),
+            None => StreamContract::new(
+                DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+            ),
             Some(block) => StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 CandidateDomains::within([
                     DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs")
                 ]),

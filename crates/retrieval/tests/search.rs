@@ -20,9 +20,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, Fixed, FusionError,
-    FusionProfile, Iri, Metric, PlanError, ProducerStatus, ProtocolError, RankedStreamAdapter,
-    RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics, Term, TopK,
-    UnservedReason, UnservedTerm, compile, execute, fuse, plan, search,
+    FusionProfile, Iri, Metric, PlanError, ProducerStatus, ProtocolError, RankFidelity,
+    RankedStreamAdapter, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
+    Term, TopK, UnservedReason, UnservedTerm, compile, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError, PfArgs,
@@ -97,6 +97,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         mandatory,
     }

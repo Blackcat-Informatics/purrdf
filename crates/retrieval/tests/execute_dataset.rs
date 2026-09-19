@@ -23,9 +23,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, Fixed, FusionProfile,
-    IndexGeneration, Iri, ProducerStatus, RankedStream, RankedStreamAdapter, RequestTerm,
-    RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel, Statistics, StreamContract, Term,
-    TopK, compile, execute, plan, search,
+    IndexGeneration, Iri, ProducerStatus, RankFidelity, RankedStream, RankedStreamAdapter,
+    RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel, Statistics,
+    StreamContract, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -268,8 +268,9 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
         candidate_position: 0,
         duplicates,
         // These fixtures fuse strata that rank the same dataset, so the widest
-        // promise is the honest one; the domain term is exercised where it is
+        // promise is the honest one on both terms; each is exercised where it is
         // the subject, in `fusion.rs`.
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         mandatory: true,
     }
@@ -705,8 +706,16 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
 
         let stats = statistics();
         let bundle = compiled(&registry, &stats);
-        let expected = StreamContract::new(duplicates, CandidateDomains::Unrestricted);
-        let beta = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
+        let expected = StreamContract::new(
+            duplicates,
+            RankFidelity::EXACT,
+            CandidateDomains::Unrestricted,
+        );
+        let beta = StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            CandidateDomains::Unrestricted,
+        );
 
         let unit = bundle
             .units

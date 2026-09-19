@@ -18,8 +18,9 @@ use purrdf_retrieval::{
     CandidateDomains, ClassWidth, DecayRule, DomainTag, DuplicatePolicy, EvidenceId, Fixed,
     FusedRow, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream,
     IndexGeneration, Iri, MonotoneDepth, PfAttestation, PlanId, ProducerReceipt, ProducerStatus,
-    ProtocolError, RECIP_K, RankedStream, RankedStreamImpl, ScoreExactness, ServiceLevel,
-    StreamContract, StreamEnding, Term, ToleratedDepth, TopK, contribution, contribution_under,
+    ProtocolError, RECIP_K, RankFidelity, RankedStream, RankedStreamImpl, ScoreExactness,
+    ServiceLevel, StreamContract, StreamEnding, Term, ToleratedDepth, TopK, contribution,
+    contribution_under,
 };
 
 const K: u32 = 60;
@@ -90,7 +91,11 @@ enum Step {
 /// ascending ranks those scripts emit are not part of it -- that law holds for
 /// every stream and is checked rank by rank rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 /// A producer whose rows and failures are pre-scripted.
@@ -2052,7 +2057,11 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
 
 /// `DuplicatePolicy::Allowed`, with the strict ordering the fixtures' rows keep.
 fn allowed_duplicates() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Allowed, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Allowed,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 /// Two streams: `dense` as scripted, and a one-row `sparse` stream that stays
@@ -2479,7 +2488,11 @@ fn no_fused_answer_ever_contains_one_entity_twice() {
                             (
                                 stratum(NAMES[position]),
                                 MockStream::new(steps, exhausted(emitted)).declaring(
-                                    StreamContract::new(policy, CandidateDomains::Unrestricted),
+                                    StreamContract::new(
+                                        policy,
+                                        RankFidelity::EXACT,
+                                        CandidateDomains::Unrestricted,
+                                    ),
                                 ),
                             )
                         })
@@ -5536,8 +5549,11 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
             };
             (
                 stratum(entry.name),
-                MockStream::new(steps, exhausted(emitted))
-                    .declaring(StreamContract::new(DuplicatePolicy::Unique, domains)),
+                MockStream::new(steps, exhausted(emitted)).declaring(StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    domains,
+                )),
             )
         })
         .collect()
@@ -6172,6 +6188,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             stratum("docs"),
             docs().declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
             )),
         ),
@@ -6186,6 +6203,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             )
             .declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
             )),
         ),
@@ -6229,6 +6247,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             stratum("docs"),
             docs().declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
             )),
         ),
@@ -6243,6 +6262,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             )
             .declaring(StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
             )),
         ),
@@ -6305,8 +6325,16 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
     // identical. This is the case a stratum-derived tag would have broken.
     let agreeing = block_on(run_fuse(
         both_naming(
-            StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
-            StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
+            StreamContract::new(
+                DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
+                within(&[DOMAIN_DOCS]),
+            ),
+            StreamContract::new(
+                DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
+                within(&[DOMAIN_DOCS]),
+            ),
         ),
         &law,
     ));
@@ -6321,9 +6349,14 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
     // fuses.
     let overlapping = block_on(run_fuse(
         both_naming(
-            StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
             StreamContract::new(
                 DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
+                within(&[DOMAIN_DOCS]),
+            ),
+            StreamContract::new(
+                DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
             ),
         ),
@@ -6387,7 +6420,13 @@ fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification
     );
     let dense_contribution = contribution(Fixed::ONE, 1, K).expect("fits");
     let target = "http://example.org/doc/000001";
-    let same_block = || StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS]));
+    let same_block = || {
+        StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            within(&[DOMAIN_DOCS]),
+        )
+    };
 
     let streams = vec![
         (

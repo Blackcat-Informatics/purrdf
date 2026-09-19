@@ -411,3 +411,10 @@ pub use purrdf_sparql_eval::{CandidateDomains, DomainTag};
 // must be able to name these types — and match on `ServiceLevel::Incomplete` —
 // without taking a dependency on the evaluator crate itself.
 pub use purrdf_sparql_eval::{IndexGeneration, PfAttestation, ServiceLevel};
+// What a producer promises about the rows it can name. Re-exported for the same
+// reason again, and with one of its own: a caller reading an answer has to be
+// able to `match` on `Completeness::Lossy` and `OrderFidelity::Perturbed` to get
+// at the producer's verbatim evidence, and the second of those is the only way
+// to learn that a score carries no finite bound at all. A consumer that can read
+// the verdict but cannot name the types in it has been handed half a seam.
+pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity};

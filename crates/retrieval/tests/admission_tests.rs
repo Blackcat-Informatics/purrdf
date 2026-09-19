@@ -19,8 +19,8 @@ use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionError,
     FusionProfile, Iri, Metric, MonotoneDepth, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
-    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
-    UnservedReason, UnservedTerm, compile, contribution, execute,
+    RankFidelity, RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics,
+    Term, UnservedReason, UnservedTerm, compile, contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -85,6 +85,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         mandatory,
     }
@@ -2066,6 +2067,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         mandatory,
     }

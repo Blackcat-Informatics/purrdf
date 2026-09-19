@@ -41,10 +41,10 @@ use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
     ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
     Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
-    ProducerStatus, ProtocolError, RankedStream, RankedStreamAdapter, RankedStreamImpl,
-    RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics,
-    StatisticsSnapshot, StreamContract, StreamEnding, Term, TopK, UnservedReason, UnservedTerm,
-    compile, contribution, execute, fuse, plan, search,
+    ProducerStatus, ProtocolError, RankFidelity, RankedStream, RankedStreamAdapter,
+    RankedStreamImpl, RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult,
+    Statistics, StatisticsSnapshot, StreamContract, StreamEnding, Term, TopK, UnservedReason,
+    UnservedTerm, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -123,6 +123,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         mandatory,
     }
@@ -135,7 +136,11 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
 /// not part of it — that law holds for every stream and is checked rank by rank
 /// rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 fn lexical_term() -> RequestTerm {

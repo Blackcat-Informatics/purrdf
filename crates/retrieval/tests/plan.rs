@@ -10,7 +10,7 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
-    ProducerDecision, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
+    ProducerDecision, RankFidelity, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
     StatisticsSnapshot, Term, UnservedReason, UnservedTerm,
 };
 use purrdf_sparql_eval::{
@@ -789,6 +789,7 @@ fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            fidelity: RankFidelity::EXACT,
             domains,
             mandatory: false,
         },

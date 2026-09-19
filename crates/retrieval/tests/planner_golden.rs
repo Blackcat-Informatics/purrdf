@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Iri, Metric, Plan, PlanError, RegistryId, RejectionReason, RequestTerm, RetrievalRequest,
-    Statistics, Term, UnservedReason, UnservedTerm, plan,
+    Iri, Metric, Plan, PlanError, RankFidelity, RegistryId, RejectionReason, RequestTerm,
+    RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -111,6 +111,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         mandatory,
     }
@@ -167,6 +168,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             mandatory: false,
         },
@@ -391,12 +393,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "3bc5bcb77883b2a06e65a287c99d3f03296938b89641d5a60d4a695c922cc8d5";
+    "8feae327d2578ed1cfe81a997a95781ac1c8df9ba8e30a7dabfc821baa792e01";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "55f770588e130ef79bb5e1bc6218b9deeacba5e47dc3797eb69f4f0e5890f869";
+    "dd89c87f6a79afb2f9ad4ec45469cef80cb4c9f1f84a983a65702932cbebc3c2";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -605,6 +607,7 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             mandatory: false,
         },
@@ -727,6 +730,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             mandatory: false,
         },
@@ -962,6 +966,7 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             mandatory: false,
         },

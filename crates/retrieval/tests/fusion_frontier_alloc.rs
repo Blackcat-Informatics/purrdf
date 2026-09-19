@@ -53,8 +53,8 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, Iri,
-    ProducerReceipt, ProducerStatus, ProtocolError, RankedStream, StreamContract, Term, TopK,
-    contribution, fuse,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedStream, StreamContract,
+    Term, TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ impl RankedStream for LazyStream {
     }
 
     fn contract(&self) -> StreamContract {
-        StreamContract::new(self.duplicates, self.domains.clone())
+        StreamContract::new(self.duplicates, RankFidelity::EXACT, self.domains.clone())
     }
 }
 
