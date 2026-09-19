@@ -2341,3 +2341,280 @@ fn two_streams_naming_one_candidate_from_two_blocks_are_refused() {
         "and both strata's contributions, which is what the agreement buys"
     );
 }
+
+// ---------------------------------------------------------------------------
+// T6.11. The bounded read rests on TWO declarations, and a stream that may
+//        repeat supplies only one of them.
+//
+// The planner narrows a bounded request's per-stratum depth to `k` when every
+// surviving stratum declares a block set and no two of those sets meet. The merge
+// argument behind it counts ranks: a candidate its stratum ranks at `r > k` is
+// beaten by the `r-1 >= k` candidates above it in that same stratum. That step
+// reads a count of ranks as a count of candidates, which is true of a
+// `DuplicatePolicy::Unique` stream and false of a `DuplicatePolicy::Allowed` one —
+// a repeat there is validated, charged to the producer and then DISCARDED, which
+// is exactly what that declaration asks a consumer to do. A depth-`k` prefix of
+// such a stream can therefore carry fewer than `k` candidates, and a prefix short
+// of `k` candidates is no longer a superset of the top `k`.
+//
+// The assertion below is a differential rather than a depth check, because a
+// depth check alone would pass on an answer that was wrong for some other reason:
+// the `Allowed` request must return the very rows, scores and provenance the same
+// request returns from a stratum declaring nothing at all, which is the read
+// nothing has ever narrowed. Its neighbour is here for the mirror defect — the
+// `Unique` case must KEEP the bounded read it already had, or the correction has
+// cost the answers it was meant to protect.
+// ---------------------------------------------------------------------------
+
+/// The stratum the fixtures below rank within, and the one block they draw from.
+const PREFIX: &str = "docs/";
+
+/// The rows a producer of this section emits, by candidate index.
+///
+/// Six rows naming five candidates, with `entity0` named again at rank five: the
+/// repeat lands INSIDE a bound of five, which is what makes a depth of five a
+/// prefix of four candidates. `entity4`, the fifth candidate, is then at rank six
+/// and a read of five rows never reaches it. Three rows would not do — the repeat
+/// has to arrive after the first occurrence has certified and left the frontier,
+/// which is the interleaving a single-stratum fusion always produces.
+const REPEATING_ROWS: [usize; 6] = [0, 1, 2, 3, 0, 4];
+
+/// The same length with no repeat in it: six candidates, one per rank. This is
+/// the honest `Unique` stream, and the neighbour whose bound must survive.
+const DISTINCT_ROWS: [usize; 6] = [0, 1, 2, 3, 4, 5];
+
+/// A producer emitting one row per entry of `rows`, naming `entity<index>`.
+///
+/// The declared row bound is two hundred — far above the rows it emits — so the
+/// depth this stratum is planned at is decided by the request's bound and by the
+/// declarations, never by the script running out.
+fn producer_over(rows: &[usize]) -> Arc<dyn PropertyFunction> {
+    let arity = PfArity::new(1, 1);
+    let emitted = rows
+        .iter()
+        .map(|index| {
+            vec![
+                TermValue::iri(format!("{}entity{index}", ex(PREFIX))),
+                TermValue::iri(format!("{}score{index}", ex(PREFIX))),
+            ]
+        })
+        .collect();
+    Arc::new(MockProducer {
+        arity,
+        mode: arity.all_free_mode(),
+        rows: 200,
+        emitted,
+    })
+}
+
+/// A one-producer registry over `rows`, declaring `domains` and `duplicates`.
+///
+/// One stratum, because the narrowing is a per-stratum depth and one stratum
+/// declaring a block set is already the disjoint case — there is no second
+/// declaration for it to meet.
+fn docs_registry(
+    rows: &[usize],
+    domains: CandidateDomains,
+    duplicates: DuplicatePolicy,
+) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/docs"),
+        producer_over(rows),
+        RankedDeclaration {
+            domains,
+            ..ranked_declaring(
+                &ex("stratum/docs"),
+                vec![TermPattern::of_kind(TermKind::Any)],
+                true,
+                duplicates,
+            )
+        },
+    );
+    registry
+}
+
+fn docs_statistics() -> MockStatistics {
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&ex("stratum/docs")), 1000);
+    cardinalities.insert(iri(&ex("body")), 500);
+    MockStatistics {
+        source: "example-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+    }
+}
+
+fn docs_profile() -> FusionProfile {
+    FusionProfile::with_decay(
+        BTreeMap::from([(iri(&ex("stratum/docs")), Fixed::ONE)]),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("the fixture profile is valid")
+}
+
+/// The request both halves of each differential are run under: a top five, which
+/// is the bound the narrowing would apply.
+fn top_five() -> RetrievalRequest {
+    RetrievalRequest::bounded(vec![lexical_term()], TopK::new(5))
+}
+
+/// The depth the planner records for the fixture stratum under `registry`.
+fn docs_depth(registry: &PropertyFunctionRegistry) -> u32 {
+    *plan(&top_five(), registry, &docs_statistics())
+        .expect("the fixture request plans")
+        .stratum_depths
+        .get(&iri(&ex("stratum/docs")))
+        .expect("the fixture stratum is planned")
+}
+
+/// The fixture request, searched through the whole ladder against `registry`.
+fn docs_search(registry: &PropertyFunctionRegistry) -> SearchResult {
+    let stats = docs_statistics();
+    let env = fixture_env(registry, &stats);
+    block_on(search(
+        &top_five(),
+        registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &docs_profile(),
+    ))
+    .expect("the fixture request searches")
+}
+
+/// What an answer says, as an answer: the rows in order with their scores and
+/// the ranks those scores came from.
+fn fused_answers(result: &SearchResult) -> Vec<FusedAnswer> {
+    result
+        .rows
+        .iter()
+        .map(|row| (row.entity.clone(), row.score, row.contributions.clone()))
+        .collect()
+}
+
+/// The fixture stratum's rank behind each row of `result`, in row order.
+fn docs_ranks(result: &SearchResult) -> Vec<u64> {
+    result
+        .rows
+        .iter()
+        .map(|row| {
+            row.contributions
+                .iter()
+                .find(|(stratum, _, _)| stratum == &iri(&ex("stratum/docs")))
+                .map(|(_, rank, _)| *rank)
+                .expect("every row of a one-stratum fusion is contributed to by that stratum")
+        })
+        .collect()
+}
+
+/// The entity `index` names, spelled as a fused row carries it.
+fn docs_entity(index: usize) -> String {
+    format!("<{}entity{index}>", ex(PREFIX))
+}
+
+#[test]
+fn an_allowed_stratum_keeps_the_read_its_repeats_need_and_answers_as_the_undeclared_one_does() {
+    let declared = docs_registry(
+        &REPEATING_ROWS,
+        CandidateDomains::within([domain_tag("domain/docs")]),
+        DuplicatePolicy::Allowed,
+    );
+    let undeclared = docs_registry(
+        &REPEATING_ROWS,
+        CandidateDomains::Unrestricted,
+        DuplicatePolicy::Allowed,
+    );
+
+    // The depth first: a stream that may repeat supplies no count of candidates,
+    // so the block declaration alone licenses nothing and the registry's own
+    // bound stands — the same two hundred rows the undeclared stratum reads.
+    assert_eq!(
+        (docs_depth(&declared), docs_depth(&undeclared)),
+        (200, 200),
+        "a declared-`Allowed` stratum reads exactly as deep as an undeclared one, \
+         because the merge argument a narrower depth rests on has no premise here"
+    );
+
+    // And the answer, which is the real claim: the same rows, the same scores and
+    // the same provenance either way. A depth of five would have returned four
+    // rows from the declared registry and five from the undeclared one, with
+    // nothing in either answer saying which had been cut.
+    let answered = docs_search(&declared);
+    assert_eq!(
+        fused_answers(&answered),
+        fused_answers(&docs_search(&undeclared)),
+        "the declared search and the undeclared one answer identically, row for \
+         row and score for score"
+    );
+    assert_eq!(
+        entities(&answered),
+        (0..5).map(docs_entity).collect::<Vec<_>>(),
+        "five candidates were asked for and five distinct candidates are returned"
+    );
+
+    // The repeat is shown to have happened rather than assumed: the fifth row
+    // carries stratum rank SIX. Rank five was pulled, validated, charged to the
+    // producer and discarded as the declared repeat it was, so the fifth
+    // candidate lies one row past a bound of five — which is the whole reason the
+    // narrowed read could not have served this answer.
+    assert_eq!(
+        docs_ranks(&answered),
+        vec![1, 2, 3, 4, 6],
+        "rank five is absent from the answer because the row carrying it repeated \
+         a candidate already certified"
+    );
+    assert_eq!(
+        answered.trailer.statuses[&iri(&ex("stratum/docs"))],
+        ProducerStatus::Exhausted { rows_emitted: 6 },
+        "and the producer is charged for the discarded row, which is a row it emitted"
+    );
+}
+
+#[test]
+fn the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave() {
+    // THE OVER-REFUSAL MIRROR. The same shape, the same six rows, the same block
+    // declaration — and the promise that no candidate is named twice, which is
+    // what makes a count of ranks a count of candidates. The bound must survive.
+    let declared = docs_registry(
+        &DISTINCT_ROWS,
+        CandidateDomains::within([domain_tag("domain/docs")]),
+        DuplicatePolicy::Unique,
+    );
+    let undeclared = docs_registry(
+        &DISTINCT_ROWS,
+        CandidateDomains::Unrestricted,
+        DuplicatePolicy::Unique,
+    );
+
+    assert_eq!(
+        docs_depth(&declared),
+        5,
+        "a `Unique` stratum over its own block still reads a five-row prefix for a \
+         top five, which is the bound the declarations were written to buy"
+    );
+    assert_eq!(
+        docs_depth(&undeclared),
+        200,
+        "and the stratum that declared nothing still reads what it always read, \
+         which is what makes the bound above a narrowing rather than a default"
+    );
+
+    let answered = docs_search(&declared);
+    assert_eq!(
+        fused_answers(&answered),
+        fused_answers(&docs_search(&undeclared)),
+        "the narrowed read and the full one answer identically, which is what \
+         makes the narrowing exact rather than merely cheaper"
+    );
+    assert_eq!(
+        entities(&answered),
+        (0..5).map(docs_entity).collect::<Vec<_>>(),
+        "the top five candidates, in rank order"
+    );
+    assert_eq!(
+        docs_ranks(&answered),
+        vec![1, 2, 3, 4, 5],
+        "and no rank is missing, because no row repeated a candidate"
+    );
+}

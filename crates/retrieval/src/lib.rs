@@ -141,6 +141,14 @@
 //! ([`ExecutionError::RowBoundBreached`]) rather than reported as either
 //! ending.
 //!
+//! One producer shape cannot be asked for that row at all — one that takes its
+//! depth as an argument and was planned at a depth already on its declared row
+//! bound, because raising the argument past the declaration would ask the producer
+//! to breach its own registration. Such a read has an ending nobody can observe, so
+//! it reports neither of the two above: [`ProducerStatus::RowBoundReached`] names
+//! the producer's declared bound as the stopper and claims nothing about what lies
+//! below it.
+//!
 //! Rank order is not carried there, because it is not a per-producer variable.
 //! Every ranked stream owes its consumer the same law — 1-based, contiguous,
 //! ascending ranks — and [`FusionStream`] enforces it row by row against the
@@ -287,8 +295,9 @@
 //!
 //! What an index attested is a different kind of fact from how a read ended, and
 //! it is kept apart from one deliberately. A producer's terminal
-//! [`ProducerStatus`] says who stopped the read — the plan's depth, fusion's
-//! contribution bound, the producer's refusal of the terms, or a failed run —
+//! [`ProducerStatus`] says who stopped the read — the planned depth, the producer's
+//! own declared row bound, fusion's contribution bound, the producer's refusal of
+//! the terms, or a failed run —
 //! and only [`ProducerStatus::Exhausted`] claims a stratum's rows ran out. An
 //! incomplete *index* is none of those: it is true from the instant the stream
 //! opened and stays true however the read ends, so it is read from
@@ -384,7 +393,9 @@ mod statistics;
 pub mod producer_contract {}
 
 pub use admission::{AdmissionEnvironment, AdmissionError};
-pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, compile};
+pub use compile::{
+    CompiledRetrieval, DepthApplication, PlannedResolution, StratumUnit, UnitError, compile,
+};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{FusionError, PlanError};
 pub use execute::{

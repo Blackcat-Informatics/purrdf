@@ -127,12 +127,17 @@ pub type CandidateId = Term;
 /// # `Exhausted` is the only READ ENDING that reports no stopper — and that is
 /// not the same as a completeness claim
 ///
-/// There are five variants and exactly one of them says the rows ran out rather
+/// There are six variants and exactly one of them says the rows ran out rather
 /// than naming who stopped the read. Every other one names *who stopped it*, and
-/// they are four different parties stopping it at four different places:
+/// they are five different parties stopping it at five different places:
 ///
 /// * [`Self::DepthReached`] — the **plan's depth** stopped the producer, at a
 ///   rank. The rows below it exist and were not looked at.
+/// * [`Self::RowBoundReached`] — the producer's **own declared row bound** stopped
+///   it, at a rank. Whether rows lie below that rank was not observable: this is
+///   the producer that takes its depth as an argument, read to the number it
+///   registered, so no row past it could be asked for. See
+///   [`ProducerReceipt::RowBoundReached`] for why neither neighbour is true of it.
 /// * [`Self::CeilingReached`] — a **contribution bound** stopped the read, at a
 ///   value in the profile's fixed-point space. Either the producer's own
 ///   declared bound or, far more often, the one a bounded fusion wrote down
@@ -199,7 +204,7 @@ pub type CandidateId = Term;
 ///
 /// # Where each variant comes from
 ///
-/// Four of the five are the producer's own declaration, converted from the
+/// Five of the six are the producer's own declaration, converted from the
 /// receipt it returned through [`RankedStream::receipt`] — plus, for the strata
 /// that never became a stream, the executor's report carried in by
 /// [`FusionTrailer::completed_with`].
@@ -292,6 +297,20 @@ pub enum ProducerStatus {
         /// rows fusion pulled from it.
         rank: u64,
     },
+    /// The producer stopped at the row bound it had itself declared, so whether
+    /// anything lay below that rank could not be observed.
+    ///
+    /// The mirror of [`ProducerReceipt::RowBoundReached`], verified the same way
+    /// [`Self::DepthReached`] is: `rank` is the last rank the producer emitted and
+    /// fusion has checked it against the rows it actually pulled. Unlike
+    /// `DepthReached` it claims nothing about rows below that rank — the read could
+    /// not be taken one row further to find out, which is the whole of what this
+    /// ending reports.
+    RowBoundReached {
+        /// The last 1-based rank the producer emitted, which is the declared row
+        /// bound it read to and the number of rows fusion pulled from it.
+        rank: u64,
+    },
     /// Reading stopped at a contribution bound rather than at the end of the
     /// rows. Declared by the producer, or written down by a fusion the caller's
     /// row bound stopped; see this type's header.
@@ -314,7 +333,7 @@ impl From<ProducerReceipt> for ProducerStatus {
     /// Carry a producer's own terminal declaration into the fused trailer,
     /// variant for variant.
     ///
-    /// The two enums are deliberately separate types for the same five facts:
+    /// The two enums are deliberately separate types for the same six facts:
     /// a [`ProducerReceipt`] is what a producer *claims* on the input protocol,
     /// and a [`ProducerStatus`] is what the trailer *reports* after fusion has
     /// checked that claim against the rows it actually pulled. Keeping them
@@ -331,6 +350,7 @@ impl From<ProducerReceipt> for ProducerStatus {
         match receipt {
             ProducerReceipt::Exhausted { rows_emitted } => Self::Exhausted { rows_emitted },
             ProducerReceipt::DepthReached { rank } => Self::DepthReached { rank },
+            ProducerReceipt::RowBoundReached { rank } => Self::RowBoundReached { rank },
             ProducerReceipt::CeilingReached { bound } => Self::CeilingReached { bound },
             ProducerReceipt::ExecutionFailed { reason } => Self::ExecutionFailed { reason },
             ProducerReceipt::TermsRejected => Self::TermsRejected,
@@ -2316,17 +2336,18 @@ impl<S: RankedStream> FusionStream<S> {
     /// Record a terminal receipt, refusing one the rows contradict.
     ///
     /// Every receipt that states a count is measured against the rows this
-    /// fusion actually pulled, and the two counting receipts are measured
+    /// fusion actually pulled, and the three counting receipts are measured
     /// identically. [`ProducerReceipt::Exhausted`] states how many rows it
-    /// emitted; [`ProducerReceipt::DepthReached`] states the last rank it
-    /// emitted, which is the same number because ranks are contiguous from one
-    /// — a law already enforced row by row in [`Self::fetch`]. A producer may
-    /// stop at the depth it was given; it may not miscount what it emitted, and
-    /// the licence to stop reading is deliberately not also a licence to
-    /// misreport. What fusion cannot check either way is the claim about rows
-    /// nobody pulled: that a depth-stopped stream still held rows below its
-    /// last rank is the producer's word, and the producer is the only party who
-    /// can know it.
+    /// emitted; [`ProducerReceipt::DepthReached`] and
+    /// [`ProducerReceipt::RowBoundReached`] state the last rank it emitted, which is
+    /// the same number because ranks are contiguous from one — a law already
+    /// enforced row by row in [`Self::fetch`]. A producer may stop at the depth it
+    /// was given or at the bound it declared; it may not miscount what it emitted,
+    /// and the licence to stop reading is deliberately not also a licence to
+    /// misreport. What fusion cannot check is the claim about rows nobody pulled:
+    /// that a depth-stopped stream still held rows below its last rank is the
+    /// producer's word, and a stream stopped at its own declared bound makes no claim
+    /// there at all — which is exactly why that ending is not `Exhausted`.
     fn finish(&mut self, index: usize, receipt: ProducerReceipt) -> Result<(), FusionError> {
         let actual = self.rows_pulled[index];
         match &receipt {
@@ -2337,7 +2358,9 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 .into());
             }
-            ProducerReceipt::DepthReached { rank } if *rank != actual => {
+            ProducerReceipt::DepthReached { rank } | ProducerReceipt::RowBoundReached { rank }
+                if *rank != actual =>
+            {
                 return Err(ProtocolError::ForgedReceipt {
                     declared: *rank,
                     actual,

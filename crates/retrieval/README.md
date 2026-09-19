@@ -131,14 +131,17 @@ plainly that no test covers it. Read it before writing a `RankedDeclaration`.
 
 ## What a read ending says, and what the index attested
 
-A producer's terminal status says **who stopped the read**, and there are five
+A producer's terminal status says **who stopped the read**, and there are six
 spellings. `Exhausted` is the one ending that names no stopper — the producer
 emitted every row *its search produced*. That is not, on its own, a claim that
 everything matching was returned: a producer whose search does not find every
 row that was due still runs out of the rows it found, and reports exactly this.
 What the status has to be read beside is the stratum's declared fidelity, below.
 `DepthReached` is the planned depth stopping a
-producer that had more to give, stated in rank space. `CeilingReached` is a
+producer that had more to give, stated in rank space. `RowBoundReached` is the
+producer's own declared row bound stopping it: a producer that takes its depth as
+an argument, read to the number it registered, so the row past it could not be
+asked for and whether one exists was not observable. `CeilingReached` is a
 contribution bound, written either by the producer or by a fused top-k that
 stopped reading. `TermsRejected` is the producer declining the terms it was
 handed, and `ExecutionFailed` is a run that could not happen. Neither of the last

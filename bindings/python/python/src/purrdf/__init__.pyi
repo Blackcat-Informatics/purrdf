@@ -2268,9 +2268,9 @@ class retrieval:
     # Each entry under `"units"` is `{"stratum": str, "sparql": str, "depth":
     # int}`. `"depth"` is the REPORTABLE bound — the most rows that stratum may
     # contribute to an answer — and it is deliberately NOT the `LIMIT` in
-    # `"sparql"`. The text is emitted at most `depth + 1` rows deep, and that last
+    # `"sparql"`. The text is emitted exactly `depth + 1` rows deep, and that last
     # row is a probe: it exists only so a reader can tell a producer that ran out
-    # of rows from a read the plan's depth cut short, two endings a text bounded
+    # of rows from a read the planned depth cut short, two endings a text bounded
     # at exactly `depth` cannot distinguish. The probe row is a READ and never a
     # value. So a host that runs the text itself keeps at most `"depth"` rows and
     # reports nothing past them; `search`, which runs the units for you, already
@@ -2282,7 +2282,19 @@ class retrieval:
     # bound cut, so reporting exhaustion there would rest on a number nobody
     # checked. The unit asks for one row more instead. If that row arrives the
     # producer contradicted its own registration and the read is refused by name;
-    # if it does not, the exhaustion is verified rather than believed.
+    # if it does not, the exhaustion is verified rather than believed. It is
+    # emitted at a declared row bound of ZERO too: that declaration is read rather
+    # than obeyed, so the depth is floored at one row and the text still reaches
+    # for a second.
+    #
+    # One shape cannot be probed, and its answer says so rather than guessing. A
+    # relation that takes the depth as an ARGUMENT bounds itself by the number it
+    # is handed, and that number is never raised past the row count the relation
+    # registered — asking for more asks it to contradict its own registration. So
+    # where the depth already sits on that registration the relation is asked for
+    # exactly `depth` rows and no row past them can arrive, however many its index
+    # holds. That stratum's status is `"row_bound_reached"`, which names the
+    # declared bound as the stopper and claims nothing about what lies below it.
     #
     # The extra row is in the `LIMIT` only — a ceiling the evaluator applies to a
     # cursor the producer never hears about, so probing costs nothing and a
@@ -2362,23 +2374,28 @@ class retrieval:
     # correction of the other.
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
-    # `"status"` string has exactly five spellings. `"exhausted"` (with
+    # `"status"` string has exactly six spellings. `"exhausted"` (with
     # `"rows_emitted"`: int) is the only one that names no stopper — that producer
     # emitted every row ITS SEARCH PRODUCED. On its own that is not a claim that
     # everything matching was returned, which is why it is read beside the
-    # stratum's `"fidelities"` entry and never instead of it. The other four each
+    # stratum's `"fidelities"` entry and never instead of it. The other five each
     # name who stopped the read and where, and none may be read as "that was all
     # of it":
     # `"depth_reached"` (with `"rank"`: int) is the producer stopping at the depth
     # the plan gave it, verified against the rows fusion pulled, so ranks one
     # through `"rank"` were read and nothing below was looked at;
+    # `"row_bound_reached"` (with `"rank"`: int) is the producer stopping at the row
+    # count IT declared it can serve per invocation — it takes its depth as an
+    # argument, the depth already sat on that declaration, so the row past it could
+    # not be asked for and whether one exists was NOT observable, which is why this
+    # is not `"exhausted"`;
     # `"ceiling_reached"` (with `"bound"`: an exact decimal `str`) is a
     # contribution bound, every row at or above it read and the rows below not —
     # what a fusion the caller's `top_k` stopped writes over the streams it
     # stopped; `"execution_failed"` (with `"reason"`: str) is a producer that
     # could not run at all; and `"terms_rejected"` is one that declined the
     # request terms it was handed. "Answered with nothing" and "could not answer"
-    # stay distinguishable, because none of the five is reduced to a flag.
+    # stay distinguishable, because none of the six is reduced to a flag.
     #
     # `"attestations"` maps a stratum to what the index behind its stream
     # attested, as `{"generation": str | None, "incomplete": str | None}`, read

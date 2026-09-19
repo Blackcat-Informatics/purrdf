@@ -1511,8 +1511,8 @@ fn planned_resolution_dict<'py>(
 /// will cost in rank resolution under the law the caller named.
 ///
 /// Each unit carries its `"depth"` beside its `"sparql"`, because the emitted
-/// text is written one row deeper than the plan reads wherever the producer's
-/// declaration left room for it: that last row is a probe the executor reads to
+/// text is written exactly one row deeper than the plan reads: that last row is a
+/// probe the executor reads to
 /// tell an exhausted producer from a depth-cut one, and it is never a value. A
 /// host that runs the text itself has no other honest source for the number of
 /// rows it may keep — the depth is not recoverable from the text, and
@@ -1533,7 +1533,7 @@ fn compile_dict<'py>(
         // The unit's own reportable bound, read off the field that carries it
         // rather than re-derived from the text or looked up again in the plan:
         // the text's `LIMIT` is the emitted bound, which includes the probe.
-        entry.set_item("depth", unit.depth)?;
+        entry.set_item("depth", unit.depth())?;
         units.append(entry)?;
     }
     out.set_item("units", units)?;
@@ -1650,6 +1650,14 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
             }
             ProducerStatus::DepthReached { rank } => {
                 entry.set_item("status", "depth_reached")?;
+                entry.set_item("rank", rank)?;
+            }
+            // The producer read to the row count it registered and could not be
+            // asked for the row past it, so how the read ended was not observable.
+            // It carries a rank like `"depth_reached"` and claims nothing about what
+            // lies below it, which is the whole difference between the two.
+            ProducerStatus::RowBoundReached { rank } => {
+                entry.set_item("status", "row_bound_reached")?;
                 entry.set_item("rank", rank)?;
             }
             ProducerStatus::CeilingReached { bound } => {
@@ -1935,13 +1943,21 @@ fn plan<'py>(
 /// runs them and fuses their rows.
 ///
 /// `"depth"` is the reportable bound and it is **not** the `LIMIT` in
-/// `"sparql"`: the text is emitted at most one row deeper, and that extra row is
+/// `"sparql"`: the text is emitted exactly one row deeper, and that extra row is
 /// a probe that exists only so a reader can tell a producer that ran out from a
 /// read the depth cut. A host that runs the text itself keeps at most `"depth"`
-/// rows and reports none of what came after. "At most one row deeper" is exact:
-/// where the producer's declared row bound already equals the depth there is no
-/// room for a probe and none is emitted, so the text's `LIMIT` equals `"depth"`
-/// there.
+/// rows and reports none of what came after. "Exactly one row deeper" is exact and
+/// unconditional: the declared row bound does not cap it, including a declared bound
+/// of zero, because a bound equal to its own depth admits no row for the probe to
+/// arrive in and every such read would be reported as an exhaustion.
+///
+/// One relation shape is bounded by something the text does not carry: one that
+/// takes the depth as an argument bounds itself by the number it was handed, which
+/// is never raised past the row count it registered. Where the depth already sits on
+/// that registration such a relation returns at most `"depth"` rows whatever its
+/// index holds, so a host running the text itself learns nothing about what lay
+/// below — and [`search`], which runs it, reports that stratum
+/// `"row_bound_reached"` rather than `"exhausted"`.
 ///
 /// `"planned_resolution"` is what those depths will cost in rank resolution,
 /// per stratum, **before** anything is executed: each entry names the
@@ -2071,19 +2087,24 @@ fn compile<'py>(
 /// reaching its planned depth, and that gap is the point: a depth a fusion never
 /// reached cost it nothing.
 ///
-/// Every `"statuses"` entry spells its own ending, and there are exactly five
+/// Every `"statuses"` entry spells its own ending, and there are exactly six
 /// spellings. `"exhausted"` (with `"rows_emitted"`) is the ONLY completeness
-/// claim of the five: that producer emitted every row it had. The other four
+/// claim of the six: that producer emitted every row it had. The other five
 /// each name who stopped the read and where. `"depth_reached"` (with `"rank"`)
 /// is the producer stopping at the depth the plan gave it, verified against the
 /// rows fusion really pulled: ranks one through `"rank"` were read and nothing
-/// below it was looked at. `"ceiling_reached"` (with `"bound"`, an exact decimal
-/// `str`) is a contribution bound: every row at or above it was read and the
-/// rows below were not — usually written by a fusion the caller's `top_k`
+/// below it was looked at. `"row_bound_reached"` (with `"rank"`) is the producer
+/// stopping at the row count IT declared it can serve per invocation: it takes its
+/// depth as an argument, the depth was already on that declaration, so the row past
+/// it could not be asked for and whether one exists was NOT observable — which is
+/// why it is not `"exhausted"`, and why reading deeper means raising that producer's
+/// declared bound rather than re-planning. `"ceiling_reached"` (with `"bound"`, an
+/// exact decimal `str`) is a contribution bound: every row at or above it was read
+/// and the rows below were not — usually written by a fusion the caller's `top_k`
 /// stopped. `"execution_failed"` (with `"reason"`) is the producer that could
 /// not run at all, and `"terms_rejected"` is the producer that declined the
 /// request terms it was handed. A stratum that answered with nothing and one
-/// that could not answer stay distinguishable, because none of the five is
+/// that could not answer stay distinguishable, because none of the six is
 /// reduced to an aggregate flag.
 ///
 /// `"attestations"` maps each stratum whose stream was handed to fusion to what

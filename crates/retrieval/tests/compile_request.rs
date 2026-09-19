@@ -23,9 +23,9 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, Iri, Metric, Plan, PlanError, ProducerStatus,
-    RankFidelity, RankedStreamImpl, ReadBound, RejectionReason, RequestTerm, RetrievalRequest,
-    Statistics, Term, TopK, UnservedReason, UnservedTerm, compile, execute, plan,
+    AdmissionEnvironment, AdmissionError, ExecutionError, Iri, Metric, Plan, PlanError,
+    ProducerStatus, RankFidelity, RankedStreamImpl, ReadBound, RejectionReason, RequestTerm,
+    RetrievalRequest, Statistics, Term, TopK, UnservedReason, UnservedTerm, compile, execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
@@ -160,6 +160,14 @@ struct Spec {
     /// term existed, so a spec that says nothing about domains keeps exactly the
     /// reading it had.
     domains: CandidateDomains,
+    /// Whether the producer promises each candidate appears at most once in its
+    /// own stream.
+    ///
+    /// [`DuplicatePolicy::Unique`] is the fixture default because it is the
+    /// promise every fixture here keeps. `Allowed` is the honest declaration of a
+    /// producer whose rows are not its candidates, and it is one of the two shapes
+    /// that cannot narrow a depth to a request's bound.
+    duplicates: DuplicatePolicy,
 }
 
 impl Spec {
@@ -177,7 +185,14 @@ impl Spec {
             candidate: 0,
             mandatory: false,
             domains: CandidateDomains::Unrestricted,
+            duplicates: DuplicatePolicy::Unique,
         }
+    }
+
+    /// Declare that the producer's stream may name one candidate more than once.
+    const fn repeats(mut self) -> Self {
+        self.duplicates = DuplicatePolicy::Allowed;
+        self
     }
 
     /// Restrict the producer to the single block `tag`.
@@ -267,7 +282,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 accepted_terms: spec.accepted,
                 depth_placement: spec.depth,
                 candidate_position: spec.candidate,
-                duplicates: DuplicatePolicy::Unique,
+                duplicates: spec.duplicates,
                 fidelity: RankFidelity::EXACT,
                 domains: spec.domains,
                 block_position: None,
@@ -623,7 +638,8 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
         compiled.units[0].sparql
     );
     assert_eq!(
-        compiled.units[0].depth, 3,
+        compiled.units[0].depth(),
+        3,
         "the recorded depth is the plan's, not the emitted bound"
     );
 
@@ -698,7 +714,8 @@ fn a_zero_statistic_still_plans_one_row_and_the_producer_reports_the_emptiness()
             compiled.units[0].sparql
         );
         assert_eq!(
-            compiled.units[0].depth, 1,
+            compiled.units[0].depth(),
+            1,
             "the floored depth is one, and the probe row does not raise it"
         );
     }
@@ -1090,24 +1107,116 @@ fn a_producer_declaring_no_rows_is_planned_at_one_row_and_still_serves_its_term(
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/narrow")))
         .expect("the zero-declaring producer's stratum emits a unit");
-    assert_eq!(narrow.depth, 1, "the unit reads one row");
-    // The emitted bound is the floor rather than `min(depth, 0)`. A `LIMIT 0`
-    // here would hand back no row whatever the relation holds, and the stratum
-    // would then be reported exhausted with nothing — a completeness claim about
-    // the bound, which is the exact defect this arm exists to keep out of the tree.
-    // It is also the one declaration that gets no probe slot: the floor IS the
-    // depth here, so nothing can arrive past it, which is deliberate — a zero
-    // declaration is read rather than obeyed, and the row the layer asked for on
-    // purpose is not a breach of it.
+    assert_eq!(narrow.depth(), 1, "the unit reads one row");
+    // The emitted bound is one row past the depth, not `min(depth, 0) + 1`. A
+    // `LIMIT 0` here would hand back no row whatever the relation holds, and the
+    // stratum would then be reported exhausted with nothing — a completeness claim
+    // about the bound, which is the exact defect this arm exists to keep out of the
+    // tree. `LIMIT 1` is the same defect one size smaller: a bound EQUAL to the depth
+    // leaves no slot for a row to arrive in, so the exhaustion would again be the
+    // bound's claim rather than the producer's. A zero declaration is read rather than
+    // obeyed, and reading it means probing past it.
     assert!(
-        narrow.sparql.ends_with("LIMIT 1"),
-        "a declared zero still emits one row, never `LIMIT 0`: {}",
+        narrow.sparql.ends_with("LIMIT 2"),
+        "a declared zero is read one row past its floored depth: {}",
         narrow.sparql
     );
     assert!(
         !narrow.sparql.contains("LIMIT 0"),
         "no part of the unit is bounded at nothing: {}",
         narrow.sparql
+    );
+}
+
+/// A declared zero is READ rather than obeyed, all the way through execution: the
+/// emptiness it reports is verified, and a wrong zero is as loud as a wrong bound of
+/// any other size.
+///
+/// The floored depth of one used to be emitted at `LIMIT 1` — a bound *equal* to its
+/// own depth, which is the one state `ProbedDepth` exists to make unwritable,
+/// reached through the declaration instead of through the depth. Nothing could
+/// arrive past it, so the stratum was certified `Exhausted` whatever the index turned
+/// out to hold: an index that really was empty and one holding nine rows produced
+/// byte-identical trailers. One row past the depth is what tells them apart.
+#[test]
+fn a_declared_zero_is_read_past_rather_than_obeyed_and_a_wrong_one_is_refused() {
+    let empty_stratum = iri(&ex("stratum/empty"));
+    let terms = || vec![lexical("quick brown fox", None)];
+    let holding = |count: usize| {
+        registry_of(vec![(
+            "empty",
+            Spec::new(
+                "empty",
+                vec![alternative(
+                    TermPattern::of_kind(TermKind::Literal),
+                    value_at(1),
+                )],
+            )
+            .rows(0, count),
+        )])
+    };
+    let run = |registry: &PropertyFunctionRegistry| {
+        let stats = statistics(&[]);
+        let planned = plan(&request(terms()), registry, &stats).expect("a declared zero plans");
+        assert_eq!(
+            planned.stratum_depths[&empty_stratum], 1,
+            "the planner floors a declared zero at the one probing row"
+        );
+        let env = AdmissionEnvironment {
+            registry,
+            statistics: &stats,
+            fusion_profile: None,
+        };
+        let compiled = compile(&planned, &env).expect("and the floored depth admits");
+        assert!(
+            compiled.units[0].sparql.ends_with("LIMIT 2"),
+            "the emitted bound reads one row PAST the floored depth: {}",
+            compiled.units[0].sparql
+        );
+        assert_eq!(compiled.units[0].declared_rows(), Some(0));
+        block_on(execute(&compiled, registry, &*common::empty_dataset()))
+    };
+
+    // The index that really is empty: nothing came back, and the read was allowed a
+    // second row, so the exhaustion is the producer's verified report.
+    let (really_empty, logs) = holding(0);
+    assert_eq!(
+        run(&really_empty).expect("the unit runs").statuses[&empty_stratum],
+        ProducerStatus::Exhausted { rows_emitted: 0 },
+        "the producer was asked, had nothing, and could have said otherwise"
+    );
+    assert_eq!(
+        invocations(&logs, "empty"),
+        1,
+        "and it really was opened: a bound equal to the depth would have faked this"
+    );
+
+    // One row behind a declaration of none. The read reached for a second and there
+    // was none, so this stratum genuinely is complete at one row — which is what the
+    // floor buys, and it is a claim about the data rather than about the zero.
+    let (holds_one, _) = holding(1);
+    assert_eq!(
+        run(&holds_one).expect("the unit runs").statuses[&empty_stratum],
+        ProducerStatus::Exhausted { rows_emitted: 1 },
+        "the floored row is a real read, and what it found is what is reported"
+    );
+
+    // Nine rows behind a declaration of none. The second row arrives, and it is the
+    // producer contradicting the registry — refused by name, exactly as a wrong
+    // declaration of any other size is, instead of certified as an exhaustion at one
+    // row.
+    let (holds_nine, _) = holding(9);
+    let error = run(&holds_nine).expect_err("a second row from a producer that declared none");
+    assert!(
+        matches!(
+            error,
+            ExecutionError::RowBoundBreached {
+                declared: 0,
+                pulled: 2,
+                ..
+            }
+        ),
+        "the breach names both numbers, got {error:?}"
     );
 }
 
@@ -1275,6 +1384,124 @@ fn a_knn_producer_without_a_depth_placement_is_refused_and_with_one_is_admitted(
     assert!(
         sparql.ends_with("LIMIT 5"),
         "the unit still carries the stratum's contract with fusion: {sparql}"
+    );
+}
+
+/// A producer that bounds itself at its own declaration reports that bound as the
+/// stopper, and a **wrong** declaration there is still caught by the unit's own
+/// `LIMIT`.
+///
+/// This is the shipped nearest-neighbour relation's shape, driven end to end: the
+/// depth is handed over as an argument rather than applied as a ceiling, and the
+/// argument is never raised past the row count the producer registered. So at a
+/// depth already on that declaration the read is asked for exactly `depth` rows and
+/// the slot past the depth can never be filled, however many rows the index holds.
+///
+/// Four arms, because the ending has to be exactly as narrow as the observation:
+/// the unobservable one, the wrong declaration that is still loud, the short answer
+/// that really is exhaustion, and the same producer read below its declaration,
+/// where the argument carries the probe and the ordinary ending returns.
+#[test]
+fn a_self_bounding_producer_reports_the_bound_that_stopped_it_and_still_catches_a_wrong_one() {
+    let knn = iri(&ex("stratum/knn"));
+    let terms = || vec![lexical("quick brown fox", None)];
+    let placement = || DepthPlacement {
+        position: 2,
+        datatype: XSD_INTEGER.to_owned(),
+    };
+    // `rows` is what the producer declares per invocation and `count` is what this
+    // mock really holds; the mock ignores both the depth argument and the engine's
+    // ceiling, which is what lets one fixture play an honest producer and a liar.
+    let spec = |rows: u64, count: usize| {
+        registry_of(vec![("knn", knn_spec(Some(placement())).rows(rows, count))]).0
+    };
+    let run = |registry: &PropertyFunctionRegistry, stats: &MockStatistics| {
+        let planned = plan(&request(terms()), registry, stats).expect("the fixture request plans");
+        let env = AdmissionEnvironment {
+            registry,
+            statistics: stats,
+            fusion_profile: None,
+        };
+        let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
+        let depth = compiled.units[0].depth();
+        let sparql = compiled.units[0].sparql.clone();
+        (
+            depth,
+            sparql,
+            block_on(execute(&compiled, registry, &*common::empty_dataset())),
+        )
+    };
+
+    // (a) Declared three, holds three, planned at three. The argument is three —
+    //     never four, which would ask the producer to breach its registration — so
+    //     the unit's `LIMIT 4` can never be filled and NOTHING here can say whether
+    //     a fourth row exists. `Exhausted` would be a completeness claim minted from
+    //     the declaration; the ending names the declaration instead.
+    let honest = spec(3, 3);
+    let (depth, sparql, execution) = run(&honest, &statistics(&[]));
+    assert_eq!(depth, 3, "the declared bound is the depth");
+    assert!(
+        sparql.contains(&format!("\"3\"^^<{XSD_INTEGER}>")),
+        "the argument stops at the declaration: {sparql}"
+    );
+    assert!(
+        sparql.ends_with("LIMIT 4"),
+        "while the unit's own bound still reaches one row past it: {sparql}"
+    );
+    assert_eq!(
+        execution.expect("the unit runs").statuses[&knn],
+        ProducerStatus::RowBoundReached { rank: 3 },
+        "the read went to the producer's own declared bound, and whether anything \
+         lies below it was not observable"
+    );
+
+    // (b) The same declaration over a producer holding nine rows. The unit's bound
+    //     reaches one row past the declaration, so the fourth row arrives and the
+    //     run is refused by name — a wrong declaration is still loud here, which is
+    //     what the emitted `LIMIT` buys that the argument cannot.
+    let liar = spec(3, 9);
+    let (depth, _, execution) = run(&liar, &statistics(&[]));
+    assert_eq!(depth, 3);
+    let error = execution.expect_err("a fourth row from a producer that declared three");
+    assert!(
+        matches!(
+            error,
+            ExecutionError::RowBoundBreached {
+                declared: 3,
+                pulled: 4,
+                ..
+            }
+        ),
+        "the breach is refused by name, got {error:?}"
+    );
+
+    // (c) The same declaration over a producer holding one row. It returned fewer
+    //     rows than it was allowed, so nothing stopped it and the exhaustion is
+    //     verified rather than assumed — this ending must not spread to the case
+    //     where the read really did run out.
+    let short = spec(3, 1);
+    let (_, _, execution) = run(&short, &statistics(&[]));
+    assert_eq!(
+        execution.expect("the unit runs").statuses[&knn],
+        ProducerStatus::Exhausted { rows_emitted: 1 },
+        "a short answer to a request for three is exhaustion, verified"
+    );
+
+    // (d) The neighbour where the ending IS observable: the same producer declaring
+    //     ten rows with a measured cardinality of four, so the depth sits BELOW the
+    //     declaration. The argument then carries the probe row, the ninth row the
+    //     mock holds arrives in it, and the ordinary `DepthReached` returns.
+    let deep = spec(10, 9);
+    let (depth, sparql, execution) = run(&deep, &statistics(&[("knn", 4)]));
+    assert_eq!(depth, 4, "the measured cardinality narrows the depth");
+    assert!(
+        sparql.contains(&format!("\"5\"^^<{XSD_INTEGER}>")),
+        "and the argument carries the probe row, because the declaration leaves room: {sparql}"
+    );
+    assert_eq!(
+        execution.expect("the unit runs").statuses[&knn],
+        ProducerStatus::DepthReached { rank: 4 },
+        "a depth below the declaration is probed like any other read"
     );
 }
 
@@ -1877,7 +2104,7 @@ fn depths_and_limits(
                 .next()
                 .expect("a stratum IRI has a last segment")
                 .to_owned();
-            (name, (unit.depth, emitted_limit(&unit.sparql)))
+            (name, (unit.depth(), emitted_limit(&unit.sparql)))
         })
         .collect()
 }
@@ -2059,6 +2286,291 @@ fn a_bound_gives_an_unbounded_declaration_a_finite_depth_and_its_absence_still_r
     assert!(
         matches!(refused, PlanError::StatisticsUnavailable { .. }),
         "expected StatisticsUnavailable, got {refused:?}"
+    );
+}
+
+/// One stratum whose producer *declares* `rows` rows per invocation and emits two,
+/// optionally restricted to a single block of the candidate universe.
+///
+/// The declared number and the corpus behind it are deliberately unrelated: these
+/// cases are about the depth a declaration licenses, and a fixture that really held
+/// four billion rows would be a test of the allocator. The block is a parameter
+/// because a declared block set is one of the two premises that let a request's own
+/// bound become the depth — without it the declaration stands and the bound narrows
+/// nothing at all.
+fn deep_registry(rows: u64, block: Option<&str>) -> PropertyFunctionRegistry {
+    let accepted = vec![alternative(
+        TermPattern::of_kind(TermKind::Literal),
+        value_at(1),
+    )];
+    let spec = Spec::new("deep", accepted).rows(rows, 2);
+    let spec = match block {
+        None => spec,
+        Some(tag) => spec.within(tag),
+    };
+    registry_of(vec![("deep", spec)]).0
+}
+
+/// [`deep_registry`]'s declaration, one field over: the producer says its stream
+/// may repeat a candidate.
+///
+/// That is the other shape a request's bound cannot narrow — a stream whose rows
+/// are not its candidates holds fewer than `k` candidates in `k` rows, so no
+/// arrangement of declared blocks makes the prefix argument hold.
+fn repeating_deep_registry(rows: u64) -> PropertyFunctionRegistry {
+    let accepted = vec![alternative(
+        TermPattern::of_kind(TermKind::Literal),
+        value_at(1),
+    )];
+    registry_of(vec![(
+        "deep",
+        Spec::new("deep", accepted).rows(rows, 2).repeats(),
+    )])
+    .0
+}
+
+#[test]
+fn a_declared_row_bound_past_the_read_range_is_planned_at_the_ceiling() {
+    let stats = statistics(&[]);
+    let needle = || vec![lexical("quick brown fox", None)];
+    // The deepest depth a read can be taken to. It is one shallower than the
+    // deepest a plan can express, because the read is emitted one row past the
+    // depth: that probe row is how the executor tells a read the bound cut from a
+    // read that ran out, and at `u32::MAX` it is not a number a `LIMIT` can hold.
+    let deepest = u32::MAX - 1;
+
+    // A declaration of exactly that many rows plans, records the depth, and is
+    // emitted with the probe row one past it.
+    assert_eq!(
+        depths_and_limits(
+            &deep_registry(u64::from(deepest), None),
+            &stats,
+            &RetrievalRequest::complete(needle()),
+        ),
+        BTreeMap::from([("deep".to_owned(), (deepest, u32::MAX))]),
+        "the deepest readable depth is read, recorded and probed like any other"
+    );
+
+    // One row deeper, and a declaration well past the range: both are honest
+    // descriptions of an index larger than a read can be taken to, so both are
+    // recorded AT the ceiling rather than refused. The old truncation to `u32::MAX`
+    // was wrong twice over — it recorded a depth below the bound it claimed to serve
+    // with nothing comparing the two, and at that exact value it left the compiler
+    // no room for the probe row, so the read was reported exhausted whatever the
+    // relation held. At the ceiling the probe row fits, so a read this bound cuts
+    // ends `DepthReached`, which names the planned depth as the stopper.
+    for declared in [u64::from(u32::MAX), u64::from(u32::MAX) + 100] {
+        assert_eq!(
+            depths_and_limits(
+                &deep_registry(declared, None),
+                &stats,
+                &RetrievalRequest::complete(needle()),
+            ),
+            BTreeMap::from([("deep".to_owned(), (deepest, u32::MAX))]),
+            "a declaration of {declared} rows is read to the ceiling, not refused"
+        );
+    }
+
+    // The unbounded declaration keeps its own distinct refusal. "Nothing bounds this
+    // read at all" and "this index is bigger than a read can reach" are two facts:
+    // the first has no number to record at all, and inventing the ceiling for it
+    // would claim a bound the registry never declared.
+    let unbounded = plan(
+        &RetrievalRequest::complete(needle()),
+        &deep_registry(u64::MAX, None),
+        &stats,
+    )
+    .expect_err("an unbounded declaration with nothing to bound it is refused");
+    assert!(
+        matches!(unbounded, PlanError::StatisticsUnavailable { .. }),
+        "expected StatisticsUnavailable, got {unbounded:?}"
+    );
+
+    // And an ordinary declaration is untouched by any of it.
+    assert_eq!(
+        depths_and_limits(
+            &deep_registry(7, None),
+            &stats,
+            &RetrievalRequest::complete(needle()),
+        ),
+        BTreeMap::from([("deep".to_owned(), (7, 8))]),
+        "a depth nowhere near the ceiling is derived exactly as it was"
+    );
+}
+
+/// A small `top_k` over an honestly oversized declaration is served, whatever the
+/// producer's shape.
+///
+/// The three shapes below are the whole of what decides whether a request's bound
+/// can become the depth, and only the first one can. The other two are the ordinary
+/// configuration rather than an exotic one — `Allowed` says the producer's rows are
+/// not its candidates, and `Unrestricted` is the shipped nearest-neighbour
+/// relation's own documented default — so a refusal here would have left a host two
+/// dishonest ways out: under-declare `rows_per_invocation`, or fabricate a
+/// cardinality statistic. What the two non-narrowing shapes pay instead is a depth
+/// at the ceiling, which is a cost the read's own ending can report rather than a
+/// number nobody compares.
+#[test]
+fn a_small_top_k_over_an_oversized_declaration_plans_admits_and_runs() {
+    let stats = statistics(&[]);
+    let needle = || vec![lexical("quick brown fox", None)];
+    let oversized = u64::from(u32::MAX) + 100;
+    let deepest = u32::MAX - 1;
+    let top_ten = || RetrievalRequest::bounded(needle(), TopK::new(10));
+
+    // The narrowing shape: unique candidates inside one declared block, so the
+    // request's own bound IS the depth and the oversized declaration never binds.
+    assert_eq!(
+        depths_and_limits(
+            &deep_registry(oversized, Some("block/deep")),
+            &stats,
+            &top_ten(),
+        ),
+        BTreeMap::from([("deep".to_owned(), (10, 11))]),
+        "a licensed prefix narrows the read to the ten rows the answer is for"
+    );
+
+    // The two that cannot narrow. Both plan, both admit, both compile, and both
+    // record the ceiling — with the probe row one past it, which is what keeps the
+    // ending observable.
+    for spec in [
+        deep_registry(oversized, None),
+        repeating_deep_registry(oversized),
+    ] {
+        assert_eq!(
+            depths_and_limits(&spec, &stats, &top_ten()),
+            BTreeMap::from([("deep".to_owned(), (deepest, u32::MAX))]),
+            "a non-narrowing shape reads to the ceiling rather than being refused"
+        );
+    }
+
+    // And it executes. The relation behind these fixtures holds two rows, so the
+    // read returns two into a bound of `u32::MAX`, the probe slot comes back empty,
+    // and the exhaustion is VERIFIED rather than claimed on the strength of the
+    // declaration — which is the whole point of recording the ceiling with its probe
+    // instead of refusing the plan.
+    let registry = repeating_deep_registry(oversized);
+    let planned = plan(&top_ten(), &registry, &stats).expect("the oversized declaration plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("and it is admitted");
+    let execution = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
+        .expect("and the unit runs");
+    assert_eq!(
+        execution.statuses.get(&iri(&ex("stratum/deep"))),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 2 }),
+        "the read the ceiling allowed was longer than the index, so it ran out — \
+         and the empty probe slot is what verifies that"
+    );
+}
+
+#[test]
+fn a_read_bound_no_rank_can_address_is_refused_and_the_addressable_ones_plan() {
+    let stats = statistics(&[]);
+    let needle = || vec![lexical("quick brown fox", None)];
+    let disjoint = Some(("block/notes", "block/titles"));
+    // The largest bound a read can be PLANNED for, which is one shallower than the
+    // largest a rank can express: where the declarations license it the bound is a
+    // stratum's depth, and a read is emitted one row deeper than its depth. The
+    // refusal's message names this number, and the neighbours below execute both
+    // halves of that claim — this bound is served, and the next one up is not.
+    let addressable =
+        usize::try_from(u64::from(u32::MAX - 1)).expect("a 64-bit host addresses a 32-bit rank");
+
+    // Refused: a fused row count no read can be planned for. This is the
+    // configuration the truncation hid in — disjoint blocks and unique candidates,
+    // where the bound IS each stratum's depth — so the plan recorded `Bounded(k)`
+    // beside a depth below `k`, and nothing anywhere compared the two.
+    for requested in [addressable + 1, usize::MAX / 2] {
+        let refused = plan(
+            &RetrievalRequest::bounded(needle(), TopK::new(requested)),
+            &two_stratum_registry(400, disjoint),
+            &stats,
+        )
+        .expect_err("a bound no depth can reach is refused");
+        match refused {
+            PlanError::ReadBoundBeyondDepthRange {
+                requested: named,
+                ceiling,
+            } => {
+                assert_eq!(named, requested, "the refusal names the number asked for");
+                assert_eq!(
+                    ceiling,
+                    u64::from(u32::MAX - 1),
+                    "and the ceiling it names is one a read really can be planned for"
+                );
+            }
+            ref other => panic!("expected ReadBoundBeyondDepthRange, got {other:?}"),
+        }
+    }
+
+    // Both valid neighbours: the largest bound a rank addresses, and an ordinary
+    // small one. Neither is refused, and neither moves a depth — the declaration is
+    // below the first and the second narrows to itself, exactly as before.
+    for (bound, expected) in [
+        (
+            TopK::new(addressable),
+            BTreeMap::from([
+                ("notes".to_owned(), (400, 401)),
+                ("titles".to_owned(), (400, 401)),
+            ]),
+        ),
+        (
+            TopK::new(9),
+            BTreeMap::from([
+                ("notes".to_owned(), (9, 10)),
+                ("titles".to_owned(), (9, 10)),
+            ]),
+        ),
+    ] {
+        assert_eq!(
+            depths_and_limits(
+                &two_stratum_registry(400, disjoint),
+                &stats,
+                &RetrievalRequest::bounded(needle(), bound),
+            ),
+            expected,
+            "an addressable bound plans: {bound}"
+        );
+    }
+
+    // The case the message has to be true for: a bound that really BECOMES the depth
+    // — an unbounded declaration whose one stratum declares its block, so the
+    // request's bound is the whole of what bounds the read. At the named ceiling it
+    // is served, end to end, with the probe row one past it. The message would be a
+    // lie if this were refused anywhere, so it is executed here rather than reasoned
+    // about.
+    assert_eq!(
+        depths_and_limits(
+            &deep_registry(u64::MAX, Some("block/deep")),
+            &stats,
+            &RetrievalRequest::bounded(needle(), TopK::new(addressable)),
+        ),
+        BTreeMap::from([("deep".to_owned(), (u32::MAX - 1, u32::MAX))]),
+        "the ceiling the refusal names is a bound this layer really plans a read for"
+    );
+
+    // And one row past it, in that same configuration, is the refusal above rather
+    // than a silently truncated depth — the request's own number, refused where the
+    // request is read.
+    let refused = plan(
+        &RetrievalRequest::bounded(needle(), TopK::new(addressable + 1)),
+        &deep_registry(u64::MAX, Some("block/deep")),
+        &stats,
+    )
+    .expect_err("a read one rank past the ceiling leaves no room for the probe row");
+    assert!(
+        matches!(
+            refused,
+            PlanError::ReadBoundBeyondDepthRange {
+                ceiling,
+                ..
+            } if ceiling == u64::from(u32::MAX - 1)
+        ),
+        "expected ReadBoundBeyondDepthRange, got {refused:?}"
     );
 }
 

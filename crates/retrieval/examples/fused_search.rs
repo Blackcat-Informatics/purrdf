@@ -553,6 +553,12 @@ fn report(result: &SearchResult) {
             ProducerStatus::DepthReached { rank } => {
                 format!("stopped at the depth it was given, after rank {rank}")
             }
+            ProducerStatus::RowBoundReached { rank } => {
+                format!(
+                    "read to the {rank} rows it declared it can serve; whether more exist was \
+                     not observable"
+                )
+            }
             ProducerStatus::CeilingReached { bound } => {
                 format!(
                     "still held rows; read down to {} and stopped",

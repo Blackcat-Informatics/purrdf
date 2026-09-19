@@ -236,6 +236,24 @@ the disagreement window. The saving is real, which means the belief is real: unt
 something drives a producer over data built to break the promise, "Unique" is a
 comment.
 
+**And it is what buys the bounded read.** A memory saving is not the whole of what
+this declaration spends. `Unique` is the promise that makes a count of ranks a
+count of candidates, and a bounded request's per-stratum depth of `k` is derived
+from exactly that identity: a candidate its stratum ranks past `k` is beaten by the
+`k` **distinct** candidates above it, and "distinct" is this obligation. An
+`Allowed` stream is de-duplicated by the consumer, so a repeat is validated,
+charged to the producer and then discarded — a depth-`k` prefix of it carries `k`
+rows and can carry fewer than `k` candidates, which is no longer a superset of the
+top `k`. So the planner narrows a depth only where every surviving stratum
+declared `Unique`, and an `Allowed` stratum keeps the full declared-or-measured
+depth it has always read, answering exactly as it does for a request that states no
+bound at all. A producer that collapses its fan-in and declares `Unique` therefore
+buys the bounded read for the whole request; one that cannot loses nothing but
+reading. Pinned by `the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave`
+and `an_allowed_stratum_keeps_the_read_its_repeats_need_and_answers_as_the_undeclared_one_does`
+in `tests/search.rs`, which assert the two answers row for row rather than
+comparing depths alone.
+
 **Who enforces it.** Both.
 
 The layer refuses a breach as
@@ -394,7 +412,7 @@ one answer to one question, bought at three different altitudes because no singl
 altitude can answer it.
 
 The layer's own purchase — the middle one — is the depth probe.
-[`compile`] emits `LIMIT max(1, min(depth, declared row bound) + 1)`, so a
+[`compile`] emits `LIMIT depth + 1`, so a
 unit whose producer still had rows past the planned depth hands back one more row
 than its stratum may contribute. That row is a **probe**: never emitted onto the
 stream, never ranked, never counted, present in no plan field, no identity and no
@@ -404,15 +422,53 @@ resolution number. All it decides is
 executor could only ever say `Exhausted` — the one ending that names no
 stopper — about a read the plan itself had cut short.
 
-The `+ 1` sits **outside** the `min`, and that placement is the rule rather than
-an arrangement of parentheses. Written inside it, the probe disappears at exactly
-one depth — the depth that already equals the producer's declared bound, where
-the `min` would select the declaration and the unit would be emitted at its own
-depth with no slot to probe with. That is the one depth an under-declaring
-producer lands a plan on, and it is the one where `Exhausted` would be a guess.
-Outside, the slot exists at every depth. It raises the emitted `LIMIT` only: the
-recorded depth is the number admission holds a plan to, and it does not move, so
-no plan field, identity or resolution number moves with it.
+Your declared row bound does **not** cap that emitted bound, at any size. The
+admission waist has already refused a recorded depth above your declaration, so
+`min(depth, declared)` selects the depth for every unit that can be emitted, and
+writing the `min` anyway would be a guard firing for no reachable plan. Its one
+consequential case was a bug rather than a saving: at the depth that already equals
+your declared bound — the depth an under-declaring producer lands a plan on —
+capping the bound erased the slot, and `Exhausted` became a guess at exactly the
+depth where it matters. A declared **zero** is the same bug one size smaller: the
+planner floors that depth at one, and a bound capped to the declaration was then
+`LIMIT 1` *equal* to the depth, so no row past it could arrive and the read was
+certified exhausted however many rows the index turned out to hold. A zero
+declaration is read rather than obeyed everywhere else in this layer
+(see [A12](#a12--bounds-narrow-they-never-zero)), so it is read here too: the
+emitted bound is `depth + 1` there as well, an empty index reports
+`Exhausted { rows_emitted: 0 }` as a *verified* claim, and an index that turns out
+to hold rows breaches its declaration by name exactly as a wrong declaration of any
+other size does.
+
+There is exactly one depth for which the slot could not be arranged — the top of the
+32-bit rank range, where the row past the depth is not a number a `LIMIT` can hold
+— and no unit is ever emitted there. Saturating would have emitted a bound equal to
+the depth, so no probe could arrive and the read would be certified `Exhausted`
+however many rows your relation still held: the `LIMIT 0` fault at the other end of
+the range. The planner records a derived bound past that ceiling **at** the ceiling,
+where the probe row still fits and `DepthReached` can still say the planned depth
+stopped the read; it refuses a *request* bound past it, because that number is the
+caller's own and asks for something unrepresentable
+(`PlanError::ReadBoundBeyondDepthRange`); and the waist refuses such a depth in an
+edited plan (`AdmissionError::DepthWithoutProbe`, the mirror of
+`AdmissionError::ZeroDepth`), as does `StratumUnit::new` in a hand-built bundle
+(`UnitError::DepthWithoutProbe`).
+
+Declaring more rows per invocation than a read can be taken to is therefore **not**
+a refusal. It is an honest description of a large index, the read the caller asked
+for may be a single page of it, and the shapes that cannot narrow a depth to that
+page — `DuplicatePolicy::Allowed`, or `CandidateDomains::Unrestricted`, which is the
+nearest-neighbour relation's own documented default — are ordinary rather than
+exotic. Refusing them would have left you two ways out and both are dishonest:
+under-declare `rows_per_invocation` against [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound),
+or invent a cardinality statistic. Pinned by
+`a_declared_row_bound_past_the_read_range_is_planned_at_the_ceiling`,
+`a_small_top_k_over_an_oversized_declaration_plans_admits_and_runs` and
+`a_read_bound_no_rank_can_address_is_refused_and_the_addressable_ones_plan` in
+`tests/compile_request.rs`, and by
+`a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling` in
+`tests/admission_tests.rs`, each of which executes the depth one rank shallower and
+requires it to plan, admit and compile with its probe row present.
 
 The slot is not an over-refusal either, because it costs an honest producer
 nothing. A producer that declared `n` and really holds `n` returns `n` rows into
@@ -422,15 +478,6 @@ after promising there is none, and the executor refuses the run by name
 (`ExecutionError::RowBoundBreached`, carrying the stratum, the declared bound and
 the count actually returned) rather than truncating to the depth and certifying
 the remainder as completeness.
-
-The outer `max(1)` is what a declared **zero** lands on: `min(depth, 0) + 1` is
-one, so such a producer is bounded at one row rather than at `LIMIT 0`, which
-would hand back nothing whatever its index holds and make its emptiness the
-bound's claim rather than its own
-(see [A12](#a12--bounds-narrow-they-never-zero)). There is no slot past the depth
-there and the refusal above is unreachable, which is deliberate: at a declared
-zero the layer reads the declaration rather than obeying it, and a row it asked
-for on purpose cannot breach anything.
 
 **If you declare a depth placement, the number you receive is bounded
 differently.** A `LIMIT` is a ceiling the evaluator applies to a cursor you never
@@ -443,15 +490,39 @@ your declaration leaves room, your declaration itself where it does not. Your
 unit's own `LIMIT` still sits one row past the declaration either way, so a
 self-bounding producer that returns more rows than it declared is still caught —
 you are simply never asked to produce them.
+
+**That class of producer has an ending of its own, because at one depth it cannot
+be probed at all.** Where the depth already sits on your declaration the two
+numbers coincide: you are asked for exactly `depth` rows, you return at most
+`depth` rows, and the slot past the depth can never be filled however many rows
+your index holds. How that read ended is then **genuinely unobservable**, and
+neither neighbouring ending is true of it — `DepthReached` would blame a planned
+depth that cut nothing, and `Exhausted` would claim your rows ran out on the
+strength of your own registration. So it is reported as
+`ProducerStatus::RowBoundReached`, which names the stopper it really had: the row
+bound you declared. It is reported **only** there. A depth below your declaration
+still receives the probe and still ends `DepthReached` or `Exhausted`, and a read
+that returned fewer rows than it was allowed is `Exhausted`, verified, because it
+stopped before anything stopped it.
+
+Raising the argument to go looking is not available and is not an oversight: it is
+precisely the request a conforming relation must refuse. If you want that read taken
+further, raise your declared row bound — re-planning deeper cannot help, because
+`capped` bounds every derived depth by the declaration.
 Pinned by
 `the_probe_separates_a_cut_read_from_an_exhausted_one` and
 `an_under_declared_row_bound_is_refused_and_an_honest_one_is_not` in
 `tests/execute_dataset.rs`, by
-`the_probe_row_changes_the_ending_and_nothing_else` and
-`a_row_past_the_declaration_is_refused_and_an_honest_one_is_not`
-in `src/execute.rs`, and by
-`the_neighbour_count_stays_inside_the_guard_while_the_limit_probes_past_it`
-in `tests/real_producers.rs`.
+`the_probe_row_changes_the_ending_and_nothing_else`,
+`a_row_past_the_declaration_is_refused_and_an_honest_one_is_not` and
+`a_self_bounding_producer_at_its_declaration_reports_the_bound_that_stopped_it`
+in `src/execute.rs`, by
+`a_self_bounding_producer_reports_the_bound_that_stopped_it_and_still_catches_a_wrong_one`
+in `tests/compile_request.rs` — whose four arms hold the unobservable ending, the
+wrong declaration the unit's own bound still catches, the short answer that really is
+exhaustion, and the depth below the declaration where the probe returns — and by
+`the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it`
+in `tests/real_producers.rs`, which drives the shipped relation end to end.
 
 `Exhausted` is the only ending that names no stopper. Every other one says who
 stopped the read.
@@ -473,23 +544,33 @@ declares `u64::MAX`.
 **The failure it prevents.** The two directions fail differently, and that
 asymmetry is the whole guidance.
 
-Under-declaring **refuses your own plans loudly**, in two places. The admission
-waist refuses a recorded depth above the declaration, and the compiled unit is
-emitted at `max(1, min(depth, declared bound) + 1)` — so an under-declaration
-caps the read at a number your index could have beaten, and then refuses the
-plans that ask for more. It is noisy, and it is a configuration error a host
-will find.
+Under-declaring **narrows your own reads**, and the waist refuses a recorded depth
+above the declaration, so an under-declaration caps the read at a number your index
+could have beaten. It is a configuration error a host will find.
 
-The second place is the one that matters at the depth the first cannot see. A
-plan whose depth lands *at* your declared bound is admitted — it asks for no more
-than you promised — and the emitted probe row therefore sits one past your
+What matters more is the depth that cap lands on. A plan whose depth lands *at* your
+declared bound is admitted — it asks for no more than you promised — and for a
+producer the evaluator bounds, the emitted probe row therefore sits one past your
 declaration. If your index really does stop where you said, that row never
 arrives and your stratum is reported
 [`ProducerStatus::Exhausted`], now verified rather
 than assumed. If it does not, the row arrives, and the run is refused by name with
 your declared bound and the count actually returned in the message
-(`ExecutionError::RowBoundBreached`). Either way the mistake is *said*. Nothing
+(`ExecutionError::RowBoundBreached`). Either way the mistake is *said*, and nothing
 is reported exhausted on the strength of a bound you got wrong.
+
+**If you declare a depth placement, that probe is not available at this depth, and
+the ending says so instead of guessing.** You are handed the depth rather than
+bounded by it, and the number you are handed is never raised past your declaration —
+so at a depth sitting on it you return exactly `depth` rows and no further row can be
+asked for. A wrong bound there is not caught, because there is nothing to catch it
+with; what the layer does instead is refuse to pretend. Your stratum is reported
+`ProducerStatus::RowBoundReached`, which names your declared bound as the stopper and
+claims nothing about what lies below it, and `Exhausted` is never minted from your
+declaration. The obligation this places on you is the one A9 already states: measure
+the bound from the index. The layer's promise is narrower and exact — it never
+reports exhaustion on the strength of a bound you got wrong; it reports that it read
+to your bound and stopped.
 
 This is what makes A8's reading of `rows_per_invocation` hold on this path rather
 than needing an exception carved out of it. The number remains an estimate in
@@ -619,8 +700,9 @@ brings the `LIMIT 0` back.
    in `tests/admission_tests.rs`, whose four arms hold the declared zero, the row
    past it, a recorded zero and the absent bound apart.
 3. **A recorded depth of zero is refused at admission** as
-   [`AdmissionError::ZeroDepth`], and the compiler's emitted bound is floored at
-   one row so a declared zero cannot write `LIMIT 0` either. Given the two above,
+   [`AdmissionError::ZeroDepth`], and the compiler's emitted bound is one row past
+   the depth whatever the declaration says, so a declared zero can write neither
+   `LIMIT 0` nor a `LIMIT` equal to its own depth. Given the two above,
    a recorded zero can only have come from an edited plan. A stratum that is to
    read nothing carries no entry at all. Pinned by
    `a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under`,
@@ -882,6 +964,19 @@ stream declares `Unrestricted` therefore computes precisely what it computed bef
 the term existed — the same rows, the same scores, the same provenance, the same
 reading cost.
 
+**And it licenses a narrower depth, conditioned on `Unique`.** The declaration buys
+a second thing, one stage earlier and larger than the quantifier: where a request
+states a bound of `k`, every surviving stratum declares a block set, no two of those
+sets meet, **and every one of those strata declared
+[`DuplicatePolicy::Unique`]**, the planner records a per-stratum depth of `k` and
+the compiled unit is emitted at that `LIMIT`. The read itself is bounded, not merely
+the walk over a stream that was materialized in full. The `Unique` condition is not
+decoration: the merge argument counts ranks and reads the count as a count of
+candidates, which is true only of a stream that names an item once — see
+[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer). Drop any one of the
+three conditions and the depth is the declared-or-measured bound it always was; no
+request is refused and no answer moves either way.
+
 **Who enforces it.** Both.
 
 The declaration is part of
@@ -931,6 +1026,21 @@ about the rows below them. This layer does not claim otherwise — it is the ide
 uniqueness declaration of [A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer)
 already carries, whose breach is likewise detected only when the repeat is actually
 read.
+
+**And the depth this declaration buys shortens that reach**, which is the one place
+the two halves of A15 pull against each other. A host that really has tagged one
+entity into two blocks is caught by `CandidateInTwoBlocks` only if both naming rows
+are pulled, and under a bounded request the read stops at `k` rows per stratum, so a
+second naming row at a deeper rank is never read and the contradiction leaves no
+trace. So the promise is exactly this and no more: **a mis-tagging is reported
+wherever the rows that witness it are among the rows pulled, and a narrower read
+pulls fewer of them.** Detection is strongest under
+[`ReadBound::Complete`], which reads every stratum to its declared
+or measured depth, and weakest under a small bound over strata that declare disjoint
+blocks — the configuration the narrowing exists for. A host commissioning a new
+partition therefore has somewhere to exercise it: run the corpus once complete, where
+every row is measured against the declaration, rather than inferring from bounded
+traffic that the tags are sound.
 
 **Nothing is defaulted from a stratum or a graph.** The tags come from the host,
 because the host is the only party that knows whether its text index and its vector

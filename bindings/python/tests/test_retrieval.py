@@ -155,13 +155,14 @@ def _counted_width(width: int | None) -> int:
 NOTE_DOMAIN = f"{EX}domain/notes"
 TITLE_DOMAIN = f"{EX}domain/titles"
 
-# The five spellings a terminal status may carry, and nothing else may appear.
-# Only the first is a completeness claim; the other four each name who stopped
+# The six spellings a terminal status may carry, and nothing else may appear.
+# Only the first is a completeness claim; the other five each name who stopped
 # the read and where.
 STATUS_SPELLINGS = frozenset(
     {
         "exhausted",
         "depth_reached",
+        "row_bound_reached",
         "ceiling_reached",
         "execution_failed",
         "terms_rejected",
@@ -722,17 +723,20 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
     assert _ranking(_search(well_formed)) == _ranking(accepted)
 
 
-def test_a_terminal_status_carries_one_of_five_spellings() -> None:
-    """Five spellings, one of which is the only completeness claim among them.
+def test_a_terminal_status_carries_one_of_six_spellings() -> None:
+    """Six spellings, one of which is the only completeness claim among them.
 
-    ``"exhausted"`` says the producer emitted every row it had. The other four
+    ``"exhausted"`` says the producer emitted every row it had. The other five
     each name who stopped the read: ``"depth_reached"`` the producer stopping at
-    the depth the plan gave it, ``"ceiling_reached"`` a contribution bound (a
+    the depth the plan gave it, ``"row_bound_reached"`` the producer stopping at
+    the row count it declared it can serve per invocation — a read whose ending
+    nobody could observe, because the row past it could not be asked for —
+    ``"ceiling_reached"`` a contribution bound (a
     fusion the caller's ``top_k`` stopped writes this over the streams it
     stopped), ``"execution_failed"`` a producer that could not run at all, and
     ``"terms_rejected"`` one that declined the terms it was handed. Reading any
-    of the four as "that was all of it" is the mistake the five spellings exist
-    to prevent, so all five are documented on the call itself.
+    of the other five as "that was all of it" is the mistake the six spellings exist
+    to prevent, so all six are documented on the call itself.
     """
     documented = retrieval.search.__doc__
     assert documented is not None
@@ -741,8 +745,11 @@ def test_a_terminal_status_carries_one_of_five_spellings() -> None:
             f"{spelling} is a status a host can be handed, so it is documented"
         )
 
-    # Three of the five are reachable from this surface, with the payload each
-    # one owes: the corpus decides which.
+    # Three of the six are reachable from this surface, with the payload each
+    # one owes: the corpus decides which. The text producers this binding wires
+    # are bounded by the unit's own LIMIT rather than by a depth argument, so
+    # ``"row_bound_reached"`` belongs to a self-bounding producer a host registers
+    # itself and is documented here without being reachable from these fixtures.
     exhausted = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE)],
@@ -791,8 +798,8 @@ def test_a_terminal_status_carries_one_of_five_spellings() -> None:
 
         assert Decimal(entry["bound"]) > 0, stratum
 
-    # Whatever a status says, it says it with one of the five spellings and with
-    # the payload that spelling owes — no aggregate flag, and no sixth word.
+    # Whatever a status says, it says it with one of the six spellings and with
+    # the payload that spelling owes — no aggregate flag, and no seventh word.
     for entry in (exhausted, bounded, *stopped.values()):
         assert entry["status"] in STATUS_SPELLINGS, entry
         assert ("rows_emitted" in entry) == (entry["status"] == "exhausted"), (

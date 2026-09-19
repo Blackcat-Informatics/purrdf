@@ -436,6 +436,46 @@ pub enum ProducerReceipt {
         /// which is what fusion measures it against.
         rank: u64,
     },
+    /// The producer stopped at the row bound it had itself declared, so whether
+    /// anything lay below that rank could not be observed.
+    ///
+    /// The ending of a producer that bounds *itself*. A relation that declared a
+    /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement) is handed its depth as
+    /// an argument rather than bounded by a `LIMIT`, and that argument is never
+    /// raised past the row count the relation registered — asking for more asks the
+    /// relation to contradict its own registration, which a conforming relation
+    /// refuses. So at a depth that already sits on the declaration the read is asked
+    /// for exactly `rank` rows, returns exactly `rank` rows, and no row past them
+    /// could have been requested.
+    ///
+    /// # Why this is neither of the two endings beside it
+    ///
+    /// * [`Self::Exhausted`] would claim the rows ran out. Nobody looked: the read
+    ///   stopped where it was told to, and an index holding a thousand rows and one
+    ///   holding exactly `rank` are indistinguishable from here. That is the
+    ///   completeness claim minted from a declaration that this whole vocabulary
+    ///   exists to prevent.
+    /// * [`Self::DepthReached`] would name the planned depth as the stopper and
+    ///   assert that a further row existed. Neither half is known: the depth was
+    ///   reached, but it is the producer's own bound that made the row past it
+    ///   unaskable, and whether such a row exists is exactly what could not be
+    ///   observed.
+    ///
+    /// So it names the stopper it really had. A consumer that wants the question
+    /// answered has one honest move, and it is a different move from either
+    /// neighbour's: raise the producer's declared row bound — re-planning deeper
+    /// cannot help, because the depth is already at the declaration and the argument
+    /// will not be raised past it.
+    ///
+    /// `rank` is measured like [`Self::DepthReached`]'s: a producer may stop at the
+    /// bound it declared, and it may not miscount what it emitted
+    /// ([`ProtocolError::ForgedReceipt`]).
+    RowBoundReached {
+        /// The last 1-based rank the producer emitted, which is the declared row
+        /// bound it read to. Because ranks are contiguous from one, it is also the
+        /// number of rows it emitted, which is what fusion measures it against.
+        rank: u64,
+    },
     /// The producer stopped at a declared score bound rather than at
     /// exhaustion.
     CeilingReached {

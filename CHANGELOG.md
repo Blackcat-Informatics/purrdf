@@ -525,6 +525,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **retrieval:** A bounded request narrows a stratum's depth to `k` only where that
+  stratum also declared `DuplicatePolicy::Unique`. The narrowing rested on the
+  candidate-domain declarations alone, and the merge argument behind it counts
+  ranks: a candidate ranked past `k` is beaten by the `k` candidates above it in
+  its own stratum. That step reads a count of ranks as a count of candidates, which
+  is true of a `Unique` stream and false of an `Allowed` one -- a repeat there is
+  validated, charged to the producer and then discarded, which is precisely what
+  that declaration asks a consumer to do. A depth-`k` prefix of such a stream
+  therefore carries `k` rows and can carry fewer than `k` candidates, so it is no
+  longer a superset of the top `k`: over one stratum the answer came back short a
+  row, and with a second stratum to fill the gap it came back the right length with
+  the wrong row in it, reported as exact with nothing in the trailer to distinguish
+  it. An `Allowed` stratum now keeps the declared-or-measured depth it always read
+  and answers exactly as the same request answers with no declaration at all;
+  `Unique` keeps the bounded read unchanged, which is what makes the condition a
+  premise rather than a retreat. No shipped producer declares `Allowed`, so no
+  released answer moved; the seam publishes the declaration, `register_ranked`
+  accepts it, and the fusion layer pays for it, so a host's own producer could
+  reach this.
+
 - **geo:** A GeoSPARQL index can now be built before the geometries it will hold
   have landed. `GeoIndex::from_dataset` refused outright when a
   `GraphSelector::Named` graph was not interned in the dataset, on the argument
@@ -592,11 +612,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   ran out from a read which was stopped, and it was emitted at
   `min(depth + 1, declared)`: at that one depth the `min` selected the
   declaration, the unit was emitted at exactly its own depth, and there was no
-  probe slot left to answer the question. It is now
-  `max(1, min(depth, declared) + 1)`, so the slot exists at every depth. Only the
-  emitted `LIMIT` moves; the recorded depth is what admission holds a plan to and
+  probe slot left to answer the question. It is now `depth + 1`, at every depth and
+  against every declaration -- the declared row bound does not cap the emitted bound
+  at all, because admission has already refused a depth above that declaration, so a
+  `min` over the two selects the depth in every case a unit can be emitted for. Only
+  the emitted `LIMIT` moves; the recorded depth is what admission holds a plan to and
   is unchanged, as are every plan field, identity and planned-resolution number
   keyed to it.
+
+  A declared row bound of **zero** was the one arm where the two numbers parted, and
+  it was the arm the `min` got wrong: the planner floors that depth at one, and a
+  bound capped to the declaration was then `LIMIT 1`, a bound *equal* to its own
+  depth. No row past it could arrive, so the stratum was certified `Exhausted`
+  whatever the index turned out to hold -- an index that really was empty and one
+  holding nine rows produced byte-identical trailers. A zero declaration is read
+  rather than obeyed everywhere else in this layer, so it is read here too. An empty
+  index now reports `Exhausted { rows_emitted: 0 }` as a verified claim, and an index
+  that turns out to hold rows breaches its declaration by name exactly as a wrong
+  declaration of any other size does.
 
   A row arriving in that slot is past the declaration rather than merely past the
   depth, which means the producer yielded a row it promised did not exist. That
@@ -621,10 +654,116 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so a self-bounding producer that returns more rows than it declared is still
   caught; it is simply never asked to.
 
-  `StratumUnit` gains a `declared_rows` field carrying the registry's declaration
-  for the stratum, which is what lets the executor tell the two kinds of extra row
+  `StratumUnit` carries the registry's declaration for the stratum, readable as
+  `declared_rows()`, which is what lets the executor tell the two kinds of extra row
   apart. `None` there is a registry that declared no access mode and therefore no
   bound, which promises nothing for a row to breach.
+
+- **retrieval:** At the deepest depth a plan can express, that probe row vanished
+  again and `ProducerStatus::Exhausted` was minted from a bounded read. The emitted
+  bound is the depth plus one row, and the addition saturated -- so at a depth of
+  `u32::MAX` the emitted `LIMIT` *equalled* the depth, no row could ever arrive
+  past it, and every such read was reported with the one ending that names no
+  stopper however many rows the relation still held. That is the fault the
+  probe row exists to close, surviving at the one depth where the mitigation was
+  dropped: a saturating operator looked like arithmetic hygiene and was a silent
+  completeness claim.
+
+  Both ends of the depth range are refused by name now, rather than one floored and
+  the other saturated. The admission waist refuses a depth whose probe row is
+  inexpressible as `AdmissionError::DepthWithoutProbe`, the mirror of
+  `AdmissionError::ZeroDepth` and enforced beside it, and it hands the compiler an
+  admitted depth as a type that cannot carry the refused value -- so a unit whose
+  `LIMIT` equals its own depth is unwritable rather than merely unwritten, and the
+  row past the depth is added with exact arithmetic.
+
+  The planner no longer truncates a derived bound to `u32::MAX` either, and the two
+  sides of that ceiling are now handled differently because they are two different
+  kinds of number. A *declared* row bound past the ceiling is recorded **at** the
+  ceiling: the truncation's real defect was not the clamp but that it recorded a depth
+  below the bound it claimed to serve with nothing anywhere reporting the difference,
+  and that at `u32::MAX` exactly it also left no room for the probe row. At the
+  readable ceiling the probe row fits, so a read this ceiling cuts arrives with a row
+  past the depth and ends `ProducerStatus::DepthReached`, which names the planned
+  depth as the stopper -- the comparison the truncation lacked. A *requested* bound
+  past the ceiling is refused, as `PlanError::ReadBoundBeyondDepthRange`, once at the
+  request itself rather than wherever it happens to bind: that number is the caller's
+  own, and deferred it was served silently against a registry whose declarations were
+  smaller and truncated against one whose were not.
+
+  Declaring more rows per invocation than a read can be taken to is therefore served
+  rather than refused, and it had to be. An honest declaration of a ten-billion-row
+  index read for a top-ten answer is an ordinary request, and it is ordinary for
+  exactly the shapes that cannot narrow a depth to that answer's bound -- a producer
+  whose rows are not its candidates (`DuplicatePolicy::Allowed`), or one that
+  restricts no block of the candidate universe (`CandidateDomains::Unrestricted`,
+  which is the shipped nearest-neighbour relation's own documented default). Refusing
+  those left a host two ways out and both were dishonest: under-declare
+  `rows_per_invocation`, or fabricate a cardinality statistic.
+
+  `PlanError::ReadBoundBeyondDepthRange`'s ceiling is the deepest *readable* depth
+  rather than `u32::MAX`, so the sentence it prints is true: a bound of exactly the
+  number it names plans, records that depth and is emitted with its probe row, while
+  the number it used to name was then refused where it bound.
+
+  Nothing an ordinary request reaches moves. Both boundaries begin at a read of four
+  billion rows from one producer per invocation; the deepest depth below them
+  still plans, admits and compiles, with its probe row present and its emitted
+  bound exactly where it was, and no plan identity, recorded depth or emitted
+  `LIMIT` changes anywhere else.
+
+- **retrieval:** One class of producer had its exhaustion minted from a
+  declaration rather than read off the data, and it is the shipped
+  nearest-neighbour relation's own shape. A producer that declares a depth
+  *placement* is handed the number instead of being bounded by a `LIMIT`, and that
+  argument is never raised past the row count it registered -- asking for more asks
+  the relation to contradict its own registration, which a conforming relation
+  refuses. So at a depth already sitting on that declaration the read is asked for
+  exactly `depth` rows, returns at most `depth` rows, and the slot past the depth can
+  never be filled however many rows the index holds. The stratum was reported
+  `ProducerStatus::Exhausted` anyway, which made an index of a thousand rows and an
+  index of exactly `depth` rows indistinguishable in every field of the answer. The
+  depth cannot rise to go looking, either: the derived depth is bounded by the
+  declaration, so no plan asks for more.
+
+  How that read ended is genuinely unobservable, and neither existing ending was
+  true of it -- `DepthReached` would blame a planned depth that cut nothing, and
+  `Exhausted` would claim the rows ran out when nobody could know. So there is a
+  sixth ending, named for the stopper it actually had:
+  `ProducerReceipt::RowBoundReached`, `ProducerStatus::RowBoundReached` and
+  `StreamEnding::RowBoundReached`, all carrying the rank the read stopped at, spelled
+  `"row_bound_reached"` in the Python answer's `"statuses"` beside its `"rank"`.
+  `Exhausted` remains the only ending that names no stopper, and a consumer
+  that wants this read taken further has one honest move, different from either
+  neighbour's: raise the producer's declared row bound.
+
+  It is reported only where the ending really is unobservable. A producer the
+  evaluator bounds always receives the probe row and is unaffected. A self-bounding
+  producer planned *below* its declaration receives the probe too and still reports
+  `DepthReached` or `Exhausted`. One that returned fewer rows than it was allowed is
+  `Exhausted`, verified, because it stopped before anything stopped it. And one that
+  returns more rows than it declared is still caught by the unit's own bound and still
+  refused as `ExecutionError::RowBoundBreached`.
+
+- **retrieval:** `StratumUnit`'s depth was a plain public `u32`, which re-opened at
+  the compile/execute boundary the exact hole the admission waist closes one stage
+  earlier. A bundle whose depth was raised past the range its emitted bound can probe
+  reported `Exhausted` for a read the `LIMIT` cut, and one whose declared row bound
+  was lowered below its depth bypassed the waist's `DepthBoundViolation` dimension --
+  on the one number all of this is about. Admission refuses a hand-edited *plan* on
+  both of those, for the reason every dimension is re-derived at the waist; trusting a
+  hand-edited *bundle* on the same two was the same fault with one stage skipped.
+
+  The depth and the declared row bound are now private, read through
+  `StratumUnit::depth()` and `StratumUnit::declared_rows()`, and reachable only
+  through a checked constructor: `StratumUnit::new` takes both numbers plus a
+  `DepthApplication` saying whether the evaluator or the producer applies the depth,
+  and refuses a zero depth, a depth whose probe row is inexpressible, and a depth
+  above the declared bound as the three variants of a new `UnitError`. The seam stays
+  open -- the compiler's own numbers handed to the constructor build the compiler's
+  own unit, and that unit executes -- and the unit's `sparql` stays public and
+  writable, because replacing the text is how a caller drives the executor over a
+  query of its own.
 
 - **python:** A ranked producer declared with more than one candidate-domain tag
   failed at the wrong time. One tag entails where every row of that producer
@@ -650,11 +789,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `"sparql"`, so the text's `LIMIT` was the only number in reach and it is the
   wrong one. Each unit now carries `"depth"` beside its text -- the bound the
   plan itself recorded, not a number re-derived from the emitted `LIMIT` -- and the
-  surface states the obligation: keep at most `"depth"` rows. Where the
-  producer's declared row bound already equals the depth no probe is emitted and
-  the two numbers coincide, which is exactly why the bound cannot be read off the
-  text. `"planned_resolution"` was no fallback either: it is empty unless the call
-  names a fusion law.
+  surface states the obligation: keep at most `"depth"` rows. The emitted `LIMIT`
+  reaches one row past the depth at every depth a plan can carry -- including a
+  depth that already sits on the producer's declared row bound -- so the text's own
+  number is never the reportable one. `"planned_resolution"` was no fallback
+  either: it is empty unless the call names a fusion law.
 - **retrieval:** A fused answer could contain the same entity twice. Certifying a
   candidate removes it from the frontier, and the check that held a stream to its
   declared uniqueness read only the frontier, so a stream naming that entity again
@@ -823,18 +962,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   unit was still `LIMIT <corpus>` -- so the elapsed time grew with the corpus while
   the instrument said it had not. Only the measurement had moved.
 
-  When the bound narrows a depth is decided from the producers' own
-  `CandidateDomains` and from nothing else, with no caller hint and no mode. Where
-  every stratum declares a block set and no two of those sets meet, each candidate
-  has exactly one naming stratum, so its fused score is one weighted contribution
-  that falls with rank and the global top `k` is a merge of per-stratum prefixes:
-  nothing below per-stratum rank `k` can enter it, even where the decay has
-  saturated and the scores tie, because the tie-break's next key is the stratum
-  rank those candidates win on. The depth is therefore
+  When the bound narrows a depth is decided from the producers' own declarations
+  and from nothing else, with no caller hint and no mode. Where every stratum
+  declares a block set, no two of those sets meet, and every one of those strata
+  declares `DuplicatePolicy::Unique`, each candidate has exactly one naming stratum
+  and each of that stratum's ranks names a different candidate, so its fused score
+  is one weighted contribution that falls with rank and the global top `k` is a
+  merge of per-stratum prefixes: nothing below per-stratum rank `k` can enter it,
+  even where the decay has saturated and the scores tie, because the tie-break's
+  next key is the stratum rank those candidates win on. The depth is therefore
   `min(declared, statistics-narrowed, k)` and it is exact rather than merely
-  smaller. Any overlap between two declarations, and any `Unrestricted` stratum,
-  and the declared-or-measured bound stands exactly as before -- scores sum across
-  strata there and the merge argument has no premise to run on. Rows, scores and
+  smaller. Any overlap between two declarations, any `Unrestricted` stratum, and
+  any stratum declaring `DuplicatePolicy::Allowed`, and the declared-or-measured
+  bound stands exactly as before -- scores sum across strata in the first two cases
+  and a discarded repeat makes a count of rows larger than the count of candidates
+  in the third, so the merge argument has no premise to run on. Rows, scores and
   provenance are identical either way.
 
   A bound also gives a finite depth to a producer that declares unboundedly many
