@@ -214,10 +214,34 @@ pub enum ProtocolError {
     /// stream instead of refusing it — one contribution per `(stratum, item)`,
     /// at the best rank the stream gave it. Raising this for a policy that
     /// predicted the repeat would be a refusal of valid input.
-    #[error("stream emitted item {item:?} more than once")]
+    ///
+    /// # The promise is held for the whole fusion, not merely for the frontier
+    ///
+    /// Raised wherever the repeat is observed: while the earlier occurrence is
+    /// still an un-emitted frontier candidate, and equally after that
+    /// occurrence has been certified and left the frontier. A fused answer may
+    /// not contain one entity twice, and that is not a property a bound on how
+    /// long fusion remembers can be allowed to weaken — so the engine
+    /// remembers, and a producer that cannot keep the promise it declared is
+    /// told so rather than smoothed over. See
+    /// [`FusionStream::pull`](crate::FusionStream) for what the remembering
+    /// costs and why it is bounded by the rows *emitted*.
+    ///
+    /// # Both fields, because "which stream lied" is the actionable half
+    ///
+    /// A repeated item names *what* went wrong; the stratum names *who*. A
+    /// consumer fusing several producers can act on the pair — the named
+    /// producer's declared [`DuplicatePolicy`] is wrong, and until it is fixed
+    /// that stratum's ranks are not trustworthy — and can act on neither half
+    /// alone: the item alone does not say which of five strata to go and fix,
+    /// and the stratum alone does not say which of its rows to look at.
+    #[error("stream for stratum {stratum} emitted item {item:?} more than once")]
     DuplicateItem {
         /// The repeated item's canonical text.
         item: String,
+        /// The stratum whose stream repeated it, exactly as that stream was
+        /// tagged when it was handed to fusion.
+        stratum: String,
     },
 
     /// A producer's contribution does not equal the profile's declared

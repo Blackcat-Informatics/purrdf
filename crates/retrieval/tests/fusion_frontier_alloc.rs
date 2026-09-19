@@ -295,6 +295,16 @@ fn fixture(
 struct Measurement {
     /// Peak heap bytes above the baseline while the rows were certified.
     peak_bytes: i64,
+    /// How many rows the run certified.
+    ///
+    /// The precondition every peak *equality* below rests on, and it is
+    /// asserted rather than assumed. The engine keeps one entry per row
+    /// **emitted** — the record that makes `a fused answer never contains the
+    /// same entity twice` unconditional — so two runs that certified different
+    /// numbers of rows hold different numbers of entries, and an equality
+    /// between their peaks would be an accident rather than the bound. Equal
+    /// emission counts are what make "only the stream length differed" true.
+    rows_certified: usize,
     /// How many rows were pulled from the three streams in total.
     pulls: usize,
     /// How many `(stratum, rank, contribution)` triples the certified rows
@@ -369,11 +379,13 @@ fn measure_rows_at_weight(
         .values()
         .map(|measured| measured.collisions_observed)
         .sum::<u64>();
+    let rows_certified = result.rows.len();
     // The peak was read before this: what is measured is what the *fusion* held,
     // not what the caller then chose to keep.
     drop(result);
     Measurement {
         peak_bytes,
+        rows_certified,
         pulls,
         contributions,
         bounded,
@@ -411,6 +423,22 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
     assert_eq!(
         short.pulls, long.pulls,
         "the two runs must do identical work; only the streams' length differs"
+    );
+
+    // And the precondition the equality below actually rests on: both runs
+    // certified the same number of rows. The engine keeps one entry per row
+    // *emitted* — the record that makes the answer's no-duplicate-entity
+    // invariant unconditional rather than bounded by the frontier — so two runs
+    // that emitted different numbers of rows would hold different numbers of
+    // entries, and their peaks matching would be a coincidence rather than the
+    // bound. Asserted before the measurement is read, not inferred from it.
+    assert_eq!(
+        short.rows_certified, CERTIFIED_ROWS,
+        "the short run must certify the rows the comparison assumes"
+    );
+    assert_eq!(
+        long.rows_certified, CERTIFIED_ROWS,
+        "the long run must certify the rows the comparison assumes"
     );
 
     // Second: the bound stopped the *reading*, which is the only way the
@@ -454,6 +482,33 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
         long.peak_bytes < 64 * 1024,
         "a bounded frontier should not cost {} bytes",
         long.peak_bytes
+    );
+
+    // The same claim under the other declaration, because the per-emitted-row
+    // record is charged whatever a stream declared — it is the answer's
+    // invariant, not a policy a producer can opt out of. `Allowed` above is the
+    // harder case for the *per-stream identity set*; `Unique` is the case where
+    // that set is absent and the emitted record is therefore the only thing
+    // left that could have tracked the input. Both must be flat.
+    let unique_short = measure(1_000, DuplicatePolicy::Unique);
+    let unique_long = measure(1_000_000, DuplicatePolicy::Unique);
+    assert_eq!(
+        unique_short.rows_certified, CERTIFIED_ROWS,
+        "the short `Unique` run must certify the rows the comparison assumes"
+    );
+    assert_eq!(
+        unique_long.rows_certified, CERTIFIED_ROWS,
+        "the long `Unique` run must certify the rows the comparison assumes"
+    );
+    assert!(
+        unique_short.peak_bytes > 0,
+        "the `Unique` fusion allocated nothing, so this measures nothing"
+    );
+    assert_eq!(
+        unique_short.peak_bytes, unique_long.peak_bytes,
+        "peak heap tracked the stream length under `Unique`: {} bytes over 1e3 \
+         rows against {} over 1e6",
+        unique_short.peak_bytes, unique_long.peak_bytes
     );
 }
 
@@ -567,7 +622,18 @@ fn the_frontier_stays_bounded_past_the_collision() {
         long.collisions
     );
 
-    // Second, the measurement is live, so the comparison is not vacuous.
+    // Second, the measurement is live, so the comparison is not vacuous — and
+    // both runs emitted the same number of rows, which is the precondition the
+    // equality rests on: the per-emitted-row record grows with emissions, so
+    // unequal emission counts would make equal peaks an accident.
+    assert_eq!(
+        short.rows_certified, long.rows_certified,
+        "the two runs must emit the same rows; only the streams' length differs"
+    );
+    assert_eq!(
+        short.rows_certified, CERTIFIED_ROWS,
+        "each run must certify the rows the comparison assumes"
+    );
     assert!(
         short.peak_bytes > 0,
         "the fusion allocated nothing, so this measures nothing"

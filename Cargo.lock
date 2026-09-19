@@ -1577,6 +1577,7 @@ dependencies = [
 name = "purrdf-retrieval"
 version = "2.0.2"
 dependencies = [
+ "ahash",
  "blake3",
  "pretty_assertions",
  "purrdf-core",

@@ -1248,10 +1248,23 @@ fn native_and_wasm_share_canonical_bytes_and_output() {
 //     This is no longer something a corpus can cause. The bound is the
 //     profile's stratum count and a candidate surfaces at most once per
 //     stratum, so reaching `strata + 1` means a stream set repeated a stratum
-//     (below) or a stream emitted one candidate twice (`ProtocolError`'s
-//     `DuplicateItem`, test 20). `fuse` refuses a repeated stratum before a row
-//     is read, so this drives `FusionStream` directly — which is the honest way
-//     to reach an invariant violation that no conforming input produces.
+//     (below) or a stream emitted one candidate twice — and the second of those
+//     is refused as the protocol violation it is (`ProtocolError`'s
+//     `DuplicateItem`, test 20) before any count can cross. `fuse` refuses a
+//     repeated stratum before a row is read, so this drives `FusionStream`
+//     directly — which is the honest way to reach an invariant violation that
+//     no conforming input produces.
+//
+//     The mechanism is the repeated stratum *tag* and nothing else, which is
+//     worth stating because the engine now also refuses a repeat whose earlier
+//     occurrence has already been emitted. That refusal cannot pre-empt this
+//     one: `a` is still an un-emitted frontier candidate when the third stream
+//     names it — the other streams are open and have not all named it, so it is
+//     not final and cannot have certified — so the emitted map is empty here
+//     and the contribution count is what the third contribution crosses. The
+//     property enumeration in test 20b asserts the converse for every
+//     conforming shape: no stream set built from distinct strata provokes this
+//     error at all.
 #[test]
 fn a_candidate_contributed_to_more_times_than_there_are_strata_is_refused() {
     let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
@@ -1415,6 +1428,13 @@ fn maximal_legitimate_score_stays_below_the_ceiling() {
 //     could reach it. This drives `FusionStream` directly (bypassing `fuse`'s
 //     duplicate-stratum guard) because getting here needs two streams sharing
 //     one stratum tag, which `fuse` itself refuses before fusion ever begins.
+//
+//     As in test 13, the mechanism is the shared stratum tag and not a repeat
+//     within one stream: `a` is named by the second stream while the first has
+//     already ended but `a` is still in the frontier un-emitted — it cannot
+//     have certified, because the second stream is open and has not named it —
+//     so nothing is in the emitted map and the contribution count is what the
+//     second contribution crosses.
 #[test]
 fn a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count() {
     // Two. `Fixed::from_integer` takes the number a reader means; the
@@ -2040,8 +2060,9 @@ fn allowed_duplicates() -> StreamContract {
 ///
 /// Without the second stratum nothing is held: a single-stratum candidate is
 /// final the moment it is read, so it certifies and leaves the frontier before
-/// the next row arrives. The fixture is two strata because the frontier is where
-/// a declared-`Unique` stream's promise is checked.
+/// the next row arrives. The fixture is two strata because the frontier is *one*
+/// of the two places a declared-`Unique` stream's promise is checked, and this
+/// shape is what reaches it; the single-stratum fixtures below reach the other.
 fn dense_and_sparse(dense: MockStream) -> Vec<(Iri, MockStream)> {
     vec![
         (stratum("dense"), dense),
@@ -2056,11 +2077,21 @@ fn dense_sparse_profile() -> FusionProfile {
     profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K)
 }
 
+/// A declared-`Unique` stream's repeat is refused while the earlier occurrence
+/// is still an un-emitted frontier candidate.
+///
+/// This is the cheap half of the check — the frontier already holds the
+/// `seen_streams` set the refusal reads — and it is no longer the whole of it.
+/// The name carries no "while unemitted" qualifier because the behaviour has
+/// none: the repeat is refused either way, and the sibling test below is the
+/// same refusal reached after the earlier occurrence has left the frontier.
 #[test]
-fn a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted() {
+fn a_declared_unique_streams_repeat_is_refused() {
     let profile = dense_sparse_profile();
     // `a` cannot be emitted before the duplicate is read: the sparse stream is
     // open and has not named it, so it is not final and stays in the frontier.
+    // That makes this the in-frontier arm specifically, and the assertion below
+    // therefore pins the arm as well as the outcome.
     let streams = dense_and_sparse(MockStream::new(
         vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
         exhausted(2),
@@ -2072,9 +2103,13 @@ fn a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted() {
         matches!(
             &result,
             Err(FusionError::Protocol(error))
-                if matches!(&**error, ProtocolError::DuplicateItem { item } if item == "a")
+                if matches!(
+                    &**error,
+                    ProtocolError::DuplicateItem { item, stratum }
+                        if item == "a" && stratum == self::stratum("dense").as_str()
+                )
         ),
-        "expected DuplicateItem for `a`, got {result:?}"
+        "expected DuplicateItem naming `a` and the dense stratum, got {result:?}"
     );
 
     // THE NEIGHBOURING CASE: the same item named once by each of the two streams
@@ -2098,24 +2133,31 @@ fn a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted() {
     );
 }
 
-/// What a `Unique` declaration buys and what it costs, stated as one test
-/// because they are one decision.
+/// What a `Unique` declaration promises and what breaking it costs, stated as
+/// one test because they are one decision.
 ///
-/// A stream that promised no repeats keeps no identity set, so the promise is
-/// checked exactly where the engine needs that state anyway: the frontier. A
-/// repeat whose first occurrence has already been certified and removed is
-/// therefore *not* caught — that detection is precisely the retained-forever set
-/// the declaration said was unnecessary, and it is the one structure a fusion
-/// holds that grows with the rows pulled.
+/// The promise is held for the whole fusion, not merely while the earlier
+/// occurrence is still in the frontier. A candidate leaves the frontier the
+/// instant it certifies, so the frontier's own once-per-stream check cannot see
+/// a repeat that arrives afterwards — and if nothing else did, the same entity
+/// would reach the caller twice, the second time scored from one late rank
+/// alone. It does not: the engine keeps a record of what it has emitted, and a
+/// stream that contradicts its own declaration is told so, naming the entity and
+/// the stratum.
 ///
-/// This is pinned rather than left to be discovered. A producer that cannot make
-/// the promise has a complete, supported answer one line away, and the second
-/// half of this test is that answer: the same stream declared `Allowed` is
-/// de-duplicated in full.
+/// Refusing rather than silently dropping the late repeat is the deliberate
+/// half. A `Unique` declaration is a claim about the producer's index, and a
+/// producer that breaks it has a stream whose ranks are no longer trustworthy —
+/// returning a plausible answer computed from it would hide exactly the fact the
+/// consumer needs.
+///
+/// A producer that cannot make the promise has a complete, supported answer one
+/// line away, and the second half of this test is that answer: the same stream
+/// declared `Allowed` is de-duplicated in full.
 #[test]
-fn a_unique_declaration_is_relied_on_past_the_frontier_and_allowed_is_the_remedy() {
+fn a_unique_declarations_repeat_is_refused_past_the_frontier_and_allowed_is_the_remedy() {
     // One stratum, so `a` certifies the moment it is read and the repeat arrives
-    // after it left the frontier.
+    // after it left the frontier — which is the arm this test exists for.
     let profile = profile(&[("dense", Fixed::ONE)], K);
     let repeated = vec![(
         stratum("dense"),
@@ -2124,15 +2166,21 @@ fn a_unique_declaration_is_relied_on_past_the_frontier_and_allowed_is_the_remedy
             exhausted(2),
         ),
     )];
-    let fused = block_on(run_fuse(repeated, &profile));
-    assert_eq!(
-        fused
-            .rows
-            .iter()
-            .map(|fused_row| fused_row.entity.clone())
-            .collect::<Vec<_>>(),
-        vec![Term::new("a"), Term::new("a")],
-        "the promise is relied on: a repeat past the frontier reaches the answer"
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        repeated, &profile, TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(
+                    &**error,
+                    ProtocolError::DuplicateItem { item, stratum }
+                        if item == "a" && stratum == self::stratum("dense").as_str()
+                )
+        ),
+        "a repeat past the frontier must be refused naming `a` and the dense \
+         stratum, got {result:?}"
     );
 
     // The remedy, and it is complete: the identical stream, declaring the policy
@@ -2240,6 +2288,263 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
         rows_of(allowed_duplicates()),
         rows_of(unique_items()),
         "with no repeat to remove, the policy is invisible in the answer"
+    );
+}
+
+/// **The reported defect, in the shape it was reported: one stratum, `[a, b,
+/// a]`.**
+///
+/// This is not a variation on the fixture above, it is the case a user actually
+/// hit, kept separate so that a later edit to the general fixtures cannot quietly
+/// stop covering it. `a` certifies at rank 1 and leaves the frontier, `b`
+/// certifies at rank 2, and only then does the stream name `a` again at rank 3 —
+/// the exact interleaving under which the frontier holds nothing to collide
+/// with.
+///
+/// It asserts both halves of the actionable report. The entity, because a
+/// consumer has to know which row to distrust; the stratum, because with several
+/// producers fused the entity alone does not say which declaration is wrong, and
+/// fixing the wrong producer is the same as fixing none.
+#[test]
+fn the_reported_single_stratum_repeat_is_refused_naming_the_item_and_the_stratum() {
+    let profile = profile(&[("dense", Fixed::ONE)], K);
+    let streams = vec![(
+        stratum("dense"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "a"),
+            ],
+            exhausted(3),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams, &profile, TOP_K,
+    ));
+    let Err(FusionError::Protocol(error)) = &result else {
+        panic!("expected a protocol refusal, got {result:?}");
+    };
+    let ProtocolError::DuplicateItem {
+        item,
+        stratum: named,
+    } = &**error
+    else {
+        panic!("expected DuplicateItem, got {error:?}");
+    };
+    assert_eq!(item, "a", "the refusal must name the repeated entity");
+    assert_eq!(
+        named,
+        stratum("dense").as_str(),
+        "the refusal must name the stratum whose producer broke its declaration"
+    );
+
+    // THE NEIGHBOURING CASE, and it is the one over-refusal would break: the
+    // same three rows with no repeat fuse into three rows and no refusal at all.
+    let clean = vec![(
+        stratum("dense"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "c"),
+            ],
+            exhausted(3),
+        ),
+    )];
+    let fused = block_on(run_fuse(clean, &profile));
+    assert_eq!(
+        fused
+            .rows
+            .iter()
+            .map(|fused_row| fused_row.entity.clone())
+            .collect::<Vec<_>>(),
+        vec![Term::new("a"), Term::new("b"), Term::new("c")],
+        "a stream of distinct items is not a duplicate and must answer in full"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 20b. The answer invariant, unconditionally: no fused answer ever contains one
+//      entity twice.
+//
+// The tests above pin named interleavings. This one pins the *property*, over
+// every shape the engine admits, because the invariant is not "we handled the
+// reported case" — it is a statement about all of them, and a statement about
+// all of them has to be checked over more than one.
+// ---------------------------------------------------------------------------
+
+/// The per-stratum row scripts the property enumeration draws from.
+///
+/// Chosen to cover the interleavings the invariant is about rather than to be
+/// random: distinct items, an immediate repeat, a repeat separated by another
+/// item (the reported defect's shape), a repeat at the very end of a longer
+/// stream, and scripts that overlap across strata so candidates genuinely have
+/// to be held in the frontier while other strata catch up.
+const PROPERTY_SCRIPTS: [&[&str]; 6] = [
+    &["a"],
+    &["a", "b"],
+    &["a", "b", "a"],
+    &["b", "a", "b", "c"],
+    &["c", "c"],
+    &["a", "b", "c", "a"],
+];
+
+/// **A fused answer never contains the same entity twice — for every stream
+/// set, every declared policy and every bound.**
+///
+/// Deterministic by enumeration rather than by a seeded generator, which is the
+/// stronger of the two here: this crate forbids nondeterminism, and an
+/// enumeration has no seed to drift, no shrinking step whose report depends on
+/// the run, and a failure that reproduces from the printed configuration alone.
+/// Every combination of one to four strata drawn from [`PROPERTY_SCRIPTS`], both
+/// [`DuplicatePolicy`] spellings, and every bound from zero to one past the
+/// longest script is executed through the shipped [`purrdf_retrieval::fuse`].
+///
+/// Exactly two outcomes are admissible, and the test asserts the disjunction
+/// rather than either branch:
+///
+/// * the fusion answered, and the entities in that answer are pairwise
+///   distinct; or
+/// * the fusion refused with [`ProtocolError::DuplicateItem`], which is the
+///   declared-`Unique` producer being told its promise is broken.
+///
+/// Anything else fails, and two "anything else"s are worth naming. A
+/// [`FusionError::MaxContributionsExceeded`] here would mean the contribution
+/// bound had become reachable from conforming input — it is an invariant
+/// violation and no stream set built from distinct strata may provoke one. And
+/// a [`FusionError::MalformedProfile`] would mean the post-emission check's
+/// impossibility proof is wrong. Both are caught by the same `else` arm, which
+/// prints the whole configuration.
+#[test]
+fn no_fused_answer_ever_contains_one_entity_twice() {
+    /// The strata names the enumeration tags its streams with, in order. Four,
+    /// because the profile's contribution maximum is the stratum count and four
+    /// distinct strata is the widest shape these scripts need.
+    const NAMES: [&str; 4] = ["s0", "s1", "s2", "s3"];
+
+    let mut configurations = 0_u32;
+    let mut refusals = 0_u32;
+    let mut answers = 0_u32;
+
+    for stratum_count in 1..=NAMES.len() {
+        // A fixed mixed-radix odometer over the script catalogue: configuration
+        // `n` gives stratum `i` the script at digit `i` of `n` in base
+        // `PROPERTY_SCRIPTS.len()`. Total order, no randomness, and the index is
+        // printable, so a failure names the exact stream set that produced it.
+        let combinations = PROPERTY_SCRIPTS
+            .len()
+            .pow(u32::try_from(stratum_count).expect("at most four strata fit in a u32 exponent"));
+        for combination in 0..combinations {
+            let scripts: Vec<&[&str]> = (0..stratum_count)
+                .map(|position| {
+                    let digit = (combination
+                        / PROPERTY_SCRIPTS
+                            .len()
+                            .pow(u32::try_from(position).expect("at most four positions")))
+                        % PROPERTY_SCRIPTS.len();
+                    PROPERTY_SCRIPTS[digit]
+                })
+                .collect();
+            let longest = scripts
+                .iter()
+                .map(|script| script.len())
+                .max()
+                .expect("at least one stratum");
+
+            for policy in [DuplicatePolicy::Unique, DuplicatePolicy::Allowed] {
+                // Zero through one past the longest script: zero is the bound
+                // that must certify nothing at all, and one past the longest is
+                // the bound that cannot be what stopped the run.
+                for bound in 0..=longest + 1 {
+                    configurations += 1;
+                    let weights: Vec<(&str, Fixed)> = NAMES[..stratum_count]
+                        .iter()
+                        .map(|name| (*name, Fixed::ONE))
+                        .collect();
+                    let profile = profile(&weights, K);
+                    let streams: Vec<(Iri, MockStream)> = scripts
+                        .iter()
+                        .enumerate()
+                        .map(|(position, script)| {
+                            let steps: Vec<Step> = script
+                                .iter()
+                                .enumerate()
+                                .map(|(offset, item)| {
+                                    let rank = u64::try_from(offset + 1).expect("small rank");
+                                    row(rank, Fixed::ONE, K, item)
+                                })
+                                .collect();
+                            let emitted = u64::try_from(script.len()).expect("short script");
+                            (
+                                stratum(NAMES[position]),
+                                MockStream::new(steps, exhausted(emitted))
+                                    .declaring(StreamContract::new(policy)),
+                            )
+                        })
+                        .collect();
+
+                    let context = format!(
+                        "strata {stratum_count}, combination {combination}, policy \
+                         {policy:?}, bound {bound}, scripts {scripts:?}"
+                    );
+                    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+                        streams,
+                        &profile,
+                        TopK::new(bound),
+                    ));
+                    match result {
+                        Ok(fused) => {
+                            answers += 1;
+                            let mut distinct = BTreeSet::new();
+                            for fused_row in &fused.rows {
+                                assert!(
+                                    distinct.insert(fused_row.entity.clone()),
+                                    "a fused answer contained {:?} twice — {context}",
+                                    fused_row.entity
+                                );
+                            }
+                            assert!(
+                                fused.rows.len() <= bound,
+                                "the answer exceeded its own bound — {context}"
+                            );
+                        }
+                        Err(FusionError::Protocol(error))
+                            if matches!(&*error, ProtocolError::DuplicateItem { .. }) =>
+                        {
+                            refusals += 1;
+                            assert_eq!(
+                                policy,
+                                DuplicatePolicy::Unique,
+                                "an `Allowed` stream is de-duplicated, never refused — {context}"
+                            );
+                        }
+                        Err(other) => {
+                            panic!(
+                                "neither a distinct answer nor a duplicate refusal: {other:?} — {context}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The crossing guards. Without them this test would pass over an
+    // enumeration that never ran, or one in which every single configuration
+    // refused and "the entities are distinct" was never actually checked.
+    assert_eq!(
+        configurations, 17_720,
+        "the enumeration must be the fixed size it claims, or it has silently \
+         changed what it covers"
+    );
+    assert!(
+        refusals > 0,
+        "no configuration was refused, so the refusal branch is untested"
+    );
+    assert!(
+        answers > 0,
+        "no configuration answered, so the distinctness branch is untested"
     );
 }
 

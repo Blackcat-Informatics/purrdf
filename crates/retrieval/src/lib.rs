@@ -65,8 +65,19 @@
 //! waist into [`StratumUnit`], tagged onto every [`StratumStream`], reported
 //! through [`RankedStream::contract`]. A producer that declared
 //! [`DuplicatePolicy::Allowed`] is de-duplicated, which is what that policy says
-//! its consumer must do; one that declared [`DuplicatePolicy::Unique`] is
-//! believed and costs no per-stream identity set at all.
+//! its consumer must do; one that declared [`DuplicatePolicy::Unique`] costs no
+//! per-stream identity set at all, and is held to its declaration rather than
+//! taken on trust — a repeat is refused as
+//! [`ProtocolError::DuplicateItem`], naming the entity and the stratum, for
+//! however long the fusion runs.
+//!
+//! Neither declaration can put the same entity in an answer twice. That is the
+//! one property here that is not a producer's to negotiate: a fused answer's
+//! entities are pairwise distinct, for every stream set, every policy and every
+//! [`TopK`]. What the declaration chooses is only how a repeat is dealt with —
+//! silently removed under `Allowed`, refused under `Unique`, because a producer
+//! that broke a promise about its index has a stream whose ranks a consumer
+//! needs to be told about rather than quietly served from.
 //!
 //! The same route carries what the *index* behind those rows attested. A
 //! relation's cursor is the only party that knows which generation of its index

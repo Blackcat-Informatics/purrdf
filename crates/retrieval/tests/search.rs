@@ -20,9 +20,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, DecayRule, ExecutionError, Fixed, FusionError,
-    FusionProfile, Iri, Metric, PlanError, ProducerStatus, RankedStreamAdapter, RequestTerm,
-    RetrievalRequest, SearchError, SearchResult, Statistics, Term, TopK, UnservedReason,
-    UnservedTerm, compile, execute, fuse, plan, search,
+    FusionProfile, Iri, Metric, PlanError, ProducerStatus, ProtocolError, RankedStreamAdapter,
+    RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics, Term, TopK,
+    UnservedReason, UnservedTerm, compile, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -1566,5 +1566,232 @@ fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
         ),
         "an empty answer is not 'nothing matched': {:?}",
         result.trailer.statuses
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 9. The answer invariant, proven at the shipped ladder
+//
+// `a fused answer never contains the same entity twice` is a claim about what
+// `search` returns, so it is checked over `search` and not only over a
+// hand-built stream set. The defect it closes was reachable here, not merely in
+// principle: `rank_candidates` ranks the projected `?candidate` column row by
+// row and de-duplicates nothing, and the compiled unit selects that column with
+// no `DISTINCT` — so a producer whose rows repeat an entity produced a ranked
+// stream that repeated it, and a `Unique` declaration over such a stream used to
+// put the same entity in the answer twice.
+//
+// Both halves are here because both are the contract. A `Unique` producer that
+// repeats is *refused*, naming the entity and the stratum, because the
+// declaration is a claim about its index and breaking it makes that stratum's
+// ranks untrustworthy. An `Allowed` producer with the identical rows answers,
+// once, because that declaration predicted the repeat and made de-duplication
+// the consumer's job.
+// ---------------------------------------------------------------------------
+
+/// A ranked declaration whose duplicate policy is the caller's to choose.
+///
+/// [`ranked`] hard-codes [`DuplicatePolicy::Unique`], which is the right default
+/// for every other fixture in this file. The pair of tests below is *about* the
+/// policy, so it must be able to state both.
+fn ranked_declaring(
+    stratum: &str,
+    patterns: Vec<TermPattern>,
+    mandatory: bool,
+    duplicates: DuplicatePolicy,
+) -> RankedDeclaration {
+    RankedDeclaration {
+        duplicates,
+        ..ranked(stratum, patterns, mandatory)
+    }
+}
+
+/// A producer whose rows name `entity0`, `entity1` and then `entity0` again.
+///
+/// Three rows rather than two, and in that order, because the repeat has to
+/// arrive *after* the first occurrence has already certified and left the
+/// frontier — which is exactly the interleaving the frontier's own
+/// once-per-stream check cannot see. Two rows would be caught in the frontier by
+/// the older check and would prove nothing about this one.
+fn repeating_producer() -> Arc<dyn PropertyFunction> {
+    let arity = PfArity::new(1, 1);
+    let entity = |index: usize| {
+        vec![
+            TermValue::iri(format!("{}entity{index}", ex("repeat/"))),
+            TermValue::iri(format!("{}score{index}", ex("repeat/"))),
+        ]
+    };
+    Arc::new(MockProducer {
+        arity,
+        mode: arity.all_free_mode(),
+        rows: 200,
+        emitted: vec![entity(0), entity(1), entity(0)],
+    })
+}
+
+/// A one-producer registry over the repeating rows, declaring `duplicates`.
+///
+/// One stratum, deliberately. A candidate in a single-stratum fusion is final
+/// the moment it is read, so it certifies and leaves the frontier before the
+/// next row arrives — which is what puts the repeat past the frontier and on the
+/// path under test.
+fn repeating_registry(duplicates: DuplicatePolicy) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/repeat"),
+        repeating_producer(),
+        ranked_declaring(
+            &ex("stratum/repeat"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+            duplicates,
+        ),
+    );
+    registry
+}
+
+/// The statistics and profile the repeating fixture searches under.
+fn repeating_statistics() -> MockStatistics {
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&ex("stratum/repeat")), 1000);
+    cardinalities.insert(iri(&ex("body")), 500);
+    MockStatistics {
+        source: "example-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+    }
+}
+
+fn repeating_profile() -> FusionProfile {
+    FusionProfile::with_decay(
+        BTreeMap::from([(iri(&ex("stratum/repeat")), Fixed::ONE)]),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("the fixture profile is valid")
+}
+
+#[test]
+fn a_repeating_unique_relation_is_refused_through_search_naming_the_item_and_stratum() {
+    let registry = repeating_registry(DuplicatePolicy::Unique);
+    let stats = repeating_statistics();
+    let env = fixture_env(&registry, &stats);
+    let profile = repeating_profile();
+
+    // First, evidence that this fixture really does exercise the *past the
+    // frontier* arm rather than the frontier's own check. Bounded at two rows
+    // the identical search answers, with both candidates in it: the first
+    // candidate has been certified and handed to the caller, and the repeat at
+    // rank three is simply never merged. So when the unbounded search below
+    // refuses, what it refused is a row naming a candidate that had already
+    // left the frontier — which is the arm under test and the one the defect
+    // lived in.
+    let bounded = block_on(search(
+        &RetrievalRequest::from_terms(vec![lexical_term()]),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TopK::new(2),
+    ))
+    .expect("the bound stops the reading before the repeat is merged");
+    assert_eq!(
+        bounded
+            .rows
+            .iter()
+            .map(|row| row.entity.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        vec![
+            format!("<{}entity0>", ex("repeat/")),
+            format!("<{}entity1>", ex("repeat/")),
+        ],
+        "the repeated candidate must have been certified and emitted first"
+    );
+
+    let error = block_on(search(
+        &RetrievalRequest::from_terms(vec![lexical_term()]),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect_err("a `Unique` relation whose rows repeat a candidate must be refused");
+
+    let SearchError::FusionError(FusionError::Protocol(protocol)) = &error else {
+        panic!("expected a fused protocol refusal, got {error:?}");
+    };
+    let ProtocolError::DuplicateItem {
+        item,
+        stratum: named,
+    } = &**protocol
+    else {
+        panic!("expected DuplicateItem, got {protocol:?}");
+    };
+    assert_eq!(
+        item,
+        &format!("<{}entity0>", ex("repeat/")),
+        "the refusal must name the repeated candidate, spelled as a caller would seed it"
+    );
+    assert_eq!(
+        named,
+        &ex("stratum/repeat"),
+        "the refusal must name the stratum whose producer broke its declaration"
+    );
+}
+
+#[test]
+fn the_same_repeating_relation_declaring_allowed_answers_once_through_search() {
+    // THE NEIGHBOURING CASE the refusal above must not swallow: identical rows,
+    // identical everything, and the one declaration that predicted the repeat.
+    // It answers — and answers with the candidate exactly once.
+    let registry = repeating_registry(DuplicatePolicy::Allowed);
+    let stats = repeating_statistics();
+    let env = fixture_env(&registry, &stats);
+    let profile = repeating_profile();
+
+    let result = block_on(search(
+        &RetrievalRequest::from_terms(vec![lexical_term()]),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("an `Allowed` relation's repeats are de-duplicated, not refused");
+
+    let entities: Vec<String> = result
+        .rows
+        .iter()
+        .map(|row| row.entity.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        entities,
+        vec![
+            format!("<{}entity0>", ex("repeat/")),
+            format!("<{}entity1>", ex("repeat/")),
+        ],
+        "the repeated candidate must appear once, at its best rank, ahead of the other"
+    );
+
+    // And the general statement, asserted over the answer rather than inferred
+    // from its length: no entity appears twice.
+    let mut distinct = BTreeMap::new();
+    for row in &result.rows {
+        assert!(
+            distinct.insert(row.entity.clone(), ()).is_none(),
+            "a search answer contained {:?} twice",
+            row.entity
+        );
+    }
+
+    // The producer is still charged for the row it emitted: the discarded
+    // duplicate was pulled, and the terminal receipt is measured against it.
+    assert_eq!(
+        result.trailer.statuses[&iri(&ex("stratum/repeat"))],
+        ProducerStatus::Exhausted { rows_emitted: 3 },
+        "a de-duplicated row is still a row the producer emitted"
     );
 }

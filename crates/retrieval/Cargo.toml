@@ -42,6 +42,13 @@ purrdf-text.workspace = true
 # Fixed-output-length hashing for the plan identity. Deterministic and keyless,
 # so the same canonical bytes yield the same digest on every target.
 blake3.workspace = true
+# The workspace's fixed-key, seed-free hasher, for the fusion engine's
+# emitted-candidate lookup table. Fixed-key rather than `RandomState` because
+# this crate must build and behave identically on `wasm32-unknown-unknown`,
+# where there is no random source to seed one from. The table is consulted and
+# never iterated, so no hash order can reach an answer — see the determinism
+# argument on `FusionStream`'s `emitted` field.
+ahash.workspace = true
 # Serialization of the plan as a plain document. `derive` builds the impls.
 serde.workspace = true
 # Error types carry structured context; `derive` builds the impls.
