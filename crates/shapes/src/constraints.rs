@@ -22,7 +22,7 @@ use crate::path;
 use crate::plan::{PlannedConstraint, PropertyPlan, RangeBound, ShapePlan};
 use crate::report::ValidationResult;
 use crate::shapes::{ComponentValidator, NodeKindValue, Path, PropertyShape, Shape};
-use crate::term::{NamedNode, Term, Triple, term_id_to_native};
+use crate::term::{NamedNode, Term, Triple, canonical_cmp_ids, term_id_to_native};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -1135,27 +1135,23 @@ fn eval_property_shape<'a, S: ResultSink>(
         }
     }
 
-    // Reifier shapes need each value node as an owned term (to build the quoted
-    // triple term). Materialize only when there is reifier work to do; a property
-    // shape with no reifier shapes never pays for it.
+    // Reifier shapes ask the RDF 1.2 statement layer about the quoted triple
+    // `<< focus predicate value >>`, which is an identity question end to end: the
+    // focus node, the path predicate and each value node are already carried as
+    // interned ids, and the quoted triple term this data graph holds for them — if
+    // it holds one — is found by an id-native dictionary lookup. So the value
+    // nodes, the focus term and the path term are NOT materialized here; each is
+    // rendered inside a result builder, which a conforming focus node never runs.
     if !ps.reifier_shapes.is_empty() || ps.reification_required {
-        let value_terms: Vec<Term> = value_nodes
-            .iter()
-            .map(|v| v.to_term(store.core_view()))
-            .collect();
-        // Reifier shapes build quoted triple terms whose SUBJECT is the focus
-        // node, so reifier evaluation — and nothing else on the route — needs it
-        // owned. It is materialized once here rather than once per value node.
-        let focus_term = focus.to_term(store.core_view());
         return eval_reifier_shapes(
             ReifierEvalContext {
                 context,
-                focus: &focus_term,
-                value_nodes: &value_terms,
+                focus,
+                value_nodes: &value_nodes,
                 ps,
                 source_roles: stamp.source_roles(),
                 path_roles: stamp.path_roles(),
-                path_term: lazy.path_term.get_or_init(|| path::path_to_term(&ps.path)),
+                lazy: &lazy,
                 property_plan,
             },
             sink,
@@ -1171,13 +1167,34 @@ struct ReifierEvalContext<'a, 'memo, 'stamp> {
     /// This property shape and its lowered reifier shapes, likewise `'a`.
     ps: &'a PropertyShape,
     property_plan: PropertyPlan<'a>,
-    /// The report-only material, which is derived per call and so lives only as
-    /// long as the `eval_property_shape` frame that built it.
-    focus: &'stamp Term,
-    value_nodes: &'stamp [Term],
+    /// The traversal-currency inputs and the report-only material, both derived
+    /// per call and so living only as long as the `eval_property_shape` frame that
+    /// built them. The focus node and the value nodes arrive in whichever
+    /// representation the path produced — interned for everything the data graph
+    /// holds — and are materialized only inside a result builder.
+    focus: &'stamp FocusNode,
+    value_nodes: &'stamp [ValueNode],
     source_roles: &'stamp [NamedNode],
     path_roles: &'stamp [NamedNode],
-    path_term: &'stamp Term,
+    /// The enclosing property shape's deferred report material, shared so that the
+    /// path term is rendered at most once per focus node and not at all for one
+    /// that conforms.
+    lazy: &'stamp PropertyLazies,
+}
+
+impl ReifierEvalContext<'_, '_, '_> {
+    /// This property shape's path as the term a result's `sh:resultPath` carries.
+    ///
+    /// Rendering it clones the predicate IRI, so it is deferred to the report
+    /// boundary rather than computed on entry: a focus node whose statements are
+    /// all correctly reified renders no path term at all. The same
+    /// [`PropertyLazies`] cell the property stamp uses backs it, so a focus node
+    /// that produces results across both routes still renders it once.
+    fn path_term(&self) -> &Term {
+        self.lazy
+            .path_term
+            .get_or_init(|| path::path_to_term(&self.ps.path))
+    }
 }
 
 /// Evaluate a property shape's `sh:reifierShape` / `sh:reificationRequired`.
@@ -1199,7 +1216,7 @@ fn eval_reifier_shapes<S: ResultSink>(
         ps,
         source_roles,
         path_roles,
-        path_term,
+        lazy: _,
         property_plan,
     } = ctx;
     if ps.reifier_shapes.is_empty() && !ps.reification_required {
@@ -1209,20 +1226,75 @@ fn eval_reifier_shapes<S: ResultSink>(
         return Ok(Flow::Continue);
     };
     let store = context.store;
+    let ds = store.core_view();
+
+    // A quoted triple's subject must be an IRI or a blank node — a fact about the
+    // FOCUS node, which every value node reached along this path shares. Settled
+    // once, from the interner, rather than re-derived from a materialized term per
+    // value node.
+    if !focus.is_subject(ds) {
+        return Ok(Flow::Continue);
+    }
+    // The loop-invariant halves of the statement-layer lookup. A focus node this
+    // view does not intern, a path predicate it does not intern, or an
+    // `rdf:reifies` it does not intern each mean the same thing for EVERY value
+    // node: no quoted triple term on this path is interned, or no row could name
+    // one, so nothing is reified. Resolving them here keeps that answer out of the
+    // loop entirely.
+    let focus_id = focus.id();
+    let predicate_id = ds.term_id_by_iri(predicate.as_str());
+    let reifies_id = ds.term_id_by_iri(rdf::REIFIES);
 
     let source_roles = with_cbox_role(source_roles, context.box_role_vocab);
+    // The reifier identities of ONE value node's statement, in canonical term
+    // order. Inline for the sizes a statement layer actually carries — a handful
+    // of reifiers per statement — so the common case keeps the whole arm free of
+    // heap traffic; a statement with more than four reifiers spills, which is a
+    // cost per REIFIER and not per focus node.
+    let mut reifiers: SmallVec<[TermId; 4]> = SmallVec::new();
     for value in value_nodes {
-        let Some(triple_term) = triple_term(focus, predicate, value) else {
-            continue;
+        // A `None` here is not a skip and not an error: the data graph interns no
+        // quoted triple term for this statement, so the statement HAS no reifier —
+        // which is exactly the answer `sh:reificationRequired` reports a violation
+        // for, and the answer `sh:reifierShape` has no reifier to judge against.
+        let triple_id = match (focus_id, predicate_id, value.as_id(ds)) {
+            (Some(subject), Some(predicate), Some(object)) => {
+                ds.term_id_by_triple(subject, predicate, object)
+            }
+            _ => None,
         };
-        let reifiers = reifiers_for(store, &triple_term);
-        if reifiers.is_empty() && ps.reification_required {
+        reifiers.clear();
+        let reified = match (triple_id, reifies_id) {
+            (Some(triple), Some(reifies)) => {
+                if ps.reifier_shapes.is_empty() {
+                    // `sh:reificationRequired` alone asks whether a reifier
+                    // EXISTS. No identity is consumed downstream, so none is kept
+                    // and the probe stops at the first row instead of deduplicating
+                    // and canonically ordering a collection nobody reads.
+                    reifier_ids(ds, reifies, triple).next().is_some()
+                } else {
+                    reifiers.extend(reifier_ids(ds, reifies, triple));
+                    // The owned probe this replaced deduplicated through a set and
+                    // then sorted the result canonically. Interned ids are in
+                    // INSERTION order, which is not canonical order, so the order
+                    // is reproduced by comparing the terms the ids denote — which
+                    // `canonical_cmp_ids` does by streaming both renderings, with
+                    // nothing materialized. Equal ids denote one term and so land
+                    // adjacent, which is what makes the dedup after it exact.
+                    reifiers.sort_unstable_by(|left, right| canonical_cmp_ids(ds, *left, *right));
+                    reifiers.dedup();
+                    !reifiers.is_empty()
+                }
+            }
+            _ => false,
+        };
+        if !reified && ps.reification_required {
             let flow = sink.violation(|| {
                 let mut result = ValidationResult {
-                    focus_node: focus.clone(),
-                    result_path: Some(path_term.clone()),
+                    focus_node: focus.to_term(ds),
+                    result_path: Some(ctx.path_term().clone()),
                     path_structure: None,
-                    value: Some(triple_term),
+                    value: Some(reified_triple_term(ds, focus, predicate, value)),
                     source_constraint_component: NamedNode::from(
                         sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                     ),
@@ -1243,13 +1315,16 @@ fn eval_reifier_shapes<S: ResultSink>(
             continue;
         }
 
-        for reifier in &reifiers {
+        for &reifier in &reifiers {
             for (reifier_shape, reifier_plan) in property_plan.reifiers(ps)? {
                 let reifier_context = ValidationContext {
                     plan: reifier_plan,
                     ..context
                 };
-                let reifier_focus = FocusNode::resolve(store.core_view(), reifier);
+                // The reifier came OUT of this view's statement layer, so it is
+                // interned in it by construction: it recurses as its identity, with
+                // no term materialized to resolve back into one.
+                let reifier_focus = FocusNode::Interned(reifier);
                 if !S::RECORDS_RESULTS {
                     // Conformance only: the inner results exist solely to supply
                     // this result's message, and this sink keeps no message. Probe
@@ -1262,7 +1337,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     }
                     let flow = sink.violation(|| {
                         let message = reifier_shape.message.clone().or_else(|| ps.message.clone());
-                        reifier_result(&ctx, &triple_term, &source_roles, message, &[])
+                        reifier_result(&ctx, predicate, value, &source_roles, message, &[])
                     });
                     if flow.stopped() {
                         return Ok(Flow::Stop);
@@ -1277,7 +1352,8 @@ fn eval_reifier_shapes<S: ResultSink>(
                             .or_else(|| ps.message.clone());
                         reifier_result(
                             &ctx,
-                            &triple_term,
+                            predicate,
+                            value,
                             &source_roles,
                             message,
                             &inner.source_box_roles,
@@ -1298,16 +1374,18 @@ fn eval_reifier_shapes<S: ResultSink>(
 /// contributed.
 fn reifier_result(
     ctx: &ReifierEvalContext<'_, '_, '_>,
-    triple_term: &Term,
+    predicate: &NamedNode,
+    value: &ValueNode,
     source_roles: &[NamedNode],
     message: Option<String>,
     inner_source_roles: &[NamedNode],
 ) -> ValidationResult {
+    let ds = ctx.context.store.core_view();
     let mut result = ValidationResult {
-        focus_node: ctx.focus.clone(),
-        result_path: Some(ctx.path_term.clone()),
+        focus_node: ctx.focus.to_term(ds),
+        result_path: Some(ctx.path_term().clone()),
         path_structure: None,
-        value: Some(triple_term.clone()),
+        value: Some(reified_triple_term(ds, ctx.focus, predicate, value)),
         source_constraint_component: NamedNode::from(sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT),
         source_shape: ctx.ps.id.clone(),
         severity: ctx.ps.severity.clone(),
@@ -1322,33 +1400,58 @@ fn reifier_result(
     result
 }
 
-fn triple_term(focus: &Term, predicate: &NamedNode, value: &Term) -> Option<Term> {
-    // A quoted triple's subject must be an IRI or blank node.
-    if !focus.is_subject() {
-        return None;
-    }
-    Some(Term::Triple(Box::new(Triple::new(
-        focus.clone(),
+/// The quoted triple term `<< focus predicate value >>` as a report value.
+///
+/// **A materialization boundary, and the only one this arm has.** It is called
+/// from inside a result builder and nowhere else, so a statement that is reified
+/// as its shape requires never builds one — which is the whole difference between
+/// this and the owned triple the arm used to construct for every value node before
+/// anything was known about it.
+///
+/// It is built rather than looked up because it must exist even when the data
+/// graph interns no such term: a `sh:reificationRequired` violation REPORTS the
+/// statement that is missing its reifier, and a statement the graph never quoted
+/// is precisely the one most likely to be missing one.
+fn reified_triple_term(
+    ds: &impl ShaclRead,
+    focus: &FocusNode,
+    predicate: &NamedNode,
+    value: &ValueNode,
+) -> Term {
+    Term::Triple(Box::new(Triple::new(
+        focus.to_term(ds),
         predicate.clone(),
-        value.clone(),
-    ))))
+        value.to_term(ds),
+    )))
 }
 
-fn reifiers_for(store: &ShaclData, triple_term: &Term) -> Vec<Term> {
-    let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
-    let reifiers_set: FastSet<Term> = native_quads(
-        store.core_view(),
+/// The reifier resources declared for one quoted triple term, id-native.
+///
+/// Read through the VIEW rather than through whatever carrier sits under it. The
+/// change path binds a projected delta view, whose statement layer is the union of
+/// the base reifier table and the delta's own additions and suppressions; a lookup
+/// aimed at the base dataset would answer about a world the caller no longer has,
+/// making a reifier the delta added invisible and one it suppressed eternal. This
+/// is the same `(?, rdf:reifies, triple)` probe the owned lookup it replaces
+/// issued through the same view — minus the owned rows, the hash set and the
+/// vector.
+///
+/// The subject-legality filter is the one the owned probe applied per row: a term
+/// that cannot occupy a subject position is not a reifier.
+fn reifier_ids<D: ShaclRead>(
+    ds: &D,
+    reifies: TermId,
+    triple: TermId,
+) -> impl Iterator<Item = TermId> + '_ {
+    quads_for_pattern_ids(
+        ds,
         None,
-        Some(&reifies),
-        Some(triple_term),
+        Some(reifies),
+        Some(triple),
         GraphFilter::DefaultGraph,
     )
-    .into_iter()
-    .map(|(subject, _, _)| subject)
-    .collect();
-    let mut reifiers: Vec<Term> = reifiers_set.into_iter().collect();
-    crate::term::sort_terms_canonical(&mut reifiers);
-    reifiers
+    .filter(move |quad| matches!(ds.resolve(quad.s), TermRef::Iri(_) | TermRef::Blank { .. }))
+    .map(|quad| quad.s)
 }
 
 fn path_box_roles(
@@ -3514,6 +3617,64 @@ mod tests {
         let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MinCount(1)]);
         let results = validate_shape(&store, &ex("a"), &shape);
         assert!(results.is_empty(), "should pass with 1 value");
+    }
+
+    /// **Two reifiers of one statement are judged in CANONICAL term order, not in
+    /// the order the data graph interned them.**
+    ///
+    /// The reifier lookup is id-native, and interned ids are in INSERTION order —
+    /// which is not canonical order and, for this fixture, is its reverse. A
+    /// lookup that took id order for canonical order would still find both
+    /// reifiers, still judge both, and still report two violations; only their
+    /// SEQUENCE would be wrong, and a SHACL report's result order is observable
+    /// output. So the two reifiers are made distinguishable in the report — each
+    /// breaks a different half of one reifier shape, and the two halves carry
+    /// different messages — because two identical results cannot show which order
+    /// they were produced in.
+    ///
+    /// The fixture is deliberately anti-canonical: `ex:zeta` is declared first and
+    /// so interns first, while `ex:alpha` sorts first canonically. Reading ids as
+    /// if they were canonical yields exactly the reverse of the asserted order,
+    /// which is what makes this assertion able to fail.
+    #[test]
+    fn multiple_reifiers_of_one_statement_are_judged_in_canonical_order() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:zeta rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:zeta ex:source ex:doc .\n\
+             ex:alpha rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:alpha ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = crate::engine::parse_shapes(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix ex: <http://example.org/ns#> .\n\
+             ex:Shape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:knows ; sh:reifierShape ex:ReifierShape ] .\n\
+             ex:ReifierShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:source ; sh:minCount 1 ; sh:message \"no source\" ] ;\n\
+                 sh:property [ sh:path ex:date ; sh:minCount 1 ; sh:message \"no date\" ] .\n",
+            None,
+        )
+        .expect("the reifier shapes graph must parse");
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        let messages: Vec<Option<&str>> = results
+            .iter()
+            .map(|result| result.message.as_deref())
+            .collect();
+        assert_eq!(
+            messages,
+            vec![Some("no source"), Some("no date")],
+            "ex:alpha sorts before ex:zeta canonically and interns after it, so this order is \
+             the canonical one and its reverse is the insertion one"
+        );
     }
 
     #[test]

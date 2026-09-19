@@ -166,7 +166,9 @@
 //! [`CASES`] is one case per SHACL Core constraint kind — including the recursive
 //! ones, `sh:node`, `sh:and`, `sh:or`, `sh:xone`, `sh:not` and
 //! `sh:qualifiedValueShape`, where "conforms fast" and "stopped validating" are
-//! one refactor apart — plus one case per SHACL path form. Tests 1 and 2 are
+//! one refactor apart, and the two RDF 1.2 statement-layer kinds a property shape
+//! carries outside the constraint enum, `sh:reificationRequired` and
+//! `sh:reifierShape` — plus one case per SHACL path form. Tests 1 and 2 are
 //! generated over it, so a new constraint kind cannot regress the invariant
 //! without a named failure saying which kind broke. Every IRI is under
 //! `example.org`: PurRDF mints no vocabulary IRIs, and a test fixture is no more
@@ -458,6 +460,26 @@ impl Emit<'_> {
         let class = self.iri(class);
         let predicate = self.builder.intern_iri(RDF_TYPE);
         self.builder.push_quad(subject, predicate, class, None);
+    }
+
+    /// Declare a per-focus-node reifier for the statement
+    /// `focus predicate object`, returning the reifier so a case can say more
+    /// about it.
+    ///
+    /// The declaration goes through [`RdfDatasetBuilder::push_reifier`], which
+    /// puts it in the RDF 1.2 reifier SIDE-TABLE — the table `sh:reifierShape`
+    /// and `sh:reificationRequired` read. Writing a plain
+    /// `(stmt, rdf:reifies, <<( s p o )>>)` row into the quad table instead would
+    /// land it somewhere neither constraint consults, and both branches of a case
+    /// built on it would violate, which is a fixture that measures the wrong thing
+    /// while looking like it measures the right one.
+    fn reify(&mut self, predicate: &str, object: TermId) -> TermId {
+        let predicate = self.iri(predicate);
+        let subject = self.focus;
+        let triple = self.builder.intern_triple(subject, predicate, object);
+        let reifier = self.scoped("stmt");
+        self.builder.push_reifier(reifier, triple);
+        reifier
     }
 
     /// Attach a per-focus-node target node typed `ex:Target`, returning it.
@@ -862,6 +884,44 @@ const CASES: &[ConstraintCase] = &[
             sh:property [ sh:path ex:tag ; sh:in ( \"alpha\" \"beta\" ) ] .",
         emit: |emit, violating| {
             emit.text("tag", if violating { "gamma" } else { "alpha" });
+        },
+    },
+    ConstraintCase {
+        // The RDF 1.2 statement layer, asked the cheapest question it answers:
+        // does ANY reifier exist for `<< focus ex:ref target >>`. The conforming
+        // branch declares one, the violating branch declares none, and the
+        // statement itself is present on both — so what separates them is the
+        // statement-layer read and nothing on the property path.
+        name: "reification_required",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:ref ; sh:reificationRequired true ] .",
+        emit: |emit, violating| {
+            let target = emit.target("ref");
+            if !violating {
+                emit.reify("ref", target);
+            }
+        },
+    },
+    ConstraintCase {
+        // The other half of the same layer: a reifier EXISTS on both branches, so
+        // emptiness cannot be what decides the verdict — the reifier is submitted
+        // to an inner shape, which is what judges it. That makes this the case
+        // that fails if the reifier identities stop reaching the inner shape, and
+        // `reification_required` above the one that fails if the existence probe
+        // stops seeing them.
+        name: "reifier_shapes",
+        shapes: "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+            sh:property [ sh:path ex:ref ; sh:reifierShape [
+                a sh:NodeShape ;
+                sh:property [ sh:path ex:source ; sh:minCount 1 ]
+            ] ] .",
+        emit: |emit, violating| {
+            let target = emit.target("ref");
+            let reifier = emit.reify("ref", target);
+            if !violating {
+                let source = emit.lit(RdfLiteral::simple("attested"));
+                emit.quad(reifier, "source", source);
+            }
         },
     },
     ConstraintCase {
@@ -2246,46 +2306,42 @@ fn covered_kind_names() -> std::collections::HashSet<String> {
 ///
 /// # Ignored — read before removing the `#[ignore]`
 ///
-/// This test is EXPECTED to fail today, and does. Three kinds are covered
-/// NOWHERE in any allocation-measuring file in this crate
-/// (`change_path_alloc.rs`, `sparql_path_alloc.rs`, `box_role_alloc.rs`):
+/// This test is EXPECTED to fail today, and does. ONE kind is covered NOWHERE
+/// in any allocation-measuring file in this crate (`change_path_alloc.rs`,
+/// `sparql_path_alloc.rs`, `box_role_alloc.rs`):
 ///
 /// * `node_by_expression` — `sh:nodeByExpression`, the SHACL-AF node-expression
-///   constraint that selects a shape IRI to validate the focus node against;
-/// * `reifier_shapes` — `sh:reifierShape` on a property shape;
-/// * `reification_required` — `sh:reificationRequired` on a property shape.
+///   constraint that selects a shape IRI to validate the focus node against.
+///
+/// The two RDF 1.2 reification kinds that used to stand beside it are now
+/// ordinary [`CASES`] entries (`reification_required` and `reifier_shapes`),
+/// asserted by exact equality like every other kind and pinned byte for byte by
+/// the golden. They were held out because the measurement said the zero-growth
+/// claim was FALSE for them: driving `sh:reificationRequired true` over a value
+/// triple present on both branches cost `6 + 18 * focus_nodes` allocations —
+/// 36,870 at 2,048 conforming focus nodes and 73,734 at 4,096 — a first-party
+/// growth term contributed by the reification arm of `eval_property_shape`
+/// (`crates/shapes/src/constraints.rs`), which materialized each value node and
+/// the focus node as owned terms, built the quoted triple term, and then
+/// answered an EXISTENCE question by building a deduplicated, canonically sorted
+/// vector of owned reifier terms. That arm is now id-native end to end, the slope
+/// is exactly zero, and both kinds cost the same 6 (id-keyed) / 7 (term-keyed)
+/// allocations per validation that every other case in `CASES` costs, at 2,048
+/// and at 4,096 alike. They were fixed rather than excluded, which is what the
+/// paragraph this replaces asked for.
 ///
 /// `box_role_alloc.rs` DOES drive a shape with `sh:reificationRequired true`
 /// (case `reifier_cbox`), but only to pin the graph-box-role VECTOR the
 /// reifier path adds; it asserts nothing about the change path's allocation
 /// behaviour for that constraint, so it does not count as coverage here.
 ///
-/// `reification_required` has since been MEASURED on the change path, and the
-/// measurement is why it still carries no [`CASES`] entry rather than why it
-/// should get one. Driving `sh:reificationRequired true` over a value triple
-/// that is present on both branches — conforming when the statement layer
-/// carries a reifier for it, violating when it does not — costs
-/// `6 + 18 * focus_nodes` allocations: 36,870 at 2,048 conforming focus nodes
-/// and 73,734 at 4,096, and 37,107 against 73,971 with eight violations held
-/// fixed. The slope is exactly 18 per focus node, contributed by the reification
-/// arm of `eval_property_shape` (`crates/shapes/src/constraints.rs`), which
-/// materializes each value node and the focus node as owned terms, builds the
-/// quoted triple term, and then answers the existence question through
-/// `reifiers_for` — a `native_quads` vector, a dedup set and a sorted result
-/// vector per value node. The `delta(2N) == delta(N)` claim `CASES` exists to
-/// pin is therefore FALSE for this kind today, so a `CASES` entry would be
-/// asserting something untrue and an `ALLOCATION_EXCLUSIONS` entry would be
-/// hiding a first-party growth term behind a list reserved for named
-/// third-party causes. The growth term is in this crate and has to go, not be
-/// excluded.
-///
 /// Leave this `#[ignore]`d until a case (or a stated `ALLOCATION_EXCLUSIONS` /
-/// `SIBLING_FILE_COVERAGE` entry, argued on its own merits) lands for exactly
-/// these three kinds; then remove the `#[ignore]`. If the assertion below ever
-/// fails while naming a DIFFERENT set, this comment is stale — update it to
+/// `SIBLING_FILE_COVERAGE` entry, argued on its own merits) lands for
+/// `node_by_expression`; then remove the `#[ignore]`. If the assertion below
+/// ever fails while naming a DIFFERENT set, this comment is stale — update it to
 /// match reality rather than silencing the test.
-#[ignore = "node_by_expression, reifier_shapes and reification_required have no allocation \
-            coverage anywhere in this crate yet; see the doc comment on this test"]
+#[ignore = "node_by_expression has no allocation coverage anywhere in this crate yet; see the \
+            doc comment on this test"]
 #[test]
 fn every_constraint_kind_is_covered_by_an_allocation_case() {
     let _guard = measure_lock();
