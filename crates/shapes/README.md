@@ -134,7 +134,8 @@ rather than silently under-approximated. Target sets and validation answers
 belong to the exact bound snapshot.
 
 **Validating a conforming focus set through that path allocates a bounded
-amount, independent of the focus-node count.** Cost is proportional to the
+amount, independent of the focus-node count — for every constraint kind and path
+form whose evaluation stays inside this crate.** Cost is proportional to the
 violations found, not to the focus nodes examined: a focus node is carried as its
 interned identity and materialized as an owned term only where a result is built.
 The bind in front of it is likewise independent of the data graph's size beyond
@@ -143,6 +144,38 @@ graph into an owned snapshot first, so it is linear in the graph by construction
 The guarantee is executed in `tests/change_path_alloc.rs` as an equality between
 two conforming validations differing only in focus count, with a companion test
 that fails if validation ever gets cheaper by producing fewer results.
+
+### The SPARQL-bearing surfaces carry a per-focus-node term
+
+The qualification above is not a third party's cost; it is this crate's own. A
+shape that reads through query text — a `sh:sparql` constraint, a custom
+component's `sh:ask`/`sh:select` validator, a SHACL-AF `sh:expression` function
+call — runs one SPARQL query **per focus node** (per value node for an `ASK`
+validator, per argument tuple for an expression call), and a query evaluation is
+not allocation-free. Those surfaces therefore satisfy a closed form rather than
+zero growth:
+
+```text
+allocations(N) == CHANGE_PATH_CONSTANT + per_focus_node * N
+```
+
+`CHANGE_PATH_CONSTANT` is the same entry cost the zero-growth cases pin.
+`per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, in
+`tests/sparql_path_alloc.rs`: **100** for a `sh:sparql` SELECT constraint, **218**
+for a custom `sh:ask` component over a two-valued path, **120** for a custom
+`sh:select` component, and **200** for a `sh:expression` function call over two
+argument tuples.
+
+Two properties of that term are worth separating from its size. It is **flat in
+the data graph** — a fixed focus count costs the same over 768 quads and over
+24,576 — so it is the price of executing a query, not of scanning a graph; the
+scan that used to be there is gone. And it splits, by measurement, into the
+SPARQL evaluator's per-execution setup (the larger share on three of the four
+surfaces) and the per-focus-node pre-binding rewrite, in which
+`purrdf_sparql_eval` clones the prepared algebra and rebuilds it and every
+pre-bound term crosses the boundary as an owned `TermValue` whose IRI is a fresh
+`String`. Neither share is currently zero, and this crate does not claim
+otherwise.
 
 ## Ontology-complete developer schemas
 

@@ -1631,10 +1631,13 @@ impl PreparedValidator {
     /// # Bounded allocation
     ///
     /// **Validating a CONFORMING focus set through this method allocates a bounded
-    /// amount, independent of how many focus nodes were supplied.** Cost is
-    /// proportional to the violations found, not to the focus nodes examined: a
-    /// focus node is carried as its interned identity and materialized as an owned
-    /// term only where a result is actually built.
+    /// amount, independent of how many focus nodes were supplied — for every
+    /// constraint kind and path form whose evaluation stays inside this crate.**
+    /// Cost is proportional to the violations found, not to the focus nodes
+    /// examined: a focus node is carried as its interned identity and materialized
+    /// as an owned term only where a result is actually built. A shape that reads
+    /// through SPARQL query text is the one qualification, and it is stated in full
+    /// below rather than left to a reader to discover.
     ///
     /// This is a product claim and it is executed, not asserted in prose:
     /// `crates/shapes/tests/change_path_alloc.rs` measures the allocation delta of
@@ -1645,11 +1648,40 @@ impl PreparedValidator {
     /// conforming population fixed while the violations double, so "bounded" cannot
     /// be satisfied by a validator that stopped validating.
     ///
-    /// Two residuals are documented there, neither of them a per-focus-node term:
-    /// `rayon`'s global injector queue allocates one block every 63 submissions,
-    /// and the `regex` crate's thread-sharded cache pool allocates when a worker
-    /// finds its shard empty, which is reachable under `sh:pattern` above the
-    /// parallel threshold. The guarantee is about this crate's own traffic.
+    /// Two THIRD-PARTY residuals are documented there, neither of them a
+    /// per-focus-node term: `rayon`'s global injector queue allocates one block
+    /// every 63 submissions, and the `regex` crate's thread-sharded cache pool
+    /// allocates when a worker finds its shard empty, which is reachable under
+    /// `sh:pattern` above the parallel threshold.
+    ///
+    /// ## The SPARQL-bearing surfaces DO carry a per-focus-node term
+    ///
+    /// That term is this crate's own traffic, not a third party's, so it is stated
+    /// here and not only in a test. A shape backed by query text — a `sh:sparql`
+    /// constraint, a custom component's `sh:ask`/`sh:select` validator, a SHACL-AF
+    /// `sh:expression` function call — runs one SPARQL query PER FOCUS NODE (per
+    /// value node for an `ASK` validator, per argument tuple for an expression
+    /// call), and a query evaluation is not allocation-free. Those four surfaces
+    /// satisfy a closed form rather than zero growth:
+    ///
+    /// ```text
+    /// allocations(N) == CHANGE_PATH_CONSTANT + per_focus_node * N
+    /// ```
+    ///
+    /// `CHANGE_PATH_CONSTANT` is the entry cost the zero-growth cases already pin.
+    /// `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, by
+    /// `crates/shapes/tests/sparql_path_alloc.rs`: **100** for a `sh:sparql` SELECT
+    /// constraint, **218** for a custom `sh:ask` component over a two-valued path,
+    /// **120** for a custom `sh:select` component, and **200** for a
+    /// `sh:expression` function call over two argument tuples.
+    ///
+    /// The term is FLAT in the data graph — a fixed focus count costs the same over
+    /// 768 quads and over 24,576 — so it is the price of executing a query, not of
+    /// scanning a graph. By measurement it divides into the SPARQL evaluator's
+    /// per-execution setup (the larger share on three of the four surfaces) and the
+    /// per-focus-node pre-binding rewrite, in which `purrdf_sparql_eval` clones the
+    /// prepared algebra and rebuilds it and every pre-bound term crosses as an owned
+    /// `TermValue` whose IRI is a fresh `String`. Neither share is zero today.
     ///
     /// The bind in front of this method is bounded too — independent of the data
     /// graph's size beyond the class catalog — so an incremental caller does not
@@ -1693,12 +1725,21 @@ impl PreparedValidator {
     /// # Bounded allocation
     ///
     /// **Validating a CONFORMING focus set through this method allocates a bounded
-    /// amount, independent of how many ids were supplied** — the same guarantee
-    /// [`Self::validate_focus_nodes`] carries and measured through both entry
-    /// points by the same tests in `crates/shapes/tests/change_path_alloc.rs`.
-    /// Cost is proportional to the violations found, not to the focus nodes
-    /// examined. See that method for the guarantee's exact scope and for the two
-    /// third-party residuals it excludes.
+    /// amount, independent of how many ids were supplied, for every constraint kind
+    /// and path form whose evaluation stays inside this crate** — the same
+    /// guarantee [`Self::validate_focus_nodes`] carries, with the same
+    /// qualification, measured through both entry points by the same tests in
+    /// `crates/shapes/tests/change_path_alloc.rs`. Cost is proportional to the
+    /// violations found, not to the focus nodes examined.
+    ///
+    /// A shape backed by SPARQL query text is the qualification and it is a
+    /// FIRST-PARTY one: `sh:sparql`, a custom component's `sh:ask`/`sh:select`
+    /// validator and a SHACL-AF `sh:expression` call each run one query per focus
+    /// node and so carry a real per-focus-node term, pinned in closed form at
+    /// 100 / 218 / 120 / 200 allocations by
+    /// `crates/shapes/tests/sparql_path_alloc.rs`. See
+    /// [`Self::validate_focus_nodes`] for that closed form, for what the term is
+    /// made of, and for the two third-party residuals the guarantee also excludes.
     ///
     /// This is the crate's headline realtime surface, so the claim is stated where
     /// it is called rather than only in a design note: a caller sizing a latency

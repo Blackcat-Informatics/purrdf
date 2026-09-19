@@ -2410,12 +2410,22 @@ type SiblingCoverageEntry = (
 /// (`allocations(N) == CONSTANT + per_focus_node * N`) is pinned in that file
 /// instead.
 ///
-/// This is a recorded COST, not a permanent exemption: the per-focus-node
-/// charge on these three surfaces is itself a defect this same effort means to
-/// eliminate. When it is, these entries should move OUT of
-/// `SIBLING_FILE_COVERAGE` and become genuine zero-growth entries in `CASES`
-/// below — at which point [`every_constraint_kind_is_covered_by_an_allocation_case`]
-/// stays green through the move, having lost nothing it was checking before.
+/// This is a recorded COST, not a permanent exemption, but the cost has since
+/// been decomposed and it is not one thing. Measured per focus node, the
+/// pre-binding rewrite — the algebra clone, the term materialization, the
+/// pushdown and the seed together — is 28% to 51% of the charge depending on
+/// the surface, and the algebra clone alone is only 4% to 6% of it. The
+/// remainder, 39% to 53%, is the SPARQL evaluator's per-query execution setup:
+/// the plan-cache key, the evaluation context, the solution schema and the
+/// intermediates a query allocates simply by running once. Removing the
+/// pre-binding charge entirely would still leave a per-focus-node term.
+///
+/// So these entries move OUT of `SIBLING_FILE_COVERAGE` and into `CASES` only
+/// when a focus node costs no allocation at all, which needs the evaluator's
+/// per-execution cost addressed and not just the pre-binding path. Until then
+/// the closed form in the sibling file is the true claim, and
+/// [`every_constraint_kind_is_covered_by_an_allocation_case`] stays green
+/// across the eventual move, having lost nothing it was checking before.
 const SIBLING_FILE_COVERAGE: &[SiblingCoverageEntry] = &[
     (
         "sparql",
