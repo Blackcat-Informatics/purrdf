@@ -194,12 +194,14 @@
 //!
 //! * `incompleteness` — the host's own reason the index was not whole, e.g.
 //!   `"shard 3 of 4 is still rebuilding"` — is reported verbatim under
-//!   `"attestations"[stratum]["incomplete"]`, and it makes `"exactness"` say
-//!   `{"exact": False, "lower_bounds_for": [stratum, …]}`. Every score in that
-//!   answer is then a LOWER BOUND on the score a whole index would have produced.
-//!   This lane REPORTS it rather than refusing, because its answer has a slot to
-//!   say it in — the same rule the SPARQL lane follows, decided by what the
-//!   return type can carry.
+//!   `"attestations"[stratum]["incomplete"]`, and it makes `"exactness"` name
+//!   that stratum under BOTH `"deficit"` and `"inflation"`. Every score in that
+//!   answer is then an ESTIMATE rather than a value, and the error runs in both
+//!   directions: fusion scores by rank, so a row the short index never named is
+//!   summed too LOW, while every row behind it moved up a rank and is summed too
+//!   HIGH. This lane REPORTS it rather than refusing, because its answer has a
+//!   slot to say it in — the same rule the SPARQL lane follows, decided by what
+//!   the return type can carry.
 //! * `generation` — the host's own name for the index version that answered — is
 //!   reported under `"attestations"[stratum]["generation"]` and is NOT a
 //!   shortfall: an answer whose producers named only generations is still exact.
@@ -1982,14 +1984,54 @@ fn compile<'py>(
 /// relation would otherwise attest; a declared incompleteness is added beside it
 /// and leaves it alone. See this module's own documentation for both.
 ///
-/// `"exactness"` is `{"exact": bool, "lower_bounds_for": list[str]}`, derived
-/// from those attestations alone and therefore unmoved by how deep this call
-/// read. When `"exact"` is `False`, every score in the answer is a LOWER BOUND
-/// on the score a whole index would have produced; the rows are still real rows
-/// in this fusion's own certified order, and what does not follow is that a row
-/// absent from the answer would have stayed absent. `"lower_bounds_for"` names
-/// exactly the strata that attested an incomplete index, in canonical order, and
-/// each one's verbatim reason is under the same key in `"attestations"`.
+/// `"fidelities"` maps a stratum to what its producer declared about the rows it
+/// can name, on two independent axes. `"completeness"` is `"complete"` or
+/// `"lossy"`; `"order"` is `"faithful"` or `"perturbed"`. Where an axis is
+/// degraded, `"completeness_evidence"` / `"order_evidence"` carries that
+/// producer's OWN words for it, verbatim — never parsed here, never re-worded.
+/// The evidence key is ABSENT, not `None`, when the axis is not degraded:
+/// silence is the thing this surface exists to stop a caller interpreting. A
+/// stratum whose stream never opened — one that failed before fusion was handed
+/// anything — has no entry at all, which is the third state and the only one a
+/// caller has to test for.
+///
+/// It is read WITH `"statuses"`, never instead of it. A status says how the read
+/// ENDED; a fidelity says whether the rows that ended it were all the rows that
+/// were DUE. `"exhausted"` beside a `"lossy"` declaration is neither a
+/// contradiction nor a completeness claim: the producer emitted every row its
+/// search produced, and the declaration says that search does not produce every
+/// row there was.
+///
+/// `"exactness"` is `{"exact": bool, "deficit": list[str], "inflation":
+/// list[str], "unbounded": list[str]}`, derived from those declarations and
+/// attestations alone and therefore unmoved by how deep this call read. `True`
+/// says no stratum in this fusion declared itself degraded — the narrow true
+/// thing, not a certificate that every index was whole and every search
+/// exhaustive.
+///
+/// When `"exact"` is `False`, every score is an ESTIMATE rather than a value and
+/// the error runs in BOTH directions — which is why there is no
+/// `"lower_bounds_for"` key. Fusion scores by RANK and nothing else, so a
+/// stratum that fails to name a row does not merely withhold that row's
+/// contribution: every row behind the missing one moves up a rank and collects a
+/// larger one than it earned. A candidate the degraded stratum missed is summed
+/// too LOW; one it named is summed too HIGH, and a consumer handed a one-sided
+/// name would be confidently wrong in the direction the name told it not to
+/// look. `"deficit"` and `"inflation"` name the strata responsible on each side,
+/// in canonical order; `"unbounded"` names strata whose declared ORDER is
+/// perturbed, for which no finite bound exists at all. The rows are still real
+/// rows in this fusion's own certified order; what does NOT follow is that a row
+/// absent from the answer would have stayed absent.
+///
+/// Each row's `"interval"` carries the size of its own error: `{"bounded": True,
+/// "deficit": str, "inflation": str}` in the same fixed-point lexical as
+/// `"score"`, or `{"bounded": False, "perturbed": list[str]}` where no finite
+/// bound exists. `"certain_prefix"` is how many LEADING rows keep their places
+/// whatever the degraded strata did or did not find — the answer a caller with a
+/// completeness obligation actually has, since without it the only safe move is
+/// to downgrade the whole answer. It claims membership and never absence: a row
+/// past the prefix is POSSIBLE, not excluded, and a candidate no producer named
+/// is not spoken for at all.
 ///
 /// `"domains"` reports the candidate-domain declaration each handed stream fused
 /// under — `None` where the producer promised only that it may name anything, a

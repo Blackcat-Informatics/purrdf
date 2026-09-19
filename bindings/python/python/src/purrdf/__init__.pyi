@@ -2095,13 +2095,15 @@ class slice:
 #
 # * `incompleteness` is the host's own reason the index was not whole ("shard 3 of
 #   4 is still rebuilding"). `search` reports it verbatim under
-#   `["attestations"][stratum]["incomplete"]` and reports
-#   `["exactness"] == {"exact": False, "lower_bounds_for": [stratum, ...]}`: every
-#   score in that answer is a LOWER BOUND on the score a whole index would have
-#   produced, the rows are still real rows in the fusion's own certified order,
-#   and what does not follow is that a row absent from the answer would have
-#   stayed absent. It is reported rather than refused because this answer has a
-#   slot to say it in.
+#   `["attestations"][stratum]["incomplete"]` and names that stratum under BOTH
+#   `["exactness"]["deficit"]` and `["exactness"]["inflation"]`: every score in
+#   that answer is an ESTIMATE rather than a value, and the error runs in both
+#   directions, because fusion scores by rank and a row the short index never
+#   named is summed too low while every row behind it moved up a rank and is
+#   summed too high. The rows are still real rows in the fusion's own certified
+#   order, and what does not follow is that a row absent from the answer would
+#   have stayed absent. It is reported rather than refused because this answer
+#   has a slot to say it in.
 # * `generation` is the host's own name for the index version that answered. It
 #   appears under `["attestations"][stratum]["generation"]` and is NOT a shortfall
 #   — an answer whose producers named only generations is still exact. It REPLACES
@@ -2143,7 +2145,8 @@ class slice:
 #             )
 #         },
 #         ...,
-#     )["exactness"]  # {"exact": False, "lower_bounds_for": [".../stratum/lexical"]}
+#     )["exactness"]  # {"exact": False, "deficit": [".../stratum/lexical"],
+#                      #  "inflation": [".../stratum/lexical"], "unbounded": []}
 _TextProducerSpec: TypeAlias = (
     tuple[str, str, str]
     | tuple[str, str, str, list[str] | None]

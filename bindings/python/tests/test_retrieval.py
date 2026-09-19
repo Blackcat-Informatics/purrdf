@@ -491,16 +491,24 @@ def test_an_attested_incompleteness_makes_that_stratums_scores_lower_bounds() ->
         "recorded verbatim: an operator acts on the shard and the phase, and "
         "nothing here parses or summarises either"
     )
-    assert short["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}, (
-        "every score in this answer is a LOWER BOUND on the score a whole index "
-        "would have produced, and the list names which index to rebuild"
+    assert short["exactness"] == {
+        "exact": False,
+        "deficit": [NOTE_STRATUM],
+        "inflation": [NOTE_STRATUM],
+        "unbounded": [],
+    }, (
+        "every score in this answer is an ESTIMATE rather than a value, and the "
+        "error runs both ways: a row the short index never named is summed too "
+        "low, and every row behind it moved up a rank and is summed too high. "
+        "The lists name which index to rebuild, on each side"
     )
 
     # Per stratum, not per answer: the producer that said nothing still says
     # nothing, and its silence is not upgraded to a shortfall by its neighbour's.
     assert short["attestations"][TITLE_STRATUM]["incomplete"] is None
-    assert NOTE_STRATUM in short["exactness"]["lower_bounds_for"]
-    assert TITLE_STRATUM not in short["exactness"]["lower_bounds_for"]
+    for side in ("deficit", "inflation"):
+        assert NOTE_STRATUM in short["exactness"][side], side
+        assert TITLE_STRATUM not in short["exactness"][side], side
 
     # The rows are untouched — a short answer is still a real answer in this
     # fusion's own certified order — and so is the generation the relation
@@ -549,9 +557,12 @@ def test_a_declared_generation_is_reported_and_is_not_a_shortfall() -> None:
         "generation": INDEX_GENERATION,
         "incomplete": None,
     }, "the host's own spelling, verbatim, and no shortfall declared beside it"
-    assert named["exactness"] == {"exact": True, "lower_bounds_for": []}, (
-        "naming which index answered says nothing about whether it was short"
-    )
+    assert named["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }, "naming which index answered says nothing about whether it was short"
     assert _ranking(named) == _ranking(silent)
 
     assert named["attestations"][NOTE_STRATUM]["generation"] != (
@@ -599,7 +610,12 @@ def test_a_producer_that_declares_no_attestation_is_unchanged() -> None:
         assert _ranking(answer) == _ranking(omitted)
         assert answer["attestations"] == omitted["attestations"]
         assert answer["evidence_id"] == omitted["evidence_id"]
-        assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
+        assert answer["exactness"] == {
+            "exact": True,
+            "deficit": [],
+            "inflation": [],
+            "unbounded": [],
+        }
         assert answer["domains"] == omitted["domains"]
 
     # And what a producer declares to the PLANNER is untouched by what it attests
@@ -640,7 +656,12 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
         "generation": INDEX_GENERATION,
         "incomplete": REBUILDING,
     }
-    assert accepted["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}
+    assert accepted["exactness"] == {
+        "exact": False,
+        "deficit": [NOTE_STRATUM],
+        "inflation": [NOTE_STRATUM],
+        "unbounded": [],
+    }
 
     # A member of the wrong type names the member, because both are recorded
     # verbatim and neither has a spelling this binding could coerce one into.
@@ -2044,11 +2065,18 @@ def _with_fidelity(
 ) -> dict[str, tuple[Any, ...]]:
     """``(producer, stratum, predicate, fidelity)`` as the engine's map.
 
-    The five-element spelling, with ``domains`` left unrestricted so the
-    fidelity term is the only thing under test.
+    The six-element spelling, with ``domains`` left unrestricted and the
+    attestation left silent so the fidelity term is the only thing under test.
+
+    Fidelity is the SIXTH position, not the fifth. The fifth is an attestation,
+    and the two are about different objects: an attestation says which version
+    of an index answered and whether that version was whole, while a fidelity
+    says whether the producer's own search over it names every row it should. A
+    host can be silent on one and explicit on the other, which is why neither
+    position can stand in for the other.
     """
     return {
-        producer: (stratum, predicate, "any", None, fidelity)
+        producer: (stratum, predicate, "any", None, (None, None), fidelity)
         for producer, stratum, predicate, fidelity in entries
     }
 
@@ -2202,28 +2230,99 @@ def test_an_empty_loss_evidence_is_refused_and_its_neighbours_are_not() -> None:
     assert real["fidelities"][NOTE_STRATUM]["completeness_evidence"] == LOSS
 
 
-def test_the_three_producer_spellings_agree_where_they_overlap() -> None:
-    """A three-, four- and five-element spec that say the same thing agree."""
-    three = _answer(NOTE_ONLY, weights={NOTE_STRATUM: retrieval.SCALE})
-    four = _answer(
-        _declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)),
-        weights={NOTE_STRATUM: retrieval.SCALE},
-    )
+def test_the_four_producer_spellings_agree_where_they_overlap() -> None:
+    """Every accepted width, saying the same thing, answers the same thing.
+
+    There are four: the bare triple, plus a ``domains`` position, plus an
+    attestation position, plus a fidelity position. Each added position has a
+    value that means SILENCE, and a spec that writes the silent value must be
+    indistinguishable from one that stops short of the position entirely —
+    otherwise writing a position down would itself be a declaration, and a host
+    that spelled out a default would get a different answer from one that did
+    not.
+    """
+    common: dict[str, Any] = {"weights": {NOTE_STRATUM: retrieval.SCALE}}
+    three = _answer(NOTE_ONLY, **common)
+    four = _answer(_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)), **common)
     five = _answer(
-        _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)),
-        weights={NOTE_STRATUM: retrieval.SCALE},
+        {NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, (None, None))}, **common
     )
-    assert _ranking(three) == _ranking(four) == _ranking(five)
-    assert three["fidelities"] == four["fidelities"] == five["fidelities"], (
-        "the shorter spellings are the same declaration, so they declare the same "
-        "thing: omitting the term means exhaustive, it does not mean unstated"
-    )
-    assert three["exactness"] == four["exactness"] == five["exactness"]
+    six = _answer(_with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)), **common)
+
+    widths = (three, four, five, six)
+    for answer in widths[1:]:
+        assert _ranking(answer) == _ranking(three), (
+            "the same declaration, four ways to write it, one ranking"
+        )
+        assert answer["fidelities"] == three["fidelities"], (
+            "the shorter spellings are the same declaration, so they declare the "
+            "same thing: omitting the term means exhaustive, not unstated"
+        )
+        assert answer["exactness"] == three["exactness"]
+        assert answer["attestations"] == three["attestations"], (
+            "a written-out silence is silence, not a declaration"
+        )
     # Not `plan_id`: a plan identity folds the registry's per-process INSTANCE
     # id alongside its content, so two separately built registries never share
     # one even when they declare identically. The content is what these three
     # spellings share, and `canonical_description`'s injectivity test in
     # `crates/sparql-eval` is where that is pinned.
+
+
+def test_the_shipped_docstring_teaches_the_channel_it_actually_returns() -> None:
+    """``help(retrieval.search)`` is the only spec most hosts will ever read.
+
+    A docstring is not decoration on this surface: it ships inside the wheel, it
+    is what ``help()`` prints, and it is the only description of the answer a
+    host has at the interpreter. One that names a key the function does not
+    return is worse than one that says nothing, because a reader acts on it --
+    and the key this replaced, ``lower_bounds_for``, taught the one-sided reading
+    the two-sided interval exists to correct. A consumer that believed it would
+    treat every score as a floor and be confidently wrong in the one direction
+    the name told it not to look.
+
+    So the prose is pinned against the dict the function really builds, rather
+    than reviewed. Both halves matter: the stale key must be gone, and every key
+    a caller must know about must be named. Checking only the first would pass
+    for a docstring that had been emptied.
+    """
+    doc = retrieval.search.__doc__
+    assert doc, "the shipped function carries its own documentation"
+    flat = " ".join(doc.split())
+
+    assert "LOWER BOUND" not in doc, (
+        "the one-sided reading is gone: a score is an estimate whose error runs "
+        "both ways, and a floor is the wrong shape for it"
+    )
+    # The key may be NAMED, but only to deny it. A reader who learned the old
+    # shape elsewhere needs to be told it is gone, so the disclaimer earns its
+    # place -- but it must be the only mention, or the denial sits beside a
+    # promise of the same key.
+    assert flat.count("lower_bounds_for") == 1, (
+        "the only mention of the retired key is the sentence retiring it"
+    )
+    assert 'there is no `"lower_bounds_for"` key' in flat, (
+        "and that sentence says outright that it does not exist, rather than "
+        "leaving a reader to notice its absence"
+    )
+
+    # Every key the answer really carries for this channel, named where a host
+    # can find it. Derived from a real answer rather than transcribed, so a key
+    # that is renamed without the prose following fails here.
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+        )
+    )
+    for key in ("fidelities", "certain_prefix", "exactness", "statuses"):
+        assert key in answer, f"the fixture does not exercise {key}"
+        assert f'"{key}"' in doc, f"`{key}` is returned but never documented"
+    for key in ("deficit", "inflation", "unbounded"):
+        assert key in answer["exactness"], f"the fixture does not exercise {key}"
+        assert f'"{key}"' in doc, f"`exactness[{key}]` is returned but undocumented"
+    assert "interval" in answer["rows"][0], "the fixture does not exercise interval"
+    assert '"interval"' in doc, "a per-row interval is returned but undocumented"
 
 
 # ── the declarations a call is assembled from ──────────────────────────────────
