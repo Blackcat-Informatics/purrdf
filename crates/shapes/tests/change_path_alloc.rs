@@ -1699,6 +1699,264 @@ fn pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshol
 }
 
 // ---------------------------------------------------------------------------
+// 2c. The expansion in front of the change path
+// ---------------------------------------------------------------------------
+
+/// Focus nodes in the change-expansion fixture.
+///
+/// Every focus node owns a target of its own, so a changed row on a target reaches
+/// exactly one focus node and the expansion's size tracks the change rather than
+/// the graph.
+const EXPANSION_FOCUS_NODES: usize = 1_024;
+
+/// The changed-row counts the expansion's closed form is checked at.
+///
+/// Powers of two, and four of them, because the form carries a `log2` term: two
+/// points can be fitted by any line and would let a per-row term hide inside the
+/// intercept. Every size is a real measurement taken on this revision.
+const EXPANSION_CHANGE_SIZES: [usize; 4] = [32, 64, 128, 256];
+
+/// Every measured change size fits inside the fixture's targets, checked when the
+/// file compiles: a change that ran off the end would measure fewer rows than it
+/// names.
+const _: () = assert!(
+    EXPANSION_CHANGE_SIZES[EXPANSION_CHANGE_SIZES.len() - 1] <= EXPANSION_FOCUS_NODES,
+    "the largest measured change must still name a target of the expansion fixture"
+);
+
+/// The shapes graph the expansion fixture is bound with.
+///
+/// A SEQUENCE path, because that is what gives the footprint a trigger with a
+/// non-empty CHAIN: the read of `ex:key` happens one `ex:ref` hop away from the
+/// focus node, so a changed `(target, ex:key, …)` row has to be walked back along
+/// `^ex:ref` to reach the focus node whose verdict it moves. A shapes graph of bare
+/// predicate paths would leave every chain empty and would measure the one branch of
+/// the expansion that evaluates no path at all — which is what
+/// [`EXPANSION_EMPTY_CHAIN_SHAPES`] is for.
+const EXPANSION_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+    sh:property [ sh:path ( ex:ref ex:key ) ; sh:minCount 1 ] .";
+
+/// The same shapes graph with the sequence flattened to a bare predicate, so the
+/// trigger that matches a changed `ex:key` row has an EMPTY chain and the expansion
+/// walks no path.
+///
+/// The control for [`EXPANSION_PER_ROW`]: what a changed row costs when nothing
+/// evaluates a path for it. See
+/// [`change_expansion_with_no_chain_to_walk_costs_no_path_probe`].
+const EXPANSION_EMPTY_CHAIN_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+    sh:property [ sh:path ex:key ; sh:minCount 1 ] .";
+
+/// The expansion's fixed cost, independent of how many rows changed.
+const EXPANSION_CONST: u64 = 2;
+
+/// What ONE changed row costs the expansion once it has a chain to walk back.
+///
+/// TWO, and both are the projected view's probe rather than the walk: a
+/// delta-backed [`ShaclDatasetView`] type-erases its probe iterator
+/// (`crates/shapes/src/data_view.rs`, `raw_probe` and `raw_overlay_probe`), so each
+/// pattern lookup costs one `Box` for the source rows and one for the RDF 1.2
+/// overlay rows. The erasure is deliberate and documented where it is done — a
+/// delta probe nests several indexed source alternatives, and keeping them generic
+/// would grow the stack frame of every caller that composes probes, which a
+/// recursive path evaluator does at every step. A NATIVE probe keeps its
+/// allocation-free representation, which is why the whole-validation figures in
+/// [`CASES`] have no per-focus-node term at all.
+///
+/// It used to be FOUR. Two of the four were the change expansion's own: it walked
+/// each trigger's chain with the `Path`-driven evaluator, which built a `HashSet`
+/// frontier table on its first insert — once per changed row, per trigger — and
+/// rebuilt the reversed `Path` rather than reading the lowering beside it. The
+/// expansion now runs the LOWERED evaluator the validation next to it runs, whose
+/// frontier dedup answers from the accumulator it is already building.
+const EXPANSION_PER_ROW: u64 = 2;
+
+/// What DOUBLING the changed-row count costs in reallocation, on top of the terms
+/// above.
+///
+/// Three collections on the expansion grow by doubling, because none of them can be
+/// sized in advance: `DeltaDatasetView::changed_quads` is an iterator with no
+/// length, so the change set the expansion maps into its own id space is built by
+/// pushing, and the affected-id vector and its dedup set are bounded by the
+/// expansion's own output — which a closure chain can make larger than the change,
+/// so the change's size is a hint and not a bound. Three doubling series is `3` per
+/// doubling, and [`EXPANSION_CHANGE_SIZES`] is four points precisely so this term
+/// cannot be confused with a per-row one.
+const EXPANSION_PER_DOUBLING: u64 = 3;
+
+/// The expansion's measured cost for `changes` changed rows.
+///
+/// `EXPANSION_CONST + EXPANSION_PER_ROW * N + EXPANSION_PER_DOUBLING * log2(N)`.
+/// Exact at every size in [`EXPANSION_CHANGE_SIZES`], with no tolerance: an
+/// allocation count is a fact about the code.
+fn expansion_alloc_model(changes: usize) -> u64 {
+    let doublings = u64::from(changes.ilog2());
+    EXPANSION_CONST + EXPANSION_PER_ROW * changes as u64 + EXPANSION_PER_DOUBLING * doublings
+}
+
+/// A delta-bound validator over [`EXPANSION_FOCUS_NODES`] focus nodes whose mutation
+/// inserts `changes` rows, each of which reaches one focus node.
+fn expansion_fixture(
+    shapes: &str,
+    changes: usize,
+) -> (Arc<purrdf::ir::DeltaDatasetView>, PreparedValidator, usize) {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let focus_class = builder.intern_iri(&format!("{NS}{FOCUS_CLASS}"));
+    let reference = builder.intern_iri(&format!("{NS}ref"));
+    for index in 0..EXPANSION_FOCUS_NODES {
+        let focus = builder.intern_iri(&format!("{NS}x{index}"));
+        let target = builder.intern_iri(&format!("{NS}xt{index}"));
+        builder.push_quad(focus, rdf_type, focus_class, None);
+        builder.push_quad(focus, reference, target, None);
+    }
+    let base = builder.freeze().expect("the expansion base freezes");
+
+    let mut mutation = purrdf::MutableDataset::new(base);
+    for index in 0..changes {
+        let row = purrdf::QuadValues {
+            s: purrdf::TermValue::iri(format!("{NS}xt{index}")),
+            p: purrdf::TermValue::iri(format!("{NS}key")),
+            o: purrdf::TermValue::simple_literal(format!("k{index}")),
+            g: None,
+        };
+        assert!(
+            purrdf::DatasetMut::insert(&mut mutation, row).expect("the expansion insert applies"),
+            "expansion row {index} changed nothing, so the measurement names more rows than it \
+             makes"
+        );
+    }
+    let snapshot = Arc::new(mutation.snapshot_view().expect("the expansion snapshots"));
+    let validator = PreparedShapes::new(Arc::new(
+        parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("the expansion shapes parse"),
+    ))
+    .bind_delta_with_shapes_graph(
+        Arc::clone(&snapshot),
+        None,
+        purrdf::ir::ViewLimits::default(),
+    )
+    .expect("the expansion delta binds");
+    (snapshot, validator, changes)
+}
+
+/// One expansion fixture: its snapshot, its validator, and the row count it was
+/// built with.
+type ExpansionFixture = (Arc<purrdf::ir::DeltaDatasetView>, PreparedValidator, usize);
+
+/// Expand `fixture`'s change, requiring the answer to be bounded and to name
+/// `expected` focus nodes.
+///
+/// The count check is the non-vacuity guard, and it is what an allocation figure
+/// alone cannot give: an expansion that stopped walking the chain would report the
+/// changed rows' own subjects — the TARGETS, not the focus nodes — and would be
+/// both cheaper and silently unsound.
+fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
+    let (snapshot, validator, changes) = fixture;
+    let expansion = validator
+        .affected_focus_node_ids(snapshot)
+        .expect("the expansion succeeds");
+    let ids = expansion.ids().unwrap_or_else(|| {
+        panic!(
+            "the expansion must be bounded, not TOP ({:?})",
+            expansion.reason()
+        )
+    });
+    assert_eq!(
+        ids.len(),
+        expected,
+        "a change of {changes} rows must expand to {expected} focus node(s); {} means the \
+         expansion is not walking the chain this fixture was built around",
+        ids.len()
+    );
+    ids.len()
+}
+
+/// **Expanding a change costs `2 + 2N + 3·log2(N)` allocations for `N` changed
+/// rows — and the `2N` is the delta view's type-erased probe, not the walk.**
+///
+/// `affected_focus_node_ids` is the surface the incremental soundness claim rests
+/// on, and until this test it was the one surface on the change path with no
+/// allocation coverage at all. That is how it came to walk every trigger's chain
+/// with the `Path`-driven evaluator — rebuilding the reversed path per trigger and
+/// building a `HashSet` frontier table per changed row — while the validation
+/// beside it ran the lowered one. Measured on this revision before that was fixed,
+/// the same fixture cost `4 + 4N + 3·log2(N)`: 278 allocations for 64 changed rows
+/// and 537 for 128, against 148 and 279 now.
+///
+/// A closed form rather than a flat `alloc(2N) == alloc(N)`, for the reason
+/// `tests/sparql_path_alloc.rs` states for its three surfaces: the residual terms
+/// are real, they are named and attributed above, and asserting they are absent
+/// would be asserting something false. Nothing here carries a tolerance — the form
+/// is exact at all four sizes.
+///
+/// The graph is held FIXED while the change doubles, so every term measured is a
+/// term in the CHANGE.
+///
+/// [`ShaclDatasetView`]: ../src/data_view.rs
+#[test]
+fn change_expansion_allocation_matches_its_pinned_closed_form() {
+    let _guard = measure_lock();
+
+    for changes in EXPANSION_CHANGE_SIZES {
+        let fixture = expansion_fixture(EXPANSION_SHAPES, changes);
+        // Warm-up, outside the window and with the exact arguments measured below.
+        assert_eq!(expand(&fixture, changes), changes);
+
+        let (_, measured) = measure_min(|| expand(&fixture, changes));
+        assert_eq!(
+            measured.allocations,
+            expansion_alloc_model(changes),
+            "expanding {changes} changed rows allocated {}, and the pinned closed form \
+             ({EXPANSION_CONST} + {EXPANSION_PER_ROW}N + {EXPANSION_PER_DOUBLING}·log2 N) says \
+             {}. A HIGHER per-row coefficient means the expansion has gone back to walking a \
+             chain it rebuilds and re-resolves per changed row; a lower one is welcome and should \
+             move these constants\n  {measured:?}",
+            measured.allocations,
+            expansion_alloc_model(changes),
+        );
+    }
+}
+
+/// **A trigger with no chain to walk back charges a changed row nothing.**
+///
+/// The control for [`EXPANSION_PER_ROW`]. Its two allocations are attributed to the
+/// delta view's type-erased pattern probe rather than to the expansion's walk, and
+/// that attribution is only worth anything if it can be turned off: this drives the
+/// same graph, the same change and the same entry point through a shapes graph whose
+/// matching trigger is anchored AT the changed row's subject, so the expansion takes
+/// the branch that performs no pattern lookup at all.
+///
+/// Measured on this revision the per-row term is then exactly zero — 16 allocations
+/// for 32 changed rows and 25 for 256, which is `1 + 3·log2(N)`, the three doubling
+/// series and nothing else. So the `2N` above really is one probe per row, and a
+/// per-row term that ever appeared HERE would be the expansion's own.
+#[test]
+fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
+    let _guard = measure_lock();
+
+    let mut measured = Vec::with_capacity(EXPANSION_CHANGE_SIZES.len());
+    for changes in EXPANSION_CHANGE_SIZES {
+        let fixture = expansion_fixture(EXPANSION_EMPTY_CHAIN_SHAPES, changes);
+        assert_eq!(expand(&fixture, changes), changes);
+        let (_, sample) = measure_min(|| expand(&fixture, changes));
+        measured.push((changes, sample));
+    }
+
+    for (changes, sample) in &measured {
+        let doublings = u64::from(changes.ilog2());
+        assert_eq!(
+            sample.allocations,
+            1 + EXPANSION_PER_DOUBLING * doublings,
+            "expanding {changes} changed rows through an EMPTY chain allocated {}, not the \
+             1 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
+             is the expansion's own, and it would mean the {EXPANSION_PER_ROW} charged per row \
+             in change_expansion_allocation_matches_its_pinned_closed_form is no longer the \
+             probe it is attributed to\n  {sample:?}",
+            sample.allocations,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 3. The silent-drop guard
 // ---------------------------------------------------------------------------
 

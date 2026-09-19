@@ -47,7 +47,7 @@ use ::purrdf::{FastMap, FastSet, IdSet, TermId};
 use crate::data::resolve_id;
 use crate::data_view::ShaclRead;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
-use crate::footprint::{Footprint, FootprintWalk, applies_to_current_node};
+use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
 use crate::shapes::{
     ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
 };
@@ -1627,7 +1627,31 @@ impl ShapeWalk {
     }
 
     /// Seal the walk into the lowering it produced.
-    fn finish(self, shapes: Vec<LoweredShape>) -> LoweredShapes {
+    fn finish(mut self, shapes: Vec<LoweredShape>) -> LoweredShapes {
+        // Reverse and lower every trigger chain HERE, once per shapes graph.
+        //
+        // The change expansion runs a trigger backwards, and the reversal is a
+        // rewrite of the path STRUCTURE — `^(a/b)` becomes `^b/^a` — that depends on
+        // the shapes graph alone. Doing it at expansion time instead rebuilt the
+        // whole `Path` subtree once per trigger and then walked the rebuilt clone
+        // with the `Path`-driven evaluator, re-hashing each predicate IRI into the
+        // dataset dictionary at every step of every changed row. Reversing into a
+        // `LoweredPath` means the expansion reads the same binding-row slots the
+        // validation hot path reads, on the same evaluator.
+        let pending = self.footprint.take_triggers();
+        let mut triggers = Vec::with_capacity(pending.len());
+        for trigger in pending {
+            let reversed = trigger
+                .chain
+                .as_ref()
+                .map(|chain| lower_path(&crate::path::invert(chain), &mut self));
+            triggers.push(Trigger {
+                predicate: trigger.predicate,
+                endpoint: trigger.endpoint,
+                reversed,
+            });
+        }
+        let footprint = self.footprint.finish(triggers);
         LoweredShapes {
             terms: self.terms.into_boxed_slice(),
             sets: self.sets.into_boxed_slice(),
@@ -1636,7 +1660,7 @@ impl ShapeWalk {
             indexes: self.indexes.into_boxed_slice(),
             bodies: self.bodies,
             no_targets: PreparedTargets::default(),
-            footprint: self.footprint.finish(),
+            footprint,
         }
     }
 
@@ -1761,6 +1785,47 @@ impl StandaloneLowering {
             classes: &self.graph.classes,
             targets: &self.graph.no_targets,
         }
+    }
+}
+
+/// Lower one SHACL property path that no shapes-graph walk lowered.
+///
+/// The counterpart of [`lower_standalone_expression`], for the same reason and by
+/// the same route: [`crate::path`]'s public entry points are handed a parsed
+/// [`Path`] by a caller who holds no preparation, so there is no stage-0 lowering to
+/// evaluate against and one is made here. Every predicate step gets a slot exactly
+/// as it would inside a shapes graph, so the caller runs the SAME evaluator the
+/// validation hot path runs rather than a second traversal that could drift from it.
+pub(crate) fn lower_standalone_path(path: &Path) -> StandalonePath {
+    let mut walk = ShapeWalk::default();
+    let lowered = lower_path(path, &mut walk);
+    StandalonePath {
+        graph: walk.finish(Vec::new()),
+        path: lowered,
+    }
+}
+
+/// The lowering of one standalone property path, with the slot row it indexes.
+#[derive(Debug)]
+pub(crate) struct StandalonePath {
+    graph: LoweredShapes,
+    path: LoweredPath,
+}
+
+impl StandalonePath {
+    /// Resolve this lowering's slot row against `dataset`.
+    ///
+    /// The row has exactly one entry per slot [`lower_standalone_path`] handed out,
+    /// because both come from the one walk, so every slot [`Self::path`] names
+    /// indexes it.
+    pub(crate) fn bind(&self, dataset: &impl ShaclRead) -> DatasetBinding {
+        self.graph.bind(dataset, &self.graph.classes)
+    }
+
+    /// The path's own lowering.
+    #[inline]
+    pub(crate) fn path(&self) -> &LoweredPath {
+        &self.path
     }
 }
 

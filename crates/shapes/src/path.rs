@@ -16,13 +16,30 @@
 //! evaluation from a term that is not interned in the data graph (a `sh:this`
 //! Constant), in which case non-reflexive steps yield nothing while a reflexive
 //! closure step still yields the focus itself.
+//!
+//! # ONE evaluator
+//!
+//! There is a single recursive walk here, and it is driven by a LOWERED path
+//! ([`LoweredPath`]) whose predicate steps are binding-row slots rather than IRIs to
+//! hash. Every caller reaches it: the validation hot path and the change expansion
+//! hand it a stage-0 lowering they already hold, and the public [`Path`]-driven
+//! entry points below lower their argument first — exactly as
+//! [`crate::expression`]'s public node-expression entry points do for an expression
+//! nobody lowered.
+//!
+//! It used to be two walks. The second one took a `Path` directly, re-resolved each
+//! predicate IRI at every step of every focus node, and rebuilt the entire subtree of
+//! an `sh:inversePath` over a composite on each visit — the cost the lowering exists
+//! to remove, kept alive in the one evaluator nothing on the hot path called, and
+//! reachable the moment a new surface picked the wrong entry point. The change
+//! expansion did exactly that.
 
 use crate::data_view::ShaclRead;
 
 use ::purrdf::{IdSet, IdVec, TermId, smallvec};
 
 use crate::data::{GraphFilter, quads_for_pattern_ids, resolve_id};
-use crate::plan::{DatasetBinding, LoweredPath};
+use crate::plan::{DatasetBinding, LoweredPath, lower_standalone_path};
 use crate::shapes::Path;
 use crate::term::{NamedNode, Term, term_id_to_native};
 
@@ -36,42 +53,31 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 ///
 /// # Traversal strategy
 ///
-/// When `focus` is interned in `ds` (the common case — a data-graph node), the
-/// entire traversal runs in id space: every step maps matched `QuadIds` to
-/// `.o`/`.s` [`TermId`]s, frontiers/closures dedup on a `Copy` [`IdSet`], and only
-/// the deduped result set is resolved to the native [`Term`] model at the end. No
-/// owned term is allocated per intermediate step, and diamond/cycle dedup hashes
-/// interned ids rather than rendered strings.
+/// `path` carries no lowering — a caller holding a parsed [`Path`] has no
+/// preparation to have lowered it against — so one is made for this call and the
+/// walk runs on it. Past that the traversal is the ordinary one: when `focus` is
+/// interned in `ds` (the common case — a data-graph node) the whole of it runs in id
+/// space, every step maps matched `QuadIds` to `.o`/`.s` [`TermId`]s, frontiers and
+/// closures dedup on `Copy` ids, and only the deduped result set is resolved to the
+/// native [`Term`] model at the end.
 ///
 /// When `focus` is NOT interned (a SHACL-AF node expression may drive evaluation
 /// from a `sh:this` Constant that never appears in the data), it has no id and
 /// therefore no outgoing/incoming quads: every STEP is empty, and the only value
 /// a path can yield is the focus itself via reflexive inclusion
-/// (`sh:zeroOrMore` / `sh:zeroOrOne`). That case keeps the native [`Term`]
-/// traversal so the reflexive focus term is returned verbatim.
+/// (`sh:zeroOrMore` / `sh:zeroOrOne`). That case returns the focus term verbatim.
 pub fn eval(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Vec<Term> {
-    let Some(focus_id) = resolve_id(ds, focus) else {
-        // Non-interned focus: it has no id and therefore no incoming/outgoing
-        // quads, so every predicate/inverse STEP is empty. The only value a path
-        // can yield is the focus term itself, via reflexive (zero-length)
-        // inclusion. So the whole traversal collapses to a single predicate:
-        // return `{focus}` iff the path admits the empty path, else `{}`. A single
-        // focus term needs no dedup.
-        if admits_empty_path(path) {
-            return vec![focus.clone()];
-        }
-        return Vec::new();
-    };
-    // Interned focus: id-native traversal, resolve only the deduped result set.
-    let ids = eval_inner_ids(ds, focus_id, path);
-    let mut seen: IdSet = IdSet::default();
-    let mut nodes: Vec<Term> = Vec::with_capacity(ids.len());
-    for id in ids {
-        if seen.insert(id) {
-            nodes.push(term_id_to_native(ds, id));
-        }
-    }
-    nodes
+    let lowering = lower_standalone_path(path);
+    let binding = lowering.bind(ds);
+    // The walk reports exactly one error — a slot the lowering never handed out —
+    // and the two lines above are why it cannot arrive here: the lowering that names
+    // the slots and the row that answers them come from the same `ShapeWalk`, made in
+    // this call, so the row has one entry per slot the lowered path can name. The
+    // empty answer is what a caller would receive from a path that matched nothing,
+    // and this module's own tests drive every path form through this function and
+    // require a non-empty result, so a lowering that ever did come apart would fail
+    // there by name rather than answer short here.
+    eval_planned(ds, focus, lowering.path(), &binding).unwrap_or_else(|_| Vec::new())
 }
 
 /// Id-native value-node producer: the deduped set of value nodes reachable from
@@ -89,35 +95,19 @@ pub fn eval(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Vec<Term> {
 /// [`eval`]; that owned-term fallback is a genuine necessity, not optionality.
 pub fn eval_ids(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Option<IdVec> {
     let focus_id = resolve_id(ds, focus)?;
-    Some(eval_ids_from_id(ds, focus_id, path))
+    let lowering = lower_standalone_path(path);
+    let binding = lowering.bind(ds);
+    // Unreachable for the reason [`eval`] states, and answered the same way.
+    Some(
+        eval_planned_ids_from_id(ds, focus_id, lowering.path(), &binding)
+            .unwrap_or_else(|_| IdVec::new()),
+    )
 }
 
-/// Id-native value-node producer for a focus node whose interned identity is
-/// already known.
-///
-/// This is the validation hot-path entry point: a focus node is resolved once
-/// when its shape evaluation begins, then every property shape reuses the same
-/// [`TermId`] instead of repeating an interner lookup.
-pub(crate) fn eval_ids_from_id(ds: &impl ShaclRead, focus_id: TermId, path: &Path) -> IdVec {
-    let ids = eval_inner_ids(ds, focus_id, path);
-    let mut seen: IdSet = IdSet::default();
-    let mut out: IdVec = IdVec::with_capacity(ids.len());
-    for id in ids {
-        if seen.insert(id) {
-            out.push(id);
-        }
-    }
-    out
-}
-
-// ── Planned evaluation ─────────────────────────────────────────────────────────
+// ── The evaluator ──────────────────────────────────────────────────────────────
 //
-// The same six path forms, driven by a path whose predicate steps were resolved to
-// dataset identities once, at bind, instead of once per focus node. These are the
-// functions the validation engine calls; the [`Path`]-driven pair above remains the
-// entry point for a caller holding only a parsed path (the public surface) and for
-// the one form a lowering does not yet carry — an inverse over a COMPOSITE path,
-// which is inverted structurally rather than resolved.
+// The six path forms, driven by a path whose predicate steps were resolved to
+// dataset identities once, at bind, instead of once per focus node.
 
 /// First-seen-order membership over an id accumulator, allocation-free while the
 /// accumulator is small.
@@ -370,35 +360,6 @@ fn planned_closure_ids(
     Ok(order)
 }
 
-/// Whether a SHACL property path matches the zero-length (reflexive) path — i.e.
-/// whether it can relate a node to itself in zero steps. This is the sole thing
-/// that governs a non-interned focus's result: with no incoming/outgoing quads,
-/// every predicate/inverse step is empty, so the path can yield the focus itself
-/// only when it admits the empty path.
-fn admits_empty_path(path: &Path) -> bool {
-    match path {
-        // A predicate step is never zero-length.
-        Path::Predicate(_) => false,
-        // Inversion does not change reflexivity: `^p` admits empty iff `p` does.
-        Path::Inverse(inner) | Path::OneOrMore(inner) => admits_empty_path(inner),
-        // A sequence admits empty only if EVERY step can be taken in zero steps.
-        Path::Sequence(parts) => parts.iter().all(admits_empty_path),
-        // An alternative admits empty if ANY branch does.
-        Path::Alternative(parts) => parts.iter().any(admits_empty_path),
-        // The reflexive closures always admit the zero-length path.
-        Path::ZeroOrMore(_) | Path::ZeroOrOne(_) => true,
-    }
-}
-
-/// Resolve a predicate IRI to its interned id, if present in `ds`.
-///
-/// Direct IRI lookup — exactly `resolve_id`'s `Term::NamedNode` arm — without
-/// cloning the predicate into a temporary owned `Term` per path step.
-#[inline]
-fn resolve_pred(ds: &impl ShaclRead, predicate: &NamedNode) -> Option<TermId> {
-    ds.term_id_by_iri(predicate.as_str())
-}
-
 /// Convert a [`Path`] to its term representation for use in `result_path`.
 ///
 /// - `Predicate(p)` → `Term::NamedNode(p)` (a simple path IS its IRI);
@@ -492,6 +453,15 @@ pub fn primary_predicate(path: &Path) -> Option<&NamedNode> {
 /// - `^(a/b/…/z) = ^z/…/^b/^a`
 /// - `^(a|b)     = ^a|^b`
 /// - `^(p*)      = (^p)*` (and likewise `+`, `?`)
+///
+/// STAGE 0 ONLY. The rewrite builds a new `Path` subtree, so it belongs where the
+/// shapes graph is read and nowhere else. Its three callers are all once-per-shapes-
+/// graph: [`crate::plan`]'s `lower_path` (an `sh:inversePath` over a composite,
+/// which lowers to `LoweredPath::InvertedComposite`), the same module's reversal of
+/// every [`crate::footprint`] trigger chain, and the footprint walk's own record of
+/// what an inverse composite READS. Nothing per focus node or per changed row
+/// inverts anything: by the time either of those walks runs, the inversion is
+/// already inside the lowering they are handed.
 pub(crate) fn invert(path: &Path) -> Path {
     match path {
         Path::Predicate(_) => Path::Inverse(Box::new(path.clone())),
@@ -502,115 +472,6 @@ pub(crate) fn invert(path: &Path) -> Path {
         Path::OneOrMore(inner) => Path::OneOrMore(Box::new(invert(inner))),
         Path::ZeroOrOne(inner) => Path::ZeroOrOne(Box::new(invert(inner))),
     }
-}
-
-// ── Id-native traversal (interned focus) ───────────────────────────────────────
-//
-// Every frontier, worklist, and visited set is a `Copy` [`TermId`] rather than an
-// owned [`Term`]. Every value a step produces is the object/subject of a real
-// quad, so it is always interned and always has a `TermId`. First-seen order and
-// per-step dedup are deterministic; the caller ([`eval`]) resolves the result to
-// terms.
-
-/// The recursive id-native path evaluator, for an interned `focus`.
-fn eval_inner_ids(ds: &impl ShaclRead, focus: TermId, path: &Path) -> IdVec {
-    match path {
-        Path::Predicate(p) => match resolve_pred(ds, p) {
-            Some(p_id) => {
-                quads_for_pattern_ids(ds, Some(focus), Some(p_id), None, GraphFilter::DefaultGraph)
-                    .map(|q| q.o)
-                    .collect()
-            }
-            None => IdVec::new(),
-        },
-        Path::Inverse(inner) => match inner.as_ref() {
-            // Inverse of a predicate: collect subjects of (?, p, focus).
-            Path::Predicate(p) => match resolve_pred(ds, p) {
-                Some(p_id) => quads_for_pattern_ids(
-                    ds,
-                    None,
-                    Some(p_id),
-                    Some(focus),
-                    GraphFilter::DefaultGraph,
-                )
-                .map(|q| q.s)
-                .collect(),
-                None => IdVec::new(),
-            },
-            // Inverse of a composite path: push the inversion inward and evaluate.
-            composite => eval_inner_ids(ds, focus, &invert(composite)),
-        },
-        Path::Sequence(parts) => {
-            // Fold the frontier through each step, deduplicating per step
-            // (first-seen order) so diamond-shaped graphs stay linear. The
-            // scratch `next`/`seen` are hoisted out of the loop and cleared each
-            // iteration so their capacity is reused across steps.
-            let mut frontier: IdVec = smallvec![focus];
-            let mut next: IdVec = IdVec::new();
-            let mut seen: IdSet = IdSet::default();
-            for part in parts {
-                next.clear();
-                seen.clear();
-                for &node in &frontier {
-                    for value in eval_inner_ids(ds, node, part) {
-                        if seen.insert(value) {
-                            next.push(value);
-                        }
-                    }
-                }
-                std::mem::swap(&mut frontier, &mut next);
-            }
-            frontier
-        }
-        Path::Alternative(parts) => parts
-            .iter()
-            .flat_map(|part| eval_inner_ids(ds, focus, part))
-            .collect(),
-        Path::ZeroOrMore(inner) => closure_ids(ds, focus, inner, true),
-        Path::OneOrMore(inner) => closure_ids(ds, focus, inner, false),
-        Path::ZeroOrOne(inner) => {
-            let mut nodes: IdVec = smallvec![focus];
-            nodes.extend(eval_inner_ids(ds, focus, inner));
-            nodes
-        }
-    }
-}
-
-/// The (reflexive-)transitive closure of `inner` from an interned `focus`: a
-/// breadth-first worklist walk with a visited set, so cyclic graphs terminate.
-/// `reflexive` includes the focus node itself (`zeroOrMore`); otherwise the walk
-/// starts from the focus's direct step values (`oneOrMore`). The visited set is an
-/// [`IdSet`] over `Copy` [`TermId`]s; first-seen order is preserved.
-fn closure_ids(ds: &impl ShaclRead, focus: TermId, inner: &Path, reflexive: bool) -> IdVec {
-    let mut seen: IdSet = IdSet::default();
-    let mut order: IdVec = IdVec::new();
-    let mut worklist: IdVec = IdVec::new();
-
-    if reflexive {
-        seen.insert(focus);
-        order.push(focus);
-        worklist.push(focus);
-    } else {
-        for value in eval_inner_ids(ds, focus, inner) {
-            if seen.insert(value) {
-                order.push(value);
-                worklist.push(value);
-            }
-        }
-    }
-
-    let mut cursor = 0;
-    while cursor < worklist.len() {
-        let node = worklist[cursor];
-        cursor += 1;
-        for value in eval_inner_ids(ds, node, inner) {
-            if seen.insert(value) {
-                order.push(value);
-                worklist.push(value);
-            }
-        }
-    }
-    order
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

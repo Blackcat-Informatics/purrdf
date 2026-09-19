@@ -31,15 +31,21 @@
 //!   `sh:inversePath` step reads `(?, p, node)`, so it is the OBJECT; and an RDF 1.2
 //!   reifier declaration reads `(?, rdf:reifies, <<( node … )>>)`, where the node is
 //!   the SUBJECT OF THE TRIPLE TERM the object carries.
-//! * `chain` — the forward path from the focus node to that node, or `None` when
-//!   the focus node IS it.
+//! * `reversed` — the path from that node BACK to the focus node, or `None` when
+//!   the focus node IS it. The walk records the FORWARD chain
+//!   ([`PendingTrigger::chain`]); the reversal happens once, below.
 //!
 //! Expansion then runs the trigger backwards: a changed triple that matches
-//! `predicate` offers its `endpoint` as the read node, and
-//! [`crate::path::invert`] turns `chain` into the path from there back to every
-//! focus node that could have reached it. That is why the answer is a superset
-//! rather than a guess — the reverse of a total forward description is a total
-//! backward one.
+//! `predicate` offers its `endpoint` as the read node, and [`Trigger::reversed`] is
+//! the path from there back to every focus node that could have reached it. That is
+//! why the answer is a superset rather than a guess — the reverse of a total forward
+//! description is a total backward one.
+//!
+//! The reversal is [`crate::path::invert`], and it runs ONCE, at stage 0, on the way
+//! into [`crate::plan::LoweredPath`] — the same treatment `sh:inversePath` over a
+//! composite gets in the lowering itself. Expansion therefore walks a path whose
+//! predicate steps are binding-row SLOTS, on the one evaluator the validation hot
+//! path uses, and inverts nothing per changed row.
 //!
 //! Reversal is also why closures cost nothing extra: `sh:zeroOrMorePath ex:next`
 //! prefixed onto a chain inverts to `(^ex:next)*`, which is exactly the transitive
@@ -72,6 +78,7 @@
 
 use crate::expression::{FnCall, NodeExpr};
 use crate::model::{rdf, rdfs};
+use crate::plan::LoweredPath;
 use crate::shapes::{Constraint, Path, Target};
 use crate::term::NamedNode;
 
@@ -101,7 +108,7 @@ pub(crate) const OPAQUE_UNROOTED: &str = "a shape reads from a node the shapes w
 
 // ── The footprint ───────────────────────────────────────────────────────────────
 
-/// Which end of a matched triple stands at the far end of a [`Trigger::chain`].
+/// Which end of a matched triple stands at the far end of a trigger's chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Endpoint {
     /// A forward read, `(node, p, ?)`.
@@ -122,14 +129,38 @@ pub(crate) enum Endpoint {
 }
 
 /// One way a changed triple can reach a focus node. See the module docs.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Trigger {
     /// The predicate this read binds, or `None` for a read that binds none.
     pub(crate) predicate: Option<NamedNode>,
     /// Which end of the matched triple is the node the read happens at.
     pub(crate) endpoint: Endpoint,
-    /// The forward path from a focus node to that node; `None` means the focus
-    /// node is that node.
+    /// The path from the node the read happens at BACK to every focus node that
+    /// could have reached it, lowered; `None` means the focus node IS that node.
+    ///
+    /// Already reversed. The forward chain the walk records is inverted and lowered
+    /// exactly once, on the way out of the walk ([`crate::plan`]'s `ShapeWalk`), so
+    /// expansion neither rebuilds a `Path` per changed row nor re-resolves the
+    /// predicates of one.
+    pub(crate) reversed: Option<LoweredPath>,
+}
+
+/// One trigger as the WALK records it: the forward chain, not yet reversed and not
+/// yet lowered.
+///
+/// Separate from [`Trigger`] because the two halves are produced by different
+/// parties. This walk observes the shapes graph and can name the forward hops; only
+/// the lowering walk hands out the binding-row slots a [`LoweredPath`] is made of,
+/// so the reversal happens where the slots live and this type is what travels
+/// between them.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingTrigger {
+    /// As [`Trigger::predicate`].
+    pub(crate) predicate: Option<NamedNode>,
+    /// As [`Trigger::endpoint`].
+    pub(crate) endpoint: Endpoint,
+    /// The forward path from a focus node to the node the read happens at; `None`
+    /// means the focus node is that node.
     pub(crate) chain: Option<Path>,
 }
 
@@ -152,16 +183,6 @@ impl Footprint {
     /// Every reversed read, in walk order.
     pub(crate) fn triggers(&self) -> &[Trigger] {
         &self.triggers
-    }
-
-    /// Record the FIRST reason this footprint went TOP.
-    ///
-    /// First, not last, because the reason is reported to a caller who has to act
-    /// on it, and the earliest construct in walk order is the one they can find.
-    fn mark_opaque(&mut self, reason: &'static str) {
-        if self.opaque.is_none() {
-            self.opaque = Some(reason);
-        }
     }
 }
 
@@ -195,7 +216,10 @@ pub(crate) struct ChainState {
 /// transcription of the reachability rule, and the two would drift.
 #[derive(Debug)]
 pub(crate) struct FootprintWalk {
-    footprint: Footprint,
+    /// Every read recorded so far, with its chain still pointing forwards.
+    triggers: Vec<PendingTrigger>,
+    /// Why this footprint is TOP, or `None` while it is still bounded.
+    opaque: Option<&'static str>,
     /// Forward hops from a focus node to the node currently being walked, or
     /// `None` when that node is not reachable from a focus node by a path this
     /// walk can name.
@@ -207,7 +231,8 @@ pub(crate) struct FootprintWalk {
 impl Default for FootprintWalk {
     fn default() -> Self {
         Self {
-            footprint: Footprint::default(),
+            triggers: Vec::new(),
+            opaque: None,
             chain: Some(Vec::new()),
             declaring: Some(Vec::new()),
         }
@@ -215,9 +240,32 @@ impl Default for FootprintWalk {
 }
 
 impl FootprintWalk {
-    /// Seal the accumulator into the footprint it derived.
-    pub(crate) fn finish(self) -> Footprint {
-        self.footprint
+    /// Hand over every read recorded so far, for reversal and lowering.
+    ///
+    /// Taken rather than borrowed because the caller holds the slot row a
+    /// [`LoweredPath`] indexes and needs it mutably while it lowers these chains;
+    /// the walk is finished with them either way.
+    pub(crate) fn take_triggers(&mut self) -> Vec<PendingTrigger> {
+        std::mem::take(&mut self.triggers)
+    }
+
+    /// Seal the accumulator into the footprint it derived, given the reversed,
+    /// lowered form of every trigger [`Self::take_triggers`] handed out.
+    pub(crate) fn finish(self, triggers: Vec<Trigger>) -> Footprint {
+        Footprint {
+            triggers,
+            opaque: self.opaque,
+        }
+    }
+
+    /// Record the FIRST reason this footprint went TOP.
+    ///
+    /// First, not last, because the reason is reported to a caller who has to act
+    /// on it, and the earliest construct in walk order is the one they can find.
+    fn mark_opaque(&mut self, reason: &'static str) {
+        if self.opaque.is_none() {
+            self.opaque = Some(reason);
+        }
     }
 
     /// Enter a shape whose focus node is the node currently being walked.
@@ -280,12 +328,12 @@ impl FootprintWalk {
             Root::Declaring => self.declaring.clone(),
         };
         let Some(base) = base else {
-            self.footprint.mark_opaque(OPAQUE_UNROOTED);
+            self.mark_opaque(OPAQUE_UNROOTED);
             return;
         };
         let mut hops = base;
         hops.extend_from_slice(prefix);
-        self.footprint.triggers.push(Trigger {
+        self.triggers.push(PendingTrigger {
             predicate,
             endpoint,
             chain: compose(hops),
@@ -310,8 +358,17 @@ impl FootprintWalk {
             }
             // `^p` reads `(?, p, node)`, so the anchored node is the OBJECT. An
             // inverse over a COMPOSITE is pushed inward first, by the same rewrite
-            // the lowering and the evaluator use, so there is exactly one
-            // description of what `^(a/b)` means.
+            // the lowering uses, so there is exactly one description of what
+            // `^(a/b)` means.
+            //
+            // This rewrite happens HERE, during the walk, and is not hoisted: it is
+            // stage-0 work reached once per declared `sh:inversePath` over a
+            // composite in the shapes graph, and it rewrites only the subtree that
+            // needs it. Pre-normalizing the whole declared path before the walk
+            // would visit every node of every path instead of just those, which is
+            // strictly more work for the same answer. What must not invert per item
+            // is the EVALUATION, and it does not: `Trigger::reversed` is inverted
+            // and lowered once, on the way out of the lowering walk.
             Path::Inverse(inner) => match inner.as_ref() {
                 Path::Predicate(predicate) => {
                     self.emit(
@@ -424,7 +481,7 @@ impl FootprintWalk {
             // A constant focus node reads nothing to BE one. Whether it violates is
             // decided by its constraints, which record their own reads.
             Target::Node(_) => {}
-            Target::Sparql { .. } => self.footprint.mark_opaque(OPAQUE_QUERY_TEXT),
+            Target::Sparql { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
         }
     }
 
@@ -457,8 +514,8 @@ impl FootprintWalk {
                 Some(predicate.clone()),
                 Endpoint::Subject,
             ),
-            Constraint::Sparql { .. } => self.footprint.mark_opaque(OPAQUE_QUERY_TEXT),
-            Constraint::Component { .. } => self.footprint.mark_opaque(OPAQUE_COMPONENT),
+            Constraint::Sparql { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
+            Constraint::Component { .. } => self.mark_opaque(OPAQUE_COMPONENT),
             // Value-local: each of these judges a value node's own identity —
             // its term kind, its lexical form, its datatype, its language tag, its
             // numeric order, its membership in a listed set — and reads no triple
@@ -519,17 +576,17 @@ impl FootprintWalk {
             // Graph-wide selections: their result moves when ANY node's type or
             // conformance moves, so no path from a focus node describes them.
             NodeExpr::InstancesOf(_) | NodeExpr::NodesMatching(_) => {
-                self.footprint.mark_opaque(OPAQUE_GLOBAL_EXPRESSION);
+                self.mark_opaque(OPAQUE_GLOBAL_EXPRESSION);
             }
             // Query text, by construction.
-            NodeExpr::Select { .. } => self.footprint.mark_opaque(OPAQUE_QUERY_TEXT),
+            NodeExpr::Select { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
             // A builtin and a `sparql:` operator are rendered as SPARQL
             // EXPRESSIONS over their already-evaluated operands — no graph pattern,
             // so no read. A `sh:SPARQLFunction` body is a SELECT that may carry
             // one, and this walk does not read it.
             NodeExpr::Call(call) => match call {
                 FnCall::Builtin { .. } | FnCall::Sparql { .. } => {}
-                FnCall::UserDefined { .. } => self.footprint.mark_opaque(OPAQUE_QUERY_TEXT),
+                FnCall::UserDefined { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
             },
             // Value-producing or purely structural: every read belongs to an
             // operand the lowering walk descends into.

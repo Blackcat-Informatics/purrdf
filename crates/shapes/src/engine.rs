@@ -1734,6 +1734,9 @@ impl PreparedValidator {
         }
         let mut seen: IdSet = IdSet::default();
         let mut affected: Vec<TermId> = Vec::new();
+        // The slot row the lowered trigger chains index, resolved once at bind —
+        // the same row the validation beside this one reads.
+        let binding = self.bound.binding();
         for trigger in self.bound.footprint().triggers() {
             let predicate = match &trigger.predicate {
                 // A predicate this dataset never interned cannot be the predicate
@@ -1747,9 +1750,6 @@ impl PreparedValidator {
                 // `sh:closed` binds no predicate: every changed row is a candidate.
                 None => None,
             };
-            // The read described forwards, walked backwards. Inverted once per
-            // trigger, not once per changed row.
-            let reversed = trigger.chain.as_ref().map(crate::path::invert);
             for quad in &changed {
                 if predicate.is_some_and(|predicate| predicate != quad.p) {
                     continue;
@@ -1769,7 +1769,11 @@ impl PreparedValidator {
                         | ::purrdf::TermRef::Literal { .. } => continue,
                     },
                 };
-                match &reversed {
+                // The read described forwards, walked backwards. The reversal is
+                // stage-0 work and was done there: this walks a LOWERED path, on
+                // the evaluator validation itself runs, and neither rebuilds a
+                // `Path` nor re-resolves a predicate IRI per changed row.
+                match &trigger.reversed {
                     // An empty chain: the focus node IS the node the read happens
                     // at, so there is nothing to walk back.
                     None => {
@@ -1778,7 +1782,9 @@ impl PreparedValidator {
                         }
                     }
                     Some(path) => {
-                        for id in crate::path::eval_ids_from_id(core, read_node, path) {
+                        for id in
+                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)?
+                        {
                             if seen.insert(id) {
                                 affected.push(id);
                             }
