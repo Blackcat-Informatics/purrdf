@@ -275,6 +275,11 @@ impl PartitionStats {
     /// quotient can be zero. BM25 divides by this value, and the guarantee is
     /// what makes that division safe without a special case that would have to
     /// invent a score.
+    ///
+    /// The guarantee is over *retained* partitions, and that is the whole of it:
+    /// an index holding no documents holds no partitions either, so there is no
+    /// `PartitionStats` to read a zero out of. An empty corpus cannot reach this
+    /// divisor rather than reaching it with a zero.
     pub const fn average_document_length(&self) -> Fixed {
         self.average_document_length
     }
@@ -375,6 +380,25 @@ struct TermEntry {
 /// denominator. Excluding them is what makes
 /// [`PartitionStats::average_document_length`] non-zero for every retained
 /// partition, which is a property later stages are entitled to rely on.
+///
+/// # The empty index
+///
+/// An index holding no documents is well formed and needs no special case
+/// anywhere. It holds zero documents, zero terms and **zero partitions** — a
+/// partition is a `(graph, language)` pair carrying at least one document, so
+/// there is no such thing as an empty partition and nothing divides by an average
+/// document length that does not exist. It still attests a generation:
+/// [`Self::fingerprint`] digests the configuration, the ranking law and the
+/// analyzer's Unicode versions before it digests any content, so two empty
+/// indexes under different configurations are distinguishable and the value
+/// changes the moment the first document lands.
+///
+/// This is reachable rather than hypothetical. An empty dataset has interned no
+/// term, so every configured predicate is absent from it, and
+/// [`Self::from_dataset`] reads an absent predicate as no rows rather than as a
+/// refusal — an index built before the documents it will hold have landed is an
+/// ordinary operating state. A query against such an index returns zero rows
+/// through exactly the path a needle that matches nothing takes.
 #[derive(Clone, Debug)]
 pub struct TextIndex {
     /// The configuration this index was built under.
@@ -421,34 +445,43 @@ impl TextIndex {
     ///
     /// # Errors
     ///
-    /// [`TextError::Data`] if a configured predicate, or a
-    /// [`GraphSelector::Named`] graph, is not interned in `dataset` at all; if a
-    /// term nests triple terms past the encoder's depth bound; or if the
-    /// dataset yields more than `u32::MAX` documents or a document longer than
-    /// `u32::MAX` tokens. [`TextError::Overflow`] if a partition's average
-    /// document length does not fit in [`Fixed`].
+    /// [`TextError::Data`] if a term nests triple terms past the encoder's depth
+    /// bound, or if the dataset yields more than `u32::MAX` documents or a
+    /// document longer than `u32::MAX` tokens. [`TextError::Overflow`] if a
+    /// partition's average document length does not fit in [`Fixed`].
     ///
-    /// ## Why an absent predicate is refused rather than ignored
+    /// ## An absent predicate contributes no rows rather than refusing
     ///
-    /// The workspace has both postures in it, and they answer different
-    /// questions. `DatasetView::term_id_by_value` documents an absent id as "an
-    /// empty match, never an error", but that governs a *structural walk* keyed
-    /// on an incidental IRI — `rdf_list` looking for `rdf:first` in a dataset
-    /// that holds no lists has genuinely found no lists, and saying so is the
-    /// right answer. `MemoryRelation::from_graph` takes the other posture for a
-    /// list head, on the grounds that "a head naming a list that does not exist
-    /// is a configuration pointing at nothing, not an empty relation".
+    /// A configured predicate the dataset has not interned, and a
+    /// [`GraphSelector::Named`] graph the dataset has not interned, each
+    /// contribute nothing to the walk. Neither is an error, for a reason the
+    /// limiting case makes plain: a dataset holding no quads has interned no term
+    /// at all, so refusing an absent predicate would mean **no index can be built
+    /// over an empty dataset** — and an index that exists before the documents it
+    /// will hold have landed is an ordinary operating state, not a fault. It would
+    /// also make the recommended single-partition configuration
+    /// ([`GraphSelector::Named`] over one graph) the hardest one to start from,
+    /// because the graph IRI is interned only once something is in the graph.
     ///
-    /// A configured predicate is the second kind. It is not something the index
-    /// stumbled across; it is the caller's entire specification of which text
-    /// exists, asserted in advance. A single mistyped character in one of five
-    /// predicate IRIs would silently remove a fifth of the corpus, and nothing
-    /// downstream could tell that apart from those documents genuinely having no
-    /// text — retrieval's failure mode is silence, which is precisely where a
-    /// hard failure earns its cost. This crate's own [`TextError::Data`]
-    /// documentation already named this case ("a predicate the configuration
-    /// names that the dataset does not carry") before the walk existed, so the
-    /// posture is the one the error channel was designed around.
+    /// So the index over an empty corpus builds, holds zero documents and zero
+    /// partitions, still attests a generation (see [`Self::fingerprint`]), and
+    /// answers every query with zero rows. Emptiness travels as the answer to a
+    /// query rather than as a verdict at construction, which is the only form a
+    /// consumer can read: it arrives with the generation it was computed against,
+    /// and that generation moves the moment the first document lands.
+    ///
+    /// The cost is real and worth naming: a mistyped predicate IRI now removes
+    /// that predicate's share of the corpus quietly. What is given up is less than
+    /// it looks, because a presence check was never a sound detector of it. It
+    /// accepted any IRI the dataset interned *anywhere* — as a subject, as an
+    /// object, in another predicate's statement — and it said nothing about a
+    /// correctly spelled predicate whose objects are all IRIs, which already
+    /// contributed no text and already raised nothing. What a host can act on is
+    /// the index itself: [`Self::document_count`] is zero, the row bound a
+    /// relation declares from it is zero, and the generation is the one that
+    /// corpus produced. A host that needs to know it is holding the intended data
+    /// asks [`verify_binding`](crate::verify_binding), which compares digests over
+    /// the rows actually walked rather than inferring from a term table.
     pub fn from_dataset<D: DatasetView>(
         dataset: &D,
         config: &TextIndexConfig,
@@ -817,6 +850,13 @@ impl TextIndex {
     /// the same content agree on it, and any change that would move a ranked
     /// answer moves it.
     ///
+    /// An index holding nothing still has one, and it is not a placeholder: the
+    /// configuration, the ranking law and the Unicode versions are digested before
+    /// any content, so an empty index attests a generation that distinguishes it
+    /// from an empty index under another configuration, and that moves as soon as
+    /// the first document lands. Emptiness is a state of the index, never an
+    /// absence of its identity.
+    ///
     /// See this module's documentation for the one caveat: blank-node labels are
     /// terms here, so two isomorphic datasets with different labels disagree.
     pub const fn fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
@@ -1088,21 +1128,34 @@ struct AnalyzedDocument {
 }
 
 /// Read every configured predicate's literal rows out of both RDF 1.2 layers.
+///
+/// A configured predicate the dataset has not interned contributes **no rows**
+/// rather than raising: the dataset holds no statement with that predicate, so
+/// there is no text under it, and that is an answer rather than a fault. The
+/// limiting case is the one that decides it — an empty dataset has interned no
+/// term at all, so a refusal here would make an index over an empty dataset
+/// impossible, and an index that exists before its documents land is an ordinary
+/// operating state. The same holds for a [`GraphSelector::Named`] graph the
+/// dataset has not interned: nothing is in a graph that is not there, so the walk
+/// yields nothing.
 fn collect_rows<D: DatasetView>(
     dataset: &D,
     config: &TextIndexConfig,
 ) -> Result<Vec<SourceRow>, TextError> {
-    let graph = resolve_graph(dataset, config.graph())?;
+    let Some(graph) = resolve_graph(dataset, config.graph()) else {
+        return Ok(Vec::new());
+    };
     let mut predicate_ids: Vec<(D::Id, &TermValue)> = Vec::with_capacity(config.predicates().len());
     for predicate in config.predicates() {
-        let Some(id) = dataset.term_id_by_value(predicate) else {
-            return Err(TextError::data(format!(
-                "indexed predicate {predicate:?} is not present in the dataset; a configured \
-                 predicate is an assertion about what the data holds, not a filter over what it \
-                 happens to hold"
-            )));
-        };
-        predicate_ids.push((id, predicate));
+        if let Some(id) = dataset.term_id_by_value(predicate) {
+            predicate_ids.push((id, predicate));
+        }
+    }
+    if predicate_ids.is_empty() {
+        // No configured predicate is interned, so no statement in either layer
+        // can carry one. Returning here rather than sweeping the annotation side
+        // table to match every row against an empty id set.
+        return Ok(Vec::new());
     }
 
     let mut rows = Vec::new();
@@ -1167,22 +1220,23 @@ fn push_row<D: DatasetView>(
     Ok(())
 }
 
-/// Resolve `selector` against `dataset`'s own id space.
+/// Resolve `selector` against `dataset`'s own id space, or `None` when no quad
+/// of this dataset can possibly match it.
+///
+/// `None` arises for exactly one reason: a [`GraphSelector::Named`] graph whose
+/// IRI the dataset has not interned. There is then no id a quad's graph could
+/// equal, so the match is empty rather than unrepresentable — `GraphMatch` holds
+/// dataset-local ids and has no id that names an absent term, so the emptiness is
+/// carried here instead of being encoded as one. `Any` and `Default` name no term
+/// and so always resolve.
 fn resolve_graph<D: DatasetView>(
     dataset: &D,
     selector: &GraphSelector,
-) -> Result<GraphMatch<D::Id>, TextError> {
-    Ok(match selector {
+) -> Option<GraphMatch<D::Id>> {
+    Some(match selector {
         GraphSelector::Any => GraphMatch::Any,
         GraphSelector::Default => GraphMatch::Default,
-        GraphSelector::Named(name) => {
-            let Some(id) = dataset.term_id_by_value(name) else {
-                return Err(TextError::data(format!(
-                    "the configured named graph {name:?} is not present in the dataset"
-                )));
-            };
-            GraphMatch::Named(id)
-        }
+        GraphSelector::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
     })
 }
 
@@ -1501,9 +1555,10 @@ fn build_terms(
 ///
 /// # Errors
 ///
-/// Whatever the walk raises — [`TextError::Data`] for a configured predicate or
-/// named graph the dataset does not carry, or for a term the encoder cannot
-/// represent.
+/// Whatever the walk raises — [`TextError::Data`] for a term the encoder cannot
+/// represent. A configured predicate, or a named graph, the dataset does not
+/// carry contributes no rows rather than raising, so an empty dataset digests to
+/// the digest of an empty row set: the value an index built over it holds.
 pub(crate) fn source_digest<D: DatasetView>(
     dataset: &D,
     config: &TextIndexConfig,

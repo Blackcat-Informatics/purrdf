@@ -1056,3 +1056,68 @@ fn the_same_rows_under_a_different_ranking_law_attest_a_different_generation() {
         "so they are different generations of the index, and the attestation says so"
     );
 }
+
+/// An index over an **empty** dataset is a producer that answers, not one that
+/// cannot exist.
+///
+/// This is the state the whole ranked-producer contract is written for and the
+/// one the shipped text producer could not previously be in: a producer whose
+/// declared row bound is zero is still invoked and still reports its own
+/// exhaustion, so emptiness arrives as the producer's receipt rather than as a
+/// verdict reached without asking it. An index that refused to build over an
+/// empty corpus made that unreachable for every shipped text producer.
+///
+/// Both directions are asserted here, because "zero rows" is the answer a broken
+/// producer also gives: the empty corpus answers with nothing while attesting a
+/// generation, and the SAME configuration over a corpus with text in it answers
+/// with the golden rows under a DIFFERENT generation.
+#[test]
+fn an_empty_index_answers_with_no_rows_and_attests_its_own_generation() {
+    let empty = dataset_of(&[]);
+    let config = config_over(&[NOTE]);
+    let index = Arc::new(
+        TextIndex::from_dataset(&*empty, &config)
+            .expect("an index over an empty dataset is an ordinary operating state"),
+    );
+    assert_eq!(index.document_count(), 0);
+    assert_eq!(
+        index.partition_count(),
+        0,
+        "no documents means no partitions, which is what the declaration below has to be \
+         true of"
+    );
+
+    let (generation, rows) = generation_and_rows(&empty, index);
+    assert_eq!(
+        rows,
+        Vec::<Vec<String>>::new(),
+        "the producer was invoked and answered with no rows; nothing was invented and \
+         nothing was refused"
+    );
+    assert_eq!(
+        generation.len(),
+        64,
+        "and it attested the generation of the corpus it read — an empty index has an \
+         identity, so a host can tell this answer from one over the same index later"
+    );
+
+    // The neighbouring valid case: the same configuration over the golden
+    // corpus. Its rows are the hand-computed golden, so the empty answer above
+    // is emptiness rather than a producer that cannot answer at all.
+    let (dataset, golden_index) = golden();
+    assert_eq!(golden_index.config(), &config);
+    let (after, after_rows) = generation_and_rows(&dataset, golden_index);
+    assert_eq!(
+        after_rows,
+        vec![
+            vec![subject("d1"), typed("1.646224553827", DECIMAL)],
+            vec![subject("d2"), typed("1.386294361118", DECIMAL)],
+        ],
+        "the same needle over a corpus with text in it answers with the golden rows"
+    );
+    assert_ne!(
+        generation, after,
+        "and the two index states are distinguishable, so a reader can tell an answer over \
+         the empty corpus from an answer over the landed one"
+    );
+}

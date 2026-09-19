@@ -28,11 +28,18 @@ pub enum TextError {
     /// [`crate::RankingProfile`], whose identity carries every scoring choice.
     Config(String),
 
-    /// The input data cannot be indexed or queried as given — a predicate the
-    /// configuration names that the dataset does not carry, or a term the index
-    /// cannot encode (a triple term nested past the encoder's depth bound).
-    /// Distinct from [`TextError::Config`]: the caller asked a well-formed
-    /// question of data that does not answer it.
+    /// The input data cannot be indexed or queried as given — a term the index
+    /// cannot encode (a triple term nested past the encoder's depth bound), a
+    /// corpus larger than the `u32` document-id space, or a query naming a
+    /// document the index does not hold. Distinct from [`TextError::Config`]: the
+    /// caller asked a well-formed question of data that does not answer it.
+    ///
+    /// Data the configuration describes and the dataset does not hold is **not**
+    /// this error. A configured predicate the dataset has not interned, and a
+    /// named graph it has not interned, each contribute no rows: an index over an
+    /// empty corpus is an ordinary operating state, and its emptiness travels as
+    /// the answer to a query rather than as a refusal to build. See
+    /// [`TextIndex::from_dataset`](crate::TextIndex::from_dataset).
     Data(String),
 
     /// A fixed-point operation overflowed. The arithmetic is exact by

@@ -426,6 +426,39 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **text:** A text index can now be built before the documents it will hold have
+  landed. A configured predicate the dataset has not interned contributes no rows
+  instead of failing the build, and so does a `GraphSelector::Named` graph the
+  dataset has not interned. The limiting case is what decided it: an empty dataset
+  interns no term at all, so the presence check made an index over an empty corpus
+  impossible -- and it made the recommended single-partition configuration (one
+  named graph) the hardest one to start from, because a graph IRI is interned only
+  once something is in that graph. It also put the shipped text producer
+  permanently out of reach of the state the ranked-retrieval contract is written
+  for: a producer whose declared row bound is zero is invoked anyway and reports
+  its own exhaustion, so emptiness arrives as the producer's receipt rather than as
+  a verdict reached without asking it.
+
+  An empty index is a complete index. It holds zero documents, zero terms and zero
+  partitions -- a partition carries at least one document, so BM25's average
+  document length is never divided by a zero that does not exist -- and it still
+  attests a generation, because the configuration, the ranking law and the
+  analyzer's Unicode versions are digested before any content. Two empty indexes
+  under different configurations are therefore distinguishable, and the value moves
+  the moment the first document lands. Every relation measured over it declares a
+  row bound of zero in every mode, `ranked_declaration` serves it (the rank law
+  holds over a stream with no rows in it), and a search answers with zero rows
+  through the ordinary cursor path.
+
+  What is given up is named rather than glossed: a mistyped predicate IRI now
+  removes that predicate's share of the corpus quietly. A presence check was never
+  a sound detector of it -- it accepted any IRI the dataset interned anywhere,
+  including in an unrelated position, and said nothing about a correctly spelled
+  predicate whose objects are all IRIs, which already contributed no text and
+  already raised nothing. `verify_binding` remains the surface that answers "is
+  this the data under that index?", and it compares digests over the rows actually
+  walked. The multi-partition refusal in `ranked_declaration` is untouched.
+
 - **retrieval:** A stratum whose planned depth already equalled its producer's
   declared row bound was reported `ProducerStatus::Exhausted` -- the strongest
   completeness claim this layer has -- for a read that bound had cut, with
