@@ -236,6 +236,24 @@ the disagreement window. The saving is real, which means the belief is real: unt
 something drives a producer over data built to break the promise, "Unique" is a
 comment.
 
+**And it is what buys the bounded read.** A memory saving is not the whole of what
+this declaration spends. `Unique` is the promise that makes a count of ranks a
+count of candidates, and a bounded request's per-stratum depth of `k` is derived
+from exactly that identity: a candidate its stratum ranks past `k` is beaten by the
+`k` **distinct** candidates above it, and "distinct" is this obligation. An
+`Allowed` stream is de-duplicated by the consumer, so a repeat is validated,
+charged to the producer and then discarded — a depth-`k` prefix of it carries `k`
+rows and can carry fewer than `k` candidates, which is no longer a superset of the
+top `k`. So the planner narrows a depth only where every surviving stratum
+declared `Unique`, and an `Allowed` stratum keeps the full declared-or-measured
+depth it has always read, answering exactly as it does for a request that states no
+bound at all. A producer that collapses its fan-in and declares `Unique` therefore
+buys the bounded read for the whole request; one that cannot loses nothing but
+reading. Pinned by `the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave`
+and `an_allowed_stratum_keeps_the_read_its_repeats_need_and_answers_as_the_undeclared_one_does`
+in `tests/search.rs`, which assert the two answers row for row rather than
+comparing depths alone.
+
 **Who enforces it.** Both.
 
 The layer refuses a breach as
@@ -867,6 +885,19 @@ stream declares `Unrestricted` therefore computes precisely what it computed bef
 the term existed — the same rows, the same scores, the same provenance, the same
 reading cost.
 
+**And it licenses a narrower depth, conditioned on `Unique`.** The declaration buys
+a second thing, one stage earlier and larger than the quantifier: where a request
+states a bound of `k`, every surviving stratum declares a block set, no two of those
+sets meet, **and every one of those strata declared
+[`DuplicatePolicy::Unique`]**, the planner records a per-stratum depth of `k` and
+the compiled unit is emitted at that `LIMIT`. The read itself is bounded, not merely
+the walk over a stream that was materialized in full. The `Unique` condition is not
+decoration: the merge argument counts ranks and reads the count as a count of
+candidates, which is true only of a stream that names an item once — see
+[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer). Drop any one of the
+three conditions and the depth is the declared-or-measured bound it always was; no
+request is refused and no answer moves either way.
+
 **Who enforces it.** Both.
 
 The declaration is part of
@@ -916,6 +947,21 @@ about the rows below them. This layer does not claim otherwise — it is the ide
 uniqueness declaration of [A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer)
 already carries, whose breach is likewise detected only when the repeat is actually
 read.
+
+**And the depth this declaration buys shortens that reach**, which is the one place
+the two halves of A15 pull against each other. A host that really has tagged one
+entity into two blocks is caught by `CandidateInTwoBlocks` only if both naming rows
+are pulled, and under a bounded request the read stops at `k` rows per stratum, so a
+second naming row at a deeper rank is never read and the contradiction leaves no
+trace. So the promise is exactly this and no more: **a mis-tagging is reported
+wherever the rows that witness it are among the rows pulled, and a narrower read
+pulls fewer of them.** Detection is strongest under
+[`ReadBound::Complete`], which reads every stratum to its declared
+or measured depth, and weakest under a small bound over strata that declare disjoint
+blocks — the configuration the narrowing exists for. A host commissioning a new
+partition therefore has somewhere to exercise it: run the corpus once complete, where
+every row is measured against the declaration, rather than inferring from bounded
+traffic that the tags are sound.
 
 **Nothing is defaulted from a stratum or a graph.** The tags come from the host,
 because the host is the only party that knows whether its text index and its vector

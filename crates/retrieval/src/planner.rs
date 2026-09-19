@@ -125,11 +125,16 @@
 //!
 //! * **Every surviving stratum declares
 //!   [`CandidateDomains::Within`](purrdf_sparql_eval::CandidateDomains::Within),
-//!   and the declared block sets are pairwise disjoint.** Then depth
-//!   `min(declared, statistics-narrowed, k)` is *exact* — the proof is below.
-//! * **Anything else** — two strata that share a block, or any stratum declaring
-//!   [`Unrestricted`](purrdf_sparql_eval::CandidateDomains::Unrestricted) — and
-//!   the declared-or-statistics bound stands exactly as it does for a
+//!   the declared block sets are pairwise disjoint, and every one of those strata
+//!   declares
+//!   [`DuplicatePolicy::Unique`](purrdf_sparql_eval::DuplicatePolicy::Unique).**
+//!   Then depth `min(declared, statistics-narrowed, k)` is *exact* — the proof is
+//!   below, and it runs on two premises rather than one.
+//! * **Anything else** — two strata that share a block, any stratum declaring
+//!   [`Unrestricted`](purrdf_sparql_eval::CandidateDomains::Unrestricted), or any
+//!   stratum declaring
+//!   [`DuplicatePolicy::Allowed`](purrdf_sparql_eval::DuplicatePolicy::Allowed) —
+//!   and the declared-or-statistics bound stands exactly as it does for a
 //!   [`ReadBound::Complete`] request.
 //!
 //! ## The proof, for the disjoint case
@@ -149,8 +154,13 @@
 //! ([`ProtocolError::ContributionMismatch`](crate::ProtocolError::ContributionMismatch))
 //! — so within one stratum the fused score is non-increasing in rank.
 //!
-//! Now take any `x` that its naming stratum `s` ranks at `r > k`. The candidates
-//! at ranks `1..r-1` of `s` are `r-1 ≥ k` distinct candidates, each with score
+//! Now take any `x` that its naming stratum `s` ranks at `r > k`. The rows at
+//! ranks `1..r-1` of `s` name `r-1 ≥ k` **distinct** candidates — the second
+//! premise, and the one
+//! [`DuplicatePolicy::Unique`](purrdf_sparql_eval::DuplicatePolicy::Unique)
+//! supplies: a stream that names an item at most once puts a different candidate
+//! at every rank, so a count of ranks is a count of candidates. Each of them
+//! carries score
 //! `weight_s × decay(rank) ≥ weight_s × decay(r) = score(x)`. At least `k`
 //! candidates therefore score at or above `x`. Where a score is strictly greater,
 //! `x` loses on the first tie-break key; where the decay has saturated and the
@@ -179,10 +189,11 @@
 //! more at a tight depth than at a loose one. That row is a read and never a
 //! value, so it is the probe that supplies it and not the depth.
 //!
-//! ## Why `Unrestricted` is excluded, and why that is not an over-refusal
+//! ## Why `Unrestricted` and `Allowed` are excluded, and why neither is an
+//! over-refusal
 //!
-//! The premise the proof runs on — each candidate has at most one naming stratum
-//! — is supplied by the declarations and by nothing else. An `Unrestricted`
+//! The first premise — each candidate has at most one naming stratum — is
+//! supplied by the domain declarations and by nothing else. An `Unrestricted`
 //! declaration supplies none: it says the producer may name anything, which is
 //! exactly the promise that lets two strata name one candidate and sum into it.
 //! Inferring the premise from the *shape of the plan* instead — one stratum, so
@@ -190,10 +201,26 @@
 //! on a promise, and it would stop holding the moment a second producer is
 //! registered, silently.
 //!
-//! Excluding it costs nothing but reading: the fallback is the depth the registry
-//! and the statistics already set, which is the depth every such plan has always
-//! carried. No request is refused, and no answer changes — only an unrestricted
-//! stratum keeps reading as deep as it did before.
+//! The second premise — that the rows above rank `r` name `r-1` distinct
+//! candidates — is supplied by `DuplicatePolicy::Unique` and by nothing else. An
+//! `Allowed` declaration asks its consumer to de-duplicate, and de-duplicating is
+//! exactly what [`FusionStream`](crate::FusionStream) does with it: a repeated row
+//! is validated, charged to the producer — the rank counter advances and the row
+//! counts as pulled — and then discarded before it can become a head. So a
+//! depth-`k` prefix of an `Allowed` stream carries `k` *rows* and can carry fewer
+//! than `k` candidates, and a prefix holding four candidates where the answer
+//! wants five is no longer a superset of the top `k`: the fifth candidate sits
+//! past the depth and is never read, so the answer is short by one row, or — with
+//! a second stratum to fill the gap — the right length with the wrong row in it.
+//! A count of ranks is a count of candidates only under `Unique`, and it is that
+//! identity the depth is derived from.
+//!
+//! Excluding either costs nothing but reading: the fallback is the depth the
+//! registry and the statistics already set, which is the depth every such plan has
+//! always carried. No request is refused, and no answer the narrowing still
+//! applies to changes — the narrowing applies exactly where both premises hold,
+//! and where either fails the stratum keeps reading as deep as it did before and
+//! answers exactly as it would for a request stating no bound at all.
 //!
 //! # Both statistics bound the depth, and neither raises it
 //!
@@ -235,7 +262,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use purrdf_sparql_eval::{
-    CandidateDomains, PfDescriptor, PropertyFunctionRegistry, RankedDeclaration,
+    CandidateDomains, DuplicatePolicy, PfDescriptor, PropertyFunctionRegistry, RankedDeclaration,
 };
 
 use crate::error::PlanError;
@@ -391,11 +418,14 @@ pub fn plan(
     let mut decisions: Vec<ProducerDecision> = Vec::with_capacity(candidates.len());
     let mut selected: Vec<(Iri, u64)> = Vec::new();
     // What each surviving stratum's one producer declared about which blocks of
-    // the candidate universe it may name. Collected here, over the set that
-    // actually survives placement, because it is the premise the request's own
-    // bound is derived under and a rejected producer's declaration is not part of
-    // that premise.
-    let mut declared_domains: BTreeMap<Iri, &CandidateDomains> = BTreeMap::new();
+    // the candidate universe it may name, and whether its stream may name one
+    // candidate twice. Both, because the merge argument the request's own bound is
+    // derived under runs on both: the blocks make a candidate's naming stratum
+    // unique, and the duplicate policy is what makes a count of ranks a count of
+    // candidates. Collected here, over the set that actually survives placement,
+    // because a rejected producer's declaration is not part of that premise.
+    let mut surviving_declarations: BTreeMap<Iri, (&CandidateDomains, DuplicatePolicy)> =
+        BTreeMap::new();
     for candidate in &candidates {
         let (descriptor, declaration, stratum, carried) = match &candidate.outcome {
             Outcome::Rejected(reason) => {
@@ -449,7 +479,10 @@ pub fn plan(
             request_terms: carried.clone(),
         });
         selected.push((stratum.clone(), declared_row_bound(descriptor)));
-        declared_domains.insert(stratum.clone(), &declaration.domains);
+        surviving_declarations.insert(
+            stratum.clone(),
+            (&declaration.domains, declaration.duplicates),
+        );
     }
 
     if bindings.is_empty() {
@@ -492,7 +525,7 @@ pub fn plan(
     // declarations: `Some(k)` when the merge argument in this module's header
     // holds, `None` when it does not and the registry's own bound stands. Decided
     // once, from the shape of the declarations, with no caller hint in it.
-    let prefix = licensed_prefix(request.bound, &declared_domains);
+    let prefix = licensed_prefix(request.bound, &surviving_declarations);
     let strata: BTreeSet<Iri> = declared_bounds.keys().cloned().collect();
     let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(strata.len());
     for stratum in &strata {
@@ -729,21 +762,27 @@ fn unserved_terms(
         .collect()
 }
 
-/// The per-stratum read prefix `bound` licenses over strata declaring `domains`,
-/// or `None` when it licenses none.
+/// The per-stratum read prefix `bound` licenses over strata declaring
+/// `declarations`, or `None` when it licenses none.
 ///
 /// This is the whole of the decision described in this module's header, and it is
 /// shape-driven: the answer is a function of the request's bound and of the
-/// surviving producers' own candidate-domain declarations. There is no caller
-/// hint, no mode and no heuristic.
+/// surviving producers' own declarations. There is no caller hint, no mode and no
+/// heuristic.
 ///
-/// `Some(k)` requires **both** halves of the premise the proof runs on:
+/// `Some(k)` requires **all three** of the conditions the proof's premises rest
+/// on:
 ///
 /// * every surviving stratum declares a block set — an `Unrestricted` stratum
 ///   promises nothing about which candidates it will not name, so it supplies no
 ///   premise at all;
 /// * no two of those sets meet, which is what makes each candidate's naming
-///   stratum unique and its fused score a single term rather than a sum.
+///   stratum unique and its fused score a single term rather than a sum;
+/// * every one of those strata declares [`DuplicatePolicy::Unique`], which is what
+///   makes its depth-`k` prefix `k` *candidates* rather than `k` rows. A repeat
+///   under [`DuplicatePolicy::Allowed`] is validated, charged and then discarded
+///   by [`FusionStream`](crate::FusionStream), so such a prefix can hold fewer
+///   candidates than rows and is then not a superset of the top `k`.
 ///
 /// [`CandidateDomains::intersects`] decides the second, and it is the right
 /// question rather than a convenient one: it is true exactly when some candidate
@@ -753,11 +792,24 @@ fn unserved_terms(
 /// The pairwise scan is quadratic in the number of strata, which is the number of
 /// ranked producers one request reaches — a handful, fixed by the registry rather
 /// than by the corpus. Nothing here touches a row.
-fn licensed_prefix(bound: ReadBound, domains: &BTreeMap<Iri, &CandidateDomains>) -> Option<u64> {
+fn licensed_prefix(
+    bound: ReadBound,
+    declarations: &BTreeMap<Iri, (&CandidateDomains, DuplicatePolicy)>,
+) -> Option<u64> {
     let ReadBound::Bounded(top_k) = bound else {
         return None;
     };
-    let declared: Vec<&&CandidateDomains> = domains.values().collect();
+    // The duplicate policies are read first and in one pass, and a single
+    // `Allowed` stratum ends the question before any block set is compared: that
+    // stream's rows are not its candidates, so no arrangement of the declared
+    // blocks can make a depth of `k` hold `k` candidates.
+    let declared: Vec<&CandidateDomains> = declarations
+        .values()
+        .map(|(domains, duplicates)| match duplicates {
+            DuplicatePolicy::Unique => Some(*domains),
+            DuplicatePolicy::Allowed => None,
+        })
+        .collect::<Option<Vec<&CandidateDomains>>>()?;
     if declared
         .iter()
         .any(|entry| matches!(entry, CandidateDomains::Unrestricted))

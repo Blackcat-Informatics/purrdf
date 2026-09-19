@@ -426,6 +426,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **retrieval:** A bounded request narrows a stratum's depth to `k` only where that
+  stratum also declared `DuplicatePolicy::Unique`. The narrowing rested on the
+  candidate-domain declarations alone, and the merge argument behind it counts
+  ranks: a candidate ranked past `k` is beaten by the `k` candidates above it in
+  its own stratum. That step reads a count of ranks as a count of candidates, which
+  is true of a `Unique` stream and false of an `Allowed` one -- a repeat there is
+  validated, charged to the producer and then discarded, which is precisely what
+  that declaration asks a consumer to do. A depth-`k` prefix of such a stream
+  therefore carries `k` rows and can carry fewer than `k` candidates, so it is no
+  longer a superset of the top `k`: over one stratum the answer came back short a
+  row, and with a second stratum to fill the gap it came back the right length with
+  the wrong row in it, reported as exact with nothing in the trailer to distinguish
+  it. An `Allowed` stratum now keeps the declared-or-measured depth it always read
+  and answers exactly as the same request answers with no declaration at all;
+  `Unique` keeps the bounded read unchanged, which is what makes the condition a
+  premise rather than a retreat. No shipped producer declares `Allowed`, so no
+  released answer moved; the seam publishes the declaration, `register_ranked`
+  accepts it, and the fusion layer pays for it, so a host's own producer could
+  reach this.
+
 - **geo:** A GeoSPARQL index can now be built before the geometries it will hold
   have landed. `GeoIndex::from_dataset` refused outright when a
   `GraphSelector::Named` graph was not interned in the dataset, on the argument
@@ -724,18 +744,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   unit was still `LIMIT <corpus>` -- so the elapsed time grew with the corpus while
   the instrument said it had not. Only the measurement had moved.
 
-  When the bound narrows a depth is decided from the producers' own
-  `CandidateDomains` and from nothing else, with no caller hint and no mode. Where
-  every stratum declares a block set and no two of those sets meet, each candidate
-  has exactly one naming stratum, so its fused score is one weighted contribution
-  that falls with rank and the global top `k` is a merge of per-stratum prefixes:
-  nothing below per-stratum rank `k` can enter it, even where the decay has
-  saturated and the scores tie, because the tie-break's next key is the stratum
-  rank those candidates win on. The depth is therefore
+  When the bound narrows a depth is decided from the producers' own declarations
+  and from nothing else, with no caller hint and no mode. Where every stratum
+  declares a block set, no two of those sets meet, and every one of those strata
+  declares `DuplicatePolicy::Unique`, each candidate has exactly one naming stratum
+  and each of that stratum's ranks names a different candidate, so its fused score
+  is one weighted contribution that falls with rank and the global top `k` is a
+  merge of per-stratum prefixes: nothing below per-stratum rank `k` can enter it,
+  even where the decay has saturated and the scores tie, because the tie-break's
+  next key is the stratum rank those candidates win on. The depth is therefore
   `min(declared, statistics-narrowed, k)` and it is exact rather than merely
-  smaller. Any overlap between two declarations, and any `Unrestricted` stratum,
-  and the declared-or-measured bound stands exactly as before -- scores sum across
-  strata there and the merge argument has no premise to run on. Rows, scores and
+  smaller. Any overlap between two declarations, any `Unrestricted` stratum, and
+  any stratum declaring `DuplicatePolicy::Allowed`, and the declared-or-measured
+  bound stands exactly as before -- scores sum across strata in the first two cases
+  and a discarded repeat makes a count of rows larger than the count of candidates
+  in the third, so the merge argument has no premise to run on. Rows, scores and
   provenance are identical either way.
 
   A bound also gives a finite depth to a producer that declares unboundedly many
