@@ -18,13 +18,18 @@
 //! and the depth datatype are all `example.org` fixtures supplied by this test
 //! in the host's role, exactly as a caller would supply its own.
 //!
+//! The last section is about a different kind of claim. Both shipped relations
+//! declare `DuplicatePolicy::Unique`, which the fusion layer spends rather than
+//! checks, so it is a promise about the producer's own index that only the
+//! producer can keep. Those tests drive each one over data shaped to break it.
+//!
 //! Geometry is deliberately absent. `purrdf-geo`'s relation computes a set — it
 //! sorts and deduplicates its pairs and carries neither a score nor a rank — so
 //! it composes as a constraint on candidates rather than as a stratum of a fused
 //! ranking, and inventing a stratum for it would be inventing a ranking it never
 //! claimed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -38,15 +43,15 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, RankedStreamAdapter, RequestTerm,
-    RetrievalRequest, SearchResult, Statistics, Term, TopK, compile, contribution, execute, fuse,
-    plan, search,
+    AdmissionEnvironment, DecayRule, Fixed, FusionError, FusionProfile, Iri, ProtocolError,
+    RankedStreamAdapter, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
+    Term, TopK, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    CandidateDomains, EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry,
-    TermKind,
+    CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace, KnnGuard,
+    PropertyFunctionRegistry, TermKind,
 };
-use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
+use purrdf_text::{GraphSelector, TextError, TextIndex, TextIndexConfig, TextSearchRelation};
 
 // ---------------------------------------------------------------------------
 // The host's vocabulary. Every IRI below is the caller's; PurRDF mints none.
@@ -67,8 +72,9 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// The reciprocal-rank smoothing constant this host fuses under.
 const K: u32 = 60;
 /// The row bound this host asks for. Fused enumeration is top-k by
-/// construction, so the bound is stated rather than defaulted; four documents
-/// are all this corpus holds, so nothing here is decided by it.
+/// construction, so the bound is stated rather than defaulted; every fixture in
+/// this file holds a handful of rows, all well below this, so nothing here is
+/// decided by it.
 const TOP_K: TopK = TopK::new(16);
 
 fn ex(local: &str) -> String {
@@ -110,11 +116,29 @@ fn corpus() -> Vec<(&'static str, &'static str, Vec<f64>)> {
 /// The dataset every stage runs against: one `note` triple per document, in the
 /// default graph. Non-empty, and the very rows the index is built from.
 fn dataset() -> Arc<RdfDataset> {
+    let rows: Vec<(&str, &str, Option<&str>)> = corpus()
+        .into_iter()
+        .map(|(local, text, _)| (local, text, None))
+        .collect();
+    dataset_of(&rows)
+}
+
+/// The same shape over an arbitrary `(subject local name, text, language)`
+/// list, in the default graph.
+///
+/// The language is a parameter because a partition of a [`TextIndex`] is keyed
+/// by `(graph, language)`, so a language is the cheapest way for a fixture to
+/// ask for more than one partition — which is the condition the text producer
+/// refuses to declare a ranked order over.
+fn dataset_of(rows: &[(&str, &str, Option<&str>)]) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let note = builder.intern_iri(NOTE);
-    for (local, text, _) in corpus() {
+    for &(local, text, language) in rows {
         let subject = builder.intern_iri(&ex(local));
-        let literal = builder.intern_literal(RdfLiteral::simple(text));
+        let literal = builder.intern_literal(language.map_or_else(
+            || RdfLiteral::simple(text),
+            |tag| RdfLiteral::language_tagged(text, tag),
+        ));
         builder.push_quad(subject, note, literal, None);
     }
     builder.freeze().expect("the fixture dataset is valid")
@@ -163,22 +187,34 @@ fn stage(name: &str) -> AppliedStage {
     )
 }
 
-/// Encode a sealed PURREMB artifact holding one `f64` row per corpus document,
-/// under the squared-Euclidean metric.
-fn artifact() -> (
+/// The corpus's vector half alone, as `(subject local name, vector)`.
+fn vector_rows() -> Vec<(&'static str, Vec<f64>)> {
+    corpus()
+        .into_iter()
+        .map(|(local, _, vector)| (local, vector))
+        .collect()
+}
+
+/// Encode a sealed PURREMB artifact holding one `f64` row per given row, under
+/// the squared-Euclidean metric.
+///
+/// The rows are a parameter rather than [`vector_rows`] directly, so a fixture
+/// can choose the vectors as well as the terms that name them.
+fn artifact_over(
+    rows: &[(&str, Vec<f64>)],
+) -> (
     Vec<u8>,
     TargetSetId,
     VectorSpaceId,
     Vec<(TargetId, TermValue)>,
 ) {
-    let rows = corpus();
-    let dimension = u32::try_from(rows[0].2.len()).expect("the fixture dimension is small");
+    let dimension = u32::try_from(rows[0].1.len()).expect("the fixture dimension is small");
     let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _) = CertifiedPurrpckSource::from_dataset(&empty).expect("source pack");
 
     let mut targets = Vec::with_capacity(rows.len());
     let mut bindings = Vec::with_capacity(rows.len());
-    for (local, _, _) in &rows {
+    for (local, _) in rows {
         let term = TermValue::iri(ex(local));
         let TermValue::Iri(text) = &term else {
             unreachable!("the fixture terms are IRIs")
@@ -223,7 +259,7 @@ fn artifact() -> (
         rows: rows
             .iter()
             .zip(&bindings)
-            .map(|((_, _, values), (target, _))| MatrixRow::new(*target, values.clone()))
+            .map(|((_, values), (target, _))| MatrixRow::new(*target, values.clone()))
             .collect(),
         projections: vec![projection],
     };
@@ -246,15 +282,22 @@ fn artifact() -> (
 
 /// A real, fully verified embedding space over the artifact above.
 fn embedding_space() -> EmbeddingSpace {
-    let (bytes, target_set, vector_space, bindings) = artifact();
-    EmbeddingSpace::from_artifact(
-        &bytes,
-        target_set,
-        vector_space,
-        bindings,
+    space_over(
+        &vector_rows(),
         KnnGuard::new(10, 5).expect("the fixture guard bounds are positive"),
     )
-    .expect("the fixture space opens")
+}
+
+/// [`embedding_space`] over an arbitrary row list and guard.
+///
+/// The guard is a parameter because it is what bounds `k`, and `k` is the
+/// per-stratum depth a plan derives from the producer's own declared row bound:
+/// a fixture that wants the space read to its last row needs a guard that
+/// admits as many neighbours as the space holds.
+fn space_over(rows: &[(&str, Vec<f64>)], guard: KnnGuard) -> EmbeddingSpace {
+    let (bytes, target_set, vector_space, bindings) = artifact_over(rows);
+    EmbeddingSpace::from_artifact(&bytes, target_set, vector_space, bindings, guard)
+        .expect("the fixture space opens")
 }
 
 // ---------------------------------------------------------------------------
@@ -858,4 +901,431 @@ fn two_runs_over_the_same_index_state_carry_one_evidence_id() {
     // reader compares the triple.
     assert_ne!(first.evidence_id.to_hex(), first.plan_id.to_hex());
     assert_ne!(first.evidence_id.to_hex(), first.profile_id.to_hex());
+}
+
+// ---------------------------------------------------------------------------
+// 5. The uniqueness promise both shipped producers declare
+// ---------------------------------------------------------------------------
+//
+// Both shipped ranked producers register with `DuplicatePolicy::Unique`. That
+// declaration is not a description of the answer, it is a promise the fusion
+// layer spends: a stream that declares it is not charged for a per-row identity
+// set, and the whole saving the declaration buys is that the layer believes it
+// without paying to check every row. So the promise is only as good as the
+// producer, and until something drives the real producers over data built to
+// break it, "Unique" is a comment.
+//
+// The tests below drive them over exactly that data.
+
+/// One weighted stratum and `K` smoothing.
+///
+/// The fixtures below each exercise a single producer, so the profile names a
+/// single stratum: a weightless stratum is dropped before fusion, and a fusion
+/// with no weighted stream would assert nothing about the producer's rows.
+fn one_stratum_profile(stratum: &str) -> FusionProfile {
+    let mut weights = BTreeMap::new();
+    weights.insert(iri(stratum), Fixed::ONE);
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid")
+}
+
+/// Register the text relation alone, under the declaration it hands out itself.
+///
+/// The declaration is the relation's own rather than one written here, which is
+/// what makes the assertions below statements about the shipped producer: a
+/// hand-written `Unique` would only prove that this test can write the word.
+fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    let text = TextSearchRelation::new(Arc::new(index));
+    let declaration = text
+        .ranked_declaration(
+            kernel_iri(TEXT_STRATUM),
+            Some(NOTE.to_owned()),
+            CandidateDomains::Unrestricted,
+        )
+        .expect("a single-partition index declares a ranked order");
+    assert_eq!(
+        declaration.duplicates,
+        DuplicatePolicy::Unique,
+        "the promise under test is the producer's own, read back before it is relied on"
+    );
+    registry.register_ranked(TEXT_PF, Arc::new(text), declaration);
+    registry
+}
+
+/// Register the nearest-neighbour relation alone, under its own declaration.
+fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    let knn = EmbeddingKnnRelation::new(Arc::new(space));
+    let declaration = knn.ranked_declaration(
+        kernel_iri(KNN_STRATUM),
+        TermKind::Iri,
+        XSD_INTEGER.to_owned(),
+        CandidateDomains::Unrestricted,
+    );
+    assert_eq!(
+        declaration.duplicates,
+        DuplicatePolicy::Unique,
+        "the promise under test is the producer's own, read back before it is relied on"
+    );
+    registry.register_ranked(KNN_PF, Arc::new(knn), declaration);
+    registry
+}
+
+/// Run `search` and return the answer, distinguishing the one refusal these
+/// tests exist to rule out from every other way a fixture can be wrong.
+///
+/// A `DuplicateItem` refusal and a clean answer both yield "no duplicate reached
+/// the caller", so a test that only unwrapped would pass either way. This panics
+/// on the refusal with its own message, so a producer that broke its promise is
+/// reported as having broken its promise rather than as an opaque error.
+fn answer_under_the_declared_contract(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry,
+    data: &RdfDataset,
+    profile: &FusionProfile,
+) -> SearchResult {
+    let statistics = NoStatistics;
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: &statistics,
+        fusion_profile: None,
+    };
+    match block_on(search(
+        request,
+        registry,
+        &statistics,
+        data,
+        &env,
+        profile,
+        TOP_K,
+    )) {
+        Ok(result) => result,
+        Err(SearchError::FusionError(FusionError::Protocol(error)))
+            if matches!(&*error, ProtocolError::DuplicateItem { .. }) =>
+        {
+            panic!(
+                "a shipped producer named one entity twice under its own `Unique` \
+                 declaration and the fusion refused the whole query: {error:?}"
+            )
+        }
+        Err(other) => panic!("the fixture request must be answerable; got {other:?}"),
+    }
+}
+
+/// The candidates of an answer, in final order.
+fn candidates(result: &SearchResult) -> Vec<String> {
+    result
+        .rows
+        .iter()
+        .map(|row| row.entity.as_str().to_owned())
+        .collect()
+}
+
+/// Every candidate of `result` is distinct, compared against a set rather than
+/// by eye.
+fn assert_candidates_are_distinct(result: &SearchResult) {
+    let emitted = candidates(result);
+    let distinct: BTreeSet<&str> = emitted.iter().map(String::as_str).collect();
+    assert_eq!(
+        distinct.len(),
+        emitted.len(),
+        "a `Unique` producer's candidates must all differ, got {emitted:?}"
+    );
+}
+
+/// How many rows the named stratum reported emitting, or a panic naming what it
+/// reported instead.
+fn rows_emitted(result: &SearchResult, stratum: &str) -> u64 {
+    match result.trailer.statuses.get(&iri(stratum)) {
+        Some(purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted }) => *rows_emitted,
+        other => panic!("{stratum} must run to exhaustion here, got {other:?}"),
+    }
+}
+
+// ── the text producer ───────────────────────────────────────────────────────
+
+/// The needle every document below is measured against. Three terms, because
+/// one term cannot tempt a term-at-a-time repeat.
+const HUB_NEEDLE: &str = "alpha beta gamma";
+
+/// A corpus built to tempt a repeat out of the text producer.
+///
+/// `ex:hub` holds **every** term of [`HUB_NEEDLE`], twice over, so an
+/// implementation that walked the needle term by term and emitted the postings
+/// of each would name `ex:hub` three times — once per matching term — and an
+/// implementation that walked occurrences rather than documents would name it
+/// six times. The three single-term documents beside it are the control: each is
+/// reachable by exactly one needle term, so an answer that named `ex:hub` once
+/// and the others once cannot be explained by the producer having simply
+/// collapsed everything.
+///
+/// Untagged, and in the default graph, so the index holds exactly one partition
+/// — which is the condition the producer requires before it claims `Unique` at
+/// all.
+fn hub_corpus() -> Vec<(&'static str, &'static str, Option<&'static str>)> {
+    vec![
+        ("hub", "alpha beta gamma alpha beta gamma", None),
+        ("only-alpha", "alpha delta delta delta", None),
+        ("only-beta", "beta epsilon epsilon epsilon", None),
+        ("only-gamma", "gamma zeta zeta zeta", None),
+    ]
+}
+
+/// A lexical request for `needle` over the fixture predicate.
+fn lexical_request(needle: &str) -> RetrievalRequest {
+    RetrievalRequest::from_terms(vec![RequestTerm::Lexical {
+        text: needle.to_owned(),
+        language: None,
+        predicate: Some(iri(NOTE)),
+    }])
+}
+
+/// T10.1 — the shipped text producer keeps the `Unique` promise it declares,
+/// over a corpus built so that a naive implementation would not.
+///
+/// `TextSearchRelation::ranked_declaration` declares
+/// [`DuplicatePolicy::Unique`], and the fusion layer spends that declaration:
+/// it does not keep a per-row identity set for a stream that promises not to
+/// need one. The promise is therefore load-bearing, and
+/// [`hub_corpus`] is shaped to catch it if it is false — `ex:hub` matches every
+/// term of the needle, so any term-at-a-time or occurrence-at-a-time emission
+/// names it more than once.
+///
+/// Both halves of the assertion matter and neither is sufficient alone. A
+/// producer that repeated `ex:hub` would today be refused with
+/// `ProtocolError::DuplicateItem` — which also yields "no duplicate in the
+/// answer" — so the test must show the producer was not merely caught. It shows
+/// that by requiring the call to succeed *and* the candidates to be distinct,
+/// and by pinning the row count the stratum reported so the distinctness is not
+/// the distinctness of a truncated prefix.
+///
+/// Its pair on the other side of the contract is
+/// `a_declared_unique_streams_repeat_is_refused` in `fusion.rs`, which drives a
+/// hand-built stream that *does* declare `Unique` and repeat, and pins the
+/// refusal. Between them: a producer that breaks the promise is refused, and the
+/// shipped producer does not break it.
+#[test]
+fn the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat() {
+    let data = dataset_of(&hub_corpus());
+    let index = TextIndex::from_dataset(&*data, &text_config()).expect("the fixture index builds");
+    assert_eq!(
+        index.partition_count(),
+        1,
+        "the corpus is untagged and single-graph, so the producer may claim a ranked order"
+    );
+    let registry = text_only_registry(index);
+    let profile = one_stratum_profile(TEXT_STRATUM);
+
+    let result = answer_under_the_declared_contract(
+        &lexical_request(HUB_NEEDLE),
+        &registry,
+        &data,
+        &profile,
+    );
+
+    // Nothing was truncated: the stratum ran to exhaustion and emitted one row
+    // per document of the corpus, so what follows is a statement about every
+    // row the producer can return rather than about a short prefix of them.
+    assert_eq!(
+        rows_emitted(&result, TEXT_STRATUM),
+        4,
+        "all four documents hold at least one needle term"
+    );
+    assert_candidates_are_distinct(&result);
+    assert_eq!(
+        candidates(&result).len(),
+        4,
+        "four documents, four candidates"
+    );
+    assert_eq!(
+        candidates(&result)
+            .iter()
+            .filter(|candidate| *candidate == &format!("<{}>", ex("hub")))
+            .count(),
+        1,
+        "the document holding every needle term is named exactly once"
+    );
+
+    // And the temptation is real rather than asserted: each needle term on its
+    // own reaches `ex:hub`, so the three-term needle gave the producer three
+    // independent routes to it.
+    for term in ["alpha", "beta", "gamma"] {
+        let single =
+            answer_under_the_declared_contract(&lexical_request(term), &registry, &data, &profile);
+        assert!(
+            candidates(&single).contains(&format!("<{}>", ex("hub"))),
+            "{term} alone reaches ex:hub, so the full needle matched it through {term} too"
+        );
+        assert_candidates_are_distinct(&single);
+    }
+}
+
+/// T10.3 — the text producer's own guard against the case where its `Unique`
+/// declaration would be false, and the neighbouring case that must still work.
+///
+/// The producer's ranks are computed *within* a partition, and a partition is
+/// keyed by `(graph, language)`. Over more than one partition the rows are
+/// emitted partition-major, so one subject may appear in several of them and
+/// `Unique` would be a lie. The producer does not declare it anyway: it declines
+/// to hand out a ranked declaration at all, which is the refusal that makes the
+/// declaration in [`text_only_registry`] trustworthy.
+///
+/// A refusal is a claim too, so both sides are executed here. The multi-language
+/// index is refused; the single-partition index next to it still declares, and
+/// the declaration it hands out still carries [`DuplicatePolicy::Unique`]. A
+/// tightening that refused both would pass a test asserting only the first.
+#[test]
+fn the_text_producer_declares_unique_only_where_one_subject_can_appear_once() {
+    let stratum = kernel_iri(TEXT_STRATUM);
+
+    // The refused case: one subject, two languages, two partitions. `ex:shared`
+    // is deliberately in both, so this is not a hypothetical overlap.
+    let multilingual = dataset_of(&[
+        ("shared", "alpha beta", Some("en")),
+        ("shared", "alpha gamma", Some("fr")),
+        ("other", "alpha delta", Some("en")),
+    ]);
+    let spread = TextIndex::from_dataset(&*multilingual, &text_config())
+        .expect("the multilingual fixture index builds");
+    assert_eq!(
+        spread.partition_count(),
+        2,
+        "two language tags are two partitions"
+    );
+    let error = TextSearchRelation::new(Arc::new(spread))
+        .ranked_declaration(
+            stratum.clone(),
+            Some(NOTE.to_owned()),
+            CandidateDomains::Unrestricted,
+        )
+        .expect_err("a multi-partition index has no one ranked order to declare");
+    match error {
+        TextError::Config(message) => assert!(
+            message.contains("rank is computed within one"),
+            "the refusal must say why a multi-partition rank is not a ranking, got {message}"
+        ),
+        other => panic!("expected a configuration refusal, got {other:?}"),
+    }
+
+    // THE NEIGHBOURING VALID CASE: the file's own single-partition index. It
+    // still declares, and what it declares is the promise the fusion spends.
+    let single = text_index();
+    assert_eq!(single.partition_count(), 1);
+    let declaration = TextSearchRelation::new(Arc::new(single))
+        .ranked_declaration(
+            stratum,
+            Some(NOTE.to_owned()),
+            CandidateDomains::Unrestricted,
+        )
+        .expect("a single-partition index declares a ranked order");
+    assert_eq!(
+        declaration.duplicates,
+        DuplicatePolicy::Unique,
+        "within one partition a subject occurs at most once, and the producer says so"
+    );
+}
+
+// ── the nearest-neighbour producer ──────────────────────────────────────────
+
+/// A space whose rows are distinct terms carrying *indistinguishable* vectors.
+///
+/// `ex:twin-one` and `ex:twin-two` are byte-identical points, and `ex:near-twin`
+/// is a point a hair further out. Every one of them is the same squared distance
+/// from `ex:seed` to within rounding, so a search from the seed returns all
+/// three at adjacent ranks. That is the shape that tempts a repeat: an
+/// implementation keying its emitted set on the *vector*, or on the distance,
+/// rather than on the target the row stands for, would either collapse the twins
+/// into one row or name one of them twice.
+///
+/// It is also exactly the shape the space's construction permits: a PURREMB
+/// target is derived from the RDF term, so two distinct IRIs are two distinct
+/// targets and two distinct rows no matter what vectors they carry. Identical
+/// vectors are legal; identical terms are not, and `bind_terms` refuses them.
+fn twinned_vectors() -> Vec<(&'static str, Vec<f64>)> {
+    vec![
+        ("seed", vec![0.0, 0.0]),
+        ("twin-one", vec![3.0, 4.0]),
+        ("twin-two", vec![3.0, 4.0]),
+        ("near-twin", vec![3.0, 4.000_000_1]),
+        ("far", vec![30.0, 40.0]),
+    ]
+}
+
+/// T10.2 — the shipped nearest-neighbour producer keeps the `Unique` promise it
+/// declares, over a space whose vectors do not distinguish its rows.
+///
+/// What makes `EmbeddingKnnRelation`'s declaration true is not the geometry: it
+/// is that a row of the space stands for exactly one target and each target is
+/// bound to exactly one distinct RDF term — `bind_terms` refuses a space with an
+/// unnamed row, a row bound twice, or one term claimed by two rows — and a
+/// nearest-neighbour search returns distinct rows. So the property under test is
+/// the one the producer actually relies on, and [`twinned_vectors`] removes the
+/// thing it does *not* rely on: two of its rows are the same point, and a third
+/// is a point too close to tell apart by eye.
+///
+/// As in the text case, both halves are asserted. A repeat would be refused with
+/// `ProtocolError::DuplicateItem` and refusal also yields a duplicate-free
+/// answer, so the call must succeed *and* the candidates must be distinct, with
+/// the emitted row count pinned so the distinctness is not a truncated prefix's.
+#[test]
+fn the_knn_producer_names_each_target_once_when_two_rows_share_one_vector() {
+    let rows = twinned_vectors();
+    let row_count = u64::try_from(rows.len()).expect("the fixture is small");
+    // The guard admits the whole space and a `k` as large as it: the plan's
+    // depth is the producer's declared row bound, which is
+    // `min(max_neighbours, rows)`, so a tighter guard would read only a prefix
+    // and the twins might never both be reached.
+    let space = space_over(
+        &rows,
+        KnnGuard::new(row_count, row_count).expect("the fixture guard bounds are positive"),
+    );
+    let registry = knn_only_registry(space);
+    let profile = one_stratum_profile(KNN_STRATUM);
+    let data = dataset();
+    let request = RetrievalRequest::from_terms(vec![RequestTerm::EntitySeed {
+        entity: Term::new(format!("<{}>", ex("seed"))),
+    }]);
+
+    let result = answer_under_the_declared_contract(&request, &registry, &data, &profile);
+
+    assert_eq!(
+        rows_emitted(&result, KNN_STRATUM),
+        row_count,
+        "the guard admits the whole space, so every row was reached"
+    );
+    assert_candidates_are_distinct(&result);
+
+    // The twins are both present, at adjacent ranks, which is what says the
+    // fixture tempted the collapse rather than merely avoiding it: a producer
+    // keyed on the vector would have emitted one of them, not two.
+    assert_eq!(
+        ranking(&result),
+        vec![
+            (
+                format!("<{}>", ex("seed")),
+                vec![(KNN_STRATUM.to_owned(), 1)],
+            ),
+            (
+                format!("<{}>", ex("twin-two")),
+                vec![(KNN_STRATUM.to_owned(), 2)],
+            ),
+            (
+                format!("<{}>", ex("twin-one")),
+                vec![(KNN_STRATUM.to_owned(), 3)],
+            ),
+            (
+                format!("<{}>", ex("near-twin")),
+                vec![(KNN_STRATUM.to_owned(), 4)],
+            ),
+            (
+                format!("<{}>", ex("far")),
+                vec![(KNN_STRATUM.to_owned(), 5)]
+            ),
+        ],
+        "the two identical points are two candidates at consecutive ranks; their \
+         distances tie exactly, so the order between them is ascending row number, \
+         and a row number is a position in the target set's canonical target-id \
+         order rather than in the order this fixture lists its rows"
+    );
 }
