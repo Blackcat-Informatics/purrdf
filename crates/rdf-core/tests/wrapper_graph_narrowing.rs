@@ -228,8 +228,9 @@ fn composite_graph_seam_matches_the_filtered_stream_over_a_selection() {
 
 /// A delta snapshot whose overlay does real work in BOTH directions: rows removed
 /// from the base (the suppression mask) and rows added by the delta, each in a
-/// different graph. The duplicate masks are charged by their own fixture below,
-/// because a row re-inserted exactly as the base spells it never reaches the delta.
+/// different graph. The duplicate masks stay empty here — and, as the module doc
+/// records, on every fixture in this file — because base membership absorbs a row the
+/// base already holds, whatever spelling it arrives under.
 #[test]
 fn delta_graph_seam_matches_the_filtered_stream() {
     let base = statement_layers(None);
@@ -282,11 +283,12 @@ fn delta_graph_seam_matches_the_filtered_stream() {
             })
             .expect("a fresh annotation inserts");
     }
-    // A row the base already holds, spelled exactly as the base spells it: base
-    // membership absorbs it, so it never reaches the delta and the overlay's
-    // DUPLICATE masks stay empty on this fixture. Charging those masks needs a row
-    // the base holds under a different spelling of the same term — see
-    // `delta_graph_seam_matches_the_filtered_stream_when_the_duplicate_masks_are_charged`.
+    // A row the base already holds: base membership absorbs it, so it never reaches
+    // the delta and the overlay's DUPLICATE masks stay empty. That holds for a
+    // NON-canonical spelling too, because resolution canonicalizes on the same policy
+    // interning does — which is why no fixture in this file charges those masks. The
+    // absorption itself, on all three streams, is pinned by
+    // `a_respelled_term_resolves_onto_the_base_row_and_never_duplicates_it`.
     assert!(
         !mutable
             .insert(QuadValues::quad(
