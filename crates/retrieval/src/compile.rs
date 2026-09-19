@@ -895,9 +895,11 @@ impl UnitAttribution {
 /// starts at [`execute`](crate::execute) — and records the attribution above each unit
 /// as it is handed over. `execute` refuses a unit list that is no longer that one, so
 /// re-tagging, swapping or dropping a unit after the fact is a named refusal rather than
-/// an answer served under a real plan identity. What is compared is the unit count and
-/// then each position's stratum, count first, because a removal shifts every position
-/// after it and reporting the first shifted tag would name a unit nothing was done to.
+/// an answer served under a real plan identity. What is compared is the unit count,
+/// then each position's stratum and its stream contract — the duplicate policy and
+/// candidate domains it was assembled under, which decide what fusion may skip and
+/// what it must refuse. Count first, because a removal shifts every position after it
+/// and reporting the first shifted tag would name a unit nothing was done to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRetrieval {
     /// Per-stratum query units, ordered by stratum IRI.
@@ -908,8 +910,9 @@ pub struct CompiledRetrieval {
     /// when the bundle is assembled. [`execute`](crate::execute) refuses a unit list
     /// that is not the one this bundle was built from
     /// ([`ExecutionError::UnitsNotAsAssembled`](crate::ExecutionError::UnitsNotAsAssembled)).
-    /// The count and each position's stratum are what is compared; a unit's own numbers
-    /// are not, because its constructor already refuses a dishonest pair of those.
+    /// The count, each position's stratum and its stream contract are what is compared;
+    /// a unit's own numbers are not, because its constructor already refuses a dishonest
+    /// pair of those.
     pub units: Vec<StratumUnit>,
     /// The canonical identity of the admitted plan.
     pub plan_id: PlanId,
