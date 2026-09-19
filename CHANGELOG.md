@@ -711,15 +711,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
   The depth and the declared row bound are now private, read through
   `StratumUnit::depth()` and `StratumUnit::declared_rows()`, and reachable only
-  through a checked constructor: `StratumUnit::new` takes both numbers plus a
-  `DepthApplication` saying whether the evaluator or the producer applies the depth,
-  and refuses a zero depth, a depth whose probe row is inexpressible, and a depth
-  above the declared bound as the three variants of a new `UnitError`. The seam stays
-  open -- the compiler's own numbers handed to the constructor build the compiler's
-  own unit, and that unit executes -- and the query text stays caller-replaceable,
-  because writing it is how a caller drives the executor over a query of its own. The
-  entry below carries that half the rest of the way: what a caller replaces is the
-  query *body*, and the bound is rendered from the depth.
+  through a checked constructor: `StratumUnit::new` takes both numbers and refuses a
+  zero depth, a depth whose probe row is inexpressible, and a depth above the declared
+  bound as the three variants of a new `UnitError`. Who applies the depth -- the
+  evaluator as a `LIMIT`, or a producer handed it as an argument -- is not an input
+  beside them: it is read off the query the compiler assembled, because it is the same
+  fact. The seam stays open, because handing the executor a query of one's own is what
+  it is for. The entry below carries that half the rest of the way: no bound the ending
+  depends on is text a caller can write, and a caller's own text is never certified.
 
 - **retrieval:** A stratum's ending was decided from four things and only three of
   them were checked. The fourth was the bound written in the unit's own query text,
@@ -733,17 +732,54 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   either: the rows emitted equalled the rows pulled, so the fused trailer above it read
   `Exact`.
 
-  `StratumUnit` now carries the query **body** and renders its own bound:
-  `StratumUnit::body` is the public, writable field and `StratumUnit::sparql()` is the
-  body plus `LIMIT depth + 1`, derived from the same `ProbedDepth` the compiler emits
-  with. There is no longer a second spelling of the bound for a caller to contradict --
-  the text a unit runs is bounded one row past its own depth for a hand-built unit
-  exactly as for an emitted one, and the compiled text is byte-identical to what it was.
-  Replacing the body still drives the executor over a caller's own query, including a
-  malformed one, which still reports its parse failure as that stratum's status. The
-  refused alternative was inspecting the trailing `LIMIT` and comparing it: that
-  re-reads a number the layer already holds, and can only ever refuse a caller for
-  writing what the layer writes itself.
+  The first fix rendered the unit's *outer* bound from the depth instead of storing it,
+  and the entry below is why that was not enough: the bound moved inward rather than
+  out of reach. The refused alternative was inspecting the trailing `LIMIT` and
+  comparing it, which re-reads a number the layer already holds and can only ever
+  refuse a caller for writing what the layer writes itself.
+
+- **retrieval:** The bound the read is taken under was pulled out of one writable
+  string and left inside another, so the same false completeness claim came back with
+  the same numbers. A `StratumUnit` carried a public `body` and rendered only the
+  *outer* `LIMIT` from the depth -- but every emitted body carries a bound of its own:
+  `LIMIT depth + 1` on the branch of a producer the evaluator bounds, or the rendered
+  depth *argument* of one that bounds itself. Where an inner bound and an outer one
+  disagree the inner one decides the read. Lowering the branch's `LIMIT` from four to
+  three on a bundle compiled for a nine-row producer at depth three returned
+  `Exhausted { rows_emitted: 3 }` where the same bundle unedited reported
+  `DepthReached { rank: 3 }`, and lowering the depth argument of a self-bounding
+  producer did the same -- verbatim the defect two earlier fixes each closed one copy
+  of.
+
+  No number the ending depends on is held as text now. A compiled unit carries its
+  query as the parts it was assembled from -- the producer IRI, the argument slots the
+  request placed, the positions the candidate and block columns are read from -- and
+  `StratumUnit::sparql()` renders the whole query on every read, with the branch's row
+  ceiling and the unit's own bound both computed from the one proved depth. The branch
+  bound is not decoration and is not deleted: it is the row ceiling the evaluator
+  pushes down to the relation, so it is rendered rather than written. The compiled text
+  is byte-identical to what it was, at every depth and for both producer shapes.
+
+  Driving the executor over a query of one's own stays open through
+  `StratumUnit::new`, and such a unit is now a different kind of unit rather than a
+  differently-spelled one. Its text is carried verbatim, this layer bounds only its
+  outside, and what the text bounds inside itself cannot be seen from here -- so that
+  read is never certified `Exhausted`. It reports the new ending
+  `StreamEnding::SuppliedQueryEnded`, surfaced as `ProducerReceipt::SuppliedQueryEnded`
+  and `ProducerStatus::SuppliedQueryEnded`, which names the caller's own text as the
+  stopper and claims nothing about what lies below the rank it reached. `Exhausted`
+  remains the only completeness claim in the vocabulary, which now has seven spellings
+  rather than six.
+
+  The refusal is exactly as narrow as the observation. A caller's query still runs,
+  still yields its rows in rank order, still reports `DepthReached` when a row past the
+  depth really did arrive -- that is an observation whatever bounded the text -- still
+  reports its parse failure as that stratum's status when it cannot be prepared, and
+  still trips `ExecutionError::RowBoundBreached` when the producer beats its own
+  declaration. Refusing to run such a text instead would have been the over-refusal:
+  most of those queries are perfectly good, and what cannot be done honestly is certify
+  a completeness claim from one. `DepthApplication` is gone with the field it was
+  needed beside.
 
 - **retrieval:** The top-k narrowing was withheld from a single-stratum plan whose
   producer declares `CandidateDomains::Unrestricted`, where the disjointness premise it
@@ -1487,6 +1523,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `wasm32-unknown-unknown` against a golden written by a native build are pinned
   separately. `open` is proved not to certify: a product whose stored canonical
   digest is tampered with must admit and must fail certification.
+- **retrieval, sparql-eval, text:** Five assertions offered as coverage that no
+  implementation could fail now assert the property their message names, and each
+  was confirmed by mutating the implementation until it went red. A compiled
+  unit's emitted `LIMIT` is pinned at the depth plus the one probe row instead of
+  accepting either value, so the row bound collapsing back onto the depth is a
+  failure rather than a tolerated spelling. A domain tag is checked against the
+  three respellings generic URI normalisation would change -- an uppercased
+  scheme and authority, a dot segment, a case-flipped percent-escape -- so
+  neither constructing a tag nor reading one can canonicalise a host's own
+  spelling, where the previous check was reflexivity of a derived `PartialEq`.
+  The relation witness's invocation count is asserted exactly, and against the
+  forced-sequential lane's count over the same query: a `FILTER EXISTS` re-enters
+  evaluation once per driving row, so the fork-join total has to add back up to
+  the same number, and a join that kept one worker's ledger and dropped the rest
+  now fails instead of passing a `>= 1` floor. An empty text index's attested
+  generation is checked for being a digest that was computed -- not the all-zeros
+  placeholder -- and for distinguishing that index from an equally empty one
+  under a different configuration, which is the pair emptiness leaves
+  indistinguishable to a digest over content alone. And the refusal that replaced
+  a bare `AttributeError` about a private protocol method is checked for naming
+  the type that actually arrived, over two different arriving types, so a
+  constant spelled into the message cannot satisfy it.
 
 ## [2.0.2] - 2026-09-14
 

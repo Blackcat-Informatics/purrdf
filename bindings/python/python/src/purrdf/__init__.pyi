@@ -2347,9 +2347,9 @@ class retrieval:
     # correction of the other.
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
-    # `"status"` string has exactly six spellings. `"exhausted"` (with
+    # `"status"` string has exactly seven spellings. `"exhausted"` (with
     # `"rows_emitted"`: int) is the ONLY completeness claim among them — that
-    # producer emitted every row it had. The other five each name who stopped the
+    # producer emitted every row it had. The other six each name who stopped the
     # read and where, and none may be read as "that was all of it":
     # `"depth_reached"` (with `"rank"`: int) is the producer stopping at the depth
     # the plan gave it, verified against the rows fusion pulled, so ranks one
@@ -2362,20 +2362,26 @@ class retrieval:
     # `"ceiling_reached"` (with `"bound"`: an exact decimal `str`) is a
     # contribution bound, every row at or above it read and the rows below not —
     # what a fusion the caller's `top_k` stopped writes over the streams it
-    # stopped; `"execution_failed"` (with `"reason"`: str) is a producer that
+    # stopped; `"supplied_query_ended"` (with `"rank"`: int) is a unit running a
+    # query text the host wrote rather than one this layer rendered — the layer
+    # bounds only the outside of such a text, so what that text bounded inside
+    # itself, and therefore what it left unread, was not observable either;
+    # `"execution_failed"` (with `"reason"`: str) is a producer that
     # could not run at all; and `"terms_rejected"` is one that declined the
     # request terms it was handed. "Answered with nothing" and "could not answer"
-    # stay distinguishable, because none of the six is reduced to a flag.
+    # stay distinguishable, because none of the seven is reduced to a flag.
     #
-    # Three of the six can come out of THIS surface: `"exhausted"`,
-    # `"depth_reached"` and `"ceiling_reached"`. The other three belong to
-    # producers this module does not register — `"row_bound_reached"` needs one
-    # that takes its depth as an argument, `"terms_rejected"` is a receipt a
-    # producer writes for itself, and `"execution_failed"` needs a unit whose text
+    # Three of the seven can come out of THIS surface: `"exhausted"`,
+    # `"depth_reached"` and `"ceiling_reached"`. The other four belong to
+    # producers or bundles this module does not build — `"row_bound_reached"` needs
+    # a producer that takes its depth as an argument, `"supplied_query_ended"`
+    # needs a unit carrying a query text a caller wrote and this surface compiles
+    # every unit it runs, `"terms_rejected"` is a receipt a producer writes for
+    # itself, and `"execution_failed"` needs a unit whose text
     # could not be prepared or run — so they are reachable for a host driving the
     # Rust surface with a bundle of its own. They are spelled and mapped here
     # regardless: the mapping is what makes a status a host DOES receive readable,
-    # and the six-way vocabulary is the engine's, not this binding's.
+    # and the seven-way vocabulary is the engine's, not this binding's.
     #
     # `"attestations"` maps a stratum to what the index behind its stream
     # attested, as `{"generation": str | None, "incomplete": str | None}`, read

@@ -2669,7 +2669,21 @@ fn the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave() 
     // a bound inside the corpus, and a bound above everything the stratum holds —
     // where the read runs out before the depth does and the narrowing must still not
     // change the answer.
+    //
+    // How many rows the narrowed answer owes is derived from the request and from the
+    // WHOLE answer, never from the narrowed answer itself. Reading that length off the
+    // value under test is what made an earlier version of this differential vacuous: it
+    // compared the narrowed answer against its own prefix of the whole one, so every
+    // truncation satisfied it — including the empty one, and including the three-row
+    // loss the narrowing is here to rule out. A prefix comparison whose length comes
+    // from the shorter side cannot see a short side.
     let whole = docs_complete_search(&undeclared);
+    let whole_rows = whole.rows.len();
+    assert_eq!(
+        whole_rows, 6,
+        "the un-narrowed answer holds every candidate the stratum names, which is what \
+         the bounded answers below are measured against"
+    );
     for requested in [1_usize, 3, 20] {
         let request = RetrievalRequest::bounded(vec![lexical_term()], TopK::new(requested));
         let narrowed = docs_search_for(&request, &undeclared);
@@ -2683,15 +2697,23 @@ fn the_unique_neighbour_keeps_its_bounded_read_and_the_answer_it_already_gave() 
             u32::try_from(requested).expect("the fixture bounds fit a rank"),
             "the bound IS the depth for a top {requested} over one unique stratum"
         );
-        let rows = narrowed.rows.len();
+        // A top `k` owes `k` rows, or every row there is where the stratum holds fewer
+        // than `k` — the bound above the corpus is the third case in this loop, and it
+        // must return six rather than refuse or truncate.
+        let owed = requested.min(whole_rows);
+        assert_eq!(
+            narrowed.rows.len(),
+            owed,
+            "a top {requested} over a six-candidate stratum answers with {owed} rows"
+        );
         assert_eq!(
             fused_answers(&narrowed),
-            fused_answers(&whole)[..rows].to_vec(),
+            fused_answers(&whole)[..owed].to_vec(),
             "a top {requested} returns the prefix of the un-narrowed answer, unchanged"
         );
         assert_eq!(
             docs_ranks(&narrowed),
-            docs_ranks(&whole)[..rows].to_vec(),
+            docs_ranks(&whole)[..owed].to_vec(),
             "and each row arrives from the same stratum rank it did in the full read"
         );
     }

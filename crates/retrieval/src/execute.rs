@@ -188,6 +188,27 @@
 //! claim and an index that turns out to hold rows breaches the declaration
 //! ([`ExecutionError::RowBoundBreached`]) exactly as a wrong declaration of any other
 //! size does.
+//!
+//! # A unit running a caller's own text is read, and is never certified
+//!
+//! Everything above rests on the bound being this layer's: the probe row is evidence
+//! only because [`compile`](crate::compile) rendered a bound one row past the depth
+//! and nothing else could have cut the read first. A unit built through
+//! [`StratumUnit::new`](crate::StratumUnit::new) runs a text a caller wrote, and this
+//! layer bounds only its outside — a `LIMIT` on a sub-`SELECT` inside it decides the
+//! read before the outer bound is ever consulted, and no inspection of the text from
+//! here could rule that out.
+//!
+//! So such a read is executed exactly as any other, its rows are ranked exactly as
+//! any other, a row past the depth still means something further existed
+//! ([`StreamEnding::DepthReached`]), and a producer that beat its own declaration is
+//! still refused by name. What it never reports is [`StreamEnding::Exhausted`]: a read
+//! that came back inside the unit's bound ends
+//! [`StreamEnding::SuppliedQueryEnded`], which names the caller's text as the stopper
+//! it actually had. Refusing to run the text instead would have been the
+//! over-refusal — the seam exists so that a host can drive this executor over a query
+//! of its own, and most such queries are perfectly good; what cannot be done honestly
+//! is certify a completeness claim from one.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -486,6 +507,27 @@ pub enum StreamEnding {
         /// and the declared row bound the read stopped at.
         rank: u64,
     },
+    /// The query text was a caller's, and it is the stopper the read actually had, so
+    /// whether a further row existed could not be observed.
+    ///
+    /// Written for every read of a unit built through
+    /// [`StratumUnit::new`](crate::StratumUnit::new) that came back inside the unit's
+    /// own bound. The layer bounds such a text only on the outside; what the text
+    /// bounds *inside* itself — a `LIMIT` on a sub-`SELECT`, a pattern matching less
+    /// than the producer holds — is not visible from here, so the absence of the probe
+    /// row is no evidence. `Exhausted` would be this layer's strongest completeness
+    /// claim minted from a text it cannot read, which is the defect this vocabulary
+    /// exists to prevent; see [`ProducerReceipt::SuppliedQueryEnded`].
+    ///
+    /// A row arriving *past* the depth is still an observation, so such a read still
+    /// ends [`Self::DepthReached`]: something further existed whatever the text
+    /// bounded.
+    SuppliedQueryEnded {
+        /// The last 1-based rank the stream carries, which is the number of rows it
+        /// holds. Zero for a read that returned nothing — which is not a claim that
+        /// there was nothing to return.
+        rank: u64,
+    },
 }
 
 impl RankedStreamImpl {
@@ -555,6 +597,9 @@ impl RankedStreamImpl {
             },
             StreamEnding::DepthReached { rank } => ProducerReceipt::DepthReached { rank },
             StreamEnding::RowBoundReached { rank } => ProducerReceipt::RowBoundReached { rank },
+            StreamEnding::SuppliedQueryEnded { rank } => {
+                ProducerReceipt::SuppliedQueryEnded { rank }
+            }
         })
     }
 }
@@ -614,11 +659,15 @@ pub async fn execute<D: DatasetView + Sync>(
     };
 
     for unit in &compiled.units {
-        // The body is what a caller can replace, so the body is what "empty" is
-        // asked about: the text below is never empty — it always carries the bound
-        // the depth renders — and a bound with no query in front of it is not a
+        // A caller's text is what "empty" is asked about, because it is the only
+        // query that can be empty: a rendered one is assembled from a producer's own
+        // call. The text run below is never empty either way — it always carries the
+        // bound the depth renders — and a bound with no query in front of it is not a
         // query the evaluator's diagnostic would describe usefully.
-        if unit.body.trim().is_empty() {
+        if unit
+            .supplied_query()
+            .is_some_and(|query| query.trim().is_empty())
+        {
             statuses.insert(
                 unit.stratum.clone(),
                 ProducerStatus::ExecutionFailed {
@@ -784,6 +833,13 @@ type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
 ///   `RowBoundReached`. `reach` is the only thing that distinguishes this from the
 ///   second case, which is why it travels on the unit rather than being guessed
 ///   from the row count.
+/// * the read came back inside the bound at all and the text was a *caller's*
+///   ([`ReadReach::Unknown`]) — the stopper is that text, and this layer can see
+///   neither what it bounded nor therefore what it left unread:
+///   `SuppliedQueryEnded`. It is decided after the row past the depth is looked for,
+///   because that row's arrival is an observation no text can take away, and before
+///   either of the other two, because neither of them is knowable once the query is
+///   not this layer's.
 ///
 /// # Errors
 ///
@@ -835,6 +891,18 @@ fn bound_to_depth(
             ranked,
             StreamEnding::DepthReached { rank },
             ProducerStatus::DepthReached { rank },
+        ));
+    }
+    // A read of a text this layer did not write has an ending nobody observed either,
+    // and the honest report names that text. The probe slot may never have existed:
+    // the bound this layer renders is only the outermost one, and a `LIMIT` inside a
+    // caller's sub-`SELECT` decides the read before it is reached.
+    if reach == ReadReach::Unknown {
+        let rank = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
+        return Ok((
+            ranked,
+            StreamEnding::SuppliedQueryEnded { rank },
+            ProducerStatus::SuppliedQueryEnded { rank },
         ));
     }
     // A read that filled a depth it could not be taken past has an ending nobody

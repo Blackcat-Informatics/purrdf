@@ -20,7 +20,7 @@ use purrdf_core::{
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, EvalOptions, GovernedOutcome, IndexGeneration, NativeSparqlEngine,
     PfArgs, PfArity, PfAttestation, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
-    QueryGovernors, QueryOptions, RelationWitness, ServiceLevel, Volatility,
+    QueryGovernors, QueryOptions, RelationAttestations, RelationWitness, ServiceLevel, Volatility,
 };
 
 /// The relation IRI every query below calls. PurRDF mints no vocabulary: without this
@@ -802,13 +802,18 @@ fn the_same_update_over_a_relation_declaring_nothing_short_commits() {
 /// sequential fallback every small input takes.
 const PARALLEL_ROW_FLOOR: usize = 1024;
 
+/// How many driving rows [`wide_dataset`] carries: clear of [`PARALLEL_ROW_FLOOR`], and
+/// not a multiple of any plausible chunk size, so a count that tracked chunks rather than
+/// rows could not coincide with it.
+const WIDE_ROWS: u64 = PARALLEL_ROW_FLOOR as u64 + 100;
+
 /// A dataset with more driving rows than the parallel threshold, so the row-loop fork is
 /// genuinely reached.
 fn wide_dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let p = builder.intern_iri(&format!("{EX}p"));
     let o = builder.intern_iri(&format!("{EX}team"));
-    for index in 0..(PARALLEL_ROW_FLOOR + 100) {
+    for index in 0..WIDE_ROWS {
         let s = builder.intern_iri(&format!("{EX}s{index}"));
         builder.push_quad(s, p, o, None);
     }
@@ -824,38 +829,72 @@ const FILTER_EXISTS_CALL: &str = "PREFIX ex: <https://example.org/d/>\n\
 
 /// An attestation collected on a per-chunk row-loop worker reaches the parent's receipt.
 ///
-/// Only the DECLARATIONS are asserted, not the invocation count: each chunk forks a child
-/// whose `EXISTS` memo is cold, so the number of times the inner pattern is evaluated is a
-/// function of the chunk count — the same already-documented property the fuel meter has
-/// on this lane when no governor is engaged (see `crate::parallel`'s
-/// `expression_re_enters_evaluation`). What the declarations say does not vary with it,
-/// which is exactly why the record unions them.
+/// The declarations are asserted, and so is the COUNT — exactly, at [`WIDE_ROWS`]. That is
+/// not a scheduling coincidence on this query: a `FILTER EXISTS` re-enters pattern
+/// evaluation once per driving row, so every row invokes the relation once and the total is
+/// the row count however the rows were split. The chunk boundaries decide which worker's
+/// ledger each invocation lands in and nothing else, so the parent's count after the join
+/// is the sum over the workers, which is the same number the forced-sequential lane reaches
+/// in one ledger. Both lanes are driven here and both are asserted against that number.
+///
+/// The exact count is the whole point of the test. A join that kept one worker's ledger and
+/// dropped the rest — the failure this lane exists to catch — leaves every DECLARATION
+/// matching, because a union with one identical member is that member; it shows up only as
+/// a count short of the rows. An inequality (`>= 1`, or "more than the sequential lane")
+/// would pass for a receipt that lost all but one chunk.
 #[test]
 fn an_attestation_collected_on_a_row_loop_worker_reaches_the_receipt() {
-    let engine = NativeSparqlEngine::new();
-    let relations = registry("ff", Declares::Generation("gen-7"));
-    let dataset = wide_dataset();
-    let prepared = engine
-        .prepare_query_with_options(FILTER_EXISTS_CALL, None, with_relations(&relations))
-        .expect("the query prepares against the registry");
-    let outcome = engine
-        .query_prepared_governed_view(
-            &*dataset,
-            &prepared,
-            &[],
-            with_relations(&relations),
-            &QueryGovernors::UNBOUNDED,
-        )
-        .expect("a governed run of a valid query is an outcome, never an error");
+    /// Drive `FILTER_EXISTS_CALL` over the wide fixture on `engine`, returning what the
+    /// relation attested.
+    fn attested_over_wide_rows(
+        engine: &NativeSparqlEngine,
+        relations: &PropertyFunctionRegistry,
+    ) -> RelationAttestations {
+        let dataset = wide_dataset();
+        let prepared = engine
+            .prepare_query_with_options(FILTER_EXISTS_CALL, None, with_relations(relations))
+            .expect("the query prepares against the registry");
+        let outcome = engine
+            .query_prepared_governed_view(
+                &*dataset,
+                &prepared,
+                &[],
+                with_relations(relations),
+                &QueryGovernors::UNBOUNDED,
+            )
+            .expect("a governed run of a valid query is an outcome, never an error");
+        outcome
+            .relations()
+            .witness
+            .get(REL_IRI)
+            .expect("a worker's attestation that died with the worker would be missing here")
+            .clone()
+    }
 
-    let attested = outcome
-        .relations()
-        .witness
-        .get(REL_IRI)
-        .expect("a worker's attestation that died with the worker would be missing here");
+    let relations = registry("ff", Declares::Generation("gen-7"));
+    let attested = attested_over_wide_rows(&NativeSparqlEngine::new(), &relations);
     assert_eq!(attested.generations, declared("gen-7"));
-    assert!(
-        attested.invocations >= 1,
-        "the relation really was invoked, however the rows were chunked"
+
+    let sequential = attested_over_wide_rows(
+        &NativeSparqlEngine::new().with_eval_options(EvalOptions {
+            force_sequential: true,
+            ..EvalOptions::default()
+        }),
+        &relations,
+    );
+    assert_eq!(
+        sequential.invocations, WIDE_ROWS,
+        "one ledger, one invocation per driving row: the number every chunk's share of the \
+         run has to add back up to"
+    );
+    assert_eq!(
+        attested.invocations, WIDE_ROWS,
+        "and the fork-join lane's count after the join is that same total, so no worker's \
+         share of it was dropped on the way to the parent"
+    );
+    assert_eq!(
+        attested.generations, sequential.generations,
+        "with the same declarations on both lanes, so the count above is invocations of \
+         one index rather than a second index answering"
     );
 }

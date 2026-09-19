@@ -23,9 +23,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, ExecutionError, Iri, Metric, Plan, PlanError,
-    ProducerStatus, RankedStreamImpl, ReadBound, RejectionReason, RequestTerm, RetrievalRequest,
-    Statistics, Term, TopK, UnservedReason, UnservedTerm, compile, execute, plan,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, ExecutionError, Iri, Metric, Plan,
+    PlanError, ProducerStatus, RankedStreamImpl, ReadBound, RejectionReason, RequestTerm,
+    RetrievalRequest, Statistics, StratumUnit, Term, TopK, UnservedReason, UnservedTerm, compile,
+    execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
@@ -76,6 +77,16 @@ struct Recorder {
     count: usize,
     prefix: String,
     log: Arc<Mutex<Vec<Call>>>,
+    /// The argument position this relation reads as the most rows it may return,
+    /// for a fixture playing a producer that **obeys** the depth it is handed.
+    ///
+    /// `None` is the fixture default, and it is the right default for every claim
+    /// about what the text says: a relation that ignores the argument still records
+    /// it, which is what those tests read. It is `Some` only where a claim is about
+    /// the argument's *effect* — a lowered depth argument cannot be observed at all
+    /// through a relation that never looked at it, and a conforming self-bounding
+    /// relation does look.
+    obeys_depth: Option<usize>,
 }
 
 impl PropertyFunction for Recorder {
@@ -110,8 +121,21 @@ impl PropertyFunction for Recorder {
                 ceiling,
             });
         let total = self.arity.total();
-        let mut rows: Vec<Vec<TermValue>> = Vec::with_capacity(self.count);
-        for index in 0..self.count {
+        // A relation that obeys its depth argument returns at most that many rows,
+        // which is what a self-bounding producer's declaration promises. The value is
+        // read off the argument the text rendered, so lowering that number in the text
+        // really does shorten the read.
+        let count = match self
+            .obeys_depth
+            .and_then(|position| bound.get(position).cloned())
+        {
+            Some(Some(TermValue::Literal { lexical_form, .. })) => lexical_form
+                .parse::<usize>()
+                .map_or(self.count, |allowed| self.count.min(allowed)),
+            Some(_) | None => self.count,
+        };
+        let mut rows: Vec<Vec<TermValue>> = Vec::with_capacity(count);
+        for index in 0..count {
             let mut row = Vec::with_capacity(total);
             for position in 0..total {
                 row.push(
@@ -160,6 +184,9 @@ struct Spec {
     /// term existed, so a spec that says nothing about domains keeps exactly the
     /// reading it had.
     domains: CandidateDomains,
+    /// The argument position the relation reads as its own row ceiling, for a
+    /// fixture that obeys the depth it is handed rather than merely recording it.
+    obeys_depth: Option<usize>,
     /// Whether the producer promises each candidate appears at most once in its
     /// own stream.
     ///
@@ -182,6 +209,7 @@ impl Spec {
             stratum: ex(&format!("stratum/{stratum}")),
             accepted,
             depth: None,
+            obeys_depth: None,
             candidate: 0,
             mandatory: false,
             domains: CandidateDomains::Unrestricted,
@@ -221,6 +249,18 @@ impl Spec {
     }
 
     fn depth(mut self, depth: DepthPlacement) -> Self {
+        self.depth = Some(depth);
+        self
+    }
+
+    /// Declare the depth placement `depth` **and** obey the number rendered into it.
+    ///
+    /// The pair travels together because neither half means anything alone: a
+    /// relation that obeys a position nothing renders a depth into reads whatever the
+    /// request placed there, and a depth placement no relation obeys cannot show what
+    /// the argument does to a read.
+    fn obeying(mut self, depth: DepthPlacement) -> Self {
+        self.obeys_depth = Some(depth.position);
         self.depth = Some(depth);
         self
     }
@@ -273,6 +313,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
             count: spec.count,
             prefix: format!("{name}/row"),
             log: Arc::clone(&log),
+            obeys_depth: spec.obeys_depth,
         });
         registry.register_ranked(
             ex(&format!("pf/{name}")),
@@ -1501,6 +1542,242 @@ fn a_self_bounding_producer_reports_the_bound_that_stopped_it_and_still_catches_
         execution.expect("the unit runs").statuses[&knn],
         ProducerStatus::DepthReached { rank: 4 },
         "a depth below the declaration is probed like any other read"
+    );
+}
+
+/// The same unit, running `query` — a text this test wrote — with every number the
+/// compiler put on it unchanged.
+///
+/// [`StratumUnit::new`] is the only way to hand `execute` a query nobody compiled, and
+/// it is the seam the attack below has to go through, because it is the only one a
+/// caller has: the compiled query is no longer a string on the unit for anything to
+/// assign to.
+fn supplying(unit: &StratumUnit, query: String) -> StratumUnit {
+    StratumUnit::new(
+        unit.stratum.clone(),
+        query,
+        unit.contract.clone(),
+        unit.depth(),
+        unit.declared_rows(),
+    )
+    .expect("the compiler's own depth and declaration are admitted")
+}
+
+/// A unit's text with this layer's outer bound removed, so a caller can hand it back.
+///
+/// [`StratumUnit::new`] renders that bound itself; a text carrying a second one is not
+/// a query the grammar accepts, which is a loud parse failure rather than a quiet
+/// wrong answer, and not what is being measured here.
+fn without_the_outer_bound(text: &str, probe: u32) -> String {
+    let (body, outer) = text
+        .rsplit_once("\nLIMIT ")
+        .expect("a unit's text ends with the bound this layer renders");
+    assert_eq!(
+        outer,
+        probe.to_string(),
+        "the outer bound is the probe row: {text}"
+    );
+    body.to_owned()
+}
+
+/// The same text with the **branch's** own copy of the probe row lowered to `depth`.
+///
+/// This is the mutation the defect needed, and it is one of exactly two shapes: the
+/// inner `LIMIT` of an evaluator-bounded branch, or the depth argument of a
+/// self-bounding producer. Either way it erases the slot the probe row would have
+/// arrived in while every number on the unit still reads as it did.
+///
+/// Done by substitution rather than as a fixed string on purpose: the
+/// single-occurrence assertion fails if the emitted text ever stops carrying exactly
+/// one copy of that number, instead of silently lowering something else.
+fn with_the_branch_bound_lowered(text: &str, probe: u32, depth: u32) -> String {
+    let body = without_the_outer_bound(text, probe);
+    let probe = probe.to_string();
+    assert_eq!(
+        body.matches(&probe).count(),
+        1,
+        "the branch carries exactly one copy of the probe row, and it is the number \
+         this lowers: {body}"
+    );
+    body.replace(&probe, &depth.to_string())
+}
+
+/// **A bound inside a caller's own text is never reported as an exhaustion, in either
+/// shape the branch's bound is written in.**
+///
+/// The read's bound has had three homes on this type, and the first two shared one
+/// property: a caller could write it. While the whole query text was a writable field,
+/// `LIMIT <depth>` in place of `LIMIT <depth + 1>` left no slot for the probe row and
+/// the read was certified `Exhausted` over a producer with six more rows behind it.
+/// Rendering the *outer* bound from the depth moved that hole inward rather than
+/// closing it: the branch's own bound was still inside the same writable string, and
+/// where an inner bound and an outer one disagree the inner one decides the read. So
+/// `Exhausted { rows_emitted: 3 }` over nine rows came back a second time, from the
+/// same numbers.
+///
+/// Both shapes are executed here, because they write that inner bound differently — a
+/// `LIMIT` on the branch for a producer the evaluator bounds, and a rendered *argument*
+/// for one that bounds itself — and a fix that closed one and left the other is
+/// precisely what happened twice.
+///
+/// Each shape is paired with the neighbour that must still answer: the same
+/// caller-supplied text, **not** lowered, which still reports the ending it can
+/// observe. The refusal here is narrow by design, and the last arm measures the edge
+/// of it — a caller's query still runs, still yields its rows in rank order, still
+/// reports `DepthReached` when a row past the depth really did arrive, and still trips
+/// [`ExecutionError::RowBoundBreached`](purrdf_retrieval::ExecutionError) when the
+/// producer beats its own declaration. The one thing it cannot do is carry this
+/// layer's strongest completeness claim, because that claim rests on a bound this
+/// layer wrote and can see.
+#[test]
+fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exhaustion() {
+    let terms = || vec![lexical("quick brown fox", None)];
+    let compiled_for = |registry: &PropertyFunctionRegistry, stats: &MockStatistics| {
+        let planned = plan(&request(terms()), registry, stats).expect("the fixture request plans");
+        let env = AdmissionEnvironment {
+            registry,
+            statistics: stats,
+            fusion_profile: None,
+        };
+        compile(&planned, &env).expect("a fresh plan is admitted")
+    };
+    let status =
+        |compiled: &CompiledRetrieval, registry: &PropertyFunctionRegistry, stratum: &Iri| {
+            block_on(execute(compiled, registry, &*common::empty_dataset()))
+                .expect("the unit runs")
+                .statuses[stratum]
+                .clone()
+        };
+    let running = |compiled: &CompiledRetrieval, query: String| CompiledRetrieval {
+        units: vec![supplying(&compiled.units[0], query)],
+        ..compiled.clone()
+    };
+
+    // (1) THE EVALUATOR-BOUNDED SHAPE. Nine rows behind a depth of three, bounded by
+    //     the branch's own `LIMIT 4`.
+    let cut = iri(&ex("stratum/cut"));
+    let (registry, _) = registry_of(vec![(
+        "cut",
+        Spec::new(
+            "cut",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Any),
+                value_at(1),
+            )],
+        )
+        .rows(1_000, 9),
+    )]);
+    let stats = statistics(&[("cut", 3)]);
+    let rendered = compiled_for(&registry, &stats);
+    let text = rendered.units[0].sparql();
+    assert_eq!(
+        rendered.units[0].depth(),
+        3,
+        "the measured cardinality is the depth"
+    );
+    assert!(
+        text.contains(" LIMIT 4 }"),
+        "the branch carries the row ceiling the evaluator pushes down: {text}"
+    );
+    assert_eq!(
+        status(&rendered, &registry, &cut),
+        ProducerStatus::DepthReached { rank: 3 },
+        "the rendered read is cut by the depth and says so"
+    );
+
+    let attacked = running(&rendered, with_the_branch_bound_lowered(&text, 4, 3));
+    assert_eq!(
+        status(&attacked, &registry, &cut),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "a text this layer did not write cannot certify an exhaustion, whatever bound \
+         it carries: the ending names that text"
+    );
+    let unlowered = running(&rendered, without_the_outer_bound(&text, 4));
+    assert_eq!(
+        status(&unlowered, &registry, &cut),
+        ProducerStatus::DepthReached { rank: 3 },
+        "and a caller's text that did NOT cut the read still reports the ending that \
+         WAS observed, because a row past the depth is an observation"
+    );
+
+    // (2) THE SELF-BOUNDING SHAPE. The depth rides as an argument, so the number to
+    //     lower is that argument — and the fixture relation obeys it, which is what
+    //     makes lowering it observable at all.
+    let knn = iri(&ex("stratum/knn"));
+    let (registry, _) = registry_of(vec![(
+        "knn",
+        knn_spec(None)
+            .obeying(DepthPlacement {
+                position: 2,
+                datatype: XSD_INTEGER.to_owned(),
+            })
+            .rows(10, 9),
+    )]);
+    let stats = statistics(&[("knn", 4)]);
+    let rendered = compiled_for(&registry, &stats);
+    let text = rendered.units[0].sparql();
+    assert_eq!(
+        rendered.units[0].depth(),
+        4,
+        "the measured cardinality is the depth"
+    );
+    assert!(
+        text.contains(&format!("\"5\"^^<{XSD_INTEGER}>")),
+        "the argument carries the probe row, because the declaration leaves room: {text}"
+    );
+    assert_eq!(
+        status(&rendered, &registry, &knn),
+        ProducerStatus::DepthReached { rank: 4 },
+        "the rendered read reaches past the depth and is cut by it"
+    );
+
+    let attacked = running(&rendered, with_the_branch_bound_lowered(&text, 5, 4));
+    assert_eq!(
+        status(&attacked, &registry, &knn),
+        ProducerStatus::SuppliedQueryEnded { rank: 4 },
+        "the argument is a bound like any other, and lowering it in a caller's text \
+         buys the same refusal to certify"
+    );
+    let unlowered = running(&rendered, without_the_outer_bound(&text, 5));
+    assert_eq!(
+        status(&unlowered, &registry, &knn),
+        ProducerStatus::DepthReached { rank: 4 },
+        "while the unlowered text still reports what it could observe"
+    );
+
+    // (3) AND THE REFUSAL A CALLER'S TEXT DOES NOT ESCAPE. A row past the *declaration*
+    //     is an observation like the row past the depth, so a producer that returns
+    //     more rows than it registered is still refused by name — the weaker ending
+    //     above withholds a completeness claim, and withholds nothing else.
+    let (registry, _) = registry_of(vec![(
+        "cut",
+        Spec::new(
+            "cut",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Any),
+                value_at(1),
+            )],
+        )
+        .rows(3, 9),
+    )]);
+    let rendered = compiled_for(&registry, &statistics(&[]));
+    assert_eq!(rendered.units[0].depth(), 3, "the declaration is the depth");
+    let supplied = running(
+        &rendered,
+        without_the_outer_bound(&rendered.units[0].sparql(), 4),
+    );
+    let error = block_on(execute(&supplied, &registry, &*common::empty_dataset()))
+        .expect_err("a fourth row from a producer that declared three");
+    assert!(
+        matches!(
+            error,
+            ExecutionError::RowBoundBreached {
+                declared: 3,
+                pulled: 4,
+                ..
+            }
+        ),
+        "the breach is refused by name whoever wrote the query, got {error:?}"
     );
 }
 

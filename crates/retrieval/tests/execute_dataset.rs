@@ -26,7 +26,7 @@ use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, ExecutionError, Fixed,
     FusionProfile, IndexGeneration, Iri, ProducerStatus, RankedStream, RankedStreamAdapter,
     RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel, Statistics,
-    StreamContract, Term, TopK, compile, execute, plan, search,
+    StratumUnit, StreamContract, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -463,6 +463,32 @@ fn calling(producer: &str) -> String {
     format!("{{ SELECT (?r0 AS ?probe) WHERE {{ ( ?r0 ) <{producer}> ( ?r1 ) }} LIMIT 1 }}")
 }
 
+/// Replace the unit at `index` with one running `query`, a text of this test's own.
+///
+/// [`StratumUnit::new`] is the only way to hand `execute` a query nobody compiled, and
+/// it is what every substitution below goes through. Nothing else about the unit
+/// moves: the stratum, the contract, the depth and the declared row bound are the
+/// compiler's own, so each test varies exactly the thing it is about.
+///
+/// The cost of the seam is stated once here rather than at each site. A text this
+/// layer did not write is bounded by it only on the outside, so such a read is never
+/// certified `ProducerStatus::Exhausted`: it ends
+/// `ProducerStatus::SuppliedQueryEnded`, naming the caller's text as the stopper. The
+/// rows, the ranks, the refusals and the attestations are unaffected — they are
+/// observations rather than completeness claims.
+fn running(bundle: &mut CompiledRetrieval, index: usize, query: String) {
+    let unit = &bundle.units[index];
+    let replacement = StratumUnit::new(
+        unit.stratum.clone(),
+        query,
+        unit.contract.clone(),
+        unit.depth(),
+        unit.declared_rows(),
+    )
+    .expect("the compiler's own depth and declaration are admitted");
+    bundle.units[index] = replacement;
+}
+
 /// The unit that reads the graph: whatever `<mentions>` the fox, in IRI order.
 fn mentions_fox() -> String {
     format!(
@@ -481,7 +507,7 @@ fn execute_answers_from_the_callers_dataset() {
     // One stratum's unit is replaced with a graph query. The bundle is otherwise
     // exactly what `compile` produced, so the plan identity and the registry
     // instance the executor checks are the real ones.
-    bundle.units[0].body = mentions_fox();
+    running(&mut bundle, 0, mentions_fox());
 
     let alpha = iri(&ex(STRATA[0]));
     let mentions = ex("mentions");
@@ -503,7 +529,9 @@ fn execute_answers_from_the_callers_dataset() {
     );
     assert_eq!(
         execution.statuses[&alpha],
-        ProducerStatus::Exhausted { rows_emitted: 2 }
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "the two rows are the caller's query's, and so is whatever bounded it, so the \
+         ending names that query rather than certifying an exhaustion"
     );
 
     // The same bundle, the same registry, different stored data: the answer
@@ -645,8 +673,16 @@ fn an_unbound_projection_fails_its_stratum_while_a_bound_one_streams() {
     let mut bundle = compiled(&registry, &stats);
     // Stratum alpha asks for a topic the dataset does not hold, so its single
     // solution leaves `?candidate` unbound. Stratum beta asks for one it does.
-    bundle.units[0].body = optional_mentions(&ex("pf/alpha"), "topic/unicorn");
-    bundle.units[1].body = optional_mentions(&ex("pf/beta"), "topic/fox");
+    running(
+        &mut bundle,
+        0,
+        optional_mentions(&ex("pf/alpha"), "topic/unicorn"),
+    );
+    running(
+        &mut bundle,
+        1,
+        optional_mentions(&ex("pf/beta"), "topic/fox"),
+    );
 
     let dataset = dataset_of(&[(&ex("doc/alpha"), &ex("mentions"), &ex("topic/fox"))]);
     let mut execution = block_on(execute(&bundle, &registry, &*dataset)).expect("the units run");
@@ -688,8 +724,9 @@ fn an_unbound_projection_fails_its_stratum_while_a_bound_one_streams() {
     );
     assert_eq!(
         execution.statuses[&beta],
-        ProducerStatus::Exhausted { rows_emitted: 1 },
-        "the surviving stratum streams to completion"
+        ProducerStatus::SuppliedQueryEnded { rank: 1 },
+        "the surviving stratum streams its row to the end of the caller's own query, \
+         which is the ending this layer can honestly report of a text it did not write"
     );
 }
 
@@ -702,7 +739,7 @@ fn a_forced_failure_isolates_to_its_stratum() {
     let registry = fixture_registry();
     let stats = statistics();
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].body = "THIS IS NOT SPARQL".to_owned();
+    running(&mut bundle, 0, "THIS IS NOT SPARQL".to_owned());
 
     let mut execution =
         block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("execution starts");
@@ -1302,7 +1339,7 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     // The defect: two invocations of one relation, two generations.
     let (registry, opens) = registry_counting_opens(Attests::Moving);
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].body = driven_by_the_data(&ex("pf/alpha"));
+    running(&mut bundle, 0, driven_by_the_data(&ex("pf/alpha")));
     let error = block_on(execute(&bundle, &registry, &*dataset))
         .expect_err("a snapshot that moved mid-run invalidates the run");
     match error {
@@ -1333,7 +1370,7 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     // invocations, one unchanged index.
     let (registry, opens) = registry_counting_opens(Attests::Generation("gen-7"));
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].body = driven_by_the_data(&ex("pf/alpha"));
+    running(&mut bundle, 0, driven_by_the_data(&ex("pf/alpha")));
     let mut execution =
         block_on(execute(&bundle, &registry, &*dataset)).expect("one index is one generation");
     assert_eq!(
@@ -1356,7 +1393,9 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     );
     assert_eq!(
         execution.statuses[&alpha],
-        ProducerStatus::Exhausted { rows_emitted: 2 }
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "an attestation is an observation and survives a caller's own query; the \
+         completeness claim is what does not"
     );
 }
 
@@ -1409,10 +1448,14 @@ fn the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it() {
     let registry = fixture_registry();
     let stats = statistics();
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].body = format!(
-        "SELECT ?candidate WHERE {{ {} BIND(<{}>(1) AS ?candidate) }}",
-        calling(&ex("pf/alpha")),
-        ex("fn/deepen")
+    running(
+        &mut bundle,
+        0,
+        format!(
+            "SELECT ?candidate WHERE {{ {} BIND(<{}>(1) AS ?candidate) }}",
+            calling(&ex("pf/alpha")),
+            ex("fn/deepen")
+        ),
     );
     let mut execution = block_on(execute(&bundle, &registry, &*dataset_of(&[])))
         .expect("an unreachable function is a stratum's failure, never a budget trip");

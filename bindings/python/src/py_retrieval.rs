@@ -303,9 +303,18 @@
 //! can actually meet is the two stratum-level messages above and the
 //! registration refusal.
 //!
-//! One terminal *status* is unreachable here for the same kind of reason, and it
-//! is recorded next to those refusals because a reader checking whether a status
-//! is testable from Python will look in one place for both. `"row_bound_reached"`
+//! Two terminal *statuses* are unreachable here for the same kind of reason, and
+//! they are recorded next to those refusals because a reader checking whether a
+//! status is testable from Python will look in one place for all of them.
+//!
+//! `"supplied_query_ended"` — a unit running a query text the host wrote rather
+//! than one this layer rendered, whose own internal bound the layer cannot see —
+//! needs a caller-assembled bundle. This surface compiles every unit it runs and
+//! accepts no bundle from a caller, so no stratum a Python host can configure can
+//! end that way. It is mapped here for the same reason the next one is: a host
+//! fusing streams from the Rust surface can be handed it.
+//!
+//! `"row_bound_reached"`
 //! — the producer stopping at the row count it declared it can serve per
 //! invocation — needs a **self-bounding** producer: one whose declaration places
 //! the depth as an argument the producer itself reads, so the read cannot reach
@@ -316,7 +325,7 @@
 //! `"exhausted"`, `"depth_reached"` or `"ceiling_reached"` instead. The status is
 //! documented on [`search`] and mapped here because a host fusing streams from
 //! the Rust surface can be handed it, and reading it as "that was all of it"
-//! would be the exact mistake the six spellings exist to prevent. Making it
+//! would be the exact mistake the seven spellings exist to prevent. Making it
 //! reachable from Python means letting a caller register a producer of its own,
 //! which this surface does not do.
 
@@ -1493,6 +1502,16 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
                 entry.set_item("status", "row_bound_reached")?;
                 entry.set_item("rank", rank)?;
             }
+            // A unit running a query text the host supplied rather than one this
+            // layer rendered. The layer bounds only the outside of such a text, so
+            // what that text bounds inside itself — and therefore what it left
+            // unread — was not observable. It carries a rank like
+            // `"depth_reached"` and, like `"row_bound_reached"`, claims nothing
+            // about what lies below it.
+            ProducerStatus::SuppliedQueryEnded { rank } => {
+                entry.set_item("status", "supplied_query_ended")?;
+                entry.set_item("rank", rank)?;
+            }
             ProducerStatus::CeilingReached { bound } => {
                 entry.set_item("status", "ceiling_reached")?;
                 entry.set_item("bound", bound.to_decimal_lexical())?;
@@ -1859,9 +1878,9 @@ fn compile<'py>(
 /// reaching its planned depth, and that gap is the point: a depth a fusion never
 /// reached cost it nothing.
 ///
-/// Every `"statuses"` entry spells its own ending, and there are exactly six
+/// Every `"statuses"` entry spells its own ending, and there are exactly seven
 /// spellings. `"exhausted"` (with `"rows_emitted"`) is the ONLY completeness
-/// claim of the six: that producer emitted every row it had. The other five
+/// claim of the seven: that producer emitted every row it had. The other six
 /// each name who stopped the read and where. `"depth_reached"` (with `"rank"`)
 /// is the producer stopping at the depth the plan gave it, verified against the
 /// rows fusion really pulled: ranks one through `"rank"` were read and nothing
@@ -1873,11 +1892,15 @@ fn compile<'py>(
 /// declared bound rather than re-planning. `"ceiling_reached"` (with `"bound"`, an
 /// exact decimal `str`) is a contribution bound: every row at or above it was read
 /// and the rows below were not — usually written by a fusion the caller's `top_k`
-/// stopped. `"execution_failed"` (with `"reason"`) is the producer that could
-/// not run at all, and `"terms_rejected"` is the producer that declined the
-/// request terms it was handed. A stratum that answered with nothing and one
-/// that could not answer stay distinguishable, because none of the six is
-/// reduced to an aggregate flag.
+/// stopped. `"supplied_query_ended"` (with `"rank"`) is a unit running a query
+/// text the host wrote rather than one this layer rendered: the layer bounds only
+/// the outside of such a text, so what that text bounded inside itself — and
+/// therefore what it left unread — was not observable either, which is why it is
+/// its own word and not `"exhausted"`. `"execution_failed"` (with `"reason"`) is
+/// the producer that could not run at all, and `"terms_rejected"` is the producer
+/// that declined the request terms it was handed. A stratum that answered with
+/// nothing and one that could not answer stay distinguishable, because none of
+/// the seven is reduced to an aggregate flag.
 ///
 /// `"attestations"` maps each stratum whose stream was handed to fusion to what
 /// the index behind it attested, as `{"generation": str | None, "incomplete":

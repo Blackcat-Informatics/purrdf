@@ -517,7 +517,57 @@ fn an_empty_domain_restriction_is_refused_while_a_named_one_registers() {
     // parse is a second chance to disagree with the first.
     let parsed = tag(EX_DOMAIN_DOCS);
     assert_eq!(parsed.as_iri().as_str(), EX_DOMAIN_DOCS);
-    assert_eq!(DomainTag::new(parsed.as_iri().clone()), parsed);
+
+    // And "reads back" means VERBATIM: neither constructing a tag nor reading
+    // one normalises, case-folds or re-spells what the host wrote. Over a text
+    // that is already canonical — every other tag in this file — an
+    // implementation that canonicalised would satisfy every assertion, so the
+    // witness below is one tag held against the three respellings generic URI
+    // normalisation would conflate it with: an uppercased scheme and authority,
+    // a dot segment, and a case-flipped percent-escape.
+    const AS_WRITTEN: &str = "http://example.org/domain/documents%2fa";
+    let written = tag(AS_WRITTEN);
+    assert_eq!(
+        written.as_str(),
+        AS_WRITTEN,
+        "the text accessor hands back the host's spelling, not a canonical one"
+    );
+    assert_eq!(
+        written.as_iri().as_str(),
+        AS_WRITTEN,
+        "and so does the IRI behind it, so the two accessors cannot disagree"
+    );
+    assert_eq!(
+        DomainTag::new(written.as_iri().clone()).as_str(),
+        AS_WRITTEN,
+        "and the IRI-taking constructor stores what it is handed, so a tag taken \
+         apart and rebuilt is the tag that was taken apart"
+    );
+    // The consequence a host relies on: each respelling a normaliser would
+    // conflate with the above is its own tag, and the difference is one
+    // normalisation step in each case, so no single step can be applied
+    // anywhere in this type without one of these failing. A domain set that
+    // merged a pair would report one block where its host declared two, and a
+    // candidate in the second block would then be scored against a declaration
+    // that never named it.
+    for respelling in [
+        "HTTP://EXAMPLE.ORG/domain/documents%2fa",
+        "http://example.org/domain/./documents%2fa",
+        "http://example.org/domain/documents%2Fa",
+    ] {
+        let other = tag(respelling);
+        assert_ne!(
+            written, other,
+            "{AS_WRITTEN} and {respelling} are two tags: comparison is over the \
+             spelling as written, and nothing canonicalised either side of it"
+        );
+        assert_eq!(
+            other.as_str(),
+            respelling,
+            "and each reads back as written, so the inequality is two spellings \
+             kept rather than one repaired"
+        );
+    }
 }
 
 // ---- one stratum, one producer -------------------------------------------

@@ -155,14 +155,15 @@ def _counted_width(width: int | None) -> int:
 NOTE_DOMAIN = f"{EX}domain/notes"
 TITLE_DOMAIN = f"{EX}domain/titles"
 
-# The six spellings a terminal status may carry, and nothing else may appear.
-# Only the first is a completeness claim; the other five each name who stopped
+# The seven spellings a terminal status may carry, and nothing else may appear.
+# Only the first is a completeness claim; the other six each name who stopped
 # the read and where.
 STATUS_SPELLINGS = frozenset(
     {
         "exhausted",
         "depth_reached",
         "row_bound_reached",
+        "supplied_query_ended",
         "ceiling_reached",
         "execution_failed",
         "terms_rejected",
@@ -698,32 +699,38 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
 
 
 def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -> None:
-    """Three of the six endings, executed — and the suite says which three those are.
+    """Three of the seven endings, executed — and the suite says which three those are.
 
-    ``"exhausted"`` says the producer emitted every row it had. The other five
+    ``"exhausted"`` says the producer emitted every row it had. The other six
     each name who stopped the read: ``"depth_reached"`` the producer stopping at
     the depth the plan gave it, ``"row_bound_reached"`` the producer stopping at
     the row count it declared it can serve per invocation — a read whose ending
     nobody could observe, because the row past it could not be asked for —
     ``"ceiling_reached"`` a contribution bound (a
     fusion the caller's ``top_k`` stopped writes this over the streams it
-    stopped), ``"execution_failed"`` a producer that could not run at all, and
+    stopped), ``"supplied_query_ended"`` a unit running a query text the host
+    wrote rather than one the layer rendered — whose own internal bound the layer
+    cannot see, so what it left unread was not observable either —
+    ``"execution_failed"`` a producer that could not run at all, and
     ``"terms_rejected"`` one that declined the terms it was handed. Reading any
-    of the other five as "that was all of it" is the mistake the six spellings
+    of the other six as "that was all of it" is the mistake the seven spellings
     exist to prevent.
 
     What this test executes is ``"exhausted"``, ``"depth_reached"`` and
-    ``"ceiling_reached"``, and it claims nothing about the other three: they are
+    ``"ceiling_reached"``, and it claims nothing about the other four: they are
     unreachable through this binding, not untested by oversight, and
     ``py_retrieval.rs``'s header records why beside the refusals in the same
     position. ``"row_bound_reached"`` needs a self-bounding producer — one whose
     declaration places the depth as an argument the producer reads — and the one
     relation this surface registers places none, so every stratum a Python host
     can configure is bounded by the unit's own emitted ``LIMIT``.
-    ``"terms_rejected"`` is a receipt a producer writes for itself, and
+    ``"supplied_query_ended"`` needs a unit carrying a query text a caller wrote,
+    and this surface compiles every unit it runs and accepts no bundle from a
+    caller. ``"terms_rejected"`` is a receipt a producer writes for itself, and
     ``"execution_failed"`` needs a unit whose text could not be prepared or run;
     both belong to a host driving the Rust surface with a bundle of its own, and
-    neither can come out of a call that compiles its own units from a text index.
+    none of the four can come out of a call that compiles its own units from a
+    text index.
 
     The spellings are not asserted against the call's documentation. A docstring
     that contains the word proves nothing about which string the mapping emits,
@@ -780,8 +787,8 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
 
         assert Decimal(entry["bound"]) > 0, stratum
 
-    # Whatever a status says, it says it with one of the six spellings and with
-    # the payload that spelling owes — no aggregate flag, and no seventh word.
+    # Whatever a status says, it says it with one of the seven spellings and with
+    # the payload that spelling owes — no aggregate flag, and no eighth word.
     for entry in (exhausted, bounded, *stopped.values()):
         assert entry["status"] in STATUS_SPELLINGS, entry
         assert ("rows_emitted" in entry) == (entry["status"] == "exhausted"), (
@@ -796,7 +803,7 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
     reached = {entry["status"] for entry in (exhausted, bounded, *stopped.values())}
     assert reached == {"exhausted", "depth_reached", "ceiling_reached"}, reached
     assert reached < STATUS_SPELLINGS, (
-        "the six spellings are the whole vocabulary, and this surface reaches "
+        "the seven spellings are the whole vocabulary, and this surface reaches "
         "strictly fewer than all of them"
     )
 
@@ -1336,7 +1343,7 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
     """Admission's value is plain text a host can read, log, or run under an obligation.
 
     The text is runnable, and running it is not the same as reporting its rows:
-    a unit is emitted at most one row deeper than the plan reads, so a host that
+    a unit is emitted exactly one row deeper than the plan reads, so a host that
     executes the text itself keeps at most ``"depth"`` rows. The unit carries
     that bound beside the text, which is the only reason the obligation is
     dischargeable here — ``"planned_resolution"`` is empty on a call that names
@@ -1358,8 +1365,10 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
     assert isinstance(depth, int) and depth >= 1, (
         "the reportable bound travels with the text it bounds"
     )
-    assert _emitted_limit(units[0]["sparql"]) in {depth, depth + 1}, (
-        "the emitted bound is the depth, or the depth plus the one probe row"
+    assert _emitted_limit(units[0]["sparql"]) == depth + 1, (
+        "the emitted bound is the depth plus the one probe row, at every depth: a "
+        "text bounded at exactly the depth could not tell an exhausted producer "
+        "from a read the depth cut short"
     )
     assert compiled["plan_id"] == compiled["plan"]["plan_id"]
     assert compiled["planned_resolution"] == {}, (

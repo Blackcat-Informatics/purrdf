@@ -79,9 +79,9 @@
 //! # The branch carries the stratum's depth, and so does the unit
 //!
 //! A branch whose producer takes no depth argument is bounded by its own
-//! `LIMIT <depth>`, and the unit carries the same bound on the outside — rendered
-//! from the depth by [`StratumUnit::sparql`] rather than written into the text, for
-//! the reason a section below gives. The inner
+//! `LIMIT <depth + 1>`, and the unit carries the same bound on the outside. Both are
+//! rendered from the depth by [`StratumUnit::sparql`] rather than written into a text
+//! anything else holds, for the reason a section below gives. The inner
 //! one is the producer's licence to stop early — the evaluator offers it to the
 //! relation as a row ceiling — and the outer one is the stratum's contract with
 //! fusion, which holds whatever bounds the branch below it carries. A producer
@@ -150,32 +150,52 @@
 //! one: [`PlannedResolution::requested_depth`] is the depth, and so is
 //! [`StratumUnit::depth()`].
 //!
-//! # The unit's bound is *rendered* from the depth, never carried beside it
+//! # Every bound is *rendered* from the depth, and a caller's text is never certified
 //!
-//! The paragraph above is a claim about a number, so the question is what holds it
-//! there. A [`StratumUnit`] used to carry the whole query text — bound included —
-//! as a writable field, and the bound in that text was a fourth input to the
-//! ending nobody compared against the other three. The natural off-by-one was
-//! enough: a caller assembling a bundle by hand writes `LIMIT <depth>`, because the
-//! depth is the number this layer reasons about everywhere, and the read then
-//! returned `depth` rows with no slot for the probe. `execute` writes
-//! `DepthReached` only when a row arrives *past* the depth, so that read was
-//! reported `Exhausted` — the strongest completeness claim this layer has — for a
-//! text that had cut it. A depth of three over nine real rows reported
-//! `Exhausted { rows_emitted: 3 }`, and the trailer above it read `Exact`.
+//! The paragraph above is a claim about two numbers, so the question is what holds
+//! them there. A [`StratumUnit`] used to carry the whole query text — bounds included
+//! — as a writable field, and a bound in that text was a fourth input to the ending
+//! nobody compared against the other three. The natural off-by-one was enough: a
+//! caller assembling a bundle by hand writes `LIMIT <depth>`, because the depth is the
+//! number this layer reasons about everywhere, and the read then returned `depth` rows
+//! with no slot for the probe. `execute` writes `DepthReached` only when a row arrives
+//! *past* the depth, so that read was reported `Exhausted` — the strongest
+//! completeness claim this layer has — for a text that had cut it. A depth of three
+//! over nine real rows reported `Exhausted { rows_emitted: 3 }`, and the trailer above
+//! it read `Exact`.
 //!
-//! So the unit carries the query **body** ([`StratumUnit::body`]) and the bound is
-//! [`StratumUnit::sparql`]'s own arithmetic over [`StratumUnit::depth()`]. There is
-//! no longer a spelling of the bound for a caller to disagree with: the text a unit
-//! runs is the body plus `LIMIT depth + 1`, at every depth, for a hand-built unit
-//! exactly as for an emitted one. Replacing the body is still how a caller drives
-//! the executor over a query of its own — that seam is the point of the public
-//! field — and what it can no longer do is describe a read shallower than the depth
-//! the ending is judged against.
+//! Pulling the *outer* bound out of that string and rendering it did not close this.
+//! It moved the writable bound inward: the branch's own `LIMIT` was still inside the
+//! text, and so was the rendered depth argument of a self-bounding producer. Where an
+//! inner bound and an outer one disagree the **inner** one decides the read, so
+//! lowering the branch's `LIMIT` from four to three — or lowering the depth argument
+//! — produced `Exhausted { rows_emitted: 3 }` over nine rows again, with the same
+//! numbers as the original fault. A bound anywhere in caller-writable text is the
+//! same defect wherever in the text it sits.
 //!
-//! Validating the trailing `LIMIT` by inspecting the text would have been the
-//! weaker fix twice over: it re-reads a bound the layer already knows, and it can
-//! only ever refuse a caller for writing the number this layer writes itself.
+//! So no number the ending depends on is held as text at all. A compiled unit carries
+//! its query as the *parts* it was assembled from — the producer's IRI, the argument
+//! slots the request placed, the positions the candidate and block columns are read
+//! from — and [`StratumUnit::sparql`] renders the whole query, both bounds included,
+//! from [`StratumUnit::depth()`] on every read. The branch's row ceiling is
+//! [`emitted_limit`]'s and the depth argument is [`depth_argument`]'s, the same two
+//! functions that always computed them; what changed is that there is no longer a
+//! string between them and the reader.
+//!
+//! Driving the executor over a query of a caller's own is still open, through
+//! [`StratumUnit::new`], and it is a *different* kind of unit: the text is carried
+//! verbatim, this layer bounds only its outside, and what bounds the caller wrote
+//! inside it cannot be seen from here. Such a read therefore never ends
+//! `Exhausted` — the ending names the caller's text as the stopper instead
+//! ([`StreamEnding::SuppliedQueryEnded`](crate::StreamEnding)). That is not a refusal
+//! of the seam and not a weaker check: it is the same rule the rest of this
+//! vocabulary follows, which is that a completeness claim is only ever made about a
+//! read this layer bounded.
+//!
+//! Validating a trailing `LIMIT` by inspecting the text would have been the weaker fix
+//! three times over: it re-reads a bound the layer already knows, it can only ever
+//! refuse a caller for writing the number this layer writes itself, and it sees
+//! nothing at all of the bound one line further in.
 //!
 //! # The declared row bound does not cap the emitted bound, at any size
 //!
@@ -275,9 +295,12 @@
 //! conforming relation must refuse. What the layer can do honestly is report that it
 //! read to the producer's bound and no further, and it does.
 //!
-//! [`StratumUnit`] carries which of the two cases it was emitted for, so
-//! [`execute`](crate::execute) reads the ending off the unit in hand rather than
-//! re-deriving it from a registry three stages away.
+//! Which of the two cases a unit was emitted for is not recorded beside its query: it
+//! is read *off* that query, by [`read_reach`], because "the producer was handed the
+//! depth as an argument" and "the branch carries no `LIMIT` of its own" are one fact
+//! written once. What [`StratumUnit`] carries is the answer — how far its read could
+//! reach — so [`execute`](crate::execute) reads the ending off the unit in hand rather
+//! than re-deriving it from a registry three stages away.
 
 use std::collections::BTreeMap;
 
@@ -294,37 +317,164 @@ use crate::matching::{PlacementError, place, render_slots};
 use crate::plan::{Plan, ProducerBinding};
 use crate::ranked_stream::StreamContract;
 use crate::reciprocal_rank::MonotoneDepth;
-use crate::render::RenderError;
+use crate::render::{self, RenderError};
 use crate::request::ReadBound;
 
-/// Who applies a stratum's depth to the read a unit's text performs.
+/// One unit's query, and who wrote it.
 ///
-/// The two are not interchangeable, and [`StratumUnit`] records which one it was
-/// emitted for because the answer decides which endings that unit's read can
-/// report — see this module's header.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DepthApplication {
-    /// The **evaluator** applies it, as a `LIMIT` over a cursor the producer never
-    /// hears about. Such a read is always taken one row past the depth, so the
-    /// probe row can always arrive and the ending is always observable — and
-    /// "always" is the rendered bound's guarantee rather than a convention the text
-    /// is trusted to follow, because [`StratumUnit::sparql`] writes that `LIMIT`
-    /// from the depth itself.
-    Evaluator,
-    /// The **producer** applies it: it declared a
-    /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement) and was handed the
-    /// number as an argument. The argument is a request rather than a ceiling, so it
-    /// is never raised past what the producer registered — and at a depth that
-    /// already sits on that registration the read cannot reach past its own depth.
-    Producer,
+/// The distinction is not bookkeeping: it decides what the layer may claim about
+/// how that unit's read ended. A query this stage rendered carries bounds this
+/// stage computed from a proved depth, so the arrival of the probe row is an
+/// observation. A query a caller supplied is text this layer cannot see into — a
+/// `LIMIT` inside a sub-`SELECT`, a `FILTER`, a pattern that simply matches less —
+/// so how that read ended is not this layer's to certify. See this module's
+/// header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum UnitQuery {
+    /// The query [`compile`] rendered, held as the parts it was assembled from so
+    /// that every bound in it is arithmetic over the unit's own depth, performed
+    /// when the text is asked for.
+    Rendered(RenderedQuery),
+    /// A query text a caller supplied, carried verbatim and bounded by nothing this
+    /// layer wrote.
+    Supplied(String),
+}
+
+/// One stratum's rendered query, as the parts a bound is written between.
+///
+/// Every field here is depth-independent: the producer's IRI, the argument slots
+/// the request placed, the positions the candidate and block columns are read
+/// from. The two numbers that are *not* depth-independent — the branch's row
+/// ceiling and a self-bounding producer's depth argument — are deliberately absent,
+/// and [`Self::text`] renders both from the depth the unit holds. That is the whole
+/// reason this is a structure rather than a string: a string would have to spell
+/// them, and a bound spelled beside the depth is a bound that can disagree with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RenderedQuery {
+    /// The registered producer IRI the branch calls.
+    producer: String,
+    /// The subject-side argument list, in declared position order.
+    ///
+    /// The subject and object sides are held apart rather than as one list with an
+    /// arity to split it at, because the split is decided once at emission from the
+    /// descriptor's own arities; a single list would make every read of this value
+    /// re-derive a partition that cannot change.
+    subject: Vec<UnitArgument>,
+    /// The object-side argument list, in declared position order.
+    object: Vec<UnitArgument>,
+    /// The argument position the candidate column is projected from.
+    candidate: usize,
+    /// The argument position each row's block is projected from, for a producer
+    /// whose declaration names one; `None` for a producer that names no block per
+    /// row, which renders the text this compiler emitted before blocks existed.
+    block: Option<usize>,
+}
+
+/// One argument position of a rendered call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum UnitArgument {
+    /// A position rendered once, at emission: a constant
+    /// [`place`](crate::matching::place) put a request facet into, or the free
+    /// `?cN` variable of a position nothing was placed into. Neither depends on the
+    /// depth.
+    Placed(String),
+    /// The depth argument of a producer that declared a
+    /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement), held as the datatype
+    /// that producer declared for it and rendered from the unit's own depth every
+    /// time the text is asked for.
+    ///
+    /// The number is [`depth_argument`]'s, which is not [`emitted_limit`]'s — see
+    /// this module's header for why a request and a ceiling are not one number.
+    Depth {
+        /// The literal datatype IRI the producer declared for its depth argument.
+        datatype: String,
+    },
+}
+
+impl UnitArgument {
+    /// Whether this position is the depth argument.
+    const fn is_depth(&self) -> bool {
+        matches!(*self, Self::Depth { .. })
+    }
+}
+
+impl RenderedQuery {
+    /// Every argument position, subject side first, in declared position order.
+    fn arguments(&self) -> impl Iterator<Item = &UnitArgument> {
+        self.subject.iter().chain(self.object.iter())
+    }
+
+    /// Whether the producer this branch calls bounds *itself*, which is true of
+    /// exactly the producer that declared a depth placement and received the depth
+    /// as an argument.
+    ///
+    /// Read off the arguments rather than recorded beside them. "The producer takes
+    /// the depth as an argument", "the branch carries no `LIMIT` of its own" and
+    /// "the ending may be unobservable at a depth on the declaration" are three
+    /// readings of one fact, and a field for it would be a second place for that
+    /// fact to be written.
+    fn bounds_itself(&self) -> bool {
+        self.arguments().any(UnitArgument::is_depth)
+    }
+
+    /// The whole text this query runs at `depth` over a producer the registry bounds
+    /// at `declared_rows`.
+    ///
+    /// Both bounds are rendered here, from that one depth: the branch's own row
+    /// ceiling (or, for a self-bounding producer, the depth argument in its call)
+    /// and the unit's outer bound. Neither is stored, so neither can be replaced.
+    fn text(&self, depth: ProbedDepth, declared_rows: Option<u64>) -> String {
+        let render = |argument: &UnitArgument| match argument {
+            UnitArgument::Placed(text) => text.clone(),
+            UnitArgument::Depth { datatype } => {
+                render::typed_literal(&depth_argument(depth, declared_rows).to_string(), datatype)
+            }
+        };
+        let subject_text = self
+            .subject
+            .iter()
+            .map(render)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let object_text = self.object.iter().map(render).collect::<Vec<_>>().join(" ");
+        let candidate = self.candidate;
+        // One projection per position the unit reads back, in the order the executor
+        // reads them: the candidate, then the block where the producer declared one.
+        let (projected, projections) = match self.block {
+            None => (
+                format!("?{CANDIDATE_NAME}"),
+                format!("(?c{candidate} AS ?{CANDIDATE_NAME})"),
+            ),
+            Some(block) => (
+                format!("?{CANDIDATE_NAME} ?{BLOCK_NAME}"),
+                format!("(?c{candidate} AS ?{CANDIDATE_NAME}) (?c{block} AS ?{BLOCK_NAME})"),
+            ),
+        };
+        // A producer that took the depth as an argument bounds itself, with the
+        // number rendered into that argument above — which carries the probe row
+        // wherever its own declaration leaves room for it. One that did not is
+        // bounded here, by the branch's own `LIMIT`, which carries the probe row
+        // always. Per this module's header those are two different promises and are
+        // deliberately not one number.
+        let ceiling = if self.bounds_itself() {
+            String::new()
+        } else {
+            format!(" LIMIT {}", emitted_limit(depth))
+        };
+        format!(
+            "SELECT {projected} WHERE {{\n  {{ SELECT {projections} WHERE {{ ( {subject_text} ) \
+             <{}> ( {object_text} ) }}{ceiling} }}\n}}\nLIMIT {}",
+            self.producer,
+            emitted_limit(depth)
+        )
+    }
 }
 
 /// How far a unit's read can reach, relative to the depth the unit records.
 ///
-/// Derived once, from the depth, the registry's declared row bound and the
-/// [`DepthApplication`], and never supplied: two spellings of "could the probe row
-/// have arrived" are two chances to disagree about the one question the ending
-/// hangs on.
+/// Derived once, from the depth, the registry's declared row bound and the query
+/// itself, and never supplied: two spellings of "could the probe row have arrived"
+/// are two chances to disagree about the one question the ending hangs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadReach {
     /// One row past the depth. The probe slot exists, so a read the depth cut is
@@ -334,33 +484,42 @@ pub(crate) enum ReadReach {
     /// depth argument and cannot be asked for a row past it, so a read that fills
     /// the depth has an ending nobody can observe.
     AtDepth,
+    /// Not known. The query text is a caller's, so what bound the read was taken
+    /// under is not a fact this layer holds: the probe row may have been cut by
+    /// something inside that text, and its absence is therefore no evidence at all.
+    Unknown,
 }
 
-/// Whether a unit emitted for these three facts can reach one row past its depth.
+/// Whether a unit built from these three facts can reach one row past its depth.
 ///
-/// The `LIMIT` on the unit is `depth + 1` unconditionally — not by convention but
-/// because [`StratumUnit::sparql`] renders it from the depth, so no text a caller
-/// supplies can carry a shallower one — so a read the evaluator
-/// bounds always reaches past the depth. A read the *producer* bounds reaches as far
-/// as [`depth_argument`] asks for, which is `max(1, min(depth + 1, declared))`: past
-/// the depth wherever the declaration leaves room, and exactly the depth where it
-/// does not. This is that comparison, spelled once, and it is the same arithmetic
-/// [`depth_argument`] performs rather than a second opinion about it.
-fn read_reach(depth: u32, declared_rows: Option<u64>, application: DepthApplication) -> ReadReach {
-    match (application, declared_rows) {
-        (DepthApplication::Evaluator, _) | (DepthApplication::Producer, None) => {
-            ReadReach::PastDepth
-        }
+/// A caller's text answers nothing, so it reaches [`ReadReach::Unknown`] — and that
+/// arm comes first because it is about the text rather than about the numbers beside
+/// it.
+///
+/// For a rendered query the answer is arithmetic. The bound on a branch the
+/// *evaluator* bounds is `depth + 1`, rendered from the depth by
+/// [`RenderedQuery::text`], so such a read always reaches past the depth. A read the
+/// *producer* bounds reaches as far as [`depth_argument`] asks for, which is
+/// `max(1, min(depth + 1, declared))`: past the depth wherever the declaration
+/// leaves room, and exactly the depth where it does not. This is that comparison,
+/// spelled once, and it is the same arithmetic [`depth_argument`] performs rather
+/// than a second opinion about it.
+fn read_reach(depth: u32, declared_rows: Option<u64>, query: &UnitQuery) -> ReadReach {
+    let rendered = match query {
+        UnitQuery::Supplied(_) => return ReadReach::Unknown,
+        UnitQuery::Rendered(rendered) => rendered,
+    };
+    match declared_rows {
+        // Either the evaluator applies the bound — always one row past the depth —
+        // or nothing was declared for the producer's own request to be capped by, so
+        // it asked for the probe outright.
+        _ if !rendered.bounds_itself() => ReadReach::PastDepth,
+        None => ReadReach::PastDepth,
         // `max(1)` is the floor `depth_argument` applies: a declared zero is read
         // rather than obeyed, and the one row it is read for is the floored depth
         // itself, so the argument lands *on* the depth there too.
-        (DepthApplication::Producer, Some(declared)) => {
-            if declared.max(1) <= u64::from(depth) {
-                ReadReach::AtDepth
-            } else {
-                ReadReach::PastDepth
-            }
-        }
+        Some(declared) if declared.max(1) <= u64::from(depth) => ReadReach::AtDepth,
+        Some(_) => ReadReach::PastDepth,
     }
 }
 
@@ -420,46 +579,50 @@ pub enum UnitError {
 /// One stratum's independently executable query, and the contract the rows it
 /// returns will arrive under.
 ///
-/// The query is held as a body and read back as text through [`Self::sparql`], which
-/// bounds it at the depth this unit records.
+/// The query is read back as text through [`Self::sparql`], which renders every
+/// bound in it from the depth this unit records.
 ///
 /// # Nothing writable decides how a read ended
 ///
 /// [`Self::depth()`], [`Self::declared_rows()`], the reach derived from them and the
-/// bound the text is run under are the whole of what [`execute`](crate::execute)
+/// bounds the text is run under are the whole of what [`execute`](crate::execute)
 /// uses to say how a read ended. The first two are reachable only through
 /// [`Self::new`], which refuses the combinations that have no honest ending; the
-/// third is derived from them and never supplied; and the fourth is not a field at
-/// all — [`Self::sparql`] renders it from the depth.
+/// third is derived from them and never supplied; and the bounds are not fields at
+/// all — [`Self::sparql`] renders them from the depth, into a query held as the parts
+/// it was assembled from.
 ///
 /// Each of those was a hole, and they were the same hole. A plain public `u32`
 /// re-opened what the admission waist closes: a depth raised past the range the
 /// emitted bound can probe made `Exhausted` reportable for a read the `LIMIT` cut,
 /// and a declared bound lowered below the depth bypassed the waist's own
 /// [`AdmissionError::DepthBoundViolation`] dimension. A writable *text* was the
-/// fourth: a caller writing the natural `LIMIT <depth>` got `Exhausted` over a
-/// stratum with rows to spare, with `rows_emitted` equal to the rows pulled, so
-/// nothing downstream could catch it. Admission refuses a hand-edited *plan* on the
-/// first two; trusting a hand-edited *bundle* on any of them was the same fault with
-/// one stage skipped.
+/// fourth, and it was the one that took three attempts to close: a caller writing the
+/// natural `LIMIT <depth>` got `Exhausted` over a stratum with rows to spare, with
+/// `rows_emitted` equal to the rows pulled, so nothing downstream could catch it.
+/// Pulling the *outer* bound out of that text and rendering it left the branch's own
+/// bound behind, inside the same writable string — and the inner copy is the one that
+/// wins, so the identical false `Exhausted` was still reachable by lowering it. So no
+/// bound is text a caller can reach: what the unit holds is the parts, and both
+/// numbers are arithmetic over the proved depth.
 ///
-/// [`Self::body`] stays public and stays writable, because replacing the query is
-/// how a caller drives the executor over a text of its own. What it replaces is the
-/// body alone: the bound is this layer's own instrument for observing an ending, and
-/// it is rendered rather than read back — see this module's header.
+/// # A caller's own query is still runnable, and is never certified
+///
+/// Driving [`execute`](crate::execute) over a text of a caller's own is the point of
+/// [`Self::new`], and it stays open. What such a unit cannot do is yield
+/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — this layer's strongest
+/// completeness claim — because the claim rests on a read this layer bounded one row
+/// past the depth, and it cannot see what bound a caller's text carries. Its ending
+/// names that text as the stopper instead
+/// ([`StreamEnding::SuppliedQueryEnded`](crate::StreamEnding)), which is the same
+/// doctrine the rest of this vocabulary follows: name the stopper, never certify what
+/// was not observed. A row arriving *past* the depth is still an observation, so such
+/// a read still ends `DepthReached`, and a producer that beats its own declaration is
+/// still refused by name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StratumUnit {
     /// The caller-supplied stratum the unit ranks within.
     pub stratum: Iri,
-    /// A self-contained SPARQL `SELECT` over the stratum's registered relations,
-    /// **without** the bound the read is taken under.
-    ///
-    /// [`Self::sparql`] is this text plus `LIMIT depth + 1`, and that is the only
-    /// text anything runs. The bound is absent here rather than present and checked
-    /// because a bound present in two places is a bound that can disagree with
-    /// itself, and the reading that loses is the one every completeness claim rests
-    /// on.
-    pub body: String,
     /// The duplicate handling and the candidate domains the stratum's producer
     /// declared — read off the registry here, at the one stage that is already
     /// holding the declaration, and carried forward rather than re-fetched.
@@ -472,10 +635,20 @@ pub struct StratumUnit {
     /// was *compiled against* stated — an identity `execute` re-checks before it
     /// runs anything.
     pub contract: StreamContract,
+    /// The query this unit runs, and who wrote it.
+    ///
+    /// Private, and private for the reason the depth is: it is not one opaque string
+    /// but a value whose variants say different things about what the run may claim.
+    /// A rendered query is the parts a bound is written between, so both bounds come
+    /// out of [`Self::depth`] every time [`Self::sparql`] is called; a supplied query
+    /// is a caller's text, read back through [`Self::supplied_query`] and never
+    /// certified. A writable field here could be neither, because it could be
+    /// replaced with a text carrying a bound of its own and nothing would know.
+    query: UnitQuery,
     /// The stratum's planned depth: the most rows this unit may contribute to
     /// the answer, exactly as [`Plan::stratum_depths`] records it.
     ///
-    /// This is **not** the `LIMIT` [`Self::sparql`] renders. That bound is one
+    /// This is **not** the `LIMIT` [`Self::sparql`] renders. Those bounds are one
     /// row deeper, at every depth a unit can be compiled for — a depth whose extra
     /// row is not expressible is refused before this stage rather than emitted
     /// without one, which is what the already-probed depth held here is — so that the
@@ -524,16 +697,15 @@ pub struct StratumUnit {
     declared_rows: Option<u64>,
     /// Whether this unit's read reaches one row past its own depth.
     ///
-    /// Derived from the three facts above by [`read_reach`], never supplied, and
-    /// read by [`execute`](crate::execute) to tell an ending it can observe from one
-    /// it cannot.
+    /// Derived from the depth, the declaration and the query by [`read_reach`], never
+    /// supplied, and read by [`execute`](crate::execute) to tell an ending it can
+    /// observe from one it cannot.
     reach: ReadReach,
 }
 
 impl StratumUnit {
-    /// A unit whose `body` is read to `depth` rows over a producer the registry
-    /// bounds at `declared_rows`, whose depth reaches the read the way `application`
-    /// says.
+    /// A unit that runs the caller's own `query`, read to `depth` rows over a producer
+    /// the registry bounds at `declared_rows`.
     ///
     /// This is the seam a caller starts at to drive [`execute`](crate::execute) over
     /// a bundle it assembled itself, and it is checked because these numbers
@@ -542,11 +714,14 @@ impl StratumUnit {
     /// row count; "declared nothing" and "declared zero" are different facts here
     /// for the reason they are different facts at the waist.
     ///
-    /// `body` carries no bound and is not asked for one: the text this unit runs is
-    /// [`Self::sparql`], which is `body` plus the bound `depth` licenses. A caller
-    /// that writes its own `LIMIT` into the body is bounding a sub-`SELECT` of its
-    /// own, exactly as an emitted branch does, and the read the ending is judged
-    /// against is still the depth's.
+    /// `query` is carried verbatim and is bounded by this layer only on the outside:
+    /// [`Self::sparql`] is that text plus `LIMIT depth + 1`. Whatever else the text
+    /// bounds — a sub-`SELECT` of its own, a pattern that matches less — is the
+    /// caller's and is not visible from here, so the read it describes is **never**
+    /// certified [`Exhausted`](crate::ProducerStatus::Exhausted); see this type's
+    /// header for what its ending is instead. There is no way to hand this
+    /// constructor a query that *is* certified, deliberately: that text is
+    /// [`compile`]'s to render, from parts no caller supplies.
     ///
     /// # Errors
     ///
@@ -558,11 +733,10 @@ impl StratumUnit {
     ///   the one probing row.
     pub fn new(
         stratum: Iri,
-        body: String,
+        query: String,
         contract: StreamContract,
         depth: u32,
         declared_rows: Option<u64>,
-        application: DepthApplication,
     ) -> Result<Self, UnitError> {
         // Decided by the waist's own predicate rather than by a second copy of it,
         // and named here in this stage's vocabulary: "can this depth carry its probe
@@ -582,11 +756,10 @@ impl StratumUnit {
         }
         Ok(Self::assembled(
             stratum,
-            body,
+            UnitQuery::Supplied(query),
             contract,
             probed,
             declared_rows,
-            application,
         ))
     }
 
@@ -599,47 +772,79 @@ impl StratumUnit {
     /// there is nothing left here for a check to decide, and a `Result` no caller
     /// could act on would be a second, weaker statement of the invariant the waist
     /// already holds.
+    ///
+    /// It is also the only constructor of a [`UnitQuery::Rendered`], which is what
+    /// makes "the layer wrote this text" a fact about the type rather than a claim
+    /// about a string.
     fn emitted(
         stratum: Iri,
-        body: String,
+        query: RenderedQuery,
         contract: StreamContract,
         depth: ProbedDepth,
         bound: RowBound,
-        application: DepthApplication,
     ) -> Self {
-        Self::assembled(stratum, body, contract, depth, bound.rows(), application)
+        Self::assembled(
+            stratum,
+            UnitQuery::Rendered(query),
+            contract,
+            depth,
+            bound.rows(),
+        )
     }
 
     /// The one place the fields are written, so the reach is derived exactly once.
     fn assembled(
         stratum: Iri,
-        body: String,
+        query: UnitQuery,
         contract: StreamContract,
         depth: ProbedDepth,
         declared_rows: Option<u64>,
-        application: DepthApplication,
     ) -> Self {
         Self {
             stratum,
-            body,
+            reach: read_reach(depth.get(), declared_rows, &query),
+            query,
             contract,
             depth,
             declared_rows,
-            reach: read_reach(depth.get(), declared_rows, application),
         }
     }
 
-    /// The whole text this unit runs: [`Self::body`] bounded at one row past
-    /// [`Self::depth()`].
+    /// The whole text this unit runs.
     ///
-    /// Derived rather than stored, so the bound the read is taken under and the depth
-    /// the ending is judged against cannot be two different numbers. The probe row is
+    /// For a query this layer rendered, that is the whole query assembled from its
+    /// parts with both bounds — the branch's row ceiling and the unit's own — computed
+    /// from [`Self::depth()`]. For a query a caller supplied, it is that text plus the
+    /// unit's own bound, which is the only bound this layer can write onto a text it
+    /// did not assemble.
+    ///
+    /// Derived rather than stored, so the bounds the read is taken under and the depth
+    /// the ending is judged against cannot be different numbers. The probe row is
     /// added with exact rather than saturating arithmetic, because the depth this unit
     /// holds is one the waist already proved the row past it fits — see this module's
     /// header for what a saturated or caller-written bound cost.
     #[must_use]
     pub fn sparql(&self) -> String {
-        format!("{}\nLIMIT {}", self.body, emitted_limit(self.depth))
+        match &self.query {
+            UnitQuery::Rendered(rendered) => rendered.text(self.depth, self.declared_rows),
+            UnitQuery::Supplied(text) => {
+                format!("{text}\nLIMIT {}", emitted_limit(self.depth))
+            }
+        }
+    }
+
+    /// The query text a caller supplied, or `None` for a query this layer rendered.
+    ///
+    /// Read-only, and the read is not the hazard: a caller may look at, log or re-run
+    /// the text it handed over. What it cannot do is replace the text a *rendered*
+    /// unit runs, because there is no text there to replace — only the parts, and two
+    /// numbers this layer computes between them.
+    #[must_use]
+    pub fn supplied_query(&self) -> Option<&str> {
+        match &self.query {
+            UnitQuery::Rendered(_) => None,
+            UnitQuery::Supplied(text) => Some(text),
+        }
     }
 
     /// The stratum's planned depth: the most rows this unit may contribute.
@@ -808,32 +1013,20 @@ pub fn compile(
             .get(stratum)
             .copied()
             .unwrap_or(RowBound::Undeclared);
-        let body = emit_body(
+        let query = emit_query(
             plan,
             binding,
             declaration,
             &admitted.descriptors,
-            EmittedBounds {
-                limit: emitted_limit(*depth),
-                depth_argument: depth_argument(*depth, bound),
-            },
+            *depth,
+            bound,
         )?;
-        // Which of the two bounds the producer will actually feel, read off the one
-        // declaration this unit was compiled against: a producer that declared a
-        // depth placement received the number and bounds itself by it, and every
-        // other producer is bounded by the `LIMIT` above.
-        let application = if declaration.depth_placement.is_some() {
-            DepthApplication::Producer
-        } else {
-            DepthApplication::Evaluator
-        };
         units.push(StratumUnit::emitted(
             stratum.clone(),
-            body,
+            query,
             StreamContract::declared(declaration),
             *depth,
             bound,
-            application,
         ));
     }
     units.sort_by(|left, right| left.stratum.cmp(&right.stratum));
@@ -914,11 +1107,14 @@ fn ranked_declaration<'a>(
 /// The row bound the emitted text actually carries for a stratum planned at
 /// `depth`.
 ///
-/// One function, read by both places a bound is written: the branch's own `LIMIT`
-/// here at emission, and the unit's, rendered from the depth by
-/// [`StratumUnit::sparql`] whenever the text is asked for. Two spellings of the
-/// probe row would be two chances to disagree about the one comparison every ending
-/// rests on.
+/// One function, and the only source of a bound anywhere in this layer.
+/// [`RenderedQuery::text`] calls it for the branch's own `LIMIT` and again for the
+/// unit's outer bound; [`StratumUnit::sparql`] calls it for the outer bound it writes
+/// onto a caller's own text, which is the only bound it can write there. Every one of
+/// those is this arithmetic over the depth in hand — no spelling of the probe row is
+/// stored anywhere for a second reading to disagree with, and the two readings that
+/// used to exist did disagree, because one of them sat inside a string a caller could
+/// replace.
 ///
 /// `depth + 1`, at every depth and against every declaration, and this module's
 /// header has the argument for why the registry's declared row bound does not
@@ -944,7 +1140,7 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
 
 /// The number handed to a producer that declares a
 /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement), for a stratum planned
-/// at `depth` over a producer whose registry declared `bound`.
+/// at `depth` over a producer the registry bounds at `declared_rows`.
 ///
 /// `max(1, min(depth + 1, declared))`, which differs from [`emitted_limit`] at
 /// exactly one depth — a depth already at the declaration — and differs there
@@ -964,74 +1160,42 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
 /// Where this number lands *on* the depth the read cannot reach past it, and
 /// [`read_reach`] is where that is turned into the ending
 /// [`execute`](crate::execute) is allowed to report.
-fn depth_argument(depth: ProbedDepth, bound: RowBound) -> u32 {
+///
+/// It is called twice over one unit and must agree with itself both times: once at
+/// emission, where [`place`] needs the value to occupy the argument slot and derive
+/// the access mode it satisfies, and once per read of the unit's text, where
+/// [`RenderedQuery::text`] renders it into that slot. Same function, same two
+/// arguments, both of them facts the unit holds.
+fn depth_argument(depth: ProbedDepth, declared_rows: Option<u64>) -> u32 {
     let probe = depth.probe();
-    match bound {
-        RowBound::Declared(declared) => u32::try_from(declared)
+    match declared_rows {
+        Some(declared) => u32::try_from(declared)
             .unwrap_or(u32::MAX)
             .min(probe)
             .max(1),
         // Nothing was declared, so there is no registration for the request to
         // exceed and the probe is asked for outright.
-        RowBound::Undeclared => probe,
+        None => probe,
     }
 }
 
-/// The two numbers one unit is emitted with: the ceiling the evaluator applies,
-/// and the request a self-bounding producer receives.
+/// Assemble one stratum's query over its one `binding`, as the parts a bound is
+/// rendered between.
 ///
-/// They travel together because they are derived together and read one line
-/// apart, and they are distinct because they are not the same kind of promise —
-/// see this module's header. A single number would have to be one or the other,
-/// and whichever it was would be wrong at a depth that sits on the declaration.
-#[derive(Clone, Copy, Debug)]
-struct EmittedBounds {
-    /// The `LIMIT` written on the branch, from [`emitted_limit`] — the same
-    /// function [`StratumUnit::sparql`] renders the unit's own bound with.
-    limit: u32,
-    /// The value rendered into a declared depth placement, from
-    /// [`depth_argument`].
-    depth_argument: u32,
-}
-
-/// Render one stratum's `SELECT` over its one `binding`, as the unit's
-/// [`StratumUnit::body`] — that is, without the bound the read is taken under.
-///
-/// The unit's own bound is [`StratumUnit::sparql`]'s, rendered from the depth so
-/// that nothing can carry a second spelling of it. What `bounds` still supplies is
-/// the *branch*: the row ceiling the evaluator offers the relation, and the depth
-/// argument a self-bounding producer receives. Both are one row deeper than the
-/// plan reads, so the executor can tell a cut read from an exhausted one.
-fn emit_body(
+/// Neither bound is written here, and that is the whole point of the return type:
+/// [`RenderedQuery::text`] renders the branch's row ceiling and the unit's own bound
+/// from the depth, every time the text is asked for, so there is no string in between
+/// for either number to be edited in. What `depth` and `bound` are needed for at this
+/// stage is [`place`]: the depth argument occupies an argument slot, and which slots
+/// are occupied decides the access mode the invocation must satisfy.
+fn emit_query(
     plan: &Plan,
     binding: &ProducerBinding,
     declaration: &RankedDeclaration,
     descriptors: &BTreeMap<String, PfDescriptor>,
-    bounds: EmittedBounds,
-) -> Result<String, AdmissionError> {
-    let branch = emit_branch(plan, binding, declaration, descriptors, bounds)?;
-    // The block column rides beside the candidate only where the producer
-    // declared a position to read it from. A producer that names no block per row
-    // yields the identical text this function has always emitted, so nothing
-    // about an existing unit, its identity or its cost moves.
-    let projected = if declaration.block_position.is_some() {
-        format!("?{CANDIDATE_NAME} ?{BLOCK_NAME}")
-    } else {
-        format!("?{CANDIDATE_NAME}")
-    };
-    Ok(format!("SELECT {projected} WHERE {{\n  {branch}\n}}"))
-}
-
-/// Render the stratum's producer as the unit's one branch, bounded at
-/// `bounds.limit` — or, where the producer takes the depth as an argument, by
-/// `bounds.depth_argument` rendered into that argument.
-fn emit_branch(
-    plan: &Plan,
-    binding: &ProducerBinding,
-    declaration: &RankedDeclaration,
-    descriptors: &BTreeMap<String, PfDescriptor>,
-    bounds: EmittedBounds,
-) -> Result<String, AdmissionError> {
+    depth: ProbedDepth,
+    bound: RowBound,
+) -> Result<RenderedQuery, AdmissionError> {
     let descriptor = descriptors
         .get(&binding.producer)
         .ok_or_else(|| malformed(binding, "has no registry declaration to compile against"))?;
@@ -1064,7 +1228,7 @@ fn emit_branch(
         declaration,
         &plan.request_terms,
         &binding.request_terms,
-        bounds.depth_argument,
+        depth_argument(depth, bound.rows()),
     )
     .map_err(|error| unsatisfiable(binding, &error))?;
     let candidate = declaration.candidate_position;
@@ -1093,32 +1257,32 @@ fn emit_branch(
         }
     };
 
+    // Every slot is rendered here except the depth argument's, which is held as the
+    // datatype its producer declared and rendered from the unit's own depth instead.
+    // `place` filled that slot too — it had to, to derive the access mode — and the
+    // text it produced is discarded rather than carried, so the number in the emitted
+    // call is the one `RenderedQuery::text` computes and never a copy of it.
     let args = render_slots(&invocation).map_err(|error| unrenderable(binding, &error))?;
-    let subject_text = args[..subject].join(" ");
-    let object_text = args[subject..].join(" ");
-    // A producer that took the depth as an argument bounds itself — with the
-    // number `place` just rendered into that argument, which carries the probe
-    // row wherever its own declaration leaves room for it; one that did not is
-    // bounded here, by the emitted `LIMIT`, which carries the probe row always.
-    // Per this module's header, those are two different promises and are
-    // deliberately not one number.
-    let limit = if declaration.depth_placement.is_none() {
-        format!(" LIMIT {}", bounds.limit)
-    } else {
-        String::new()
-    };
-    // One projection per position the unit reads back, in the order the executor
-    // reads them: the candidate, then the block where the producer declared one.
-    let projections = match block {
-        None => format!("(?c{candidate} AS ?{CANDIDATE_NAME})"),
-        Some(block) => {
-            format!("(?c{candidate} AS ?{CANDIDATE_NAME}) (?c{block} AS ?{BLOCK_NAME})")
-        }
-    };
-    Ok(format!(
-        "{{ SELECT {projections} WHERE {{ ( {subject_text} ) <{}> ( {object_text} ) }}{limit} }}",
-        binding.producer
-    ))
+    let arguments: Vec<UnitArgument> = args
+        .into_iter()
+        .enumerate()
+        .map(
+            |(position, text)| match declaration.depth_placement.as_ref() {
+                Some(placement) if placement.position == position => UnitArgument::Depth {
+                    datatype: placement.datatype.clone(),
+                },
+                Some(_) | None => UnitArgument::Placed(text),
+            },
+        )
+        .collect();
+    let (subject_arguments, object_arguments) = arguments.split_at(subject);
+    Ok(RenderedQuery {
+        producer: binding.producer.clone(),
+        subject: subject_arguments.to_vec(),
+        object: object_arguments.to_vec(),
+        candidate,
+        block,
+    })
 }
 
 /// A structural defect in the plan-plus-registry pair, named by producer.

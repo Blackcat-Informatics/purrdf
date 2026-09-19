@@ -19,8 +19,8 @@ use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionError,
     FusionProfile, Iri, Metric, MonotoneDepth, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
-    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
-    UnservedReason, UnservedTerm, compile, contribution, execute,
+    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, StratumUnit,
+    Term, UnservedReason, UnservedTerm, compile, contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -2067,7 +2067,20 @@ fn one_stratum_failure_others_continue() {
     };
     let mut compiled = compile(&plan, &env).expect("the plan admits");
     let failing = compiled.units[1].stratum.clone();
-    compiled.units[1].body = "THIS IS NOT SPARQL".to_owned();
+    // A unit running a text nobody compiled, which is the only way to reach the
+    // evaluator's parse failure from here. Everything else about the unit is the
+    // compiler's own, so the surviving strata below are unaffected — including their
+    // `Exhausted`, which they still earn because their own text is still rendered.
+    let broken = &compiled.units[1];
+    let broken = StratumUnit::new(
+        broken.stratum.clone(),
+        "THIS IS NOT SPARQL".to_owned(),
+        broken.contract.clone(),
+        broken.depth(),
+        broken.declared_rows(),
+    )
+    .expect("the compiler's own depth and declaration are admitted");
+    compiled.units[1] = broken;
 
     let result = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
         .expect("execution starts");

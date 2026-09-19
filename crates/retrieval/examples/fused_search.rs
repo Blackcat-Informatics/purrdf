@@ -478,6 +478,12 @@ fn report(result: &SearchResult) {
                      not observable"
                 )
             }
+            ProducerStatus::SuppliedQueryEnded { rank } => {
+                format!(
+                    "ran a query text of the caller's own and emitted {rank} row(s); what that \
+                     text left unread was not observable"
+                )
+            }
             ProducerStatus::CeilingReached { bound } => {
                 format!(
                     "still held rows; read down to {} and stopped",

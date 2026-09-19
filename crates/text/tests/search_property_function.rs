@@ -1094,11 +1094,43 @@ fn an_empty_index_answers_with_no_rows_and_attests_its_own_generation() {
         "the producer was invoked and answered with no rows; nothing was invented and \
          nothing was refused"
     );
+    // And it attested the generation of the corpus it read. The claim is that an
+    // empty index has an IDENTITY, which is not the same as having a value: a
+    // placeholder digest nobody computed, or one constant shared by every empty
+    // index, is a value and tells a host nothing. Both halves are asserted — the
+    // all-zeros placeholder first, then distinguishability against a SECOND
+    // empty index under a DIFFERENT configuration (same empty corpus, same zero
+    // documents, different set of indexed predicates), which is the pair of
+    // index states emptiness leaves indistinguishable to a digest that covers
+    // content alone.
+    assert_ne!(
+        generation,
+        "0".repeat(generation.len()),
+        "the attestation is a digest that was computed, not the all-zeros placeholder \
+         an unreached computation leaves behind"
+    );
+    let other_config = config_over(&[NOTE, "http://example.org/title"]);
+    let other_empty = Arc::new(
+        TextIndex::from_dataset(&*empty, &other_config)
+            .expect("an index over an empty dataset is an ordinary operating state"),
+    );
     assert_eq!(
-        generation.len(),
-        64,
-        "and it attested the generation of the corpus it read — an empty index has an \
-         identity, so a host can tell this answer from one over the same index later"
+        other_empty.document_count(),
+        0,
+        "this neighbour is empty too"
+    );
+    let (other_generation, other_rows) = generation_and_rows(&empty, other_empty);
+    assert_eq!(
+        other_rows,
+        Vec::<Vec<String>>::new(),
+        "and it answers with nothing, so the two generations below are the identities \
+         of two states that produced identical answers"
+    );
+    assert_ne!(
+        generation, other_generation,
+        "and two empty indexes under two configurations are two index states the \
+         attestation tells apart — so a host can tell this answer from one over another \
+         index, which is the whole use of the value"
     );
 
     // The neighbouring valid case: the same configuration over the golden
