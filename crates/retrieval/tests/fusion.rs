@@ -15,12 +15,17 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag, DuplicatePolicy, EvidenceId,
-    Fixed, FusedRow, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream,
-    IndexGeneration, Iri, MonotoneDepth, OrderFidelity, PfAttestation, PlanId, ProducerReceipt,
-    ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream,
-    RankedStreamImpl, RowBlock, ScoreExactness, ScoreInterval, ServiceLevel, StreamContract,
-    StreamEnding, Term, ToleratedDepth, TopK, contribution, contribution_under,
+    AdmissionEnvironment, CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag,
+    DuplicatePolicy, EvidenceId, Fixed, FusedRow, FusionError, FusionProfile, FusionProfileId,
+    FusionResult, FusionStream, IndexGeneration, Iri, MonotoneDepth, OrderFidelity, PfAttestation,
+    PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow,
+    RankedStream, RankedStreamImpl, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness,
+    ScoreInterval, ServiceLevel, Statistics, StreamContract, StreamEnding, Term, ToleratedDepth,
+    TopK, contribution, contribution_under,
+};
+use purrdf_sparql_eval::{
+    AcceptedTerm, MemoryRelation, PropertyFunctionRegistry, RankedDeclaration, TermKind,
+    TermPattern,
 };
 
 const K: u32 = 60;
@@ -8040,5 +8045,510 @@ fn the_backward_pass_agrees_with_the_quadratic_definition() {
         "the cases must cover all three outcomes, or agreement proves only \
          that both functions return the same constant: {saw_empty} empty, \
          {saw_partial} partial, {saw_whole} whole"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T10. What `Exact` claims, what a refusal does instead of reporting a zero,
+//      and where the emitted order and the plan identity are read from.
+//
+//      Each of the four below pins a law that an otherwise-green rewrite can
+//      break silently, because breaking it produces a *plausible* answer: a
+//      stricter exactness verdict, a zero bound where the arithmetic gave out,
+//      an order that is consistently wrong, and an identity that stops moving
+//      when a declaration does.
+// ---------------------------------------------------------------------------
+
+// T10.1. THE LAW: `Exact` says *no stratum declared itself degraded*, and it
+// says nothing wider. A stratum the caller's depth STOPPED is not a stratum
+// that failed to name a row it could see -- it stated, in its own status, the
+// rank it read to and stopped. Reading any shortfall as degradation is the
+// tempting-but-wrong generalisation, and it would make `Exact` unreachable for
+// every bounded read: the verdict would become a paraphrase of "nothing was
+// bounded", and a consumer could no longer tell a depth it chose from an
+// approximation it did not.
+//
+// It can regress from either side. A rewrite that folds `DepthReached` into the
+// `deficit` set turns every depth-bounded read into an estimate; one that
+// derives exactness from the statuses rather than from the declarations does
+// the same by a different route. This is the case that goes red for both.
+#[test]
+fn a_depth_bounded_exact_stratum_is_still_exact() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::DepthReached { rank: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+        ],
+        &profile,
+    ));
+
+    // The precondition: the stratum really did stop at a depth, so this is not
+    // an exhaustive fusion wearing a bounded label.
+    assert_eq!(
+        fused.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::DepthReached { rank: 2 }),
+        "the fixture must actually reach the depth-bounded ending"
+    );
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Exact,
+        "a stratum that was STOPPED has not declared itself degraded: what it \
+         left unread is already stated in its own status, in the rank space the \
+         producer was handed, and repeating it as an unnamed score error would \
+         charge the answer twice for one fact"
+    );
+    // And the disclosure channel is not merely empty -- it is present and says
+    // the strongest thing it can, which is what a consumer reads.
+    assert_eq!(
+        fused.trailer.fidelities[&stratum("text")],
+        RankFidelity::EXACT
+    );
+}
+
+// T10.2. The same law from its farthest edge: a producer that could not run at
+// all is still `Exact`. It emitted nothing, so it withheld nothing it had; what
+// it did not do is recorded, by name and with its own words, in
+// `ProducerStatus::ExecutionFailed`. Calling the answer an *estimate* here would
+// claim a score error nobody can bound and would hide a hard failure behind a
+// soft word -- the fused rows are exactly the sum of what the strata that ran
+// contributed, and that is the narrow true claim.
+#[test]
+fn a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact() {
+    const REASON: &str = "index unavailable: the segment generation was reaped mid-read";
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    Vec::new(),
+                    ProducerReceipt::ExecutionFailed {
+                        reason: REASON.to_owned(),
+                    },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    assert_eq!(
+        fused.trailer.statuses.get(&stratum("vector")),
+        Some(&ProducerStatus::ExecutionFailed {
+            reason: REASON.to_owned(),
+        }),
+        "the failure is reported where a failure belongs, verbatim"
+    );
+    assert_eq!(
+        fused.trailer.exactness,
+        ScoreExactness::Exact,
+        "a stratum that never ran declared no loss: the rows are the exact sum \
+         of the contributions that arrived, and the one that did not arrive is \
+         named in the status rather than smeared into an unbounded estimate"
+    );
+    // The neighbour that must still move it, so this is not the verdict being
+    // stuck at `Exact`: the same fusion with the same failure and one declared
+    // loss is an estimate.
+    let estimated = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
+                    .declaring(lossy_contract()),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    Vec::new(),
+                    ProducerReceipt::ExecutionFailed {
+                        reason: REASON.to_owned(),
+                    },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+    assert!(
+        matches!(
+            estimated.trailer.exactness,
+            ScoreExactness::Estimated { .. }
+        ),
+        "a declared loss still moves the verdict; only the failure does not"
+    );
+}
+
+// T10.3. THE HARD-FAILS PROPERTY, executed. `score_interval` documents that a
+// refusal is propagated and NEVER rendered as a zero bound -- reporting
+// `Fixed::ZERO` where the arithmetic gave out would say "nothing was withheld"
+// at exactly the moment nothing is known, which is a bound on the read silently
+// becoming a value. Nothing executed it, so a rewrite that answered
+// `.unwrap_or(Fixed::ZERO)` on either summand would have passed every test in
+// this file while publishing a certain-looking answer built on an overflow.
+//
+// # The shape, and why it is the one available
+//
+// The deficit charges every degraded stratum that could still have named the
+// row its RANK-ONE contribution, because a row it never found could have been
+// due at any rank. Three such charges at a weight whose own ceiling is the whole
+// fixed-point range leave that range on the third addition.
+//
+// A repeated stratum is what makes three charges reachable: `fuse` refuses one
+// before a row is read, so this drives `FusionStream` directly, exactly as
+// `checked_addition_overflow_is_refused` above does. It has to. `contribution_under`
+// at rank one cannot itself refuse under any profile `FusionProfile::with_decay`
+// admits -- the reciprocal at rank one is at most one half, so a rank-one
+// contribution is at most its own weight, and the derived ceiling
+// (`max_weight x stratum count`) already had to fit. The refusal is therefore in
+// the SUM, which is the summand `score_interval` guards, and it is reached by
+// charging one stratum's weight more than once.
+//
+// The degraded streams are EMPTY on purpose. A degraded stream holding a head
+// would have its contribution counted by `compute_threshold` first, and the
+// refusal under test would be pre-empted by a different one, several frames
+// earlier, in a function this test is not about.
+#[test]
+fn an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero() {
+    let huge = Fixed::from_raw(i128::MAX);
+    let whole_range = profile(&[("only", huge)], 1);
+    let only = stratum("only");
+    let mut streams = vec![(
+        only.clone(),
+        MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
+    )];
+    for _ in 0..3 {
+        streams.push((
+            only.clone(),
+            MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
+        ));
+    }
+    let mut fusion = FusionStream::new(streams, whole_range);
+
+    let refused = block_on(fusion.next());
+    assert!(
+        matches!(refused, Err(FusionError::Overflow)),
+        "the interval's arithmetic left the fixed-point range, so there is no \
+         bound to report and the refusal is the answer; got {refused:?}"
+    );
+
+    // The neighbouring case that must still SUCCEED, and must succeed with a
+    // real number. Over-refusal is the mirror of the fault above: a rewrite that
+    // refused every multiply-charged deficit would pass the assertion above and
+    // be wrong about every fusion that fits.
+    let large = Fixed::from_raw(i128::MAX / 8);
+    let narrow = profile(&[("only", large)], 1);
+    let mut streams = vec![(
+        only.clone(),
+        MockStream::new(vec![row(1, large, 1, "a")], exhausted(1)),
+    )];
+    for _ in 0..3 {
+        streams.push((
+            only.clone(),
+            MockStream::new(Vec::new(), exhausted(0)).declaring(lossy_contract()),
+        ));
+    }
+    let mut fusion = FusionStream::new(streams, narrow);
+    let emitted = block_on(fusion.next())
+        .expect("three rank-one charges at an eighth of the range still sum")
+        .expect("the fusion certifies its one candidate");
+    let rank_one = contribution_under(DecayRule::ReciprocalRank { k: 1 }, large, 1)
+        .expect("the fixture rank-one contribution fits");
+    let (deficit, _) = bounds(&emitted);
+    assert_eq!(
+        deficit,
+        rank_one
+            .checked_add(rank_one)
+            .and_then(|sum| sum.checked_add(rank_one))
+            .expect("three eighths of the range fits"),
+        "each of the three lossy strata is charged its rank-one contribution, \
+         and the sum is reported as the number it is"
+    );
+    assert!(
+        deficit > Fixed::ZERO,
+        "the bound the refusal above declined to invent is non-zero here, which \
+         is what makes a zero in its place a lie rather than a coincidence"
+    );
+}
+
+// T10.4. The emitted order against an EXPLICIT list, derived from the profile's
+// own arithmetic rather than from a run.
+//
+// Every other ordering test in this file compares one fusion with another, or a
+// fusion with an oracle assembled from the same helpers the engine uses. Both
+// pass when the engine and its comparator are wrong the same way -- a decay rule
+// that truncated one digit too many, a tie-break that reversed, a sum that
+// dropped a stratum would move BOTH sides together. A literal is the only
+// comparator that cannot move.
+//
+// # The arithmetic, spelled out
+//
+// A `Fixed` is a multiple of `10^-12`, and under `ReciprocalRank { k }` a
+// unit-weighted row at rank `r` contributes exactly `trunc(10^12 / (k + r))`
+// raw units. At `k = 60`:
+//
+// | rank | raw contribution |
+// |---|---|
+// | 1 | `10^12 / 61` = `16393442622` (`.95...` truncated) |
+// | 2 | `10^12 / 62` = `16129032258` (`.06...` truncated) |
+// | 3 | `10^12 / 63` = `15873015873` (`.01...` truncated) |
+//
+// The two strata below name `a b c` and `c a d`, so the fused scores are:
+//
+// * `a` = rank 1 in text + rank 2 in vector = `16393442622 + 16129032258` = `32522474880`
+// * `c` = rank 3 in text + rank 1 in vector = `15873015873 + 16393442622` = `32266458495`
+// * `b` = rank 2 in text alone = `16129032258`
+// * `d` = rank 3 in vector alone = `15873015873`
+//
+// which is a strict descent, so the order is decided by score alone and no
+// tie-break is consulted. `c` beating `b` is the whole point of fusing: `b` is
+// ranked ABOVE `c` by the only stratum that named both, and the second stratum's
+// agreement is what moves `c` past it.
+#[test]
+fn the_emitted_sequence_matches_an_explicit_expected_order() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![
+                        row(1, Fixed::ONE, K, "a"),
+                        row(2, Fixed::ONE, K, "b"),
+                        row(3, Fixed::ONE, K, "c"),
+                    ],
+                    exhausted(3),
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![
+                        row(1, Fixed::ONE, K, "c"),
+                        row(2, Fixed::ONE, K, "a"),
+                        row(3, Fixed::ONE, K, "d"),
+                    ],
+                    exhausted(3),
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    let emitted: Vec<(Term, Fixed)> = fused
+        .rows
+        .iter()
+        .map(|emitted| (emitted.entity.clone(), emitted.score))
+        .collect();
+    let expected: Vec<(Term, Fixed)> = vec![
+        (Term::new("a"), Fixed::from_raw(32_522_474_880)),
+        (Term::new("c"), Fixed::from_raw(32_266_458_495)),
+        (Term::new("b"), Fixed::from_raw(16_129_032_258)),
+        (Term::new("d"), Fixed::from_raw(15_873_015_873)),
+    ];
+    assert_eq!(
+        emitted, expected,
+        "the answer is compared against numbers written down from the decay \
+         rule, not against a second computation that could be wrong the same way"
+    );
+}
+
+// T10.5. THE LAW: a producer's declared fidelity reaches the compiled bundle's
+// `plan_id`. Two wirings that differ in NOTHING but one producer's fidelity must
+// compile to two identities.
+//
+// This matters because a plan identity is what a caller caches against and what
+// a host compares to decide "is this the same read?". Two registries that differ
+// only here FUSE DIFFERENTLY -- one answer's scores are values and the other's
+// are estimates with a reported interval -- so a shared identity would let a
+// plan admitted against the exhaustive wiring be served, silently, by the
+// approximate one. The route is declaration -> registry content fingerprint ->
+// plan bytes -> `Plan::id` -> `CompiledRetrieval::plan_id`, and this walks all
+// of it rather than asserting a link in the middle. Only the first hop is tested
+// elsewhere (`canonical_description` injectivity, in `purrdf-sparql-eval`),
+// which is precisely the hop that cannot show the identity moved.
+//
+// # The registries share an instance id, and that is what makes this sharp
+//
+// A plan records the registry's instance id as well as its content fingerprint,
+// so two independently built registries produce two identities whatever they
+// declare -- an assertion over such a pair would pass on a build that had
+// dropped the fidelity from the digest entirely. Cloning one empty registry
+// inherits the id rather than re-minting it, so the ONLY difference between the
+// wirings below is the declaration under test.
+
+/// A `Statistics` provider that measures nothing. The claim here is about a
+/// declaration reaching an identity; a cardinality it did not report cannot be
+/// what moved one.
+struct SilentStatistics {
+    /// Owned rather than a literal, because the trait hands back a borrow of
+    /// the provider and a provider that reads its own source from configuration
+    /// is the shape this stands in for.
+    source: String,
+    revision: String,
+}
+
+impl SilentStatistics {
+    fn new() -> Self {
+        Self {
+            source: "fusion-fixture-statistics".to_owned(),
+            revision: "r1".to_owned(),
+        }
+    }
+}
+
+impl Statistics for SilentStatistics {
+    fn source(&self) -> &str {
+        &self.source
+    }
+
+    fn revision(&self) -> &str {
+        &self.revision
+    }
+
+    fn cardinality(&self, _predicate: &Iri) -> Option<u64> {
+        None
+    }
+
+    fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
+        None
+    }
+}
+
+/// `base`, with one ranked producer registered that declares `fidelity` and is
+/// otherwise fixed. The registry is taken by value so its instance id -- cloned
+/// from one empty registry by every caller -- is carried into the result.
+fn registry_declaring_fidelity(
+    mut base: PropertyFunctionRegistry,
+    fidelity: RankFidelity,
+) -> PropertyFunctionRegistry {
+    base.register_ranked(
+        "http://example.org/pf/ranked",
+        Arc::new(MemoryRelation::new(1, 1, Vec::new()).expect("an empty table is uniform")),
+        RankedDeclaration {
+            stratum: purrdf_core::parse_iri("http://example.org/stratum/text")
+                .expect("fixture IRI"),
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(TermKind::Any),
+                placements: Vec::new(),
+            }],
+            depth_placement: None,
+            candidate_position: 0,
+            duplicates: DuplicatePolicy::Unique,
+            fidelity,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
+            mandatory: false,
+        },
+    );
+    base
+}
+
+/// The identity `compile` publishes for a bundle built against `registry`.
+fn compiled_plan_id(registry: &PropertyFunctionRegistry) -> PlanId {
+    let statistics = SilentStatistics::new();
+    let request = RetrievalRequest::bounded(
+        vec![RequestTerm::Lexical {
+            text: "quick brown".to_owned(),
+            language: Some("en".to_owned()),
+            predicate: Some(iri("http://example.org/p")),
+        }],
+        TopK::new(8),
+    );
+    let planned =
+        purrdf_retrieval::plan(&request, registry, &statistics).expect("the fixture request plans");
+    let compiled = purrdf_retrieval::compile(
+        &planned,
+        &AdmissionEnvironment {
+            registry,
+            statistics: &statistics,
+            fusion_profile: None,
+        },
+    )
+    .expect("a freshly planned bundle is admitted against the registry it was planned on");
+    assert_eq!(
+        compiled.plan_id,
+        planned.id(),
+        "the compiled bundle republishes the plan's own identity"
+    );
+    compiled.plan_id
+}
+
+#[test]
+fn a_declared_fidelity_moves_the_compiled_plan_identity() {
+    let base = PropertyFunctionRegistry::new();
+    let exhaustive = registry_declaring_fidelity(base.clone(), RankFidelity::EXACT);
+    let approximate = registry_declaring_fidelity(
+        base.clone(),
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from(LOSS),
+            },
+            order: OrderFidelity::Faithful,
+        },
+    );
+    let twin = registry_declaring_fidelity(base.clone(), RankFidelity::EXACT);
+    let other_reason = registry_declaring_fidelity(
+        base,
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from("approximate: sampled one segment in a thousand"),
+            },
+            order: OrderFidelity::Faithful,
+        },
+    );
+
+    // The precondition: the wirings share an instance id, so nothing but the
+    // declaration can move an identity below.
+    assert_eq!(
+        exhaustive.instance_id(),
+        approximate.instance_id(),
+        "the fixture registries must be clones of one, or every assertion here \
+         passes on the instance id alone"
+    );
+    assert_ne!(
+        exhaustive.content_fingerprint().expect("readable"),
+        approximate.content_fingerprint().expect("readable"),
+        "the declaration reaches the registry's durable fingerprint"
+    );
+
+    assert_ne!(
+        compiled_plan_id(&exhaustive),
+        compiled_plan_id(&approximate),
+        "and through it the compiled bundle's identity: a plan cached against \
+         the exhaustive wiring must not be served by the approximate one, whose \
+         every score is an estimate"
+    );
+
+    // The valid neighbour, and the property that makes the identity usable at
+    // all: two wirings declaring the SAME fidelity compile to the same
+    // identity. An id that moved between identical wirings would invalidate
+    // every cached plan on every rebuild.
+    assert_eq!(
+        compiled_plan_id(&exhaustive),
+        compiled_plan_id(&twin),
+        "the identity is a function of what was declared, not of when it was \
+         declared"
+    );
+
+    // And the producer's own words are part of the declaration, not merely the
+    // fact that a loss exists: two lossy wirings that differ only in the reason
+    // they publish are two identities. A digest that recorded "lossy" and
+    // dropped the evidence would pass every assertion above and fail here.
+    assert_ne!(
+        compiled_plan_id(&approximate),
+        compiled_plan_id(&other_reason),
+        "the evidence a producer publishes is part of what it declared"
     );
 }
