@@ -109,24 +109,71 @@ impl ValueNode {
 
     /// Borrow `(lexical, datatype IRI)` for a literal value node.
     fn literal_parts<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<(&'a str, &'a str)> {
+        let view = self.literal_view(ds)?;
+        Some((view.lexical, view.datatype))
+    }
+
+    /// Borrow the whole comparison surface of a literal value node.
+    ///
+    /// This is the one derivation of "what a literal looks like to the value
+    /// comparisons": [`Self::literal_parts`] and the property-pair order
+    /// constraints both read it, so the interned and foreign spellings of a
+    /// literal are transcribed once rather than once per caller.
+    fn literal_view<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<LiteralView<'a>> {
         match self {
-            Self::Interned(id) => {
-                let TermRef::Literal {
-                    lexical, datatype, ..
-                } = ds.resolve(*id)
-                else {
-                    return None;
-                };
-                let TermRef::Iri(datatype) = ds.resolve(datatype) else {
-                    return None;
-                };
-                Some((lexical, datatype))
-            }
-            Self::Foreign(Term::Literal(literal)) => {
-                Some((literal.value(), literal.datatype_str()))
-            }
-            Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+            Self::Interned(id) => literal_view_of_id(ds, *id),
+            Self::Foreign(term) => literal_view_of_term(term),
         }
+    }
+}
+
+/// A literal's comparison surface, BORROWED rather than materialized.
+///
+/// Every value comparison SHACL defines over literals — the range facets and the
+/// property-pair order constraints — reads exactly these three fields. Carrying
+/// them as borrows is what lets a conforming focus node be compared without an
+/// owned [`Term`] ever existing: an interned literal's lexical form, datatype IRI
+/// and language tag all live in the dataset's interner already.
+#[derive(Clone, Copy, Debug)]
+struct LiteralView<'a> {
+    /// The literal's lexical form.
+    lexical: &'a str,
+    /// The literal's datatype IRI.
+    datatype: &'a str,
+    /// The literal's language tag, if it carries one.
+    language: Option<&'a str>,
+}
+
+/// The comparison surface of an INTERNED term, or `None` when it is not a literal.
+fn literal_view_of_id(ds: &impl ShaclRead, id: TermId) -> Option<LiteralView<'_>> {
+    let TermRef::Literal {
+        lexical,
+        datatype,
+        language,
+        ..
+    } = ds.resolve(id)
+    else {
+        return None;
+    };
+    let TermRef::Iri(datatype) = ds.resolve(datatype) else {
+        return None;
+    };
+    Some(LiteralView {
+        lexical,
+        datatype,
+        language,
+    })
+}
+
+/// The comparison surface of an owned term, or `None` when it is not a literal.
+fn literal_view_of_term(term: &Term) -> Option<LiteralView<'_>> {
+    match term {
+        Term::Literal(literal) => Some(LiteralView {
+            lexical: literal.value(),
+            datatype: literal.datatype_str(),
+            language: literal.language(),
+        }),
+        Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_) => None,
     }
 }
 
@@ -1950,27 +1997,16 @@ fn eval_constraint<'a, S: ResultSink>(
         // ── Property-pair constraints (§4.3): compare the value nodes against
         //    the objects of the given predicate from the SAME focus node. ──────
         PlannedConstraint::Equals(pred) => {
-            let others = pair_values(store, focus_node, pred);
-            // Membership is identity: compare in `TermId` space (the interner is
-            // injective, so an interned value equals a predicate object iff their ids
-            // match). Only offending value nodes are materialized on the conforming
-            // side. `others` come from the data graph and are always interned.
-            let other_ids: FastSet<TermId> = others.iter().map(|&(id, _)| id).collect();
-            let value_ids: FastSet<TermId> =
-                value_nodes.iter().filter_map(|v| v.as_id(ds)).collect();
+            // Membership is identity, so the comparison stays in `TermId` space
+            // end to end: the comparands are collected as ids and never
+            // materialized, and only an OFFENDING term is ever built.
+            let others = PairComparands::collect(ds, focus_node, pred);
             // The dedup set is only ever touched by an OFFENDING value node, so a
             // conforming focus node never allocates it.
             let mut seen: FastSet<Term> = FastSet::default();
             // Value nodes missing from the predicate's objects…
             for v in value_nodes {
-                let present = match v.as_id(ds) {
-                    Some(id) => other_ids.contains(&id),
-                    None => {
-                        let term = v.to_term(ds);
-                        others.iter().any(|(_, o)| terms_equal(o, &term))
-                    }
-                };
-                if !present {
+                if !others.contains_value(ds, v) {
                     let term = v.to_term(ds);
                     if seen.insert(term.clone()) {
                         emit!(result!(
@@ -1981,32 +2017,32 @@ fn eval_constraint<'a, S: ResultSink>(
                     }
                 }
             }
-            // …and predicate objects missing from the value nodes.
-            for (oid, o) in &others {
-                if !value_ids.contains(oid) && seen.insert(o.clone()) {
-                    emit!(result!(
-                        sh::EQUALS_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
-                        Some(o.clone())
-                    ));
+            // …and predicate objects missing from the value nodes. Building the
+            // value-node index is itself gated on there being a comparand to ask
+            // about, so an empty comparand set costs nothing.
+            if !others.is_empty() {
+                let value_ids = ValueNodeIds::of(ds, value_nodes);
+                for oid in others.iter() {
+                    if !value_ids.contains(ds, oid) {
+                        let other = term_id_to_native(ds, oid);
+                        if seen.insert(other.clone()) {
+                            emit!(result!(
+                                sh::EQUALS_CONSTRAINT_COMPONENT,
+                                focus_node.clone(),
+                                Some(other)
+                            ));
+                        }
+                    }
                 }
             }
             Flow::Continue
         }
         PlannedConstraint::Disjoint(pred) => {
-            let others = pair_values(store, focus_node, pred);
             // Identity check in `TermId` space; only offending value nodes are
             // materialized.
-            let other_ids: FastSet<TermId> = others.iter().map(|&(id, _)| id).collect();
+            let others = PairComparands::collect(ds, focus_node, pred);
             for v in value_nodes {
-                let violates = match v.as_id(ds) {
-                    Some(id) => other_ids.contains(&id),
-                    None => {
-                        let term = v.to_term(ds);
-                        others.iter().any(|(_, o)| terms_equal(o, &term))
-                    }
-                };
-                if violates {
+                if others.contains_value(ds, v) {
                     emit!(result!(
                         sh::DISJOINT_CONSTRAINT_COMPONENT,
                         focus_node.clone(),
@@ -2017,10 +2053,10 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
         PlannedConstraint::LessThan(pred) => {
-            // Order comparison needs each value node's term (numeric/string/temporal
-            // value space), so materialize the set for the pair walk.
-            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
-            for value in pair_order_offenders(store, focus_node, &value_terms, pred, false) {
+            // Order comparison reads the numeric/string/temporal value space, but
+            // it reads it through BORROWED lexical forms on both sides, so neither
+            // the value nodes nor the comparands are materialized to compare them.
+            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, false) {
                 emit!(result!(
                     sh::LESS_THAN_CONSTRAINT_COMPONENT,
                     focus_node.clone(),
@@ -2030,8 +2066,7 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
         PlannedConstraint::LessThanOrEquals(pred) => {
-            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
-            for value in pair_order_offenders(store, focus_node, &value_terms, pred, true) {
+            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, true) {
                 emit!(result!(
                     sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
                     focus_node.clone(),
@@ -2810,34 +2845,166 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
 }
 
+/// Distinct comparands a [`PairComparands`] holds inline before it allocates.
+///
+/// A property-pair constraint compares against the objects of ONE predicate from
+/// ONE focus node, which in practice is a handful of terms; inline storage is what
+/// makes the conforming change path allocate nothing for the comparand set.
+const PAIR_COMPARANDS_INLINE: usize = 4;
+
+/// Distinct comparands past which [`PairComparands`] builds a membership index.
+///
+/// Below it, dedup and membership are a linear scan over at most this many `u32`s
+/// — cheaper than a hash probe and, crucially, free of allocation. Above it the
+/// scan would be quadratic in the predicate's degree, so the one allocation buys
+/// back O(1) probes.
+const PAIR_COMPARANDS_INDEX_AT: usize = 16;
+
 /// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
-/// order — the "other" side of a property-pair constraint (§4.3).
-fn pair_values(store: &ShaclData, focus: &Term, pred: Option<TermId>) -> Vec<(TermId, Term)> {
-    let ds = store.core_view();
-    // The comparand predicate's identity was resolved at BIND. `None` means this
-    // data graph interns no such IRI, so it has no objects at all — an ordinary
-    // empty comparand set, not a failure. A focus node that is not interned has no
-    // outgoing quads for the same reason.
-    let (Some(predicate), Some(focus)) = (pred, resolve_id(ds, focus)) else {
-        return Vec::new();
-    };
-    let mut out: Vec<(TermId, Term)> = Vec::new();
-    let mut seen: IdSet = IdSet::default();
-    for quad in quads_for_pattern_ids(
-        ds,
-        Some(focus),
-        Some(predicate),
-        None,
-        GraphFilter::DefaultGraph,
-    ) {
-        // Dedup in id space: every object comes out of the data graph and is
-        // therefore interned, and the interner is injective, so id equality and
-        // term equality are the same relation here.
-        if seen.insert(quad.o) {
-            out.push((quad.o, term_id_to_native(ds, quad.o)));
+/// order — the "other" side of a property-pair constraint (§4.3) — held as
+/// INTERNED IDS.
+///
+/// Every comparand comes out of the data graph and is therefore interned, and the
+/// interner is injective, so identity between a comparand and an interned value
+/// node is exactly id equality, and order between two comparable literals is
+/// decided from their borrowed lexical forms. Neither needs an owned [`Term`], so
+/// the comparand set is never materialized: on the change path a conforming focus
+/// node used to pay two string allocations per comparand for terms that were only
+/// ever compared and then dropped.
+///
+/// **Interning order is insertion order, which is NOT value order.** The ids are a
+/// comparand's IDENTITY only; `sh:lessThan`/`sh:lessThanOrEquals` resolve each id
+/// back to a borrowed [`LiteralView`] and compare in the value space, exactly as
+/// they did when the terms were owned.
+#[derive(Debug, Default)]
+struct PairComparands {
+    /// The distinct comparands in first-seen order. The report is order-sensitive
+    /// (`sh:equals` emits one result per unmatched comparand), so this is a
+    /// sequence, never a set.
+    ids: SmallVec<[TermId; PAIR_COMPARANDS_INLINE]>,
+    /// Membership index over `ids`, populated only once `ids` grows past
+    /// [`PAIR_COMPARANDS_INDEX_AT`]. Empty means "scan `ids`".
+    index: IdSet,
+}
+
+impl PairComparands {
+    /// Collect the comparands of `(focus, pred, ?)` from the default graph.
+    fn collect(ds: &impl ShaclRead, focus: &Term, pred: Option<TermId>) -> Self {
+        let mut out = Self::default();
+        // The comparand predicate's identity was resolved at BIND. `None` means
+        // this data graph interns no such IRI, so it has no objects at all — an
+        // ordinary empty comparand set, not a failure. A focus node that is not
+        // interned has no outgoing quads for the same reason.
+        let (Some(predicate), Some(focus)) = (pred, resolve_id(ds, focus)) else {
+            return out;
+        };
+        for quad in quads_for_pattern_ids(
+            ds,
+            Some(focus),
+            Some(predicate),
+            None,
+            GraphFilter::DefaultGraph,
+        ) {
+            out.push(quad.o);
+        }
+        out
+    }
+
+    /// Record one comparand, ignoring a repeat.
+    ///
+    /// Dedup is in id space: every object comes out of the data graph and is
+    /// therefore interned, and the interner is injective, so id equality and term
+    /// equality are the same relation here.
+    fn push(&mut self, id: TermId) {
+        if self.contains_id(id) {
+            return;
+        }
+        self.ids.push(id);
+        if !self.index.is_empty() {
+            self.index.insert(id);
+        } else if self.ids.len() > PAIR_COMPARANDS_INDEX_AT {
+            self.index.extend(self.ids.iter().copied());
         }
     }
-    out
+
+    /// Whether an interned id is one of the comparands.
+    fn contains_id(&self, id: TermId) -> bool {
+        if self.index.is_empty() {
+            self.ids.contains(&id)
+        } else {
+            self.index.contains(&id)
+        }
+    }
+
+    /// Whether a VALUE NODE is one of the comparands.
+    ///
+    /// The id probe is deliberately not the only path. A value node a SHACL-AF
+    /// node expression produced may be [`ValueNode::Foreign`] — a term this
+    /// dataset never interned — and "not interned, therefore cannot match" is
+    /// FALSE: two terms with no shared identity can still be equal. Treating the
+    /// id probe as total would silently drop `sh:equals`/`sh:disjoint` violations
+    /// over foreign values, which is the exact failure `tests/foreign_value_nodes.rs`
+    /// exists to catch. A value node with no id therefore falls back to term
+    /// equality against the materialized comparands — an owned term per comparand,
+    /// paid only on the foreign path, which no interned value node ever takes.
+    fn contains_value(&self, ds: &impl ShaclRead, value: &ValueNode) -> bool {
+        match value.as_id(ds) {
+            Some(id) => self.contains_id(id),
+            None => {
+                let term = value.to_term(ds);
+                self.iter()
+                    .any(|id| terms_equal(&term_id_to_native(ds, id), &term))
+            }
+        }
+    }
+
+    /// Whether there are no comparands at all.
+    fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// The comparands in first-seen order.
+    fn iter(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.ids.iter().copied()
+    }
+}
+
+/// Value nodes past which [`ValueNodeIds`] indexes rather than scans.
+///
+/// Same trade as [`PAIR_COMPARANDS_INDEX_AT`]: the index allocates, and the whole
+/// point of the change path is that a conforming focus node does not.
+const VALUE_NODE_INDEX_AT: usize = 16;
+
+/// Membership over the value nodes' INTERNED ids — the reverse direction of
+/// `sh:equals`, which asks which comparands no value node matches.
+///
+/// A value node with no interned id contributes nothing here, exactly as it did
+/// when this was an eagerly collected `FastSet`: a comparand comes out of the data
+/// graph and is interned, so a non-interned value node cannot BE that comparand.
+/// (That is the opposite direction from [`PairComparands::contains_value`], where
+/// the missing id is the value node's own and term equality really can still hold.)
+struct ValueNodeIds<'a> {
+    /// The value nodes being asked about.
+    nodes: &'a [ValueNode],
+    /// Populated only above [`VALUE_NODE_INDEX_AT`]; otherwise `nodes` is scanned.
+    index: Option<FastSet<TermId>>,
+}
+
+impl<'a> ValueNodeIds<'a> {
+    /// Index `nodes` if there are enough of them to be worth an allocation.
+    fn of(ds: &impl ShaclRead, nodes: &'a [ValueNode]) -> Self {
+        let index = (nodes.len() > VALUE_NODE_INDEX_AT)
+            .then(|| nodes.iter().filter_map(|v| v.as_id(ds)).collect());
+        Self { nodes, index }
+    }
+
+    /// Whether some value node carries this interned id.
+    fn contains(&self, ds: &impl ShaclRead, id: TermId) -> bool {
+        match &self.index {
+            Some(index) => index.contains(&id),
+            None => self.nodes.iter().any(|v| v.as_id(ds) == Some(id)),
+        }
+    }
 }
 
 /// The value nodes violating `sh:lessThan` (`allow_equal = false`) or
@@ -2849,24 +3016,32 @@ fn pair_values(store: &ShaclData, focus: &Term, pred: Option<TermId>) -> Vec<(Te
 /// N comparands yields N results (duplicate tuples — the report is a
 /// multiset, matching the W3C suite's expectations). An incomparable pair
 /// (per SPARQL `<` semantics) is a violation.
+///
+/// Both sides are compared through borrowed [`LiteralView`]s, so a CONFORMING
+/// focus node materializes neither its value nodes nor its comparands: the
+/// returned `Vec` is `Vec::new()` until an offender exists, and `Vec::new()` does
+/// not allocate.
 fn pair_order_offenders(
-    store: &ShaclData,
+    ds: &impl ShaclRead,
     focus: &Term,
-    value_nodes: &[Term],
+    value_nodes: &[ValueNode],
     pred: Option<TermId>,
     allow_equal: bool,
 ) -> Vec<Term> {
-    let others = pair_values(store, focus, pred);
+    let others = PairComparands::collect(ds, focus, pred);
     let mut offending: Vec<Term> = Vec::new();
     for v in value_nodes {
-        for (_, o) in &others {
-            let ok = match compare_terms(v, o) {
+        // Identity is an id here; ORDER is not — interning order is insertion
+        // order. The comparison key is the value space, read back off each id.
+        let left = v.literal_view(ds);
+        for o in others.iter() {
+            let ok = match compare_literal_views(left, literal_view_of_id(ds, o)) {
                 Some(std::cmp::Ordering::Less) => true,
                 Some(std::cmp::Ordering::Equal) => allow_equal,
                 Some(std::cmp::Ordering::Greater) | None => false,
             };
             if !ok {
-                offending.push(v.clone());
+                offending.push(v.to_term(ds));
             }
         }
     }
@@ -2876,7 +3051,7 @@ fn pair_order_offenders(
 /// SPARQL-style `<` comparison of two terms, as used by `sh:lessThan` /
 /// `sh:lessThanOrEquals` (and the same value machinery as the range facets):
 ///
-/// - two numeric literals compare by numeric value ([`numeric_value`] — the
+/// - two numeric literals compare by numeric value ([`numeric_parts`] — the
 ///   full XSD numeric lattice);
 /// - two plain/`xsd:string` literals compare by codepoint order;
 /// - two `xsd:boolean` literals compare with `false < true`;
@@ -2886,7 +3061,13 @@ fn pair_order_offenders(
 /// - anything else (language-tagged literals, IRIs, blank nodes, mixed
 ///   datatypes) is incomparable → `None`, which the pair constraints treat as a
 ///   violation per spec.
-fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
+///
+/// `None` on either side is a NON-LITERAL — an IRI, a blank node or a quoted
+/// triple — which is incomparable by the last rule above.
+fn compare_literal_views(
+    a: Option<LiteralView<'_>>,
+    b: Option<LiteralView<'_>>,
+) -> Option<std::cmp::Ordering> {
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
     const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
     const TEMPORAL: [&str; 3] = [
@@ -2895,19 +3076,22 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
         "http://www.w3.org/2001/XMLSchema#time",
     ];
 
-    if let (Some(x), Some(y)) = (numeric_value(a), numeric_value(b)) {
-        return x.partial_cmp(&y);
-    }
-    let (Term::Literal(la), Term::Literal(lb)) = (a, b) else {
+    let (Some(a), Some(b)) = (a, b) else {
         return None;
     };
+    if let (Some(x), Some(y)) = (
+        numeric_parts(a.lexical, a.datatype),
+        numeric_parts(b.lexical, b.datatype),
+    ) {
+        return x.partial_cmp(&y);
+    }
     // SPARQL `<` is undefined for language-tagged literals.
-    if la.language().is_some() || lb.language().is_some() {
+    if a.language.is_some() || b.language.is_some() {
         return None;
     }
-    let (da, db) = (la.datatype_str(), lb.datatype_str());
+    let (da, db) = (a.datatype, b.datatype);
     if da == XSD_STRING && db == XSD_STRING {
-        return Some(la.value().cmp(lb.value()));
+        return Some(a.lexical.cmp(b.lexical));
     }
     if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
         // `xsd:boolean` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.2),
@@ -2917,10 +3101,10 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
             "false" | "0" => Some(false),
             _ => None,
         };
-        return Some(bool_of(la.value())?.cmp(&bool_of(lb.value())?));
+        return Some(bool_of(a.lexical)?.cmp(&bool_of(b.lexical)?));
     }
     if da == db && TEMPORAL.contains(&da) {
-        return Some(la.value().cmp(lb.value()));
+        return Some(a.lexical.cmp(b.lexical));
     }
     None
 }
@@ -5264,6 +5448,12 @@ mod tests {
     #[test]
     fn compare_terms_covers_the_value_lattice() {
         use std::cmp::Ordering;
+        // The production comparison reads BORROWED literal views; over owned terms
+        // it is exactly this composition, which is what keeps the lattice below a
+        // statement about the code the pair constraints actually run.
+        let compare_terms = |a: &Term, b: &Term| {
+            compare_literal_views(literal_view_of_term(a), literal_view_of_term(b))
+        };
         // Mixed numeric datatypes compare by value.
         assert_eq!(
             compare_terms(&xsd_lit("2", "integer"), &xsd_lit("2.5", "decimal")),

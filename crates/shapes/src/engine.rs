@@ -10,7 +10,7 @@
 use crate::data_view::{ShaclDatasetView, ShaclRead};
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{DatasetView, FastSet, IdSet, RdfDataset, TermId};
+use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
 
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
@@ -93,6 +93,10 @@ pub(crate) struct BoundShapes {
     classes: Arc<ClassCatalog>,
     binding: DatasetBinding,
     targets: Vec<PreparedTargets>,
+    /// `targets` inverted onto the node, for the bounded (change-path) dispatch.
+    /// Derived from `targets` alone, so it is stage-1 work like `targets` itself
+    /// and never repeated per focus node.
+    dispatch: TargetDispatch,
 }
 
 impl BoundShapes {
@@ -115,11 +119,13 @@ impl BoundShapes {
                 }
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let dispatch = TargetDispatch::invert(&targets);
         Ok(Self {
             lowered,
             classes,
             binding,
             targets,
+            dispatch,
         })
     }
 
@@ -136,6 +142,7 @@ impl BoundShapes {
             classes,
             binding,
             targets: Vec::new(),
+            dispatch: TargetDispatch::default(),
         }
     }
 
@@ -147,6 +154,11 @@ impl BoundShapes {
             .unwrap_or_else(|| self.lowered.no_targets());
         self.lowered
             .plan(shape, position, &self.binding, &self.classes, targets)
+    }
+
+    /// The inverted target index behind this binding.
+    fn dispatch(&self) -> &TargetDispatch {
+        &self.dispatch
     }
 
     /// The class analysis behind this binding.
@@ -213,7 +225,23 @@ impl PreparedTargets {
         }
     }
 
-    #[inline]
+    /// Whether this shape's targets contain `focus` — **the definition** of
+    /// bounded-target membership.
+    ///
+    /// It is no longer the dispatch mechanism. Answering it once per
+    /// (shape, focus node) pair re-derives the focus node's class memberships and
+    /// re-scans its outgoing and incoming quads once per shape, so it is
+    /// quadratic in exactly the regime the change path exists to serve;
+    /// [`TargetDispatch`] inverts the same facts once at bind time and answers
+    /// the dual question instead.
+    ///
+    /// The definition stays executable, and is executed:
+    /// `target_dispatch_agrees_with_contains_and_resolve_all` drives it over
+    /// every [`Target`] variant and requires the index and
+    /// [`Self::resolve_all`] to select the identical focus set. Two
+    /// implementations of one predicate with no equivalence test is how they come
+    /// to disagree; this one has three, and one test binding all of them.
+    #[cfg(test)]
     fn contains(&self, data: &ShaclData, focus: &FocusNode) -> bool {
         let Some(id) = focus.id() else {
             return self.explicit_foreign.contains(focus.term());
@@ -276,6 +304,16 @@ impl PreparedTargets {
                 }
             }
         }
+        // The pattern below is IDENTICAL to the subjects-of loop above it, and
+        // that is correct by construction, not a copy-paste defect: the pattern
+        // is `(?, predicate, ?)` — open on BOTH ends — so the one quad set
+        // carries every subjects-of AND every objects-of target of `predicate`.
+        // The loops differ in the only place they can: which END of the matched
+        // quad is the focus node, `quad.s` there and `quad.o` here. Binding the
+        // object here instead would be the real bug, because it would ask for
+        // quads whose object is a predicate. `resolve_all_is_asymmetric_in_the_
+        // subject_and_object_directions` pins the difference with a fixture whose
+        // subjects-of and objects-of sets are disjoint.
         for &predicate in &self.object_predicates {
             for quad in
                 quads_for_pattern_ids(dataset, None, Some(predicate), None, GraphFilter::AnyGraph)
@@ -296,6 +334,195 @@ impl PreparedTargets {
         );
         sort_focus_nodes(&mut nodes);
         nodes
+    }
+}
+
+/// The DUAL of [`PreparedTargets`]: which shapes claim a node, rather than which
+/// nodes a shape claims.
+///
+/// [`PreparedTargets::contains`] answers "shape, do you contain this node?". Used
+/// as the change path's DISPATCH it is answered once per (shape, focus node)
+/// pair, and each answer re-derives the focus node's class memberships and — for
+/// a shape with a `sh:targetSubjectsOf` or `sh:targetObjectsOf` target — re-scans
+/// the focus node's outgoing and incoming quads. Fifty node shapes against a
+/// thousand-node delta is fifty thousand probes and up to a hundred thousand
+/// quad-pattern scans before a single constraint is evaluated, and the whole
+/// reason the change path exists is to be cheaper than that.
+///
+/// The change path asks the dual question — "node, which shapes claim you?" —
+/// and this is the index that answers it. Every target key is inverted ONCE, at
+/// bind time, so a focus node needs one class-view lookup and one outgoing and
+/// one incoming predicate pass TOTAL, shared across every shape, yielding the
+/// candidate shape set directly. `O(S·F)` becomes `O(F·(1+deg))`.
+///
+/// `contains` keeps DEFINING the semantics; this only has to agree with it, and
+/// `target_dispatch_agrees_with_contains_and_resolve_all` is where that is
+/// executed, over every [`Target`] variant.
+///
+/// Immutable behind `&` once built, and every field is `Send + Sync`, because the
+/// claims derived from it are read from rayon focus-chunk workers.
+#[derive(Debug, Default)]
+pub(crate) struct TargetDispatch {
+    /// `sh:targetNode` identity → the shapes declaring it.
+    explicit: FastMap<TermId, Vec<usize>>,
+    /// A `sh:targetNode` this dataset never interned → the shapes declaring it.
+    foreign: FastMap<Term, Vec<usize>>,
+    /// `sh:targetClass` / implicit-class identity → the shapes declaring it.
+    classes: FastMap<TermId, Vec<usize>>,
+    /// `sh:targetSubjectsOf` predicate identity → the shapes declaring it.
+    subject_predicates: FastMap<TermId, Vec<usize>>,
+    /// `sh:targetObjectsOf` predicate identity → the shapes declaring it.
+    object_predicates: FastMap<TermId, Vec<usize>>,
+}
+
+impl TargetDispatch {
+    /// Invert `targets`, which is positionally parallel to the node-shape list.
+    fn invert(targets: &[PreparedTargets]) -> Self {
+        let mut dispatch = Self::default();
+        for (position, prepared) in targets.iter().enumerate() {
+            for &id in &prepared.explicit_ids {
+                dispatch.explicit.entry(id).or_default().push(position);
+            }
+            for term in &prepared.explicit_foreign {
+                dispatch
+                    .foreign
+                    .entry(term.clone())
+                    .or_default()
+                    .push(position);
+            }
+            for &id in &prepared.target_class_ids {
+                dispatch.classes.entry(id).or_default().push(position);
+            }
+            for &id in &prepared.subject_predicates {
+                dispatch
+                    .subject_predicates
+                    .entry(id)
+                    .or_default()
+                    .push(position);
+            }
+            for &id in &prepared.object_predicates {
+                dispatch
+                    .object_predicates
+                    .entry(id)
+                    .or_default()
+                    .push(position);
+            }
+        }
+        dispatch
+    }
+
+    /// Every shape position claiming `focus`, ascending and duplicate-free, into
+    /// `out` (which is cleared first, so one buffer serves a whole focus set).
+    fn claimants(&self, data: &ShaclData, focus: &FocusNode, out: &mut Vec<usize>) {
+        out.clear();
+        let Some(id) = focus.id() else {
+            // A focus node this dataset never interned can only be an EXPLICIT
+            // target: every other target form is a fact ABOUT the data graph, and
+            // a node absent from it participates in none of them. That is exactly
+            // the answer `contains` gives an id-less focus node.
+            if let Some(positions) = self.foreign.get(focus.term()) {
+                out.extend(positions.iter().copied());
+            }
+            return;
+        };
+        if let Some(positions) = self.explicit.get(&id) {
+            out.extend(positions.iter().copied());
+        }
+        if !self.classes.is_empty() {
+            for class in data.class_view().classes_of(id) {
+                if let Some(positions) = self.classes.get(&class) {
+                    out.extend(positions.iter().copied());
+                }
+            }
+        }
+        let dataset = data.core_view();
+        if !self.subject_predicates.is_empty() {
+            for quad in quads_for_pattern_ids(dataset, Some(id), None, None, GraphFilter::AnyGraph)
+            {
+                if let Some(positions) = self.subject_predicates.get(&quad.p) {
+                    out.extend(positions.iter().copied());
+                }
+            }
+        }
+        if !self.object_predicates.is_empty() {
+            for quad in quads_for_pattern_ids(dataset, None, None, Some(id), GraphFilter::AnyGraph)
+            {
+                if let Some(positions) = self.object_predicates.get(&quad.p) {
+                    out.extend(positions.iter().copied());
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    /// Dispatch a whole focus set: for each of `shape_count` shape positions, the
+    /// focus nodes that position claims.
+    ///
+    /// One pass over the focus nodes for ALL shapes, which is the entire point.
+    fn claims(
+        &self,
+        data: &ShaclData,
+        focus_nodes: &[FocusNode],
+        shape_count: usize,
+    ) -> Vec<ClaimedFocus> {
+        let mut claims: Vec<ClaimedFocus> = Vec::new();
+        claims.resize_with(shape_count, ClaimedFocus::default);
+        let mut positions: Vec<usize> = Vec::new();
+        for focus in focus_nodes {
+            self.claimants(data, focus, &mut positions);
+            for &position in &positions {
+                // A prepared-target row exists for every node shape, so a position
+                // out of range is impossible; ignoring one rather than indexing is
+                // what keeps that impossible case from being a panic across the
+                // PyO3 and C ABI boundaries.
+                if let Some(claimed) = claims.get_mut(position) {
+                    claimed.insert(focus);
+                }
+            }
+        }
+        claims
+    }
+}
+
+/// The focus nodes one shape position claims, as a membership test.
+///
+/// Identity-keyed for the ordinary interned focus node; a focus node with no
+/// dataset identity is keyed by its term, exactly as the explicit-target index
+/// that is the only way such a node can be claimed at all.
+#[derive(Debug, Default)]
+struct ClaimedFocus {
+    /// Claimed interned focus nodes.
+    ids: IdSet,
+    /// Claimed focus nodes this dataset never interned.
+    foreign: FastSet<Term>,
+}
+
+impl ClaimedFocus {
+    /// Record a claim.
+    fn insert(&mut self, focus: &FocusNode) {
+        match focus.id() {
+            Some(id) => {
+                self.ids.insert(id);
+            }
+            None => {
+                self.foreign.insert(focus.term().clone());
+            }
+        }
+    }
+
+    /// Whether this position claims `focus`.
+    #[inline]
+    fn contains(&self, focus: &FocusNode) -> bool {
+        match focus.id() {
+            Some(id) => self.ids.contains(&id),
+            None => self.foreign.contains(focus.term()),
+        }
+    }
+
+    /// Whether this position claims nothing in the dispatched focus set.
+    fn is_empty(&self) -> bool {
+        self.ids.is_empty() && self.foreign.is_empty()
     }
 }
 
@@ -1111,19 +1338,32 @@ impl PreparedValidator {
         if focus_nodes.is_empty() {
             return Ok(finish_report(Vec::new()));
         }
+        // The dual question, asked once for the whole focus set: not "shape, do
+        // you contain this node?" once per (shape, focus node) pair, but "node,
+        // which shapes claim you?" once per node. See [`TargetDispatch`].
+        let claims =
+            self.bound
+                .dispatch()
+                .claims(&self.data, focus_nodes, self.shapes.node_shapes.len());
         let mut all_results = Vec::new();
         for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
                 continue;
             }
+            // Planned unconditionally, before the empty-claims check: a shape
+            // whose plan cannot be built is a defect in this crate, and a bounded
+            // request that happened to claim none of its nodes must not be the
+            // reason it goes unreported.
             let plan = self.bound.plan(shape, position)?;
-            let targets = plan.targets();
+            let Some(claimed) = claims.get(position).filter(|claimed| !claimed.is_empty()) else {
+                continue;
+            };
             all_results.extend(evaluate_shape_focus_nodes(
                 &self.data,
                 &self.shapes,
                 plan,
                 focus_nodes,
-                |focus| targets.contains(&self.data, focus),
+                |focus| claimed.contains(focus),
             )?);
         }
         Ok(finish_report(all_results))
@@ -1660,6 +1900,215 @@ mod tests {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl, None)
             .expect("shapes Turtle must parse");
         crate::shapes::from_dataset(&dataset).expect("shapes parse must succeed")
+    }
+
+    // ── Target selection: three implementations, one predicate ────────────────
+
+    /// The namespace the target-agreement fixtures live in.
+    const TARGET_NS: &str = "http://example.org/ns#";
+
+    /// Bind `shapes_body` against `data_body` and return the bound validator.
+    fn bind_target_fixture(shapes_body: &str, data_body: &str) -> (Arc<Shapes>, PreparedValidator) {
+        let shapes = Arc::new(load_shapes_ttl(&format!("{PREFIXES}{shapes_body}")));
+        let data =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{data_body}"), None)
+                .expect("fixture data must parse");
+        let data = project_dataset(&data).expect("fixture data must project");
+        let validator = PreparedShapes::new(Arc::clone(&shapes))
+            .bind_projected_dataset(data)
+            .expect("fixture must bind");
+        (shapes, validator)
+    }
+
+    /// EVERY node this dataset can name, plus terms it never interned.
+    ///
+    /// A target set is not only about nodes the graph mentions — `sh:targetNode`
+    /// may name one that is absent — so the candidate set deliberately includes
+    /// both an absent term that IS an explicit target and one that is not.
+    fn every_candidate_focus_node(validator: &PreparedValidator) -> Vec<FocusNode> {
+        let view = validator.data.core_view();
+        let mut candidates: Vec<FocusNode> = (0..view.term_count())
+            .map(|index| {
+                let id = TermId::from_index(u32::try_from(index).expect("fixture fits in u32"));
+                FocusNode {
+                    term: term_id_to_native(view, id),
+                    id: Some(id),
+                }
+            })
+            .collect();
+        for local in ["neverInterned", "neverInternedAndNotATarget"] {
+            candidates.push(FocusNode {
+                term: Term::NamedNode(NamedNode::new_unchecked(format!("{TARGET_NS}{local}"))),
+                id: None,
+            });
+        }
+        candidates
+    }
+
+    /// The focus nodes each of the three implementations selects, per shape
+    /// position: `(contains, dispatch, resolve_all)`.
+    fn target_selections(
+        shapes: &Shapes,
+        validator: &PreparedValidator,
+    ) -> Vec<(
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    )> {
+        let candidates = every_candidate_focus_node(validator);
+        let claims = validator.bound.dispatch().claims(
+            &validator.data,
+            &candidates,
+            shapes.node_shapes.len(),
+        );
+        let key = |focus: &FocusNode| focus.term().to_string();
+        (0..shapes.node_shapes.len())
+            .map(|position| {
+                let targets = &validator.bound.targets[position];
+                let by_contains = candidates
+                    .iter()
+                    .filter(|focus| targets.contains(&validator.data, focus))
+                    .map(key)
+                    .collect();
+                let by_dispatch = candidates
+                    .iter()
+                    .filter(|focus| claims[position].contains(focus))
+                    .map(key)
+                    .collect();
+                let by_resolve_all = targets
+                    .resolve_all(&validator.data)
+                    .iter()
+                    .map(key)
+                    .collect();
+                (by_contains, by_dispatch, by_resolve_all)
+            })
+            .collect()
+    }
+
+    /// **`PreparedTargets::contains`, `PreparedTargets::resolve_all` and
+    /// `TargetDispatch` select the identical focus-node set — for every `Target`
+    /// variant there is.**
+    ///
+    /// Three implementations of one predicate. `contains` DEFINES it, one
+    /// (shape, node) pair at a time; `resolve_all` enumerates it forwards over the
+    /// whole graph; the dispatch index answers it backwards, from the node. Two
+    /// implementations of one predicate with no equivalence test is how they come
+    /// to disagree, and a disagreement here is not a slow validator but a wrong
+    /// one: a node the dispatch fails to claim is a node NO shape validates, which
+    /// is a silent drop with a conforming report to hide behind.
+    ///
+    /// The candidate set is exhaustive over the dataset's whole term table rather
+    /// than over a hand-listed set of "interesting" nodes, so a predicate that
+    /// over-selects (an IRI used only as a datatype, say) fails here too — the
+    /// mirror failure, and the one an under-selection test cannot see.
+    #[test]
+    fn target_dispatch_agrees_with_contains_and_resolve_all() {
+        let (shapes, validator) = bind_target_fixture(
+            r#"
+            ex:ClassShape a sh:NodeShape ; sh:targetClass ex:Person ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ImplicitShape a sh:NodeShape, rdfs:Class ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:SubjectsShape a sh:NodeShape ; sh:targetSubjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ObjectsShape a sh:NodeShape ; sh:targetObjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ExplicitShape a sh:NodeShape ;
+                sh:targetNode ex:explicit, ex:neverInterned ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:SparqlShape a sh:NodeShape ;
+                sh:target [ a sh:SPARQLTarget ; sh:select
+                    "SELECT ?this WHERE { ?this <http://example.org/ns#active> true }" ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            "#,
+            r"
+            ex:Child rdfs:subClassOf ex:Person .
+            ex:alice a ex:Child .
+            ex:bob a ex:Person .
+            ex:implicitInstance a ex:ImplicitShape .
+            ex:tail ex:link ex:head .
+            ex:explicit ex:required ex:anything .
+            ex:activeNode ex:active true .
+            ",
+        );
+
+        // The fixture's claim to be exhaustive is itself checked: a fixture that
+        // quietly stopped covering a variant would leave this test green while
+        // testing less, which is the failure mode an agreement test is for.
+        let mut covered = [false; 6];
+        for target in shapes.node_shapes.iter().flat_map(|shape| &shape.targets) {
+            covered[match target {
+                Target::Class(_) => 0,
+                Target::SubjectsOf(_) => 1,
+                Target::ObjectsOf(_) => 2,
+                Target::Node(_) => 3,
+                Target::ImplicitClass(_) => 4,
+                Target::Sparql { .. } => 5,
+            }] = true;
+        }
+        assert!(
+            covered.iter().all(|&seen| seen),
+            "the fixture must exercise EVERY Target variant, got {covered:?}",
+        );
+
+        for (position, (by_contains, by_dispatch, by_resolve_all)) in
+            target_selections(&shapes, &validator)
+                .into_iter()
+                .enumerate()
+        {
+            let shape = &shapes.node_shapes[position].id;
+            assert!(
+                !by_contains.is_empty(),
+                "{shape}: selects nothing, so its agreement is vacuous",
+            );
+            assert_eq!(
+                by_contains, by_dispatch,
+                "{shape}: the inverted dispatch disagrees with `contains`",
+            );
+            assert_eq!(
+                by_contains, by_resolve_all,
+                "{shape}: `resolve_all` disagrees with `contains`",
+            );
+        }
+    }
+
+    /// **The subjects-of and objects-of loops select opposite ends of the same
+    /// quad.**
+    ///
+    /// `resolve_all`'s two predicate loops use an IDENTICAL quad pattern —
+    /// `(?, predicate, ?)`, open on both ends — and differ only in taking
+    /// `quad.s` or `quad.o`. That is correct by construction, and it is also
+    /// invisible to any fixture whose subjects-of and objects-of sets overlap.
+    /// This one makes them DISJOINT, so swapping the two ends, or "tidying" the
+    /// object loop into binding its object, fails immediately.
+    #[test]
+    fn resolve_all_is_asymmetric_in_the_subject_and_object_directions() {
+        let (shapes, validator) = bind_target_fixture(
+            r"
+            ex:SubjectsShape a sh:NodeShape ; sh:targetSubjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ObjectsShape a sh:NodeShape ; sh:targetObjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ",
+            "ex:tail ex:link ex:head .",
+        );
+        // `node_shapes` is not in declaration order, so the expected end is keyed
+        // by the shape that declares it rather than by position.
+        let selections = target_selections(&shapes, &validator);
+        for (position, (by_contains, by_dispatch, by_resolve_all)) in
+            selections.into_iter().enumerate()
+        {
+            let shape = shapes.node_shapes[position].id.to_string();
+            let end = if shape.contains("SubjectsShape") {
+                "tail"
+            } else {
+                "head"
+            };
+            let only = std::collections::BTreeSet::from([format!("<{TARGET_NS}{end}>")]);
+            assert_eq!(by_resolve_all, only, "{shape}: wrong end of the quad");
+            assert_eq!(by_contains, only, "{shape}: wrong end of the quad");
+            assert_eq!(by_dispatch, only, "{shape}: wrong end of the quad");
+        }
     }
 
     #[test]

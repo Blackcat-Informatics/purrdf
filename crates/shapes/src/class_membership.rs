@@ -169,6 +169,31 @@ impl ClassMembershipView {
         self.has_derived_membership(subject, class)
     }
 
+    /// Every class `subject` is a direct or transitive asserted SHACL instance
+    /// of, in unspecified order.
+    ///
+    /// The DUAL of [`Self::is_instance`]. That answers "is this node in THAT
+    /// class", one candidate class at a time, which is quadratic for a caller
+    /// holding a set of candidate classes; this answers "which classes is this
+    /// node in" in one pass, which is what a target dispatch inverted onto the
+    /// focus node needs.
+    ///
+    /// The two agree by construction rather than by coincidence: `is_instance`
+    /// is a direct `rdf:type` quad OR a derived membership through the subclass
+    /// closure, and this chains exactly those two sources — the direct
+    /// `rdf:type` objects, and the same [`Self::derived_types`] whose ancestor
+    /// arrays `has_derived_membership` searches.
+    pub(crate) fn classes_of(&self, subject: TermId) -> impl Iterator<Item = TermId> + '_ {
+        self.rdf_type
+            .into_iter()
+            .flat_map(move |rdf_type| {
+                self.base
+                    .quads_for_pattern(Some(subject), Some(rdf_type), None, GraphMatch::Default)
+                    .map(|quad| quad.o)
+            })
+            .chain(self.derived_types(subject))
+    }
+
     /// Every direct or derived instance of `class`, sorted within the asserted
     /// and virtual portions and duplicate-free across them.
     pub(crate) fn instances_of(&self, class: TermId) -> impl Iterator<Item = TermId> + '_ {
