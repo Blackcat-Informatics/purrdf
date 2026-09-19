@@ -498,7 +498,26 @@ fn eval_call_over<D: DatasetView + Sync>(
         // The generation, read HERE and once: an index-backed relation pins its snapshot
         // when it opens, so this is the instant at which "which version is answering" is
         // true of every row this cursor will go on to emit. See `PfCursor::generation`.
-        let generation = generation_contained(&*cursor, &call.iri)?;
+        //
+        // Read only on a lane that can carry the answer. `ctx.witnessing` is false exactly
+        // when this execution's return type has no witness slot (see `EvalCtx::witnessing`),
+        // and there the reading has nowhere to go: the value would be built, folded into a
+        // ledger, and dropped with the context, once per driving row. Skipping it does not
+        // weaken the OTHER attested fact — `service_level` below is read on every lane,
+        // because the `RelationIncomplete` refusal is what an unwitnessed lane owes a short
+        // index, and that refusal is the reason this one is safe to skip: there is no lane
+        // on which an unread generation is silently treated as a declaration.
+        //
+        // `None` is "never asked", and it is an `Option` rather than an
+        // `IndexGeneration::Undeclared` placeholder so that the unasked case cannot reach
+        // the ledger at all: `Undeclared` means a relation was asked and said nothing, and
+        // a value standing in for a question never put would record a declaration the
+        // relation never made.
+        let generation = if ctx.witnessing {
+            Some(generation_contained(&*cursor, &call.iri)?)
+        } else {
+            None
+        };
         // Whether the pull loop below is ending this INVOCATION or the whole input loop.
         // The outer break is deferred by one statement rather than taken from inside the
         // pull loop, because every exit from it — exhausted, ceiling, governor, stop
@@ -600,7 +619,16 @@ fn eval_call_over<D: DatasetView + Sync>(
         // One record per invocation that entered host code — the same executions the
         // `property-function-invocation` charge point prices, so the receipt and the
         // meter cannot come to describe different runs.
-        ctx.witness.record(&call.iri, generation, service);
+        //
+        // Recorded only where the record is readable. On an unwitnessed lane the ledger is
+        // dropped with the context and no caller can ever see it, so building it would be
+        // a per-driving-row map insertion, a set insertion and a key allocation spent on a
+        // value that provably nobody reads. The refusal above has already run, so nothing
+        // a relation attested goes unhandled: the one declaration that changes an answer's
+        // meaning either labels the rows (here) or refuses them (there).
+        if let Some(generation) = generation {
+            ctx.witness.record(&call.iri, generation, service);
+        }
         if stop_input {
             break 'input;
         }

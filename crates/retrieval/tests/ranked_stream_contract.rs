@@ -36,6 +36,7 @@ fn declaration(fidelity: RankFidelity) -> RankedDeclaration {
         duplicates: DuplicatePolicy::Unique,
         fidelity,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory: false,
     }
 }

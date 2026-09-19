@@ -61,13 +61,12 @@ use std::time::{Duration, Instant};
 
 use purrdf_core::{GraphMatch, ResourceVector};
 use purrdf_sparql_eval::{
-    AggregateRegistry, BindingPattern, BudgetExhausted, CancellationFlag, EvalError,
-    GovernedOutcome, GovernedUpdateOutcome, GovernorEvidence, IndexGeneration, MemoryRelation,
-    NativeSparqlEngine, ParserOptions, PartialAnswers, PathDirection, PathGraph, PathLimits,
-    PathStep, PathWitnessRelation, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, QueryGovernors, RelationWitness, ResourceDimension, ServiceLevel,
-    ShortestPathWitnessRelation, StandpointPredicates, StopCause, StopSignal, TrippedGovernor,
-    Volatility, WallDeadline,
+    AggregateRegistry, BudgetExhausted, CancellationFlag, EvalError, GovernedOutcome,
+    GovernedUpdateOutcome, GovernorEvidence, IndexGeneration, MemoryRelation, NativeSparqlEngine,
+    ParserOptions, PartialAnswers, PathDirection, PathGraph, PathLimits, PathStep,
+    PathWitnessRelation, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
+    RelationWitness, ResourceDimension, ShortestPathWitnessRelation, StandpointPredicates,
+    StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -75,6 +74,7 @@ use pyo3::types::{PyBytes, PyDict, PyString};
 
 use super::io::{PyRdfFormat, serialize_quads, serialize_triples};
 use super::term::{PyQuad, PyTriple, PyVariable, extract_term_value, term_to_py};
+use crate::attestation::Attestation;
 use crate::{GovernedEntailment, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SparqlResult, TermValue};
 
 /// The optional per-call engine configuration the Python surface accepts, converted
@@ -189,146 +189,6 @@ pub(super) enum RelationSpec {
         /// for `"walk"` (every simple-prefix witness).
         shortest: bool,
     },
-}
-
-/// What the host declares about the index one relation's rows came from: which version
-/// of it answered, and whether it was **not** whole.
-///
-/// # Why this is the one part of a relation the rows cannot carry
-///
-/// Everything else about a relation registered from Python is visible in the values
-/// crossing the boundary — the arity, the rows, the traversal envelope. These two facts
-/// are not: a host that read its table out of a search index mid-rebuild hands over
-/// exactly the same tuple of rows as a host whose index was whole, and no query text,
-/// dataset snapshot or registry fingerprint differs between the two runs. Only the host
-/// knows, so only the host can say, and this is where it says it.
-///
-/// # Neither field is ever minted here
-///
-/// Both default to the kernel's own silence
-/// ([`IndexGeneration::Undeclared`] / [`ServiceLevel::Undeclared`]), which a reader must
-/// not upgrade to "the index was current" or "the index was whole" — there is no seam at
-/// which either could be certified, so this binding invents neither. A relation declared
-/// without the trailing position therefore behaves exactly as it did before this surface
-/// existed.
-///
-/// # An incompleteness is witnessed or fatal
-///
-/// Declaring one does NOT make a query answer short and quiet. An entry point whose
-/// outcome carries a witness — the governed lanes — reports the reason beside its rows;
-/// one whose outcome has nowhere to put it (`query`, `update`) refuses the query with
-/// the kernel's own `native-sparql-relation-incomplete` diagnostic. That is a property
-/// of the entry point's return type, not a caller's choice.
-#[derive(Debug, Clone)]
-pub(super) struct Attestation {
-    /// The host's own spelling of the index version that produced the rows.
-    generation: IndexGeneration,
-    /// Whether the host declares that index was not whole, and why, verbatim.
-    service: ServiceLevel,
-}
-
-impl Attestation {
-    /// The attestation of a relation that declared nothing — silence on both halves,
-    /// which is what every relation declared without a trailing position attests.
-    const UNDECLARED: Self = Self {
-        generation: IndexGeneration::Undeclared,
-        service: ServiceLevel::Undeclared,
-    };
-
-    /// Whether this attestation says anything at all, i.e. whether wrapping the relation
-    /// in an [`AttestedRelation`] would change what it attests.
-    fn is_silent(&self) -> bool {
-        matches!(
-            (&self.generation, &self.service),
-            (IndexGeneration::Undeclared, ServiceLevel::Undeclared)
-        )
-    }
-}
-
-/// A relation that answers exactly as `inner` does and attests what the host declared
-/// about the index behind it.
-///
-/// A wrapper rather than a field on each relation kind: the attestation is a property of
-/// the INDEX the rows were read from, which is the same fact whichever of the three
-/// spellings carried the rows, and the kernel reads it through the cursor rather than
-/// through the relation. Every declaration the planner reads — volatility, arity, modes,
-/// per-invocation cardinality, the admitted access patterns — is delegated verbatim, so
-/// wrapping cannot change which plan a query gets or which rows it produces. Only the two
-/// cursor attestations differ.
-struct AttestedRelation {
-    /// The relation the rows actually come from.
-    inner: Arc<dyn PropertyFunction>,
-    /// What every invocation of it attests.
-    attestation: Attestation,
-}
-
-impl PropertyFunction for AttestedRelation {
-    fn volatility(&self) -> Volatility {
-        self.inner.volatility()
-    }
-
-    fn arity(&self) -> PfArity {
-        self.inner.arity()
-    }
-
-    fn modes(&self) -> &[BindingPattern] {
-        self.inner.modes()
-    }
-
-    fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
-        self.inner.rows_per_invocation(mode)
-    }
-
-    fn open(
-        &self,
-        args: &PfArgs<'_>,
-        ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
-        Ok(Box::new(AttestedCursor {
-            inner: self.inner.open(args, ceiling)?,
-            attestation: self.attestation.clone(),
-        }))
-    }
-
-    fn admits(&self, invocation: BindingPattern) -> bool {
-        // Delegated rather than left to the provided default: if `inner` ever narrows
-        // which access patterns it serves, a wrapper that recomputed the default from
-        // `modes` would admit calls the relation itself refuses.
-        self.inner.admits(invocation)
-    }
-}
-
-/// [`AttestedRelation`]'s cursor: `inner`'s rows, the host's attestations.
-struct AttestedCursor {
-    /// The wrapped relation's own cursor for this invocation.
-    inner: Box<dyn PfCursor>,
-    /// What this invocation attests, at both instants the evaluator asks.
-    attestation: Attestation,
-}
-
-impl PfCursor for AttestedCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        self.inner.next()
-    }
-
-    fn take_work(&mut self) -> u64 {
-        // Forwarded, not zeroed: the wrapped relation's reported internal work is what
-        // its caller's budget is charged for, and swallowing it here would make a
-        // governed receipt describe a cheaper execution than the one that ran.
-        self.inner.take_work()
-    }
-
-    fn generation(&self) -> IndexGeneration {
-        self.attestation.generation.clone()
-    }
-
-    fn service_level(&self) -> ServiceLevel {
-        // The same declaration at both instants. A Python relation is a frozen table
-        // handed over before evaluation began, so it cannot discover a shortfall
-        // mid-drain the way a live index-backed relation can; what the host knew when it
-        // supplied the rows is all there is to say.
-        self.attestation.service.clone()
-    }
 }
 
 /// Collect the `relations` / `relations_from_graph` / `path_relations` keyword dicts
@@ -619,8 +479,9 @@ fn relation_fields<'py, const N: usize>(
         // likely to be a field someone believed this kind had than a mis-spelled
         // attestation, so it reports the accepted shapes; one that is shaped like an
         // attestation but carries the wrong member types keeps its own precise
-        // diagnostic, which `attestation` raises.
-        attestation(iri, &trailing)?.ok_or_else(shape_error)?
+        // diagnostic, which [`Attestation::read`] raises.
+        Attestation::read(&format!("property function <{iri}>"), &trailing)?
+            .ok_or_else(shape_error)?
     } else {
         Attestation::UNDECLARED
     };
@@ -628,54 +489,6 @@ fn relation_fields<'py, const N: usize>(
         <[Bound<'py, PyAny>; N]>::try_from(items).map_err(|_| shape_error())?,
         attested,
     ))
-}
-
-/// Read one relation declaration's trailing attestation position:
-/// `(generation, incompleteness)`, each a `str` or `None`.
-///
-/// `Ok(None)` is "this value is not an attestation at all" — not a two-member sequence —
-/// which is the caller's cue to report the whole declaration's accepted shapes rather
-/// than a diagnostic about a position the caller may never have meant to write.
-///
-/// # A string is not a two-member sequence here
-///
-/// Python strings are sequences of their own characters, so a two-character string would
-/// otherwise extract as a perfectly well-formed attestation whose two halves are its two
-/// letters — a misconfiguration that would be accepted in silence and then reported back
-/// on the receipt as though the host had said it.
-///
-/// # Errors
-///
-/// `TypeError` naming the field when the value IS a two-member sequence but a member is
-/// neither a `str` nor `None`.
-fn attestation(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<Option<Attestation>> {
-    if value.is_instance_of::<PyString>() || value.is_instance_of::<PyBytes>() {
-        return Ok(None);
-    }
-    let Ok(members) = value.extract::<Vec<Bound<'_, PyAny>>>() else {
-        return Ok(None);
-    };
-    let Ok([generation, incompleteness]) = <[Bound<'_, PyAny>; 2]>::try_from(members) else {
-        return Ok(None);
-    };
-    let read = |member: &Bound<'_, PyAny>, field: &str| -> PyResult<Option<String>> {
-        member.extract::<Option<String>>().map_err(|_| {
-            PyTypeError::new_err(format!(
-                "property function <{iri}>: an attestation's `{field}` must be a str or None"
-            ))
-        })
-    };
-    Ok(Some(Attestation {
-        // Recorded verbatim on both halves. The kernel never parses either string, and
-        // neither does this boundary: a generation is whatever the host's index calls its
-        // versions, and a reason is whatever an operator needs to read.
-        generation: read(&generation, "generation")?
-            .map_or(IndexGeneration::Undeclared, IndexGeneration::Declared),
-        service: read(&incompleteness, "incompleteness")?
-            .map_or(ServiceLevel::Undeclared, |reason| {
-                ServiceLevel::Incomplete { reason }
-            }),
-    }))
 }
 
 /// Read one declared arity position as a non-negative integer.
@@ -761,18 +574,7 @@ pub(super) fn registry_over(
     let mut registry = PropertyFunctionRegistry::new();
     for (iri, spec, attestation) in specs {
         let relation = build_relation(&iri, spec, dataset)?;
-        // Wrapped only when the host actually declared something, so a relation that
-        // attested nothing is byte-for-byte the registration it was before the
-        // attestation position existed rather than a silent relation behind a wrapper.
-        let relation: Arc<dyn PropertyFunction> = if attestation.is_silent() {
-            relation
-        } else {
-            Arc::new(AttestedRelation {
-                inner: relation,
-                attestation,
-            })
-        };
-        registry.register(iri, relation);
+        registry.register(iri, attestation.wrap(relation));
     }
     Ok(registry)
 }
@@ -2141,7 +1943,7 @@ fn witness_to_dict<'py>(
             .iter()
             .map(|generation| match generation {
                 IndexGeneration::Undeclared => None,
-                IndexGeneration::Declared(value) => Some(value.as_str()),
+                IndexGeneration::Declared(value) => Some(&**value),
             })
             .collect();
         entry.set_item("generations", generations)?;
@@ -2295,190 +2097,4 @@ fn materialize_partial(py: Python<'_>, partial: PartialAnswers) -> PyResult<Py<P
             barrier,
         },
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{SparqlEngine, SparqlRequest, parse_dataset};
-
-    /// An `ASK` whose filter calls an IRI in call position under a would-be
-    /// extension namespace.
-    const EXT_CALL_ASK: &str = "ASK { FILTER(<https://ex.example/fn/nope>(1)) }";
-
-    fn ask(engine: &NativeSparqlEngine) -> Result<SparqlResult, crate::RdfDiagnostic> {
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        engine.query(
-            &dataset,
-            SparqlRequest {
-                query: EXT_CALL_ASK,
-                base_iri: None,
-                substitutions: &[],
-            },
-        )
-    }
-
-    #[test]
-    fn default_engine_leaves_extension_functions_off() {
-        // Unset = engine defaults: the call-position IRI is an ordinary custom
-        // function, so the query PARSES (any failure is an evaluation error,
-        // never the extension seam's parse-time unknown-local-name hard-fail).
-        if let Err(diag) = ask(&build_engine(EngineConfig::default())) {
-            assert!(
-                !diag.to_string().contains("parse"),
-                "extensions-off must not fail at parse time: {diag}"
-            );
-        }
-    }
-
-    #[test]
-    fn extension_namespaces_thread_into_parser_options() {
-        // With the namespace configured, the UNKNOWN local name `nope` is a
-        // parse-time hard error — proving the kwarg reached ParserOptions.
-        let engine = build_engine(EngineConfig {
-            extension_namespaces: Some(vec!["https://ex.example/fn/".to_owned()]),
-            ..EngineConfig::default()
-        });
-        let diag = ask(&engine).expect_err("unknown extension local name must hard-fail");
-        assert_eq!(diag.code, "native-sparql-query-parse", "{diag}");
-    }
-
-    #[test]
-    fn standpoint_predicates_thread_into_the_engine() {
-        let engine = build_engine(EngineConfig {
-            standpoint_predicates: Some((
-                "https://ex.example/accordingTo".to_owned(),
-                "https://ex.example/sharpens".to_owned(),
-            )),
-            ..EngineConfig::default()
-        });
-        // The engine Debug surface reports the configured table (the engine's own
-        // crate tests cover `heldIn` evaluation semantics end-to-end).
-        assert!(
-            format!("{engine:?}").contains("accordingTo"),
-            "standpoint predicate table must be installed"
-        );
-    }
-
-    /// A property-function namespace configured with NO registry: a predicate under
-    /// it is lowered to a call node, and the call is refused as unregistered rather
-    /// than quietly scanning a dataset that holds no such triple.
-    #[test]
-    fn property_fn_namespaces_thread_into_parser_options() {
-        let engine = build_engine(EngineConfig {
-            property_fn_namespaces: Some(vec!["https://ex.example/rel/".to_owned()]),
-            ..EngineConfig::default()
-        });
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        let diag = engine
-            .query(
-                &dataset,
-                SparqlRequest {
-                    query: "ASK { ?s <https://ex.example/rel/nope> ?o }",
-                    base_iri: None,
-                    substitutions: &[],
-                },
-            )
-            .expect_err("a call under a declared namespace with no relation must hard-fail");
-        assert!(
-            diag.to_string()
-                .contains("no property function is registered"),
-            "{diag}"
-        );
-    }
-
-    /// The registry the Python surface builds is the kernel's own, so a ragged table
-    /// is refused by [`MemoryRelation::new`] and surfaces as a Python `ValueError`.
-    #[test]
-    fn a_ragged_tuple_relation_is_refused() {
-        let specs = vec![(
-            "https://ex.example/rel/pairs".to_owned(),
-            RelationSpec::Rows {
-                subject_arity: 1,
-                object_arity: 1,
-                rows: vec![vec![TermValue::iri("https://ex.example/a")]],
-            },
-            Attestation::UNDECLARED,
-        )];
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        let error = build_relations(specs, &dataset).expect_err("a one-cell row is not two wide");
-        assert!(
-            format!("{error}").contains("https://ex.example/rel/pairs"),
-            "the refusal must name the relation: {error}"
-        );
-    }
-
-    /// No declared relation is the ABSENCE of a registry, not an empty one — the
-    /// configuration every pre-existing call keeps.
-    #[test]
-    fn no_declared_relation_attaches_no_registry() {
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        assert!(
-            build_relations(Vec::new(), &dataset)
-                .expect("no relations is not an error")
-                .is_none()
-        );
-    }
-
-    /// An alternative the dataset has no edges for contributes zero edges rather than
-    /// failing — the kernel's own rule, inherited verbatim rather than second-guessed at
-    /// the boundary. The relation is registered and answers nothing.
-    #[test]
-    fn a_path_relation_over_an_edgeless_predicate_still_registers() {
-        let specs = vec![(
-            "https://ex.example/rel/walk".to_owned(),
-            RelationSpec::PathWitness {
-                steps: vec![(
-                    TermValue::iri("https://ex.example/p"),
-                    PathDirection::Forward,
-                )],
-                min_hops: 1,
-                max_hops: 4,
-                max_paths_per_seed: 8,
-                max_expansions_per_invocation: 64,
-                shortest: false,
-            },
-            Attestation::UNDECLARED,
-        )];
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        let registry = build_relations(specs, &dataset)
-            .expect("an edgeless alternative is not a misconfiguration")
-            .expect("one relation was declared, so a registry exists");
-        assert!(
-            registry.resolve("https://ex.example/rel/walk").is_some(),
-            "the relation is registered under the caller's IRI"
-        );
-    }
-
-    /// A zero `min_hops` is refused by the kernel's own envelope, not defaulted away: a
-    /// zero-hop path is the identity and has no statement to bind as a witness.
-    #[test]
-    fn a_path_relation_with_a_zero_min_hops_is_refused() {
-        let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        let a = builder.intern_iri("https://ex.example/a");
-        let p = builder.intern_iri("https://ex.example/p");
-        let b = builder.intern_iri("https://ex.example/b");
-        builder.push_quad(a, p, b, None);
-        let dataset = builder.freeze().expect("a one-quad dataset");
-        let specs = vec![(
-            "https://ex.example/rel/walk".to_owned(),
-            RelationSpec::PathWitness {
-                steps: vec![(
-                    TermValue::iri("https://ex.example/p"),
-                    PathDirection::Forward,
-                )],
-                min_hops: 0,
-                max_hops: 4,
-                max_paths_per_seed: 8,
-                max_expansions_per_invocation: 64,
-                shortest: false,
-            },
-            Attestation::UNDECLARED,
-        )];
-        let error = build_relations(specs, &dataset).expect_err("min_hops of zero is refused");
-        assert!(
-            format!("{error}").contains("min_hops must be at least 1"),
-            "the kernel's own diagnostic must cross the boundary: {error}"
-        );
-    }
 }

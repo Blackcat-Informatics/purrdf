@@ -87,6 +87,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -474,15 +475,31 @@ fn admission_accepts_fresh_plan() {
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/graph")))
         .expect("the seed stratum emits a unit");
+    // The bound is fifty-one against a depth of fifty: this producer declares
+    // fifty rows and the measured cardinality is fifty too, so the depth sits
+    // exactly at the declaration — the one depth where an emitted bound equal to
+    // the depth would make `Exhausted` a guess about the bound rather than a
+    // report about the data. The probe row is emitted there like everywhere else.
+    // Only the text moved: `compiled.plan_id` is asserted equal to the identity
+    // the plan itself carries, above, and the recorded depth is checked below.
     assert_eq!(
         graph.sparql,
         format!(
             "SELECT ?candidate WHERE {{\n  \
-             {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( <{}> ) }} LIMIT 50 }}\n\
-             }}\nLIMIT 50",
+             {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( <{}> ) }} LIMIT 51 }}\n\
+             }}\nLIMIT 51",
             ex("pf/iri"),
             ex("seed")
         )
+    );
+    assert_eq!(
+        graph.depth, 50,
+        "the recorded depth is the fifty the plan holds and does not move with the emitted bound"
+    );
+    assert_eq!(
+        graph.declared_rows,
+        Some(50),
+        "and the unit carries the declaration the probe row is read against"
     );
 }
 
@@ -1908,9 +1925,13 @@ fn a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all() {
 /// one row at a time through the ranked-stream protocol, to exhaustion.
 fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
-    while let Some(row) = block_on(stream.next()).expect("a materialized stream obeys the protocol")
+    // The block each row names is not what these assertions are about — every
+    // producer here declares `Unrestricted` and so names none — so it is dropped
+    // by name rather than compared.
+    while let Some((rank, candidate, _block)) =
+        block_on(stream.next()).expect("a materialized stream obeys the protocol")
     {
-        rows.push(row);
+        rows.push((rank, candidate));
     }
     rows
 }
@@ -2069,6 +2090,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }

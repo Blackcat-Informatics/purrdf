@@ -54,23 +54,43 @@
 //! and no two scores are equal. Every expected sum below is those integers added
 //! by hand.
 //!
-//! The one recorded expectation is the fusion profile's identity, because it is
-//! a BLAKE3 digest and there is no hand arithmetic that produces one. Pinning it
-//! is still the cross-target claim this file exists to make: the digest is taken
-//! over the profile's canonical, length-framed encoding, so a target that framed
-//! a `u32` or ordered a map differently would produce a different hex here.
+//! The recorded expectations are the two BLAKE3 digests — the fusion profile's
+//! identity and an answer's evidence identity — because there is no hand
+//! arithmetic that produces one. Pinning them is still the cross-target claim
+//! this file exists to make: each digest is taken over a canonical,
+//! length-framed encoding, so a target that framed an integer or ordered a map
+//! differently would produce a different hex here. The evidence digest is also
+//! pinned the stronger way, by writing out the **bytes** it is a digest of, which
+//! is a claim about the layout that no digest alone can make.
 //!
 //! The comparison is on the **decimal lexical**, not on the raw `i128`, because
 //! the lexical is what a consumer receives and what a serializer writes.
+//!
+//! # What else crosses the target boundary
+//!
+//! A fused score is not the only thing an answer carries, so two further facts
+//! about the same fusion are pinned here rather than on one target only:
+//!
+//! * **the evidence identity**, which is what two holders of two answers compare
+//!   to decide whether they were served from the same indexes — hand-written
+//!   bytes, then their digest, then the exactness verdict a declared shortfall
+//!   produces;
+//! * **the depth a declared candidate domain licenses**, because a declaration
+//!   that two strata draw from disjoint blocks lets a candidate certify before
+//!   every stream has been consulted. That makes the number of ranks read part of
+//!   the answer's contract: a stream stopped short reports a ceiling rather than
+//!   exhaustion, so a target whose finality test read one rank further would hand
+//!   back a different terminal report for identical streams.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    CandidateDomains, DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt,
-    ProducerStatus, ProtocolError, RankFidelity, RankedStream, StreamContract, Term, TopK,
-    contribution, fuse,
+    CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, EVIDENCE_VERSION, EvidenceId, Fixed,
+    FusionProfile, IndexGeneration, Iri, PfAttestation, ProducerReceipt, ProducerStatus,
+    ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock, ScoreExactness, ServiceLevel,
+    StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -128,8 +148,16 @@ fn iri(text: &str) -> Iri {
 
 /// A producer whose rows are pre-scripted, in rank order.
 struct ScriptedStream {
-    steps: VecDeque<(u64, Fixed, Term)>,
+    steps: VecDeque<RankedRow<Term>>,
     emitted: u64,
+    /// What this stream promises about its rows. Part of the determinism claim:
+    /// the contract decides what the engine holds and refuses, so a target that
+    /// read it differently would fuse differently.
+    contract: StreamContract,
+    /// What this stream attests about the index behind its rows. Most fixtures
+    /// here descend from no index and say so; the evidence fixture states its
+    /// own, because an evidence identity is a digest over exactly these values.
+    attestation: PfAttestation,
 }
 
 // The trait's methods are `async`; this mock's body is synchronous because its
@@ -138,7 +166,7 @@ struct ScriptedStream {
 impl RankedStream for ScriptedStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         match self.steps.pop_front() {
             Some(step) => {
                 self.emitted += 1;
@@ -154,17 +182,23 @@ impl RankedStream for ScriptedStream {
         })
     }
 
-    /// The fixture's scripted rows are distinct and strictly rank-ordered, so
-    /// this is what they honestly declare. It is part of the determinism claim:
-    /// the contract decides what the engine holds and refuses, so a target that
-    /// read it differently would fuse differently.
     fn contract(&self) -> StreamContract {
-        StreamContract::new(
-            DuplicatePolicy::Unique,
-            RankFidelity::EXACT,
-            CandidateDomains::Unrestricted,
-        )
+        self.contract.clone()
     }
+
+    fn attestation(&self) -> PfAttestation {
+        self.attestation.clone()
+    }
+}
+
+/// The contract a fixture stream of distinct, strictly rank-ordered rows honestly
+/// declares when it promises nothing about where its candidates lie.
+fn unrestricted() -> StreamContract {
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 /// Script one stream's three rows, in the order `candidates` names them.
@@ -174,14 +208,23 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
         .enumerate()
         .map(|(index, candidate)| {
             let rank = u64::try_from(index + 1).expect("three rows");
-            (
+            // The fixture declares `Unrestricted`, which owes no per-row block
+            // and names none. That is part of the determinism claim too: an
+            // absence must read identically on every target.
+            RankedRow::new(
                 rank,
                 contribution(Fixed::ONE, rank, K).expect("the contribution fits"),
                 Term::new(*candidate),
+                RowBlock::Undeclared,
             )
         })
         .collect();
-    ScriptedStream { steps, emitted: 0 }
+    ScriptedStream {
+        steps,
+        emitted: 0,
+        contract: unrestricted(),
+        attestation: PfAttestation::UNDECLARED,
+    }
 }
 
 /// Both strata at unit weight and `K = 60`, which admits two contributions per
@@ -373,10 +416,22 @@ fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
 
     let stream = ScriptedStream {
         steps: VecDeque::from([
-            (1, Fixed::from_raw(COLLIDED), Term::new("alpha")),
-            (2, Fixed::from_raw(COLLIDED), Term::new("beta")),
+            RankedRow::new(
+                1,
+                Fixed::from_raw(COLLIDED),
+                Term::new("alpha"),
+                RowBlock::Undeclared,
+            ),
+            RankedRow::new(
+                2,
+                Fixed::from_raw(COLLIDED),
+                Term::new("beta"),
+                RowBlock::Undeclared,
+            ),
         ]),
         emitted: 0,
+        contract: unrestricted(),
+        attestation: PfAttestation::UNDECLARED,
     };
     let fused = block_on(fuse::<ScriptedStream, Term>(
         vec![(stratum.clone(), stream)],
@@ -409,4 +464,249 @@ fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
         fused.trailer.resolution[&stratum].collisions_observed, 1,
         "one adjacent pair collided, on every target"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The evidence identity, and a fusion under a declared candidate domain
+// ---------------------------------------------------------------------------
+
+/// The block the documents stratum declares, and the block its rows are drawn
+/// from.
+const DOMAIN_DOCS: &str = "http://example.org/domain/documents";
+
+/// The block the people stratum declares. Disjoint from [`DOMAIN_DOCS`], which
+/// is what lets a candidate be final the moment it is read.
+const DOMAIN_PEOPLE: &str = "http://example.org/domain/people";
+
+/// The evidence identity of the two attestations
+/// [`an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets`] fuses,
+/// as hex.
+///
+/// Recorded rather than derived, exactly as [`PROFILE_ID_HEX`] is and for the
+/// same reason: it is a BLAKE3 digest and no hand arithmetic produces one. The
+/// bytes it is a digest *of* are hand-written in that test, which is where the
+/// layout claim actually lives — this constant then pins that the digest over
+/// those bytes is the same number on every target.
+const EVIDENCE_ID_HEX: &str = "8511177560e417f1bba69c0b3066820bb06e8fff5415fca0ef2c6df5afbb5567";
+
+fn domain(tag: &str) -> DomainTag {
+    DomainTag::parse(tag).expect("the fixture domain tags are valid IRIs")
+}
+
+/// One stream's rows, all drawn from `block`, at ranks `1..=candidates.len()`.
+fn scripted_in(candidates: &[&str], block: &str) -> ScriptedStream {
+    let steps = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let rank = u64::try_from(index + 1).expect("the fixture ranks fit");
+            RankedRow::new(
+                rank,
+                contribution(Fixed::ONE, rank, K).expect("the contribution fits"),
+                Term::new(*candidate),
+                // A restricted stream owes a block on every row, and this is the
+                // block the row is really in. An absence here would be an
+                // unbacked declaration and a refusal, on every target.
+                RowBlock::Declared(domain(block)),
+            )
+        })
+        .collect();
+    ScriptedStream {
+        steps,
+        emitted: 0,
+        contract: StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            CandidateDomains::within([domain(block)]),
+        ),
+        attestation: PfAttestation::UNDECLARED,
+    }
+}
+
+/// Write one length-framed part exactly as the canonical writer does: a
+/// little-endian `u64` length, then the bytes.
+///
+/// Spelled out here rather than reached for from the crate, because the point is
+/// to state the layout independently. A test that asked the encoder to describe
+/// its own framing would agree with any framing at all.
+fn framed(out: &mut Vec<u8>, part: &str) {
+    out.extend_from_slice(&(part.len() as u64).to_le_bytes());
+    out.extend_from_slice(part.as_bytes());
+}
+
+/// **An answer's evidence identity is the same bytes, and the same digest, on
+/// both targets.**
+///
+/// The evidence identity is what two holders of two answers compare to decide
+/// whether they were answered from the same indexes. A target that framed a
+/// length differently, ordered the strata differently, or wrote an absence with a
+/// different discriminant would hand them ids that disagreed about answers whose
+/// evidence was identical — and nothing downstream could tell that apart from a
+/// genuine index rebuild.
+///
+/// The bytes are hand-written from the layout: the version, the entry count, then
+/// per stratum in canonical order the framed stratum IRI, the generation
+/// discriminant with its framed spelling, and the service-level discriminant with
+/// its framed reason. Every integer little-endian.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
+    const REASON: &str = "shard 3 rebuilding";
+
+    let mut one = scripted(["alpha", "beta", "gamma"]);
+    one.attestation = PfAttestation {
+        generation: IndexGeneration::declared("gen-7"),
+        service: ServiceLevel::Undeclared,
+    };
+    let mut two = scripted(["beta", "gamma", "alpha"]);
+    two.attestation = PfAttestation {
+        generation: IndexGeneration::declared("gen-8"),
+        service: ServiceLevel::Incomplete {
+            reason: REASON.to_owned(),
+        },
+    };
+
+    let result = block_on(fuse::<ScriptedStream, Term>(
+        vec![(iri(STRATUM_ONE), one), (iri(STRATUM_TWO), two)],
+        &profile(),
+        TopK::new(8),
+    ))
+    .expect("the fixture streams fuse");
+
+    // What each stratum attested, carried through verbatim: the generation
+    // spellings are the hosts' own bytes and the reason is the host's own words.
+    assert_eq!(
+        result.trailer.attestations[&iri(STRATUM_ONE)],
+        PfAttestation {
+            generation: IndexGeneration::declared("gen-7"),
+            service: ServiceLevel::Undeclared,
+        }
+    );
+    assert_eq!(
+        result.trailer.attestations[&iri(STRATUM_TWO)],
+        PfAttestation {
+            generation: IndexGeneration::declared("gen-8"),
+            service: ServiceLevel::Incomplete {
+                reason: REASON.to_owned(),
+            },
+        }
+    );
+
+    // The layout, written out by hand.
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&EVIDENCE_VERSION.to_le_bytes());
+    expected.extend_from_slice(&2_u64.to_le_bytes());
+    framed(&mut expected, STRATUM_ONE);
+    expected.push(1); // the generation is declared
+    framed(&mut expected, "gen-7");
+    expected.push(0); // and nothing was said about its wholeness
+    framed(&mut expected, STRATUM_TWO);
+    expected.push(1);
+    framed(&mut expected, "gen-8");
+    expected.push(1); // this one declared itself short
+    framed(&mut expected, REASON);
+    assert_eq!(
+        result.trailer.evidence_canonical_bytes(),
+        expected,
+        "the evidence encoding is the same bytes on both targets"
+    );
+
+    // And the identity an answer is compared by is the digest of exactly those
+    // bytes — re-derived here rather than taken on the trailer's word, which is
+    // the audit a holder of an answer performs.
+    assert_eq!(
+        result.trailer.evidence_id,
+        EvidenceId::from_canonical(&expected),
+        "the id is the digest of the bytes the trailer publishes"
+    );
+    assert_eq!(result.trailer.evidence_id.to_hex(), EVIDENCE_ID_HEX);
+
+    // One stratum served from an index it called short, so every fused score is
+    // an ESTIMATE rather than a value — and the answer names which stratum made
+    // it one, on both sides. Fusion scores by rank, so a stratum that fails to
+    // name a row both withholds that row's contribution and promotes every row
+    // behind it: the error runs in both directions, which is why the same
+    // stratum appears under `deficit` and under `inflation`. Its declared order
+    // is faithful, so both directions stay finite and `unbounded` is empty.
+    assert_eq!(
+        result.trailer.exactness,
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([iri(STRATUM_TWO)]),
+            inflation: BTreeSet::from([iri(STRATUM_TWO)]),
+            unbounded: BTreeSet::new(),
+        },
+        "the shortfall reaches the exactness verdict identically on both targets"
+    );
+}
+
+/// **A fusion under a declared candidate domain reads the same depth, and
+/// answers the same rows, on both targets.**
+///
+/// A declaration that the two strata draw from disjoint blocks is what licenses
+/// the engine to certify a candidate before every stream has been consulted about
+/// it. That makes the *depth read* part of the answer's cross-target contract and
+/// not merely an optimization: a target that computed the finality test
+/// differently would read a different number of ranks, and — because a stream
+/// stopped short reports a ceiling rather than exhaustion — would hand back a
+/// different terminal report for the same streams.
+///
+/// The scores are the header's hand-computed unit-weight contributions. The two
+/// leading candidates tie exactly, so their order falls to the declared
+/// tie-break's later keys, and the streams are longer than the bound so the
+/// bounded stop is what ends them.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+fn a_declared_candidate_domain_bounds_the_same_read_on_both_targets() {
+    let docs = ["doc-1", "doc-2", "doc-3", "doc-4"];
+    let people = ["person-1", "person-2", "person-3", "person-4"];
+    let result = block_on(fuse::<ScriptedStream, Term>(
+        vec![
+            (iri(STRATUM_ONE), scripted_in(&docs, DOMAIN_DOCS)),
+            (iri(STRATUM_TWO), scripted_in(&people, DOMAIN_PEOPLE)),
+        ],
+        &profile(),
+        TopK::new(2),
+    ))
+    .expect("declared blocks its rows back are not a protocol violation");
+
+    // Each candidate is named by exactly one stratum, so each score is that one
+    // contribution. `doc-1` and `person-1` are therefore tied exactly, and the
+    // tie-break — best stratum rank, then canonical term bytes — orders them.
+    let rows: Vec<(String, String)> = result
+        .rows
+        .iter()
+        .map(|row| {
+            (
+                row.entity.as_str().to_owned(),
+                row.score.to_decimal_lexical(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("doc-1".to_owned(), decimal(RANK_1)),
+            ("person-1".to_owned(), decimal(RANK_1)),
+        ],
+        "both targets return the same two rows, in the same tie-broken order"
+    );
+
+    // The depth read, which is what the declaration buys. Two ranks per stream:
+    // the rank-one row that becomes the answer, and one more head whose
+    // contribution is the threshold the second row is certified against.
+    for stratum in [STRATUM_ONE, STRATUM_TWO] {
+        assert_eq!(
+            result.trailer.resolution[&iri(stratum)].ranks_pulled,
+            2,
+            "the declaration stopped {stratum} two ranks in, on every target"
+        );
+        assert_eq!(
+            result.trailer.statuses.get(&iri(stratum)),
+            Some(&ProducerStatus::CeilingReached {
+                bound: Fixed::from_raw(RANK_2)
+            }),
+            "a stream the bound stopped is closed at the contribution of the last \
+             rank read from it, never drained into an exhaustion it did not earn"
+        );
+    }
 }

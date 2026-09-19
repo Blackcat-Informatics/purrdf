@@ -41,7 +41,7 @@
 //!
 //! # A raw stream, not yet a fusion stream
 //!
-//! [`RankedStreamImpl`] carries `(rank, candidate)` only. A fusion contribution
+//! [`RankedStreamImpl`] carries `(rank, candidate, block)` only. A fusion contribution
 //! depends on the fusion profile's weights and smoothing constant, which are
 //! deliberately not a plan input, so the contribution is attached at `fuse` time.
 //! Keeping the executor profile-free is what lets the unfused rung be consumed
@@ -109,31 +109,65 @@
 //! the plan identity does. The attestation read off the witness travels the
 //! same way, in [`StratumStream::attestation`].
 //!
+//! # Each row says which block it was drawn from
+//!
+//! A restricted declaration is a promise about every row, and a consumer can only
+//! hold it to the rows it reads if a row says where it came from. So every row
+//! carries its block ([`RowBlock`]), from exactly one of two places and never from
+//! a guess:
+//!
+//! * the unit's own `?block` column, where the producer's declaration named the
+//!   argument position to read it from. `compile` projects that column only for
+//!   such a producer, and it is found here by name;
+//! * the **declaration itself**, where it names exactly one block. A producer that
+//!   promised all its candidates lie in one block has already answered per row, so
+//!   nothing is invented and no host repeats itself — see [`entailed_block`].
+//!
+//! Anything else is [`RowBlock::Undeclared`], which is the honest report and not a
+//! gap: an unrestricted producer owes no block, and a producer restricted to
+//! several blocks with no column to distinguish them has declared something this
+//! stage cannot back. Fusion is where that is answered — it refuses a restriction
+//! no row backs rather than certifying an order on it — because fusion is the
+//! stage that would otherwise have used it.
+//!
 //! # The unit is read one row deeper than the stratum is
 //!
-//! [`compile`](crate::compile) emits `LIMIT min(depth + 1, declared row bound)`,
-//! so a unit whose producer still had rows past the planned depth hands back one
-//! more row than the stratum may contribute. That row is a **probe**: it is
-//! never emitted onto the stream, never ranked, and never counted anywhere. All
-//! it does is decide the stream's ending — [`StreamEnding::DepthReached`] when
-//! it arrived, [`StreamEnding::Exhausted`] when it did not. Without it an
-//! executor could only ever say `Exhausted`, which is the strongest
-//! completeness claim this layer makes, uttered about a read the plan itself cut
-//! short.
+//! [`compile`](crate::compile) emits
+//! `LIMIT max(1, min(depth, declared row bound) + 1)`, so a unit whose producer
+//! still had rows past the planned depth hands back one more row than the
+//! stratum may contribute. That row is a **probe**: it is never emitted onto the
+//! stream, never ranked, and never counted anywhere. All it does is decide the
+//! stream's ending — [`StreamEnding::DepthReached`] when it arrived,
+//! [`StreamEnding::Exhausted`] when it did not. Without it an executor could
+//! only ever say `Exhausted`, which is the strongest completeness claim this
+//! layer makes, uttered about a read the plan itself cut short.
+//!
+//! The slot exists at every depth, including a depth that already equals the
+//! producer's declared row bound, and that last case is why the slot's arrival
+//! is read against the declaration rather than reported blind. Below the
+//! declaration, the extra row means the *depth* stopped the read, which is
+//! `DepthReached`. At the declaration, it means the producer yielded a row it
+//! promised did not exist, and [`bound_to_depth`] refuses the whole run
+//! ([`ExecutionError::RowBoundBreached`]) rather than truncating to the depth
+//! and calling the result exhausted. When the declaration is honest the slot
+//! comes back empty and costs nothing, and `Exhausted` is then verified against
+//! a read that was allowed to go one row further rather than believed on the
+//! strength of a bound.
 
 use std::collections::{HashMap, VecDeque};
 
 use purrdf_core::{DatasetView, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    GovernedOutcome, NativeSparqlEngine, PfAttestation, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, RegistryId, RelationWitness, ServiceLevel,
+    CandidateDomains, DomainTag, GovernedOutcome, NativeSparqlEngine, PfAttestation,
+    PropertyFunctionRegistry, QueryGovernors, QueryOptions, RegistryId, RelationWitness,
+    ServiceLevel,
 };
 
-use crate::compile::{CANDIDATE_NAME, CompiledRetrieval};
+use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval};
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, StreamContract};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RowBlock, StreamContract};
 use crate::render::candidate_lexical;
 
 /// One stratum's ranked rows, tagged with the pinned plan they descend from and
@@ -206,7 +240,9 @@ pub struct ExecutionResult {
 /// change if one were ever found. [`Self::InconsistentWitness`] is that second
 /// condition, and it is added on the terms that argument set rather than
 /// against them: a variant no path can construct is worse than no variant, and
-/// this one is reached by a real observation the executor now makes.
+/// this one is reached by a real observation the executor now makes — an index
+/// that moved between two of one run's invocations, executed end to end in
+/// `tests/execute_dataset.rs`.
 ///
 /// What makes it whole-run rather than per-stratum is *what it observes*. A
 /// witness that does not describe exactly one relation, one index generation
@@ -215,6 +251,34 @@ pub struct ExecutionResult {
 /// admission waist about what was registered, or an index moving underneath the
 /// query. Neither fact is confined to the stratum that noticed it, and the
 /// remaining strata's answers rest on the same two assumptions.
+///
+/// # The witness rule is the reachable construction; the budget arm is not
+///
+/// [`execute`] raises [`Self::InconsistentWitness`] from two places, and they
+/// are not equal. The witness rule is the observation just described. The other
+/// is the `GovernedOutcome::BudgetExhausted` arm, and **nothing a compiled unit
+/// can do reaches it today** — which is worth writing down plainly rather than
+/// leaving a reader to infer that the executor has seen one.
+///
+/// It is not removable, and that is the honest resolution rather than an excuse.
+/// `GovernedOutcome` is deliberately *not* `#[non_exhaustive]`: its two variants
+/// are the whole taxonomy a governor can produce, so the compiler requires both
+/// to be handled and the only open question is what this stage does with the
+/// second. The two alternatives are worse than a refusal nothing reaches. Taking
+/// the partial rows as an answer would report a truncated read as a stratum that
+/// exhausted — the silent drop, certified. Panicking would turn a condition this
+/// crate cannot rule out *by type* into a crash in a library.
+///
+/// What rules it out is the lane's configuration, which is a fact about two
+/// values rather than about this enum: [`QueryGovernors::UNBOUNDED`] engages no
+/// caller-settable ceiling and carries no stop signal, leaving only the
+/// evaluator's fixed recursion guard on user-function depth engaged; and the
+/// options built below inject no user-function registry, so a unit cannot enter
+/// a user function at all, let alone nest one past a build constant. Both halves
+/// are executed in `tests/execute_dataset.rs` beside the witness test, so a
+/// later change to either — a ceiling added to the lane, a registry injected —
+/// reddens a test rather than quietly making a documented impossibility
+/// possible.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ExecutionError {
@@ -243,6 +307,12 @@ pub enum ExecutionError {
     /// The invocation count is deliberately not part of the rule; see this
     /// module's header for why tightening it to include the count would be a
     /// flake rather than a check.
+    ///
+    /// One other condition is reported here, for want of a whole-run refusal
+    /// that would mean anything different: a governed outcome that tripped on a
+    /// lane which declined every ceiling. It is the same shape of fact — the run
+    /// did not happen under the assumptions it was compiled against — and it is
+    /// unreachable through this lane's configuration, per this type's own docs.
     #[error("stratum {stratum}: the relation witness is not a compiled unit's: {reason}")]
     InconsistentWitness {
         /// The stratum whose unit produced the witness. Boxed because an
@@ -253,13 +323,68 @@ pub enum ExecutionError {
         /// count that was wrong.
         reason: String,
     },
+
+    /// A stratum's producer yielded more rows than the registry declared it
+    /// could yield per invocation.
+    ///
+    /// The declared row bound is what
+    /// [`compile`](crate::compile) sizes the emitted `LIMIT` against and what
+    /// admission holds a recorded depth to, so a producer that beats it has
+    /// invalidated both decisions for this run. The condition is observable
+    /// only because the emitted bound carries a probe slot one row past the
+    /// declaration: the read is allowed to reach for a row the registry said
+    /// does not exist, precisely so that its arrival can be reported.
+    ///
+    /// It is a **whole-run refusal**, not a
+    /// [`ProducerStatus::ExecutionFailed`] entry, for two reasons. That status
+    /// says the producer could not run and carries no rows, and this producer
+    /// ran and returned rows — the same distinction
+    /// [`Self::InconsistentWitness`] draws. And the broken number is not
+    /// confined to the stratum that exposed it: the same declaration ordered
+    /// this call against the other operators of its group and admitted every
+    /// depth in the plan, so the remaining strata's answers rest on it too.
+    ///
+    /// The alternative to refusing is what this layer did before the slot
+    /// reached this depth: truncate to the depth and report the stratum
+    /// [`ProducerStatus::Exhausted`] — the strongest completeness claim in the
+    /// vocabulary, minted for a read that demonstrably had more rows behind it.
+    ///
+    /// Both numbers are carried because either alone is unactionable. `declared`
+    /// is the promise a host has to go and fix in its producer, and `pulled` is
+    /// the evidence that it is false.
+    #[error(
+        "stratum {stratum}: the registry declares at most {declared} rows per invocation, and the read returned {pulled}"
+    )]
+    RowBoundBreached {
+        /// The stratum whose producer beat its own declaration. Boxed for the
+        /// reason [`Self::InconsistentWitness`] boxes its own: an [`Iri`] is
+        /// much wider than the two counts beside it, and a large `Err` is paid
+        /// for on every call that returns `Ok`.
+        stratum: Box<Iri>,
+        /// The row bound the registry declared for this stratum, as
+        /// [`StratumUnit::declared_rows`](crate::StratumUnit) carries it.
+        declared: u64,
+        /// How many rows the read actually returned, which is one past
+        /// `declared`: the probe slot is the only row past the declaration the
+        /// emitted bound ever asks for.
+        pulled: u64,
+    },
 }
 
-/// A concrete ranked stream of `(rank, candidate)` rows.
+/// A concrete ranked stream of `(rank, candidate, block)` rows.
 ///
 /// The rows are materialized by the evaluator and drained in order; `next` never
 /// pends, so the stream is usable under any executor. A caller that wants to fuse
 /// the rows wraps them with the fusion profile at `fuse` time.
+///
+/// The third element is the block of the candidate universe the row was drawn
+/// from ([`RowBlock`]) — read from the unit's own `?block` column where the
+/// producer declared a position for it, entailed from a single-block declaration
+/// where it did not, and [`RowBlock::Undeclared`] for a producer that restricted
+/// nothing. It is carried here rather than attached at `fuse` time for the reason
+/// the contract and the attestation are carried: the producer is the only party
+/// that knows it, and a consumer three stages downstream is the party that checks
+/// it.
 ///
 /// There is deliberately no bulk accessor beside [`next`](Self::next): reading
 /// the rows one at a time and then taking the [`receipt`](Self::receipt) *is*
@@ -268,7 +393,7 @@ pub enum ExecutionError {
 /// to tell a stratum that ended from a stratum it stopped reading.
 #[derive(Debug)]
 pub struct RankedStreamImpl {
-    rows: VecDeque<(u64, Term)>,
+    rows: VecDeque<(u64, Term, RowBlock)>,
     pulled: u64,
     exhausted: bool,
     ending: StreamEnding,
@@ -302,7 +427,7 @@ pub enum StreamEnding {
 }
 
 impl RankedStreamImpl {
-    /// Build a stream over pre-ranked `(rank, candidate)` rows that ends the way
+    /// Build a stream over pre-ranked `(rank, candidate, block)` rows that ends the way
     /// `ending` says.
     ///
     /// The ending is a parameter rather than something inferred from `rows`,
@@ -310,7 +435,7 @@ impl RankedStreamImpl {
     /// either way, and the whole point of the distinction is that only the
     /// reader of the underlying answer knows which one happened.
     #[must_use]
-    pub fn new(rows: Vec<(u64, Term)>, ending: StreamEnding) -> Self {
+    pub fn new(rows: Vec<(u64, Term, RowBlock)>, ending: StreamEnding) -> Self {
         Self {
             rows: rows.into(),
             pulled: 0,
@@ -329,7 +454,7 @@ impl RankedStreamImpl {
     // returning; the `async` shape is the ranked-stream contract the fusion stage
     // consumes, and a caller may compose it with genuinely asynchronous streams.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
-    pub async fn next(&mut self) -> Result<Option<(u64, Term)>, ProtocolError> {
+    pub async fn next(&mut self) -> Result<Option<(u64, Term, RowBlock)>, ProtocolError> {
         match self.rows.pop_front() {
             Some(row) => {
                 self.pulled += 1;
@@ -478,9 +603,15 @@ pub async fn execute<D: DatasetView + Sync>(
                             reason,
                         }
                     })?;
-                match rank_candidates(&variables, &rows) {
+                match rank_candidates(&variables, &rows, &unit.contract.domains) {
                     Ok(ranked) => {
-                        let (ranked, ending, status) = bound_to_depth(ranked, unit.depth);
+                        // `?`, not a per-stratum status: a producer that beat
+                        // its own declaration broke the number every other
+                        // stratum's admission and ordering rested on, and the
+                        // only ending left for this one is a completeness claim
+                        // the extra row has already falsified.
+                        let (ranked, ending, status) =
+                            bound_to_depth(ranked, unit.depth, unit.declared_rows, &unit.stratum)?;
                         streams.push(StratumStream {
                             stratum: unit.stratum.clone(),
                             plan_id: compiled.plan_id,
@@ -509,12 +640,19 @@ pub async fn execute<D: DatasetView + Sync>(
                 );
             }
             Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
-                // `UNBOUNDED` declines every caller-settable ceiling, so a trip
-                // is the same class of impossibility the witness rule catches:
+                // A required arm over an outcome no unit on this lane can reach
+                // — the enum is exhaustive by design, so this case is handled
+                // here or nowhere. `UNBOUNDED` declines every caller-settable
+                // ceiling and carries no stop signal, and these options inject
+                // no user-function registry, so the one ceiling that remains has
+                // no charge site a unit can enter; see `ExecutionError` for the
+                // full argument and the tests that pin both halves.
+                //
+                // What it must not do is take the partial rows: a trip means
                 // something other than this call's governors stopped the run,
-                // and whatever rows it reached are a partial answer nothing here
-                // asked for. It is reported as the whole-run refusal it is,
-                // naming the governor, rather than as a stratum that answered.
+                // and reporting its rows as a stratum's answer would certify a
+                // truncated read as an exhausted one. So it is the whole-run
+                // refusal it would be, naming the governor that did it.
                 return Err(ExecutionError::InconsistentWitness {
                     stratum: Box::new(unit.stratum.clone()),
                     reason: format!(
@@ -537,36 +675,77 @@ pub async fn execute<D: DatasetView + Sync>(
     Ok(ExecutionResult { streams, statuses })
 }
 
+/// What one stratum's read came to: the rows that reach the stream, how the read
+/// ended, and the status that mirrors that ending.
+///
+/// The three are produced together by [`bound_to_depth`] and must stay together:
+/// the ending is a claim about the rows beside it, and a caller holding one
+/// without the others could report an exhaustion that the dropped probe row had
+/// already falsified.
+type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
+
 /// Cut `ranked` down to the stratum's `depth`, and say which ending that was.
 ///
-/// The unit was emitted one row deeper than `depth` wherever the registry left
-/// room, so a `depth + 1`-th row here means the producer still had rows when the
-/// plan's bound ran out. That row is dropped — it is a probe and never a value —
-/// and its only effect is the ending. Every other row keeps the rank
-/// [`rank_candidates`] gave it, so nothing is renumbered.
+/// The unit was emitted one row deeper than `depth`, so a `depth + 1`-th row
+/// here means the read still had a row when the bound ran out. That row is
+/// dropped — it is a probe and never a value — and its only effect is the
+/// ending. Every other row keeps the rank [`rank_candidates`] gave it, so
+/// nothing is renumbered.
 ///
 /// The status returned is the mirror of the ending, so the terminal report and
 /// the stream's own receipt cannot say different things about the same read.
+///
+/// # Errors
+///
+/// [`ExecutionError::RowBoundBreached`] where the extra row is past
+/// `declared_rows` rather than merely past `depth`. Those are different facts
+/// and `declared_rows` is what tells them apart: a row past the depth and below
+/// the declaration is the bound the plan recorded doing its job, while a row
+/// past the declaration is the producer contradicting the registry — and
+/// reporting the second as the first would truncate a read that had more rows
+/// behind it and certify the remainder as exhaustion.
+///
+/// A stratum whose registry declared no bound carries no promise for a row to
+/// break, so its probe is always the ordinary `DepthReached`.
 fn bound_to_depth(
-    mut ranked: Vec<(u64, Term)>,
+    mut ranked: Vec<(u64, Term, RowBlock)>,
     depth: u32,
-) -> (Vec<(u64, Term)>, StreamEnding, ProducerStatus) {
+    declared_rows: Option<u64>,
+    stratum: &Iri,
+) -> Result<BoundedRead, ExecutionError> {
     let ceiling = usize::try_from(depth).unwrap_or(usize::MAX);
     if ranked.len() > ceiling {
+        let pulled = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
+        // Consulted only here, on the one row the declaration could possibly be
+        // breached by: the emitted bound never asks for a second. A declared
+        // zero cannot reach this arm at all — its emitted bound is the floor of
+        // one and an admitted depth is at least one, so `ranked.len()` is at
+        // most `depth` — which is deliberate, because at a declared zero the
+        // layer reads the declaration rather than obeying it and the row it
+        // asked for on purpose is not a breach.
+        if let Some(declared) = declared_rows
+            && pulled > declared
+        {
+            return Err(ExecutionError::RowBoundBreached {
+                stratum: Box::new(stratum.clone()),
+                declared,
+                pulled,
+            });
+        }
         ranked.truncate(ceiling);
         let rank = u64::from(depth);
-        return (
+        return Ok((
             ranked,
             StreamEnding::DepthReached { rank },
             ProducerStatus::DepthReached { rank },
-        );
+        ));
     }
     let rows_emitted = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
-    (
+    Ok((
         ranked,
         StreamEnding::Exhausted,
         ProducerStatus::Exhausted { rows_emitted },
-    )
+    ))
 }
 
 /// The attestation a compiled unit's run left on the governed receipt.
@@ -656,7 +835,8 @@ fn sole_attestation(witness: &RelationWitness) -> Result<PfAttestation, String> 
     })
 }
 
-/// Read a unit's projected candidate column into ranked `(rank, candidate)` rows.
+/// Read a unit's projected candidate and block columns into ranked
+/// `(rank, candidate, block)` rows.
 ///
 /// # The column is found by name
 ///
@@ -675,22 +855,106 @@ fn sole_attestation(witness: &RelationWitness) -> Result<PfAttestation, String> 
 fn rank_candidates(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
-) -> Result<Vec<(u64, Term)>, String> {
+    domains: &CandidateDomains,
+) -> Result<Vec<(u64, Term, RowBlock)>, String> {
     let column = variables
         .iter()
         .position(|name| name == CANDIDATE_NAME)
         .ok_or_else(|| {
             format!("the unit's solutions project no ?{CANDIDATE_NAME} column: {variables:?}")
         })?;
+    // Present exactly when the producer declared a position to read a block out
+    // of, because that is the only case `compile` projects the column. Found by
+    // name for the reason the candidate is: reading a position instead would make
+    // the block depend on projection order.
+    let block_column = variables.iter().position(|name| name == BLOCK_NAME);
+    // The fallback for a unit with no block column, and it is a derivation rather
+    // than a default: see [`entailed_block`].
+    let entailed = entailed_block(domains);
     let mut ranked = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let rank = u64::try_from(index + 1).unwrap_or(u64::MAX);
         let value = row.get(column).and_then(Option::as_ref).ok_or_else(|| {
             format!("the projected ?{CANDIDATE_NAME} column is unbound in row {rank}")
         })?;
-        ranked.push((rank, term_candidate(value)));
+        let block = match block_column {
+            None => entailed.clone(),
+            Some(column) => row_block(row.get(column).and_then(Option::as_ref), rank)?,
+        };
+        ranked.push((rank, term_candidate(value), block));
     }
     Ok(ranked)
+}
+
+/// The block every row of a producer that names none itself lies in, read off the
+/// declaration.
+///
+/// This is an **entailment**, not a default. A producer declaring exactly one
+/// block has already said that every candidate it names lies in that block, so
+/// naming it per row states nothing the declaration did not, and a host is not
+/// asked to repeat itself on every row of every stratum. That is the common
+/// configuration and the one the whole declared-domain mechanism exists for — one
+/// producer per block, blocks that do not overlap.
+///
+/// Everything else is [`RowBlock::Undeclared`], because nothing else is derivable:
+///
+/// * [`CandidateDomains::Unrestricted`] restricts nothing, so there is no block to
+///   entail and none is owed;
+/// * a restriction naming **several** blocks has not said which of them a given
+///   row is in, and this layer may not choose — a guess would place a candidate in
+///   a block the producer never claimed and could refuse a perfectly good corpus
+///   as self-contradictory. The consequence is the honest one: fusion refuses a
+///   restriction no row backs
+///   ([`ProtocolError::UnbackedDomainDeclaration`](crate::ProtocolError)), and the
+///   host's exits are to declare a block column, to register one producer per
+///   block, or to declare `Unrestricted`.
+fn entailed_block(domains: &CandidateDomains) -> RowBlock {
+    match domains.tags() {
+        Some(tags) if tags.len() == 1 => tags
+            .iter()
+            .next()
+            .map_or(RowBlock::Undeclared, |tag| RowBlock::Declared(tag.clone())),
+        Some(_) | None => RowBlock::Undeclared,
+    }
+}
+
+/// Read one row's projected block column as the block that row was drawn from.
+///
+/// A block is a [`DomainTag`], which is an IRI, so the cell must be a bound IRI
+/// and nothing else. Both failures refuse the **whole unit** rather than the row,
+/// for the reason an unbound candidate does: a rank is a position in the stratum's
+/// answer, so dropping one row renumbers every row after it and the stratum would
+/// report a shorter, differently-ranked list that still looked complete. A
+/// producer that cannot name a block for one of its rows has not declared a
+/// narrower domain — it has declared one it cannot back, and that is refused where
+/// it is observed.
+fn row_block(value: Option<&TermValue>, rank: u64) -> Result<RowBlock, String> {
+    let value = value.ok_or_else(|| {
+        format!(
+            "the projected ?{BLOCK_NAME} column is unbound in row {rank}, so that row names \
+                 no block of the candidate universe; a producer that declares a block column owes \
+                 a block on every row"
+        )
+    })?;
+    match value {
+        // Parsed, never trusted: the tag reaches a consumer that compares it
+        // against a host's declared blocks, and a cell that is not an IRI cannot
+        // be one of those. `DomainTag::parse` is the same validation the registry
+        // applied to the declaration, so the two sides are compared after one
+        // rule rather than two.
+        TermValue::Iri(text) => DomainTag::parse(text)
+            .map(RowBlock::Declared)
+            .map_err(|error| {
+                format!(
+                    "the projected ?{BLOCK_NAME} column in row {rank} is <{text}>, which is not a \
+                 valid IRI and so names no block: {error}"
+                )
+            }),
+        other => Err(format!(
+            "the projected ?{BLOCK_NAME} column in row {rank} is {other:?}, and a block of the \
+             candidate universe is named by an IRI"
+        )),
+    }
 }
 
 /// A candidate's canonical term lexical — exactly the spelling a caller uses for
@@ -714,15 +978,19 @@ fn term_candidate(value: &TermValue) -> Term {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use purrdf_core::TermValue;
-    use purrdf_sparql_eval::{IndexGeneration, PfAttestation, RelationWitness, ServiceLevel};
+    use purrdf_sparql_eval::{
+        CandidateDomains, DomainTag, IndexGeneration, PfAttestation, RelationWitness, ServiceLevel,
+    };
 
     use super::{
-        ProducerStatus, StreamEnding, bound_to_depth, rank_candidates, read_attestation,
-        sole_attestation, term_candidate,
+        ExecutionError, ProducerStatus, RowBlock, StreamEnding, bound_to_depth, entailed_block,
+        rank_candidates, read_attestation, sole_attestation, term_candidate,
     };
-    use crate::compile::CANDIDATE_NAME;
-    use crate::iri::Term;
+    use crate::compile::{BLOCK_NAME, CANDIDATE_NAME};
+    use crate::iri::{Iri, Term};
     use crate::render::decode_term;
 
     fn variables() -> Vec<String> {
@@ -770,13 +1038,14 @@ mod tests {
                 vec![Some(TermValue::blank("b0"))],
                 vec![Some(TermValue::iri("http://example.org/other"))],
             ],
+            &CandidateDomains::Unrestricted,
         )
         .expect("a blank node among the answers is still an answer");
 
         assert_eq!(
             ranked
                 .iter()
-                .map(|(_, term)| term.as_str())
+                .map(|(_, term, _)| term.as_str())
                 .collect::<Vec<_>>(),
             vec![
                 "<http://example.org/doc>",
@@ -786,7 +1055,7 @@ mod tests {
             "the blank node is named in place, and its neighbours keep their ranks"
         );
         assert_eq!(
-            ranked.iter().map(|(rank, _)| *rank).collect::<Vec<_>>(),
+            ranked.iter().map(|(rank, ..)| *rank).collect::<Vec<_>>(),
             vec![1, 2, 3],
             "ranks stay 1-based and contiguous, so no row was dropped"
         );
@@ -803,7 +1072,7 @@ mod tests {
         // is a refusal, never the earlier column's term promoted into the rank.
         let variables = vec!["other".to_owned(), CANDIDATE_NAME.to_owned()];
         let rows = vec![vec![Some(TermValue::iri("http://example.org/other")), None]];
-        let reason = rank_candidates(&variables, &rows)
+        let reason = rank_candidates(&variables, &rows, &CandidateDomains::Unrestricted)
             .expect_err("an unbound candidate column is a refusal");
         assert!(reason.contains("unbound"), "{reason}");
 
@@ -813,16 +1082,152 @@ mod tests {
             Some(TermValue::iri("http://example.org/doc")),
         ]];
         assert_eq!(
-            rank_candidates(&variables, &rows).expect("the candidate column ranks"),
-            vec![(1, Term::new("<http://example.org/doc>".to_owned()))]
+            rank_candidates(&variables, &rows, &CandidateDomains::Unrestricted)
+                .expect("the candidate column ranks"),
+            vec![(
+                1,
+                Term::new("<http://example.org/doc>".to_owned()),
+                RowBlock::Undeclared
+            )]
         );
     }
 
     #[test]
     fn a_unit_that_projects_no_candidate_column_is_refused() {
-        let reason = rank_candidates(&["other".to_owned()], &[vec![None]])
-            .expect_err("a unit with no candidate column cannot be ranked");
+        let reason = rank_candidates(
+            &["other".to_owned()],
+            &[vec![None]],
+            &CandidateDomains::Unrestricted,
+        )
+        .expect_err("a unit with no candidate column cannot be ranked");
         assert!(reason.contains(CANDIDATE_NAME), "{reason}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Each row's block: entailed from the declaration, or read from the column
+    // -----------------------------------------------------------------------
+
+    fn block_tag(suffix: &str) -> DomainTag {
+        DomainTag::parse(&format!("http://example.org/domain/{suffix}"))
+            .expect("fixture domain tags are valid IRIs")
+    }
+
+    /// A declaration naming exactly one block answers per row by itself, and no
+    /// other declaration answers at all. The negative halves are the point: a
+    /// guess for a several-block declaration would place a candidate in a block
+    /// its producer never claimed.
+    #[test]
+    fn a_single_block_declaration_entails_every_rows_block_and_nothing_else_does() {
+        assert_eq!(
+            entailed_block(&CandidateDomains::within([block_tag("docs")])),
+            RowBlock::Declared(block_tag("docs")),
+            "one declared block IS the block every row of this producer lies in"
+        );
+        assert_eq!(
+            entailed_block(&CandidateDomains::within([
+                block_tag("docs"),
+                block_tag("people")
+            ])),
+            RowBlock::Undeclared,
+            "two blocks entail nothing about any one row, and this layer does not choose"
+        );
+        assert_eq!(
+            entailed_block(&CandidateDomains::Unrestricted),
+            RowBlock::Undeclared,
+            "an unrestricted producer owes no block, so there is none to entail"
+        );
+    }
+
+    /// The column, when the producer declared one. An IRI is a block; an unbound
+    /// cell and a non-IRI are refusals of the whole unit rather than of the row,
+    /// because dropping a row renumbers every rank after it. The valid case is
+    /// executed beside both refusals.
+    #[test]
+    fn the_block_column_is_read_as_an_iri_or_the_unit_is_refused() {
+        let variables = vec![CANDIDATE_NAME.to_owned(), BLOCK_NAME.to_owned()];
+        let declared = CandidateDomains::within([block_tag("docs"), block_tag("people")]);
+
+        // Valid: two rows, each naming its own block out of the declared pair.
+        let ranked = rank_candidates(
+            &variables,
+            &[
+                vec![
+                    Some(TermValue::iri("http://example.org/doc")),
+                    Some(TermValue::iri("http://example.org/domain/docs")),
+                ],
+                vec![
+                    Some(TermValue::iri("http://example.org/person")),
+                    Some(TermValue::iri("http://example.org/domain/people")),
+                ],
+            ],
+            &declared,
+        )
+        .expect("a bound IRI in the block column is a block");
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|(_, _, block)| block.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                RowBlock::Declared(block_tag("docs")),
+                RowBlock::Declared(block_tag("people")),
+            ],
+            "each row carries the block it was drawn from, not the declaration's set"
+        );
+
+        // Unbound: the producer declared a column and then named no block in it.
+        let unbound = rank_candidates(
+            &variables,
+            &[vec![Some(TermValue::iri("http://example.org/doc")), None]],
+            &declared,
+        )
+        .expect_err("a declared block column that binds nothing backs nothing");
+        assert!(
+            unbound.contains(BLOCK_NAME) && unbound.contains("row 1"),
+            "the refusal names the column and the row: {unbound}"
+        );
+
+        // Not an IRI: a block is named by an IRI, and a literal is not one.
+        let literal = rank_candidates(
+            &variables,
+            &[vec![
+                Some(TermValue::iri("http://example.org/doc")),
+                Some(TermValue::simple_literal("docs")),
+            ]],
+            &declared,
+        )
+        .expect_err("a literal names no block of the candidate universe");
+        assert!(
+            literal.contains(BLOCK_NAME) && literal.contains("IRI"),
+            "the refusal says what a block is: {literal}"
+        );
+    }
+
+    /// A unit with no block column falls back to the entailment, which is how a
+    /// single-block producer backs its declaration without any host writing a
+    /// column. The neighbouring case — the same rows under a declaration that
+    /// entails nothing — reports the absence rather than inventing a block.
+    #[test]
+    fn a_unit_with_no_block_column_carries_the_entailed_block() {
+        let rows = [vec![Some(TermValue::iri("http://example.org/doc"))]];
+        let entailed = rank_candidates(
+            &variables(),
+            &rows,
+            &CandidateDomains::within([block_tag("docs")]),
+        )
+        .expect("a single-block declaration needs no column");
+        assert_eq!(
+            entailed.first().map(|(_, _, block)| block.clone()),
+            Some(RowBlock::Declared(block_tag("docs")))
+        );
+
+        let silent = rank_candidates(&variables(), &rows, &CandidateDomains::Unrestricted)
+            .expect("an unrestricted producer still answers");
+        assert_eq!(
+            silent.first().map(|(_, _, block)| block.clone()),
+            Some(RowBlock::Undeclared),
+            "silence is reported as silence, never filled in"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -836,7 +1241,7 @@ mod tests {
     const ANOTHER_RELATION: &str = "http://example.org/pf/beta";
 
     fn declared(generation: &str) -> IndexGeneration {
-        IndexGeneration::Declared(generation.to_owned())
+        IndexGeneration::declared(generation)
     }
 
     fn incomplete(reason: &str) -> ServiceLevel {
@@ -906,6 +1311,54 @@ mod tests {
                 service: ServiceLevel::Undeclared,
             }),
             "the count is read and deliberately ignored"
+        );
+    }
+
+    /// And the count is gone by the time an answer's evidence identity is taken:
+    /// the SHIPPED encoder — the only canonical encoding of what the indexes
+    /// attested — is driven here over what the collapse produced from one
+    /// invocation and from seven.
+    ///
+    /// This is the assertion that makes the ignoring load-bearing rather than
+    /// incidental. Had the evidence bytes been derived from the evaluator's
+    /// ledger instead, they would carry `invocations`, and these two runs over
+    /// one unchanged index would have been handed different `EvidenceId`s purely
+    /// because the evaluator chunked more driving rows.
+    #[test]
+    fn the_evidence_digest_does_not_move_with_the_invocation_count() {
+        let bytes_after = |invocations: usize| {
+            let mut witness = RelationWitness::default();
+            for _ in 0..invocations {
+                witness.record(ONE_RELATION, declared("gen-7"), ServiceLevel::Undeclared);
+            }
+            let attestation = sole_attestation(&witness).expect("the conforming shape");
+            let stratum = Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
+            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
+                stratum,
+                attestation,
+            )]))
+        };
+        assert_eq!(
+            bytes_after(1),
+            bytes_after(7),
+            "seven invocations of one index are the same evidence as one"
+        );
+
+        // Not vacuous: the encoder really does move when the ATTESTATION moves.
+        let rebuilt = {
+            let mut witness = RelationWitness::default();
+            witness.record(ONE_RELATION, declared("gen-8"), ServiceLevel::Undeclared);
+            let attestation = sole_attestation(&witness).expect("the conforming shape");
+            let stratum = Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
+            crate::fusion_stream::evidence_canonical_bytes(&BTreeMap::from([(
+                stratum,
+                attestation,
+            )]))
+        };
+        assert_ne!(
+            bytes_after(1),
+            rebuilt,
+            "a rebuilt generation is different evidence"
         );
     }
 
@@ -1009,13 +1462,22 @@ mod tests {
     fn the_probe_row_changes_the_ending_and_nothing_else() {
         let rows = |count: u64| {
             (1..=count)
-                .map(|rank| (rank, Term::new(format!("<http://example.org/doc{rank}>"))))
+                .map(|rank| {
+                    (
+                        rank,
+                        Term::new(format!("<http://example.org/doc{rank}>")),
+                        RowBlock::Undeclared,
+                    )
+                })
                 .collect::<Vec<_>>()
         };
+        let stratum = Iri::parse("http://example.org/stratum/alpha").expect("a valid fixture IRI");
+        let bounded =
+            |count, depth, declared| bound_to_depth(rows(count), depth, declared, &stratum);
 
-        let (kept, ending, status) = bound_to_depth(rows(4), 3);
+        let (kept, ending, status) = bounded(4, 3, Some(100)).expect("below the declaration");
         assert_eq!(
-            kept.iter().map(|(rank, _)| *rank).collect::<Vec<_>>(),
+            kept.iter().map(|(rank, ..)| *rank).collect::<Vec<_>>(),
             vec![1, 2, 3],
             "the probe row is dropped and its neighbours keep their ranks"
         );
@@ -1023,15 +1485,81 @@ mod tests {
         assert_eq!(status, ProducerStatus::DepthReached { rank: 3 });
 
         // Exactly at the depth: the probe never arrived, so the read ran out.
-        let (kept, ending, status) = bound_to_depth(rows(3), 3);
+        let (kept, ending, status) = bounded(3, 3, Some(100)).expect("the read ran out");
         assert_eq!(kept.len(), 3);
         assert_eq!(ending, StreamEnding::Exhausted);
         assert_eq!(status, ProducerStatus::Exhausted { rows_emitted: 3 });
 
         // And below it, where the depth was never the binding constraint.
-        let (kept, ending, status) = bound_to_depth(rows(1), 3);
+        let (kept, ending, status) = bounded(1, 3, Some(100)).expect("the read ran out");
         assert_eq!(kept.len(), 1);
         assert_eq!(ending, StreamEnding::Exhausted);
         assert_eq!(status, ProducerStatus::Exhausted { rows_emitted: 1 });
+
+        // An undeclared bound promises nothing, so the probe is the ordinary
+        // `DepthReached` and never a breach.
+        let (kept, ending, status) = bounded(4, 3, None).expect("nothing was declared to breach");
+        assert_eq!(kept.len(), 3);
+        assert_eq!(ending, StreamEnding::DepthReached { rank: 3 });
+        assert_eq!(status, ProducerStatus::DepthReached { rank: 3 });
+    }
+
+    /// The probe row landing past the **declaration** is a different fact from
+    /// the probe row landing past the depth, and it is refused rather than
+    /// truncated into `Exhausted`.
+    ///
+    /// The honest neighbour is asserted in the same test: a producer that
+    /// declared three and really holds three returns three rows into the four-row
+    /// bound, the slot comes back empty, and the exhaustion claim stands. The
+    /// refusal must catch the liar without costing that producer anything.
+    #[test]
+    fn a_row_past_the_declaration_is_refused_and_an_honest_one_is_not() {
+        let rows = |count: u64| {
+            (1..=count)
+                .map(|rank| {
+                    (
+                        rank,
+                        Term::new(format!("<http://example.org/doc{rank}>")),
+                        RowBlock::Undeclared,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let stratum = Iri::parse("http://example.org/stratum/alpha").expect("a valid fixture IRI");
+
+        let breach = bound_to_depth(rows(4), 3, Some(3), &stratum)
+            .expect_err("a fourth row from a producer that declared three is a breach");
+        match &breach {
+            ExecutionError::RowBoundBreached {
+                stratum: named,
+                declared,
+                pulled,
+            } => {
+                assert_eq!(named.as_str(), stratum.as_str());
+                assert_eq!(*declared, 3, "the promise a host has to go and fix");
+                assert_eq!(*pulled, 4, "and the evidence that it is false");
+            }
+            other => panic!("the breach is reported by name, not as {other:?}"),
+        }
+        assert!(
+            breach.to_string().contains("at most 3 rows")
+                && breach.to_string().contains("returned 4"),
+            "both numbers reach a host that only reads the message: {breach}"
+        );
+
+        let (kept, ending, status) = bound_to_depth(rows(3), 3, Some(3), &stratum)
+            .expect("a producer that declared three and holds three is not a liar");
+        assert_eq!(
+            kept.len(),
+            3,
+            "the honest producer loses no row to the probe"
+        );
+        assert_eq!(ending, StreamEnding::Exhausted);
+        assert_eq!(
+            status,
+            ProducerStatus::Exhausted { rows_emitted: 3 },
+            "and its exhaustion is now verified by the empty slot rather than \
+             believed on the strength of the bound"
+        );
     }
 }

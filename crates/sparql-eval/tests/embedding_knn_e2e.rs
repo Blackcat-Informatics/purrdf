@@ -800,7 +800,7 @@ fn one_artifact_under_one_binding_attests_one_generation() {
         .expect("the relation this query invoked must appear on the receipt");
     assert_eq!(
         attested.generations,
-        BTreeSet::from([IndexGeneration::Declared(left.generation().to_owned())]),
+        BTreeSet::from([IndexGeneration::declared(left.generation())]),
         "the cursor declares the space's generation verbatim, once per index"
     );
 }

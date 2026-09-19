@@ -245,7 +245,33 @@ pub enum IndexGeneration {
     /// unversioned. An absence, never a claim that the index was current.
     Undeclared,
     /// The relation's own spelling of the generation that answered, recorded verbatim.
-    Declared(String),
+    ///
+    /// A shared `Arc<str>` rather than an owned `String` because of where this value is
+    /// built. [`PfCursor::generation`] is asked once per invocation, and a relation over a
+    /// frozen index knows its generation *before the first invocation* — it renders the
+    /// spelling once at construction and hands every cursor a pointer to it. With an
+    /// owned `String` here, attesting that already-known constant would copy it on every
+    /// invocation, in the per-driving-row seam; with a shared pointer, attesting is a
+    /// refcount bump. Nothing about the value changes: it is still the host's own bytes,
+    /// still recorded verbatim, still never parsed, and `Ord`/`Hash` still compare the
+    /// spelling and not the pointer, so two relations that rendered the same generation
+    /// into two separate allocations remain the same set member.
+    Declared(Arc<str>),
+}
+
+impl IndexGeneration {
+    /// [`Self::Declared`] over anything that can become a shared string — a `&str`, a
+    /// `String`, or an `Arc<str>` a relation already holds.
+    ///
+    /// The `Arc<str>` form is the one that costs nothing: it clones a pointer. The
+    /// `&str`/`String` forms allocate once, here, which is the right price for a
+    /// generation genuinely computed per invocation and the wrong one for a constant of
+    /// the relation — a relation over a frozen index should intern its spelling at
+    /// construction and pass the `Arc` in.
+    #[must_use]
+    pub fn declared(value: impl Into<Arc<str>>) -> Self {
+        Self::Declared(value.into())
+    }
 }
 
 /// Whether a relation served an invocation from a WHOLE index, said so far as it can
@@ -401,12 +427,24 @@ pub trait PfCursor {
 
     /// Which version of the backing index is answering this invocation.
     ///
-    /// Read by the evaluator **immediately after [`open_contained`] returns**, and once
-    /// per invocation. That instant is not an implementation convenience: an index-backed
-    /// relation pins its snapshot when it opens, so "which generation is answering" is
-    /// true from that moment and stays true for every row this cursor goes on to emit.
-    /// Reading it later would let a rebuild that landed mid-drain be reported as the
-    /// generation that produced rows it did not produce.
+    /// Read by the evaluator **immediately after [`open_contained`] returns**, and at most
+    /// once per invocation. That instant is not an implementation convenience: an
+    /// index-backed relation pins its snapshot when it opens, so "which generation is
+    /// answering" is true from that moment and stays true for every row this cursor goes
+    /// on to emit. Reading it later would let a rebuild that landed mid-drain be reported
+    /// as the generation that produced rows it did not produce.
+    ///
+    /// # Asked only where the answer can be carried
+    ///
+    /// *At most* once, because an entry point whose return type has no
+    /// [`RelationWitness`](crate::RelationWitness) slot — every ungoverned query and
+    /// update — never asks at all. There is nowhere for the answer to go on that lane, and
+    /// asking anyway would charge every invocation for a value the caller provably cannot
+    /// read. The consequence a host should know about is that this method's side effects,
+    /// its cost and its panics are observable only on the governed lane; the OTHER
+    /// attested fact is not like this, because [`ServiceLevel::Incomplete`] governs a
+    /// refusal ([`EvalError::RELATION_INCOMPLETE_CODE`](crate::EvalError::RELATION_INCOMPLETE_CODE))
+    /// and so [`Self::service_level`] is read on every lane, witnessed or not.
     ///
     /// # Default
     ///
@@ -656,6 +694,7 @@ pub enum OrderFidelity {
 ///     candidate_position: 0,
 ///     duplicates: DuplicatePolicy::Unique,
 ///     domains: CandidateDomains::Unrestricted,
+///     block_position: None,
 ///     mandatory: false,
 /// };
 /// ```
@@ -676,6 +715,7 @@ pub enum OrderFidelity {
 ///     duplicates: DuplicatePolicy::Unique,
 ///     fidelity: RankFidelity::EXACT,
 ///     domains: CandidateDomains::Unrestricted,
+///     block_position: None,
 ///     mandatory: false,
 /// };
 /// assert_eq!(declaration.fidelity, RankFidelity::EXACT);
@@ -1177,6 +1217,58 @@ pub struct RankedDeclaration {
     /// wider promise rather than the weaker one, and why nothing derives a tag
     /// from a stratum or a graph on a host's behalf.
     pub domains: CandidateDomains,
+    /// The flattened argument position each row's **block** is projected from,
+    /// or `None` when this producer names no block per row.
+    ///
+    /// [`Self::domains`] is a promise about every row this producer will ever
+    /// emit. This is where an individual row backs it.
+    ///
+    /// # What the per-row block is for
+    ///
+    /// The whole arithmetic value of a restricted declaration rests on one
+    /// axiom: the tags **partition** the candidate universe, so a candidate lies
+    /// in exactly one block ([`DomainTag`]). A consumer cannot derive that — it
+    /// is a fact about the host's corpus — but it can hold the rows it pulls to
+    /// it, and it can only do so if the rows say which block they came from.
+    /// Two streams that name one candidate from two different blocks have
+    /// proven the axiom false for that candidate, and a consumer that could not
+    /// see the blocks would instead publish an order computed from it. That is
+    /// what this position carries, and it is the only channel on the seam that
+    /// can carry it: the depth and the accepted terms are inputs, and
+    /// [`Self::candidate_position`] names the entity rather than the block it
+    /// was drawn from.
+    ///
+    /// # When the declaration already answers, and when it cannot
+    ///
+    /// A [`CandidateDomains::Within`] declaration naming exactly **one** block
+    /// needs nothing here. It has already said that every candidate this
+    /// producer names lies in that block, so the per-row fact is *entailed* by
+    /// the declaration and a consumer reads it straight off the declaration —
+    /// `purrdf-retrieval`'s executor does exactly that, and no host has to
+    /// repeat itself per row.
+    ///
+    /// A declaration naming **several** blocks has not said which of them any
+    /// given row is in, and a consumer may not choose on the host's behalf. So
+    /// a producer that can say declares the position here, and a producer that
+    /// cannot leaves this `None` and is held to the consequence rather than
+    /// believed: the consumer refuses a restriction no row backs, instead of
+    /// certifying an order on an axiom nothing checked. A host in that position
+    /// has two honest exits, both one line long — declare
+    /// [`CandidateDomains::Unrestricted`], which restricts nothing and costs
+    /// only the early certification a narrower claim would have bought, or
+    /// register one producer per block, each with the single tag its rows really
+    /// lie in.
+    ///
+    /// # It is admitted under `Unrestricted` too, and honoured there
+    ///
+    /// An unrestricted producer *owes* no block: it counts in every block's
+    /// bound already, so it tightens no consumer arithmetic and there is no
+    /// promise for a row to back. It may still name one, and a consumer that is
+    /// handed one uses it — a block named by an unrestricted stream is evidence
+    /// about the **candidate**, and it falsifies the axiom exactly as a
+    /// restricted stream's block does. Refusing the combination would throw away
+    /// evidence a host volunteered and corrupt nothing.
+    pub block_position: Option<usize>,
     /// Whether a request that reaches this producer must actually be served by
     /// it. Declared by the host, never inferred by a consumer: admission
     /// enforces whatever the registry declared and adds nothing of its own.
@@ -1209,6 +1301,18 @@ impl RankedDeclaration {
         self.fidelity.push_canonical(&mut out);
         self.domains.push_canonical(&mut out);
         push_canonical_field(&mut out, &self.candidate_position.to_string());
+        // Beside the domains for the same reason they are beside the duplicate
+        // policy: this position decides whether a consumer can hold the
+        // restriction to the rows it pulls, so two registries that verify
+        // differently must not share a digest. An explicit present/absent
+        // discriminant rather than an omitted field, because "no block column"
+        // is a declaration and not a gap in one.
+        push_canonical_option(
+            &mut out,
+            self.block_position
+                .map(|position| position.to_string())
+                .as_deref(),
+        );
         out.push(if self.mandatory { '1' } else { '0' });
         out.push(';');
         match self.depth_placement.as_ref() {
@@ -1689,6 +1793,10 @@ impl PropertyFunctionRegistry {
     ///   one position renders one value.
     /// * `decl.candidate_position` is also a placement or depth target: a
     ///   position filled with a constant cannot also be the projected candidate.
+    /// * `decl.block_position` binds outside `relation`'s positions, or targets
+    ///   the candidate, a term placement or the depth — one position projects or
+    ///   renders one value, and a block a row names cannot be read out of a
+    ///   position holding something else.
     /// * `decl.domains` is an empty [`CandidateDomains::Within`] — a promise to
     ///   name nothing is not a narrow domain, it is a producer that should not
     ///   be registered; a host that does not want to restrict its candidates
@@ -2096,6 +2204,41 @@ fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
             placement.facet.as_str(),
             placement.position
         );
+    }
+    // The block column is the candidate column's sibling: both are positions the
+    // consumer *reads*, so both must exist and neither may share a position with
+    // a value the invocation writes. A host that mixed them up would hand a
+    // consumer the needle as the block a row lies in, and the consumer would
+    // measure a perfectly good corpus against it.
+    if let Some(block) = decl.block_position {
+        assert!(
+            block < total,
+            "ranked declaration for <{iri}> projects each row's block from position {block} but \
+             the relation declares only {total} argument position(s) ({arity})"
+        );
+        assert!(
+            block != decl.candidate_position,
+            "ranked declaration for <{iri}> projects both its candidate and each row's block \
+             from position {block}; one position projects one value, and a candidate is not the \
+             block it was drawn from"
+        );
+        for placement in decl.placements() {
+            assert!(
+                placement.position != block,
+                "ranked declaration for <{iri}> binds the {} facet of an accepted term at \
+                 position {block} and also projects each row's block from there; a position \
+                 filled with a request value cannot also be read back as the row's block",
+                placement.facet.as_str()
+            );
+        }
+        if let Some(depth) = decl.depth_placement.as_ref() {
+            assert!(
+                depth.position != block,
+                "ranked declaration for <{iri}> binds its per-stratum depth at position {block} \
+                 and also projects each row's block from there; a position filled with the depth \
+                 cannot also be read back as the row's block"
+            );
+        }
     }
     if let Some(depth) = decl.depth_placement.as_ref() {
         assert!(

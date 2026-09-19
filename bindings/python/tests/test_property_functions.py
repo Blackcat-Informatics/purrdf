@@ -1460,3 +1460,65 @@ ex:a ex:p ex:b .
     )
     assert walked.outcome is not None
     assert _walk_rows(walked.outcome.result) == [("b", 1, 1, "b")]
+
+
+def test_every_relation_refusal_names_the_relation_it_is_about() -> None:
+    """A ``relations`` map holds several, so the message has to say which to fix.
+
+    The kernel's arity and list diagnostics describe the DEFECT — "row 0 has 1
+    value(s)", "not an rdf:List" — and say nothing about which declaration
+    produced it. The boundary adds the relation IRI, and that prefix is the only
+    thing turning a correct diagnosis into an actionable one when a host declared
+    four relations and one of them is wrong. Nothing else asserts the prefix, so
+    deleting it would leave every refusal test here green.
+
+    The valid relation declared alongside the broken one is deliberate: it is what
+    makes "which one" a real question, and it is the neighbour that must not be
+    swept into the refusal.
+    """
+    with pytest.raises(ValueError) as refused:
+        purrdf.Store().query(
+            SELECT_MEMBERS,
+            relations={
+                MEMBER_OF: (1, 1, [[_node("ada")]]),
+                f"{REL}wellFormed": (1, 1, [[_node("ada"), _node("blue")]]),
+            },
+        )
+    message = str(refused.value)
+    assert f"<{MEMBER_OF}>" in message, (
+        f"the refusal names the relation that was misconfigured: {message}"
+    )
+    assert f"{REL}wellFormed" not in message, (
+        f"…and not the one that was fine: {message}"
+    )
+
+    # The same prefix on the dataset-read spelling, whose defect text names a
+    # table head rather than a row width.
+    with pytest.raises(ValueError) as refused:
+        purrdf.Store().query(
+            SELECT_MEMBERS,
+            relations_from_graph={MEMBER_OF: (_node("noSuchTable"), 1, 1)},
+        )
+    assert f"<{MEMBER_OF}>" in str(refused.value), str(refused.value)
+
+    # …and on the path spelling, whose defect text names an envelope field.
+    with pytest.raises(ValueError) as refused:
+        purrdf.Store().query(
+            WALK_QUERY,
+            path_relations={WALK: ([(_node("p"), "forward")], 0, 4, 8, 64, "walk")},
+        )
+    assert f"<{WALK}>" in str(refused.value), str(refused.value)
+
+    # The neighbouring well-formed declarations still answer, so none of the three
+    # refusals above is over-refusal of a valid map.
+    assert _pairs(purrdf.Store().query(SELECT_MEMBERS, relations=_member_relations())) == [
+        ("ada", "alpha"),
+        ("brian", "alpha"),
+        ("chen", "beta"),
+    ]
+    assert _walk_rows(
+        _store_with(CHAIN_TTL).query(
+            WALK_QUERY,
+            path_relations={WALK: ([(_node("p"), "forward")], 1, 4, 8, 64, "walk")},
+        )
+    )

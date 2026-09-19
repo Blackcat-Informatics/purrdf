@@ -55,7 +55,7 @@ precise cost several of these declarations exist to avoid.
 | [A12](#a12--bounds-narrow-they-never-zero) | Bounds narrow; they never zero | layer, three times |
 | [A13](#a13--attest-the-generation-of-the-snapshot-that-answered) | Attest the generation of the snapshot that answered | producer declares, layer carries |
 | [A14](#a14--declare-incompleteness-rather-than-refusing-or-faking-exhaustion) | Declare incompleteness rather than refusing or faking exhaustion | producer declares, layer refuses an unrecordable one |
-| [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, and never name a candidate outside them | both |
+| [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, name each row's block, and never name a candidate outside them | both, per row |
 
 [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound),
 [A10](#a10--the-engine-pushed-ceiling-is-honoured-for-efficiency-only) and
@@ -346,8 +346,17 @@ For the row bound, the producer. The layer checks the recorded depth *against* t
 declaration — [`AdmissionError::DepthBoundViolation`],
 pinned by `a_declared_row_bound_still_refuses_a_raised_depth` and
 `a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero` in
-`tests/admission_tests.rs` — and has no way whatever to check the declaration
-against the index behind it.
+`tests/admission_tests.rs` — and cannot ask your index what its real worst case
+is, because nothing in the seam answers that question.
+
+It can, however, catch the declaration being beaten where it was about to be
+relied on. A plan whose depth sits at your declared bound is emitted with a probe
+row one past it, so if the row your declaration ruled out shows up, the run is
+refused (`ExecutionError::RowBoundBreached`) instead of reported exhausted; see
+[A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound). That is
+narrower than checking the declaration — it says nothing about a bound never
+planned to — and it is exactly the case where being wrong would have cost a
+consumer a false completeness claim rather than a bad join order.
 
 **On declaring many modes.** The subset direction is the useful one: a relation
 that can serve object-bound/subject-free can also serve both-bound, by producing
@@ -385,26 +394,64 @@ one answer to one question, bought at three different altitudes because no singl
 altitude can answer it.
 
 The layer's own purchase — the middle one — is the depth probe.
-[`compile`] emits `LIMIT max(1, min(depth + 1, declared row bound))`, so a
+[`compile`] emits `LIMIT max(1, min(depth, declared row bound) + 1)`, so a
 unit whose producer still had rows past the planned depth hands back one more row
 than its stratum may contribute. That row is a **probe**: never emitted onto the
 stream, never ranked, never counted, present in no plan field, no identity and no
 resolution number. All it decides is
 [`ProducerStatus::DepthReached`] versus
-[`ProducerStatus::Exhausted`]. The `min` is what
-keeps the probe from becoming an over-refusal of its own: where the depth already
-equals the producer's declared bound there is nothing further to promise, the
-registry already answered the question, and no probe is emitted. Without it an
-executor could only ever say `Exhausted` — the one ending that names no stopper —
-about a read the plan itself had cut short. The outer `max(1)` is
-the other side of that same care: a producer declaring zero rows would otherwise
-be bounded at `LIMIT 0`, which hands back nothing whatever its index holds, so its
-emptiness would be the bound's claim rather than its own
-(see [A12](#a12--bounds-narrow-they-never-zero)).
+[`ProducerStatus::Exhausted`]. Without it an
+executor could only ever say `Exhausted` — the one ending that names no
+stopper — about a read the plan itself had cut short.
+
+The `+ 1` sits **outside** the `min`, and that placement is the rule rather than
+an arrangement of parentheses. Written inside it, the probe disappears at exactly
+one depth — the depth that already equals the producer's declared bound, where
+the `min` would select the declaration and the unit would be emitted at its own
+depth with no slot to probe with. That is the one depth an under-declaring
+producer lands a plan on, and it is the one where `Exhausted` would be a guess.
+Outside, the slot exists at every depth. It raises the emitted `LIMIT` only: the
+recorded depth is the number admission holds a plan to, and it does not move, so
+no plan field, identity or resolution number moves with it.
+
+The slot is not an over-refusal either, because it costs an honest producer
+nothing. A producer that declared `n` and really holds `n` returns `n` rows into
+an `n + 1`-row bound, the slot comes back empty, and `Exhausted` is *verified*
+rather than believed. A row arriving in it is the producer yielding an `n + 1`-th
+after promising there is none, and the executor refuses the run by name
+(`ExecutionError::RowBoundBreached`, carrying the stratum, the declared bound and
+the count actually returned) rather than truncating to the depth and certifying
+the remainder as completeness.
+
+The outer `max(1)` is what a declared **zero** lands on: `min(depth, 0) + 1` is
+one, so such a producer is bounded at one row rather than at `LIMIT 0`, which
+would hand back nothing whatever its index holds and make its emptiness the
+bound's claim rather than its own
+(see [A12](#a12--bounds-narrow-they-never-zero)). There is no slot past the depth
+there and the refusal above is unreachable, which is deliberate: at a declared
+zero the layer reads the declaration rather than obeying it, and a row it asked
+for on purpose cannot breach anything.
+
+**If you declare a depth placement, the number you receive is bounded
+differently.** A `LIMIT` is a ceiling the evaluator applies to a cursor you never
+hear about, so probing one row past your declaration there costs you nothing. The
+depth argument is a *request you read*, and a request for `declared + 1` asks you
+to exceed the bound you registered — which a producer with a configured ceiling
+should refuse, as the nearest-neighbour relation refuses a `k` above its guard.
+So the argument carries `max(1, min(depth + 1, declared bound))`: the probe where
+your declaration leaves room, your declaration itself where it does not. Your
+unit's own `LIMIT` still sits one row past the declaration either way, so a
+self-bounding producer that returns more rows than it declared is still caught —
+you are simply never asked to produce them.
 Pinned by
-`the_probe_separates_a_cut_read_from_an_exhausted_one` in
-`tests/execute_dataset.rs` and `the_probe_row_changes_the_ending_and_nothing_else`
-in `src/execute.rs`.
+`the_probe_separates_a_cut_read_from_an_exhausted_one` and
+`an_under_declared_row_bound_is_refused_and_an_honest_one_is_not` in
+`tests/execute_dataset.rs`, by
+`the_probe_row_changes_the_ending_and_nothing_else` and
+`a_row_past_the_declaration_is_refused_and_an_honest_one_is_not`
+in `src/execute.rs`, and by
+`the_neighbour_count_stays_inside_the_guard_while_the_limit_probes_past_it`
+in `tests/real_producers.rs`.
 
 `Exhausted` is the only ending that names no stopper. Every other one says who
 stopped the read.
@@ -426,11 +473,30 @@ declares `u64::MAX`.
 **The failure it prevents.** The two directions fail differently, and that
 asymmetry is the whole guidance.
 
-Under-declaring **refuses your own plans loudly**. The admission waist refuses a
-recorded depth above the declaration, and the compiled unit is emitted at
-`min(depth + 1, declared bound)` — so an under-declaration silently caps the read
-at a number the index could have beaten, and then refuses the plans that ask for
-more. It is noisy, and it is a configuration error a host will find.
+Under-declaring **refuses your own plans loudly**, in two places. The admission
+waist refuses a recorded depth above the declaration, and the compiled unit is
+emitted at `max(1, min(depth, declared bound) + 1)` — so an under-declaration
+caps the read at a number your index could have beaten, and then refuses the
+plans that ask for more. It is noisy, and it is a configuration error a host
+will find.
+
+The second place is the one that matters at the depth the first cannot see. A
+plan whose depth lands *at* your declared bound is admitted — it asks for no more
+than you promised — and the emitted probe row therefore sits one past your
+declaration. If your index really does stop where you said, that row never
+arrives and your stratum is reported
+[`ProducerStatus::Exhausted`], now verified rather
+than assumed. If it does not, the row arrives, and the run is refused by name with
+your declared bound and the count actually returned in the message
+(`ExecutionError::RowBoundBreached`). Either way the mistake is *said*. Nothing
+is reported exhausted on the strength of a bound you got wrong.
+
+This is what makes A8's reading of `rows_per_invocation` hold on this path rather
+than needing an exception carved out of it. The number remains an estimate in
+A8's sense — nothing can check it against your index, and it may be wrong without
+your producer being incorrect, buying you a bad join order and nothing worse. What
+the probe adds is that where the layer would otherwise have had to *rely* on it to
+know it had seen your last row, it no longer does: it goes and looks.
 
 Over-declaring is **silent** and costs a worse join order, because the bound is
 what orders a call against the other operators of its group: a call that emits at
@@ -751,6 +817,48 @@ empty: a promise to name nothing is not a narrow domain, it describes a producer
 that should not be registered, and `register_ranked` refuses it where it is
 written.
 
+**And every row backs it.** A restricted declaration is not only a set other
+declarations are compared against: each row says which block it was drawn from
+([`RowBlock`] on [`RankedRow`]), because the axiom the arithmetic below rests on —
+the tags partition the candidate universe — is a fact about the host's corpus that
+no consumer can derive, and a row that names its block is what makes it checkable
+at all. So the per-row duty, exactly:
+
+* a [`CandidateDomains::Within`] producer owes a block on **every** row, and owes
+  one its own declaration admits;
+* a [`CandidateDomains::Unrestricted`] producer owes **none**. It restricts no
+  consumer arithmetic — its head counts in every block's bound — so there is no
+  promise for a row to back, and [`RowBlock::Undeclared`] is its honest answer. It
+  may still name one, and a block it names is kept, because a block is evidence
+  about the *candidate* rather than about the stream.
+
+**Where the block comes from, for a producer registered through the seam.** Two
+places, and never a guess:
+
+* the **declaration**, when it names exactly one block. It has already said that
+  every candidate this producer names lies in that block, so the per-row fact is
+  entailed and `execute` reads it straight off the declaration. No host repeats
+  itself per row, and this is the configuration the whole mechanism exists for —
+  one producer per block, blocks that do not overlap;
+* the producer's own **block column**, named by
+  [`RankedDeclaration::block_position`](purrdf_sparql_eval::RankedDeclaration): the
+  argument position each row carries its block in. `compile` projects it beside
+  `?candidate` for exactly the producers that declare it, and `execute` reads it
+  back by name. This is how a producer restricted to **several** blocks backs its
+  promise, because a several-block declaration entails nothing about any one row
+  and no consumer may choose on the host's behalf.
+
+A several-block declaration with no column to back it is refused at the first row
+([`ProtocolError::UnbackedDomainDeclaration`]) rather than quietly read as the
+wider promise it did not make: fusion has already *used* the restriction by then.
+A host in that position has two one-line exits — declare
+[`CandidateDomains::Unrestricted`], which costs only the early certification the
+narrower claim would have bought, or register one producer per block. Neither
+shipped producer declares a block column: a text index answers with documents and
+a vector index with neighbours, and neither holds any notion of a host's
+partition, so both leave the position unset and take their domains from the host
+unchanged.
+
 **The failure it prevents.** Without a declaration, "could this stream still name
 the candidate" is true of every open stream, so strata whose candidate sets do not
 overlap are read to their ends however small the caller's top-k — a top-ten over
@@ -796,9 +904,30 @@ Pinned by `a_stream_naming_a_candidate_outside_its_declared_domains_is_refused` 
 `declared_domains_bound_the_reading_over_disjoint_strata` and the unchanged answer
 in `the_differential_holds_under_declared_domains_over_many_configurations`.
 
+The per-row duty is held to by three further refusals, each a distinct fact and
+each paired in the tests with a valid neighbour that still answers:
+
+| Refusal | The fact it reports | Pinned by |
+|---|---|---|
+| [`ProtocolError::UnbackedDomainDeclaration`] | a restricted stream's row names no block, so nothing backs the restriction | `a_several_block_declaration_no_row_backs_is_refused` (`tests/search.rs`) |
+| [`ProtocolError::BlockOutsideDeclaredDomain`] | a row names a block its **own** declaration excludes — a stream contradicting itself, needing no second stream to witness it | `a_row_naming_a_block_outside_its_own_declaration_is_refused` (`tests/search.rs`) |
+| [`ProtocolError::CandidateInTwoBlocks`] | two rows place one candidate in two blocks, so the axiom is false for that candidate | `two_streams_naming_one_candidate_from_two_blocks_are_refused` (`tests/search.rs`), `a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses` and `a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block` (`tests/fusion.rs`) |
+
+The third is the one the threshold depends on, and it is deliberately not
+`OutsideDeclaredDomain`: that refusal compares *declarations*, so it cannot see two
+overlapping declarations whose **rows** disagree — and that is exactly the case the
+per-block bound under-counts, because the streams that reach one block and the
+streams that reach the other are different sets. It names the item, both strata and
+both blocks, because either producer may be the one that tagged wrongly and this
+layer cannot know which. A row a permissive duplicate policy discards is checked
+too: a repeat may be dropped, but its claim about the candidate may not be.
+
 **The honest limit.** Verification reaches only as far as the rows actually pulled.
 A false declaration that no pulled row contradicts yields a score that declaration
-made wrong, and this layer does not claim otherwise — it is the identical trust the
+made wrong, and a candidate two streams would have placed in two blocks at ranks
+this fusion never reached leaves no trace. What that leaves unverified is stated
+rather than implied: the axiom holds over the rows read, and nothing is claimed
+about the rows below them. This layer does not claim otherwise — it is the identical trust the
 uniqueness declaration of [A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer)
 already carries, whose breach is likewise detected only when the repeat is actually
 read.

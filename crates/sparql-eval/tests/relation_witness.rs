@@ -138,7 +138,7 @@ impl PfCursor for AttestingCursor {
     fn generation(&self) -> IndexGeneration {
         match self.declares {
             Declares::Generation(value) | Declares::GenerationThenIncomplete(value, _) => {
-                IndexGeneration::Declared(value.to_owned())
+                IndexGeneration::declared(value)
             }
             Declares::PanicOnGeneration => panic!("the-generation-panic-payload"),
             Declares::Nothing
@@ -244,7 +244,7 @@ fn without_panic_output<R>(body: impl FnOnce() -> R) -> R {
 }
 
 fn declared(value: &str) -> BTreeSet<IndexGeneration> {
-    BTreeSet::from([IndexGeneration::Declared(value.to_owned())])
+    BTreeSet::from([IndexGeneration::declared(value)])
 }
 
 fn row_count(result: &SparqlResult) -> usize {
@@ -460,12 +460,28 @@ fn a_relation_overriding_neither_method_is_undeclared_on_both_lanes() {
 /// A cursor that panics while reporting its generation becomes a clean, payload-free
 /// host-function error — never an aborted worker, and never a message whose text depends
 /// on what the host's `panic!` happened to say.
+///
+/// Driven through the GOVERNED lane, because that is the lane that asks: an entry point
+/// with no witness slot never reads a generation at all (the test below pins that), so it
+/// is not the place to check what happens when the read panics.
 #[test]
 fn a_panicking_generation_is_contained_payload_free() {
     let engine = NativeSparqlEngine::new();
     let relations = registry("ff", Declares::PanicOnGeneration);
+    let prepared = engine
+        .prepare_query_with_options(ONE_CALL, None, with_relations(&relations))
+        .expect("the query prepares against the registry");
+    let dataset = dataset();
     let diagnostic = without_panic_output(|| {
-        ungoverned(&engine, &relations, ONE_CALL).expect_err("a panicking read must not escape")
+        engine
+            .query_prepared_governed_view(
+                &*dataset,
+                &prepared,
+                &[],
+                with_relations(&relations),
+                &QueryGovernors::UNBOUNDED,
+            )
+            .expect_err("a panicking read must not escape")
     });
     assert!(
         diagnostic
@@ -484,6 +500,67 @@ fn a_panicking_generation_is_contained_payload_free() {
         "the panic payload must never be interpolated: {}",
         diagnostic.message
     );
+}
+
+/// An entry point with nowhere to carry a witness never asks a cursor for its generation.
+///
+/// The fixture proves it by being unable to answer the question quietly: its
+/// `generation()` panics. The ungoverned run ANSWERS, so the method was not called — the
+/// one observation that distinguishes "asked and the value was thrown away" from "never
+/// asked", without instrumenting the engine.
+#[test]
+fn an_ungoverned_entry_never_asks_for_a_generation_it_cannot_carry() {
+    let engine = NativeSparqlEngine::new();
+    let relations = registry("ff", Declares::PanicOnGeneration);
+    let result = ungoverned(&engine, &relations, PER_ROW_CALL)
+        .expect("a lane that cannot report a generation has no reason to read one");
+    assert_eq!(
+        row_count(&result),
+        3,
+        "one row per driving row, so the relation really was invoked three times and \
+         would have panicked three times had the generation been read"
+    );
+}
+
+/// The refusal that lane DOES owe still fires, and it fires on the same fixture shape
+/// whose generation is never read: the service level is read on every lane, because an
+/// unwitnessed short bag has to be refused rather than labelled.
+#[test]
+fn an_ungoverned_entry_still_refuses_an_incompleteness_it_cannot_label() {
+    let engine = NativeSparqlEngine::new();
+    let relations = registry("ff", Declares::UndeclaredThenIncomplete(SHARD_REASON));
+    let diagnostic = ungoverned(&engine, &relations, PER_ROW_CALL)
+        .expect_err("an unlabelled short bag is the one answer this engine may not give");
+    assert_eq!(diagnostic.code, EvalError::RELATION_INCOMPLETE_CODE);
+    assert!(
+        diagnostic.message.contains(SHARD_REASON),
+        "the diagnostic must quote the relation's own reason: {}",
+        diagnostic.message
+    );
+
+    // The neighbouring VALID case over the same lane and the same query: a relation that
+    // declares nothing short is answered, so the refusal is a rule about incompleteness
+    // and not a lane that fails whenever a relation declares anything at all.
+    let quiet = registry("ff", Declares::Generation("gen-7"));
+    let result = ungoverned(&engine, &quiet, PER_ROW_CALL)
+        .expect("a relation that declared no shortfall must still be answered");
+    assert_eq!(row_count(&result), 3);
+}
+
+/// And the governed lane still records what the ungoverned one skips — the control that
+/// makes the skip a lane property rather than a feature that was switched off.
+#[test]
+fn the_governed_lane_still_records_the_generation_the_other_lane_skips() {
+    let engine = NativeSparqlEngine::new();
+    let relations = registry("bf", Declares::Generation("gen-7"));
+    let attested = governed(&engine, &relations, PER_ROW_CALL)
+        .relations()
+        .witness
+        .get(REL_IRI)
+        .expect("the witnessed lane records every invocation that entered host code")
+        .clone();
+    assert_eq!(attested.generations, declared("gen-7"));
+    assert_eq!(attested.invocations, 3);
 }
 
 /// The same containment on the other new read, at the other instant.
@@ -525,11 +602,17 @@ const UNION_CALL: &str = "PREFIX ex: <https://example.org/d/>\n\
                             { ?a ex:p ?b }\n\
                           }";
 
-/// The canonical bytes are a function of what was attested and of nothing else: the same
-/// query answers the same way on repeated runs, and the forced-sequential engine and the
-/// fork-join one produce byte-identical records.
+/// Every DECLARATION a run records is a function of what was attested and of nothing
+/// else: the same query declares the same things on repeated runs, and the
+/// forced-sequential engine and the fork-join one record the same declarations.
+///
+/// The comparison is over the declaration sets rather than over the whole ledger on
+/// purpose. `RelationAttestations::invocations` is a fact about the schedule — the field's
+/// own docs name the lane where it moves with the chunk count — so an assertion that two
+/// engines agree on it would be pinning a scheduling coincidence, and would fail the day
+/// the row loop chunked differently without anything about the index having changed.
 #[test]
-fn the_canonical_record_is_identical_across_runs_and_across_the_fork() {
+fn the_declarations_are_identical_across_runs_and_across_the_fork() {
     let relations = registry("ff", Declares::GenerationThenIncomplete("gen-7", "partial"));
 
     let parallel_engine = NativeSparqlEngine::new();
@@ -538,71 +621,71 @@ fn the_canonical_record_is_identical_across_runs_and_across_the_fork() {
         ..EvalOptions::default()
     });
 
-    let bytes_of = |engine: &NativeSparqlEngine| {
-        governed(engine, &relations, UNION_CALL)
+    /// What one run declared, per relation, with the schedule-dependent count left out.
+    fn declarations(
+        engine: &NativeSparqlEngine,
+        relations: &PropertyFunctionRegistry,
+    ) -> Vec<(String, BTreeSet<IndexGeneration>, BTreeSet<String>)> {
+        governed(engine, relations, UNION_CALL)
             .relations()
             .witness
-            .canonical_bytes()
-    };
+            .iter()
+            .map(|(iri, attested)| {
+                (
+                    iri.to_owned(),
+                    attested.generations.clone(),
+                    attested.incompleteness.clone(),
+                )
+            })
+            .collect()
+    }
 
-    let first = bytes_of(&parallel_engine);
-    assert!(
-        !first.is_empty(),
-        "the encoding is never empty; it always carries its version tag"
+    let first = declarations(&parallel_engine, &relations);
+    assert_eq!(
+        first,
+        vec![(
+            REL_IRI.to_owned(),
+            declared("gen-7"),
+            BTreeSet::from(["partial".to_owned()])
+        )],
+        "the forked branch's attestation must reach the parent's receipt, so the record is \
+         not vacuously equal below"
     );
     assert_eq!(
         first,
-        bytes_of(&parallel_engine),
-        "a second run of the same query over the same data must encode identically"
+        declarations(&parallel_engine, &relations),
+        "a second run of the same query over the same data must declare identically"
     );
-    assert_eq!(first, bytes_of(&parallel_engine), "and a third");
     assert_eq!(
         first,
-        bytes_of(&sequential_engine),
+        declarations(&parallel_engine, &relations),
+        "and a third"
+    );
+    assert_eq!(
+        first,
+        declarations(&sequential_engine, &relations),
         "the fork-join path and the forced-sequential path must record the same thing: a \
          worker's attestation that died with the worker would show up exactly here"
     );
-
-    // And the record is not vacuously equal: the relation really was invoked on both.
-    let witness = governed(&parallel_engine, &relations, UNION_CALL)
-        .relations()
-        .witness
-        .clone();
-    let attested = witness
-        .get(REL_IRI)
-        .expect("the forked branch's attestation must reach the parent's receipt");
-    assert_eq!(attested.invocations, 1);
-    assert_eq!(attested.generations, declared("gen-7"));
-    assert_eq!(
-        first,
-        witness.canonical_bytes(),
-        "the bytes compared above are this witness's own"
-    );
 }
 
-/// The encoding is injective where it matters: two runs that attested DIFFERENT things
-/// must not encode alike, or the comparison above would pass for the wrong reason.
+/// The record distinguishes what it has to: two runs that attested DIFFERENT generations
+/// are different records, or the comparison above would pass for the wrong reason.
 #[test]
-fn the_canonical_record_separates_two_different_generations() {
+fn the_record_separates_two_different_generations() {
     let engine = NativeSparqlEngine::new();
-    let seven = governed(
-        &engine,
-        &registry("ff", Declares::Generation("gen-7")),
-        ONE_CALL,
-    )
-    .relations()
-    .witness
-    .canonical_bytes();
-    let eight = governed(
-        &engine,
-        &registry("ff", Declares::Generation("gen-8")),
-        ONE_CALL,
-    )
-    .relations()
-    .witness
-    .canonical_bytes();
+    let generations_of = |declares| {
+        governed(&engine, &registry("ff", declares), ONE_CALL)
+            .relations()
+            .witness
+            .get(REL_IRI)
+            .expect("the relation attested")
+            .generations
+            .clone()
+    };
     assert_ne!(
-        seven, eight,
+        generations_of(Declares::Generation("gen-7")),
+        generations_of(Declares::Generation("gen-8")),
         "a rebuild between two otherwise identical queries must be visible in the record"
     );
 }
@@ -628,10 +711,7 @@ fn a_query_that_invokes_no_relation_carries_an_empty_witness() {
         "but the registry was in scope, and the identity says so — the two emptinesses \
          are independent facts"
     );
-    assert_eq!(
-        identity.witness.canonical_bytes(),
-        RelationWitness::default().canonical_bytes()
-    );
+    assert_eq!(identity.witness, RelationWitness::default());
 }
 
 // ---------------------------------------------------------------------------

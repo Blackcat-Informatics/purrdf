@@ -45,8 +45,8 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, FusionStream,
-    Iri, ProducerReceipt, ProtocolError, RankFidelity, RankedStream, StreamContract, Term,
-    contribution,
+    Iri, ProducerReceipt, ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock,
+    StreamContract, Term, contribution,
 };
 
 // ---------------------------------------------------------------------------
@@ -253,7 +253,7 @@ struct LazyStream {
 impl RankedStream for LazyStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         if self.emitted >= self.total {
             return Ok(None);
         }
@@ -268,7 +268,23 @@ impl RankedStream for LazyStream {
             }
             Some(block) => format!("block-{block}/candidate-{rank:08}"),
         };
-        Ok(Some((rank, value, Term::new(item))))
+        // The block this row was drawn from, which a restricted stream owes on
+        // every row. It is the same block the contract declares — the disjoint
+        // fixture's streams each draw from exactly one, so that block IS where
+        // every one of their rows comes from — and the overlapping fixture
+        // declares nothing and so names nothing.
+        let drawn_from = match self.block {
+            None => RowBlock::Undeclared,
+            Some(block) => RowBlock::Declared(
+                DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs"),
+            ),
+        };
+        Ok(Some(RankedRow::new(
+            rank,
+            value,
+            Term::new(item),
+            drawn_from,
+        )))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {

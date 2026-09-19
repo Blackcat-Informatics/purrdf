@@ -10,6 +10,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **build:** `scripts/check-python-binding-tests.py`, wired into `make check`,
+  `make pytest`, `make python-binding-hygiene` and CI. It fails if a `test`
+  predicate appears in any `cfg` invocation, or a `#[test]` attribute anywhere,
+  under `bindings/python/src`. That crate's manifest sets `test = false` because
+  the library is a PyO3 `extension-module`: it leaves the CPython API unresolved
+  for the interpreter to supply at `dlopen` time, which is what makes the `abi3`
+  manylinux wheel portable, so an ordinary test executable has no interpreter and
+  fails at link. A Rust test module there is consequently compiled by nothing and
+  run by nothing while looking exactly like coverage in a diff. Neither of the
+  textbook remedies is available -- a Cargo feature gating `extension-module` is
+  forbidden here, and dropping the attribute would link libpython into the
+  `cdylib` -- so the gate names the one route that works: the coverage belongs in
+  `bindings/python/tests`. `--self-test` proves it fires on both shapes and, just
+  as importantly, that it does not fire on prose describing them, so this crate's
+  own source can keep explaining the rule.
+
 - **retrieval:** A new publishable crate, `purrdf-retrieval`: the composition
   layer over the ranked property-function producers. One request becomes one
   answer across them through four stages -- a pure planner returning an
@@ -146,7 +162,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   public APIs and the keystone fixture corpus, so a release can demonstrate that
   a constrained deployment class still fits its pinned ceilings. Pass criteria
   are completion and memory; wall time is recorded evidence, never a gate.
-||||||| 45ad8bb7
 - **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
   approximate nearest-neighbour index over a PURREMB embedding matrix, registered
   on the evaluator's property-function seam under a caller-supplied predicate IRI.
@@ -274,6 +289,46 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   wrong answer. An empty restriction is refused at `register_ranked`, where the
   declaration is committed: a promise to name nothing describes a producer that
   should not be registered.
+- **retrieval:** Every ranked row now says which block of the candidate universe it
+  was drawn from, so the axiom the declared-domain arithmetic rests on is verified
+  rather than trusted. `RankedStream::next` yields a named `RankedRow` -- rank,
+  contribution, item and `RowBlock` -- and `RowBlock::Undeclared` is a first-class
+  absence beside `IndexGeneration::Undeclared` rather than an `Option` a reader
+  could unwrap into a claim. A `CandidateDomains::Within` stream owes a block on
+  every row, and owes one its own declaration admits; an `Unrestricted` stream owes
+  none, because it restricts no arithmetic at all, and a block it volunteers is
+  still honoured as evidence about the candidate. Three refusals, each a separate
+  fact: `ProtocolError::UnbackedDomainDeclaration` -- a restricted stream's row
+  names no block, so nothing backs the restriction, and fusion has already used it;
+  `ProtocolError::BlockOutsideDeclaredDomain` -- a row names a block its own
+  declaration excludes, which is a stream contradicting itself and needs no second
+  stream to witness it; and `ProtocolError::CandidateInTwoBlocks`, naming the item,
+  both strata and both blocks, because two rows that place one candidate in two
+  blocks falsify the partition the threshold's per-block maximum depends on and
+  either producer may be the one that tagged wrongly. That last case is the one
+  `OutsideDeclaredDomain` cannot see: it compares declarations, and two declarations
+  can overlap while the rows disagree -- which is exactly where the bound
+  under-counts, since the streams that reach one block and the streams that reach
+  the other are different sets. A row a permissive duplicate policy discards is
+  checked too: a repeat may be dropped, its claim about the candidate may not.
+  `compute_threshold` keeps the largest per-block sum of open heads, unweakened; a
+  tagging that violates the axiom now fails loudly instead of returning a plausible
+  order, as far as the rows pulled reach and no further.
+- **sparql-eval, retrieval:** `RankedDeclaration::block_position`, the argument
+  position a producer's rows carry their block in. A declaration naming exactly one
+  block entails every row's block and needs no column -- the common configuration,
+  one producer per block, costs a host nothing. A declaration naming several
+  entails nothing about any one row, so a producer that can say declares the
+  position its rows name it from, and one that cannot leaves it unset and is held to
+  the consequence rather than believed. `purrdf-retrieval` projects the column
+  beside `?candidate` for exactly the producers that declare it and reads it back by
+  name, so a unit for a producer that declares none is byte-identical to before. The
+  position is refused at registration when it falls outside the relation's arity or
+  collides with the candidate, a term placement or the depth, and it reaches the
+  registry's content fingerprint -- two wirings that verify differently may not
+  share a digest -- so that fingerprint and the plan identities over it move.
+  Neither shipped producer declares one: a text index answers with documents and a
+  vector index with neighbours, and neither holds any notion of a host's partition.
 - **text, sparql-eval:** Both shipped ranked producers attest a content-derived
   generation for the index that answered. The text relation declares its index
   fingerprint, which closes over the documents, the term dictionary, every
@@ -303,6 +358,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   audited against its own inputs; and `"evidence_id"` sits beside `"plan_id"` and
   `"profile_id"` in the same 64-character lowercase hex spelling, so one
   comparison over the three decides whether two answers are comparable.
+- **python:** `retrieval.search`'s `text_producers` value may carry a fifth
+  `(generation, incompleteness)` position -- each member a string or `None`, recorded
+  verbatim -- declaring what the host knows about the index behind that producer. A
+  declared incompleteness is reported under
+  `answer["attestations"][stratum]["incomplete"]` and makes `answer["exactness"]`
+  report `{"exact": False, "lower_bounds_for": [stratum, ...]}`, which was previously
+  unreachable from Python: no shipped producer can know what was missing from the
+  document it was handed, so the surface was structurally present and could never
+  carry a value. A declared generation is reported and is not a shortfall; it
+  replaces the content digest the shipped text relation attests, because one
+  generation is pinned per invocation, and a generation that does not move when the
+  host's corpus does will defeat the evidence identity. Declaring nothing is silence,
+  never a claim that the index was whole, and a value without the position behaves
+  exactly as before. The position is FIFTH -- after an explicitly written `domains`
+  -- because a fourth-position sequence is already a domains list and the two would
+  be indistinguishable: `("a", "b")` is a well-formed two-tag restriction and a
+  well-formed attestation at once, and guessing would report a domain tag back to an
+  operator as an index generation.
 - **python:** A governed outcome carries `relation_witness`, the record of what each
   relation attested about itself during the run: per relation IRI, how many times it
   was invoked, which index generations answered, and the verbatim reason wherever one
@@ -338,8 +411,75 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   registration, because a promise to name nothing is not a restriction, and
   because the refusal on the far side of the boundary is a panic that must never
   cross it.
+- **python:** `MutableDataset` answers the native validation snapshot protocol, so
+  `Shapes.validate_store` accepts one for real: both quad containers on this
+  surface hold a frozen dataset behind a copy-on-write overlay, and validation
+  borrows that snapshot instead of serialising to N-Triples and parsing it back.
+  Either container validated yields the one answer the triples deserve, and the
+  snapshot rule holds on both -- a report already produced is a statement about the
+  data as it was. A value that answers no such protocol is now refused with a
+  `TypeError` naming the type that arrived and the three things accepted (a
+  `Store`, a `MutableDataset`, or `validate_nt` for text a caller holds), rather
+  than escaping as an `AttributeError` about a private attribute the caller never
+  wrote.
 
 ### Fixed
+
+- **retrieval:** A stratum whose planned depth already equalled its producer's
+  declared row bound was reported `ProducerStatus::Exhausted` -- the strongest
+  completeness claim this layer has -- for a read that bound had cut, with
+  nothing anywhere saying so. The depth probe is the row that tells a read which
+  ran out from a read which was stopped, and it was emitted at
+  `min(depth + 1, declared)`: at that one depth the `min` selected the
+  declaration, the unit was emitted at exactly its own depth, and there was no
+  probe slot left to answer the question. It is now
+  `max(1, min(depth, declared) + 1)`, so the slot exists at every depth. Only the
+  emitted `LIMIT` moves; the recorded depth is what admission holds a plan to and
+  is unchanged, as are every plan field, identity and planned-resolution number
+  keyed to it.
+
+  A row arriving in that slot is past the declaration rather than merely past the
+  depth, which means the producer yielded a row it promised did not exist. That
+  is refused by name -- a new `ExecutionError::RowBoundBreached` carrying the
+  stratum, the declared bound and the count actually returned -- rather than
+  truncated and certified as exhaustion. It is a whole-run refusal and not a
+  per-stratum status, because the broken number ordered that call against the
+  other operators of its group and admitted every depth in the plan, and because
+  `ProducerStatus::ExecutionFailed` says the producer could not run while this
+  one ran and returned rows. An honest producer pays nothing for the slot: it
+  returns the rows it declared, the slot comes back empty, and its exhaustion is
+  now verified rather than believed.
+
+  The depth *argument* handed to a producer that declares a depth placement keeps
+  the older `max(1, min(depth + 1, declared))`, and that split is the point: a
+  `LIMIT` is a ceiling the evaluator applies to a cursor the producer never hears
+  about, while the argument is a request the producer reads and checks. Asking
+  for `declared + 1` there asks a producer to exceed its own registration, and
+  the nearest-neighbour relation correctly refuses a `k` above its configured
+  guard -- so probing on the argument would have turned a valid query into a
+  refused one. The unit's own bound still reaches one row past the declaration,
+  so a self-bounding producer that returns more rows than it declared is still
+  caught; it is simply never asked to.
+
+  `StratumUnit` gains a `declared_rows` field carrying the registry's declaration
+  for the stratum, which is what lets the executor tell the two kinds of extra row
+  apart. `None` there is a registry that declared no access mode and therefore no
+  bound, which promises nothing for a row to breach.
+
+- **python:** A ranked producer declared with more than one candidate-domain tag
+  failed at the wrong time. One tag entails where every row of that producer
+  lies, so a consumer reads the block off the declaration; several tags say only
+  that the rows lie somewhere in the set, which obliges the producer to name each
+  row's own block -- and both ranked relations this binding can build project a
+  candidate and a score and declare no such column, because a tag describes how a
+  host's corpora partition and only the host knows that. The declaration was
+  therefore unsatisfiable by construction, and the fusion said so at the first row
+  it pulled, after the plan, the compile and the first read had all been paid for.
+  It is refused at registration now, where the caller can act on it, naming the
+  producer, quoting the blocks in canonical order and naming the three exits that
+  work: one tag, one producer per block, or `domains=None`. A list that repeats
+  one tag names one block and still registers, and single-tag declarations are
+  untouched -- including the shorter read they buy.
 
 - **python:** A host that ran a compiled retrieval unit's SPARQL itself had no way
   to learn how many of its rows it was allowed to report. The compile stage emits
@@ -348,8 +488,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   is read and never reported. Rust callers have carried the reportable bound on
   the unit all along; the Python unit dict exposed only `"stratum"` and
   `"sparql"`, so the text's `LIMIT` was the only number in reach and it is the
-  wrong one. Each unit now carries `"depth"` beside its text -- the plan's own
-  recorded bound, not a number re-derived from the emitted `LIMIT` -- and the
+  wrong one. Each unit now carries `"depth"` beside its text -- the bound the
+  plan itself recorded, not a number re-derived from the emitted `LIMIT` -- and the
   surface states the obligation: keep at most `"depth"` rows. Where the
   producer's declared row bound already equals the depth no probe is emitted and
   the two numbers coincide, which is exactly why the bound cannot be read off the
@@ -387,6 +527,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   collapsing it. The answer is unchanged: rows, scores and provenance are identical
   to the draining run and to an independent oracle across hundreds of
   configurations, and the ranks read never rise as a declaration is refined.
+
+  What the bound bounds is stated exactly, because the number above invites a wider
+  reading than it earns: it is the ranks **fusion pulls from a stream**, and the
+  frontier it therefore has to hold. It is not the producer's work. Each stratum's
+  rows are materialized by the evaluator up to the depth the plan recorded before
+  fusion pulls anything, so a stratum planned a thousand deep is read a thousand
+  deep whatever the bound later turns out to need — the evaluator's egress model is
+  a complete answer, with no cursor surface for a consumer's bound to reach back
+  through. A ranked producer's own cursor is lazy and stays lazy; what is not lazy
+  is the boundary between it and this layer.
 - **retrieval:** Fusion no longer refuses a well-formed producer stream when the
   profile's own fixed-point decay gives two adjacent ranks one contribution. A
   producer's ordering declaration is a claim about **ranks**, and the check was
@@ -403,6 +553,39 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   coarser rank resolution.
 
 ### Removed
+
+- **sparql-eval:** `RelationWitness::canonical_bytes`, and the encoding version tag
+  behind it. It was a second canonical encoding of "what the indexes attested",
+  and the only one nothing shipped: every caller was a determinism test comparing
+  it against itself. The encoding an answer is actually compared by lives in
+  `purrdf-retrieval`, which collapses the ledger per stratum and digests the result
+  into its `EvidenceId` -- and the ledger could not have been that encoding's
+  source, because it is keyed by relation IRI rather than by stratum, holds sets
+  where an answer's evidence holds one generation and one service level, and counts
+  invocations, a quantity that follows the evaluator's chunking of driving rows
+  rather than anything an index said. An evidence identity derived from it would
+  have moved between two runs over one unchanged index. The ledger's own
+  determinism is now pinned as what it is -- an ordered value whose declarations are
+  identical across repeated runs and across the fork -- and the shipped digest is
+  pinned through the shipped path, including that it does not move with the
+  invocation count.
+
+- **python:** Every Rust test module under `bindings/python/src` -- roughly
+  fifteen hundred lines across ten files, holding fifty-six `#[test]` functions
+  that no gate has ever built. The crate sets `test = false` for a sound and
+  documented reason (see the new hygiene gate above), so those modules were
+  compiled by nothing and run by nothing; one of them had silently accumulated a
+  shadowing error that no gate could have reported. Every property each asserted
+  is now asserted where it runs. Most were already covered by the pytest suite or
+  by a live test in the crate that owns the logic; the rest are covered by new
+  pytest tests -- the whole `purrdf.shex` surface (which had none at all), the
+  native term model's own identity and RDF 1.2 refusals, blank-node scoping across
+  and within a `Store.load`, the validation snapshot seam behind
+  `Shapes.validate_store`, codec fidelity for private-use language tags and
+  non-canonical lexical forms, the eight-format egress registry, RDFC-1.0
+  determinism over isomorphic graphs, the per-call SPARQL engine configuration,
+  `RdfDataset`'s layer classification, and seven further properties of the ranked
+  retrieval surface.
 
 - **retrieval:** `ProtocolError::RepeatedContribution` and
   `AdmissionError::DepthBeyondMonotoneRange`, the two refusals above, at the
@@ -795,6 +978,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Performance
 
+- **sparql-eval/text:** Attesting an index generation is a refcount bump instead of
+  a string copy, and an entry point that cannot carry the answer no longer asks the
+  question. `IndexGeneration::Declared` holds a shared `Arc<str>`, so a producer over
+  a frozen index -- both text relations, the kNN cursor -- renders its generation once
+  at construction and every invocation clones a pointer, where each one previously
+  copied 64 hex characters into a fresh `String` in a seam entered once per driving
+  row. On a lane whose return type has no witness slot, the generation is not read
+  and the ledger entry is not built at all: the value could only have been dropped
+  with the context unread. The service-level read is deliberately not conditional,
+  because the refusal an unwitnessed lane owes a relation that declares its index
+  short depends on it. A relation over a frozen index therefore attests at no
+  per-invocation allocation, and one that genuinely computes a generation per
+  invocation pays for it only where somebody can read it --
+  `benches/relation_attestation_alloc.rs` reports the counts per invocation for both
+  shapes on both lanes (report-only, no threshold).
+  `IndexGeneration::declared` builds the variant from a `&str`, a `String` or an
+  `Arc<str>`.
+
 - **core/iri:** Restoring a dataset pack allocates 21 times for the prepared
   product fixture's 3.8 KB section, down from 523, and requests 43,411 bytes
   down from 104,527. The largest single cause was a double parse across a crate
@@ -808,6 +1009,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   vector and the frozen product golden are unaffected.
 
 ### Documentation
+
+- **sparql-eval/book:** `RelationAttestations::invocations` says, where a host reads
+  it, that it is a fact about the schedule rather than about the index: under a
+  `FILTER EXISTS` the parallel row loop evaluates each chunk of driving rows on a
+  worker whose `EXISTS` memo starts cold, so the relation inside it is re-entered
+  once per chunk and the count follows the input size and the worker count. The
+  declaration sets beside it do not move with any of that, which is why the
+  per-stratum conformance rule and an answer's evidence identity are keyed on them
+  alone. The two readings the count does support -- ran at all, and a rough
+  magnitude -- are named, and comparing it between two receipts is named as the one
+  thing it cannot be used for. The querying chapter carries the same correction,
+  which previously promised that two runs over one snapshot compare byte for byte
+  across the whole mapping.
 
 - **design:** `docs/design/purrdf-prepared-products.md` records the decisions
   behind the prepared-product surface — admission rather than parsing, why there

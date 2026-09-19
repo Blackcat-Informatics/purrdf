@@ -751,6 +751,7 @@ mod tests {
             // these fixtures make the widest promise there is on both terms.
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         }
     }

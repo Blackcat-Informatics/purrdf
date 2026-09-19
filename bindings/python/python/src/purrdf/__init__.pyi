@@ -522,6 +522,16 @@ class RelationAttestations(TypedDict):
     #: Invocations of this relation that entered host code — the same executions the
     #: `property-function-invocation` charge point prices, so the receipt and the meter
     #: describe the same run.
+    #:
+    #: A fact about the SCHEDULE, not about the index, and therefore NOT comparable
+    #: across runs — unlike the two declaration lists beside it. Under a `FILTER EXISTS`
+    #: the engine evaluates each chunk of driving rows on a worker whose `EXISTS` memo
+    #: starts cold, so the relation inside it is re-entered once per chunk and the chunk
+    #: count comes from the runtime's thread count; the same query over the same data can
+    #: report a different number while every declaration beside it is identical, including
+    #: between two runs that differ only in the budget they were given. Read it as "did
+    #: this relation run at all" (`0` versus non-zero) or as a rough magnitude for a log
+    #: line, never as a value to compare between two receipts.
     invocations: int
     #: Every DISTINCT index version this relation declared, sorted and de-duplicated.
     #: `None` is a member like any other and means those invocations declared NOTHING:
@@ -1459,6 +1469,12 @@ class _Shapes:
     # relative reference raises ValueError rather than being silently unresolved.
     def __init__(self, shapes_ttl: str, *, base: str | None = None) -> None: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
+    # Either quad container, validated through the native snapshot seam: both hold
+    # a frozen dataset behind their copy-on-write overlay, so neither is serialized
+    # to N-Triples and parsed back to be validated. The report is a statement about
+    # the data as it was — a later mutation moves the next report, not this one.
+    # Anything that cannot hand over such a snapshot raises `TypeError` naming the
+    # type that arrived and what is accepted; text belongs in `validate_nt`.
     def validate_store(self, data: Store | MutableDataset) -> _ValidationReport: ...
     # Analyze the shape tree once; the step a prepared PRODUCT is written from.
     def prepare(self) -> _PreparedShapes: ...
@@ -2012,8 +2028,9 @@ class slice:
 # Every weight crosses as an `int` of raw fixed-point units (`SCALE` is one whole
 # unit) and every score comes back as its exact decimal `str`, never a float.
 
-# One ranked text producer's declaration: `(stratum, predicate, graph)`, or the
-# same three followed by the producer's candidate domains.
+# One ranked text producer's declaration: `(stratum, predicate, graph)`, the same
+# three followed by the producer's candidate domains, or those four followed by
+# what the host attests about the index behind the producer.
 #
 # `domains` is `None` — which is also what omitting the fourth element declares —
 # or a list of domain-tag IRI strings. `None` is `Unrestricted`: "this producer
@@ -2036,6 +2053,18 @@ class slice:
 # consumer holds a producer to its declaration row by row, so every row it
 # emitted would contradict it. Pass `None` to restrict nothing.
 #
+# A list naming MORE THAN ONE distinct block raises `ValueError` naming the
+# producer too, and it is refused at registration rather than at the first row.
+# One block is entailed by the declaration, so a consumer reads it off the
+# declaration and no row repeats it; several blocks say only that the rows lie
+# somewhere in the set, which obliges the producer to name each row's own block —
+# and the ranked relations this surface builds project a candidate and a score
+# and declare no such column, because a tag describes how a host's corpora
+# partition and only the host knows that. The refusal quotes the blocks in
+# canonical order and names three exits: exactly one tag (the block this
+# producer's rows really lie in), one producer per block with its own stratum, or
+# `None`. A list that repeats one tag names one block and is accepted.
+#
 # A declaration is a promise, and `search` checks it against the rows it pulls.
 # Two producers whose declarations place one candidate in disjoint blocks cannot
 # both be telling the truth about it, so the fusion raises `ValueError` —
@@ -2050,10 +2079,76 @@ class slice:
 # contributions under either. The sibling refusal on the same seam — "stream for
 # stratum S emitted item I more than once" — is a producer that declared unique
 # candidates and repeated one, and names its stratum for the same reason.
+#
+# The FIFTH position is the attestation: `(generation, incompleteness)`, each a
+# `str` or `None`, recorded verbatim and never parsed — the same declaration
+# `_Relation` carries on the SPARQL lane, and the same one part of a producer that
+# nothing else crossing this boundary can express. Which version of the host's
+# index answered, and whether it was NOT whole, change an answer while every input
+# the engine can see stays identical, so if the host does not say, nothing can.
+#
+# Declaring nothing is SILENCE, and silence is not a claim that the index was
+# whole: there is no seam at which wholeness can be certified — a producer stopped
+# at a row ceiling never looked at the rows it skipped — so neither this binding
+# nor the engine mints such a claim. A spec written without the position declares
+# exactly that silence and behaves as it always has.
+#
+# * `incompleteness` is the host's own reason the index was not whole ("shard 3 of
+#   4 is still rebuilding"). `search` reports it verbatim under
+#   `["attestations"][stratum]["incomplete"]` and reports
+#   `["exactness"] == {"exact": False, "lower_bounds_for": [stratum, ...]}`: every
+#   score in that answer is a LOWER BOUND on the score a whole index would have
+#   produced, the rows are still real rows in the fusion's own certified order,
+#   and what does not follow is that a row absent from the answer would have
+#   stayed absent. It is reported rather than refused because this answer has a
+#   slot to say it in.
+# * `generation` is the host's own name for the index version that answered. It
+#   appears under `["attestations"][stratum]["generation"]` and is NOT a shortfall
+#   — an answer whose producers named only generations is still exact. It REPLACES
+#   the content digest the shipped text relation would otherwise attest, because
+#   one generation is pinned per invocation; a spelling that does not move when
+#   the host's corpus does makes two answers from two index states carry one
+#   `"evidence_id"`. Declaring an incompleteness alone leaves the digest in place.
+#
+# `plan` and `compile` read the same value — one producer declaration serves all
+# three entry points — and neither reports it: they execute nothing, so no index
+# has answered yet and there is nothing to attest about. It reaches no plan, no
+# compiled unit and no identity either returns, the registry's content
+# fingerprint included: that is a function of what a producer declares to the
+# PLANNER, and an attestation declares nothing there.
+#
+# The position is FIFTH rather than fourth-or-fifth, and the `domains` position is
+# written explicitly (as `None` to restrict nothing) to reach it. A four-element
+# value's tail is always `domains`: `("a", "b")` is a well-formed two-tag
+# restriction and a well-formed attestation at once, and guessing which the host
+# meant would report a domain tag back to an operator as an index generation, or
+# register a producer whose rows cannot back a restriction it never made. A value
+# of any other width, or a fifth position that is not a two-member sequence (a
+# bare string included — a `str` is a sequence of its own characters, and reading
+# `"ab"` as `generation="a"` would put a claim in the host's mouth), raises
+# `TypeError` naming all three accepted widths. A fifth position that IS a
+# two-member sequence whose member is neither `str` nor `None` raises `TypeError`
+# naming that member.
+#
+#     retrieval.search(
+#         data,
+#         [("lexical", "quick fox", None, "https://example.org/note")],
+#         text_producers={
+#             "https://example.org/pf/search": (
+#                 "https://example.org/stratum/lexical",
+#                 "https://example.org/note",
+#                 "any",
+#                 None,
+#                 ("notes-index-7", "shard 3 of 4 is still rebuilding"),
+#             )
+#         },
+#         ...,
+#     )["exactness"]  # {"exact": False, "lower_bounds_for": [".../stratum/lexical"]}
 _TextProducerSpec: TypeAlias = (
     tuple[str, str, str]
     | tuple[str, str, str, list[str] | None]
-    | tuple[str, str, str, list[str] | None, str | None]
+    | tuple[str, str, str, list[str] | None, _Attestation]
+    | tuple[str, str, str, list[str] | None, _Attestation, str | None]
 )
 
 class retrieval:
@@ -2088,12 +2183,15 @@ class retrieval:
     # ("numeric", predicate, lower_raw | None, upper_raw | None), or
     # ("entity", term).
     #
-    # `text_producers` maps a producer IRI to (stratum, predicate, graph) or to
-    # (stratum, predicate, graph, domains), where `graph` is "any", "default", or
-    # a named-graph IRI and `domains` is the producer's candidate-domain
+    # `text_producers` maps a producer IRI to (stratum, predicate, graph), to
+    # (stratum, predicate, graph, domains), or to those four followed by one
+    # (generation, incompleteness) attestation, where `graph` is "any", "default",
+    # or a named-graph IRI and `domains` is the producer's candidate-domain
     # declaration (see `_TextProducerSpec`: `None` or an omitted fourth element
     # promises nothing and restricts nothing, a list of tag IRIs restricts the
-    # producer to those blocks, and an empty list is refused by name).
+    # producer to those blocks, and an empty list is refused by name; the fifth
+    # position is what the host attests about the index behind the producer, and
+    # declaring nothing there is silence rather than a claim the index was whole).
     # `statistics` must name
     # its "source" and "revision", and may carry "cardinality" (stratum IRI to
     # row count) and "selectivity" ((stratum IRI, request-term index) to an
@@ -2123,13 +2221,24 @@ class retrieval:
     # reports nothing past them; `search`, which runs the units for you, already
     # does.
     #
-    # "At most `depth + 1`" is exact, not hedged. Where the producer's declared
-    # row bound already equals the depth there is no room for a probe — the
-    # registry already answered the question the probe would ask — so none is
-    # emitted and the text's `LIMIT` equals `"depth"`. Read the bound off
-    # `"depth"` rather than off the text, which carries whichever of the two
-    # applies. `"planned_resolution"` is not a fallback source for it: that map is
-    # empty unless the call names a fusion law.
+    # The probe is emitted even where the producer's declared row bound already
+    # equals the depth, and that case is the one it exists for: a read stopping
+    # exactly at the declaration cannot tell a producer that ran out from one the
+    # bound cut, so reporting exhaustion there would rest on a number nobody
+    # checked. The unit asks for one row more instead. If that row arrives the
+    # producer contradicted its own registration and the read is refused by name;
+    # if it does not, the exhaustion is verified rather than believed.
+    #
+    # The extra row is in the `LIMIT` only — a ceiling the evaluator applies to a
+    # cursor the producer never hears about, so probing costs nothing and a
+    # producer that reads a depth argument is never asked to exceed what it
+    # registered. The single exception is a producer that declared no rows at all:
+    # there the floor of one row is the whole read, so the `LIMIT` equals
+    # `"depth"`, and the emptiness that comes back is the producer's own.
+    #
+    # Read the bound off `"depth"`, never off the text's `LIMIT`, which is the
+    # larger of the two everywhere else. `"planned_resolution"` is not a fallback
+    # source for it: that map is empty unless the call names a fusion law.
     #
     # `weights`, `k` and `decay` are the fusion law the caller means to fuse
     # under, and naming it is what makes `"planned_resolution"` answerable: per
@@ -2217,6 +2326,15 @@ class retrieval:
     # put a claim in the mouth of every producer that never spoke. Only the
     # streams fusion was handed are keyed; a stratum that never became a stream is
     # absent rather than reported as having declined to answer.
+    #
+    # Either axis may be the HOST's word rather than the relation's, through the
+    # fifth position of that producer's `_TextProducerSpec`. That is the only way
+    # an incompleteness reaches this map at all: the shipped text relation indexes
+    # the document it was handed and has no way to know what was missing from it,
+    # so a host whose corpus was assembled from a partial index is the only party
+    # who can say so. A declared generation replaces the content digest the
+    # relation would otherwise attest; a declared incompleteness is added beside it
+    # and leaves it alone.
     #
     # `"fidelities"` maps a stratum to what its producer declared about the rows
     # it can name, on two independent axes. `"completeness"` is `"complete"` or

@@ -601,6 +601,14 @@ indistinguishable from a complete one. An empty witness, an empty
 `incompleteness` list, and a `None` generation are all absences — none of them is a
 certificate that an index was whole.
 
+The two declaration lists are comparable between runs; `invocations` is not. It
+counts entries into host code, which is a fact about the schedule rather than about
+the index — under a `FILTER EXISTS` the relation is re-entered once per chunk of
+driving rows and the chunk count comes from the runtime's thread count, so the same
+query over the same data can report a different number while every declaration
+beside it is identical. Read it as "did this relation run at all", never as a value
+to compare between two receipts.
+
 Registration is per call and carries no callable, so the whole evaluation still
 runs with the GIL released. The property functions that are arbitrary host
 closures on the Rust side — the full-text index, the GeoSPARQL relations, the

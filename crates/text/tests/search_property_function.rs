@@ -899,7 +899,7 @@ fn generation_and_rows(dataset: &RdfDataset, index: Arc<TextIndex>) -> (String, 
         "one index answered, so one generation was attested: {attested:?}"
     );
     match attested.pop_first().expect("checked non-empty above") {
-        IndexGeneration::Declared(value) => (value, rows),
+        IndexGeneration::Declared(value) => (value.to_string(), rows),
         IndexGeneration::Undeclared => panic!(
             "the shipped ranked producer must declare the generation of the index that \
              answered; an undeclared generation makes two answers over two index states \

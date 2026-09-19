@@ -53,8 +53,8 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, Iri,
-    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedStream, StreamContract,
-    Term, TopK, contribution, fuse,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
+    RowBlock, StreamContract, Term, TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ struct LazyStream {
 impl RankedStream for LazyStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         if self.emitted >= self.total {
             return Ok(None);
         }
@@ -256,7 +256,16 @@ impl RankedStream for LazyStream {
             }
             Some(block) => format!("block-{block}/candidate-{rank:08}"),
         };
-        Ok(Some((rank, value, Term::new(item))))
+        // The block this row was drawn from, which a restricted stream owes on
+        // every row. It is read off this stream's own declaration rather than
+        // stored twice: the disjoint fixture declares exactly one block per
+        // stratum, so that block IS where each of its rows comes from, and the
+        // overlapping fixture declares nothing and names nothing.
+        let block = match self.domains.tags().and_then(|tags| tags.iter().next()) {
+            Some(tag) => RowBlock::Declared(tag.clone()),
+            None => RowBlock::Undeclared,
+        };
+        Ok(Some(RankedRow::new(rank, value, Term::new(item), block)))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -573,8 +582,16 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
     // And in absolute terms it is small. Materializing even the candidate terms
     // of one 1e6-row stream would cost tens of megabytes; the whole fusion's
     // working set here is kilobytes.
+    //
+    // The ceiling is a smell test against that two-orders-of-magnitude gap, not
+    // a derived bound — the derived claim is the equality above, which is what
+    // says the peak does not track the input. It is stated with room for the
+    // per-row record to carry more than it does today: each row already holds
+    // its score interval and the block it was drawn from, and a field added to
+    // either moves this number by `CERTIFIED_ROWS` times its width while
+    // changing nothing about what is being claimed.
     assert!(
-        long.peak_bytes < 64 * 1024,
+        long.peak_bytes < 128 * 1024,
         "a bounded frontier should not cost {} bytes",
         long.peak_bytes
     );

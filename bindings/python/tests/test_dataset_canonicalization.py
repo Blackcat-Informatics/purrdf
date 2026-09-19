@@ -88,3 +88,85 @@ def test_dataset_canonicalize_still_admits_an_ordinary_neighbouring_dataset() ->
     )
     dataset.canonicalize(purrdf.CanonicalizationAlgorithm.RDFC_1_0)
     assert len(dataset) == 1
+
+
+# ── determinism: what canonicalization is FOR ───────────────────────────────────
+#
+# Everything above is about the refusal. These are about the thing being refused
+# on behalf of: a canonical form only earns the name if two documents that are
+# the same graph reach the same bytes, and the same document reaches them twice.
+# Without a blank node in the fixture no canonical label is ever minted, so the
+# refusal tests above cannot witness any of it.
+
+EX = "https://example.org/"
+
+#: Two isomorphic graphs: one two-cycle each, with disjoint blank labels. As RDF
+#: graphs they are indistinguishable, and a canonical form has to say so.
+ISOMORPHIC_A = f"_:a <{EX}p> _:b .\n_:b <{EX}q> _:a .\n"
+ISOMORPHIC_B = f"_:x <{EX}p> _:y .\n_:y <{EX}q> _:x .\n"
+
+#: The neighbouring graph that is NOT isomorphic to either: the same two-cycle
+#: shape with one predicate changed, so both edges are `ex:p`. If canonicalization
+#: collapsed everything to one form, this would match too — which is how a
+#: "deterministic" function that simply discards information passes a
+#: same-bytes test.
+NON_ISOMORPHIC = f"_:a <{EX}p> _:b .\n_:b <{EX}p> _:a .\n"
+
+
+def _canonical_rows(document: str, algorithm: object) -> list[str]:
+    """The canonical form of *document* under *algorithm*, as comparable rows.
+
+    `purrdf.parse` rather than a store load, because only it keeps the document's
+    blank labels verbatim — and the labels are the whole subject of the exercise.
+    """
+    dataset = purrdf.Dataset(purrdf.parse(document, RdfFormat.N_TRIPLES))
+    dataset.canonicalize(algorithm)
+    return sorted(f"{quad.subject} <{quad.predicate}> {quad.object}" for quad in dataset)
+
+
+def test_two_isomorphic_graphs_canonicalize_to_one_form_under_rdfc_1_0() -> None:
+    """Different blank labels, same graph, same canonical bytes.
+
+    This is the property RDFC-1.0 exists to provide and the only one a consumer
+    can build on: a digest, a diff or a signature over a graph is meaningless
+    unless relabelling the blanks leaves it alone. The canonical labels appear in
+    the output too, because a form that kept the document's own labels would be
+    stable only by accident of input.
+    """
+    first = _canonical_rows(ISOMORPHIC_A, purrdf.CanonicalizationAlgorithm.RDFC_1_0)
+    second = _canonical_rows(ISOMORPHIC_B, purrdf.CanonicalizationAlgorithm.RDFC_1_0)
+
+    assert first == second, "isomorphic graphs canonicalize identically"
+    assert all("_:c14n" in row for row in first), (
+        f"every blank carries a canonical label, not the document's: {first}"
+    )
+    for original in ("_:a", "_:b", "_:x", "_:y"):
+        assert not any(f"{original} " in row for row in first), (
+            f"{original} is an input label and must not survive: {first}"
+        )
+
+    # The neighbouring graph that is a DIFFERENT graph still canonicalizes to a
+    # different form. Agreement that swallowed this would be information loss
+    # wearing determinism.
+    assert (
+        _canonical_rows(NON_ISOMORPHIC, purrdf.CanonicalizationAlgorithm.RDFC_1_0)
+        != first
+    )
+
+
+def test_the_unstable_algorithm_is_self_consistent() -> None:
+    """The unstable algorithm makes no cross-version promise, but it is a function.
+
+    "Unstable" names what it does not promise — that the labels will be the same
+    in a later release — not a licence to answer differently twice in one process.
+    A caller using it to deduplicate within a run depends on exactly this, and
+    nothing else states it.
+    """
+    algorithm = purrdf.CanonicalizationAlgorithm.UNSTABLE
+    first = _canonical_rows(ISOMORPHIC_A, algorithm)
+    assert first == _canonical_rows(ISOMORPHIC_A, algorithm)
+    assert first, "the fixture canonicalizes to something"
+
+    # And it still tells two different graphs apart, which is the floor any
+    # labelling has to clear to be usable for anything.
+    assert _canonical_rows(NON_ISOMORPHIC, algorithm) != first

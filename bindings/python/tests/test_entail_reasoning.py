@@ -901,6 +901,13 @@ def test_the_committed_proof_bytes_reproduce_through_this_host() -> None:
     """
     cases = _dl_proof_vectors()
     assert len(cases) == 7, "one case per proof-bearing service"
+    # …and one case per service BY NAME, not merely seven of them. A count alone
+    # is satisfied by an artifact that duplicated one service and dropped another,
+    # which would leave a proof-bearing service checked on no host at all.
+    assert {case["service"] for case in cases} == set(entail.proof_services()), (
+        "every service that carries a proof term has a case, and the artifact "
+        "names no service that does not"
+    )
     for case in cases:
         argument = case.get("argument", "").rstrip("\n")
         answer, certificate, proof = entail.prove(case["input"], case["service"], argument)

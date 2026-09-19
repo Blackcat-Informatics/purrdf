@@ -261,7 +261,12 @@ pub struct EmbeddingSpace {
     guard: KnnGuard,
     /// The generation every cursor over this space attests, folded once at
     /// construction — see [`space_generation`].
-    generation: String,
+    ///
+    /// Shared rather than owned: the space is immutable, so this hex is a constant
+    /// of it, and [`IndexGeneration::Declared`] holds the same `Arc<str>`. Attesting
+    /// it — which the engine asks for once per invocation, and an invocation is once
+    /// per driving row — is a refcount bump instead of a fresh copy of the digest.
+    generation: Arc<str>,
 }
 
 impl EmbeddingSpace {
@@ -381,8 +386,18 @@ impl EmbeddingSpace {
 
     /// The generation this space attests for every row it returns.
     ///
-    /// A content identity, comparable across processes and machines: see
-    /// [`space_generation`] for what it folds and why each part of it is there.
+    /// A content identity, comparable across processes and machines. It folds the
+    /// projection digest, the family contract that names the metric, and every
+    /// bound term in row order — and it moves exactly when the rows this space can
+    /// return move, which is what makes it worth comparing.
+    ///
+    /// The projection digest rather than the matrix digest, because a prefix policy
+    /// lets two spaces share one stored matrix and differ in the prefix taken. The
+    /// bindings are folded because the map from a row to the RDF term it stands for
+    /// is a host argument: two spaces over byte-identical artifacts with different
+    /// bindings return a different term at every position, and a matrix-only
+    /// identity would call them one generation. The bound on work is excluded — it
+    /// decides how hard a search tries, never which rows exist or how they rank.
     #[must_use]
     pub fn generation(&self) -> &str {
         &self.generation
@@ -583,7 +598,7 @@ fn space_generation(
     projection: ProjectionContentDigest,
     family: FamilyContractDigest,
     terms: &[TermValue],
-) -> String {
+) -> Arc<str> {
     let mut bytes = Vec::new();
     crate::registry_id::append_framed_part(
         &mut bytes,
@@ -603,7 +618,7 @@ fn space_generation(
         term.canonical_bytes(&mut term_bytes);
         crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);
     }
-    ContentDigest::of(&bytes).to_hex()
+    Arc::from(ContentDigest::of(&bytes).to_hex())
 }
 
 /// Read every row of `effective` into one row-major `f64` buffer.
@@ -886,6 +901,13 @@ impl EmbeddingKnnRelation {
             // measured against, and it declares the top of the lattice.
             fidelity: RankFidelity::EXACT,
             domains,
+            // This relation projects a neighbour and a distance; it knows
+            // nothing of a host's partition, so it has no position to read a
+            // per-row block out of and says so. A host whose vector index spans
+            // several blocks declares one producer per block, or declares
+            // `CandidateDomains::Unrestricted`; see
+            // `RankedDeclaration::block_position`.
+            block_position: None,
             mandatory: false,
         }
     }
@@ -1164,9 +1186,10 @@ impl PfCursor for KnnCursor {
     ///
     /// The space is immutable once built, so the reading is true for every row
     /// this cursor goes on to emit — which is exactly the property the seam
-    /// documents for the instant it takes this reading at.
+    /// documents for the instant it takes this reading at. The digest itself is
+    /// not copied out: the attestation shares the space's own `Arc<str>`.
     fn generation(&self) -> IndexGeneration {
-        IndexGeneration::Declared(self.space.generation().to_owned())
+        IndexGeneration::Declared(Arc::clone(&self.space.generation))
     }
 }
 

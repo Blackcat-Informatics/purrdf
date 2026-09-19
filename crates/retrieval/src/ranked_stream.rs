@@ -51,9 +51,36 @@
 //! contradicts is believed, because there is nothing else a consumer could do
 //! with it short of reading the whole stream, which is the cost the declaration
 //! exists to avoid.
+//!
+//! # The domain promise is backed row by row
+//!
+//! A restricted declaration is not merely a set a consumer compares other
+//! declarations against. Every row says which block of the candidate universe it
+//! was drawn from ([`RankedRow::block`]), because the arithmetic the restriction
+//! licenses rests on an axiom about the host's corpus — the tags **partition**
+//! the candidate universe, so a candidate lies in exactly one block — and a row
+//! that names its block is what makes that axiom checkable at all.
+//!
+//! So a [`CandidateDomains::Within`] stream owes a block on every row, and it
+//! owes one its own declaration admits
+//! ([`ProtocolError::UnbackedDomainDeclaration`],
+//! [`ProtocolError::BlockOutsideDeclaredDomain`]). A
+//! [`CandidateDomains::Unrestricted`] stream owes none: it restricts no
+//! arithmetic — its head counts in every block's bound — so there is no promise
+//! for a row to back. It may still name one, and a named block is honoured
+//! whoever named it, because a block is evidence about the *candidate* rather
+//! than about the stream.
+//!
+//! Two streams that name one candidate from two different blocks have proven the
+//! axiom false for that candidate, and that is
+//! [`ProtocolError::CandidateInTwoBlocks`] — the refusal that keeps a false
+//! tagging from becoming a wrong order rather than an error. It is the same
+//! verified-as-far-as-the-rows-reach standard as the two promises above: a
+//! violation among rows nobody pulled is not detected, and this layer does not
+//! claim otherwise.
 
 use purrdf_sparql_eval::{
-    CandidateDomains, DuplicatePolicy, PfAttestation, RankFidelity, RankedDeclaration,
+    CandidateDomains, DomainTag, DuplicatePolicy, PfAttestation, RankFidelity, RankedDeclaration,
 };
 use purrdf_text::Fixed;
 
@@ -244,6 +271,97 @@ impl StreamContract {
             duplicates,
             fidelity,
             domains,
+        }
+    }
+}
+
+/// Which block of the candidate universe one row was drawn from, or an honest
+/// absence.
+///
+/// # Why `Undeclared` is a first-class value and not an `Option`
+///
+/// This follows [`IndexGeneration::Undeclared`](purrdf_sparql_eval::IndexGeneration)
+/// and [`PfAttestation::UNDECLARED`], for the reason those exist: a producer may
+/// have nothing to say, and asking it to fabricate a block would be asking it to
+/// fabricate evidence. A stream computed over its arguments, a walk of the
+/// dataset, an unrestricted index that holds no notion of a host's partition —
+/// none of those has a block, and `None` would invite a reader to treat the
+/// absence as a value it could unwrap or default. The variant says what happened:
+/// this row named no block.
+///
+/// It is silence, never a claim. [`Self::Undeclared`] does **not** say the
+/// candidate is outside every block, does not say it is in all of them, and
+/// carries no permission to pick one — it says nobody stated anything, which is
+/// exactly why a [`CandidateDomains::Within`] stream may not utter it (see
+/// [`ProtocolError::UnbackedDomainDeclaration`]): that stream has already made a
+/// promise, and a row that declares nothing is a row that backs nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RowBlock {
+    /// The row names no block. See this type's docs: an absence, not a claim.
+    Undeclared,
+    /// The row was drawn from this block of the candidate universe.
+    ///
+    /// A [`DomainTag`] is a caller-chosen IRI naming a block of a partition, so
+    /// this is the producer's statement that *this candidate* lies in *that*
+    /// block — a fact about the candidate, which is why a second stream naming
+    /// the same candidate in a different block is a contradiction
+    /// ([`ProtocolError::CandidateInTwoBlocks`]) rather than a difference of
+    /// opinion.
+    Declared(DomainTag),
+}
+
+impl RowBlock {
+    /// The block this row names, or `None` where it named none.
+    ///
+    /// A reader that needs the tag itself — to compare two rows, or to measure
+    /// one against a declaration — asks for it here. The absence stays an
+    /// absence: this is a projection of the variant, never a defaulting of it.
+    #[must_use]
+    pub const fn tag(&self) -> Option<&DomainTag> {
+        match self {
+            Self::Undeclared => None,
+            Self::Declared(tag) => Some(tag),
+        }
+    }
+}
+
+/// One row of a ranked stream: its rank, its contribution, the item it names,
+/// and the block that item was drawn from.
+///
+/// A named value rather than a tuple because the row now carries four facts, two
+/// of which are the same shape to a reader skimming a call site — and because
+/// three of them are claims a consumer checks against a different thing: the rank
+/// against the rank law, the contribution against the profile, and the block
+/// against the stream's own declaration and against every other row that named
+/// the same item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RankedRow<I> {
+    /// The row's 1-based rank within this stream. Contiguous and ascending; see
+    /// [`RankedDeclaration`]'s note on the single rank law.
+    pub rank: u64,
+    /// The profile's reciprocal-rank contribution for this rank, which fusion
+    /// re-derives and refuses on a mismatch
+    /// ([`ProtocolError::ContributionMismatch`]).
+    pub contribution: Fixed,
+    /// The candidate this row names.
+    pub item: I,
+    /// The block of the candidate universe this row was drawn from.
+    ///
+    /// Owed by a [`CandidateDomains::Within`] stream on every row, and owed by
+    /// no other — see this module's header, and [`RowBlock`] for why the absence
+    /// is a value rather than an `Option`.
+    pub block: RowBlock,
+}
+
+impl<I> RankedRow<I> {
+    /// A row that names `block`.
+    #[must_use]
+    pub const fn new(rank: u64, contribution: Fixed, item: I, block: RowBlock) -> Self {
+        Self {
+            rank,
+            contribution,
+            item,
+            block,
         }
     }
 }
@@ -459,6 +577,154 @@ pub enum ProtocolError {
         named_by: String,
     },
 
+    /// A stream that restricted its candidate domains emitted a row that names
+    /// no block, so nothing backs the restriction.
+    ///
+    /// Raised only against a [`CandidateDomains::Within`] declaration, and
+    /// against every such row — the first one is enough, because the promise is
+    /// about the whole stream.
+    ///
+    /// # Why an unbacked restriction is refused rather than read as `Unrestricted`
+    ///
+    /// Because the restriction has already been *used*, and quietly widening it
+    /// is not available at the point the row arrives: fusion skips streams that
+    /// provably cannot name a candidate and bounds unseen items by the best
+    /// single block, so rows may already have been certified on the strength of
+    /// this declaration. The two remaining options are to refuse, or to keep
+    /// certifying against an axiom — a candidate lies in exactly one block —
+    /// that nothing in this fusion can check. Refusing is the one that does not
+    /// hand a caller an order computed from an unchecked premise.
+    ///
+    /// It is not a refusal of a producer that cannot say which block its rows
+    /// lie in. Such a producer declares [`CandidateDomains::Unrestricted`],
+    /// which owes no block, fuses normally, and costs only the early
+    /// certification the narrower claim would have bought; or it is registered
+    /// once per block, each declaration naming the single block its rows really
+    /// lie in, where the block is *entailed* by the declaration and no row has
+    /// to repeat it. Both exits are one line, and both are in
+    /// `RankedDeclaration::block_position`'s docs.
+    ///
+    /// # Both fields, because the promise and its author are different questions
+    ///
+    /// The stratum says who made a promise it does not back; the blocks say what
+    /// the promise was, which is what a reader needs in order to choose between
+    /// the two exits — one block means delete the row-level expectation, several
+    /// means split the producer or name a block column. The rank says which row
+    /// was measured, and it is not always the first: a stream may back its
+    /// declaration for a hundred rows and then stop, and a refusal that named no
+    /// rank would send a reader to row one.
+    #[error(
+        "stream for stratum {stratum} restricted its candidates to {declared:?} but the row at \
+         rank {rank} names no block, so nothing backs that restriction"
+    )]
+    UnbackedDomainDeclaration {
+        /// The stratum whose stream emitted the blockless row, exactly as that
+        /// stream was tagged when it was handed to fusion.
+        stratum: String,
+        /// The blocks the stream declared, in canonical order.
+        declared: Vec<String>,
+        /// The 1-based rank of the row that named no block.
+        rank: u64,
+    },
+
+    /// A row names a block its own stream's declaration does not include.
+    ///
+    /// The stream contradicts itself: it promised its candidates lie in a named
+    /// set of blocks and then said this one came from outside that set. No
+    /// second stream is involved and none is needed, which is what separates
+    /// this from [`Self::OutsideDeclaredDomain`] — that one reports two
+    /// declarations that cannot both be true of one candidate, and this one
+    /// reports a single stream whose row contradicts its own registration.
+    ///
+    /// Raised whatever the stream declared *except* under
+    /// [`CandidateDomains::Unrestricted`], which admits every block, so an
+    /// unrestricted stream cannot reach it: a stream that promised nothing has
+    /// nothing to contradict. That is deliberate rather than incidental — a
+    /// block volunteered by an unrestricted stream is still honoured as evidence
+    /// about the candidate (see [`Self::CandidateInTwoBlocks`]), and refusing it
+    /// here would refuse a host that told the truth about a producer it had not
+    /// restricted.
+    ///
+    /// # All four fields
+    ///
+    /// The item says *which row*, the stratum says *who*, `block` says what the
+    /// row claimed and `declared` says what the registration claimed. The last
+    /// two are the contradiction itself and neither half states it: a reader
+    /// holding only the named block cannot see which set it fell outside, and a
+    /// reader holding only the set cannot see what arrived.
+    #[error(
+        "stream for stratum {stratum} named item {item:?} in block {block}, which its declared \
+         domains {declared:?} do not include"
+    )]
+    BlockOutsideDeclaredDomain {
+        /// The candidate's canonical text.
+        item: String,
+        /// The stratum whose stream named the block, exactly as that stream was
+        /// tagged when it was handed to fusion.
+        stratum: String,
+        /// The block the row named.
+        block: String,
+        /// The blocks that stream declared, in canonical order.
+        declared: Vec<String>,
+    },
+
+    /// Two streams named one candidate from two different blocks, so the
+    /// candidate lies in two blocks — which the whole declared-domain arithmetic
+    /// says it cannot.
+    ///
+    /// This is the axiom itself, falsified by rows. A [`DomainTag`] names a
+    /// block of a *partition* of the candidate universe, so a candidate lies in
+    /// exactly one block; fusion bounds every item nobody has named yet by the
+    /// largest single block's sum of open heads, and skips a stream whose
+    /// declaration cannot reach a candidate's blocks when deciding that
+    /// candidate's score is final. Both of those are sound only under the axiom.
+    /// Two rows that place one candidate in two blocks are a proof the host's
+    /// tagging does not describe its corpus, and everything computed under it —
+    /// including rows already emitted — is a bound presented as a value.
+    ///
+    /// # Why this is not [`Self::OutsideDeclaredDomain`]
+    ///
+    /// That refusal compares *declarations*: it fires when a stream names a
+    /// candidate the already-applied declarations of other streams put out of
+    /// its reach. It therefore cannot see the case this one exists for — two
+    /// streams whose declarations overlap, each naming the same candidate from a
+    /// different block. Nothing about the declarations is contradictory there
+    /// (one shared block would make both true), and the threshold is still
+    /// wrong: the streams that can reach the first block and the streams that
+    /// can reach the second are different sets, so an unseen item's bound is the
+    /// larger single set while the candidate collected both. That gap is exactly
+    /// what per-row blocks close, and it closes silently or not at all.
+    ///
+    /// # Five fields, because a reader has five questions
+    ///
+    /// The item names the candidate whose tagging is wrong. The two strata name
+    /// the two producers whose rows disagree — one of the two tagged it wrongly
+    /// and this layer cannot know which, so it names both rather than picking a
+    /// side. The two blocks are the disagreement itself: without them a reader
+    /// sees two strata that both legitimately hold the candidate and no reason
+    /// they were refused. None of the five is derivable from the others, and no
+    /// subset makes the report actionable.
+    #[error(
+        "streams for strata {stratum} and {named_by} name item {item:?} from two different \
+         blocks, {block} and {named_by_block}: a candidate lies in exactly one block, so this \
+         tagging cannot be true"
+    )]
+    CandidateInTwoBlocks {
+        /// The candidate's canonical text.
+        item: String,
+        /// The stratum whose row arrived last, exactly as that stream was tagged
+        /// when it was handed to fusion.
+        stratum: String,
+        /// The block that row named.
+        block: String,
+        /// The stratum that had already named the candidate — deterministically,
+        /// the stream that recorded the candidate's block first in the order the
+        /// streams were handed to fusion.
+        named_by: String,
+        /// The block that stratum named the candidate from.
+        named_by_block: String,
+    },
+
     /// A producer's contribution does not equal the profile's declared
     /// reciprocal-rank value for its stratum and rank. The fusion engine
     /// recomputes the contribution from the profile and refuses a mismatch
@@ -555,15 +821,22 @@ pub enum ProtocolError {
 
 /// A producer's ranked rows, pulled one at a time.
 ///
-/// `next` yields `(rank, contribution, item)` in rank order and `Ok(None)` once
-/// the stream is exhausted; `receipt` then reports how it ended. Ranks are
-/// 1-based and contiguous. Contributions are the profile's reciprocal-rank
-/// values — a conforming producer computes them with
-/// [`contribution`](crate::contribution). Fusion re-derives every one of them
-/// from `(decay rule, K, weight, rank)` and refuses a stream that supplies a
-/// different number ([`ProtocolError::ContributionMismatch`]), which is also
-/// what holds the sequence non-increasing with rank: the profile's own curve
-/// never rises, so a rising value is a value the profile did not compute.
+/// `next` yields a [`RankedRow`] in rank order and `Ok(None)` once the stream is
+/// exhausted; `receipt` then reports how it ended. Ranks are 1-based and
+/// contiguous. Contributions are the profile's reciprocal-rank values — a
+/// conforming producer computes them with [`contribution`](crate::contribution).
+/// Fusion re-derives every one of them from `(decay rule, K, weight, rank)` and
+/// refuses a stream that supplies a different number
+/// ([`ProtocolError::ContributionMismatch`]), which is also what holds the
+/// sequence non-increasing with rank: the profile's own curve never rises, so a
+/// rising value is a value the profile did not compute.
+///
+/// Each row also says which block of the candidate universe it was drawn from. A
+/// stream that declared [`CandidateDomains::Within`] owes that on every row and
+/// owes one its own declaration admits; a stream that declared
+/// [`CandidateDomains::Unrestricted`] owes none and says
+/// [`RowBlock::Undeclared`], which is an absence rather than a claim. See this
+/// module's header for what the block buys and what it costs a producer.
 // The trait is consumed only by `FusionStream` in this crate; its futures are
 // awaited in the same task and never cross a thread boundary, so the `Send`
 // bound the lint wants to express would add nothing. Making it a required bound
@@ -581,7 +854,7 @@ pub trait RankedStream {
     /// A [`ProtocolError`] when the producer cannot report its own rows
     /// honestly — for example [`ProtocolError::ErrorAfterRows`] after a failure
     /// that followed emitted rows, or [`ProtocolError::NeverEndingSource`].
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError>;
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError>;
 
     /// Report how the stream ended. Called only after `next` returned
     /// `Ok(None)`.

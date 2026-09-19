@@ -492,6 +492,14 @@ impl HnswRelation {
             duplicates: DuplicatePolicy::Unique,
             fidelity: self.fidelity(),
             domains,
+            // This relation projects a neighbour and a distance; it knows
+            // nothing of a host's partition, so it has no position to read a
+            // per-row block out of and says so — the same answer its exact
+            // sibling gives, for the same reason. A host whose vector index
+            // spans several blocks declares one producer per block, or declares
+            // `CandidateDomains::Unrestricted`; see
+            // `RankedDeclaration::block_position`.
+            block_position: None,
             mandatory: false,
         }
     }
@@ -727,8 +735,12 @@ impl PfCursor for HnswCursor {
     ///
     /// The space is immutable once built, so the reading taken here is true for
     /// every row this cursor goes on to emit.
+    ///
+    /// The `Arc` is cloned rather than the string: the space already holds the
+    /// one encoding of what it attested, and handing back a pointer to it is
+    /// what keeps a per-invocation allocation off this path.
     fn generation(&self) -> IndexGeneration {
-        IndexGeneration::Declared(self.space.generation().to_owned())
+        IndexGeneration::Declared(Arc::clone(&self.space.generation))
     }
 
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {

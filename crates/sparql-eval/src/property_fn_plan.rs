@@ -1520,6 +1520,7 @@ mod content_fingerprint_tests {
             // The fixture producer is an in-memory table read end to end.
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         }
     }

@@ -503,3 +503,153 @@ def test_identified_node_resolves_through_shadow() -> None:
         "print('OK')\n"
     )
     assert _run_in_shadow(code).strip() == "OK"
+
+
+# ── the NATIVE term model, on its own terms ─────────────────────────────────────
+#
+# Everything above compares the compat shim against the oracle. These compare the
+# native `purrdf` term constructors against the RDF abstract syntax directly,
+# because the shim re-implements some of this in Python — its own base-direction
+# validation, its own `xsd:string` collapse — and so a shim test can pass while
+# the native surface underneath it is wrong. A host that imports `purrdf` rather
+# than `purrdf.compat.rdflib` gets exactly these terms.
+
+RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+
+
+def test_a_plain_and_an_explicit_xsd_string_literal_are_one_native_term() -> None:
+    """RDF 1.1 abolished the plain literal: its datatype IS ``xsd:string``.
+
+    So the two spellings name the same term, and a term model that told them
+    apart would report two distinct nodes where RDF has one — visible as a
+    duplicate row in any set, dict or graph keyed by terms. Equality, hash and
+    set cardinality are asserted together because a type can get any two of the
+    three right and still be broken as a key.
+    """
+    import purrdf
+
+    plain = purrdf.Literal("Alice")
+    explicit = purrdf.Literal("Alice", datatype=purrdf.NamedNode(XSD + "string"))
+
+    assert plain == explicit
+    assert hash(plain) == hash(explicit)
+    assert len({plain, explicit}) == 1, "one term, so one key"
+    assert {plain: "first", explicit: "second"} == {plain: "second"}
+
+    # And the getter answers the same way round: a plain literal reports the
+    # datatype it has rather than an absence.
+    assert plain.datatype.value == XSD + "string"
+    assert explicit.datatype.value == XSD + "string"
+
+
+def test_a_native_language_tagged_literal_reports_rdf_langstring() -> None:
+    """A language tag fixes the datatype, and the getter says which one.
+
+    ``rdf:langString`` is not a datatype a caller may supply — it is implied by
+    the tag — so this getter is the only place the pairing is visible, and a
+    literal that reported ``xsd:string`` here would be claiming to be a different
+    term from the one it is.
+    """
+    import purrdf
+
+    lit = purrdf.Literal("hi", language="en")
+    assert lit.language == "en"
+    assert lit.datatype.value == RDF + "langString"
+
+    # The neighbouring untagged literal is the contrast, and it is a different
+    # term with a different datatype.
+    plain = purrdf.Literal("hi")
+    assert plain.language is None
+    assert plain.datatype.value == XSD + "string"
+    assert lit != plain
+
+
+def test_a_native_typed_literal_keeps_its_datatype_and_differs_from_the_plain_one() -> None:
+    """A datatype is part of the term, so ``"1"^^xsd:integer`` is not ``"1"``.
+
+    The pair is asserted together on purpose: a model that stored the datatype
+    but left it out of the identity would pass the getter check and still merge
+    two distinct terms.
+    """
+    import purrdf
+
+    typed = purrdf.Literal("1", datatype=purrdf.NamedNode(XSD + "integer"))
+    plain = purrdf.Literal("1")
+
+    assert typed.datatype.value == XSD + "integer"
+    assert typed != plain
+    assert hash(typed) != hash(plain)
+    assert len({typed, plain}) == 2
+
+
+def test_the_native_literal_refuses_a_direction_without_a_language_and_an_unknown_token() -> None:
+    """A ``dirLangString`` is a language tag AND a direction from a closed set.
+
+    Both refusals are on the native constructor rather than the shim, which
+    validates directions again in Python and so cannot witness this. Each is
+    paired with the neighbouring valid call, because an over-refusal here would
+    reject the RDF 1.2 literals this surface exists to express and would read as
+    correct strictness right up to the point a host wrote one.
+    """
+    import purrdf
+
+    # A direction with no language is not a dirLangString and is not anything
+    # else either, so it is refused rather than silently dropped.
+    with pytest.raises(ValueError, match="requires a language tag"):
+        purrdf.Literal("x", direction="ltr")
+    # …and the neighbouring call that adds the tag is accepted.
+    assert purrdf.Literal("x", language="en", direction="ltr").direction == "ltr"
+
+    # The vocabulary is closed: two tokens, and no third spelling is read as
+    # either of them.
+    with pytest.raises(ValueError, match="invalid base direction") as refused:
+        purrdf.Literal("x", language="en", direction="up")
+    message = str(refused.value)
+    assert '"ltr"' in message and '"rtl"' in message, (
+        f"the refusal names both accepted tokens: {message}"
+    )
+    for token in ("ltr", "rtl"):
+        assert purrdf.Literal("x", language="en", direction=token).direction == token
+
+    # A literal that carries no direction reports its absence, which is what
+    # makes the getter readable at all: `None` here means "no base direction",
+    # never "the default one".
+    assert purrdf.Literal("x").direction is None
+    assert purrdf.Literal("x", language="en").direction is None
+    assert purrdf.Literal("x", datatype=purrdf.NamedNode(XSD + "integer")).direction is None
+
+
+def test_a_quoted_triple_is_an_object_and_never_a_subject() -> None:
+    """RDF 1.2 puts a triple term in the object slot only.
+
+    This is the line RDF 1.2 draws that the obsolete RDF-star proposal did not: a
+    subject is an IRI or a blank node, full stop. A model that accepted a triple
+    term as a subject would let a caller build a row no RDF syntax can write and
+    no consumer can read back, and the refusal has to come from the constructor
+    rather than from a type stub, since a stub governs no runtime call.
+    """
+    import purrdf
+
+    inner = purrdf.Triple(
+        purrdf.NamedNode(EX + "s"),
+        purrdf.NamedNode(EX + "p"),
+        purrdf.NamedNode(EX + "o"),
+    )
+    reifies = purrdf.NamedNode(RDF + "reifies")
+
+    # The object slot: accepted, and it comes back as a triple term rather than
+    # as some flattened rendering of one.
+    for constructor in (purrdf.Triple, purrdf.Quad):
+        row = constructor(purrdf.NamedNode(EX + "r"), reifies, inner)
+        assert isinstance(row.object, purrdf.Triple)
+        assert row.object == inner
+        assert isinstance(row.subject, purrdf.NamedNode)
+
+    # The subject slot: refused, for both row types, with the reason.
+    for constructor in (purrdf.Triple, purrdf.Quad):
+        with pytest.raises(TypeError, match="must be a NamedNode or BlankNode"):
+            constructor(inner, reifies, purrdf.NamedNode(EX + "o"))
+
+    # The neighbouring valid subjects, which the refusal must not sweep up.
+    for subject in (purrdf.NamedNode(EX + "r"), purrdf.BlankNode("r")):
+        assert purrdf.Quad(subject, reifies, inner).subject == subject

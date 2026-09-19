@@ -18,9 +18,9 @@ use purrdf_retrieval::{
     CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag, DuplicatePolicy, EvidenceId,
     Fixed, FusedRow, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream,
     IndexGeneration, Iri, MonotoneDepth, OrderFidelity, PfAttestation, PlanId, ProducerReceipt,
-    ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedStream, RankedStreamImpl,
-    ScoreExactness, ScoreInterval, ServiceLevel, StreamContract, StreamEnding, Term,
-    ToleratedDepth, TopK, contribution, contribution_under,
+    ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream,
+    RankedStreamImpl, RowBlock, ScoreExactness, ScoreInterval, ServiceLevel, StreamContract,
+    StreamEnding, Term, ToleratedDepth, TopK, contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -81,7 +81,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 /// One scripted step of a mock producer.
 enum Step {
-    Row(u64, Fixed, Term),
+    Row(RankedRow<Term>),
     Fail(ProtocolError),
 }
 
@@ -179,12 +179,12 @@ impl MockStream {
 impl RankedStream for MockStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         match self.steps.pop_front() {
-            Some(Step::Row(rank, score, item)) => {
+            Some(Step::Row(row)) => {
                 self.rows_emitted += 1;
                 self.pull_counter.fetch_add(1, Ordering::SeqCst);
-                Ok(Some((rank, score, item)))
+                Ok(Some(row))
             }
             Some(Step::Fail(error)) => Err(error),
             None => Ok(None),
@@ -210,11 +210,28 @@ impl RankedStream for MockStream {
 
 /// A well-formed row at `rank` for `weight` under `k`.
 fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> Step {
-    Step::Row(
+    Step::Row(RankedRow::new(
         rank,
         contribution(weight, rank, k).expect("fixture contribution fits"),
         Term::new(item),
-    )
+        // No block, which is what the `Unrestricted` declaration most fixtures
+        // here make owes. `row_in` is the same row drawn from a named block.
+        RowBlock::Undeclared,
+    ))
+}
+
+/// The same row, drawn from the block `block` names.
+///
+/// A restricted stream owes this on every row: its declaration is a promise
+/// about where its candidates lie, and the block is where an individual row
+/// backs it.
+fn row_in(rank: u64, weight: Fixed, k: u32, item: &str, block: &str) -> Step {
+    Step::Row(RankedRow::new(
+        rank,
+        contribution(weight, rank, k).expect("fixture contribution fits"),
+        Term::new(item),
+        RowBlock::Declared(domain(block)),
+    ))
 }
 
 fn exhausted(rows: u64) -> ProducerReceipt {
@@ -674,7 +691,12 @@ fn protocol_violations_are_typed() {
     let mismatch = vec![(
         stratum("text"),
         MockStream::new(
-            vec![Step::Row(1, Fixed::from_raw(1), Term::new("a"))],
+            vec![Step::Row(RankedRow::new(
+                1,
+                Fixed::from_raw(1),
+                Term::new("a"),
+                RowBlock::Undeclared,
+            ))],
             exhausted(1),
         ),
     )];
@@ -1696,9 +1718,25 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     );
 }
 
-// 15. The bound stops the reading, not only the returning.
+// 15. The bound stops the reading, not only the returning — over ONE stratum.
+//
+// **The single-stratum case is degenerate, and the name says so.** With one
+// stream open there is no rival stratum that could still contribute to a
+// candidate, so the finality test every certification rests on is satisfied by
+// the first row pulled and the bound stops the read whatever the engine's
+// threshold arithmetic does. That is worth pinning — it is the shape a
+// single-producer request really has — but it is *not* evidence that the reading
+// is bounded in general, and a version of this test that claimed to be would
+// have stayed green throughout the fused top-k drain defect, which lived
+// entirely in the multi-stratum threshold.
+//
+// The load-bearing claim over several strata is
+// `declared_domains_bound_the_reading_over_disjoint_strata`, which measures the
+// same quantity across two disjoint strata and carries the counter-measurement:
+// without a domain declaration the identical streams drain, because with two
+// open streams nothing licenses an early stop.
 #[test]
-fn a_bounded_stop_closes_a_stream_instead_of_draining_it() {
+fn a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it() {
     // A stratum with far more rows than the bound asks for, and a counter on
     // every pull. If the terminal report drained the stream to make it declare
     // `Exhausted`, the count would be the whole stream and the memory bound
@@ -2588,8 +2626,18 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
         stratum("thin"),
         MockStream::new(
             vec![
-                Step::Row(1, first, Term::new("a")),
-                Step::Row(2, second, Term::new("b")),
+                Step::Row(RankedRow::new(
+                    1,
+                    first,
+                    Term::new("a"),
+                    RowBlock::Undeclared,
+                )),
+                Step::Row(RankedRow::new(
+                    2,
+                    second,
+                    Term::new("b"),
+                    RowBlock::Undeclared,
+                )),
             ],
             exhausted(2),
         ),
@@ -2634,7 +2682,12 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
             MockStream::new(
                 vec![
                     row(1, Fixed::ONE, K, "a"),
-                    Step::Row(2, risen, Term::new("b")),
+                    Step::Row(RankedRow::new(
+                        2,
+                        risen,
+                        Term::new("b"),
+                        RowBlock::Undeclared,
+                    )),
                 ],
                 exhausted(2),
             )
@@ -2933,11 +2986,12 @@ fn deep_profile(decay: DecayRule, weight: Fixed) -> FusionProfile {
 fn deep_stream(decay: DecayRule, weight: Fixed, rows: u64) -> MockStream {
     let steps = (1..=rows)
         .map(|rank| {
-            Step::Row(
+            Step::Row(RankedRow::new(
                 rank,
                 contribution_under(decay, weight, rank).expect("fixture contribution fits"),
                 Term::new(format!("d{rank:07}")),
-            )
+                RowBlock::Undeclared,
+            ))
         })
         .collect();
     MockStream::new(steps, exhausted(rows))
@@ -3213,8 +3267,18 @@ fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
         stratum("deep"),
         MockStream::new(
             vec![
-                Step::Row(1, plateau, Term::new("a")),
-                Step::Row(2, forged, Term::new("b")),
+                Step::Row(RankedRow::new(
+                    1,
+                    plateau,
+                    Term::new("a"),
+                    RowBlock::Undeclared,
+                )),
+                Step::Row(RankedRow::new(
+                    2,
+                    forged,
+                    Term::new("b"),
+                    RowBlock::Undeclared,
+                )),
             ],
             exhausted(2),
         ),
@@ -3240,8 +3304,18 @@ fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
         stratum("deep"),
         MockStream::new(
             vec![
-                Step::Row(1, plateau, Term::new("a")),
-                Step::Row(2, plateau, Term::new("b")),
+                Step::Row(RankedRow::new(
+                    1,
+                    plateau,
+                    Term::new("a"),
+                    RowBlock::Undeclared,
+                )),
+                Step::Row(RankedRow::new(
+                    2,
+                    plateau,
+                    Term::new("b"),
+                    RowBlock::Undeclared,
+                )),
             ],
             exhausted(2),
         ),
@@ -4451,11 +4525,12 @@ async fn collided_fusion_at(top_k: TopK) -> FusionResult<Term> {
                 .enumerate()
                 .map(|(index, name)| {
                     let rank = u64::try_from(index + 1).expect("four rows");
-                    Step::Row(
+                    Step::Row(RankedRow::new(
                         rank,
                         contribution_under(decay, weight, rank).expect("fits"),
                         Term::new(*name),
-                    )
+                        RowBlock::Undeclared,
+                    ))
                 })
                 .collect(),
             exhausted(4),
@@ -4878,7 +4953,10 @@ fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end
     // refusal. Asked too early it refuses; asked after its rows ran out — one
     // more pull, nothing else changed — it answers with the count it emitted.
     let mut stream = RankedStreamImpl::new(
-        vec![(1, Term::new("a")), (2, Term::new("b"))],
+        vec![
+            (1, Term::new("a"), RowBlock::Undeclared),
+            (2, Term::new("b"), RowBlock::Undeclared),
+        ],
         StreamEnding::Exhausted,
     );
     assert!(
@@ -4998,7 +5076,7 @@ fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused()
 /// A producer that names a generation and declares nothing about wholeness.
 fn attests(generation: &str) -> PfAttestation {
     PfAttestation {
-        generation: IndexGeneration::Declared(generation.to_owned()),
+        generation: IndexGeneration::declared(generation),
         service: ServiceLevel::Undeclared,
     }
 }
@@ -5006,7 +5084,7 @@ fn attests(generation: &str) -> PfAttestation {
 /// A producer that names a generation and declares that index was **not** whole.
 fn attests_short(generation: &str, reason: &str) -> PfAttestation {
     PfAttestation {
-        generation: IndexGeneration::Declared(generation.to_owned()),
+        generation: IndexGeneration::declared(generation),
         service: ServiceLevel::Incomplete {
             reason: reason.to_owned(),
         },
@@ -5535,6 +5613,20 @@ fn spec_union(spec: &[StratumSpec]) -> Vec<&'static str> {
     union.into_iter().collect()
 }
 
+/// The block a fixture item really lies in, read off the item itself.
+///
+/// The fixtures mint `doc/…` and `person/…` items, so the block is a property of
+/// the item rather than of the stream that emitted it — which is exactly what the
+/// partition axiom says a block is, and what lets the cross-cutting stratum name
+/// items from both blocks truthfully.
+fn block_of(item: &str) -> &'static str {
+    if item.contains("/doc/") {
+        DOMAIN_DOCS
+    } else {
+        DOMAIN_PEOPLE
+    }
+}
+
 /// The fixture's streams, each declaring what `declared` says it declares.
 fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStream)> {
     let union = spec_union(spec);
@@ -5546,7 +5638,18 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
                 .enumerate()
                 .map(|(index, item)| {
                     let rank = u64::try_from(index + 1).expect("fixture ranks fit");
-                    row(rank, entry.weight, K, item)
+                    match declared {
+                        // An unrestricted stream owes no per-row block and names
+                        // none: this is the fixture as it was before blocks
+                        // existed, which is what the differential compares
+                        // against.
+                        Declared::Nothing => row(rank, entry.weight, K, item),
+                        // A restricted stream backs its declaration row by row,
+                        // with the block the item is really in.
+                        Declared::TheUnion | Declared::ItsOwnBlocks => {
+                            row_in(rank, entry.weight, K, item, block_of(item))
+                        }
+                    }
                 })
                 .collect();
             let emitted = u64::try_from(steps.len()).expect("fixture row counts fit");
@@ -6011,18 +6114,30 @@ fn seeded(state: &mut u64) -> u64 {
 /// refusal, and the refusal is T6.5's subject.
 fn differential_spec(index: u64) -> Vec<StratumSpec> {
     let mut state = index.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-    let universe: Vec<String> = (0..12)
-        .map(|item: u64| format!("http://example.org/item/{item:04}"))
-        .collect();
     // Each item's block, drawn once and then respected by every producer.
-    let blocks: Vec<&'static str> = universe
-        .iter()
-        .map(|_| {
+    let blocks: Vec<&'static str> = (0..12)
+        .map(|_: u64| {
             if seeded(&mut state).is_multiple_of(2) {
                 DOMAIN_DOCS
             } else {
                 DOMAIN_PEOPLE
             }
+        })
+        .collect();
+    // The item's own name says which block it is in, so the partition is
+    // readable from any row in isolation — which is what lets every producer here
+    // name the same block for the same item without a second table to keep in
+    // step. The draw above is still what decides it.
+    let universe: Vec<String> = blocks
+        .iter()
+        .enumerate()
+        .map(|(item, block)| {
+            let space = if *block == DOMAIN_DOCS {
+                "doc"
+            } else {
+                "person"
+            };
+            format!("http://example.org/{space}/{item:04}")
         })
         .collect();
     let pick = |state: &mut u64, allowed: &[&'static str]| -> Vec<String> {
@@ -6183,7 +6298,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
     let shared = "http://example.org/doc/000001";
     let docs = || {
         MockStream::new(
-            vec![row(1, Fixed::ONE, K, shared)],
+            vec![row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS)],
             ProducerReceipt::Exhausted { rows_emitted: 1 },
         )
     };
@@ -6204,8 +6319,17 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             stratum("people"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, shared),
-                    row(2, Fixed::ONE, K, "http://example.org/person/000001"),
+                    // `people` says this candidate came from ITS block, which is
+                    // what makes the pair of declarations contradictory rather
+                    // than merely unusual.
+                    row_in(1, Fixed::ONE, K, shared, DOMAIN_PEOPLE),
+                    row_in(
+                        2,
+                        Fixed::ONE,
+                        K,
+                        "http://example.org/person/000001",
+                        DOMAIN_PEOPLE,
+                    ),
                 ],
                 exhausted(2),
             )
@@ -6263,8 +6387,14 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
             stratum("people"),
             MockStream::new(
                 vec![
-                    row(1, Fixed::ONE, K, "http://example.org/person/000001"),
-                    row(2, Fixed::ONE, K, shared),
+                    row_in(
+                        1,
+                        Fixed::ONE,
+                        K,
+                        "http://example.org/person/000001",
+                        DOMAIN_PEOPLE,
+                    ),
+                    row_in(2, Fixed::ONE, K, shared, DOMAIN_PEOPLE),
                 ],
                 exhausted(2),
             )
@@ -6297,6 +6427,250 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
     );
 }
 
+// T6.5b. The axiom itself, held against the ROWS rather than the declarations.
+//
+// Two declarations can overlap — both naming `documents` — and still place one
+// candidate in two different blocks, one row each. Nothing about that pair of
+// promises is contradictory, so `OutsideDeclaredDomain` cannot see it; what is
+// contradictory is the pair of rows, and it is exactly the case the threshold's
+// per-block maximum under-bounds, because the streams that reach one block and
+// the streams that reach the other are different sets.
+//
+// The shipped-path proof of this refusal is `search.rs`'s
+// `two_streams_naming_one_candidate_from_two_blocks_are_refused`. What is pinned
+// here is the engine-level case a producer reaches through `fuse` with its own
+// streams, including the one row `pull` never sees: a repeat a permissive
+// duplicate policy discards.
+#[test]
+fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
+    let shared = "http://example.org/doc/000001";
+    let law = profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K);
+    // Overlapping declarations: both admit `documents`, so a candidate both name
+    // is perfectly possible and the declaration-level refusal stays silent.
+    let overlapping = || {
+        StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+        )
+    };
+    let pair = |left_block: &'static str, right_block: &'static str| {
+        vec![
+            (
+                stratum("docs"),
+                MockStream::new(
+                    vec![row_in(1, Fixed::ONE, K, shared, left_block)],
+                    exhausted(1),
+                )
+                .declaring(overlapping()),
+            ),
+            (
+                stratum("people"),
+                MockStream::new(
+                    vec![row_in(1, Fixed::ONE, K, shared, right_block)],
+                    exhausted(1),
+                )
+                .declaring(overlapping()),
+            ),
+        ]
+    };
+
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(DOMAIN_DOCS, DOMAIN_PEOPLE),
+        &law,
+        TopK::new(10),
+    ))
+    .expect_err("a candidate in two blocks falsifies the axiom the threshold rests on");
+    match error {
+        FusionError::Protocol(protocol) => match *protocol {
+            ProtocolError::CandidateInTwoBlocks {
+                item,
+                stratum: offender,
+                block,
+                named_by,
+                named_by_block,
+            } => {
+                assert_eq!(item, shared, "the refusal names the candidate");
+                assert_eq!(offender, stratum("people").as_str());
+                assert_eq!(block, DOMAIN_PEOPLE, "the block the later row claimed");
+                assert_eq!(named_by, stratum("docs").as_str());
+                assert_eq!(
+                    named_by_block, DOMAIN_DOCS,
+                    "and the placement it contradicted — either producer could be \
+                     the one that tagged wrongly, so both are named"
+                );
+            }
+            other => panic!("expected a two-block refusal, got {other:?}"),
+        },
+        other => panic!("expected a protocol refusal, got {other:?}"),
+    }
+
+    // The valid neighbour, one block different: both streams place the candidate
+    // in the SAME block. Two producers ranking one entity is what fused
+    // enumeration is for, and it fuses into one row carrying both contributions.
+    let agreeing = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(DOMAIN_DOCS, DOMAIN_DOCS),
+        &law,
+        TopK::new(10),
+    ))
+    .expect("agreeing placements are the ordinary overlapping case");
+    assert_eq!(agreeing.rows.len(), 1, "one candidate, one row");
+    assert_eq!(agreeing.rows[0].entity, Term::new(shared));
+    assert_eq!(
+        agreeing.rows[0].contributions.len(),
+        2,
+        "and both strata's contributions, which is what the agreement buys"
+    );
+}
+
+// T6.5d. An unrestricted stream owes no block — and a block it volunteers is
+// still evidence about the CANDIDATE, so it is honoured rather than discarded.
+//
+// Both halves are executed, because both are decisions. Discarding the volunteered
+// block would throw away a host's own evidence that its tagging is wrong;
+// *requiring* one would refuse a producer that promised nothing and therefore
+// tightened nothing.
+#[test]
+fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses() {
+    let shared = "http://example.org/doc/000001";
+    let law = profile(&[("wide", Fixed::ONE), ("people", Fixed::ONE)], K);
+    let restricted = || {
+        StreamContract::new(
+            DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
+            within(&[DOMAIN_PEOPLE]),
+        )
+    };
+    let pair = |volunteered: Step| {
+        vec![
+            (
+                stratum("wide"),
+                MockStream::new(vec![volunteered], exhausted(1)).declaring(unique_items()),
+            ),
+            (
+                stratum("people"),
+                MockStream::new(
+                    vec![row_in(1, Fixed::ONE, K, shared, DOMAIN_PEOPLE)],
+                    exhausted(1),
+                )
+                .declaring(restricted()),
+            ),
+        ]
+    };
+
+    // Volunteered and contradictory: the unrestricted stream places the candidate
+    // in `documents` and the restricted one in `people`. One candidate cannot be
+    // in two blocks, and an unrestricted declaration does not make the claim
+    // unfalsifiable — it only means this stream was never obliged to make it.
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS)),
+        &law,
+        TopK::new(10),
+    ))
+    .expect_err("a volunteered block that contradicts a placement is still a contradiction");
+    assert!(
+        matches!(
+            &error,
+            FusionError::Protocol(protocol)
+                if matches!(&**protocol, ProtocolError::CandidateInTwoBlocks { item, .. } if item == shared)
+        ),
+        "expected a two-block refusal, got {error:?}"
+    );
+
+    // Silent, which is what an unrestricted stream owes: no block, nothing to
+    // contradict, and the two streams fuse the shared candidate into one row.
+    let quiet = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(row(1, Fixed::ONE, K, shared)),
+        &law,
+        TopK::new(10),
+    ))
+    .expect("an unrestricted stream owes no block and is not refused for naming none");
+    assert_eq!(quiet.rows.len(), 1, "one candidate, one row");
+    assert_eq!(
+        quiet.rows[0].contributions.len(),
+        2,
+        "and both strata contributed, exactly as they did before blocks existed"
+    );
+}
+
+// T6.5c. The row `pull` never sees. A stream that declared `Allowed` has its
+// repeats discarded by the consumer, and a discarded row is still a row the
+// producer made claims about: it may not smuggle a second, different placement
+// for a candidate past the check by repeating it.
+#[test]
+fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
+    let shared = "http://example.org/doc/000001";
+    let law = profile(&[("docs", Fixed::ONE)], K);
+    let repeating = || {
+        StreamContract::new(
+            DuplicatePolicy::Allowed,
+            RankFidelity::EXACT,
+            within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+        )
+    };
+    let stream = |second_block: &'static str| {
+        vec![(
+            stratum("docs"),
+            MockStream::new(
+                vec![
+                    row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS),
+                    row_in(2, Fixed::ONE, K, shared, second_block),
+                ],
+                exhausted(2),
+            )
+            .declaring(repeating()),
+        )]
+    };
+
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        stream(DOMAIN_PEOPLE),
+        &law,
+        TopK::new(10),
+    ))
+    .expect_err("a repeat may be dropped; its claim about the candidate may not be");
+    assert!(
+        matches!(
+            &error,
+            FusionError::Protocol(protocol)
+                if matches!(
+                    &**protocol,
+                    ProtocolError::CandidateInTwoBlocks { item, block, named_by_block, .. }
+                        if item == shared
+                            && block == DOMAIN_PEOPLE
+                            && named_by_block == DOMAIN_DOCS
+                )
+        ),
+        "the second placement must be refused even though the row it rode in on \
+         was about to be discarded, got {error:?}"
+    );
+
+    // The valid neighbour: the identical repeat, placed in the block the first
+    // row already placed the candidate in. That contradicts nothing, so it is
+    // de-duplicated exactly as this policy says it must be — one row, one
+    // contribution, and the producer still charged for both rows it emitted.
+    let consistent = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        stream(DOMAIN_DOCS),
+        &law,
+        TopK::new(10),
+    ))
+    .expect("a repeat that agrees about the candidate's block is an ordinary repeat");
+    assert_eq!(
+        consistent.rows.len(),
+        1,
+        "the repeat was dropped, not fused"
+    );
+    assert_eq!(
+        consistent.rows[0].contributions.len(),
+        1,
+        "one contribution per stratum, at the best rank the stream gave it"
+    );
+    assert_eq!(
+        consistent.trailer.statuses.get(&stratum("docs")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 2 }),
+        "and the dropped row is still a row the producer emitted"
+    );
+}
+
 // T6.5's valid neighbours. The refusal above is about a pair of DECLARATIONS,
 // not about two producers naming one entity — which is the case fused
 // enumeration exists for, and which must keep working unchanged.
@@ -6304,21 +6678,30 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
 fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise() {
     let shared = "http://example.org/doc/000001";
     let law = profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K);
-    let both_naming = |left: StreamContract, right: StreamContract| {
+    // Each side is a declaration and the row that backs it. A restricted stream
+    // owes a block on every row, and both sides name the block the shared
+    // candidate is really in — it is one document, and it is in one block, which
+    // is the axiom holding rather than being violated.
+    let both_naming = |left: (StreamContract, Step), right: (StreamContract, Step)| {
         vec![
             (
                 stratum("docs"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, shared)], exhausted(1)).declaring(left),
+                MockStream::new(vec![left.1], exhausted(1)).declaring(left.0),
             ),
             (
                 stratum("people"),
-                MockStream::new(vec![row(1, Fixed::ONE, K, shared)], exhausted(1)).declaring(right),
+                MockStream::new(vec![right.1], exhausted(1)).declaring(right.0),
             ),
         ]
     };
+    let blockless = || row(1, Fixed::ONE, K, shared);
+    let in_docs = || row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS);
 
     // (i) No declaration at all: one row, two contributions, the sum of both.
-    let unrestricted = block_on(run_fuse(both_naming(unique_items(), unique_items()), &law));
+    let unrestricted = block_on(run_fuse(
+        both_naming((unique_items(), blockless()), (unique_items(), blockless())),
+        &law,
+    ));
     let doubled = contribution(Fixed::ONE, 1, K)
         .expect("fits")
         .checked_add(contribution(Fixed::ONE, 1, K).expect("fits"))
@@ -6333,15 +6716,21 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
     // identical. This is the case a stratum-derived tag would have broken.
     let agreeing = block_on(run_fuse(
         both_naming(
-            StreamContract::new(
-                DuplicatePolicy::Unique,
-                RankFidelity::EXACT,
-                within(&[DOMAIN_DOCS]),
+            (
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    within(&[DOMAIN_DOCS]),
+                ),
+                in_docs(),
             ),
-            StreamContract::new(
-                DuplicatePolicy::Unique,
-                RankFidelity::EXACT,
-                within(&[DOMAIN_DOCS]),
+            (
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    within(&[DOMAIN_DOCS]),
+                ),
+                in_docs(),
             ),
         ),
         &law,
@@ -6357,15 +6746,24 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
     // fuses.
     let overlapping = block_on(run_fuse(
         both_naming(
-            StreamContract::new(
-                DuplicatePolicy::Unique,
-                RankFidelity::EXACT,
-                within(&[DOMAIN_DOCS]),
+            (
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    within(&[DOMAIN_DOCS]),
+                ),
+                in_docs(),
             ),
-            StreamContract::new(
-                DuplicatePolicy::Unique,
-                RankFidelity::EXACT,
-                within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+            (
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    RankFidelity::EXACT,
+                    within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+                ),
+                // The cross-cutting producer names two blocks and says which one
+                // THIS row came from, which is the whole point of a per-row
+                // block: a several-block declaration is backed row by row.
+                in_docs(),
             ),
         ),
         &law,
@@ -6439,20 +6837,24 @@ fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification
     let streams = vec![
         (
             stratum("dense"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, target)], exhausted(1))
-                .declaring(same_block()),
+            MockStream::new(
+                vec![row_in(1, Fixed::ONE, K, target, DOMAIN_DOCS)],
+                exhausted(1),
+            )
+            .declaring(same_block()),
         ),
         (
             stratum("sparse"),
             MockStream::new(
                 vec![
-                    row(
+                    row_in(
                         1,
                         ZERO_CONTRIBUTING_WEIGHT,
                         K,
                         "http://example.org/doc/000002",
+                        DOMAIN_DOCS,
                     ),
-                    row(2, ZERO_CONTRIBUTING_WEIGHT, K, target),
+                    row_in(2, ZERO_CONTRIBUTING_WEIGHT, K, target, DOMAIN_DOCS),
                 ],
                 exhausted(2),
             )
@@ -6946,7 +7348,10 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
             (
                 stratum("text"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "a")],
+                    // The row names the block its stream declared: a restricted
+                    // declaration is backed row by row, and an unbacked one is
+                    // refused rather than believed.
+                    vec![row_in(1, Fixed::ONE, K, "a", "documents")],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(StreamContract::new(
@@ -6960,7 +7365,7 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
                 // named the text stratum's candidate, however much it missed.
                 stratum("vector"),
                 MockStream::new(
-                    vec![row(1, Fixed::ONE, K, "z")],
+                    vec![row_in(1, Fixed::ONE, K, "z", "people")],
                     ProducerReceipt::Exhausted { rows_emitted: 1 },
                 )
                 .declaring(StreamContract::new(
