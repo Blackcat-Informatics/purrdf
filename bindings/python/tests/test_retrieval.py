@@ -2049,6 +2049,13 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
 
 LOSS = "approximate: a 10% sample of the corpus; an empty result proves nothing"
 
+# The other axis. Only a producer comparing APPROXIMATED values ranks a row
+# better than it earned, and the shipped text relation never does -- BM25 over
+# the document this call was handed compares exact scores. A host whose text was
+# transliterated or machine-translated before it arrived is the party who knows
+# otherwise, and this is the only place it can say so.
+PERTURBATION = "machine-translated before indexing; ranks compare glosses"
+
 
 def _is_zero(lexical: str) -> bool:
     """Whether a rendered fixed-point value is zero.
@@ -2061,9 +2068,9 @@ def _is_zero(lexical: str) -> bool:
 
 
 def _with_fidelity(
-    *entries: tuple[str, str, str, str | None],
+    *entries: tuple[str, str, str, tuple[str | None, str | None]],
 ) -> dict[str, tuple[Any, ...]]:
-    """``(producer, stratum, predicate, fidelity)`` as the engine's map.
+    """``(producer, stratum, predicate, (completeness, order))`` as the map.
 
     The six-element spelling, with ``domains`` left unrestricted and the
     attestation left silent so the fidelity term is the only thing under test.
@@ -2071,9 +2078,9 @@ def _with_fidelity(
     Fidelity is the SIXTH position, not the fifth. The fifth is an attestation,
     and the two are about different objects: an attestation says which version
     of an index answered and whether that version was whole, while a fidelity
-    says whether the producer's own search over it names every row it should. A
-    host can be silent on one and explicit on the other, which is why neither
-    position can stand in for the other.
+    says whether the producer's own search over it names every row it should and
+    ranks them as they were due. A host can be silent on one and explicit on the
+    other, which is why neither position can stand in for the other.
     """
     return {
         producer: (stratum, predicate, "any", None, (None, None), fidelity)
@@ -2135,8 +2142,8 @@ def test_an_exhaustive_answer_is_exact_and_wholly_certain() -> None:
 def test_a_declared_loss_reaches_the_answer_verbatim_and_on_both_sides() -> None:
     answer = _answer(
         _with_fidelity(
-            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
-            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
         )
     )
 
@@ -2167,8 +2174,8 @@ def test_a_declared_loss_reaches_the_answer_verbatim_and_on_both_sides() -> None
 def test_a_status_alone_is_not_a_completeness_claim() -> None:
     answer = _answer(
         _with_fidelity(
-            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
-            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
         )
     )
     # The status is exactly what an exhaustive producer reports. That is the
@@ -2181,8 +2188,8 @@ def test_a_declared_loss_bounds_each_row_and_can_shorten_the_certain_prefix() ->
     exhaustive = _answer(BOTH)
     degraded = _answer(
         _with_fidelity(
-            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
-            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
         )
     )
 
@@ -2205,29 +2212,166 @@ def test_a_declared_loss_bounds_each_row_and_can_shorten_the_certain_prefix() ->
     )
 
 
-def test_an_empty_loss_evidence_is_refused_and_its_neighbours_are_not() -> None:
-    def search(fidelity: str | None) -> dict[str, Any]:
+def test_an_empty_evidence_is_refused_on_either_axis_and_its_neighbours_are_not() -> (
+    None
+):
+    """A degradation with nothing behind it is refused; real prose is not.
+
+    The refusal is per AXIS, because the two fail independently and a host may
+    know about one and not the other. Both sides are executed: over-refusal is
+    the mirror of the silent-drop bug and it hides perfectly, since a test that
+    only checks the refusals passes for an implementation that refuses
+    everything.
+    """
+
+    def search(fidelity: tuple[Any, Any]) -> dict[str, Any]:
         return _answer(
             _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, fidelity)),
             weights={NOTE_STRATUM: retrieval.SCALE},
         )
 
-    # Refused: a declared loss that discloses nothing reports a degraded
-    # stratum while saying nothing a reader can act on.
-    with pytest.raises(ValueError, match="supplies no evidence"):
-        search("lossy:")
-    with pytest.raises(ValueError, match="supplies no evidence"):
-        search("lossy:    ")
-    # Refused: an unrecognised spelling, naming both accepted ones.
-    with pytest.raises(ValueError, match="exact"):
-        search("approximate")
+    # Refused, on either axis: a declared degradation that discloses nothing
+    # reports a degraded stratum while saying nothing a reader can act on, and
+    # is indistinguishable in a rendered answer from one that declared none.
+    for empty in ("", "    ", "\n\t "):
+        with pytest.raises(ValueError, match="`completeness` but supplies no evidence"):
+            search((empty, None))
+        with pytest.raises(ValueError, match="`order` but supplies no evidence"):
+            search((None, empty))
 
-    # The neighbours that must still work. Over-refusal is the mirror of the
-    # silent-drop bug and it hides perfectly: every test above passes either way.
-    assert search(None)["fidelities"][NOTE_STRATUM]["completeness"] == "complete"
-    assert search("exact")["fidelities"][NOTE_STRATUM]["completeness"] == "complete"
-    real = search(f"lossy: {LOSS}")
-    assert real["fidelities"][NOTE_STRATUM]["completeness_evidence"] == LOSS
+    # Refused: a member that is not a string names the axis it was written for.
+    with pytest.raises(TypeError, match="`completeness` must be a str or None"):
+        search((7, None))
+    with pytest.raises(TypeError, match="`order` must be a str or None"):
+        search((None, 7))
+
+    # Refused: a bare string is NOT destructured into its own two characters.
+    # `"ab"` extracts as a well-formed two-member sequence, so accepting it would
+    # report `"a"` back as completeness evidence the host never wrote.
+    with pytest.raises(TypeError, match="a fidelity is the sixth"):
+        search("ab")  # type: ignore[arg-type]
+    # As is a sequence of the wrong width: three axes is not this declaration.
+    with pytest.raises(TypeError, match="a fidelity is the sixth"):
+        search((LOSS, None, None))  # type: ignore[arg-type]
+
+    # ── the neighbours that must still work, which is the point of the test ──
+    silent = search((None, None))["fidelities"][NOTE_STRATUM]
+    assert silent == {"completeness": "complete", "order": "faithful"}, (
+        "silence on both axes is the top of the lattice, and it is reported "
+        "rather than left absent"
+    )
+
+    lossy = search((LOSS, None))["fidelities"][NOTE_STRATUM]
+    assert lossy["completeness"] == "lossy"
+    assert lossy["completeness_evidence"] == LOSS
+    assert lossy["order"] == "faithful", "one axis degraded is not both"
+
+    # The order axis, which no shipped producer can reach on its own: a host
+    # whose text was transliterated or machine-translated before it arrived is
+    # ranking over approximations of the values the ranking is meant to be over.
+    perturbed = search((None, PERTURBATION))["fidelities"][NOTE_STRATUM]
+    assert perturbed["order"] == "perturbed"
+    assert perturbed["order_evidence"] == PERTURBATION
+    assert perturbed["completeness"] == "complete", "and the other way round"
+
+    both = search((LOSS, PERTURBATION))["fidelities"][NOTE_STRATUM]
+    assert both == {
+        "completeness": "lossy",
+        "completeness_evidence": LOSS,
+        "order": "perturbed",
+        "order_evidence": PERTURBATION,
+    }
+
+
+def test_a_perturbed_order_leaves_every_score_it_touched_without_a_finite_bound() -> (
+    None
+):
+    """The axis that breaks the bound, end to end on the shipped surface.
+
+    Every score bound this engine computes rests on one inequality: a row a
+    producer NAMED has a true rank at least as bad as the rank it was emitted
+    at. A producer comparing approximated values breaks exactly that -- it can
+    rank a row it found BETTER than the row was due -- so there is no number to
+    report, and reporting one anyway would be the fabrication this channel
+    exists to prevent.
+
+    So the interval says so instead of guessing, and it says it per row: only
+    rows the perturbed stratum actually named lose their bound. The strata
+    responsible are named, in both places, so the fact stays actionable.
+    """
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (None, PERTURBATION)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
+        )
+    )
+
+    assert answer["fidelities"][NOTE_STRATUM] == {
+        "completeness": "complete",
+        "order": "perturbed",
+        "order_evidence": PERTURBATION,
+    }, "a perturbed order is not a completeness claim, and is not derived from one"
+
+    # The answer-level verdict names it under `unbounded` and NOT under the two
+    # finite sides: this producer names every row that was due, so nothing is
+    # withheld and nothing is promoted by absence. It is the ORDER that is wrong.
+    assert answer["exactness"] == {
+        "exact": False,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [NOTE_STRATUM],
+    }
+
+    named = [
+        row
+        for row in answer["rows"]
+        if any(c["stratum"] == NOTE_STRATUM for c in row["contributions"])
+    ]
+    assert named, "the fixture has rows the perturbed stratum named"
+    for row in named:
+        assert row["interval"] == {"bounded": False, "perturbed": [NOTE_STRATUM]}, (
+            "no finite bound exists for a row whose rank a perturbed producer "
+            "decided, and the responsible stratum is named rather than implied"
+        )
+
+    # The neighbour: a faithful stratum's declaration is untouched, and a row
+    # only the faithful stratum named keeps a finite bound.
+    assert answer["fidelities"][TITLE_STRATUM]["order"] == "faithful"
+    for row in answer["rows"]:
+        if row not in named:
+            assert row["interval"]["bounded"] is True
+
+    assert answer["certain_prefix"] == 0, (
+        "and nothing is certain: a prefix is a claim about relative order, and "
+        "a perturbed stratum is precisely a producer whose order is not evidence"
+    )
+
+
+def test_the_evidence_a_host_writes_is_the_evidence_a_consumer_reads() -> None:
+    """Byte for byte, on both axes, through the whole ladder.
+
+    The string is the host's disclosure and a consumer acts on it, so anything
+    this layer does to it -- trimming, tagging, re-wrapping -- is the layer
+    editing a statement it did not make. The characters here are the ones a
+    delimiter scheme or a `strip()` would corrupt: leading and trailing
+    whitespace, a colon, a semicolon, a control character, and a newline. The
+    Rust leg is proved against the same shapes, and this is the claim that the
+    Python leg is not weaker.
+    """
+    awkward = "  lossy: 10% sample; seethe note\nand the second line  "
+    answer = _answer(
+        _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, (awkward, awkward))),
+        weights={NOTE_STRATUM: retrieval.SCALE},
+    )
+    declared = answer["fidelities"][NOTE_STRATUM]
+    assert declared["completeness_evidence"] == awkward, (
+        "not trimmed, not parsed, not re-worded -- the bytes the host published"
+    )
+    assert declared["order_evidence"] == awkward
+    # And in particular the surrounding whitespace survived, which is the part a
+    # `.trim()` would silently take and no other assertion here would notice.
+    assert declared["completeness_evidence"].startswith("  ")
+    assert declared["completeness_evidence"].endswith("  ")
 
 
 def test_the_four_producer_spellings_agree_where_they_overlap() -> None:
@@ -2247,7 +2391,9 @@ def test_the_four_producer_spellings_agree_where_they_overlap() -> None:
     five = _answer(
         {NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, (None, None))}, **common
     )
-    six = _answer(_with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)), **common)
+    six = _answer(
+        _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, (None, None))), **common
+    )
 
     widths = (three, four, five, six)
     for answer in widths[1:]:
@@ -2311,8 +2457,8 @@ def test_the_shipped_docstring_teaches_the_channel_it_actually_returns() -> None
     # that is renamed without the prose following fails here.
     answer = _answer(
         _with_fidelity(
-            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
-            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
         )
     )
     for key in ("fidelities", "certain_prefix", "exactness", "statuses"):

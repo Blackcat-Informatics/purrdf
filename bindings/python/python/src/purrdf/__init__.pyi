@@ -2147,11 +2147,53 @@ class slice:
 #         ...,
 #     )["exactness"]  # {"exact": False, "deficit": [".../stratum/lexical"],
 #                      #  "inflation": [".../stratum/lexical"], "unbounded": []}
+# What a producer's own SEARCH promises about the rows it can name, on two
+# independent axes: `(completeness, order)`. Shaped like `_Attestation` beside it
+# and read on the same terms — each member is a `str` or `None`, `None` is
+# SILENCE on that axis, and a string is that axis declared degraded with the
+# host's own words carried verbatim. Nothing parses either string; the member's
+# POSITION is what says which axis it is about, so there is no tag to spell and
+# no whitespace to lose.
+#
+# The two say different things about different objects. An attestation is about
+# the INDEX — which version answered, and whether that version was whole. A
+# fidelity is about the SEARCH over it — whether it names every row that was due
+# (`completeness`), and whether a row it names arrives at a rank no better than
+# it earned (`order`). Only the second breaks a score bound, which is why a
+# perturbed order is what makes an interval `{"bounded": False}`.
+#
+# Silence on both is the top of the lattice, and it is a FACT here rather than a
+# fabricated default: this binding builds the index in the same call, out of the
+# document it was handed, and BM25 over it scores every document carrying a query
+# term with no pruning and compares nothing in an approximated space. What it
+# cannot see is whether that document is the whole of what the host means — a
+# sample, one partition, a snapshot that has fallen behind, or text that was
+# transliterated or machine-translated before it arrived. That is what a member
+# is for, and the host is the only party who knows it.
+#
+#     purrdf.retrieval.search(
+#         ...,
+#         text_producers={
+#             "https://example.org/pf/search": (
+#                 "https://example.org/stratum/lexical",
+#                 "https://example.org/note",
+#                 "any",
+#                 None,
+#                 (None, None),
+#                 ("a 10% sample of the corpus", None),
+#             )
+#         },
+#         ...,
+#     )["fidelities"]["https://example.org/stratum/lexical"]
+#     # {"completeness": "lossy",
+#     #  "completeness_evidence": "a 10% sample of the corpus",
+#     #  "order": "faithful"}
+_Fidelity: TypeAlias = tuple[str | None, str | None]
 _TextProducerSpec: TypeAlias = (
     tuple[str, str, str]
     | tuple[str, str, str, list[str] | None]
     | tuple[str, str, str, list[str] | None, _Attestation]
-    | tuple[str, str, str, list[str] | None, _Attestation, str | None]
+    | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity]
 )
 
 class retrieval:

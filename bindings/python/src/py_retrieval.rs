@@ -305,7 +305,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 
 use crate::attestation::Attestation;
 use crate::retrieval::{
@@ -403,27 +403,31 @@ struct TextProducer {
     /// byte-for-byte what it was before that position existed. See this module's
     /// header for what each axis does to the answer.
     attestation: Attestation,
-    /// What this producer's own search promises about the rows it can name, as
-    /// the host spelled it, or `None` for the exhaustive declaration.
+    /// What this producer's own search promises about the rows it can name, on
+    /// both axes, as the host declared them.
     ///
     /// Host-supplied for the reason `domains` is, and the reason is the same
-    /// shape. BM25 over the index this relation holds is exhaustive: every
-    /// document carrying a query term is scored, with no pruning and no early
-    /// exit. Whether that index covers what the host means by its corpus is a
-    /// fact the relation cannot see. A host that indexed a sample, one partition
-    /// of a larger collection, or a snapshot it knows has fallen behind has a
-    /// genuinely lossy producer, and this is the only place it can say so.
+    /// shape. BM25 over the index this relation holds is exhaustive and ranks by
+    /// exact scores: every document carrying a query term is scored, with no
+    /// pruning and no early exit, and nothing is compared in an approximated
+    /// space. Over the document this call was handed, both axes are therefore
+    /// facts rather than claims.
     ///
-    /// Distinct from `attestation`, which is about the INDEX behind the rows:
-    /// an attestation says which version answered and whether that version was
+    /// What the relation cannot see is whether that document is itself the whole
+    /// of what the host means. A host that handed in a sample, one partition of a
+    /// larger collection, or a snapshot it knows has fallen behind has a
+    /// genuinely lossy producer; a host whose text was transliterated, truncated
+    /// or machine-translated before it got here has a genuinely order-perturbed
+    /// one, because the values being compared are approximations of the ones the
+    /// ranking is meant to be over. Neither is visible from inside, and this is
+    /// the only place either can be said.
+    ///
+    /// Distinct from `attestation`, which is about the INDEX behind the rows: an
+    /// attestation says which version answered and whether that version was
     /// whole, while this says whether the producer's own search over it names
-    /// every row it should. A host can be silent on one and explicit on the
-    /// other.
-    ///
-    /// `None` declares the top of the lattice, which is what this binding
-    /// declared before the parameter existed and what a host with a complete
-    /// index means.
-    fidelity: Option<String>,
+    /// every row it should and ranks them as they were due. A host can be silent
+    /// on one and explicit on the other.
+    fidelity: RankFidelity,
 }
 
 /// The statistics provider the host supplied, as owned data.
@@ -644,7 +648,7 @@ fn build_registry(
             )
         })?;
         let domains = candidate_domains(&producer.producer, producer.domains.as_deref())?;
-        let fidelity = declared_fidelity(&producer.producer, producer.fidelity.as_deref())?;
+        let fidelity = producer.fidelity.clone();
         // Read off the relation itself, BEFORE the host's attestation wraps it:
         // what a producer declares to the planner is what the relation can
         // honestly declare, and an attestation says nothing about arity, modes or
@@ -663,60 +667,92 @@ fn build_registry(
     Ok(registry)
 }
 
-/// The fidelity `declared` states, or the exhaustive declaration where it said
-/// nothing.
+/// The fidelity a `(completeness, order)` position declares, or the top of the
+/// lattice where it said nothing.
 ///
-/// `None` means "complete and order-faithful", which is what a host with an
-/// index covering its corpus means and what this binding declared before the
-/// parameter existed. `"exact"` says the same thing explicitly. Anything else
-/// must be `"lossy: <evidence>"`, carrying the host's own words about what its
-/// producer does not promise.
+/// Two independent members, each a `str` or `None`, shaped exactly like the
+/// attestation position beside it and read on exactly the same terms: a member
+/// that is `None` is SILENCE on that axis, and a member that is a string is that
+/// axis declared degraded, with the host's own words carried **verbatim**.
+/// Nothing here parses either string. There is no tag to spell, no prefix to
+/// strip and no whitespace to lose, because the position of the member is what
+/// says which axis it is about.
 ///
-/// # Why the evidence is required, and refused here rather than below
+/// The axes fail independently and a host may know about one and not the other:
+/// * `completeness` — the search does not name every row that was due. A host
+///   that handed in a sample, one partition, or a snapshot that has fallen
+///   behind.
+/// * `order` — a row it does name can arrive at a rank BETTER than it earned,
+///   which is what breaks every score bound. A host whose text was
+///   transliterated, truncated or machine-translated before it arrived is
+///   ranking over approximations of the values the ranking is meant to be over.
 ///
-/// A declared loss with nothing behind it reports a degraded stratum while
-/// saying nothing a reader can act on, and it is indistinguishable in a rendered
-/// answer from a producer that declared no loss at all. `register_ranked`
-/// refuses it by **panicking**, which must never cross the FFI boundary, so the
-/// refusal is made here as an ordinary Python error — the same reason an empty
-/// domain list is refused here.
+/// Silence on both is [`RankFidelity::EXACT`], and that is a fact rather than a
+/// fabricated default: this binding builds the index in this very call, out of
+/// the document it was handed, and BM25 over it scores every document carrying a
+/// query term with no pruning and compares nothing in an approximated space. The
+/// relation is exhaustive and order-faithful **over what it was given**. What it
+/// cannot see — whether what it was given is the whole of what the host means —
+/// is precisely what a member says, and the host is the only party who knows it.
 ///
-/// The neighbouring valid cases are deliberately close: `None` and `"exact"`
-/// both register, and so does any `"lossy:"` with real prose after it.
-fn declared_fidelity(producer: &str, declared: Option<&str>) -> Result<RankFidelity, String> {
-    let Some(declared) = declared else {
-        return Ok(RankFidelity::EXACT);
-    };
-    if declared == "exact" {
-        return Ok(RankFidelity::EXACT);
+/// # Why an empty member is refused, and refused here rather than below
+///
+/// A declared degradation with nothing behind it reports a degraded stratum
+/// while saying nothing a reader can act on, and it is indistinguishable in a
+/// rendered answer from a producer that declared none. `register_ranked` refuses
+/// it by **panicking**, which must never cross the FFI boundary, so the refusal
+/// is made here as an ordinary Python error — the same reason an empty domain
+/// list is refused here.
+///
+/// The neighbouring valid cases are deliberately close: `None` on a member
+/// registers, and so does any member with real prose in it, whatever it spells.
+fn read_fidelity(subject: &str, value: &Bound<'_, PyAny>) -> PyResult<Option<RankFidelity>> {
+    // A bare string is not destructured into its own characters. `"ab"` extracts
+    // as a well-formed two-member sequence, so accepting it would report `"a"`
+    // back to an operator as the completeness evidence they never wrote.
+    if value.is_instance_of::<PyString>() || value.is_instance_of::<PyBytes>() {
+        return Ok(None);
     }
-    let Some(evidence) = declared.strip_prefix("lossy:") else {
-        return Err(format!(
-            "text producer <{producer}>: `fidelity` is \"exact\" or \"lossy: <evidence>\", \
-             got {declared:?}. A producer that promises everything says the first; one whose \
-             index does not cover its corpus says the second and states what it does not \
-             promise"
-        ));
+    let Ok(members) = value.extract::<Vec<Bound<'_, PyAny>>>() else {
+        return Ok(None);
     };
-    if evidence.trim().is_empty() {
-        return Err(format!(
-            "text producer <{producer}>: `fidelity` declares a loss but supplies no evidence \
-             for it. A consumer carries this string into its answer verbatim, so an empty one \
-             reports a degraded stratum while saying nothing a reader can act on. State what \
-             the producer does not promise, or declare \"exact\""
-        ));
-    }
-    Ok(RankFidelity {
-        completeness: Completeness::Lossy {
-            evidence: Arc::from(evidence.trim()),
-        },
-        // A text index that covers only part of a corpus still ranks what it
-        // holds truly: BM25 is exact over the documents it scored, so an
-        // emitted rank is a lower bound on the true rank. Only a producer
-        // comparing APPROXIMATED values is order-perturbed, and no text
-        // relation does.
-        order: OrderFidelity::Faithful,
-    })
+    let Ok([completeness, order]) = <[Bound<'_, PyAny>; 2]>::try_from(members) else {
+        return Ok(None);
+    };
+    let read = |member: &Bound<'_, PyAny>, axis: &str| -> PyResult<Option<String>> {
+        let declared = member.extract::<Option<String>>().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "{subject}: a fidelity's `{axis}` must be a str or None"
+            ))
+        })?;
+        if declared.as_deref().is_some_and(|d| d.trim().is_empty()) {
+            return Err(PyValueError::new_err(format!(
+                "{subject}: `fidelity` declares a degraded `{axis}` but supplies no evidence \
+                 for it. A consumer carries this string into its answer verbatim, so an empty \
+                 one reports a degraded stratum while saying nothing a reader can act on. \
+                 State what the producer does not promise, or write None for this axis"
+            )));
+        }
+        Ok(declared)
+    };
+    Ok(Some(RankFidelity {
+        // Verbatim on both halves: `Arc::from` the string as the host wrote it,
+        // with no trim. A disclosure that is indented, multi-line, or ends in a
+        // newline reaches the consumer as those bytes, because the test that
+        // proves the Rust leg survives a `\u{1}`, a `;` and a `\n` is a claim
+        // about this surface too.
+        completeness: read(&completeness, "completeness")?.map_or(
+            Completeness::Complete,
+            |evidence| Completeness::Lossy {
+                evidence: Arc::from(evidence),
+            },
+        ),
+        order: read(&order, "order")?.map_or(OrderFidelity::Faithful, |evidence| {
+            OrderFidelity::Perturbed {
+                evidence: Arc::from(evidence),
+            }
+        }),
+    }))
 }
 
 /// Build the fusion law from the host's weights and the decay rule it named.
@@ -1118,10 +1154,10 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
                 "text producer <{producer}>: the value is (stratum, predicate, graph), \
                  (stratum, predicate, graph, domains), (stratum, predicate, graph, domains, \
                  (generation, incompleteness)), or (stratum, predicate, graph, domains, \
-                 (generation, incompleteness), fidelity) — an attestation is the fifth \
-                 position, because a fourth-position sequence is already a `domains` list and \
-                 guessing between the two would report one back as the other; a fidelity is the \
-                 sixth, because it speaks about the producer's search rather than about the \
+                 (generation, incompleteness), (completeness, order)) — an attestation is the \
+                 fifth position, because a fourth-position sequence is already a `domains` list \
+                 and guessing between the two would report one back as the other; a fidelity is \
+                 the sixth, because it speaks about the producer's search rather than about the \
                  index the attestation names"
             ))
         };
@@ -1175,13 +1211,15 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             _ => None,
         };
         let fidelity = match fidelity {
-            Some(value) if !value.is_none() => Some(value.extract::<String>().map_err(|_| {
-                PyTypeError::new_err(format!(
-                    "text producer <{producer}>: `fidelity` is \"exact\" or \"lossy: <evidence>\", \
-                     or None for the exhaustive declaration"
-                ))
-            })?),
-            _ => None,
+            Some(value) if !value.is_none() => {
+                // A sixth position that is not even SHAPED like a fidelity
+                // reports the accepted widths rather than a diagnostic about a
+                // position the caller may never have meant to write; one that is
+                // shaped like a fidelity but carries the wrong member types keeps
+                // its own precise diagnostic, which `read_fidelity` raises.
+                read_fidelity(&format!("text producer <{producer}>"), &value)?.ok_or_else(shape)?
+            }
+            _ => RankFidelity::EXACT,
         };
         let graph =
             GraphSpec::parse(&producer, &field("graph", &graph)?).map_err(PyValueError::new_err)?;
