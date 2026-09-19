@@ -53,6 +53,14 @@
 # can create nothing. That is the interleave in docs/RELEASE.md, "Outstanding
 # bootstrap".
 #
+# The third refusal separates "not up YET" from "never". A path dependency that
+# survives packaging (scripts/workspace-deps.sh) onto a member with
+# `publish = false` names a crate no lane can ever put on crates.io, so it is
+# not something to wait for: it is refused from the manifests, before the
+# registry is asked anything. Without that distinction such an edge reads as a
+# missing dependency and its dependent DEFERS in every pass, for good — the
+# quiet way a release stops, since each pass looks like ordinary progress.
+#
 # Usage:
 #   scripts/bootstrap-crates-io.sh [VERSION]          create the ledger records
 #   scripts/bootstrap-crates-io.sh [VERSION] --plan   the preflight and plan only:
@@ -115,6 +123,10 @@ release_list="${PURRDF_RELEASE_CRATES_FILE:-${repo}/scripts/release-crates.sh}"
 source "${release_list}"
 # shellcheck source=scripts/crates-io-api.sh
 source "${repo}/scripts/crates-io-api.sh"
+# The one reading of which path dependencies survive packaging, shared with the
+# trusted lane's publish loop so the two cannot disagree about what cargo strips.
+# shellcheck source=scripts/workspace-deps.sh
+source "${repo}/scripts/workspace-deps.sh"
 crates=("${PURRDF_UNBOOTSTRAPPED_CRATES[@]}")
 release_set=("${PURRDF_RELEASE_CRATES[@]}")
 # `preflight`'s decision, readable by every step that follows it. Declared here so
@@ -185,23 +197,20 @@ version_state() {
   crates_io_version_state "$1" "${VERSION}" "${user_agent}"
 }
 
-# workspace_path_deps <crate>: one "<kind> <name>" line per PATH dependency of
-# the crate, every kind — `cargo publish` resolves the packaged crate's whole
-# graph, dev-dependencies included, to write its lockfile, so every kind must
-# exist on the registry at the target version.
-workspace_path_deps() {
-  python3 - "${metadata_json}" "$1" <<'PY'
-import json
-import sys
-
-metadata = json.load(open(sys.argv[1], encoding="utf-8"))
-for package in metadata["packages"]:
-    if package["name"] != sys.argv[2]:
-        continue
-    for dep in package["dependencies"]:
-        if dep.get("path"):
-            print(dep["kind"] or "normal", dep["name"])
-PY
+# crate_path_deps <crate>: this script's one-crate view of the shared reader
+# (scripts/workspace-deps.sh), as "<kind> <name>" lines — every PATH dependency
+# of the crate that SURVIVES packaging, every kind. `cargo publish` resolves the
+# packaged crate's whole graph, dev-dependencies included, to write its lockfile,
+# so each of these must be on the registry at the target version before the crate
+# can be uploaded.
+#
+# The one edge cargo removes from the uploaded manifest — a versionless
+# dev-dependency onto a member that is never published — is excluded there, and
+# excluding it is what keeps this script from waiting forever: such a member has
+# no crates.io record and no lane will ever give it one, so a plan that waits on
+# it DEFERS its dependent in every pass, for good.
+crate_path_deps() {
+  workspace_path_deps "${metadata_json}" "$1" | cut -d' ' -f2-
 }
 
 in_list() {
@@ -236,7 +245,7 @@ EOF
   # must iterate the PLAN, not the ledger: a DEFERRED crate's dependencies are by
   # definition not on the registry, so `cargo package` dies on it before the first
   # upload. Observed verbatim at token step 1 of the 0.13.0 bootstrap.
-  local -a to_create=() to_skip=() has_record=() deferred=() not_in_set=()
+  local -a to_create=() to_skip=() has_record=() deferred=() not_in_set=() private_edges=()
   local crate idx dep_line kind dep dep_state state
 
   echo "crates.io bootstrap plan for ${VERSION} (ledger: ${crates[*]}):"
@@ -245,6 +254,21 @@ EOF
     if ! in_list "$crate" "${release_set[@]}"; then
       printf '  REFUSE         %s (in the ledger but not in the release set)\n' "$crate"
       not_in_set+=("$crate")
+      continue
+    fi
+    # Decided from the manifests alone, before the registry is asked anything:
+    # an edge cargo keeps, onto a member cargo can never publish, is unpublishable
+    # at every version by every lane. Waiting on it is the failure mode this
+    # refusal replaces — the DEFER below would otherwise name it as a dependency
+    # "the next trusted-lane run publishes", which no run ever will.
+    local -a private_here=()
+    while read -r _ kind dep; do
+      [[ -z "$dep" ]] && continue
+      private_here+=("${dep} (${kind})")
+    done < <(workspace_private_path_deps "${metadata_json}" "$crate")
+    if [[ "${#private_here[@]}" -gt 0 ]]; then
+      printf '  REFUSE         %s (path dependency onto a member that is never published: %s)\n' "$crate" "$(IFS=,; echo "${private_here[*]}")"
+      private_edges+=("${crate} -> $(IFS=,; echo "${private_here[*]}")")
       continue
     fi
     state="$(record_state "$crate")"
@@ -283,7 +307,7 @@ EOF
       else
         deps_missing+=("${dep} ${VERSION} (${kind})")
       fi
-    done < <(workspace_path_deps "$crate")
+    done < <(crate_path_deps "$crate")
     if [[ "${#deps_missing[@]}" -gt 0 ]]; then
       printf '  DEFER          %s (no record; its dependencies are not on crates.io yet: %s — the next trusted-lane run publishes them)\n' "$crate" "$(IFS=,; echo "${deps_missing[*]}")"
       deferred+=("${crate} waits on $(IFS=,; echo "${deps_missing[*]}")")
@@ -300,6 +324,26 @@ EOF
       echo
       echo "REFUSING: these ledger entries are not release crates: ${not_in_set[*]}"
       echo "PURRDF_UNBOOTSTRAPPED_CRATES must name crates in PURRDF_RELEASE_CRATES (scripts/check-publish-order.py gates this offline)."
+    } >&2
+  fi
+  if [[ "${#private_edges[@]}" -gt 0 ]]; then
+    failed=true
+    {
+      echo
+      echo "REFUSING: these ledger crates keep a path dependency onto a member that is never published:"
+      for dep in "${private_edges[@]}"; do echo "  - ${dep}"; done
+      cat <<'EOF'
+
+`cargo package` removes exactly one such edge from the manifest it uploads — a
+DEV-dependency with NO version — and keeps every other shape. The member named
+above has `publish = false`: it has no crates.io record, and neither this token
+step nor the trusted lane can ever give it one. So the upload fails on it
+whatever the pass — a normal or build edge for carrying no version, a versioned
+one on "failed to select a version for the requirement" — and no amount of
+waiting changes that. Fix the manifest: drop the edge, point it at a published
+crate, or make it a versionless dev-dependency (scripts/release-crates.sh
+states the rule the existing dev-edges rely on).
+EOF
     } >&2
   fi
   if [[ "${#has_record[@]}" -gt 0 ]]; then
@@ -396,6 +440,16 @@ self_test() {
     fixture=("${release_set[@]: -2}")
   fi
 
+  # The members crates.io will never hold a record for, read from the workspace's
+  # publish status — NOT from the dependency reader the arms are testing. Every
+  # mock below is built against this, so the fixture registry can only ever claim
+  # what the real one could.
+  local -a never_published=()
+  local member
+  while IFS= read -r member; do
+    [[ -n "$member" ]] && never_published+=("$member")
+  done < <(workspace_never_published "${metadata_json}")
+
   # ledger_file <name> <crate>... : the real release set with the ledger replaced.
   ledger_file() {
     local name="$1"
@@ -415,7 +469,8 @@ self_test() {
     printf '200\n{"version":{"crate":"%s","num":"%s"}}\n' "$2" "${VERSION}" > "$1/$2@${VERSION}"
   }
   # deps_present <dir>: every path-dependency of every fixture crate, at VERSION —
-  # EXCEPT a dependency that is itself a fixture crate.
+  # EXCEPT a dependency that is itself a fixture crate, and EXCEPT a member that
+  # is never published.
   #
   # A ledger crate is BY DEFINITION not on the registry, so minting a version
   # record for one contradicts the fixture. It also silently broke arm 5 the day
@@ -427,6 +482,14 @@ self_test() {
   # earlier one through its in-pass check ("created earlier in this pass"), which
   # is the real behaviour this should be exercising; arm 2b encodes the same
   # exclusion for its own expectations.
+  #
+  # The second exclusion is a fact about crates.io, not a tidiness rule: a
+  # `publish = false` member has no record and never will, so minting a version
+  # for one makes the mock assert something the real registry can never say.
+  # Without it this fixture could not fail for a plan that DEMANDS such a version
+  # — it minted whatever the plan asked for, derived from the same dependency
+  # reader the arms exist to check, so the reader was grading its own work and
+  # every arm stayed green while the real bootstrap DEFERRED a crate forever.
   deps_present() {
     local crate dep_line dep
     for crate in "${fixture[@]}"; do
@@ -434,8 +497,9 @@ self_test() {
         [[ -z "$dep_line" ]] && continue
         dep="${dep_line#* }"
         in_list "$dep" "${fixture[@]}" && continue
+        in_list "$dep" "${never_published[@]}" && continue
         version "$1" "$dep"
-      done < <(workspace_path_deps "$crate")
+      done < <(crate_path_deps "$crate")
     done
   }
 
@@ -488,7 +552,7 @@ self_test() {
       dep="${dep_line#* }"
       in_list "$dep" "${fixture[@]}" || expect_missing+=("${crate} waits on")
       in_list "$dep" "${fixture[@]}" || expect_missing+=("${dep} ${VERSION} (${dep_line%% *})")
-    done < <(workspace_path_deps "$crate")
+    done < <(crate_path_deps "$crate")
   done
   arm "every ledger crate's dependencies absent at ${VERSION}: nothing creatable" refuse \
     "$mock" "$(ledger_file absent "${fixture[@]}")" \
@@ -502,8 +566,11 @@ self_test() {
   #     are not — create the first, DEFER the rest, proceed.
   mock="${tmp}/step1"; mkdir -p "$mock"
   while IFS= read -r dep_line; do
-    [[ -n "$dep_line" ]] && version "$mock" "${dep_line#* }"
-  done < <(workspace_path_deps "${fixture[0]}")
+    [[ -z "$dep_line" ]] && continue
+    # Never for a member crates.io will never hold — see deps_present.
+    in_list "${dep_line#* }" "${never_published[@]}" && continue
+    version "$mock" "${dep_line#* }"
+  done < <(crate_path_deps "${fixture[0]}")
   local -a expect_step1=("CREATE RECORD  ${fixture[0]} (no crates.io record")
   local -a others=("${fixture[@]:1}")
   for crate in "${others[@]}"; do
@@ -515,7 +582,7 @@ self_test() {
       dep="${dep_line#* }"
       in_list "$dep" "${fixture[@]}" && continue
       [[ -f "${mock}/${dep}@${VERSION}" ]] || deferred_here=true
-    done < <(workspace_path_deps "$crate")
+    done < <(crate_path_deps "$crate")
     [[ "$deferred_here" == "true" ]] && expect_step1+=("DEFER          ${crate} (no record; its dependencies are not on crates.io yet")
   done
   arm "token step 1: ${fixture[0]}'s dependencies present, the rest deferred" pass \
@@ -543,6 +610,57 @@ self_test() {
   arm "nothing deferred: the args cover every ledger crate" pass \
     "$mock" "$(ledger_file allargs "${fixture[@]}")" \
     "$expect_all_args"
+
+  # 2d. A ledger crate that keeps a path dependency onto a never-published
+  #     member. Nothing is invented for this: a `publish = false` member holding
+  #     a NORMAL edge onto another one really exists in this workspace —
+  #     legitimate there only because the crate holding it is never published
+  #     either — so the fixture moves that crate into the release set and the
+  #     ledger, where the same edge is fatal, and requires the refusal. The
+  #     crate is FOUND, never named here, so the arm cannot go stale.
+  #
+  #     The mock is EMPTY on purpose: this verdict comes from the manifests, and
+  #     must be reached without asking the registry anything.
+  local offender="" candidate offender_edge
+  for candidate in "${never_published[@]}"; do
+    if [[ -n "$(workspace_private_path_deps "${metadata_json}" "$candidate")" ]]; then
+      offender="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$offender" ]]; then
+    echo "  FAILED  no member keeps a path dependency onto a never-published member, so the refusal cannot be exercised"
+    failures=$((failures + 1))
+  else
+    offender_edge="$(workspace_private_path_deps "${metadata_json}" "$offender" | head -n 1)"
+    mock="${tmp}/private"; mkdir -p "$mock"
+    {
+      cat "${repo}/scripts/release-crates.sh"
+      printf '\nPURRDF_RELEASE_CRATES=(%s %s)\n' "${release_set[*]}" "$offender"
+      printf 'PURRDF_UNBOOTSTRAPPED_CRATES=(%s)\n' "$offender"
+    } > "${tmp}/private.sh"
+    arm "ledger crate keeps a path dependency onto a never-published member (${offender})" refuse \
+      "$mock" "${tmp}/private.sh" \
+      "REFUSE         ${offender} (path dependency onto a member that is never published: $(cut -d' ' -f3 <<<"$offender_edge") ($(cut -d' ' -f2 <<<"$offender_edge")))" \
+      "REFUSING: these ledger crates keep a path dependency onto a member that is never published" \
+      "nor the trusted lane can ever give it one"
+  fi
+
+  # 2e. The other direction, stated directly — and it is the situation that is
+  #     correct TODAY. Every release crate's edge onto a never-published member
+  #     is the versionless dev shape cargo strips, so none of them may be
+  #     reported here. Arms 3 and "nothing deferred" prove the same thing end to
+  #     end: they require every ledger crate to be CREATED against a mock that
+  #     deliberately holds no record for such a member.
+  local legit
+  legit="$(workspace_private_path_deps "${metadata_json}" "${release_set[@]}")"
+  if [[ -z "$legit" ]]; then
+    printf '  ok      the committed release set keeps no such edge: its versionless dev-dependencies onto %s stay invisible\n' "${never_published[0]:-a never-published member}"
+  else
+    echo "  FAILED  the committed release set is refused by its own check:"
+    while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$legit"
+    failures=$((failures + 1))
+  fi
 
   # 3. The valid path: no records, every dependency present — the plan proceeds
   #    and names every ledger crate as a record to CREATE.
