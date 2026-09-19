@@ -251,10 +251,44 @@ impl SparqlParser {
     /// Parse a SPARQL 1.1/1.2 query into the algebra with explicit [`ParserOptions`]
     /// (e.g. an extra extension-function namespace alias).
     pub fn parse_query_with(&self, query: &str, options: &ParserOptions) -> Result<Query> {
+        self.parse_query_split(query, options)
+            .map(|(query, _)| query)
+    }
+
+    /// [`Self::parse_query_with`], also reporting the byte offset the query's
+    /// **prologue** ends at: the start of the query form's own first token, so
+    /// `&query[..offset]` is the `BASE`/`PREFIX`/`VERSION` text (plus any comment
+    /// or whitespace between them) and `&query[offset..]` is the form itself.
+    ///
+    /// Positional only. The number is the offset the one parse below was already
+    /// standing at when it finished the prologue, so the two halves are the caller's
+    /// own bytes rather than anything re-rendered, and nothing about the algebra
+    /// returned beside it changes. It exists for a caller that must *move* the
+    /// prologue — a layer wrapping a supplied query in a sub-`SELECT`, which has no
+    /// prologue of its own, has to lift those directives above the wrapper or the
+    /// prefixed names inside the body resolve against nothing. Re-rendering the body
+    /// from the algebra cannot serve that: a prefixed name is resolved away at parse
+    /// time, so the prologue is not recoverable from a [`Query`], and re-serializing
+    /// the body would also rewrite constructs whose surface spelling the caller's
+    /// next reader depends on.
+    ///
+    /// The offset is `0` for a query with no prologue, which is the whole text.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::parse_query_with`]'s: a [`ParseError`] for an unusable base
+    /// IRI, a tokenizer refusal, a syntax error or trailing tokens after the form.
+    pub fn parse_query_split(
+        &self,
+        query: &str,
+        options: &ParserOptions,
+    ) -> Result<(Query, usize)> {
         let mut p = self.parser_for(query, options)?;
-        let q = p.parse_query()?;
+        p.parse_prologue()?;
+        let body_at = p.span();
+        let q = p.parse_query_form()?;
         p.expect_eof()?;
-        Ok(q)
+        Ok((q, body_at))
     }
 
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra, under
@@ -818,8 +852,11 @@ impl<'a> Parser<'a, '_> {
 
     // ── prologue + query form ────────────────────────────────────────────────
 
-    fn parse_query(&mut self) -> Result<Query> {
-        self.parse_prologue()?;
+    /// The query form alone, with the prologue already read: the half
+    /// [`SparqlParser::parse_query_split`] needs to start after the offset it
+    /// reports. Split out of `parse_query` rather than duplicated, so the two
+    /// entries cannot parse a form differently.
+    fn parse_query_form(&mut self) -> Result<Query> {
         let base_iri = self.base_named_node();
         if self.peek_kw("SELECT") {
             self.parse_select(base_iri)
@@ -3719,11 +3756,27 @@ impl<'a> Parser<'a, '_> {
                 m.order_by.push(cond);
             }
         }
-        // LIMIT / OFFSET in either order.
+        // `LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause
+        // LimitClause?` — at most ONE of each, in either order. The loop reads
+        // both orders, and refuses a repeat instead of overwriting the earlier
+        // clause: a caller who wrote `LIMIT 2` and got every row back because a
+        // later `LIMIT 13` overwrote the bound has had their own bound silently
+        // dropped, and the query would mean one thing here and another to a
+        // conforming processor. It is not valid SPARQL, so accepting it is not
+        // leniency anyone can rely on. The offset is captured BEFORE the keyword
+        // is eaten so the diagnostic points at the repeated clause, not at its
+        // integer.
         loop {
+            let at = self.span();
             if self.eat_kw("LIMIT") {
+                if m.limit.is_some() {
+                    return Err(repeated_bound_clause("LIMIT", at));
+                }
                 m.limit = Some(self.expect_integer()?);
             } else if self.eat_kw("OFFSET") {
+                if m.offset.is_some() {
+                    return Err(repeated_bound_clause("OFFSET", at));
+                }
                 m.offset = Some(self.expect_integer()?);
             } else {
                 break;
@@ -5406,6 +5459,20 @@ const MODIFIER_TERMINATOR_WORDS: [&str; 8] = [
     "HAVING", "ORDER", "LIMIT", "OFFSET", "VALUES", "BINDINGS", "TRUE", "FALSE",
 ];
 
+/// The refusal for a second `LIMIT`/`OFFSET` in one solution-modifier list
+/// (`LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause
+/// LimitClause?`). `kw` names the clause that repeated, and `at` is the byte
+/// offset of that repeat's keyword.
+fn repeated_bound_clause(kw: &str, at: usize) -> ParseError {
+    ParseError::syntax(
+        format!(
+            "repeated {kw} clause: LimitOffsetClauses allows at most one LIMIT \
+             and at most one OFFSET, in either order"
+        ),
+        at,
+    )
+}
+
 /// Case-insensitive membership of `w` in [`MODIFIER_TERMINATOR_WORDS`].
 ///
 /// `eq_ignore_ascii_case` against each all-ASCII keyword is the same predicate
@@ -6777,6 +6844,147 @@ mod tests {
         assert!(matches!(*inner, GraphPattern::Distinct { .. }));
     }
 
+    /// `SolutionModifier ::= GroupClause? HavingClause? OrderClause?
+    /// LimitOffsetClauses?` and `ValuesClause ::= ( 'VALUES' DataBlock )?` — no
+    /// clause in the list may repeat, so none of these is a production. Only
+    /// the bound clauses were read by a loop that could overwrite an earlier
+    /// value; each clause here is parsed by a single conditional, so a repeat
+    /// falls out of the modifier list and is refused (by the end-of-query
+    /// guard, or — for `GROUP BY`, whose bare-condition arm consumes the
+    /// repeated keyword as a callee — as an unsupported function name). Pinned
+    /// so the overwrite shape cannot be reintroduced here either.
+    #[test]
+    fn no_other_solution_modifier_may_repeat() {
+        for q in [
+            "SELECT ?a WHERE { ?a ?p ?o } GROUP BY ?a GROUP BY ?p",
+            "SELECT ?a WHERE { ?a ?p ?o } GROUP BY ?a ORDER BY ?a GROUP BY ?p",
+            "SELECT (COUNT(?o) AS ?n) WHERE { ?a ?p ?o } GROUP BY ?a \
+             HAVING (?n > 1) HAVING (?n > 2)",
+            "SELECT ?a WHERE { ?a ?p ?o } ORDER BY ?a ORDER BY ?p",
+            "SELECT ?a WHERE { ?a ?p ?o } VALUES ?a { 1 } VALUES ?a { 2 }",
+        ] {
+            let err = try_parse(q).expect_err("a repeated solution modifier is not a production");
+            assert!(
+                matches!(
+                    &err,
+                    ParseError::Syntax { reason, .. } if reason.starts_with("unexpected trailing token")
+                ) || matches!(&err, ParseError::Unsupported(_)),
+                "`{q}` must be refused, got {err:?}"
+            );
+        }
+    }
+
+    /// The `Slice` (or its absence) for every `LimitOffsetClauses` spelling the
+    /// grammar admits — `LimitClause OffsetClause? | OffsetClause LimitClause?`,
+    /// so BOTH clause orders, either clause alone, and neither. The mirror of
+    /// [`a_repeated_bound_clause_is_refused`]: refusing the second clause must
+    /// not narrow the set the grammar permits, and `LIMIT 0` in particular must
+    /// stay a real zero-row bound rather than being read as "no bound".
+    #[test]
+    fn every_bound_clause_spelling_the_grammar_admits_still_parses() {
+        fn slice_of(q: &str) -> Option<(usize, Option<usize>)> {
+            match select_pattern(q) {
+                GraphPattern::Slice { start, length, .. } => Some((start, length)),
+                other => {
+                    assert!(
+                        matches!(other, GraphPattern::Project { .. }),
+                        "an unbounded query keeps its Project at the top, got {other:?}"
+                    );
+                    None
+                }
+            }
+        }
+        let base = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }}");
+        assert_eq!(
+            slice_of(&base),
+            None,
+            "no bound clause must build no Slice at all"
+        );
+        for (tail, start, length) in [
+            ("LIMIT 5", 0, Some(5)),
+            ("OFFSET 2", 2, None),
+            ("LIMIT 5 OFFSET 2", 2, Some(5)),
+            ("OFFSET 2 LIMIT 5", 2, Some(5)),
+            ("LIMIT 0", 0, Some(0)),
+            ("OFFSET 0", 0, None),
+            ("LIMIT 0 OFFSET 0", 0, Some(0)),
+            ("OFFSET 0 LIMIT 0", 0, Some(0)),
+            // A bound far past any plausible row count is still just a bound —
+            // the value is carried, never clamped. Held below 2^32 so the
+            // assertion means the same thing on a 32-bit/wasm32 target.
+            (
+                "LIMIT 4000000000 OFFSET 4000000000",
+                4_000_000_000,
+                Some(4_000_000_000),
+            ),
+        ] {
+            let q = format!("{base} {tail}");
+            assert_eq!(
+                slice_of(&q),
+                Some((start, length)),
+                "`{tail}` must reach Slice {{ start: {start}, length: {length:?} }}"
+            );
+        }
+    }
+
+    /// `LimitOffsetClauses` admits at most ONE `LIMIT` and at most one
+    /// `OFFSET`. A repeat used to be swallowed by the bound-clause loop, which
+    /// overwrote the earlier value — so `LIMIT 2 LIMIT 13` returned thirteen
+    /// rows and the caller's own bound of two vanished. It is refused, naming
+    /// the clause that repeated and pointing at that repeat's keyword, at every
+    /// query form and on a sub-select.
+    #[test]
+    fn a_repeated_bound_clause_is_refused() {
+        fn expected(clause: &str) -> String {
+            format!(
+                "repeated {clause} clause: LimitOffsetClauses allows at most one LIMIT \
+                 and at most one OFFSET, in either order"
+            )
+        }
+        let base = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }}");
+        for (tail, clause) in [
+            ("LIMIT 2 LIMIT 13", "LIMIT"),
+            ("LIMIT 13 LIMIT 2", "LIMIT"),
+            ("OFFSET 1 OFFSET 4", "OFFSET"),
+            // The interleaved spellings: the repeat is separated from the first
+            // clause by the other one, which the loop read as a fresh pair.
+            ("LIMIT 2 OFFSET 1 LIMIT 13", "LIMIT"),
+            ("OFFSET 1 LIMIT 2 OFFSET 4", "OFFSET"),
+            ("ORDER BY ?a LIMIT 2 LIMIT 13", "LIMIT"),
+        ] {
+            let q = format!("{base} {tail}");
+            let err = try_parse(&q).expect_err("a repeated bound clause is not a production");
+            let ParseError::Syntax { reason, at } = &err else {
+                panic!("`{tail}` must be a Syntax refusal, got {err:?}");
+            };
+            assert_eq!(*reason, expected(clause), "for `{tail}`");
+            assert_eq!(
+                *at,
+                q.rfind(clause)
+                    .expect("the repeated keyword is in the query"),
+                "`{tail}` must report the byte offset of the REPEATED {clause}"
+            );
+        }
+        // The same bound-clause parse backs every query form and the sub-select,
+        // so the refusal is not SELECT-only.
+        for q in [
+            format!("{GM}CONSTRUCT {{ ?a a purrdf:U }} WHERE {{ ?a a purrdf:T }} LIMIT 2 LIMIT 13"),
+            format!("{GM}DESCRIBE ?a WHERE {{ ?a a purrdf:T }} OFFSET 1 OFFSET 4"),
+            format!(
+                "{GM}SELECT ?a WHERE {{ {{ SELECT ?a WHERE {{ ?a a purrdf:T }} LIMIT 2 LIMIT 13 }} }}"
+            ),
+        ] {
+            let err = try_parse(&q).expect_err("a repeated bound clause is not a production");
+            let ParseError::Syntax { reason, .. } = &err else {
+                panic!("`{q}` must be a Syntax refusal, got {err:?}");
+            };
+            assert!(
+                reason.starts_with("repeated "),
+                "`{q}` must reach the repeated-bound-clause refusal, got {reason:?}"
+            );
+        }
+    }
+
     #[test]
     fn select_star_collects_visible_vars() {
         let q = format!("{GM}SELECT * WHERE {{ ?a purrdf:p ?b . }}");
@@ -7844,6 +8052,47 @@ mod tests {
         assert_eq!(*destination, GraphTarget::Default);
     }
 
+    /// The prologue offset is the start of the query form, so the two halves are
+    /// the caller's own bytes and the algebra is the one `parse_query_with` returns.
+    ///
+    /// Both neighbours are asserted: a text with directives splits after the last
+    /// one, and a text without them splits at zero — which is what makes the offset
+    /// a position rather than a guess about where `SELECT` tends to be written.
+    #[test]
+    fn a_prologue_splits_at_the_query_form_and_an_absent_one_splits_at_zero() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+        let prefixed = "BASE <http://example.org/>\nPREFIX ex: <http://example.org/ns#>\n# and a comment\nSELECT ?s WHERE { ?s ex:p ?o }";
+        let (query, at) = parser
+            .parse_query_split(prefixed, &options)
+            .expect("a prefixed query parses");
+        assert_eq!(
+            &prefixed[at..],
+            "SELECT ?s WHERE { ?s ex:p ?o }",
+            "the offset is the start of the query form, comments and all"
+        );
+        assert_eq!(
+            query,
+            parser
+                .parse_query_with(prefixed, &options)
+                .expect("the same text parses through the plain entry"),
+            "and the algebra beside the offset is the ordinary one"
+        );
+
+        let bare = "SELECT ?s WHERE { ?s <http://example.org/ns#p> ?o }";
+        let (_, at) = parser
+            .parse_query_split(bare, &options)
+            .expect("a query with no prologue parses");
+        assert_eq!(at, 0, "no prologue is a split at the front of the text");
+
+        assert!(
+            parser
+                .parse_query_split("PREFIX ex: <urn:x#>", &options)
+                .is_err(),
+            "a prologue with no query form is still not a query"
+        );
+    }
+
     #[test]
     fn update_sequence_of_operations() {
         let u = parse_update("CREATE GRAPH purrdf:g ; CLEAR DEFAULT ;");
@@ -8187,7 +8436,8 @@ mod tests {
             let mut p = SparqlParser::new()
                 .parser_for(query, &options)
                 .expect("tokenize");
-            p.parse_query().expect("parse");
+            p.parse_prologue().expect("prologue");
+            p.parse_query_form().expect("parse");
             p.expect_eof().expect("a full query consumes every token");
             p.debug_scope_consultations()
         }

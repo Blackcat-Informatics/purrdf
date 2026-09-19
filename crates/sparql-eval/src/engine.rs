@@ -857,6 +857,11 @@ impl NativeSparqlEngine {
             ctx = ctx.with_remote(source);
         }
         let mut ctx = apply_query_options(ctx, options)?;
+        // The governed lane's outcome carries a `RelationIdentity`, which has a slot for
+        // the witness — so this execution can REPORT a relation that declares its index
+        // was not whole instead of refusing the query. See `EvalCtx::witnessing`: the
+        // flag is a fact about the return type, never a caller's preference.
+        ctx.witnessing = true;
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => {
                 evaluate_governed_with_shacl_prebinding(prepared, substitutions, &mut ctx)?
@@ -865,7 +870,7 @@ impl NativeSparqlEngine {
                 evaluate_governed_with_substitutions(prepared, substitutions, &mut ctx)?
             }
         };
-        Ok(materialize_governed(evaluated, &ctx, state, identity))
+        Ok(materialize_governed(evaluated, &mut ctx, state, identity))
     }
 
     /// [`Self::query_governed`] with a
@@ -2261,6 +2266,12 @@ fn relation_identity(
     Ok(RelationIdentity {
         fingerprint: prepared.relations.clone(),
         iris,
+        // EMPTY here by construction: this is computed BEFORE evaluation (once, so the
+        // refusal, complete and truncated arms all carry the same identity), and nothing
+        // has attested yet. `materialize_governed` fills it from the context on the arms
+        // that actually ran; the admission-refusal arm keeps it empty, which is the true
+        // statement that no relation was invoked.
+        witness: crate::witness::RelationWitness::default(),
     })
 }
 
@@ -2441,12 +2452,26 @@ fn certain_partial(result: SparqlResult, positional_prefix: bool) -> PartialAnsw
 /// 2. **The certificate is restated in the egress vocabulary.** The evaluator's internal
 ///    three-way classification maps one-for-one onto [`PartialAnswers`], so the public
 ///    claim is the analysis's claim rather than a second, hand-maintained reading of it.
+/// 3. **The relation witness is moved off the context onto the receipt.** It is per-run
+///    evidence accumulated during evaluation and it dies with `ctx`, exactly as the rows
+///    do, so it crosses here or not at all. Moved rather than cloned: there is one
+///    witness for one execution and two copies of it could only ever disagree.
+///
+/// No governed entry point is added for it, and that is the point: a witness is evidence
+/// ABOUT an outcome, not an outcome. The governed receipt is already where per-run
+/// evidence rides — [`GovernorEvidence`] is the precedent — so a caller reads it from
+/// the place it already looks for what this execution did.
 fn materialize_governed<D: DatasetView + Sync>(
     evaluated: EvaluatedOutcome<D::Id>,
-    ctx: &EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'_, D>,
     state: &GovernorState,
     relations: RelationIdentity,
 ) -> GovernedOutcome {
+    let relations = RelationIdentity {
+        witness: core::mem::take(&mut ctx.witness),
+        ..relations
+    };
+    let ctx = &*ctx;
     match evaluated {
         EvaluatedOutcome::Complete(outcome) => {
             let result = materialize(outcome, ctx);

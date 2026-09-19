@@ -395,3 +395,55 @@ def test_invalid_provenance_namespace_is_a_value_error(compat: ModuleType) -> No
             format="json",
             provenance_namespace=("not:a:prefix", "https://example.org/ns/prov#"),
         )
+
+
+# ── the format id itself ────────────────────────────────────────────────────────
+
+
+def test_an_unknown_results_format_id_is_refused_and_the_four_known_ones_answer() -> None:
+    """Four ids are accepted by name, and a fifth is refused naming the four.
+
+    The goldens above establish what each of the four id*s* produces; nothing
+    establishes what a fifth does. An id read as a default — the first format, or
+    the last one that matched — would hand a caller a document in a syntax they
+    did not ask for and cannot detect, since a SPARQL Results reader is chosen by
+    the same name that was ignored.
+
+    ``"txt"`` is deliberately the unknown id under test: rdflib ships its own
+    ``txt`` table serializer, so it is the spelling a host is most likely to reach
+    for and the one whose silent acceptance would look plausible.
+    """
+    import purrdf
+
+    for entry in (
+        lambda fmt: purrdf.serialize_sparql_boolean(fmt, True),
+        lambda fmt: purrdf.serialize_sparql_solutions(fmt, [], []),
+        lambda fmt: purrdf.parse_sparql_results(fmt, b'{"head":{},"boolean":true}'),
+    ):
+        with pytest.raises(ValueError, match="unknown SPARQL results format") as refused:
+            entry("txt")
+        message = str(refused.value)
+        for known in ("json", "xml", "csv", "tsv"):
+            assert known in message, f"the refusal names {known}: {message}"
+
+    # The neighbouring valid ids: all four serialize a SELECT, the two that can
+    # express an ASK serialize one, and the two the parser reads round-trip.
+    # Refusing any of these would be the mirror failure — a format registry that
+    # rejects its own registered names.
+    row = [purrdf.NamedNode("https://example.org/s")]
+    for fmt in ("json", "xml", "csv", "tsv"):
+        assert purrdf.serialize_sparql_solutions(fmt, ["s"], [row]), fmt
+    # CSV and TSV are defined for variable bindings only, so an ASK is refused
+    # there for a reason of its own — a distinct message, not the unknown-id one.
+    for fmt in ("json", "xml"):
+        assert purrdf.serialize_sparql_boolean(fmt, True), fmt
+        assert purrdf.parse_sparql_results(
+            fmt, purrdf.serialize_sparql_boolean(fmt, True)
+        ) == ("ASK", True), fmt
+    for fmt in ("csv", "tsv"):
+        with pytest.raises(ValueError, match="not ASK") as declined:
+            purrdf.serialize_sparql_boolean(fmt, True)
+        assert "unknown SPARQL results format" not in str(declined.value), (
+            f"{fmt}: a registered id that cannot express an ASK says so, and is "
+            "never reported as an unregistered id"
+        )

@@ -79,7 +79,8 @@ pub use analysis::{Analyzer, Token, UnicodeVersion, UnicodeVersions, unicode_ver
 pub use error::TextError;
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{
-    Document, GraphSelector, PartitionKey, PartitionStats, TextIndex, TextIndexConfig,
+    Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
+    TextIndexConfig,
 };
 pub use relation::{TermOccurrenceRelation, TextSearchRelation, verify_binding};
 pub use score::{

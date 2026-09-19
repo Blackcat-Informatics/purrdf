@@ -32,6 +32,13 @@
 //! callable, which is what keeps the seam GIL-free — nothing the engine invokes while
 //! detached can re-enter the interpreter.
 //!
+//! Any of the three may carry one trailing [`Attestation`]: what the host knows about
+//! the index the rows came from, which is a fact only the host holds and which no
+//! declaration or dataset snapshot can express. It is reported back on the governed
+//! outcome's `relation_witness` — and on an entry point that has no witness to report it
+//! on, an attested incompleteness REFUSES the query rather than answering short. See
+//! [`Attestation`] and [`witness_to_dict`].
+//!
 //! This module also owns the Python side of caller-supplied execution governors:
 //! [`GovernorArgs`] (the ceilings a keyword argument carries), [`PyStopWatch`] (the
 //! composed stop signal — the caller's token, the caller's deadline, and the
@@ -54,11 +61,12 @@ use std::time::{Duration, Instant};
 
 use purrdf_core::{GraphMatch, ResourceVector};
 use purrdf_sparql_eval::{
-    AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
-    GovernorEvidence, MemoryRelation, NativeSparqlEngine, ParserOptions, PartialAnswers,
-    PathDirection, PathGraph, PathLimits, PathStep, PathWitnessRelation, PropertyFunction,
-    PropertyFunctionRegistry, QueryGovernors, ResourceDimension, ShortestPathWitnessRelation,
-    StandpointPredicates, StopCause, StopSignal, TrippedGovernor, WallDeadline,
+    AggregateRegistry, BudgetExhausted, CancellationFlag, EvalError, GovernedOutcome,
+    GovernedUpdateOutcome, GovernorEvidence, IndexGeneration, MemoryRelation, NativeSparqlEngine,
+    ParserOptions, PartialAnswers, PathDirection, PathGraph, PathLimits, PathStep,
+    PathWitnessRelation, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
+    RelationWitness, ResourceDimension, ShortestPathWitnessRelation, StandpointPredicates,
+    StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -66,6 +74,7 @@ use pyo3::types::{PyBytes, PyDict, PyString};
 
 use super::io::{PyRdfFormat, serialize_quads, serialize_triples};
 use super::term::{PyQuad, PyTriple, PyVariable, extract_term_value, term_to_py};
+use crate::attestation::Attestation;
 use crate::{GovernedEntailment, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SparqlResult, TermValue};
 
 /// The optional per-call engine configuration the Python surface accepts, converted
@@ -183,7 +192,7 @@ pub(super) enum RelationSpec {
 }
 
 /// Collect the `relations` / `relations_from_graph` / `path_relations` keyword dicts
-/// into the ordered `(IRI, spec)` list one call registers.
+/// into the ordered `(IRI, spec, attestation)` list one call registers.
 ///
 /// # A duplicate IRI is refused here, not at registration
 ///
@@ -196,15 +205,15 @@ pub(super) enum RelationSpec {
 ///
 /// # Errors
 ///
-/// `TypeError` if a key is not a `str` or a value is not the declared shape;
-/// `ValueError` if an IRI is declared twice, or if a `path_relations` value names an
-/// unknown direction or mode.
+/// `TypeError` if a key is not a `str`, a value is not the declared shape, or a trailing
+/// attestation's two members are not `str` or `None`; `ValueError` if an IRI is declared
+/// twice, or if a `path_relations` value names an unknown direction or mode.
 pub(super) fn collect_relations(
     relations: Option<&Bound<'_, PyDict>>,
     relations_from_graph: Option<&Bound<'_, PyDict>>,
     path_relations: Option<&Bound<'_, PyDict>>,
-) -> PyResult<Vec<(String, RelationSpec)>> {
-    let mut specs: Vec<(String, RelationSpec)> = Vec::new();
+) -> PyResult<Vec<(String, RelationSpec, Attestation)>> {
+    let mut specs: Vec<(String, RelationSpec, Attestation)> = Vec::new();
     for (dict, kind) in [
         (relations, RelationKind::Rows),
         (relations_from_graph, RelationKind::Graph),
@@ -215,19 +224,19 @@ pub(super) fn collect_relations(
             let iri = key.extract::<String>().map_err(|_| {
                 PyTypeError::new_err("property-function relation keys must be IRI strings")
             })?;
-            if specs.iter().any(|(seen, _)| *seen == iri) {
+            if specs.iter().any(|(seen, ..)| *seen == iri) {
                 return Err(PyValueError::new_err(format!(
                     "property function <{iri}> is declared twice; a relation may not be \
                      silently shadowed, because both spellings of the call are identical \
                      and the only observable difference is which rows the query returns"
                 )));
             }
-            let spec = match kind {
+            let (spec, attestation) = match kind {
                 RelationKind::Rows => rows_relation_spec(&iri, &value)?,
                 RelationKind::Graph => graph_relation_spec(&iri, &value)?,
                 RelationKind::Path => path_relation_spec(&iri, &value)?,
             };
-            specs.push((iri, spec));
+            specs.push((iri, spec, attestation));
         }
     }
     Ok(specs)
@@ -265,12 +274,16 @@ enum RelationKind {
 /// `TypeError` if the value is not the declared six-position shape, if `steps` is not a
 /// sequence of pairs, if a predicate is not an RDF term, or if a count is not a
 /// non-negative integer of its width. `ValueError` for an unknown direction or mode.
-fn path_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
-    let [steps, min_hops, max_hops, max_paths, max_expansions, mode] = relation_fields(
-        iri,
-        value,
-        "(steps, min_hops, max_hops, max_paths_per_seed, max_expansions_per_invocation, mode)",
-    )?;
+fn path_relation_spec(
+    iri: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(RelationSpec, Attestation)> {
+    let ([steps, min_hops, max_hops, max_paths, max_expansions, mode], attestation) =
+        relation_fields(
+            iri,
+            value,
+            "(steps, min_hops, max_hops, max_paths_per_seed, max_expansions_per_invocation, mode)",
+        )?;
     let mut alternatives: Vec<(TermValue, PathDirection)> = Vec::new();
     for step in steps.try_iter().map_err(|_| {
         PyTypeError::new_err(format!(
@@ -296,18 +309,21 @@ fn path_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationS
             path_direction(iri, &direction)?,
         ));
     }
-    Ok(RelationSpec::PathWitness {
-        steps: alternatives,
-        min_hops: count(iri, &min_hops, "min_hops")?,
-        max_hops: count(iri, &max_hops, "max_hops")?,
-        max_paths_per_seed: count(iri, &max_paths, "max_paths_per_seed")?,
-        max_expansions_per_invocation: count(
-            iri,
-            &max_expansions,
-            "max_expansions_per_invocation",
-        )?,
-        shortest: path_mode(iri, &mode)?,
-    })
+    Ok((
+        RelationSpec::PathWitness {
+            steps: alternatives,
+            min_hops: count(iri, &min_hops, "min_hops")?,
+            max_hops: count(iri, &max_hops, "max_hops")?,
+            max_paths_per_seed: count(iri, &max_paths, "max_paths_per_seed")?,
+            max_expansions_per_invocation: count(
+                iri,
+                &max_expansions,
+                "max_expansions_per_invocation",
+            )?,
+            shortest: path_mode(iri, &mode)?,
+        },
+        attestation,
+    ))
 }
 
 /// Read one step's direction: `"forward"` traverses subject→object, `"inverse"`
@@ -370,8 +386,11 @@ where
 }
 
 /// Parse one `relations` value: `(subject_arity, object_arity, rows)`.
-fn rows_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
-    let [subject_arity, object_arity, rows] =
+fn rows_relation_spec(
+    iri: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(RelationSpec, Attestation)> {
+    let ([subject_arity, object_arity, rows], attestation) =
         relation_fields(iri, value, "(subject_arity, object_arity, rows)")?;
     let subject_arity = arity(iri, &subject_arity)?;
     let object_arity = arity(iri, &object_arity)?;
@@ -392,41 +411,84 @@ fn rows_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationS
         }
         table.push(cells);
     }
-    Ok(RelationSpec::Rows {
-        subject_arity,
-        object_arity,
-        rows: table,
-    })
+    Ok((
+        RelationSpec::Rows {
+            subject_arity,
+            object_arity,
+            rows: table,
+        },
+        attestation,
+    ))
 }
 
 /// Parse one `relations_from_graph` value: `(head, subject_arity, object_arity)`.
-fn graph_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
-    let [head, subject_arity, object_arity] =
+fn graph_relation_spec(
+    iri: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(RelationSpec, Attestation)> {
+    let ([head, subject_arity, object_arity], attestation) =
         relation_fields(iri, value, "(head, subject_arity, object_arity)")?;
-    Ok(RelationSpec::Graph {
-        head: extract_term_value(&head)?,
-        subject_arity: arity(iri, &subject_arity)?,
-        object_arity: arity(iri, &object_arity)?,
-    })
+    Ok((
+        RelationSpec::Graph {
+            head: extract_term_value(&head)?,
+            subject_arity: arity(iri, &subject_arity)?,
+            object_arity: arity(iri, &object_arity)?,
+        },
+        attestation,
+    ))
 }
 
-/// Unpack a relation declaration into its `N` positions, naming the expected shape
-/// in the error rather than reporting an anonymous extraction failure.
+/// Unpack a relation declaration into its `N` positions plus the optional trailing
+/// [`Attestation`], naming the expected shape in the error rather than reporting an
+/// anonymous extraction failure.
 ///
 /// One helper across the three keywords, parameterised by width, so a declaration of the
-/// wrong length reads the same way whichever kind it was meant to be.
+/// wrong length reads the same way whichever kind it was meant to be — and so the
+/// attestation position is admitted on all three by construction rather than on the one
+/// whose parser someone remembered to extend.
+///
+/// # Why the extra position is read positionally and not by a keyword
+///
+/// An attestation is about ONE relation's index, and a relation is already named by a
+/// dict key; a per-call keyword would have to re-name every relation it spoke about, which
+/// is a second copy of the name table and a second thing to get out of step with the first.
+/// The position cannot be confused with a declared field: each kind's width is fixed, and
+/// the attestation is itself a two-member sequence rather than a scalar, so a value in the
+/// wrong slot fails the shape check instead of being read as a count or a term.
+///
+/// # Errors
+///
+/// `TypeError` naming the accepted shapes when the value is not a sequence of `N` or
+/// `N + 1` positions, or when the trailing position is not a two-member sequence;
+/// `TypeError` naming the field when an attestation member is neither `str` nor `None`.
 fn relation_fields<'py, const N: usize>(
     iri: &str,
     value: &Bound<'py, PyAny>,
     shape: &str,
-) -> PyResult<[Bound<'py, PyAny>; N]> {
+) -> PyResult<([Bound<'py, PyAny>; N], Attestation)> {
     let shape_error = || {
         PyTypeError::new_err(format!(
-            "property function <{iri}> must be declared as {shape}"
+            "property function <{iri}> must be declared as {shape}, optionally followed by \
+             one attestation position (generation, incompleteness)"
         ))
     };
-    let items: Vec<Bound<'py, PyAny>> = value.extract().map_err(|_| shape_error())?;
-    <[Bound<'py, PyAny>; N]>::try_from(items).map_err(|_| shape_error())
+    let mut items: Vec<Bound<'py, PyAny>> = value.extract().map_err(|_| shape_error())?;
+    let attested = if items.len() == N + 1 {
+        let trailing = items.pop().ok_or_else(shape_error)?;
+        // A trailing position that is not even SHAPED like an attestation is far more
+        // likely to be a field someone believed this kind had than a mis-spelled
+        // attestation, so it reports the accepted shapes; one that is shaped like an
+        // attestation but carries the wrong member types keeps its own precise
+        // diagnostic, which [`Attestation::read`] raises.
+        Attestation::read(&format!("property function <{iri}>"), &trailing)?
+            .ok_or_else(shape_error)?
+    } else {
+        Attestation::UNDECLARED
+    };
+    Ok((
+        <[Bound<'py, PyAny>; N]>::try_from(items).map_err(|_| shape_error())?,
+        attested,
+    ))
 }
 
 /// Read one declared arity position as a non-negative integer.
@@ -480,7 +542,7 @@ fn arity(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<usize> {
 /// matches nothing (see [`PathGraph::from_dataset`]). The boundary inherits that rule
 /// rather than second-guessing it.
 pub(super) fn build_relations(
-    specs: Vec<(String, RelationSpec)>,
+    specs: Vec<(String, RelationSpec, Attestation)>,
     dataset: &RdfDataset,
 ) -> PyResult<Option<PropertyFunctionRegistry>> {
     if specs.is_empty() {
@@ -506,13 +568,13 @@ pub(super) fn build_relations(
 /// The `property function <iri>: …` message naming the relation and the kernel's own
 /// diagnostic.
 pub(super) fn registry_over(
-    specs: Vec<(String, RelationSpec)>,
+    specs: Vec<(String, RelationSpec, Attestation)>,
     dataset: &RdfDataset,
 ) -> Result<PropertyFunctionRegistry, String> {
     let mut registry = PropertyFunctionRegistry::new();
-    for (iri, spec) in specs {
+    for (iri, spec, attestation) in specs {
         let relation = build_relation(&iri, spec, dataset)?;
-        registry.register(iri, relation);
+        registry.register(iri, attestation.wrap(relation));
     }
     Ok(registry)
 }
@@ -527,7 +589,7 @@ fn build_relation(
     spec: RelationSpec,
     dataset: &RdfDataset,
 ) -> Result<Arc<dyn PropertyFunction>, String> {
-    let named = |e: purrdf_sparql_eval::EvalError| format!("property function <{iri}>: {e}");
+    let named = |e: EvalError| format!("property function <{iri}>: {e}");
     match spec {
         RelationSpec::Rows {
             subject_arity,
@@ -1653,6 +1715,14 @@ pub struct PyQueryOutcome {
     tripped: Option<Py<PyTrippedGovernor>>,
     /// This execution's consumption and ceilings, present on both paths.
     evidence: Py<PyGovernorEvidence>,
+    /// What the relations this execution invoked attested, present on both paths.
+    ///
+    /// Held as the native record and rendered on read by
+    /// [`witness_to_dict`], rather than converted once at construction: the
+    /// conversion allocates a dict per relation, most callers never look, and the
+    /// kernel's value is the one thing that cannot be reordered by a Python container on
+    /// its way through.
+    relation_witness: RelationWitness,
 }
 
 #[pymethods]
@@ -1691,6 +1761,25 @@ impl PyQueryOutcome {
     #[getter]
     fn evidence(&self, py: Python<'_>) -> Py<PyGovernorEvidence> {
         self.evidence.clone_ref(py)
+    }
+
+    /// What each relation this execution invoked attested about the index behind it:
+    /// `{relation_iri: {"invocations": int, "generations": [...], "incompleteness": [...]}}`.
+    ///
+    /// Present on both paths and **always present, possibly empty** — an empty mapping is
+    /// the true statement that no relation attested anything (usually because the query
+    /// invoked none), and it is never a claim that an index was whole. A relation that ran
+    /// and declared nothing is listed, with its invocation count and a single `None`
+    /// generation: "it ran and said nothing" and "it never ran" are different facts and
+    /// stay different here.
+    ///
+    /// `incompleteness` holds the producer's own words, verbatim and de-duplicated. It is
+    /// the reason this lane can answer at all where the ungoverned one raises: rows whose
+    /// receipt names the relation that was short, and why, are labelled rather than
+    /// silently short.
+    #[getter]
+    fn relation_witness<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        witness_to_dict(py, &self.relation_witness)
     }
 
     fn __repr__(&self) -> String {
@@ -1820,6 +1909,52 @@ fn dimension_from_label(label: &str) -> PyResult<ResourceDimension> {
         })
 }
 
+/// Render what the relations a governed execution invoked attested as
+/// `{relation_iri: {"invocations": int, "generations": [...], "incompleteness": [...]}}`.
+///
+/// # Every order here is the kernel's, not a hash map's
+///
+/// The native record is a `BTreeMap` of `BTreeSet`s, so its iteration order is the
+/// values' own order on every target and in every build. A Python `dict` preserves
+/// insertion order and a `list` preserves its own, so writing the entries in the order
+/// they are read carries that property across the boundary intact; collecting either into
+/// a `set` would hand it back to a hasher, and a caller that logged, diffed or hashed the
+/// receipt would get an artifact that differed run to run.
+///
+/// # `None` in `generations` is an absence, never a completeness claim
+///
+/// A relation that ran but declared no version contributes `None`, which sorts first — it
+/// says "these invocations attested nothing", and a reader must not read it as "the index
+/// was current". The kernel keeps that case as a member of the set rather than dropping
+/// it, because a relation that answered some invocations from a named generation and
+/// others from an unnamed one is a different fact from one that named a generation every
+/// time, and flattening the two here would delete exactly the distinction the record
+/// exists to carry.
+fn witness_to_dict<'py>(
+    py: Python<'py>,
+    witness: &RelationWitness,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (iri, attested) in witness.iter() {
+        let entry = PyDict::new(py);
+        entry.set_item("invocations", attested.invocations)?;
+        let generations: Vec<Option<&str>> = attested
+            .generations
+            .iter()
+            .map(|generation| match generation {
+                IndexGeneration::Undeclared => None,
+                IndexGeneration::Declared(value) => Some(&**value),
+            })
+            .collect();
+        entry.set_item("generations", generations)?;
+        let incompleteness: Vec<&str> =
+            attested.incompleteness.iter().map(String::as_str).collect();
+        entry.set_item("incompleteness", incompleteness)?;
+        out.set_item(iri, entry)?;
+    }
+    Ok(out)
+}
+
 /// Render a resource vector as a `{dimension label: value}` dict, in the kernel's
 /// declaration order so the mapping is deterministic across calls and builds.
 fn vector_to_dict(py: Python<'_>, vector: ResourceVector) -> PyResult<Bound<'_, PyDict>> {
@@ -1831,13 +1966,20 @@ fn vector_to_dict(py: Python<'_>, vector: ResourceVector) -> PyResult<Bound<'_, 
 }
 
 /// Convert a native [`GovernedOutcome`] into the Python `QueryOutcome` object.
+///
+/// The `RelationIdentity`'s witness is carried on BOTH arms, because a truncated
+/// execution's relations attested exactly as much as a complete one's did — and a caller
+/// deciding whether to retry a tripped query needs to know whether the rows it already has
+/// came from an index that declared itself short.
 pub(crate) fn materialize_outcome(
     py: Python<'_>,
     outcome: GovernedOutcome,
 ) -> PyResult<Py<PyQueryOutcome>> {
     match outcome {
         GovernedOutcome::Complete {
-            result, evidence, ..
+            result,
+            evidence,
+            relations,
         } => Py::new(
             py,
             PyQueryOutcome {
@@ -1845,13 +1987,14 @@ pub(crate) fn materialize_outcome(
                 partial: None,
                 tripped: None,
                 evidence: Py::new(py, PyGovernorEvidence { inner: evidence })?,
+                relation_witness: relations.witness,
             },
         ),
         GovernedOutcome::BudgetExhausted(BudgetExhausted {
             tripped,
             evidence,
+            relations,
             partial,
-            ..
         }) => Py::new(
             py,
             PyQueryOutcome {
@@ -1859,6 +2002,7 @@ pub(crate) fn materialize_outcome(
                 partial: Some(materialize_partial(py, partial)?),
                 tripped: Some(Py::new(py, PyTrippedGovernor { inner: tripped })?),
                 evidence: Py::new(py, PyGovernorEvidence { inner: evidence })?,
+                relation_witness: relations.witness,
             },
         ),
     }
@@ -1953,187 +2097,4 @@ fn materialize_partial(py: Python<'_>, partial: PartialAnswers) -> PyResult<Py<P
             barrier,
         },
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{SparqlEngine, SparqlRequest, parse_dataset};
-
-    /// An `ASK` whose filter calls an IRI in call position under a would-be
-    /// extension namespace.
-    const EXT_CALL_ASK: &str = "ASK { FILTER(<https://ex.example/fn/nope>(1)) }";
-
-    fn ask(engine: &NativeSparqlEngine) -> Result<SparqlResult, crate::RdfDiagnostic> {
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        engine.query(
-            &dataset,
-            SparqlRequest {
-                query: EXT_CALL_ASK,
-                base_iri: None,
-                substitutions: &[],
-            },
-        )
-    }
-
-    #[test]
-    fn default_engine_leaves_extension_functions_off() {
-        // Unset = engine defaults: the call-position IRI is an ordinary custom
-        // function, so the query PARSES (any failure is an evaluation error,
-        // never the extension seam's parse-time unknown-local-name hard-fail).
-        if let Err(diag) = ask(&build_engine(EngineConfig::default())) {
-            assert!(
-                !diag.to_string().contains("parse"),
-                "extensions-off must not fail at parse time: {diag}"
-            );
-        }
-    }
-
-    #[test]
-    fn extension_namespaces_thread_into_parser_options() {
-        // With the namespace configured, the UNKNOWN local name `nope` is a
-        // parse-time hard error — proving the kwarg reached ParserOptions.
-        let engine = build_engine(EngineConfig {
-            extension_namespaces: Some(vec!["https://ex.example/fn/".to_owned()]),
-            ..EngineConfig::default()
-        });
-        let diag = ask(&engine).expect_err("unknown extension local name must hard-fail");
-        assert_eq!(diag.code, "native-sparql-query-parse", "{diag}");
-    }
-
-    #[test]
-    fn standpoint_predicates_thread_into_the_engine() {
-        let engine = build_engine(EngineConfig {
-            standpoint_predicates: Some((
-                "https://ex.example/accordingTo".to_owned(),
-                "https://ex.example/sharpens".to_owned(),
-            )),
-            ..EngineConfig::default()
-        });
-        // The engine Debug surface reports the configured table (the engine's own
-        // crate tests cover `heldIn` evaluation semantics end-to-end).
-        assert!(
-            format!("{engine:?}").contains("accordingTo"),
-            "standpoint predicate table must be installed"
-        );
-    }
-
-    /// A property-function namespace configured with NO registry: a predicate under
-    /// it is lowered to a call node, and the call is refused as unregistered rather
-    /// than quietly scanning a dataset that holds no such triple.
-    #[test]
-    fn property_fn_namespaces_thread_into_parser_options() {
-        let engine = build_engine(EngineConfig {
-            property_fn_namespaces: Some(vec!["https://ex.example/rel/".to_owned()]),
-            ..EngineConfig::default()
-        });
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        let diag = engine
-            .query(
-                &dataset,
-                SparqlRequest {
-                    query: "ASK { ?s <https://ex.example/rel/nope> ?o }",
-                    base_iri: None,
-                    substitutions: &[],
-                },
-            )
-            .expect_err("a call under a declared namespace with no relation must hard-fail");
-        assert!(
-            diag.to_string()
-                .contains("no property function is registered"),
-            "{diag}"
-        );
-    }
-
-    /// The registry the Python surface builds is the kernel's own, so a ragged table
-    /// is refused by [`MemoryRelation::new`] and surfaces as a Python `ValueError`.
-    #[test]
-    fn a_ragged_tuple_relation_is_refused() {
-        let specs = vec![(
-            "https://ex.example/rel/pairs".to_owned(),
-            RelationSpec::Rows {
-                subject_arity: 1,
-                object_arity: 1,
-                rows: vec![vec![TermValue::iri("https://ex.example/a")]],
-            },
-        )];
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        let error = build_relations(specs, &dataset).expect_err("a one-cell row is not two wide");
-        assert!(
-            format!("{error}").contains("https://ex.example/rel/pairs"),
-            "the refusal must name the relation: {error}"
-        );
-    }
-
-    /// No declared relation is the ABSENCE of a registry, not an empty one — the
-    /// configuration every pre-existing call keeps.
-    #[test]
-    fn no_declared_relation_attaches_no_registry() {
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        assert!(
-            build_relations(Vec::new(), &dataset)
-                .expect("no relations is not an error")
-                .is_none()
-        );
-    }
-
-    /// An alternative the dataset has no edges for contributes zero edges rather than
-    /// failing — the kernel's own rule, inherited verbatim rather than second-guessed at
-    /// the boundary. The relation is registered and answers nothing.
-    #[test]
-    fn a_path_relation_over_an_edgeless_predicate_still_registers() {
-        let specs = vec![(
-            "https://ex.example/rel/walk".to_owned(),
-            RelationSpec::PathWitness {
-                steps: vec![(
-                    TermValue::iri("https://ex.example/p"),
-                    PathDirection::Forward,
-                )],
-                min_hops: 1,
-                max_hops: 4,
-                max_paths_per_seed: 8,
-                max_expansions_per_invocation: 64,
-                shortest: false,
-            },
-        )];
-        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
-        let registry = build_relations(specs, &dataset)
-            .expect("an edgeless alternative is not a misconfiguration")
-            .expect("one relation was declared, so a registry exists");
-        assert!(
-            registry.resolve("https://ex.example/rel/walk").is_some(),
-            "the relation is registered under the caller's IRI"
-        );
-    }
-
-    /// A zero `min_hops` is refused by the kernel's own envelope, not defaulted away: a
-    /// zero-hop path is the identity and has no statement to bind as a witness.
-    #[test]
-    fn a_path_relation_with_a_zero_min_hops_is_refused() {
-        let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        let a = builder.intern_iri("https://ex.example/a");
-        let p = builder.intern_iri("https://ex.example/p");
-        let b = builder.intern_iri("https://ex.example/b");
-        builder.push_quad(a, p, b, None);
-        let dataset = builder.freeze().expect("a one-quad dataset");
-        let specs = vec![(
-            "https://ex.example/rel/walk".to_owned(),
-            RelationSpec::PathWitness {
-                steps: vec![(
-                    TermValue::iri("https://ex.example/p"),
-                    PathDirection::Forward,
-                )],
-                min_hops: 0,
-                max_hops: 4,
-                max_paths_per_seed: 8,
-                max_expansions_per_invocation: 64,
-                shortest: false,
-            },
-        )];
-        let error = build_relations(specs, &dataset).expect_err("min_hops of zero is refused");
-        assert!(
-            format!("{error}").contains("min_hops must be at least 1"),
-            "the kernel's own diagnostic must cross the boundary: {error}"
-        );
-    }
 }

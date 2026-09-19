@@ -1233,7 +1233,10 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
-        let minted = crate::parallel::par_chunk_try_map_init(
+        // Harvesting, for `crate::expr::eval_filter`'s reason: an aggregate's argument
+        // expression can reach a property function through an embedded `EXISTS`, and
+        // the per-group worker's attestation must reach the parent's receipt.
+        let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
             &groups,
             || ctx.fork_for_worker(),
             |child, acc, (_, key, idxs)| {
@@ -1247,7 +1250,9 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 Ok(())
             },
+            |child| core::mem::take(&mut child.witness),
         )?;
+        ctx.absorb_worker_witnesses(witnesses);
         minted
             .into_iter()
             .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))

@@ -10,9 +10,11 @@ These tests hold the Python surface to what makes that usable and honest from a
 host that writes Python:
 
 * **Producers are DATA, not callables.** ``text_producers`` maps a producer IRI
-  to ``(stratum, predicate, graph)``; the engine builds the index and registers
-  the relation itself. Nothing it invokes can re-enter the interpreter, which is
-  why the whole ladder still runs with the GIL released.
+  to ``(stratum, predicate, graph)``, or to ``(stratum, predicate, graph,
+  domains)`` where the producer can say which blocks of the candidate universe
+  it draws from; the engine builds the index and registers the relation itself.
+  Nothing it invokes can re-enter the interpreter, which is why the whole ladder
+  still runs with the GIL released.
 * **Nothing is defaulted.** There is no default producer, stratum, weight,
   smoothing constant or row bound, and ``statistics`` must name its own source
   and revision, because PurRDF mints no vocabulary and invents no measurement.
@@ -24,6 +26,12 @@ host that writes Python:
   per-stratum provenance, every applicable producer carries its own terminal
   status, and every request term that reached no producer is named with a typed
   reason rather than quietly producing no rows.
+* **An answer says what evidence it was produced against.** Every stratum's
+  index attests what it can honestly attest — which generation answered, and
+  whether that generation was short — and the answer carries those attestations,
+  the exactness that follows from them, the candidate-domain declaration each
+  stream fused under, and the ``evidence_id`` that is their content identity. An
+  absence there is an absence, never a certificate of wholeness.
 * **A misconfiguration raises where it is supplied**, carrying the engine's own
   diagnostic text — and a refusal never takes down the neighbouring request that
   is valid.
@@ -57,6 +65,16 @@ DATA = f"""
 """
 
 STATISTICS: dict[str, Any] = {"source": "host-statistics", "revision": "r1"}
+
+# The row bound the plan-and-compile fixtures ask for.
+#
+# `plan` and `compile` require it because it is a planning input: it decides how
+# deep each stratum is read wherever the producers' own `domains` make that sound.
+# This value is above anything the small fixture corpora hold, so the fixtures
+# below measure the depth the declarations and the statistics set rather than a
+# depth this number cut — the narrowing itself is measured where it is the subject,
+# in `test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum`.
+PLAN_TOP_K = 1024
 
 # The two decay rules, by the spelling the binding reads them under. Neither is
 # a default: they compute different contributions from the same weights and
@@ -130,6 +148,98 @@ def _counted_width(width: int | None) -> int:
     return width
 
 
+# The two blocks of the candidate universe the disjoint-corpus cases below
+# declare over. They are the HOST's tags, invented by these tests for their own
+# fixture, because which entities an index names is a fact about the corpus that
+# neither the engine nor the relation can see.
+NOTE_DOMAIN = f"{EX}domain/notes"
+TITLE_DOMAIN = f"{EX}domain/titles"
+
+# The seven spellings a terminal status may carry, and nothing else may appear.
+# Only the first is a completeness claim; the other six each name who stopped
+# the read and where.
+STATUS_SPELLINGS = frozenset(
+    {
+        "exhausted",
+        "depth_reached",
+        "row_bound_reached",
+        "supplied_query_ended",
+        "ceiling_reached",
+        "execution_failed",
+        "terms_rejected",
+    }
+)
+
+
+def _disjoint_corpus(rows: int = 40) -> str:
+    """A corpus whose two indexed predicates name entirely disjoint entities.
+
+    ``ex:n0..`` carry notes and nothing else, ``ex:t0..`` carry titles and
+    nothing else, so a producer over each really does draw from its own block
+    and the declaration these tests make about them is TRUE. Both fields hold
+    the same needle with varying term counts, so both producers rank every one
+    of their own entities and the scores separate.
+
+    It is deliberately far larger than a ``top_k`` of three: what a domain
+    declaration buys is visible only where a bounded read could stop early, and
+    over a three-document corpus every stream is exhausted before the question
+    arises.
+    """
+    notes = [
+        f'<{EX}n{i}> <{NOTE}> "quick {"fox " * (1 + i % 5)}note {i}" .'
+        for i in range(rows)
+    ]
+    titles = [
+        f'<{EX}t{i}> <{TITLE}> "quick {"hound " * (1 + i % 7)}title {i}" .'
+        for i in range(rows)
+    ]
+    return "\n".join(notes + titles)
+
+
+def _declared(
+    *entries: tuple[str, str, str, list[str] | None],
+) -> dict[str, tuple[Any, ...]]:
+    """``(producer, stratum, predicate, domains)`` as the engine's declaration map.
+
+    The four-element spelling of a ``text_producers`` value. ``domains`` of
+    ``None`` is the unrestricted promise — the same declaration the three-element
+    spelling makes — and a list restricts the producer to those blocks.
+    """
+    return {
+        producer: (stratum, predicate, "any", domains)
+        for producer, stratum, predicate, domains in entries
+    }
+
+
+def _emitted_limit(sparql: str) -> int:
+    """The row bound a compiled unit's own text carries, read off that text.
+
+    The unit's trailing ``LIMIT`` — the one bounding the whole ``SELECT``, not
+    any bound an inner call renders into its own arguments. It is read here so a
+    test can compare what the text is allowed to RETURN against the ``"depth"``
+    the unit says may be REPORTED; those two numbers differ by the probe row
+    wherever the producer's declaration left room for one.
+    """
+    found = re.search(r"LIMIT (\d+)\s*$", sparql)
+    assert found is not None, f"a compiled unit carries a trailing LIMIT: {sparql!r}"
+    return int(found.group(1))
+
+
+def _ranking(answer: dict[str, Any]) -> list[tuple[str, str, tuple[Any, ...]]]:
+    """An answer's rows, scores and provenance, as one comparable value."""
+    return [
+        (
+            row["entity"],
+            row["score"],
+            tuple(
+                (c["stratum"], c["rank"], c["contribution"])
+                for c in row["contributions"]
+            ),
+        )
+        for row in answer["rows"]
+    ]
+
+
 NOTE_ONLY = _producers((NOTE_PRODUCER, NOTE_STRATUM, NOTE))
 BOTH = _producers(
     (NOTE_PRODUCER, NOTE_STRATUM, NOTE),
@@ -183,6 +293,890 @@ def test_every_producer_reports_its_own_terminal_status() -> None:
     for stratum, status in statuses.items():
         assert status["status"] == "exhausted", stratum
         assert status["rows_emitted"] >= 1, stratum
+
+
+def test_an_answer_names_the_evidence_the_indexes_attested() -> None:
+    """The third identity, and the attestations it is the content identity of.
+
+    An answer carries three identities, and this is the one the other two cannot
+    stand in for: ``plan_id`` pins the question, ``profile_id`` pins the law, and
+    ``evidence_id`` pins the index generations that answered. Rebuilding an index
+    moves none of the fields a caller can otherwise see — not the dataset it
+    passed, not the request, not the registry fingerprint — so without this
+    there is no way to tell two answers assembled from different index states
+    apart. Two runs over the same corpus are the same evidence, and say so.
+
+    The shipped text producer attests the content fingerprint of the index that
+    answered: a digest of the configuration, the ranking law, the analyzer's
+    Unicode tables, the documents, the dictionary and every posting. It is
+    derived from content and never from a clock or a counter, so two runs over
+    one corpus agree on it and a corpus with one more document does not.
+    """
+    kwargs: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    first = retrieval.search(DATA, [_lexical("quick fox", NOTE)], **kwargs)
+    second = retrieval.search(DATA, [_lexical("quick fox", NOTE)], **kwargs)
+
+    attestation = first["attestations"][NOTE_STRATUM]
+    assert set(attestation) == {"generation", "incomplete"}
+    generation = attestation["generation"]
+    assert isinstance(generation, str) and generation, (
+        "the shipped text producer names the generation of the index that "
+        "answered, verbatim; an absence here would make two answers over two "
+        "index states indistinguishable"
+    )
+    assert len(generation) == 64 and all(c in "0123456789abcdef" for c in generation), (
+        f"a 32-byte content digest in lowercase hex, got {generation!r}"
+    )
+    assert first["attestations"] == second["attestations"], (
+        "the same index in the same state attests the same thing twice"
+    )
+
+    # Rebuilt with one more document: a row the earlier index could not return,
+    # and a corpus size every surviving row is scored against. The request, the
+    # producers, the weights and the law are identical, so the only thing that
+    # changed is the index — and the generation moves with it.
+    grown = retrieval.search(
+        DATA + f'<{EX}d> <{NOTE}> "another quick fox" .\n',
+        [_lexical("quick fox", NOTE)],
+        **kwargs,
+    )
+    reached = {row["entity"] for row in grown["rows"]}
+    assert f"<{EX}d>" in reached and reached != {
+        row["entity"] for row in first["rows"]
+    }, "the added document really is retrievable, so the returnable rows changed"
+    grown_generation = grown["attestations"][NOTE_STRATUM]["generation"]
+    assert grown_generation != generation, (
+        "an added document changes which rows can be returned, so it must "
+        "change the generation the producer attests"
+    )
+
+    assert len(first["evidence_id"]) == 64, "rendered like its two sibling ids"
+    assert first["evidence_id"] == second["evidence_id"], (
+        "two runs over one index state carry one evidence id"
+    )
+    assert grown["evidence_id"] != first["evidence_id"], (
+        "and two answers from two index states do not"
+    )
+    # And it is its own identity, not a restatement of the other two: the answer
+    # carries all three, and a reader compares the triple.
+    assert first["plan_id"] != first["evidence_id"]
+    assert first["profile_id"] != first["evidence_id"]
+
+
+def test_an_attestation_has_two_independently_absent_axes() -> None:
+    """Which generation answered and whether it was whole are separate facts.
+
+    They are two keys rather than one fused flag because they are separately
+    knowable and separately absent: a generation without a service level says
+    which index answered but not whether it was all there, and a service level
+    without a generation says an index was short without saying which one to
+    rebuild. Each is ``None`` on its own when its producer said nothing.
+
+    ``None`` under ``"incomplete"`` is the one that must never be read as good
+    news. There is no "whole" value for it to be the opposite of — a producer
+    stopped at the engine's row ceiling never looked at the rows it was licensed
+    to skip, so it could not certify wholeness even if it were asked — and the
+    seam therefore asks only the narrower question that has an honest answer on
+    every path: was your index NOT whole?
+    """
+    answer = retrieval.search(
+        DATA,
+        [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
+        text_producers=BOTH,
+        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )
+    assert set(answer["attestations"]) == {NOTE_STRATUM, TITLE_STRATUM}, (
+        "every stream fusion was handed attests, and nothing else is keyed"
+    )
+    for stratum, attestation in answer["attestations"].items():
+        assert set(attestation) == {"generation", "incomplete"}, stratum
+        for axis in ("generation", "incomplete"):
+            value = attestation[axis]
+            assert value is None or (isinstance(value, str) and value), (
+                f"{stratum}: {axis} is a verbatim string or an absence"
+            )
+
+    # Exactness is derived from exactly those attestations, and no producer here
+    # declared a short index — which is the narrow true thing, not a certificate
+    # that every index was whole.
+    assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
+
+
+# ── what only the HOST can attest about the index behind a producer ──────────
+#
+# The relation this surface builds indexes the document it was handed, so it can
+# attest which index answered — the content digest of that index — and nothing
+# else. Whether the corpus that document was assembled from was WHOLE is a fact
+# that never crosses this boundary in any other value: a corpus read out of a
+# search index mid-rebuild is the same document as one read out of a whole index.
+# Only the host knows, so a `text_producers` value may carry one trailing
+# `(generation, incompleteness)` attestation, in the same shape and with the same
+# refusals the SPARQL lane's relation declarations use.
+#
+# It is the FIFTH position, after an explicitly written `domains`, because a
+# four-element tail is already a domains list: `("a", "b")` is a well-formed
+# two-tag restriction and a well-formed attestation at once, and guessing which
+# the host meant would report one back as the other.
+
+#: The host's own name for the index version that produced a producer's rows.
+INDEX_GENERATION = "notes-index-7"
+
+#: The host's own reason its index was not whole, verbatim — a shard name and a
+#: phase, because that is what an operator can act on and ``True`` is not.
+REBUILDING = "shard 3 of 4 is still rebuilding"
+
+#: The fusion law and the request the attestation cases below all share, so the
+#: only thing that differs between any two of them is what a producer attested.
+ATTESTED_COMMON: dict[str, Any] = {
+    "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+    "statistics": STATISTICS,
+    "k": 60,
+    "decay": TRUNCATED,
+    "top_k": 10,
+}
+
+#: The request every attestation case runs, reaching both producers.
+ATTESTED_REQUEST = [_lexical("quick fox", NOTE), _lexical("quick", TITLE)]
+
+
+def _note_attesting(
+    attestation: tuple[str | None, str | None],
+) -> dict[str, tuple[Any, ...]]:
+    """``BOTH``, with only the note producer carrying the host's attestation.
+
+    The five-element spelling writes its ``domains`` position explicitly as
+    ``None`` — the unrestricted promise, which is the same declaration the
+    three-element title producer beside it makes — because the attestation is
+    the fifth position. Only one of the two attests, so every assertion below is
+    about a per-stratum fact rather than about a flag the answer carries once,
+    and the two widths in one dict are the proof that a producer which declares
+    nothing keeps its own reading.
+    """
+    return {
+        NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, attestation),
+        TITLE_PRODUCER: (TITLE_STRATUM, TITLE, "any"),
+    }
+
+
+def test_an_attested_incompleteness_makes_that_stratums_scores_lower_bounds() -> None:
+    """The host says its index was short, and the answer says so all the way down.
+
+    This is the whole point of the position: without it no producer this surface
+    registers can ever say it was short, so ``"exact"`` could only ever be
+    ``True`` and the ``"incomplete"`` key could only ever be ``None`` — a
+    structurally present receipt with no reachable content. With it, the reason
+    the host wrote arrives verbatim under the stratum that declared it, the
+    exactness derived from it names that stratum and no other, and the evidence
+    identity moves because the evidence did.
+
+    What does NOT change is the ranking. An attestation labels the bag; it never
+    reaches the rows, the scores or the provenance, and the run below is compared
+    against the identical one whose producers said nothing.
+    """
+    silent = retrieval.search(
+        DATA, ATTESTED_REQUEST, text_producers=BOTH, **ATTESTED_COMMON
+    )
+    short = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_note_attesting((None, REBUILDING)),
+        **ATTESTED_COMMON,
+    )
+
+    assert short["attestations"][NOTE_STRATUM]["incomplete"] == REBUILDING, (
+        "recorded verbatim: an operator acts on the shard and the phase, and "
+        "nothing here parses or summarises either"
+    )
+    assert short["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}, (
+        "every score in this answer is a LOWER BOUND on the score a whole index "
+        "would have produced, and the list names which index to rebuild"
+    )
+
+    # Per stratum, not per answer: the producer that said nothing still says
+    # nothing, and its silence is not upgraded to a shortfall by its neighbour's.
+    assert short["attestations"][TITLE_STRATUM]["incomplete"] is None
+    assert NOTE_STRATUM in short["exactness"]["lower_bounds_for"]
+    assert TITLE_STRATUM not in short["exactness"]["lower_bounds_for"]
+
+    # The rows are untouched — a short answer is still a real answer in this
+    # fusion's own certified order — and so is the generation the relation
+    # attests, because an axis the host left silent delegates to the relation.
+    assert _ranking(short) == _ranking(silent), (
+        "an attestation labels the answer and never changes it"
+    )
+    assert (
+        short["attestations"][NOTE_STRATUM]["generation"]
+        == silent["attestations"][NOTE_STRATUM]["generation"]
+    ), "declaring an incompleteness does not cost the index its own digest"
+
+    # And the third identity moved, because what the indexes attested moved —
+    # while the law it was fused under, which an attestation says nothing about,
+    # is the same content-addressed law it always was.
+    assert short["evidence_id"] != silent["evidence_id"]
+    assert short["profile_id"] == silent["profile_id"]
+
+
+def test_a_declared_generation_is_reported_and_is_not_a_shortfall() -> None:
+    """An absence is not a shortfall, and naming a version is not declaring one.
+
+    The two axes are independent, so a host that knows which version of its index
+    answered but has no reason to think it was short declares exactly that, and
+    the answer stays EXACT. Reading a named generation as a shortfall would be
+    the over-refusal mirror of the silent drop: nothing is wrong, and an answer
+    that called itself a lower bound would send an operator to rebuild an index
+    that was fine.
+
+    The generation the host names REPLACES the content digest the shipped
+    relation would otherwise attest, because exactly one generation is pinned per
+    invocation. That is asserted here rather than left to be discovered: a host
+    choosing its own spelling is choosing to identify the index by it.
+    """
+    silent = retrieval.search(
+        DATA, ATTESTED_REQUEST, text_producers=BOTH, **ATTESTED_COMMON
+    )
+    named = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_note_attesting((INDEX_GENERATION, None)),
+        **ATTESTED_COMMON,
+    )
+
+    assert named["attestations"][NOTE_STRATUM] == {
+        "generation": INDEX_GENERATION,
+        "incomplete": None,
+    }, "the host's own spelling, verbatim, and no shortfall declared beside it"
+    assert named["exactness"] == {"exact": True, "lower_bounds_for": []}, (
+        "naming which index answered says nothing about whether it was short"
+    )
+    assert _ranking(named) == _ranking(silent)
+
+    assert named["attestations"][NOTE_STRATUM]["generation"] != (
+        silent["attestations"][NOTE_STRATUM]["generation"]
+    ), "one generation is pinned per invocation, so the host's replaces the digest"
+    assert (
+        named["attestations"][TITLE_STRATUM]
+        == silent["attestations"][TITLE_STRATUM]
+    ), "the producer that declared nothing attests exactly what it always did"
+
+
+def test_a_producer_that_declares_no_attestation_is_unchanged() -> None:
+    """The valid neighbour: three widths, one answer, down to the evidence id.
+
+    A position that changed what a spec without it means would be a silent
+    migration of every host already using this surface. So the three-element
+    spelling, the four-element one with an explicit ``None`` domains, and the
+    five-element one attesting ``(None, None)`` must all be the same declaration
+    — silence — and must produce the same answer, the same attestations and the
+    same content identity for them.
+
+    ``(None, None)`` is the case that makes silence genuinely silence rather than
+    a third declaration with a meaning of its own.
+    """
+    omitted = retrieval.search(
+        DATA, ATTESTED_REQUEST, text_producers=BOTH, **ATTESTED_COMMON
+    )
+    unrestricted = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_declared(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, None),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+        ),
+        **ATTESTED_COMMON,
+    )
+    silent = retrieval.search(
+        DATA,
+        ATTESTED_REQUEST,
+        text_producers=_note_attesting((None, None)),
+        **ATTESTED_COMMON,
+    )
+
+    for answer in (unrestricted, silent):
+        assert _ranking(answer) == _ranking(omitted)
+        assert answer["attestations"] == omitted["attestations"]
+        assert answer["evidence_id"] == omitted["evidence_id"]
+        assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
+        assert answer["domains"] == omitted["domains"]
+
+    # And what a producer declares to the PLANNER is untouched by what it attests
+    # about its index, which is why the position can be read by all three entry
+    # points while only `search` reports it: an attestation names no arity, no
+    # mode and no ranked order, so the registry's durable content fingerprint is
+    # the same whether one is declared or not.
+    def _fingerprint(producers: dict[str, Any]) -> str:
+        planned = retrieval.plan(
+            DATA, ATTESTED_REQUEST, text_producers=producers, statistics=STATISTICS
+        ,
+            top_k=PLAN_TOP_K,
+)
+        return planned["registry_content_fingerprint"]
+
+    assert _fingerprint(_note_attesting((INDEX_GENERATION, REBUILDING))) == (
+        _fingerprint(BOTH)
+    )
+
+
+def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None:
+    """Each refusal, paired with the well-formed declaration one line away from it.
+
+    A refusal here is only evidence about what it excludes if the neighbouring
+    valid case is executed too — otherwise a shape check that swept up a legal
+    spelling would look exactly like correct strictness until a host wrote the
+    declaration that should work and did not. So every case below is a pair.
+    """
+    well_formed = _note_attesting((INDEX_GENERATION, REBUILDING))
+
+    def _search(producers: dict[str, Any]) -> dict[str, Any]:
+        return retrieval.search(
+            DATA, ATTESTED_REQUEST, text_producers=producers, **ATTESTED_COMMON
+        )
+
+    # The neighbour, first: the declaration all four refusals below are one
+    # mistake away from really does answer, and answers with both axes.
+    accepted = _search(well_formed)
+    assert accepted["attestations"][NOTE_STRATUM] == {
+        "generation": INDEX_GENERATION,
+        "incomplete": REBUILDING,
+    }
+    assert accepted["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}
+
+    # A member of the wrong type names the member, because both are recorded
+    # verbatim and neither has a spelling this binding could coerce one into.
+    with pytest.raises(TypeError, match="`generation` must be a str or None"):
+        _search(_note_attesting((7, REBUILDING)))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="`incompleteness` must be a str or None"):
+        _search(_note_attesting((INDEX_GENERATION, 7)))  # type: ignore[arg-type]
+
+    # A bare string in the fifth position is NOT destructured into its own two
+    # characters. `"ab"` extracts as a perfectly well-formed two-member sequence,
+    # so accepting it would have reported `generation="a"` back to an operator as
+    # though the host had said it. It is a shape error, like any other value in a
+    # position this spec does not have.
+    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+        _search({NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, "ab")})
+
+    # As is a sequence of the wrong width — three axes is not this declaration.
+    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+        _search(
+            {
+                NOTE_PRODUCER: (
+                    NOTE_STRATUM,
+                    NOTE,
+                    "any",
+                    None,
+                    (INDEX_GENERATION, REBUILDING, "extra"),
+                )
+            }
+        )
+
+    # And a value of the wrong number of positions altogether.
+    with pytest.raises(TypeError, match="an attestation is the fifth position"):
+        _search({NOTE_PRODUCER: (NOTE_STRATUM, NOTE)})
+
+    # The fourth position is `domains` and stays `domains`, even when what was
+    # written there would have been a well-formed attestation: the two are
+    # genuinely ambiguous at that width, and this binding refuses to guess. A
+    # host that wrote one there is told which list it landed in.
+    with pytest.raises(ValueError, match="domain tag"):
+        _search(
+            {NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", (INDEX_GENERATION, REBUILDING))}
+        )
+
+    # None of which disturbed the neighbouring producer or the next call: the
+    # same map, once more, with the same answer.
+    assert _ranking(_search(well_formed)) == _ranking(accepted)
+
+
+def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -> None:
+    """Three of the seven endings, executed — and the suite says which three those are.
+
+    ``"exhausted"`` says the producer emitted every row it had. The other six
+    each name who stopped the read: ``"depth_reached"`` the producer stopping at
+    the depth the plan gave it, ``"row_bound_reached"`` the producer stopping at
+    the row count it declared it can serve per invocation — a read whose ending
+    nobody could observe, because the row past it could not be asked for —
+    ``"ceiling_reached"`` a contribution bound (a
+    fusion the caller's ``top_k`` stopped writes this over the streams it
+    stopped), ``"supplied_query_ended"`` a unit running a query text the host
+    wrote rather than one the layer rendered — whose own internal bound the layer
+    cannot see, so what it left unread was not observable either —
+    ``"execution_failed"`` a producer that could not run at all, and
+    ``"terms_rejected"`` one that declined the terms it was handed. Reading any
+    of the other six as "that was all of it" is the mistake the seven spellings
+    exist to prevent.
+
+    What this test executes is ``"exhausted"``, ``"depth_reached"`` and
+    ``"ceiling_reached"``, and it claims nothing about the other four: they are
+    unreachable through this binding, not untested by oversight, and
+    ``py_retrieval.rs``'s header records why beside the refusals in the same
+    position. ``"row_bound_reached"`` needs a self-bounding producer — one whose
+    declaration places the depth as an argument the producer reads — and the one
+    relation this surface registers places none, so every stratum a Python host
+    can configure is bounded by the unit's own emitted ``LIMIT``.
+    ``"supplied_query_ended"`` needs a unit carrying a query text a caller wrote,
+    and this surface compiles every unit it runs and accepts no bundle from a
+    caller. ``"terms_rejected"`` is a receipt a producer writes for itself, and
+    ``"execution_failed"`` needs a unit whose text could not be prepared or run;
+    both belong to a host driving the Rust surface with a bundle of its own, and
+    none of the four can come out of a call that compiles its own units from a
+    text index.
+
+    The spellings are not asserted against the call's documentation. A docstring
+    that contains the word proves nothing about which string the mapping emits,
+    and would have passed with the mapping deleted. What is checked below is the
+    emitted value and the payload each spelling owes.
+    """
+    # ``"exhausted"``: a corpus small enough that this query drains it, so the
+    # producer really did emit every row it had.
+    exhausted = retrieval.search(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )["statuses"][NOTE_STRATUM]
+    assert exhausted["status"] == "exhausted"
+    assert exhausted["rows_emitted"] >= 1
+
+    # A measured cardinality bounds the planned depth, and the producer stops
+    # there with rows still beneath it — which is NOT a claim the rows ran out.
+    corpus = _disjoint_corpus()
+    bounded = retrieval.search(
+        corpus,
+        [_lexical("quick", NOTE)],
+        text_producers=NOTE_ONLY,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 2}},
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )["statuses"][NOTE_STRATUM]
+    assert bounded["status"] == "depth_reached"
+    assert bounded["rank"] == 2, "ranks one and two were read; nothing below was"
+
+    stopped = retrieval.search(
+        corpus,
+        [_lexical("quick", NOTE), _lexical("quick", TITLE)],
+        text_producers=_declared(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
+        ),
+        weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=3,
+    )["statuses"]
+    assert {entry["status"] for entry in stopped.values()} == {"ceiling_reached"}
+    for stratum, entry in stopped.items():
+        from decimal import Decimal
+
+        assert Decimal(entry["bound"]) > 0, stratum
+
+    # Whatever a status says, it says it with one of the seven spellings and with
+    # the payload that spelling owes — no aggregate flag, and no eighth word.
+    for entry in (exhausted, bounded, *stopped.values()):
+        assert entry["status"] in STATUS_SPELLINGS, entry
+        assert ("rows_emitted" in entry) == (entry["status"] == "exhausted"), (
+            "a row count is the completeness claim, and only it carries one"
+        )
+
+    # And the coverage this test does and does not have, stated rather than
+    # implied: exactly three endings came out of the three calls above. A fourth
+    # appearing is news — some registration this surface offers now reaches an
+    # ending the module header says it cannot — and a third going missing is a
+    # fixture that stopped exercising what it was written for.
+    reached = {entry["status"] for entry in (exhausted, bounded, *stopped.values())}
+    assert reached == {"exhausted", "depth_reached", "ceiling_reached"}, reached
+    assert reached < STATUS_SPELLINGS, (
+        "the seven spellings are the whole vocabulary, and this surface reaches "
+        "strictly fewer than all of them"
+    )
+
+
+def test_a_declared_domain_changes_the_reading_and_not_the_answer() -> None:
+    """The Python-visible proof that a declaration buys a read, not an answer.
+
+    Fusion certifies a candidate only when every stream that COULD still name it
+    has. With nothing declared, that is every open stream — so over two strata
+    whose candidate sets do not overlap, a top-three drains both, because the
+    confirmation it waits for is never coming. Telling fusion which blocks each
+    producer draws from lets it skip the streams that provably cannot name a
+    candidate, and only those: the finality test does not get weaker, its
+    quantifier gets smaller.
+
+    So the two runs below must agree on every row, every score and every
+    contribution, and disagree only on how far they read to get there. The
+    declaration is reported back on the answer, because it is an input the
+    answer cannot otherwise be audited against: it decides which streams fusion
+    was allowed to skip when it certified a row.
+    """
+    corpus = _disjoint_corpus()
+    request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 3,
+    }
+    undeclared = retrieval.search(corpus, request, text_producers=BOTH, **common)
+    declared = retrieval.search(
+        corpus,
+        request,
+        text_producers=_declared(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
+        ),
+        **common,
+    )
+
+    assert _ranking(declared) == _ranking(undeclared), (
+        "a declaration licenses a shorter read, and never a different answer"
+    )
+    assert len(declared["rows"]) == 3
+
+    # The reading is where they differ, and it differs in the direction the
+    # declaration promised.
+    assert any(
+        entry["status"] == "ceiling_reached" for entry in declared["statuses"].values()
+    ), "the declared run stopped at a bound instead of draining its streams"
+    assert all(
+        entry["status"] == "exhausted" for entry in undeclared["statuses"].values()
+    ), "with nothing declared there is no stream fusion may skip, so both drain"
+    for stratum in (NOTE_STRATUM, TITLE_STRATUM):
+        assert (
+            declared["observed_resolution"][stratum]["ranks_pulled"]
+            < undeclared["observed_resolution"][stratum]["ranks_pulled"]
+        ), stratum
+
+    # And the answer says whose word it was certified on.
+    assert declared["domains"] == {
+        NOTE_STRATUM: [NOTE_DOMAIN],
+        TITLE_STRATUM: [TITLE_DOMAIN],
+    }
+    assert undeclared["domains"] == {NOTE_STRATUM: None, TITLE_STRATUM: None}, (
+        "None is the widest promise — this producer may name anything — and it "
+        "is what every answer this engine produced before domains carried"
+    )
+
+    # The shorter read is still an exact one: nothing here attested a short
+    # index, so the scores are sums of every contribution that was due.
+    assert declared["exactness"] == {"exact": True, "lower_bounds_for": []}
+
+
+def test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum() -> None:
+    """The materialized read is flat in corpus size, not merely walked less far.
+
+    The defect this test exists for: a declaration used to buy a shorter walk of a
+    stream that had already been materialized in full. Fusion stopped early and
+    said so, and the compiled unit was still ``LIMIT <corpus>`` — so the elapsed
+    time of a top-five answer grew with the corpus while the instrument reported a
+    handful of ranks pulled. The bound arrived at ``fuse``, four stages after the
+    depth was chosen.
+
+    The bound is a planning input now, so the same ``top_k`` over a corpus and over
+    a corpus four times its size compiles to the SAME per-stratum ``LIMIT`` and
+    records the SAME depth. Both numbers are asserted, because either alone would
+    leave the defect expressible: a narrowed ``LIMIT`` beside an unnarrowed depth
+    is a plan recording a read nobody took, and an unnarrowed ``LIMIT`` beside a
+    narrowed depth is the corpus still being materialized.
+
+    And the answer does not move. At both sizes the bounded run's rows, scores and
+    provenance are identical to the draining run's — the run that reads every row
+    of every stream because nothing was declared. That is the soundness gate: a
+    depth rule that fired too eagerly would show up here as a truncated ranked
+    list, which is the mirror of the defect above and worse than it.
+    """
+    top_k = 5
+    disjoint = _declared(
+        (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+        (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
+    )
+    request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
+    law: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": top_k,
+    }
+
+    def compiled_bounds(rows: int) -> dict[str, tuple[int, int]]:
+        """Each stratum's recorded depth and the ``LIMIT`` its unit carries."""
+        compiled = retrieval.compile(
+            _disjoint_corpus(rows),
+            request,
+            text_producers=disjoint,
+            statistics=STATISTICS,
+            top_k=top_k,
+        )
+        return {
+            unit["stratum"]: (unit["depth"], _emitted_limit(unit["sparql"]))
+            for unit in compiled["units"]
+        }
+
+    small, large = compiled_bounds(400), compiled_bounds(1600)
+    assert small == large, (
+        "the materialized read is flat in corpus size, so neither the recorded "
+        f"depth nor the emitted LIMIT may move with it: {small} vs {large}"
+    )
+    assert small == {
+        NOTE_STRATUM: (top_k, top_k + 1),
+        TITLE_STRATUM: (top_k, top_k + 1),
+    }, (
+        "each stratum is read to the bound and no deeper, with the probe row one "
+        f"past it exactly as at any other depth: {small}"
+    )
+
+    # The answer is the same answer, at both sizes, as the run that drains
+    # everything. Nothing declared means no stream fusion may skip, so the
+    # undeclared run is the oracle here rather than a second engine.
+    for rows in (400, 1600):
+        corpus = _disjoint_corpus(rows)
+        bounded = retrieval.search(corpus, request, text_producers=disjoint, **law)
+        draining = retrieval.search(corpus, request, text_producers=BOTH, **law)
+        assert _ranking(bounded) == _ranking(draining), (
+            f"over {rows} rows per predicate a declaration licensed a shorter "
+            "read, and it must never license a different answer"
+        )
+        assert len(bounded["rows"]) == top_k
+
+        # And the reading really was flat, measured on the rows themselves: the
+        # draining run pulled its whole corpus per stratum, the bounded one pulled
+        # at most what its depth allowed.
+        for stratum in (NOTE_STRATUM, TITLE_STRATUM):
+            assert draining["observed_resolution"][stratum]["ranks_pulled"] == rows, (
+                "the undeclared run has no stream it may skip, so it reads to the "
+                "end of both"
+            )
+            assert bounded["observed_resolution"][stratum]["ranks_pulled"] <= top_k, (
+                stratum
+            )
+
+
+def test_an_unrestricted_or_overlapping_stratum_keeps_the_declared_depth() -> None:
+    """The neighbours the prefix rule must NOT fire on, and they are not refused.
+
+    The proof the prefix rests on needs one premise: each candidate has at most
+    one naming stratum, so its fused score is a single weighted contribution that
+    falls with rank. The producers' own declarations are what supply that premise,
+    and two shapes supply none of it — a stratum that says it may name anything,
+    and two strata that say they draw from the same block, where a candidate's
+    score is a SUM across both.
+
+    Neither is refused and neither answers differently. What they keep is the
+    depth, which is the declared-or-measured bound and exactly the depth every such
+    plan has always carried. Reading more than the answer needs is the safe
+    direction; reading less would truncate a ranked list with nothing saying so.
+    """
+    top_k = 5
+    rows = 40
+    corpus = _disjoint_corpus(rows)
+    request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
+
+    def depths(producers: dict[str, tuple[Any, ...]]) -> dict[str, int]:
+        compiled = retrieval.compile(
+            corpus, request, text_producers=producers, statistics=STATISTICS, top_k=top_k
+        )
+        return {unit["stratum"]: unit["depth"] for unit in compiled["units"]}
+
+    # The declared bound, read off the shape that licenses no prefix at all: both
+    # producers unrestricted, which is what every producer said before domains
+    # carried.
+    declared = depths(BOTH)
+    assert declared == {NOTE_STRATUM: rows, TITLE_STRATUM: rows}, (
+        "each producer's own index bounds it at the rows it holds"
+    )
+
+    # One unrestricted stratum beside one restricted one: the unrestricted one has
+    # made no promise about which candidates it will not name, so there is no
+    # premise and the bound stands for BOTH.
+    mixed = _declared(
+        (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+        (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+    )
+    assert depths(mixed) == declared, (
+        "an unrestricted stratum licenses no prefix, for itself or for its siblings"
+    )
+
+    # Two producers declaring the SAME block. Every candidate either could name is
+    # in a block both declared, so scores sum across strata and the merge argument
+    # has nothing to stand on.
+    overlapping = _declared(
+        (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+        (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [NOTE_DOMAIN]),
+    )
+    assert depths(overlapping) == declared, (
+        "declarations that meet license no prefix"
+    )
+
+    # And every one of them answers, identically. The depth is the only thing that
+    # moved anywhere in this family.
+    law: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": top_k,
+    }
+    widest = retrieval.search(corpus, request, text_producers=BOTH, **law)
+    for producers in (mixed, overlapping):
+        assert _ranking(
+            retrieval.search(corpus, request, text_producers=producers, **law)
+        ) == _ranking(widest), (
+            "a declaration changes how much is read, never what is returned"
+        )
+
+
+def test_an_empty_domain_declaration_is_refused_and_its_neighbours_are_not() -> None:
+    """An empty restriction is a promise to name nothing, and is refused by name.
+
+    It sits one line away from the unrestricted declaration and means the
+    opposite of it, so reading it as "no restriction" would be the silent repair
+    that registers a producer whose every row contradicts its own declaration.
+    The refusal names the producer that declared it, because a ``text_producers``
+    map holds several and the message has to say which one to fix.
+
+    Both neighbours are valid and both are checked here, which is the point of
+    the test: a refusal that also swept up ``None`` or a one-tag list would be
+    the mirror failure — strictness that reads as correctness until a host
+    writes the declaration that should work and does not.
+    """
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick fox", NOTE)]
+
+    with pytest.raises(ValueError, match=re.escape(NOTE_PRODUCER)) as refused:
+        retrieval.search(
+            DATA,
+            request,
+            text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, [])),
+            **common,
+        )
+    assert "empty list" in str(refused.value)
+
+    unrestricted = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)),
+        **common,
+    )
+    assert unrestricted["rows"], "None is a declaration, and a perfectly good one"
+    assert unrestricted["domains"] == {NOTE_STRATUM: None}
+
+    restricted = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN])),
+        **common,
+    )
+    assert _ranking(restricted) == _ranking(unrestricted)
+    assert restricted["domains"] == {NOTE_STRATUM: [NOTE_DOMAIN]}
+
+    # The three-element spelling is the same declaration as an explicit None, so
+    # a host that never heard of domains keeps exactly the answer it had.
+    omitted = retrieval.search(DATA, request, text_producers=NOTE_ONLY, **common)
+    assert _ranking(omitted) == _ranking(unrestricted)
+    assert omitted["domains"] == unrestricted["domains"]
+
+    # A tag that is not an IRI is refused where it is written, naming the tag.
+    with pytest.raises(ValueError, match="domain tag"):
+        retrieval.search(
+            DATA,
+            request,
+            text_producers=_declared(
+                (NOTE_PRODUCER, NOTE_STRATUM, NOTE, ["not an iri"])
+            ),
+            **common,
+        )
+
+
+def test_a_false_domain_declaration_is_refused_and_names_who_collided() -> None:
+    """A declaration is a promise, and the rows are checked against it.
+
+    A domain tag names a block of a PARTITION of the candidate universe, so a
+    candidate lies in exactly one block: two producers whose declarations put
+    one entity in blocks with nothing in common cannot both be telling the
+    truth about it. The consumer cannot know which of the two is wrong, so it
+    reports the contradiction rather than picking a side — and it cannot widen
+    the declaration silently instead, because the declaration has already been
+    USED: rows were certified early on the strength of it, and merging the late
+    contribution would hand back a score its own provenance contradicts.
+
+    The message names all three parties, and each answers a different question:
+    the item says what, the stratum says who broke its promise, and the stratum
+    that had already named the candidate says against whose declaration.
+
+    This is NOT a refusal of producers that overlap. The corpus here has one
+    entity in both indexed fields, and the neighbouring declarations that say so
+    — one shared tag, or none at all — fuse it into one row carrying both
+    contributions, which the second half of this test holds.
+    """
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
+
+    with pytest.raises(ValueError) as refused:
+        retrieval.search(
+            DATA,
+            request,
+            text_producers=_declared(
+                (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+                (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [TITLE_DOMAIN]),
+            ),
+            **common,
+        )
+    message = str(refused.value)
+    assert "declared candidate domains cannot reach" in message
+    assert NOTE_STRATUM in message and TITLE_STRATUM in message, (
+        "the refusal names the stratum that broke its promise AND the one whose "
+        "declaration it collided with; neither half is actionable alone"
+    )
+    assert f"<{EX}a>" in message, "and the candidate the two disagree about"
+
+    # The one-line fix, and the proof it is not over-refusal: producers that
+    # really do rank the same entities declare a tag they share, and fuse.
+    shared = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN]),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, [NOTE_DOMAIN]),
+        ),
+        **common,
+    )
+    both = [row for row in shared["rows"] if len(row["contributions"]) == 2]
+    assert both, "one entity holds both needles, and one row carries both ranks"
+
+    # …as do the same two producers declaring nothing at all, to the same answer.
+    assert _ranking(shared) == _ranking(
+        retrieval.search(DATA, request, text_producers=BOTH, **common)
+    )
 
 
 def test_a_term_no_producer_accepts_is_named_not_dropped() -> None:
@@ -285,10 +1279,14 @@ def test_the_registry_shape_is_durable_where_the_instance_is_not() -> None:
     request = [_lexical("quick fox", NOTE)]
     first = retrieval.plan(
         DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     second = retrieval.plan(
         DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     assert (
         first["registry_content_fingerprint"] == second["registry_content_fingerprint"]
     )
@@ -302,7 +1300,8 @@ def test_plan_reports_why_a_producer_was_not_selected() -> None:
         [_lexical("quick fox", NOTE)],
         text_producers=BOTH,
         statistics=STATISTICS,
-    )
+            top_k=PLAN_TOP_K,
+)
     decisions = {d["producer"]: d for d in planned["producer_decisions"]}
     assert decisions[NOTE_PRODUCER]["selected"] is True
     assert decisions[NOTE_PRODUCER]["stratum"] == NOTE_STRATUM
@@ -317,13 +1316,16 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
     request = [_lexical("quick fox", NOTE)]
     unbounded = retrieval.plan(
         DATA, request, text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     bounded = retrieval.plan(
         DATA,
         request,
         text_producers=NOTE_ONLY,
         statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
-    )
+            top_k=PLAN_TOP_K,
+)
     assert bounded["stratum_depths"][NOTE_STRATUM] == 1
     assert (
         bounded["stratum_depths"][NOTE_STRATUM]
@@ -338,21 +1340,128 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
 
 
 def test_compile_emits_the_sparql_each_stratum_runs() -> None:
-    """Admission's value is plain text a host can read, log, or run itself."""
+    """Admission's value is plain text a host can read, log, or run under an obligation.
+
+    The text is runnable, and running it is not the same as reporting its rows:
+    a unit is emitted exactly one row deeper than the plan reads, so a host that
+    executes the text itself keeps at most ``"depth"`` rows. The unit carries
+    that bound beside the text, which is the only reason the obligation is
+    dischargeable here — ``"planned_resolution"`` is empty on a call that names
+    no law, so it is no fallback source for the number.
+    """
     compiled = retrieval.compile(
         DATA,
         [_lexical("quick fox", NOTE)],
         text_producers=NOTE_ONLY,
         statistics=STATISTICS,
-    )
+            top_k=PLAN_TOP_K,
+)
     units = compiled["units"]
     assert len(units) == 1
     assert units[0]["stratum"] == NOTE_STRATUM
     assert '"quick fox"' in units[0]["sparql"], "the needle is a rendered constant"
     assert f"<{NOTE_PRODUCER}>" in units[0]["sparql"], "the unit calls the bound producer"
+    depth = units[0]["depth"]
+    assert isinstance(depth, int) and depth >= 1, (
+        "the reportable bound travels with the text it bounds"
+    )
+    assert _emitted_limit(units[0]["sparql"]) == depth + 1, (
+        "the emitted bound is the depth plus the one probe row, at every depth: a "
+        "text bounded at exactly the depth could not tell an exhausted producer "
+        "from a read the depth cut short"
+    )
     assert compiled["plan_id"] == compiled["plan"]["plan_id"]
     assert compiled["planned_resolution"] == {}, (
         "resolution is measured against a fusion law, and this call named none"
+    )
+
+
+def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> None:
+    """The emitted ``LIMIT`` is not the reportable bound, and the unit says both.
+
+    A text bounded at exactly the depth cannot tell the two endings apart that
+    a consumer has to distinguish: a producer that ran out of rows, and a read
+    the planned depth cut short. So wherever the producer's declared row bound
+    leaves room, the unit is emitted one row deeper and that last row is a
+    probe — a READ and never a value. Here a measured cardinality lowers the
+    depth below what the producer declared, which is exactly the room the probe
+    needs, so the emitted ``LIMIT`` is ``depth + 1`` while ``"depth"`` stays the
+    number of rows a host may keep.
+
+    That room is asserted rather than assumed — ``"declared_rows"`` strictly above
+    ``"depth"`` — because it is the only thing separating this case from the one
+    its sibling covers, where the depth has reached the declaration.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
+            top_k=PLAN_TOP_K,
+)
+    unit = compiled["units"][0]
+    assert unit["depth"] == 1, "the host's measurement lowered the depth to one row"
+    assert unit["declared_rows"] > unit["depth"], (
+        "the room the probe row needs, read off the declaration the unit carries: "
+        f"declared {unit['declared_rows']}, depth {unit['depth']}"
+    )
+    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+        "the extra row is the probe, and a host that runs this text reports "
+        "only the first `depth` rows"
+    )
+
+
+def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> None:
+    """The emitted ``LIMIT`` is one past the depth even here, and that is the point.
+
+    With no statistic to narrow it, the depth is already the producer's whole
+    declared row bound. A read that stopped exactly there could not tell a producer
+    that ran out from one the bound cut, so it would report the strongest
+    completeness claim this layer has on the strength of a number nobody checked.
+    The unit asks for one row more instead: if that row arrives the producer
+    contradicted its own registration and the read is refused by name, and if it
+    does not, the exhaustion is verified rather than believed.
+
+    The extra row lives in the ``LIMIT`` only — a ceiling the evaluator applies to
+    a cursor the producer never hears about, so probing costs nothing. A producer
+    that reads a depth argument is never asked to exceed what it registered.
+
+    The bound a host may report is still ``"depth"`` and never the text's
+    ``LIMIT``, which is now always the larger of the two.
+
+    The premise is the whole test, so it is asserted and not assumed: the
+    ``"declared_rows"`` the unit carries must EQUAL its ``"depth"`` here. Without
+    that, this configuration would be an ordinary one with room to spare — its
+    sibling's case under a second name — and a bound wrongly capped at the
+    declaration would sail through, because such a cap only ever bites where the
+    depth has arrived at the declaration.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+            top_k=PLAN_TOP_K,
+)
+    unit = compiled["units"][0]
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+            top_k=PLAN_TOP_K,
+)
+    assert unit["depth"] == planned["stratum_depths"][NOTE_STRATUM], (
+        "the unit reports the depth the plan recorded, not a number of its own"
+    )
+    assert unit["declared_rows"] == unit["depth"], (
+        "this test's premise: no statistic narrowed the depth, so it has risen to "
+        "the producer's whole declared row bound and there is no room under it — "
+        f"declared {unit['declared_rows']}, depth {unit['depth']}"
+    )
+    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+        "the probe slot exists even on the declaration, so exhaustion is checked "
+        "rather than assumed"
     )
 
 
@@ -372,7 +1481,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     planned = compiled["planned_resolution"][NOTE_STRATUM]
     assert planned["fully_separated"] is True, (
         "a whole unit of weight separates every rank this plan reads"
@@ -398,7 +1508,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: sufficient - 1},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     coarse_planned = coarse["planned_resolution"][NOTE_STRATUM]
     assert coarse_planned["requested_depth"] == depth
     assert coarse_planned["fully_separated"] is False, (
@@ -417,7 +1528,8 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         weights={NOTE_STRATUM: sufficient},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert exact["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
 
@@ -440,11 +1552,14 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
             [_lexical("quick fox", NOTE)],
             weights={NOTE_STRATUM: retrieval.SCALE},
             **common,
-        )
+                    top_k=PLAN_TOP_K,
+)
     with pytest.raises(ValueError, match="smoothing constant"):
         retrieval.compile(
             DATA, [_lexical("quick fox", NOTE)], k=60, decay=TRUNCATED, **common
-        )
+        ,
+            top_k=PLAN_TOP_K,
+)
     # Two thirds of a law is still not a law, and the message names the third
     # that is missing rather than choosing one.
     with pytest.raises(ValueError, match=r"left the `decay` rule unnamed"):
@@ -454,7 +1569,8 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
             weights={NOTE_STRATUM: retrieval.SCALE},
             k=60,
             **common,
-        )
+                    top_k=PLAN_TOP_K,
+)
 
     # All three together are a law, and the same call answers.
     whole = retrieval.compile(
@@ -464,12 +1580,13 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
         k=60,
         decay=TRUNCATED,
         **common,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert whole["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
     # Naming NONE of the three is not a refusal: it compiles without a law and
     # is simply told nothing about resolution.
-    lawless = retrieval.compile(DATA, [_lexical("quick fox", NOTE)], **common)
+    lawless = retrieval.compile(DATA, [_lexical("quick fox", NOTE)], **common, top_k=PLAN_TOP_K)
     assert lawless["planned_resolution"] == {}
     assert lawless["units"], "a call that names no law is still a compiled plan"
 
@@ -513,7 +1630,8 @@ def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
         decay=TRUNCATED,
-    )
+            top_k=PLAN_TOP_K,
+)
     assert compiled["planned_resolution"] == answer["planned_resolution"]
 
 
@@ -522,7 +1640,9 @@ def test_no_producer_is_refused_by_name() -> None:
     with pytest.raises(ValueError, match="no ranked producers"):
         retrieval.plan(
             DATA, [_lexical("quick fox", NOTE)], text_producers={}, statistics=STATISTICS
-        )
+        ,
+            top_k=PLAN_TOP_K,
+)
 
 
 def test_statistics_must_name_their_own_revision() -> None:
@@ -533,7 +1653,8 @@ def test_statistics_must_name_their_own_revision() -> None:
             [_lexical("quick fox", NOTE)],
             text_producers=NOTE_ONLY,
             statistics={"source": "host-statistics"},
-        )
+                    top_k=PLAN_TOP_K,
+)
 
 
 def test_a_float_weight_is_refused_and_an_exact_one_is_not() -> None:
@@ -568,7 +1689,9 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
     with pytest.raises(ValueError, match="partition"):
         retrieval.plan(
             tagged, [_lexical("quick", NOTE)], text_producers=NOTE_ONLY, statistics=STATISTICS
-        )
+        ,
+            top_k=PLAN_TOP_K,
+)
 
     # The neighbouring valid case: one language is one partition, and it answers.
     one_language = (
@@ -577,8 +1700,27 @@ def test_a_multi_partition_index_refuses_to_claim_a_ranking() -> None:
     )
     planned = retrieval.plan(
         one_language, [_lexical("quick", NOTE)], text_producers=NOTE_ONLY, statistics=STATISTICS
-    )
+    ,
+        top_k=PLAN_TOP_K,
+)
     assert planned["producer_bindings"], "a single-partition index declares a ranked order"
+
+    # …and the declaration is worth having: the whole ladder runs over it and both
+    # documents holding the needle come back ranked. "It planned" alone would be
+    # satisfied by a declaration nothing could execute.
+    answer = retrieval.search(
+        one_language,
+        [_lexical("quick", NOTE)],
+        text_producers=NOTE_ONLY,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        decay=TRUNCATED,
+        top_k=10,
+    )
+    assert sorted(row["entity"] for row in answer["rows"]) == [f"<{EX}a>", f"<{EX}b>"], (
+        "one partition, one ranking, and every document holding the needle in it"
+    )
 
 
 def test_an_unknown_request_kind_names_what_is_accepted() -> None:
@@ -589,7 +1731,8 @@ def test_an_unknown_request_kind_names_what_is_accepted() -> None:
             [("keyword", "quick fox", None, NOTE)],
             text_producers=NOTE_ONLY,
             statistics=STATISTICS,
-        )
+                    top_k=PLAN_TOP_K,
+)
 
 
 def test_an_unknown_graph_selector_names_what_is_accepted() -> None:
@@ -600,7 +1743,8 @@ def test_an_unknown_graph_selector_names_what_is_accepted() -> None:
             [_lexical("quick fox", NOTE)],
             text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every")},
             statistics=STATISTICS,
-        )
+                    top_k=PLAN_TOP_K,
+)
 
 
 def test_the_folded_rule_reaches_every_number_in_the_answer() -> None:
@@ -1123,3 +2267,358 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
             f"{decay}, raw {raw}: the reported depth is never the one a "
             "'separated from both neighbours' reading would predict"
         )
+
+
+# ── the declarations a call is assembled from ──────────────────────────────────
+
+
+def test_the_planned_resolution_reports_the_depth_the_plan_itself_recorded() -> None:
+    """The cost is quoted against the depth this plan records, not one of its own.
+
+    ``planned_resolution`` answers "what will this plan cost", so the depth it
+    prices has to be the depth recorded beside it. A resolution derived from some
+    other number — the producer's declared bound, say, or a fresh re-derivation —
+    would be a true statement about a plan that is not the one being compiled, and
+    the two agree on a small fixture often enough that nothing would look wrong.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        k=60,
+        decay=TRUNCATED,
+            top_k=PLAN_TOP_K,
+)
+    assert (
+        compiled["planned_resolution"][NOTE_STRATUM]["requested_depth"]
+        == compiled["plan"]["stratum_depths"][NOTE_STRATUM]
+    ), "the evidence names the depth the plan recorded"
+
+    # And it follows the plan when the plan moves: a measured cardinality lowers
+    # the recorded depth, and the priced depth goes with it.
+    bounded = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "cardinality": {NOTE_STRATUM: 1}},
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        k=60,
+        decay=TRUNCATED,
+            top_k=PLAN_TOP_K,
+)
+    assert bounded["plan"]["stratum_depths"][NOTE_STRATUM] == 1
+    assert bounded["planned_resolution"][NOTE_STRATUM]["requested_depth"] == 1
+    assert (
+        bounded["planned_resolution"][NOTE_STRATUM]["requested_depth"]
+        < compiled["planned_resolution"][NOTE_STRATUM]["requested_depth"]
+    ), "the priced depth moved with the plan rather than staying put"
+
+
+def test_a_non_positive_weight_is_refused_naming_the_stratum() -> None:
+    """A weight of zero or less orders nothing, and the refusal says whose.
+
+    A weight is a stratum's share of every fused score. Zero contributes nothing
+    at any rank, so a stratum weighted zero is a stream read and discarded — and a
+    negative weight orders the ranking backwards. Neither is a weight, and a
+    ``weights`` map holds several, so the message names the one to fix.
+
+    The neighbouring positive weights are executed here because "positive" reaches
+    all the way down to one raw unit: an implementation that refused anything it
+    considered too small to matter would be discarding exactly the low-weight
+    strata a host tunes by hand.
+    """
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick fox", NOTE)]
+
+    for refused_weight in (0, -1, -retrieval.SCALE):
+        with pytest.raises(ValueError, match="non-positive weight") as refused:
+            retrieval.search(DATA, request, weights={NOTE_STRATUM: refused_weight}, **common)
+        assert NOTE_STRATUM in str(refused.value), (
+            f"the refusal names the stratum whose weight was rejected: {refused.value}"
+        )
+
+    # The neighbouring valid weights, down to the smallest positive one there is.
+    for accepted in (1, retrieval.SCALE // 2, retrieval.SCALE, 1000 * retrieval.SCALE):
+        answer = retrieval.search(DATA, request, weights={NOTE_STRATUM: accepted}, **common)
+        assert answer["rows"], f"a raw weight of {accepted} is a weight and answers"
+
+
+def test_every_graph_selector_spelling_selects_a_different_reading() -> None:
+    """``"any"``, ``"default"`` and a graph IRI are three readings of one corpus.
+
+    A selector accepted and then ignored is the failure this catches, and it needs
+    a corpus where the three disagree: one row in a named graph and one in the
+    default graph, so ``"default"`` reaches exactly the second, the graph IRI
+    reaches exactly the first, and each is the wrong answer for the other. A
+    single-graph fixture makes all three identical.
+
+    ``"any"`` is the third reading and is exercised over a single-graph corpus,
+    because a graph is a partition of the index and a rank is computed within one
+    partition — so ``"any"`` over two graphs cannot honestly declare a ranking at
+    all, which is the neighbouring refusal held below.
+    """
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+        "data_format": "nquads",
+    }
+    request = [_lexical("quick fox", NOTE)]
+    named_graph = f"{EX}g"
+    split = (
+        f'<{EX}a> <{NOTE}> "the quick brown fox" <{named_graph}> .\n'
+        f'<{EX}b> <{NOTE}> "a quick red fox" .\n'
+    )
+
+    def _entities(selector: str, corpus: str) -> list[str]:
+        answer = retrieval.search(
+            corpus,
+            request,
+            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, selector)},
+            **common,
+        )
+        return [row["entity"] for row in answer["rows"]]
+
+    assert _entities("default", split) == [f"<{EX}b>"], (
+        "the default graph holds ex:b and nothing else"
+    )
+    assert _entities(named_graph, split) == [f"<{EX}a>"], (
+        "and the named graph holds ex:a — so the selector really routes"
+    )
+
+    # "any" over ONE graph is the widest reading and reaches both rows.
+    one_graph = (
+        f'<{EX}a> <{NOTE}> "the quick brown fox" <{named_graph}> .\n'
+        f'<{EX}b> <{NOTE}> "a quick red fox" <{named_graph}> .\n'
+    )
+    assert sorted(_entities("any", one_graph)) == [f"<{EX}a>", f"<{EX}b>"]
+
+    # A fourth spelling is refused naming what a selector may be — and the
+    # refusal names the producer that carried it, since a map holds several.
+    with pytest.raises(ValueError, match="unknown graph selector") as refused:
+        retrieval.search(
+            split,
+            request,
+            text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every")},
+            **common,
+        )
+    message = str(refused.value)
+    assert NOTE_PRODUCER in message, message
+    for accepted in ('"any"', '"default"'):
+        assert accepted in message, f"the refusal names {accepted}: {message}"
+
+
+def test_each_data_format_name_routes_the_document_and_an_unknown_one_is_refused() -> None:
+    """Three document syntaxes, named, with no default beyond ``"turtle"``.
+
+    Each is proved by syntax only its own codec reads, so a name routed to the
+    wrong codec fails on its own document rather than being masked by a grammar
+    that happens to accept both.
+    """
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick fox", NOTE)]
+    turtle = f'PREFIX ex: <{EX}> ex:a ex:note "the quick brown fox" .\n'
+    ntriples = f'<{EX}a> <{NOTE}> "the quick brown fox" .\n'
+    nquads = f'<{EX}a> <{NOTE}> "the quick brown fox" <{EX}g> .\n'
+
+    for document, data_format in (
+        (turtle, "turtle"),
+        (ntriples, "ntriples"),
+        (nquads, "nquads"),
+    ):
+        answer = retrieval.search(document, request, data_format=data_format, **common)
+        assert [row["entity"] for row in answer["rows"]] == [f"<{EX}a>"], data_format
+
+    # …and each syntax the others cannot read is refused, so the three above are
+    # routing rather than one lenient grammar read three times.
+    with pytest.raises(ValueError):
+        retrieval.search(nquads, request, data_format="ntriples", **common)
+    with pytest.raises(ValueError):
+        retrieval.search(turtle, request, data_format="nquads", **common)
+
+    with pytest.raises(ValueError, match="unknown data format") as refused:
+        retrieval.search(ntriples, request, data_format="trix", **common)
+    message = str(refused.value)
+    for accepted in ('"turtle"', '"ntriples"', '"nquads"'):
+        assert accepted in message, f"the refusal names {accepted}: {message}"
+
+
+def test_every_partial_fusion_law_names_what_arrived_and_what_did_not() -> None:
+    """All six proper subsets of the three, each told apart from the others.
+
+    A law is ``weights``, ``k`` and ``decay`` together. There are six ways to name
+    some and not the rest, and a refusal that described them with one sentence
+    would be useless in exactly the case a caller needs it: they wrote two of the
+    three and cannot see which one is missing. So each message is checked to name
+    the parts that arrived AND the parts that did not, and the two lists are
+    checked against each other — a message that named all three on both sides
+    would match either half alone.
+    """
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "statistics": STATISTICS,
+    }
+    request = [_lexical("quick fox", NOTE)]
+    weights = {NOTE_STRATUM: retrieval.SCALE}
+    labels = {
+        "weights": "`weights`",
+        "k": "the smoothing constant `k`",
+        "decay": "the `decay` rule",
+    }
+    whole = {"weights": weights, "k": 60, "decay": TRUNCATED}
+
+    # The three parts in the order the message lists them, so an expectation can
+    # be derived rather than transcribed six times.
+    order = ("weights", "k", "decay")
+    for supplied in (
+        ("weights",),
+        ("k",),
+        ("decay",),
+        ("weights", "k"),
+        ("weights", "decay"),
+        ("k", "decay"),
+    ):
+        absent = tuple(part for part in order if part not in supplied)
+        with pytest.raises(ValueError) as refused:
+            retrieval.compile(
+                DATA, request, **{part: whole[part] for part in supplied}, **common
+            ,
+                top_k=PLAN_TOP_K,
+)
+        message = str(refused.value)
+        arrived = " and ".join(labels[part] for part in order if part in supplied)
+        missing = " and ".join(labels[part] for part in absent)
+        assert f"named {arrived}, and left {missing} unnamed" in message, (
+            f"supplied {supplied}: {message}"
+        )
+
+    # The two neighbouring cases that are NOT refusals: all three name a law, and
+    # none of them names no law — which is compiled without one, not refused.
+    named = retrieval.compile(DATA, request, **whole, **common, top_k=PLAN_TOP_K)
+    assert named["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
+    lawless = retrieval.compile(DATA, request, **common, top_k=PLAN_TOP_K)
+    assert lawless["planned_resolution"] == {}
+    assert lawless["units"], "a call that names no law is still a compiled plan"
+
+
+def test_a_several_block_declaration_is_refused_where_it_is_registered() -> None:
+    """A restriction no row can back is refused at registration, not at row one.
+
+    A one-block declaration needs nothing per row: it has already said where every
+    candidate of this producer lies, so a consumer reads the block off the
+    declaration. A SEVERAL-block declaration says only that the candidates lie
+    somewhere in the set, which obliges the producer to say which block each row
+    came from — and neither ranked relation this surface can build declares a
+    column such a block could be read out of, because a domain tag describes how a
+    host's corpora partition and only the host knows that.
+
+    So a several-block list from Python is unsatisfiable by construction, and the
+    fusion used to say so at the first row it pulled: a registration-time defect
+    reported as a query-time failure, after the plan, the compile and the first
+    read had all been paid for. It is refused where the caller wrote it instead,
+    naming the producer and the three exits that do work.
+
+    The blocks are quoted in canonical order, not the host's. A declaration is a
+    SET, so the order it was written in carries no information and must not reach
+    anything a reader compares: two hosts that named the same two blocks in
+    different orders named the same declaration and read the same refusal.
+
+    The valid neighbours are held below — one tag, one tag written twice, and
+    `None` — and that the one-tag declaration still shortens the read it bounds
+    is held by ``test_a_declared_domain_changes_the_reading_and_not_the_answer``.
+    """
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick fox", NOTE)]
+    assert NOTE_DOMAIN < TITLE_DOMAIN, "canonical order is over the tag IRIs"
+
+    for declared in ([NOTE_DOMAIN, TITLE_DOMAIN], [TITLE_DOMAIN, NOTE_DOMAIN]):
+        with pytest.raises(ValueError, match=re.escape(NOTE_PRODUCER)) as refused:
+            retrieval.search(
+                DATA,
+                request,
+                text_producers=_declared(
+                    (NOTE_PRODUCER, NOTE_STRATUM, NOTE, declared)
+                ),
+                **common,
+            )
+        message = str(refused.value)
+        assert "names 2 blocks" in message, message
+        assert f"[<{NOTE_DOMAIN}>, <{TITLE_DOMAIN}>]" in message, (
+            f"declared as {declared}, reported canonically: {message}"
+        )
+        # The exits, because a refusal a caller cannot act on is only a stop.
+        assert "exactly ONE domain tag" in message
+        assert "one producer per block" in message
+        assert "`domains=None`" in message
+
+    # It is refused before anything is planned, so the cheapest stage sees it too
+    # — a host that never calls `search` still learns at the same point.
+    with pytest.raises(ValueError, match="names 2 blocks"):
+        retrieval.plan(
+            DATA,
+            request,
+            text_producers=_declared(
+                (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN, TITLE_DOMAIN])
+            ),
+            statistics=STATISTICS,
+                    top_k=PLAN_TOP_K,
+)
+
+    # ── the valid neighbours, which is the point of the test ──────────────────
+    # One block leaves nothing to disambiguate, so it registers AND still bounds
+    # the read: the refusal above is about the ambiguity, not about declaring
+    # domains at all.
+    restricted = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN])),
+        **common,
+    )
+    assert restricted["domains"] == {NOTE_STRATUM: [NOTE_DOMAIN]}
+    assert restricted["rows"]
+
+    # A list that spells one block twice names ONE block, so the count that
+    # decides is taken over the set and not over the list the host wrote.
+    repeated = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, [NOTE_DOMAIN, NOTE_DOMAIN])
+        ),
+        **common,
+    )
+    assert repeated["domains"] == {NOTE_STRATUM: [NOTE_DOMAIN]}
+    assert _ranking(repeated) == _ranking(restricted)
+
+    # And `None` — the widest promise — registers exactly as it always did.
+    unrestricted = retrieval.search(
+        DATA,
+        request,
+        text_producers=_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)),
+        **common,
+    )
+    assert unrestricted["domains"] == {NOTE_STRATUM: None}
+    assert _ranking(unrestricted) == _ranking(restricted)

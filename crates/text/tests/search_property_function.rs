@@ -21,6 +21,7 @@
 //! namespace of its own — which is exactly what the three configuration cases at
 //! the bottom of this file are here to demonstrate.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
@@ -28,9 +29,13 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry, QueryOptions,
+    IndexGeneration, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions,
 };
-use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
+use purrdf_text::{
+    Fixed, GraphSelector, RankingField, RankingProfile, TextIndex, TextIndexConfig,
+    TextSearchRelation,
+};
 
 /// The caller-supplied predicate this host calls ranked retrieval by.
 const SEARCH: &str = "http://example.org/pf#search";
@@ -813,5 +818,338 @@ fn an_arity_mismatch_at_the_call_site_is_an_error() {
     assert!(
         message.contains("supplies 1 subject / 2 object"),
         "got {message}"
+    );
+}
+
+// ── the generation the producer attests ──────────────────────────────────────
+
+/// The `?score` column of a ranked answer, so a claim that two index states
+/// answer DIFFERENTLY is an observation rather than an inference from a digest.
+fn scores(rows: &[Vec<String>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| row.last().cloned().expect("every ranked row has a score"))
+        .collect()
+}
+
+/// The one query every generation test below drives, selecting the score so the
+/// rows can be compared as well as counted.
+fn generation_query() -> String {
+    format!(
+        "SELECT ?doc ?score WHERE {{ ?doc <{SEARCH}> ( \"quick brown\" ?score ?rank ?lang ?matched ) }}"
+    )
+}
+
+/// The set of generations the relation registered at [`SEARCH`] attested while
+/// answering `query`, read off the receipt of the governed entry.
+///
+/// Nothing here opens a cursor either. The attestation is taken by the
+/// evaluator immediately after it opens one and is carried out on the governed
+/// outcome's relation identity, which is the surface a host actually reads —
+/// exactly the seam the rest of this file insists on driving.
+fn attested_generations(
+    dataset: &RdfDataset,
+    registry: &PropertyFunctionRegistry,
+    query: &str,
+) -> BTreeSet<IndexGeneration> {
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query_with_options(
+            query,
+            None,
+            QueryOptions {
+                property_functions: registry,
+                ..QueryOptions::EMPTY
+            },
+        )
+        .expect("the query prepares against the registry");
+    let outcome = engine
+        .query_prepared_governed_view(
+            dataset,
+            &prepared,
+            &[],
+            QueryOptions {
+                property_functions: registry,
+                ..QueryOptions::EMPTY
+            },
+            &QueryGovernors::UNBOUNDED,
+        )
+        .expect("a governed run of a valid query is an outcome, never an error");
+    outcome
+        .relations()
+        .witness
+        .get(SEARCH)
+        .expect("the relation this query invoked must appear on the receipt")
+        .generations
+        .clone()
+}
+
+/// The single generation `index` attests for the shared needle query, with the
+/// rows it answered with.
+///
+/// Both come back together because every assertion below is about the pair: a
+/// generation that moved is only interesting beside what moved with it.
+fn generation_and_rows(dataset: &RdfDataset, index: Arc<TextIndex>) -> (String, Vec<Vec<String>>) {
+    let registry = registry_of(SEARCH, index);
+    let query = generation_query();
+    let rows = answer(dataset, &registry, &query);
+    let mut attested = attested_generations(dataset, &registry, &query);
+    assert_eq!(
+        attested.len(),
+        1,
+        "one index answered, so one generation was attested: {attested:?}"
+    );
+    match attested.pop_first().expect("checked non-empty above") {
+        IndexGeneration::Declared(value) => (value.to_string(), rows),
+        IndexGeneration::Undeclared => panic!(
+            "the shipped ranked producer must declare the generation of the index that \
+             answered; an undeclared generation makes two answers over two index states \
+             indistinguishable"
+        ),
+    }
+}
+
+/// The corpus the generation tests are built over: four documents of DIFFERENT
+/// lengths, so the length-normalization coefficient `b` is a parameter that
+/// actually moves a score here. The equal-length golden corpus would leave
+/// every score identical under every `b`, and the ranking-law case below would
+/// then prove nothing.
+fn uneven_rows() -> Vec<(
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+)> {
+    vec![
+        ("d1", NOTE, "quick quick brown fox", None),
+        ("d2", NOTE, "quick brown", None),
+        (
+            "d3",
+            NOTE,
+            "quick brown fox jumps over a lazy dog today",
+            None,
+        ),
+        ("d4", NOTE, "river stone bridge path", None),
+    ]
+}
+
+/// T8.1 — the generation is a content identity of the index: two independent
+/// builds over the same rows attest the same one, and one more document moves
+/// it.
+///
+/// This is the property that makes the value worth carrying at all. If two
+/// builds of one corpus disagreed, every receipt would disagree with every
+/// other one and a reader could conclude nothing from a comparison; if an added
+/// document did NOT move it, an answer from a stale index would be reported as
+/// the same evidence as an answer from the current one, which is the silent
+/// failure the attestation exists to prevent.
+#[test]
+fn two_builds_of_one_corpus_attest_one_generation_and_a_new_document_moves_it() {
+    let rows = uneven_rows();
+    let dataset = dataset_of(&rows);
+    let config = config_over(&[NOTE]);
+
+    let first =
+        Arc::new(TextIndex::from_dataset(&*dataset, &config).expect("the fixture corpus indexes"));
+    let second = Arc::new(
+        TextIndex::from_dataset(&*dataset, &config).expect("the fixture corpus indexes twice"),
+    );
+    let (left, left_rows) = generation_and_rows(&dataset, first);
+    let (right, right_rows) = generation_and_rows(&dataset, second);
+
+    assert_eq!(
+        left, right,
+        "two independent builds over the same rows are the same index generation"
+    );
+    assert_eq!(
+        left_rows, right_rows,
+        "and they answer identically, which is what makes the shared generation true"
+    );
+    assert_eq!(left.len(), 64, "a 32-byte digest rendered as hex");
+    assert!(
+        left.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "rendered in lowercase hex, like every other digest this workspace ships: {left}"
+    );
+
+    // One more matching document: a row the earlier index could not return, and
+    // a corpus size every surviving row's score is computed against.
+    let mut grown = rows;
+    grown.push(("d5", NOTE, "quick brown fox", None));
+    let grown_dataset = dataset_of(&grown);
+    let grown_index = Arc::new(
+        TextIndex::from_dataset(&*grown_dataset, &config).expect("the grown corpus indexes"),
+    );
+    let (after, after_rows) = generation_and_rows(&grown_dataset, grown_index);
+
+    assert_ne!(
+        left, after,
+        "adding a retrievable document changes which rows can be returned, so it must \
+         change the attested generation"
+    );
+    assert_ne!(
+        left_rows, after_rows,
+        "and the rows really did change, so the moved generation is reporting a real \
+         difference rather than an incidental one"
+    );
+}
+
+/// T8.1, the neighbour the chosen fingerprint implies: the SAME rows under a
+/// different ranking law are a different generation.
+///
+/// This is the case that decides between `TextIndex::fingerprint` and
+/// `TextIndex::source_fingerprint`. The source rows are byte-identical across
+/// the two indexes below — a digest of the data under the index cannot tell
+/// them apart — yet every score the relation emits moves, because `b` is a
+/// different number. Declaring the source digest would attest "same generation"
+/// across two states that answer differently; the index's own fingerprint does
+/// not, and this pins that.
+#[test]
+fn the_same_rows_under_a_different_ranking_law_attest_a_different_generation() {
+    let rows = uneven_rows();
+    let dataset = dataset_of(&rows);
+    let config = config_over(&[NOTE]);
+
+    let default_law =
+        TextIndex::from_dataset(&*dataset, &config).expect("the fixture corpus indexes");
+    let default_b = RankingProfile::single_field().fields()[0].b();
+    assert_ne!(
+        default_b,
+        Fixed::ZERO,
+        "the shipped law normalizes by length; if it did not, the profile below would be \
+         the same law under another name and this test would prove nothing"
+    );
+
+    // The same fields and the same weight, with length normalization switched
+    // off. A different law over the same postings.
+    let flat_law = TextIndex::from_dataset(&*dataset, &config)
+        .expect("the fixture corpus indexes")
+        .with_ranking_profile(
+            RankingProfile::new(
+                vec![
+                    RankingField::new("text", Fixed::ONE, Fixed::ZERO)
+                        .expect("b = 0 is inside the closed interval [0, 1]"),
+                ],
+                Vec::new(),
+                Some(0),
+            )
+            .expect("one field with explicit unclassified routing is a valid profile"),
+        )
+        .expect("re-ranking an index does not rebuild its postings");
+
+    assert_eq!(
+        default_law.source_fingerprint(),
+        flat_law.source_fingerprint(),
+        "the two indexes were built from byte-identical source rows, which is what makes \
+         the source digest unable to tell them apart"
+    );
+
+    let (under_default, default_rows) = generation_and_rows(&dataset, Arc::new(default_law));
+    let (under_flat, flat_rows) = generation_and_rows(&dataset, Arc::new(flat_law));
+
+    assert_ne!(
+        scores(&default_rows),
+        scores(&flat_rows),
+        "the two laws really do score the same documents differently"
+    );
+    assert_ne!(
+        under_default, under_flat,
+        "so they are different generations of the index, and the attestation says so"
+    );
+}
+
+/// An index over an **empty** dataset is a producer that answers, not one that
+/// cannot exist.
+///
+/// This is the state the whole ranked-producer contract is written for and the
+/// one the shipped text producer could not previously be in: a producer whose
+/// declared row bound is zero is still invoked and still reports its own
+/// exhaustion, so emptiness arrives as the producer's receipt rather than as a
+/// verdict reached without asking it. An index that refused to build over an
+/// empty corpus made that unreachable for every shipped text producer.
+///
+/// Both directions are asserted here, because "zero rows" is the answer a broken
+/// producer also gives: the empty corpus answers with nothing while attesting a
+/// generation, and the SAME configuration over a corpus with text in it answers
+/// with the golden rows under a DIFFERENT generation.
+#[test]
+fn an_empty_index_answers_with_no_rows_and_attests_its_own_generation() {
+    let empty = dataset_of(&[]);
+    let config = config_over(&[NOTE]);
+    let index = Arc::new(
+        TextIndex::from_dataset(&*empty, &config)
+            .expect("an index over an empty dataset is an ordinary operating state"),
+    );
+    assert_eq!(index.document_count(), 0);
+    assert_eq!(
+        index.partition_count(),
+        0,
+        "no documents means no partitions, which is what the declaration below has to be \
+         true of"
+    );
+
+    let (generation, rows) = generation_and_rows(&empty, index);
+    assert_eq!(
+        rows,
+        Vec::<Vec<String>>::new(),
+        "the producer was invoked and answered with no rows; nothing was invented and \
+         nothing was refused"
+    );
+    // And it attested the generation of the corpus it read. The claim is that an
+    // empty index has an IDENTITY, which is not the same as having a value: a
+    // placeholder digest nobody computed, or one constant shared by every empty
+    // index, is a value and tells a host nothing. Both halves are asserted — the
+    // all-zeros placeholder first, then distinguishability against a SECOND
+    // empty index under a DIFFERENT configuration (same empty corpus, same zero
+    // documents, different set of indexed predicates), which is the pair of
+    // index states emptiness leaves indistinguishable to a digest that covers
+    // content alone.
+    assert_ne!(
+        generation,
+        "0".repeat(generation.len()),
+        "the attestation is a digest that was computed, not the all-zeros placeholder \
+         an unreached computation leaves behind"
+    );
+    let other_config = config_over(&[NOTE, "http://example.org/title"]);
+    let other_empty = Arc::new(
+        TextIndex::from_dataset(&*empty, &other_config)
+            .expect("an index over an empty dataset is an ordinary operating state"),
+    );
+    assert_eq!(
+        other_empty.document_count(),
+        0,
+        "this neighbour is empty too"
+    );
+    let (other_generation, other_rows) = generation_and_rows(&empty, other_empty);
+    assert_eq!(
+        other_rows,
+        Vec::<Vec<String>>::new(),
+        "and it answers with nothing, so the two generations below are the identities \
+         of two states that produced identical answers"
+    );
+    assert_ne!(
+        generation, other_generation,
+        "and two empty indexes under two configurations are two index states the \
+         attestation tells apart — so a host can tell this answer from one over another \
+         index, which is the whole use of the value"
+    );
+
+    // The neighbouring valid case: the same configuration over the golden
+    // corpus. Its rows are the hand-computed golden, so the empty answer above
+    // is emptiness rather than a producer that cannot answer at all.
+    let (dataset, golden_index) = golden();
+    assert_eq!(golden_index.config(), &config);
+    let (after, after_rows) = generation_and_rows(&dataset, golden_index);
+    assert_eq!(
+        after_rows,
+        vec![
+            vec![subject("d1"), typed("1.646224553827", DECIMAL)],
+            vec![subject("d2"), typed("1.386294361118", DECIMAL)],
+        ],
+        "the same needle over a corpus with text in it answers with the golden rows"
+    );
+    assert_ne!(
+        generation, after,
+        "and the two index states are distinguishable, so a reader can tell an answer over \
+         the empty corpus from an answer over the landed one"
     );
 }

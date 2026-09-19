@@ -38,17 +38,18 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, ExecutionError,
-    ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan,
-    PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError,
-    RankedStream, RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest,
-    SearchError, SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK,
-    UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
+    ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
+    Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
+    ProducerStatus, ProtocolError, RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl,
+    ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult,
+    Statistics, StatisticsSnapshot, StratumUnit, StreamContract, StreamEnding, Term, TopK,
+    UnitError, UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankedDeclaration,
-    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -69,6 +70,24 @@ const TOP_K: TopK = TopK::new(1024);
 
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
+}
+
+/// A bundle of `units` under the identities `compiled` carries.
+///
+/// Assembled through [`CompiledRetrieval::new`] rather than written as a literal,
+/// because the attribution a bundle is checked against is recorded when it is
+/// assembled — a caller handing `execute` a bundle of its own is the seam, and a
+/// bundle re-tagged after assembly is the refusal. Starting at `execute` therefore
+/// goes through the same constructor `compile` does.
+fn bundle_of(units: Vec<StratumUnit>, compiled: &CompiledRetrieval) -> CompiledRetrieval {
+    CompiledRetrieval::new(
+        units,
+        compiled.plan_id,
+        compiled.registry_id,
+        compiled.registry_fingerprint.clone(),
+        compiled.fused_bound,
+        compiled.resolution.clone(),
+    )
 }
 
 fn iri(text: &str) -> Iri {
@@ -122,6 +141,8 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -133,7 +154,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
 /// not part of it — that law holds for every stream and is checked rank by rank
 /// rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique)
+    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
 }
 
 fn lexical_term() -> RequestTerm {
@@ -355,13 +376,13 @@ fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Optio
 
 /// A producer whose rows and terminal receipt are pre-scripted.
 struct ScriptedStream {
-    steps: VecDeque<(u64, Fixed, Term)>,
+    steps: VecDeque<RankedRow<Term>>,
     receipt: ProducerReceipt,
     emitted: u64,
 }
 
 impl ScriptedStream {
-    fn new(steps: Vec<(u64, Fixed, Term)>, receipt: ProducerReceipt) -> Self {
+    fn new(steps: Vec<RankedRow<Term>>, receipt: ProducerReceipt) -> Self {
         Self {
             steps: steps.into(),
             receipt,
@@ -377,11 +398,11 @@ impl ScriptedStream {
 impl RankedStream for ScriptedStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         match self.steps.pop_front() {
-            Some((rank, value, item)) => {
+            Some(row) => {
                 self.emitted += 1;
-                Ok(Some((rank, value, item)))
+                Ok(Some(row))
             }
             None => Ok(None),
         }
@@ -397,11 +418,17 @@ impl RankedStream for ScriptedStream {
 }
 
 /// A well-formed row at `rank` for `weight` under `k`.
-fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> (u64, Fixed, Term) {
-    (
+///
+/// It names no block, which is exactly what these fixtures' `Unrestricted`
+/// declaration owes: an unrestricted producer has made no promise for a row to
+/// back. The domain fixtures in `tests/fusion.rs` are where a named block is
+/// exercised.
+fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> RankedRow<Term> {
+    RankedRow::new(
         rank,
         contribution(weight, rank, k).expect("fixture contribution fits"),
         Term::new(item),
+        RowBlock::Undeclared,
     )
 }
 
@@ -417,7 +444,7 @@ fn exhausted(rows: u64) -> ProducerReceipt {
 fn stop_at_plan_inspect_value() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 10, 2);
     let stats = single_statistics(&ex("stratum/hand"), 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
 
     let planned = plan(&request, &registry, &stats).expect("the fixture request plans");
 
@@ -447,7 +474,7 @@ fn stop_at_plan_inspect_value() {
 fn stop_at_compile_run_directly() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 12, 3);
     let stats = single_statistics(&ex("stratum/hand"), 12);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let env = AdmissionEnvironment {
         registry: &registry,
@@ -462,11 +489,11 @@ fn stop_at_compile_run_directly() {
     // with no `execute` (and so no composition layer) in the path.
     let unit = &compiled.units[0];
     assert!(
-        unit.sparql.contains(&ex("pf/hand")),
+        unit.sparql().contains(&ex("pf/hand")),
         "the unit names its producer: {}",
-        unit.sparql
+        unit.sparql()
     );
-    let rows = run_query(&unit.sparql, &registry);
+    let rows = run_query(&unit.sparql(), &registry);
     assert_eq!(
         rows.len(),
         3,
@@ -488,7 +515,7 @@ fn stop_at_compile_run_directly() {
 fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 9, 5);
     let stats = single_statistics(&ex("stratum/hand"), 9);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let env = AdmissionEnvironment {
         registry: &registry,
@@ -511,7 +538,9 @@ fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
     // top-k certification can block an emission.
     let mut pulled = 0usize;
     let mut last_rank = 0u64;
-    while let Some((rank, _term)) = block_on(stream.stream.next()).expect("the stream pulls") {
+    while let Some((rank, _term, _block)) =
+        block_on(stream.stream.next()).expect("the stream pulls")
+    {
         assert_eq!(rank, last_rank + 1, "ranks are 1-based and contiguous");
         last_rank = rank;
         pulled += 1;
@@ -529,7 +558,7 @@ fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
 fn start_at_compile_hand_built_plan() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 10, 2);
     let stats = single_statistics(&ex("stratum/hand"), 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let stratum = iri(&ex("stratum/hand"));
 
     let mut stratum_depths = HashMap::new();
@@ -540,6 +569,7 @@ fn start_at_compile_hand_built_plan() {
     let hand_built = Plan {
         version: Plan::VERSION,
         request_terms: vec![lexical_term()],
+        read_bound: ReadBound::Complete,
         producer_bindings: vec![ProducerBinding {
             producer: ex("pf/hand"),
             stratum,
@@ -590,6 +620,543 @@ fn start_at_compile_hand_built_plan() {
     // have compiled to this same text while reporting the needle answered.
     assert_eq!(planned.producer_bindings, hand_built.producer_bindings);
     assert_eq!(planned.unserved_evidence(), hand_built.unserved_evidence());
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Start at execute: a hand-built bundle, checked on the same dimensions
+// ---------------------------------------------------------------------------
+
+/// A query of this test's own over the fixture producer: every candidate it names,
+/// projected under the column the executor reads, carrying no bound of any kind.
+///
+/// It calls the registered relation exactly once because that is what `execute`'s
+/// witness rule requires of any unit it is handed — a unit that returned rows while
+/// attesting nothing did not run a query over this registry at all — and it carries no
+/// bound because the unit's own bound is the layer's to render.
+fn hand_written(producer: &str) -> String {
+    hand_written_over(&format!("<{producer}>"))
+}
+
+/// The same text with the relation named by `predicate` exactly as written — an
+/// absolute IRI in angle brackets, a prefixed name, or a relative reference — so a
+/// caller's prologue has something in the body to resolve.
+fn hand_written_over(predicate: &str) -> String {
+    format!(
+        "SELECT ?candidate WHERE {{ {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) \
+         {predicate} ( ?c1 ) }} }} }}"
+    )
+}
+
+/// A hand-built [`StratumUnit`] is admitted on the same terms the compiler's own
+/// output is, refused on the same terms a hand-edited *plan* is, and certified on
+/// weaker terms than either — because its query is a caller's.
+///
+/// A bundle is what [`execute`] is handed, and **four** things about a unit decide what
+/// the run may claim about how its read ended: its depth, its declared row bound, the
+/// reach derived from those, and the query the read was actually taken under. The
+/// first two were plain public fields, the reach was derived from a flag a caller
+/// supplied beside them, and the query was a public `String` — which stayed writable
+/// through two attempted fixes.
+///
+/// While the numbers were plain public fields, a bundle could say anything: a depth
+/// raised past the range the emitted bound can probe made `Exhausted` reportable for a
+/// read the `LIMIT` cut, and a declared bound lowered below the depth bypassed the
+/// admission waist's `DepthBoundViolation` dimension. While the query was a writable
+/// string, a bound inside it was a fourth input nobody compared against the other
+/// three: writing the natural `LIMIT <depth>` — the depth being the number this layer
+/// reasons about everywhere — left no slot for the probe row, and a depth of three over
+/// a producer holding nine rows was then reported `Exhausted { rows_emitted: 3 }` with
+/// `rows_emitted` equal to the rows pulled, so nothing downstream could catch it
+/// either. Rendering only the *outer* bound left the branch's bound in that same
+/// string, and the inner bound is the one that decides the read, so the identical
+/// false claim came back.
+///
+/// So: the depth and the declaration are reachable only through [`StratumUnit::new`],
+/// the reach is derived from them, and the query is not a string this constructor can
+/// be handed as the compiler's. A unit built here runs a text this layer did not write,
+/// and therefore never reports `Exhausted` — its ending names that text
+/// ([`ProducerStatus::SuppliedQueryEnded`]), and the compiled unit beside it, over the
+/// very same producer, still earns the certified exhaustion. Every refusal below is
+/// executed beside the neighbouring value that must still build, because a checked
+/// surface that refused the honest cases would have closed the seam instead of holding
+/// it.
+#[test]
+fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
+    let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 12, 3);
+    let stats = single_statistics(&ex("stratum/hand"), 12);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
+    let planned = plan(&request, &registry, &stats).expect("plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&planned, &env).expect("the plan is admitted");
+    let emitted = &compiled.units[0];
+    let query = hand_written(&ex("pf/hand"));
+    let rebuild = |depth: u32, declared: Option<u64>| {
+        StratumUnit::new(
+            emitted.stratum.clone(),
+            query.clone(),
+            emitted.contract.clone(),
+            depth,
+            declared,
+        )
+    };
+
+    // The seam is open: the compiler's own numbers, handed to the constructor with a
+    // query of this test's own, build a unit — and it is *not* the compiler's unit,
+    // which is the fourth dimension stated as a fact about the type. The compiled
+    // query is no longer a string anything can hand back.
+    let by_hand = rebuild(emitted.depth(), emitted.declared_rows())
+        .expect("the compiler's own numbers are admitted");
+    assert_ne!(
+        &by_hand, emitted,
+        "a unit running a caller's text is not the unit the compiler rendered, however \
+         much the numbers on it agree"
+    );
+    assert_eq!(
+        by_hand.supplied_query(),
+        Some(query.as_str()),
+        "the caller's text is carried verbatim and read back as the caller's"
+    );
+    assert_eq!(
+        emitted.supplied_query(),
+        None,
+        "while the compiled unit supplies none: its query is parts, not text"
+    );
+
+    // THE FOURTH DIMENSION, on the numbers it still varies: one query, three depths,
+    // three bounds — and the bound is the depth's every time, because the unit renders
+    // it rather than carrying it. Every case above and below varies a number while
+    // reusing this text, so none of them could observe a bound that disagreed with the
+    // depth beside it.
+    //
+    // The caller's text is a sub-`SELECT` of the bounded query rather than the front of
+    // it, because a text carrying a top-level bound of its own can hold no second one:
+    // appended, the two are two `LIMIT` clauses of one solution modifier, which the
+    // grammar admits one of, and the caller's is the one a last-clause-wins parser
+    // drops. `a_supplied_bound_is_not_destroyed_by_the_layers_own` executes that case.
+    for depth in [1_u32, 3, 12] {
+        let unit = rebuild(depth, Some(12)).expect("a depth inside the declaration builds");
+        assert_eq!(
+            unit.sparql(),
+            format!(
+                "SELECT * WHERE {{\n  {{ {query} }}\n}}\nLIMIT {}",
+                depth + 1
+            ),
+            "the text a unit runs is its query wrapped in a read bounded one row past \
+             its own depth"
+        );
+    }
+
+    // A depth of zero reads nothing and proves nothing, and one row is the
+    // neighbouring read that must still build.
+    assert_eq!(rebuild(0, Some(12)), Err(UnitError::ZeroDepth));
+    assert!(rebuild(1, Some(12)).is_ok(), "one row is a real read");
+
+    // A depth whose probe row is not expressible could report no ending at all, so
+    // `Exhausted` would be reportable for a read the emitted bound cut. One rank
+    // shallower is the deepest readable depth and must still build.
+    assert_eq!(
+        rebuild(u32::MAX, Some(u64::MAX)),
+        Err(UnitError::DepthWithoutProbe {
+            depth: u32::MAX,
+            ceiling: u32::MAX - 1,
+        })
+    );
+    assert!(
+        rebuild(u32::MAX - 1, Some(u64::MAX)).is_ok(),
+        "the deepest depth whose ending can be observed still builds"
+    );
+
+    // A depth above the declared row bound: the read it describes cannot be taken,
+    // and the rows that do come back are not that depth's. This is the waist's
+    // `DepthBoundViolation` dimension, held at the stage that was trusting it.
+    assert_eq!(
+        rebuild(4, Some(1)),
+        Err(UnitError::DepthBeyondDeclaration {
+            depth: 4,
+            declared: 1,
+        })
+    );
+    assert!(
+        rebuild(1, Some(1)).is_ok(),
+        "a depth at the declaration is the ordinary case, not a violation"
+    );
+    // A declared zero is read as the floor of one here too, exactly as the planner
+    // and the waist read it — and only the floor.
+    assert!(
+        rebuild(1, Some(0)).is_ok(),
+        "the floored probing row is admitted against a declared zero"
+    );
+    assert_eq!(
+        rebuild(2, Some(0)),
+        Err(UnitError::DepthBeyondDeclaration {
+            depth: 2,
+            declared: 0,
+        })
+    );
+    // And a producer that declared no access mode declared no bound, so there is no
+    // number here for a depth to exceed.
+    assert!(
+        rebuild(9, None).is_ok(),
+        "silence bounds no read, at any depth a read can reach"
+    );
+
+    // The COMPILED unit over this very producer, run first so the pair below is a
+    // measurement of the query's provenance and of nothing else: three rows behind a
+    // twelve-row declaration, read to their end, certified.
+    let rendered = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
+        .expect("the compiled unit runs");
+    assert_eq!(
+        rendered.statuses[&stratum("hand")],
+        ProducerStatus::Exhausted { rows_emitted: 3 },
+        "a read this layer bounded, three rows deep into a bound of thirteen, is an \
+         exhaustion it can verify"
+    );
+
+    // The hand-built bundle runs, which is the point of the seam: the checks are a
+    // gate on dishonest numbers and not a lock on the door. What it does not get is the
+    // certificate above — same producer, same three rows, same depth, and a text this
+    // layer cannot see the bounds of, so the ending names that text.
+    let bundle = bundle_of(vec![by_hand], &compiled);
+    let execution =
+        block_on(execute(&bundle, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&stratum("hand")],
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "three rows came back inside the bound, and whether the caller's own text cut \
+         the read is not a fact this layer holds"
+    );
+
+    // And the run the fourth dimension was worth catching for: a hand-built unit at
+    // depth three over a producer holding NINE rows. The read is cut by the depth and
+    // says so. This is the observation a caller-written `LIMIT 3` destroyed — the
+    // probe slot vanished, no row could arrive past the depth, and the layer's
+    // strongest completeness claim was reported for a read with six rows behind it.
+    let nine = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 1_000, 9);
+    let nine_stats = single_statistics(&ex("stratum/hand"), 1_000);
+    let nine_env = AdmissionEnvironment {
+        registry: &nine,
+        statistics: &nine_stats,
+        fusion_profile: None,
+    };
+    let nine_compiled = compile(
+        &plan(&request, &nine, &nine_stats).expect("plans"),
+        &nine_env,
+    )
+    .expect("the plan is admitted");
+    let shallow = StratumUnit::new(
+        nine_compiled.units[0].stratum.clone(),
+        hand_written(&ex("pf/hand")),
+        nine_compiled.units[0].contract.clone(),
+        3,
+        Some(1_000),
+    )
+    .expect("depth three inside a thousand-row declaration is admitted");
+    let cut = block_on(execute(
+        &bundle_of(vec![shallow], &nine_compiled),
+        &nine,
+        &*common::empty_dataset(),
+    ))
+    .expect("the unit runs");
+    assert_eq!(
+        cut.statuses[&stratum("hand")],
+        ProducerStatus::DepthReached { rank: 3 },
+        "nine rows read at depth three ended at the depth, and a caller's text keeps \
+         the ending it CAN observe: the fourth row arrived, so something is down there"
+    );
+}
+
+/// A supplied text's own top-level bound survives this layer's, and the ending is
+/// the caller's text rather than a read that text did not take.
+///
+/// The layer's bound used to FOLLOW the caller's text, which made two `LIMIT`
+/// clauses of one solution modifier — a shape the grammar admits exactly one of
+/// (`LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause LimitClause?`).
+/// A parser that keeps the last clause therefore dropped the caller's: a text asking
+/// for two rows over a producer holding nine returned THREE, and the stream's ending
+/// named that text as the stopper for a read it had not stopped. Wrapping the text
+/// instead leaves the caller's bound applying to the pattern it was written against
+/// and this layer's applying to the whole of it.
+///
+/// Both halves are executed, because a wrap that bounded the caller's text away would
+/// be the mirror fault: the unbounded neighbour reads to the *depth*, which is the
+/// case that proves the wrap did not become a second ceiling of its own.
+#[test]
+fn a_supplied_bound_is_not_destroyed_by_the_layers_own() {
+    let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 1_000, 9);
+    let stats = single_statistics(&ex("stratum/hand"), 1_000);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&plan(&request, &registry, &stats).expect("plans"), &env)
+        .expect("the plan is admitted");
+
+    // The caller's own text, bounded at two by the caller. The depth is four, so this
+    // layer's own bound is five: whichever bound is dropped, the row count says which.
+    let bounded = format!("{}\nLIMIT 2", hand_written(&ex("pf/hand")));
+    let unit = StratumUnit::new(
+        compiled.units[0].stratum.clone(),
+        bounded,
+        compiled.units[0].contract.clone(),
+        4,
+        Some(1_000),
+    )
+    .expect("depth four inside a thousand-row declaration is admitted");
+    let bundle = bundle_of(vec![unit], &compiled);
+    let execution =
+        block_on(execute(&bundle, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&stratum("hand")],
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "the caller asked for two rows and got two: its bound is inside this layer's \
+         rather than beside it, so neither clause replaced the other"
+    );
+
+    // The neighbouring valid case: the same text with no bound of its own reads to the
+    // depth over the same nine-row producer. The wrap bounds the whole read at
+    // `depth + 1`, so the fifth row arrives and the depth is named as the stopper —
+    // which is what proves the wrap did not narrow the read to something else.
+    let unbounded = StratumUnit::new(
+        compiled.units[0].stratum.clone(),
+        hand_written(&ex("pf/hand")),
+        compiled.units[0].contract.clone(),
+        4,
+        Some(1_000),
+    )
+    .expect("depth four inside a thousand-row declaration is admitted");
+    let open = bundle_of(vec![unbounded], &compiled);
+    let execution =
+        block_on(execute(&open, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&stratum("hand")],
+        ProducerStatus::DepthReached { rank: 4 },
+        "with nothing of the caller's bounding it, the same text reads to the depth and \
+         the probe row past it arrives"
+    );
+}
+
+/// **A caller's prologue survives the wrap, and a text that is not a query never
+/// becomes a unit.**
+///
+/// The layer's bound wraps a supplied text in a sub-`SELECT`, and the grammar puts no
+/// prologue inside one: `PREFIX` and `BASE` are `Prologue`, which appears once, at the
+/// front of a whole query. So wrapping a prefixed text *as it stands* produced a query
+/// that does not parse, and the caller was handed a syntax error at a byte offset of a
+/// query this layer wrote — for a text that was perfectly good and that the seam had
+/// run before the wrap existed. One narrow shape was fixed (a text carrying its own
+/// top-level bound, which cannot hold a second one) and a strictly larger valid class
+/// was broken, including that same shape whenever it was prefixed.
+///
+/// Every shape a supplied text comes in is executed here, because the fault was
+/// invisible to a suite whose every fixture spelled its IRIs absolutely: a prologue the
+/// body uses, one it does not, a `BASE`, no prologue at all, a bound of the caller's
+/// own, a bound inside the caller's own sub-`SELECT`, and a prologue **and** a bound
+/// together — the case that failed both before the wrap and after it.
+///
+/// The refusals are executed too, and they are the reason the parse is affordable: the
+/// hoist needs to know where the prologue ends, which only a parse can say, so a text
+/// that is not a query at all is refused at the constructor rather than carried to one
+/// stratum's failure after a bundle was assembled — and, since the same parse names the
+/// form, so is a query the wrapper could never hold: an `ASK`, `CONSTRUCT` or
+/// `DESCRIBE`, refused by that name, beside every `SELECT` shape that must still run.
+#[test]
+fn a_supplied_prologue_is_hoisted_over_the_wrap_and_a_non_query_is_refused() {
+    // Three rows behind a depth of four, so every read below that the caller did not
+    // bound returns all three and ends on the caller's text — and the two that ARE
+    // bounded at two return two. The row count is therefore what says which bound
+    // applied.
+    let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 1_000, 3);
+    let stats = single_statistics(&ex("stratum/hand"), 1_000);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&plan(&request, &registry, &stats).expect("plans"), &env)
+        .expect("the plan is admitted");
+    let unit = |query: String| {
+        StratumUnit::new(
+            compiled.units[0].stratum.clone(),
+            query,
+            compiled.units[0].contract.clone(),
+            4,
+            Some(1_000),
+        )
+    };
+    let ending = |query: String| {
+        let built = unit(query).expect("a query with a prologue is a query");
+        let bundle = bundle_of(vec![built], &compiled);
+        block_on(execute(&bundle, &registry, &*common::empty_dataset()))
+            .expect("the unit runs")
+            .statuses[&stratum("hand")]
+            .clone()
+    };
+
+    // The relation's IRI, spelled three ways: absolutely, through a prefix the body
+    // uses, and relatively against a `BASE`. All three name the same producer.
+    let namespace = ex("pf/");
+    let prefix = format!("PREFIX rel: <{namespace}>\n");
+    let base = format!("BASE <{namespace}>\n");
+    let absolute = hand_written(&ex("pf/hand"));
+    let prefixed = hand_written_over("rel:hand");
+    let relative = hand_written_over("<hand>");
+
+    // (1) THE CONTROL: no prologue, absolute IRI. Unchanged by the hoist, byte for
+    //     byte — the split is at zero, so there is nothing in front of the wrapper.
+    assert_eq!(
+        ending(absolute.clone()),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "the shape the seam always ran: three rows inside a depth of four, ending on \
+         the caller's own text"
+    );
+
+    // (2) A PREFIX the body uses. This is the case the wrap broke outright: the
+    //     directives are lifted above the wrapping `SELECT`, so `rel:hand` resolves
+    //     against the caller's own declaration and the same three rows come back.
+    assert_eq!(
+        ending(format!("{prefix}{prefixed}")),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "a prefixed text names the same producer and reads the same rows"
+    );
+
+    // (3) A PREFIX the body does not use. Nothing resolves through it, and it must
+    //     still not break the query it is written in front of.
+    assert_eq!(
+        ending(format!("PREFIX unused: <{}>\n{absolute}", ex("unused#"))),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "a declaration the body never spells is carried, not tripped over"
+    );
+
+    // (4) A BASE, with the relation named relatively against it.
+    assert_eq!(
+        ending(format!("{base}{relative}")),
+        ProducerStatus::SuppliedQueryEnded { rank: 3 },
+        "a relative reference resolves against the caller's own base, which is in \
+         scope for the whole wrapped query"
+    );
+
+    // (5) The caller's own top-level bound, which is why the wrap exists: appended,
+    //     this layer's bound and the caller's would be two `LIMIT` clauses of one
+    //     solution modifier and the caller's would vanish.
+    assert_eq!(
+        ending(format!("{absolute}\nLIMIT 2")),
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "the caller asked for two rows and got two"
+    );
+
+    // (6) A bound inside the caller's own sub-`SELECT`, which this layer cannot see
+    //     from outside and does not need to: the rows say what it did.
+    assert_eq!(
+        ending(format!(
+            "SELECT ?candidate WHERE {{ {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) \
+             <{}> ( ?c1 ) }} LIMIT 2 }} }}",
+            ex("pf/hand")
+        )),
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "a bound the caller wrote inside its own sub-SELECT still decides the read"
+    );
+
+    // (7) A PREFIX **and** the caller's own bound. This shape failed before the wrap
+    //     (the two bounds collided) and after it (the prologue was wrapped into a
+    //     sub-SELECT), so it is the one case neither arrangement served.
+    assert_eq!(
+        ending(format!("{prefix}{prefixed}\nLIMIT 2")),
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "a prefixed text carrying its own bound keeps both: the prologue is hoisted \
+         and the bound is wrapped"
+    );
+
+    // What the emitted text actually looks like, for the one case the shape matters
+    // in: the directives in front, the wrapper after them, and the caller's body
+    // inside it unchanged.
+    let hoisted = unit(format!("{prefix}{prefixed}")).expect("a prefixed text is a query");
+    assert_eq!(
+        hoisted.sparql(),
+        format!("{prefix}SELECT * WHERE {{\n  {{ {prefixed} }}\n}}\nLIMIT 5"),
+        "the prologue is hoisted rather than re-rendered, so the body inside the wrap \
+         is the caller's own bytes"
+    );
+    assert_eq!(
+        hoisted.supplied_query(),
+        Some(format!("{prefix}{prefixed}").as_str()),
+        "and the text read back is the whole of what the caller handed over, prologue \
+         included"
+    );
+
+    // (8) THE REFUSAL. A text that is not a query is refused where the caller can
+    //     still act on it, carrying the parser's own diagnostic.
+    match unit("THIS IS NOT SPARQL".to_owned()).expect_err("not a query, so not a unit") {
+        UnitError::NotAQuery { reason } => assert!(
+            reason.contains("expected SELECT, CONSTRUCT, ASK or DESCRIBE"),
+            "the parser's own words, not this layer's summary of them: {reason}"
+        ),
+        other => panic!("expected NotAQuery, got {other:?}"),
+    }
+    // And its neighbour that must still build: the same text with a query in it.
+    assert!(
+        unit(absolute).is_ok(),
+        "the refusal is about the text being a query, and nothing else"
+    );
+
+    // (9) THE OTHER REFUSAL. A query that is not a SELECT is refused by its form's
+    //     name. Before this refusal each of these built a unit and failed at execution
+    //     with "syntax error at byte 21: expected an RDF term, found ASK" — the same
+    //     diagnostic-about-a-query-the-caller-never-wrote that the prologue produced,
+    //     and for the same reason: the grammar admits only a SELECT inside the wrapper.
+    //     None of these forms yields a row to rank, so no valid text is lost.
+    let producer = ex("pf/hand");
+    let pattern = format!("( ?c0 ) <{producer}> ( ?c1 )");
+    for (form, text) in [
+        ("ASK", format!("ASK WHERE {{ {pattern} }}")),
+        (
+            "CONSTRUCT",
+            format!("CONSTRUCT {{ ?c0 <{producer}> ?c1 }} WHERE {{ {pattern} }}"),
+        ),
+        ("DESCRIBE", format!("DESCRIBE ?c0 WHERE {{ {pattern} }}")),
+    ] {
+        match unit(text).expect_err("not a SELECT, so not a unit") {
+            UnitError::NotASelect { form: named } => {
+                assert_eq!(named, form, "the refusal names the form the caller wrote");
+            }
+            other => panic!("expected NotASelect for {form}, got {other:?}"),
+        }
+    }
+    // Its neighbours that must still run: every SELECT shape the grammar lets a whole
+    // query carry that a bare sub-SELECT does not spell — a dataset clause, a trailing
+    // VALUES, a VERSION directive — is still a SELECT, and the refusal must not reach
+    // any of them.
+    let select = format!("SELECT ?candidate WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}");
+    for (shape, text) in [
+        (
+            "FROM",
+            format!(
+                "SELECT ?candidate FROM <{}> WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}",
+                ex("g")
+            ),
+        ),
+        (
+            "FROM NAMED",
+            format!(
+                "SELECT ?candidate FROM NAMED <{}> WHERE {{ {pattern} BIND(?c0 AS ?candidate) }}",
+                ex("g")
+            ),
+        ),
+        ("VALUES", format!("{select} VALUES ?x {{ 1 }}")),
+        ("VERSION", format!("VERSION \"1.2\"\n{select}")),
+    ] {
+        assert_eq!(
+            ending(text),
+            ProducerStatus::SuppliedQueryEnded { rank: 3 },
+            "a SELECT carrying {shape} is a SELECT, and reads its three rows"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +1218,83 @@ fn start_at_fuse_hand_built_streams() {
     assert_eq!(result.rows.len(), 2);
     assert_eq!(result.trailer.statuses.len(), 2);
     assert_eq!(result.trailer.profile_id, profile.id());
+
+    // These streams descend from no index, so they attest nothing — and the
+    // seam records that as the absence it is rather than inventing evidence
+    // for a caller that assembled its rows by hand. `Exact` here is the narrow
+    // claim it always is: no stratum declared itself short.
+    assert_eq!(
+        result.trailer.attestations,
+        BTreeMap::from([
+            (stratum("s1"), PfAttestation::UNDECLARED),
+            (stratum("s2"), PfAttestation::UNDECLARED),
+        ]),
+        "a hand-built stream is asked and honestly says nothing"
+    );
+    assert_eq!(result.trailer.exactness, ScoreExactness::Exact);
+}
+
+// ---------------------------------------------------------------------------
+// 6b. Start at fuse: a hand-built stream may author the ending its own depth
+//     gave it
+//
+// The seam is a place to start, and a caller starting here is the party that
+// read its own index to some depth and stopped. Fusion cannot tell that apart
+// from a stream that ran out — both simply stop yielding rows — so the ending
+// has to be declarable at the seam, in the rank space the caller actually
+// stopped in. What the seam *can* check, it does: the rank against the rows it
+// pulled.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_hand_built_stream_can_declare_the_depth_that_stopped_it() {
+    let profile = profile(&[("s1", Fixed::ONE)], K);
+    let scripted = || {
+        vec![
+            row(1, Fixed::ONE, K, "alpha"),
+            row(2, Fixed::ONE, K, "beta"),
+        ]
+    };
+
+    let stopped = block_on(fuse::<ScriptedStream, Term>(
+        vec![(
+            stratum("s1"),
+            ScriptedStream::new(scripted(), ProducerReceipt::DepthReached { rank: 2 }),
+        )],
+        &profile,
+        TOP_K,
+    ))
+    .expect("a depth-stopped stream fuses");
+
+    assert_eq!(
+        stopped.rows.len(),
+        2,
+        "every row the caller did read is in the answer"
+    );
+    assert_eq!(
+        stopped.trailer.statuses.get(&stratum("s1")),
+        Some(&ProducerStatus::DepthReached { rank: 2 }),
+        "and the trailer says the depth stopped the read, which no other party could say"
+    );
+
+    // The count is still measured, because a licence to stop reading is not a
+    // licence to misreport what was read.
+    let forged = block_on(fuse::<ScriptedStream, Term>(
+        vec![(
+            stratum("s1"),
+            ScriptedStream::new(scripted(), ProducerReceipt::DepthReached { rank: 1 }),
+        )],
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &forged,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ForgedReceipt { declared: 1, actual: 2 })
+        ),
+        "expected ForgedReceipt {{ declared: 1, actual: 2 }}, got {forged:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -727,7 +1371,7 @@ struct LazyStream {
 impl RankedStream for LazyStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         if self.emitted >= self.total {
             return Ok(None);
         }
@@ -735,7 +1379,12 @@ impl RankedStream for LazyStream {
         self.pulls.fetch_add(1, Ordering::SeqCst);
         let rank = self.emitted;
         let value = contribution(self.weight, rank, self.k).expect("contribution fits");
-        Ok(Some((rank, value, (self.item_at)(self.stream_index, rank))))
+        Ok(Some(RankedRow::new(
+            rank,
+            value,
+            (self.item_at)(self.stream_index, rank),
+            RowBlock::Undeclared,
+        )))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -1021,7 +1670,7 @@ fn unfused_rung_applies_no_threshold_to_its_rows() {
     const ROWS: usize = 4096;
     let registry = single_registry(&ex("stratum/deep"), &ex("pf/deep"), ROWS as u64, ROWS);
     let stats = single_statistics(&ex("stratum/deep"), ROWS as u64);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let env = AdmissionEnvironment {
         registry: &registry,
@@ -1043,7 +1692,9 @@ fn unfused_rung_applies_no_threshold_to_its_rows() {
     // stratum's own materialized result.
     let mut pulled = 0usize;
     let mut last_rank = 0u64;
-    while let Some((rank, _term)) = block_on(stream.stream.next()).expect("the stream pulls") {
+    while let Some((rank, _term, _block)) =
+        block_on(stream.stream.next()).expect("the stream pulls")
+    {
         assert_eq!(rank, last_rank + 1, "ranks stay contiguous to the end");
         last_rank = rank;
         pulled += 1;
@@ -1091,7 +1742,13 @@ fn prefix_reader_incomplete_evidence() {
     );
 
     // A partially-read stream refuses to describe its own completeness.
-    let mut partial = RankedStreamImpl::new(vec![(1, Term::new("a")), (2, Term::new("b"))]);
+    let mut partial = RankedStreamImpl::new(
+        vec![
+            (1, Term::new("a"), RowBlock::Undeclared),
+            (2, Term::new("b"), RowBlock::Undeclared),
+        ],
+        StreamEnding::Exhausted,
+    );
     assert!(block_on(partial.next()).expect("pulls").is_some());
     assert!(matches!(
         block_on(partial.receipt()),
@@ -1118,7 +1775,7 @@ fn reporting_names_plan_and_profile() {
         fusion_profile: None,
     };
     let profile = single_profile(&ex("stratum/report"));
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
 
     let expected_plan = plan(&request, &registry, &stats).expect("plans");
     let result = block_on(search(
@@ -1128,7 +1785,6 @@ fn reporting_names_plan_and_profile() {
         &*common::empty_dataset(),
         &env,
         &profile,
-        TOP_K,
     ))
     .expect("the composed search answers");
 
@@ -1184,13 +1840,12 @@ async fn search_shape<S, D>(
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
-    top_k: TopK,
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
     D: purrdf_core::DatasetView + Sync,
 {
-    search(request, registry, statistics, dataset, env, profile, top_k).await
+    search(request, registry, statistics, dataset, env, profile).await
 }
 
 /// The seam is the same behaviour observed earlier; a mode flag would be a
@@ -1234,7 +1889,7 @@ fn no_stage_takes_a_selector() {
         statistics: &stats,
         fusion_profile: None,
     };
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
     let compiled = compile(&planned, &env).expect("admits");
     let dataset = common::empty_dataset();
@@ -1261,7 +1916,6 @@ fn no_stage_takes_a_selector() {
         &*dataset,
         &env,
         &seam_profile,
-        TOP_K,
     ))
     .expect("the composed search answers");
     assert_eq!(searched.plan_id, planned.id());
@@ -1335,7 +1989,7 @@ async fn equality_fusion(profile: &FusionProfile) -> FusionResult<Term> {
 fn encoding_and_fusion_are_deterministic_in_one_process() {
     let registry = single_registry(&ex("stratum/eq"), &ex("pf/eq"), 12, 3);
     let stats = single_statistics(&ex("stratum/eq"), 12);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
 
     // A plan's canonical encoding is a pure function of its fields: repeated
@@ -1381,7 +2035,7 @@ fn encoding_and_fusion_are_deterministic_in_one_process() {
 fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let registry = single_registry(&ex("stratum/resume"), &ex("pf/resume"), 10, 3);
     let stats = single_statistics(&ex("stratum/resume"), 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
@@ -1435,7 +2089,10 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let elsewhere = crate::profile(&[("elsewhere", Fixed::ONE)], K);
     assert!(
         RankedStreamAdapter::new(
-            RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+            RankedStreamImpl::new(
+                vec![(1, Term::new("a"), RowBlock::Undeclared)],
+                StreamEnding::Exhausted,
+            ),
             unique_items(),
             &elsewhere,
             &stratum("resume"),
@@ -1457,7 +2114,7 @@ fn executed_stream(suffix: &str, profile: &FusionProfile) -> (PlanId, Iri, Ranke
     let stratum_iri = ex(&format!("stratum/{suffix}"));
     let registry = single_registry(&stratum_iri, &ex(&format!("pf/{suffix}")), 10, 3);
     let stats = single_statistics(&stratum_iri, 10);
-    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
@@ -1550,6 +2207,228 @@ fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
     assert_eq!(mixed.trailer.plan_id, None);
 }
 
+// ---------------------------------------------------------------------------
+// 11c. The bound the streams were planned for travels with them too, and a
+//      fusion run at another bound is refused rather than answered short
+//
+// This is the sibling of 11b, one field over. A depth derived for a bound of two
+// rows is honest for two rows: the rows past it were never read, and nothing
+// about the rows that WERE read says so. So the bound rides with them and `fuse`
+// checks its own argument against it, exactly as it checks that the streams agree
+// on a plan.
+//
+// The read really is cut to the bound here, which is what makes the refusal
+// load-bearing rather than pedantic, and what cuts it is the producer's
+// `DuplicatePolicy::Unique` declaration over a single surviving stratum: with no
+// second stratum there is no pair for a disjointness premise to be about, so
+// uniqueness alone makes a `k`-row prefix a top `k`. The test below measures that
+// rather than asserting it — the same fixture declaring `Unrestricted` narrows
+// identically, and the same fixture declaring `Allowed` does not narrow at all.
+// ---------------------------------------------------------------------------
+
+/// A registered producer declaring `domains` and `duplicates`, holding `count` of the
+/// `rows` it registers.
+///
+/// The two declarations are parameters because which of them the narrowing rests on is
+/// exactly what the section below measures; a fixture that fixed both could only ever
+/// assert the answer.
+fn registry_declaring(
+    stratum_iri: &str,
+    producer_iri: &str,
+    rows: u64,
+    count: usize,
+    domains: CandidateDomains,
+    duplicates: DuplicatePolicy,
+) -> PropertyFunctionRegistry {
+    let mut declaration = ranked(stratum_iri, vec![TermPattern::of_kind(TermKind::Any)], true);
+    declaration.domains = domains;
+    declaration.duplicates = duplicates;
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        producer_iri,
+        make_producer(rows, "hand/", count),
+        declaration,
+    );
+    registry
+}
+
+/// The section's own fixture: a producer restricted to one block of the candidate
+/// universe, promising no repeats.
+///
+/// One tag rather than a set, because a single-block declaration entails the block of
+/// every row and so needs no per-row block column. It is **not** what lets the planner
+/// narrow this stratum's depth to the request's bound — at one surviving stratum the
+/// disjointness premise is vacuous and uniqueness carries the prefix alone, which the
+/// test below measures both ways. What the tag buys is that every row this fixture
+/// streams carries an entailed block rather than an undeclared one, which is the shape
+/// a restricted producer's stream really has.
+fn registry_within_one_block(
+    stratum_iri: &str,
+    producer_iri: &str,
+    rows: u64,
+    count: usize,
+) -> PropertyFunctionRegistry {
+    registry_declaring(
+        stratum_iri,
+        producer_iri,
+        rows,
+        count,
+        CandidateDomains::within([
+            DomainTag::parse(&ex("block/only")).expect("the fixture domain tag is a valid IRI")
+        ]),
+        DuplicatePolicy::Unique,
+    )
+}
+
+/// Plan, compile and execute one single-block fixture for a request bounded at
+/// `top_k`, returning the recorded depth, the bound the bundle was compiled for,
+/// its stratum, and the bridged stream tagged with that bound.
+fn executed_stream_bounded(
+    suffix: &str,
+    profile: &FusionProfile,
+    top_k: TopK,
+) -> (u32, TopK, Iri, RankedStreamAdapter) {
+    let stratum_iri = ex(&format!("stratum/{suffix}"));
+    let registry = registry_within_one_block(&stratum_iri, &ex(&format!("pf/{suffix}")), 10, 3);
+    let stats = single_statistics(&stratum_iri, 10);
+    let request = RetrievalRequest::bounded(vec![lexical_term()], top_k);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let planned = plan(&request, &registry, &stats).expect("plans");
+    let depth = planned.stratum_depths[&iri(&stratum_iri)];
+    let compiled = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+    let stream = execution
+        .streams
+        .into_iter()
+        .next()
+        .expect("the stratum streamed");
+    let adapter =
+        RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum)
+            .expect("the profile weights the stratum the plan reached")
+            .with_fused_bound(stream.fused_bound);
+    (depth, stream.fused_bound, stream.stratum, adapter)
+}
+
+#[test]
+fn fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name() {
+    let profile = profile(&[("bound", Fixed::ONE)], K);
+
+    // The fixture must really have been cut by the bound, or the refusal below
+    // would be protecting nothing: the producer holds three rows and declares ten,
+    // and a bound of two is what the depth comes out as.
+    let (depth, planned_bound, deeper_stratum, stream) =
+        executed_stream_bounded("bound", &profile, TopK::new(2));
+    assert_eq!(
+        depth, 2,
+        "the request's bound is what the depth was derived from"
+    );
+    assert_eq!(planned_bound, TopK::new(2));
+
+    // WHICH DECLARATION BUYS THE CUT, measured rather than implied. The guard above
+    // passes with the fixture's block declaration deleted, so on its own it says
+    // nothing about what the narrowing rests on.
+    let depth_declaring = |domains: CandidateDomains, duplicates: DuplicatePolicy| {
+        let stratum_iri = ex("stratum/measured");
+        let registry =
+            registry_declaring(&stratum_iri, &ex("pf/measured"), 10, 3, domains, duplicates);
+        let stats = single_statistics(&stratum_iri, 10);
+        let request = RetrievalRequest::bounded(vec![lexical_term()], TopK::new(2));
+        plan(&request, &registry, &stats)
+            .expect("plans")
+            .stratum_depths[&iri(&stratum_iri)]
+    };
+    assert_eq!(
+        depth_declaring(CandidateDomains::Unrestricted, DuplicatePolicy::Unique),
+        2,
+        "a producer that declares NO block narrows to the bound exactly as the fixture \
+         does, because one surviving stratum has no second one to overlap with"
+    );
+    assert_eq!(
+        depth_declaring(
+            CandidateDomains::within([
+                DomainTag::parse(&ex("block/only")).expect("the fixture domain tag is valid")
+            ]),
+            DuplicatePolicy::Allowed
+        ),
+        10,
+        "and a producer that may repeat does not narrow however it declares its blocks, \
+         because a count of ranks is then not a count of candidates — so uniqueness is \
+         what the cut above rests on"
+    );
+
+    let deeper = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![(deeper_stratum, stream)],
+        &profile,
+        TopK::new(5),
+    ))
+    .expect_err("a read taken for two rows cannot answer a fusion for five");
+    assert!(
+        matches!(
+            &deeper,
+            FusionError::ReadBoundMismatch { planned, requested }
+                if *planned == TopK::new(2) && *requested == TopK::new(5)
+        ),
+        "expected ReadBoundMismatch {{ planned: 2, requested: 5 }}, got {deeper:?}"
+    );
+
+    // A SHALLOWER bound is refused too, and the message is the same one. It would
+    // answer correctly, out of a read deeper than the question needed — and then
+    // the depth the bundle records, the resolution it reports and the identity it
+    // carries would all be describing a different request.
+    let (_, _, shallower_stratum, stream) =
+        executed_stream_bounded("bound", &profile, TopK::new(2));
+    let shallower = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![(shallower_stratum, stream)],
+        &profile,
+        TopK::new(1),
+    ))
+    .expect_err("a bound below the planned one is still not the planned one");
+    assert!(
+        matches!(
+            &shallower,
+            FusionError::ReadBoundMismatch { planned, requested }
+                if *planned == TopK::new(2) && *requested == TopK::new(1)
+        ),
+        "expected ReadBoundMismatch {{ planned: 2, requested: 1 }}, got {shallower:?}"
+    );
+
+    // THE NEIGHBOUR THAT MUST SUCCEED: the same streams, fused at the bound they
+    // were planned for. A refusal that also swept this up would have made the
+    // resumable seam unusable, which is the mirror failure of not checking at all.
+    let (_, planned_bound, matched_stratum, stream) =
+        executed_stream_bounded("bound", &profile, TopK::new(2));
+    let matched = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![(matched_stratum, stream)],
+        &profile,
+        planned_bound,
+    ))
+    .expect("streams fused at the bound they were planned for answer");
+    assert_eq!(
+        matched.rows.len(),
+        2,
+        "and they answer with the rows the bound asked for"
+    );
+
+    // THE SECOND NEIGHBOUR, because the refusal must stay narrow: a stream built
+    // outside the ladder names no bound at all, so there is nothing for the
+    // caller's argument to disagree with and it fuses at whatever was named.
+    let unbounded = block_on(fuse::<ScriptedStream, Term>(
+        vec![(
+            stratum("bound"),
+            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "alpha")], exhausted(1)),
+        )],
+        &profile,
+        TopK::new(9),
+    ))
+    .expect("a stream that no plan bounded is not a disagreement");
+    assert_eq!(unbounded.rows.len(), 1);
+}
+
 #[test]
 fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // Ranks are 1-based. `execute` never emits a zero, but the bridge is public
@@ -1557,7 +2436,10 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // come back as the protocol error fusion would raise for the same row.
     let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut adapter = RankedStreamAdapter::new(
-        RankedStreamImpl::new(vec![(0, Term::new("a"))]),
+        RankedStreamImpl::new(
+            vec![(0, Term::new("a"), RowBlock::Undeclared)],
+            StreamEnding::Exhausted,
+        ),
         unique_items(),
         &profile,
         &stratum("resume"),
@@ -1577,7 +2459,10 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // The valid neighbour: a 1-based rank through the same adapter is an
     // ordinary row carrying the profile's own contribution.
     let mut adapter = RankedStreamAdapter::new(
-        RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+        RankedStreamImpl::new(
+            vec![(1, Term::new("a"), RowBlock::Undeclared)],
+            StreamEnding::Exhausted,
+        ),
         unique_items(),
         &profile,
         &stratum("resume"),
@@ -1585,10 +2470,11 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     .expect("the profile weights the stratum");
     assert_eq!(
         block_on(adapter.next()).expect("a 1-based rank is well formed"),
-        Some((
+        Some(RankedRow::new(
             1,
             contribution(Fixed::ONE, 1, K).expect("fits"),
-            Term::new("a")
+            Term::new("a"),
+            RowBlock::Undeclared
         ))
     );
 }

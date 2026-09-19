@@ -26,11 +26,6 @@ use pyo3::prelude::*;
 
 use crate::{BlankScope, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple, TermValue};
 
-#[cfg(test)]
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-#[cfg(test)]
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
 // ── Term model ──────────────────────────────────────────────────────────────────
 
 fn hash_str(value: &str) -> u64 {
@@ -771,99 +766,4 @@ pub(crate) fn extract_graph_name(obj: Option<&Bound<'_, PyAny>>) -> PyResult<Opt
     Err(PyTypeError::new_err(
         "a graph name must be a NamedNode, BlankNode, or DefaultGraph",
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plain_and_explicit_xsd_string_literals_are_equal_terms() {
-        // RDF term equality: a plain literal and an explicit `xsd:string` literal of
-        // the same lexical form are the SAME term (oxigraph `Literal` parity — a
-        // plain literal's datatype IS `xsd:string`).
-        let plain = PyLiteral {
-            inner: RdfLiteral::simple("Alice"),
-        };
-        let explicit = PyLiteral {
-            inner: RdfLiteral::typed("Alice", XSD_STRING),
-        };
-        assert!(plain.__eq__(&explicit));
-        assert_eq!(plain.__hash__(), explicit.__hash__());
-        // The datatype getter expands a plain literal to `xsd:string`.
-        assert_eq!(plain.datatype().inner, XSD_STRING);
-    }
-
-    #[test]
-    fn lang_literal_reports_rdf_langstring_datatype() {
-        let lit = PyLiteral {
-            inner: RdfLiteral::language_tagged("hi", "en"),
-        };
-        assert_eq!(lit.language(), Some("en"));
-        assert_eq!(lit.datatype().inner, RDF_LANG_STRING);
-    }
-
-    #[test]
-    fn typed_literal_keeps_its_datatype_and_differs_from_plain() {
-        let int_dt = "http://www.w3.org/2001/XMLSchema#integer";
-        let typed = PyLiteral {
-            inner: RdfLiteral::typed("1", int_dt),
-        };
-        let plain = PyLiteral {
-            inner: RdfLiteral::simple("1"),
-        };
-        assert_eq!(typed.datatype().inner, int_dt);
-        assert!(!typed.__eq__(&plain));
-    }
-
-    #[test]
-    fn direction_parses_and_round_trips_on_lang_literal() {
-        // RDF 1.2 base direction: a `dirLangString` carries a language tag AND a
-        // direction; the getter surfaces the closed `ltr`/`rtl` vocabulary.
-        let lit = PyLiteral::new("مرحبا".to_owned(), None, Some("ar".to_owned()), Some("rtl"))
-            .expect("dirLangString constructs");
-        assert_eq!(lit.language(), Some("ar"));
-        assert_eq!(lit.direction(), Some("rtl"));
-        let other = PyLiteral::new("مرحبا".to_owned(), None, Some("ar".to_owned()), Some("ltr"))
-            .expect("opposite direction");
-        assert!(!lit.__eq__(&other));
-        assert_ne!(
-            literal_key_string(&lit.inner),
-            literal_key_string(&other.inner)
-        );
-
-        // A direction without a language tag is rejected (not a dirLangString).
-        assert!(PyLiteral::new("x".to_owned(), None, None, Some("ltr")).is_err());
-        // An unknown direction token is rejected (closed vocabulary).
-        assert!(PyLiteral::new("x".to_owned(), None, Some("en".to_owned()), Some("up")).is_err());
-        // A plain/typed literal reports no direction.
-        let plain = PyLiteral::new("x".to_owned(), None, None, None).expect("plain constructs");
-        assert_eq!(plain.direction(), None);
-    }
-
-    #[test]
-    fn named_node_str_and_value() {
-        let n = PyNamedNode::new("https://example.org/s").unwrap();
-        assert_eq!(n.value(), "https://example.org/s");
-        assert_eq!(n.__str__(), "<https://example.org/s>");
-    }
-
-    #[test]
-    fn rdf12_triple_terms_are_object_position_only() {
-        // RDF 1.2 (unlike obsolete RDF-star) permits quoted triples in the OBJECT
-        // slot only; a subject is always an IRI or blank node. A quoted-triple
-        // object round-trips through the native model.
-        let inner = RdfTriple::new(
-            RdfTerm::iri("https://example.org/s"),
-            "https://example.org/p",
-            RdfTerm::iri("https://example.org/o"),
-        );
-        let quad = RdfQuad::new(
-            RdfTerm::iri("https://example.org/r"),
-            "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies",
-            RdfTerm::triple(inner),
-        );
-        assert!(matches!(quad.object, RdfTerm::Triple(_)));
-        assert!(matches!(quad.subject, RdfTerm::Iri(_)));
-    }
 }

@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use purrdf_core::Iri;
 use purrdf_sparql_eval::{
-    AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PropertyFunction,
-    PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement,
+    AcceptedTerm, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy, MemoryRelation,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement,
 };
 
 const EX_REL: &str = "http://example.org/ns#search";
@@ -25,6 +25,14 @@ const EX_STRATUM: &str = "http://example.org/stratum/lexical";
 const EX_STRATUM_B: &str = "http://example.org/stratum/vector";
 const EX_DEPTH_TYPE: &str = "http://example.org/datatype/count";
 const EX_LANG_TYPE: &str = "http://example.org/datatype/tag";
+/// Two caller-named blocks of a candidate universe. Nothing here mints them;
+/// they are ordinary `example.org` IRIs a host chose for its own partition.
+const EX_DOMAIN_DOCS: &str = "http://example.org/domain/documents";
+const EX_DOMAIN_PEOPLE: &str = "http://example.org/domain/people";
+
+fn tag(iri: &str) -> DomainTag {
+    DomainTag::parse(iri).expect("fixture domain tag")
+}
 
 /// A five-position relation: one subject-side argument, four object-side. The
 /// widest shape the fixtures below place into, so a position is out of range
@@ -81,6 +89,15 @@ fn declaration() -> RankedDeclaration {
         }),
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        // The reference declaration promises nothing about where its candidates
+        // lie, which is the widest promise and the one every producer made
+        // before the term existed. The tests that are ABOUT the term state
+        // their own.
+        domains: CandidateDomains::Unrestricted,
+        // And it names no per-row block, which is the honest answer for a
+        // producer that restricts nothing: there is no promise for a row to
+        // back. The tests that are ABOUT the block column state their own.
+        block_position: None,
         mandatory: true,
     }
 }
@@ -295,6 +312,262 @@ fn a_candidate_that_collides_with_the_depth_is_refused() {
         ..declaration()
     };
     registry.register_ranked(EX_REL, relation(), decl);
+}
+
+/// The block column is the candidate column's sibling — a position the consumer
+/// *reads* — so it must exist and it may not share a position with a value the
+/// invocation *writes*. Each refusal is executed, and so is the valid neighbour
+/// that distinguishes "this position is wrong" from "a block column is wrong":
+/// the same declaration with the block at a free position registers, under both
+/// a restriction and none.
+#[test]
+fn a_block_position_that_cannot_be_read_back_is_refused_while_a_free_one_registers() {
+    // Outside the relation's positions: there is nothing there to read.
+    let out_of_range = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(9),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        out_of_range.contains("projects each row's block from position 9"),
+        "the refusal names the position, got: {out_of_range}"
+    );
+
+    // The candidate's own position: a candidate is not the block it lies in, and
+    // one position projects one value.
+    let candidate = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(0),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        candidate.contains("both its candidate and each row's block"),
+        "the refusal names the collision, got: {candidate}"
+    );
+
+    // A placement target: that position carries the request's needle, so reading
+    // it back as a block would measure the corpus against the query.
+    let placement = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(1),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        placement.contains("value facet") && placement.contains("row's block"),
+        "the refusal names the facet it collides with, got: {placement}"
+    );
+
+    // The depth target, refused for the same reason and named separately,
+    // because the remedy differs: move the depth, or move the block.
+    let depth = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                block_position: Some(2),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        depth.contains("per-stratum depth at position 2")
+            && depth.contains("projects each row's block"),
+        "the refusal names the depth collision, got: {depth}"
+    );
+
+    // The valid neighbour. Position 3 is free in this relation — it is neither
+    // the candidate, a placement target nor the depth — so the declaration
+    // registers and reads back unchanged.
+    let mut free = PropertyFunctionRegistry::new();
+    let declared = RankedDeclaration {
+        block_position: Some(3),
+        ..declaration()
+    };
+    free.register_ranked(EX_REL, relation(), declared.clone());
+    assert_eq!(
+        free.ranked_declaration(EX_REL),
+        Some(&declared),
+        "a block column at a free position is a perfectly ordinary declaration"
+    );
+
+    // And beside a restriction it actually backs, which is what the column is
+    // for: several blocks, and a position each row names its own from.
+    let mut restricted = PropertyFunctionRegistry::new();
+    restricted.register_ranked(
+        EX_REL,
+        relation(),
+        RankedDeclaration {
+            domains: CandidateDomains::within([tag(EX_DOMAIN_DOCS), tag(EX_DOMAIN_PEOPLE)]),
+            block_position: Some(3),
+            ..declaration()
+        },
+    );
+    assert!(
+        restricted.ranked_declaration(EX_REL).is_some(),
+        "a several-block restriction with a column to back it is the supported configuration"
+    );
+}
+
+#[test]
+fn an_empty_domain_restriction_is_refused_while_a_named_one_registers() {
+    // The refusal. `Within` with no blocks says "this producer names nothing",
+    // which is not a narrow producer but an unusable one: a consumer holds a
+    // producer to this declaration row by row, so the first row it emitted
+    // would contradict it.
+    let message = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                domains: CandidateDomains::Within(std::collections::BTreeSet::new()),
+                ..declaration()
+            },
+        );
+    });
+    assert!(
+        message.contains("empty set of") && message.contains("CandidateDomains::Unrestricted"),
+        "the refusal must name the offence AND the one-line remedy, got: {message}"
+    );
+
+    // Nothing was inserted: the refusal runs before the registry is written, the
+    // same discipline every other declaration refusal keeps.
+    let mut refused = PropertyFunctionRegistry::new();
+    let outcome = without_panic_output(|| {
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            refused.register_ranked(
+                EX_REL,
+                relation(),
+                RankedDeclaration {
+                    domains: CandidateDomains::Within(std::collections::BTreeSet::new()),
+                    ..declaration()
+                },
+            );
+        }))
+    });
+    assert!(outcome.is_err());
+    // Both halves, because they are written in order and only one of them is
+    // what `is_empty` reports. `register_ranked` inserts the declaration into the
+    // ranked side table BEFORE it inserts the relation, and `is_empty` answers
+    // over the relations alone — so a refusal that had already recorded the
+    // declaration would leave `is_empty` true and this assertion would pass over
+    // exactly the state it claims to rule out. The side table is asked directly.
+    assert!(
+        refused.is_empty(),
+        "no relation was inserted before the refusal"
+    );
+    assert!(
+        refused.ranked_declaration(EX_REL).is_none(),
+        "and no declaration was recorded in the side table the insert writes first"
+    );
+
+    // THE VALID NEIGHBOURS, and they are what this refusal must not touch. A
+    // restriction naming one block registers; so does one naming two; so does
+    // the unrestricted declaration the whole fixture set uses. Only the empty
+    // set is refused.
+    for (name, domains) in [
+        ("one block", CandidateDomains::within([tag(EX_DOMAIN_DOCS)])),
+        (
+            "two blocks",
+            CandidateDomains::within([tag(EX_DOMAIN_DOCS), tag(EX_DOMAIN_PEOPLE)]),
+        ),
+        ("unrestricted", CandidateDomains::Unrestricted),
+    ] {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            EX_REL,
+            relation(),
+            RankedDeclaration {
+                domains: domains.clone(),
+                ..declaration()
+            },
+        );
+        assert_eq!(
+            registry
+                .ranked_declaration(EX_REL)
+                .expect("the declaration registered")
+                .domains,
+            domains,
+            "a {name} declaration must register and read back verbatim"
+        );
+    }
+
+    // A tag reads back as the validated IRI it was built from, not only as
+    // text. A consumer holding a declaration off an answer would otherwise have
+    // to re-parse a string this type already proved well-formed, and a second
+    // parse is a second chance to disagree with the first.
+    let parsed = tag(EX_DOMAIN_DOCS);
+    assert_eq!(parsed.as_iri().as_str(), EX_DOMAIN_DOCS);
+
+    // And "reads back" means VERBATIM: neither constructing a tag nor reading
+    // one normalises, case-folds or re-spells what the host wrote. Over a text
+    // that is already canonical — every other tag in this file — an
+    // implementation that canonicalised would satisfy every assertion, so the
+    // witness below is one tag held against the three respellings generic URI
+    // normalisation would conflate it with: an uppercased scheme and authority,
+    // a dot segment, and a case-flipped percent-escape.
+    const AS_WRITTEN: &str = "http://example.org/domain/documents%2fa";
+    let written = tag(AS_WRITTEN);
+    assert_eq!(
+        written.as_str(),
+        AS_WRITTEN,
+        "the text accessor hands back the host's spelling, not a canonical one"
+    );
+    assert_eq!(
+        written.as_iri().as_str(),
+        AS_WRITTEN,
+        "and so does the IRI behind it, so the two accessors cannot disagree"
+    );
+    assert_eq!(
+        DomainTag::new(written.as_iri().clone()).as_str(),
+        AS_WRITTEN,
+        "and the IRI-taking constructor stores what it is handed, so a tag taken \
+         apart and rebuilt is the tag that was taken apart"
+    );
+    // The consequence a host relies on: each respelling a normaliser would
+    // conflate with the above is its own tag, and the difference is one
+    // normalisation step in each case, so no single step can be applied
+    // anywhere in this type without one of these failing. A domain set that
+    // merged a pair would report one block where its host declared two, and a
+    // candidate in the second block would then be scored against a declaration
+    // that never named it.
+    for respelling in [
+        "HTTP://EXAMPLE.ORG/domain/documents%2fa",
+        "http://example.org/domain/./documents%2fa",
+        "http://example.org/domain/documents%2Fa",
+    ] {
+        let other = tag(respelling);
+        assert_ne!(
+            written, other,
+            "{AS_WRITTEN} and {respelling} are two tags: comparison is over the \
+             spelling as written, and nothing canonicalised either side of it"
+        );
+        assert_eq!(
+            other.as_str(),
+            respelling,
+            "and each reads back as written, so the inequality is two spellings \
+             kept rather than one repaired"
+        );
+    }
 }
 
 // ---- one stratum, one producer -------------------------------------------
@@ -536,6 +809,41 @@ fn canonical_description_is_injective_over_every_field() {
             "mandatory",
             RankedDeclaration {
                 mandatory: false,
+                ..base.clone()
+            },
+        ),
+        (
+            "domains restricted",
+            RankedDeclaration {
+                domains: CandidateDomains::within([tag(EX_DOMAIN_DOCS)]),
+                ..base.clone()
+            },
+        ),
+        (
+            "domains other block",
+            RankedDeclaration {
+                domains: CandidateDomains::within([tag(EX_DOMAIN_PEOPLE)]),
+                ..base.clone()
+            },
+        ),
+        (
+            "domains two blocks",
+            RankedDeclaration {
+                domains: CandidateDomains::within([tag(EX_DOMAIN_DOCS), tag(EX_DOMAIN_PEOPLE)]),
+                ..base.clone()
+            },
+        ),
+        (
+            "block column declared",
+            RankedDeclaration {
+                block_position: Some(3),
+                ..base.clone()
+            },
+        ),
+        (
+            "block column elsewhere",
+            RankedDeclaration {
+                block_position: Some(4),
                 ..base.clone()
             },
         ),

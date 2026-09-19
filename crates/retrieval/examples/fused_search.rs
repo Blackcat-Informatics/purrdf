@@ -33,14 +33,41 @@
 //! producer put it there and at what rank, so the compromise is legible rather
 //! than asserted.
 //!
-//! # The bound is stated, because fused enumeration is top-k
+//! # The bound is stated in the request, because fused enumeration is top-k
 //!
-//! `search` takes a row bound rather than defaulting to one: no candidate can be
+//! A request states a row bound rather than defaulting to one: no candidate can be
 //! emitted until it is known not to reappear in another stratum and raise its
-//! total, so fusion is bounded work by construction. The bound here is above
-//! what four documents can yield, so nothing in this answer is decided by it —
-//! and the trailer reports what each producer actually did, which for a corpus
-//! this small is to run out of rows.
+//! total, so fusion is bounded work by construction. It is stated on the
+//! *request* rather than handed to `search`, because the planner derives each
+//! stratum's depth from it — over producers whose declared candidate blocks do not
+//! overlap, the bound is the depth. Both producers here rank the same four
+//! documents and so promise nothing narrower than "anything", which is exactly the
+//! shape that licenses no narrowing; the bound is also above what four documents
+//! can yield, so nothing in this answer is decided by it, and the trailer reports
+//! what each producer actually did — which for a corpus this small is to run out
+//! of rows.
+//!
+//! # The trailer is the rest of the answer
+//!
+//! The rows are what was asked for; the trailer is what a consumer needs in order
+//! to know what the rows are worth, so this example prints all of it rather than
+//! stopping at the ranking. After the statuses and the planned resolution it
+//! reports:
+//!
+//! * **what each index attested** — which generation answered, and whether that
+//!   generation declared itself short. Both are pinned when the index is opened,
+//!   before a single row is pulled, so they describe the read that produced these
+//!   rows and not the state of an index some time afterwards;
+//! * **the evidence identity**, a digest of exactly those attestations. Two
+//!   answers assembled from differently-aged indexes carry different ids even
+//!   when the plan, the profile and every row match;
+//! * **what that makes of the scores** — exact, or a lower bound naming the
+//!   strata whose shortfall made it one. A lower bound is still a real order over
+//!   real rows; what it withdraws is the claim that a missing row would have
+//!   stayed missing;
+//! * **the candidate domains in force**, which say what each producer could ever
+//!   have named. Both producers here rank the same four documents and so promise
+//!   nothing narrower than "anything".
 //!
 //! Every IRI here is the host's own `example.org` vocabulary. PurRDF mints none,
 //! and there is no default producer, stratum or weight to fall back on.
@@ -59,10 +86,11 @@ use purrdf_core::{
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus, RequestTerm,
-    RetrievalRequest, SearchResult, Statistics, Term, TopK, search,
+    RetrievalRequest, ScoreExactness, SearchResult, Statistics, Term, TopK, search,
 };
 use purrdf_sparql_eval::{
-    EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry, TermKind,
+    CandidateDomains, DomainTag, EmbeddingKnnRelation, EmbeddingSpace, IndexGeneration, KnnGuard,
+    PropertyFunctionRegistry, ServiceLevel, TermKind,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 
@@ -274,6 +302,10 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         .ranked_declaration(
             parse_iri(TEXT_STRATUM).expect("the host's stratum IRI is valid"),
             Some(NOTE.to_owned()),
+            // This host's notes and its embedded entities are the same
+            // entities — the example's whole point is a candidate both
+            // producers name — so neither producer restricts its domain.
+            CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");
     registry.register_ranked(TEXT_PRODUCER, Arc::new(text), text_declaration);
@@ -285,6 +317,8 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         // requests name.
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        // As above: one entity space, ranked twice by two laws.
+        CandidateDomains::Unrestricted,
     );
     registry.register_ranked(KNN_PRODUCER, Arc::new(knn), knn_declaration);
 
@@ -298,22 +332,29 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
 /// already holds. The geometry is deliberate: a request may name a modality no
 /// registered producer accepts, and the answer says so per term rather than
 /// letting it vanish.
+///
+/// The bound is part of the request, because it is what the planner derives each
+/// stratum's depth from: `search` reads it from here rather than taking it as an
+/// argument of its own.
 fn request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![
-        RequestTerm::Lexical {
-            text: NEEDLE.to_owned(),
-            language: None,
-            predicate: Some(iri(NOTE)),
-        },
-        RequestTerm::EntitySeed {
-            entity: Term::new(format!("<{}>", subject(SEED))),
-        },
-        RequestTerm::Spatial {
-            geometry: "POINT(0 0)".to_owned(),
-            predicate: iri(PLACE),
-            max_distance: None,
-        },
-    ])
+    RetrievalRequest::bounded(
+        vec![
+            RequestTerm::Lexical {
+                text: NEEDLE.to_owned(),
+                language: None,
+                predicate: Some(iri(NOTE)),
+            },
+            RequestTerm::EntitySeed {
+                entity: Term::new(format!("<{}>", subject(SEED))),
+            },
+            RequestTerm::Spatial {
+                geometry: "POINT(0 0)".to_owned(),
+                predicate: iri(PLACE),
+                max_distance: None,
+            },
+        ],
+        TOP_K,
+    )
 }
 
 /// Unit weights for both strata and `K` smoothing.
@@ -428,6 +469,21 @@ fn report(result: &SearchResult) {
             ProducerStatus::Exhausted { rows_emitted } => {
                 format!("exhausted after {rows_emitted} rows")
             }
+            ProducerStatus::DepthReached { rank } => {
+                format!("stopped at the depth it was given, after rank {rank}")
+            }
+            ProducerStatus::RowBoundReached { rank } => {
+                format!(
+                    "read to the {rank} rows it declared it can serve; whether more exist was \
+                     not observable"
+                )
+            }
+            ProducerStatus::SuppliedQueryEnded { rank } => {
+                format!(
+                    "ran a query text of the caller's own and emitted {rank} row(s); what that \
+                     text left unread was not observable"
+                )
+            }
             ProducerStatus::CeilingReached { bound } => {
                 format!(
                     "still held rows; read down to {} and stopped",
@@ -462,6 +518,63 @@ fn report(result: &SearchResult) {
         );
     }
 
+    // The trailer is where a consumer looks for "what should I know about this
+    // answer", so the exemplar reads all of it rather than the rows alone. Each
+    // block below is a fact no row can carry: which index answered, whether that
+    // index was whole, what that makes of the scores, and which slice of the
+    // candidate universe each producer was ever able to name.
+    println!("\nwhat each index attested (pinned before a row was pulled)");
+    for (stratum, attestation) in &result.trailer.attestations {
+        let generation = match &attestation.generation {
+            IndexGeneration::Declared(generation) => format!("generation {generation}"),
+            IndexGeneration::Undeclared => "no generation declared".to_owned(),
+        };
+        let service = match &attestation.service {
+            ServiceLevel::Undeclared => "declared no shortfall".to_owned(),
+            ServiceLevel::Incomplete { reason } => format!("declared itself SHORT: {reason}"),
+        };
+        println!("  {}: {generation}; {service}", short(stratum));
+    }
+
+    // A pure function of the attestations above, so two answers built from the
+    // same indexes carry the same id and two built from differently-aged ones do
+    // not — whatever else about the query matched.
+    println!("\nevidence identity {}", result.evidence_id);
+
+    println!("\nwhat that makes of the scores");
+    match &result.trailer.exactness {
+        ScoreExactness::Exact => println!(
+            "  exact: no stratum in this fusion declared itself short, so each score is \
+             the whole sum of the contributions that were due"
+        ),
+        ScoreExactness::LowerBounds { strata } => {
+            let named = strata.iter().map(short).collect::<Vec<_>>().join(", ");
+            println!(
+                "  lower bounds: {named} attested an incomplete index, so every score here \
+                 is at most what the whole index would have produced"
+            );
+        }
+    }
+
+    // What each producer promised it could ever name. `Unrestricted` is the
+    // widest promise and the one both producers here make, because both rank the
+    // same four documents; a `Within` declaration is what lets fusion certify a
+    // candidate without draining a stratum that was never going to name it.
+    println!("\ncandidate domains in force");
+    for (stratum, domains) in &result.trailer.domains {
+        let rendered = match domains {
+            CandidateDomains::Unrestricted => "may name any candidate".to_owned(),
+            CandidateDomains::Within(tags) => format!(
+                "restricted to {}",
+                tags.iter()
+                    .map(DomainTag::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        println!("  {}: {rendered}", short(stratum));
+    }
+
     println!("\nrequest terms nothing served");
     if result.unserved_terms.is_empty() {
         println!("  (none)");
@@ -493,7 +606,6 @@ fn main() {
         &*data,
         &environment,
         &profile,
-        TOP_K,
     ))
     .expect("the host's producers answer");
 

@@ -28,9 +28,6 @@ use crate::sparql::{
 };
 use crate::{BlankScope, RdfDatasetBuilder, RdfTerm, SparqlResult, TermValue};
 
-#[cfg(test)]
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
 /// Map the short format id (`json`/`xml`/`csv`/`tsv`) to the crate's format enum.
 fn parse_format(name: &str) -> PyResult<SparqlResultsFormat> {
     match name {
@@ -298,34 +295,4 @@ fn build_ask_py(py: Python<'_>, value: bool) -> PyResult<Bound<'_, PyAny>> {
         ],
     )?;
     Ok(tuple.into_any())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_ids_map_to_enum() {
-        assert_eq!(parse_format("json").unwrap(), SparqlResultsFormat::Json);
-        assert_eq!(parse_format("xml").unwrap(), SparqlResultsFormat::Xml);
-        assert_eq!(parse_format("csv").unwrap(), SparqlResultsFormat::Csv);
-        assert_eq!(parse_format("tsv").unwrap(), SparqlResultsFormat::Tsv);
-        assert!(parse_format("txt").is_err());
-    }
-
-    #[test]
-    fn plain_literal_lowers_to_xsd_string_value() {
-        let term = RdfTerm::literal(crate::RdfLiteral::simple("hi"));
-        match rdf_term_to_value(&term) {
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                ..
-            } => {
-                assert_eq!(lexical_form, "hi");
-                assert_eq!(datatype, XSD_STRING);
-            }
-            other => panic!("expected literal, got {other:?}"),
-        }
-    }
 }

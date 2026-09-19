@@ -38,9 +38,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical::{Reader, Writer};
 use crate::error::PlanError;
+use crate::fuse::TopK;
 use crate::id::{PLAN_VERSION, PlanId};
 use crate::iri::{Iri, Term};
-use crate::request::{Metric, RequestTerm};
+use crate::request::{Metric, ReadBound, RequestTerm};
 
 // Canonical discriminators. One tag space per enum, never reused.
 //
@@ -71,6 +72,9 @@ const REJECT_NOT_RANKED: u8 = 0;
 const REJECT_NO_ACCEPTED_TERM: u8 = 1;
 const REJECT_DEPTH_EXCEEDED: u8 = 2;
 const REJECT_UNSATISFIED_CONSTRAINT: u8 = 3;
+
+const BOUND_COMPLETE: u8 = 0;
+const BOUND_BOUNDED: u8 = 1;
 
 const UNSERVED_NO_PRODUCER_ACCEPTS: u8 = 0;
 const UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED: u8 = 1;
@@ -186,6 +190,14 @@ pub enum RejectionReason {
     /// The producer was omitted because a depth bound excluded it.
     DepthExceeded,
     /// A registry-declared constraint the producer requires was not satisfied.
+    ///
+    /// A producer that declares no access mode at all lands here: it admits no
+    /// invocation, so placement cannot render one. A producer that declares an
+    /// access mode promising **zero rows** does not — that is a measurement of its
+    /// data, not a refusal of its own invocation, so it is selected like any other
+    /// and planned at the floored depth of one, where it reads and reports its own
+    /// emptiness. "Declared nothing" and "declared zero" are different facts and
+    /// only the first is a rejection.
     UnsatisfiedConstraint,
 }
 
@@ -326,6 +338,24 @@ pub struct Plan {
     pub version: u16,
     /// The request terms this plan was built for, in caller order.
     pub request_terms: Vec<RequestTerm>,
+    /// How much of the answer the request asked for, and therefore the bound
+    /// [`Self::stratum_depths`] was derived under.
+    ///
+    /// It is content rather than provenance, and therefore part of [`Self::id`],
+    /// because a plan for five rows and a plan for five hundred are different
+    /// plans: under a request whose strata declare disjoint candidate blocks
+    /// they record different depths, emit different `LIMIT`s and read different
+    /// numbers of rows. Two plans that agree on everything else and disagree
+    /// here must not share an identity, or a caller comparing identities would
+    /// be told two different reads were the same one.
+    ///
+    /// It is also what lets a bound mismatch be caught rather than guessed at.
+    /// The depths below are honest for *this* bound; fusing the compiled bundle
+    /// at another is refused by name
+    /// ([`FusionError::ReadBoundMismatch`](crate::FusionError::ReadBoundMismatch)),
+    /// because a depth derived for five rows cannot serve five hundred and the
+    /// recorded depth would be describing a read nobody asked for.
+    pub read_bound: ReadBound,
     /// The producers selected, with the request terms each was bound to.
     pub producer_bindings: Vec<ProducerBinding>,
     /// Every producer considered, selected or rejected, with reasons.
@@ -389,6 +419,7 @@ impl PartialEq for Plan {
     fn eq(&self, other: &Self) -> bool {
         self.version == other.version
             && self.request_terms == other.request_terms
+            && self.read_bound == other.read_bound
             && self.producer_bindings == other.producer_bindings
             && self.producer_decisions == other.producer_decisions
             && self.unserved_terms == other.unserved_terms
@@ -422,6 +453,7 @@ impl Plan {
         writer.u64(self.registry_instance_id.as_u64());
         writer.string(&self.registry_content_fingerprint);
         write_unserved_terms(&mut writer, &self.unserved_terms);
+        write_read_bound(&mut writer, self.read_bound);
         writer.into_bytes()
     }
 
@@ -449,6 +481,7 @@ impl Plan {
         let registry_instance_id = RegistryId::from_raw(reader.u64()?);
         let registry_content_fingerprint = reader.string("registry content fingerprint")?;
         let unserved_terms = read_unserved_terms(&mut reader)?;
+        let read_bound = read_read_bound(&mut reader)?;
         reader.finish()?;
         // Reconstructed from bytes, so the instance id just read is a counter
         // value this process cannot have minted; the plan is held to its
@@ -458,6 +491,7 @@ impl Plan {
             origin: PlanOrigin::Deserialized,
             version,
             request_terms,
+            read_bound,
             producer_bindings,
             producer_decisions,
             unserved_terms,
@@ -648,6 +682,52 @@ fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, Pla
         });
     }
     Ok(terms)
+}
+
+/// Write the request's read bound: its arm's discriminator byte, then the row
+/// count the bounded arm carries.
+///
+/// The count goes out as a `u64` rather than as the `usize` [`TopK`] holds, so
+/// the bytes — and therefore the identity digested from them — are the same on a
+/// 32-bit and a 64-bit target. A count wider than a `u64` is not expressible in a `usize`
+/// on any target this workspace builds for, so the conversion cannot lose one.
+fn write_read_bound(writer: &mut Writer, bound: ReadBound) {
+    match bound {
+        ReadBound::Complete => writer.u8(BOUND_COMPLETE),
+        ReadBound::Bounded(top_k) => {
+            writer.u8(BOUND_BOUNDED);
+            writer.u64(top_k.get() as u64);
+        }
+    }
+}
+
+/// Read the read bound written by [`write_read_bound`].
+///
+/// An unknown arm byte is a refusal for the reason every other tag in this module
+/// is refused: the two arms license different depths, so reading one as the other
+/// would admit a plan whose recorded depths were derived under a bound this build
+/// then ignored.
+///
+/// A count a `usize` cannot hold is refused rather than clamped. Clamping it
+/// would answer a narrower question than the plan asked while still reporting the
+/// plan's own identity, and a bound is the one field where "smaller" is not a
+/// safe direction — it is the number the recorded depths were derived from.
+fn read_read_bound(reader: &mut Reader<'_>) -> Result<ReadBound, PlanError> {
+    match reader.u8()? {
+        BOUND_COMPLETE => Ok(ReadBound::Complete),
+        BOUND_BOUNDED => {
+            let rows = reader.u64()?;
+            let rows = usize::try_from(rows).map_err(|_| PlanError::InvalidTag {
+                what: "read bound row count wider than this target's usize",
+                tag: BOUND_BOUNDED,
+            })?;
+            Ok(ReadBound::Bounded(TopK::new(rows)))
+        }
+        tag => Err(PlanError::InvalidTag {
+            what: "read bound",
+            tag,
+        }),
+    }
 }
 
 /// Write an IRI as its length-framed canonical text.

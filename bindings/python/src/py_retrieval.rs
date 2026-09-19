@@ -85,6 +85,13 @@
 //! default weight, and no invented statistics revision: `k`, `decay` and `top_k`
 //! are required keywords for the same reason.
 //!
+//! `top_k` is required on **all three** entry points, including the two that
+//! execute nothing, because the row bound is a planning input rather than a
+//! trailing preference. It is what each stratum's depth is derived from wherever
+//! the producers' own `domains` declarations make that sound, so a `plan` or
+//! `compile` call without it would report a depth, a `LIMIT` and an identity for a
+//! read nobody asked for.
+//!
 //! `decay` is the one of those that looks most like it could have a default and
 //! least can. It names the rank-decay rule the fusion law runs under, and the two
 //! rules compute **different numbers** from the same weights:
@@ -124,6 +131,122 @@
 //! point of the fusion. A `text_producers` map that names one stratum twice is
 //! refused where it is registered.
 //!
+//! # What a producer may name, and what a host has to tell it
+//!
+//! A `text_producers` entry may be written as a fourth element beside the three
+//! it already carries — `(stratum, predicate, graph, domains)` — where `domains`
+//! is `None` or a list of domain-tag IRIs. It is the second promise a producer
+//! makes about its own rows, beside its duplicate policy, and like that one it
+//! is host-supplied configuration read at registration rather than anything the
+//! engine infers.
+//!
+//! It buys a **reading**, never an answer. A fused score is exact only when
+//! every stream that could still name a candidate has named it, and with no
+//! declaration "could still name it" is true of every open stream — so over
+//! strata whose candidate sets do not overlap, a top-ten drains both streams to
+//! their ends, because no confirmation is ever coming. A declaration lets the
+//! fusion skip the streams that *provably* cannot name a candidate and only
+//! those: the finality test does not get weaker, its quantifier gets smaller.
+//! The rows, the scores and the provenance are identical either way; what
+//! changes is how many ranks were pulled to reach them, which the answer reports
+//! under `"observed_resolution"` and `"statuses"`.
+//!
+//! `None` — or an omitted fourth element — is `Unrestricted`: "this producer may
+//! name anything", the honest value for a host that does not know how its
+//! indexes partition, and exactly the behaviour this binding had before the
+//! parameter existed. An **empty list** is refused by name: a promise to name
+//! nothing is not a narrow producer, it is a producer that should not be
+//! registered, and a consumer holding it to that declaration row by row would
+//! refuse its first row.
+//!
+//! A list of **more than one** tag is refused by name as well, and the refusal is
+//! about what this binding can register rather than about the declaration. One
+//! tag says where every row of this producer lies, so a consumer reads the block
+//! off the declaration and no row has to repeat it. Several tags say only that
+//! the rows lie somewhere in that set, which obliges the producer to name each
+//! row's own block — and the two ranked relations this surface builds project a
+//! candidate and a score and declare no column such a block could be read out
+//! of, because a tag describes how a host's corpora partition and only the host
+//! knows that. Refused at registration, where a caller can act on it, rather
+//! than at the first row pulled, where it arrives as a failure of the fusion.
+//! The exits are the ones the refusal names: one tag, one producer per block, or
+//! `None`.
+//!
+//! Nothing is defaulted from a stratum or from a graph, here or below. Which
+//! entities a text index names is a fact about the host's corpus that neither
+//! this layer nor the relation can see, and a tag derived per stratum would hand
+//! two producers over one entity space a pair of tags a consumer reads as
+//! disjoint. That mistake is not conservative in either direction: it refuses a
+//! valid query where both producers name one entity, and certifies a score
+//! missing the other's contribution where they do not.
+//!
+//! # What only the host can say about the index behind a producer
+//!
+//! A fifth element may follow the four above — `(stratum, predicate, graph,
+//! domains, (generation, incompleteness))` — and it is the one part of a producer
+//! that nothing crossing this boundary can express. Two facts can change an
+//! answer while every input the engine sees stays identical: WHICH version of the
+//! host's index answered, and whether that index was WHOLE. A corpus read out of
+//! a search index mid-rebuild is the same document as one read out of a whole
+//! index, so if the host does not say, nothing can.
+//!
+//! Each member is a `str` or `None`, recorded verbatim and never parsed, and each
+//! axis is independently absent. `None` is SILENCE on both: never a claim that
+//! the index was current, and never a certificate that it was whole. A spec that
+//! writes no attestation position declares exactly that silence, which is what
+//! every `text_producers` value declared before this position existed.
+//!
+//! The two axes reach the answer differently, and only one of them is a
+//! shortfall:
+//!
+//! * `incompleteness` — the host's own reason the index was not whole, e.g.
+//!   `"shard 3 of 4 is still rebuilding"` — is reported verbatim under
+//!   `"attestations"[stratum]["incomplete"]`, and it makes `"exactness"` say
+//!   `{"exact": False, "lower_bounds_for": [stratum, …]}`. Every score in that
+//!   answer is then a LOWER BOUND on the score a whole index would have produced.
+//!   This lane REPORTS it rather than refusing, because its answer has a slot to
+//!   say it in — the same rule the SPARQL lane follows, decided by what the
+//!   return type can carry.
+//! * `generation` — the host's own name for the index version that answered — is
+//!   reported under `"attestations"[stratum]["generation"]` and is NOT a
+//!   shortfall: an answer whose producers named only generations is still exact.
+//!   It REPLACES what the shipped text relation would otherwise attest, which is
+//!   the content digest of the index this call built, because the kernel pins
+//!   exactly one generation per invocation and two distinct ones are its
+//!   diagnostic for an index that moved under the query. Declaring one is
+//!   therefore a choice to identify the index by the host's own spelling; a
+//!   spelling that does NOT move when the host's corpus does makes two answers
+//!   from two index states carry one `"evidence_id"`, which is the whole thing
+//!   that identity exists to prevent. Declaring an incompleteness alone changes
+//!   no generation: an axis left silent delegates to the relation's own.
+//!
+//! [`plan`] and [`compile`] read the same value, because one producer
+//! declaration serves all three entry points, and neither reports it: they
+//! execute nothing, so no index has answered yet and there is nothing to attest
+//! about. It reaches no plan, no compiled unit and no identity either of them
+//! returns — including the registry's content fingerprint, which is a function of
+//! what each producer declares to the PLANNER, and an attestation declares
+//! nothing there.
+//!
+//! # The evidence an answer carries about the indexes that served it
+//!
+//! [`search`]'s answer carries, beside its rows, what each stratum's index said
+//! about itself. `"attestations"` maps a stratum to `{"generation", "incomplete"}`,
+//! both independently `None`; `"exactness"` says whether the scores are exact or
+//! floors, naming the strata that came up short; `"domains"` reports the
+//! declaration each stream actually fused under; and `"evidence_id"` is the
+//! content identity of the attestation map, the third of the three identities
+//! beside `"plan_id"` and `"profile_id"`.
+//!
+//! The one thing none of them says is "the index was whole". `None` under
+//! `"incomplete"` is silence, not a certificate: the engine-side service level
+//! has no `Whole` variant, because a producer stopped at the engine's row
+//! ceiling never looked at the rows it was licensed to skip and so could not
+//! honestly certify anything about them. The seam asks the one question with an
+//! honest answer on every path — *was your index NOT whole?* — and reading its
+//! silence as certification would put a claim in the mouth of every producer
+//! that never spoke.
+//!
 //! # Two identities, and only one of them survives the call
 //!
 //! Registration is **per call** here, exactly as it is on the query surface: the
@@ -147,8 +270,66 @@
 //! index that cannot declare a ranked order) is a Python `ValueError` carrying
 //! the engine's message; a malformed argument shape is a `TypeError`. The cores
 //! below are panic-free, so nothing unwinds across the FFI boundary.
+//!
+//! Two of those messages are a producer being held to its own declaration, and
+//! both name the stratum so a host holding several knows which one to fix:
+//! *"stream for stratum S emitted item I more than once"* is a producer that
+//! declared unique candidates and repeated one, and *"stream for stratum S named
+//! item I, which its declared candidate domains cannot reach; stratum T already
+//! named it"* is a pair of domain declarations that place one candidate in two
+//! disjoint blocks. Neither is silently repaired: the declaration has already
+//! been used to certify rows, so a merged late contribution would be a score its
+//! own provenance contradicts. The second is fixed by declaring the tag the two
+//! producers share, or `None` — both fuse the overlapping entity into one row
+//! carrying both contributions.
+//!
+//! A third refusal in that family never reaches the fusion at all: a `domains`
+//! list of **more than one** tag is refused where it is written, before a
+//! registry exists, naming the producer that declared it and the three exits
+//! (one tag, one producer per block, `domains=None`). It used to arrive at the
+//! first row pulled instead, as the fusion's *"restricted its candidates to …
+//! but the row at rank R names no block, so nothing backs that restriction"* —
+//! a registration-time defect in a query-time failure's clothes.
+//!
+//! That leaves the engine's three row-level block refusals unreachable from this
+//! binding today, which is a property of what this surface can register and not
+//! a claim that they are unreal: each is a live refusal for a host writing its
+//! own relation on the Rust surface. The *"nothing backs that restriction"* one
+//! is the message the registration refusal above forecloses. The other two —
+//! *"named item I in block B, which its declared domains … do not include"* and
+//! *"name item I from two different blocks"* — need a producer whose rows DO
+//! name their own block, and both relations this module builds declare no block
+//! column, so nothing registered here can emit such a row. What a Python host
+//! can actually meet is the two stratum-level messages above and the
+//! registration refusal.
+//!
+//! Two terminal *statuses* are unreachable here for the same kind of reason, and
+//! they are recorded next to those refusals because a reader checking whether a
+//! status is testable from Python will look in one place for all of them.
+//!
+//! `"supplied_query_ended"` — a unit running a query text the host wrote rather
+//! than one this layer rendered, whose own internal bound the layer cannot see —
+//! needs a caller-assembled bundle. This surface compiles every unit it runs and
+//! accepts no bundle from a caller, so no stratum a Python host can configure can
+//! end that way. It is mapped here for the same reason the next one is: a host
+//! fusing streams from the Rust surface can be handed it.
+//!
+//! `"row_bound_reached"`
+//! — the producer stopping at the row count it declared it can serve per
+//! invocation — needs a **self-bounding** producer: one whose declaration places
+//! the depth as an argument the producer itself reads, so the read cannot reach
+//! for the row past it and how that read ended is not observable. The only
+//! relation this module registers is the text-search one, whose ranked
+//! declaration places no depth argument, so every stratum a Python host can
+//! configure is bounded by the unit's own emitted `LIMIT` and ends
+//! `"exhausted"`, `"depth_reached"` or `"ceiling_reached"` instead. The status is
+//! documented on [`search`] and mapped here because a host fusing streams from
+//! the Rust surface can be handed it, and reading it as "that was all of it"
+//! would be the exact mistake the seven spellings exist to prevent. Making it
+//! reachable from Python means letting a caller register a producer of its own,
+//! which this surface does not do.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -157,15 +338,18 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use crate::attestation::Attestation;
 use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
     Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason,
-    RequestTerm, RetrievalRequest, SearchResult, Statistics, Term, ToleratedDepth, TopK,
-    UnservedReason,
+    RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, Statistics, Term, ToleratedDepth,
+    TopK, UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
-use purrdf_sparql_eval::PropertyFunctionRegistry;
+use purrdf_sparql_eval::{
+    CandidateDomains, DomainTag, IndexGeneration, PropertyFunctionRegistry, ServiceLevel,
+};
 
 /// The number of decimal digits in one whole fixed-point unit.
 ///
@@ -228,6 +412,27 @@ struct TextProducer {
     predicate: String,
     /// Which graphs the index reads.
     graph: GraphSpec,
+    /// Which blocks of the candidate universe this producer promises its rows
+    /// lie in, as the host spelled them, or `None` for the unrestricted
+    /// declaration.
+    ///
+    /// Host-supplied and never derived. Which entities a text index names is a
+    /// fact about the host's corpus, and neither this layer nor the relation can
+    /// see it: deriving a tag per stratum would hand two producers over one
+    /// entity space a pair of tags a consumer reads as disjoint, which makes a
+    /// fusion refuse a valid query in one direction and certify a score missing
+    /// a contribution in the other. `None` is the honest value where the host
+    /// does not know, and it is exactly what this binding declared before the
+    /// parameter existed.
+    domains: Option<Vec<String>>,
+    /// What the host declares about the index this producer's rows came from:
+    /// which version of it answered, and whether it was **not** whole.
+    ///
+    /// [`Attestation::UNDECLARED`] — silence on both axes — is what a spec that
+    /// wrote no attestation position declares, and it leaves the registration
+    /// byte-for-byte what it was before that position existed. See this module's
+    /// header for what each axis does to the answer.
+    attestation: Attestation,
 }
 
 /// The statistics provider the host supplied, as owned data.
@@ -288,7 +493,7 @@ struct Call {
     statistics: HostStatistics,
 }
 
-// ── pure-Rust cores (unit-tested without a Python interpreter) ───────────────
+// ── pure-Rust cores (PyO3-free, exercised through the pytest suite) ──────────
 
 /// Map the Python-surface data format name onto the native codec's media type.
 fn data_media_type(format: &str) -> Result<&'static str, String> {
@@ -305,6 +510,96 @@ fn data_media_type(format: &str) -> Result<&'static str, String> {
 /// Parse one caller-supplied IRI through the layer's own validator.
 fn retrieval_iri(role: &str, text: &str) -> Result<Iri, String> {
     Iri::parse(text).map_err(|e| format!("{role} <{text}>: {e}"))
+}
+
+/// Read one producer's host-declared candidate domains.
+///
+/// `None` is `CandidateDomains::Unrestricted` — "this producer may name
+/// anything" — which licenses a consumer to skip nothing and is the behaviour
+/// every answer this binding produced before domains could be declared. A list
+/// is `CandidateDomains::Within`, each entry validated as an IRI by the same
+/// parser every other IRI on this surface goes through.
+///
+/// An EMPTY list is refused here rather than read as the unrestricted
+/// declaration, and the two are not neighbours that could be quietly merged: an
+/// empty restriction promises the producer names nothing at all, a consumer
+/// holds a producer to that row by row, and so every row it emitted would
+/// contradict its own declaration. `register_ranked` refuses it on the Rust side
+/// by panicking, which must never reach the FFI boundary, so the same refusal is
+/// raised here — before the registry is touched — as a `ValueError` naming the
+/// producer that declared it.
+///
+/// A list of MORE THAN ONE tag is refused here too, and for a reason that is
+/// specific to this binding rather than to the declaration itself. A
+/// several-block restriction says only that the producer's candidates lie
+/// *somewhere* in that set, so a consumer that wants to hold it to a row has to
+/// be told which block that row came from — the per-row fact
+/// `RankedDeclaration::block_position` points at. The ranked relations this
+/// module can build project a candidate and a score and nothing else, and both
+/// declare no block column, because a domain tag describes how a host's corpora
+/// partition and only the host knows that. So a several-block list from Python
+/// is a restriction that no row this binding can produce is able to back, and a
+/// fusion holding the stream to it refuses the very first row it pulls. That is
+/// a registration-time defect wearing a query-time failure's clothes, so it is
+/// refused where the caller wrote it, with the exits that do work: one tag (the
+/// block whose rows this producer really ranks), one producer per block, or
+/// `None`.
+///
+/// A one-tag list needs no per-row fact and is fully supported: the block is
+/// *entailed* by the declaration, and the executor reads it straight off the
+/// declaration for every row. The count that decides between the two is taken
+/// after the tags become a set, so a list repeating one tag is the one-block
+/// declaration it means; and the blocks the refusal quotes are quoted in the
+/// set's own canonical order, so two hosts that wrote the same blocks in
+/// different orders read the same message about the same declaration.
+fn candidate_domains(
+    producer: &str,
+    declared: Option<&[String]>,
+) -> Result<CandidateDomains, String> {
+    let Some(tags) = declared else {
+        return Ok(CandidateDomains::Unrestricted);
+    };
+    if tags.is_empty() {
+        return Err(format!(
+            "text producer <{producer}>: `domains` is an empty list, which promises that this \
+             producer names no candidate at all rather than narrowing the ones it names. A \
+             consumer holds a producer to that declaration row by row, so every row this \
+             producer emitted would contradict it. Name the domains it really draws from, or \
+             pass `domains=None`, which is the honest statement that it may name anything"
+        ));
+    }
+    let mut blocks = BTreeSet::new();
+    for tag in tags {
+        let iri = crate::iri::parse(tag)
+            .map_err(|e| format!("text producer <{producer}>: domain tag <{tag}>: {e}"))?;
+        blocks.insert(DomainTag::new(iri));
+    }
+    // Counted after the set absorbs them, so a list that spells one block twice
+    // is the satisfiable one-block declaration it means rather than a refusal
+    // over an arity the declaration does not actually have.
+    if blocks.len() > 1 {
+        let listed = blocks
+            .iter()
+            .map(|tag| format!("<{}>", tag.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "text producer <{producer}>: `domains` names {count} blocks [{listed}], and a \
+             several-block declaration only says this producer's candidates lie somewhere in that \
+             set — it obliges the producer to say, row by row, which of those blocks each row came \
+             from. The ranked relations this surface builds project a candidate and a score and \
+             declare no block column, because a domain tag describes how a host's corpora \
+             partition and only the host knows that. So this is a restriction no row this producer \
+             can emit is able to back, and a fusion holding it to the declaration refuses its \
+             first row. Three exits work: pass exactly ONE domain tag, naming the block this \
+             producer's rows really lie in — a single tag entails the per-row fact and needs no \
+             block column; or register one producer per block, each with its own single tag and \
+             its own stratum; or pass `domains=None`, which restricts nothing and costs only the \
+             earlier certification a narrower claim would have bought",
+            count = blocks.len()
+        ));
+    }
+    Ok(CandidateDomains::Within(blocks))
 }
 
 /// Parse the document every stage runs against.
@@ -357,10 +652,21 @@ fn build_registry(
                 producer.producer, producer.stratum
             )
         })?;
+        let domains = candidate_domains(&producer.producer, producer.domains.as_deref())?;
+        // Read off the relation itself, BEFORE the host's attestation wraps it:
+        // what a producer declares to the planner is what the relation can
+        // honestly declare, and an attestation says nothing about arity, modes or
+        // ranked order. The wrapper delegates every one of those, so the
+        // declaration would be identical either way; taking it from the relation
+        // is what makes that true by construction rather than by inspection.
         let declaration = relation
-            .ranked_declaration(stratum, Some(producer.predicate.clone()))
+            .ranked_declaration(stratum, Some(producer.predicate.clone()), domains)
             .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
-        registry.register_ranked(&producer.producer, Arc::new(relation), declaration);
+        registry.register_ranked(
+            &producer.producer,
+            producer.attestation.clone().wrap(Arc::new(relation)),
+            declaration,
+        );
     }
     Ok(registry)
 }
@@ -418,7 +724,7 @@ fn run_compile(
 }
 
 /// Run the whole ladder and return the fused answer.
-fn run_search(call: &Call, profile: &FusionProfile, top_k: TopK) -> Result<SearchResult, String> {
+fn run_search(call: &Call, profile: &FusionProfile) -> Result<SearchResult, String> {
     let data = build_dataset(call)?;
     let registry = build_registry(&data, &call.producers)?;
     let environment = AdmissionEnvironment {
@@ -433,7 +739,6 @@ fn run_search(call: &Call, profile: &FusionProfile, top_k: TopK) -> Result<Searc
         &*data,
         &environment,
         profile,
-        top_k,
     ))
     .map_err(|e| e.to_string())
 }
@@ -712,7 +1017,7 @@ fn partial_fusion_law(weights: bool, k: bool, decay: bool) -> String {
 }
 
 /// Collect the request term list.
-fn collect_request(request: &Bound<'_, PyAny>) -> PyResult<RetrievalRequest> {
+fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<RetrievalRequest> {
     let items = request
         .try_iter()
         .map_err(|_| PyTypeError::new_err("`request` must be a sequence of request-term tuples"))?;
@@ -720,28 +1025,84 @@ fn collect_request(request: &Bound<'_, PyAny>) -> PyResult<RetrievalRequest> {
     for (index, item) in items.enumerate() {
         terms.push(request_term(index, &item?)?);
     }
-    Ok(RetrievalRequest::from_terms(terms))
+    // The bound is part of the request, not an argument of the last stage: the
+    // planner derives every stratum's depth from it, so a request that asks for a
+    // different number of rows is a different plan with different depths and a
+    // different identity. Every entry point on this surface therefore takes it,
+    // including the two that execute nothing.
+    Ok(RetrievalRequest::bounded(terms, TopK::new(top_k)))
 }
 
 /// Collect the `text_producers` dict into the ordered declarations one call
-/// registers: `producer_iri -> (stratum_iri, predicate_iri, graph)`.
+/// registers: `producer_iri -> (stratum_iri, predicate_iri, graph)`, or
+/// `producer_iri -> (stratum_iri, predicate_iri, graph, domains)`, or the same
+/// four followed by one `(generation, incompleteness)` attestation.
+///
+/// The fourth element is the producer's candidate-domain declaration: `None`
+/// for the unrestricted promise, or a list of domain-tag IRIs. Omitting it
+/// entirely is the same declaration as `None` — the widest promise, which
+/// licenses a consumer to skip nothing — so a host that never heard of domains
+/// keeps exactly the reading it had.
+///
+/// # The attestation is the FIFTH position, and that is not an accident
+///
+/// A `domains` value and an attestation are both sequences, so on a four-element
+/// value the two are genuinely ambiguous: `("a", "b")` is a well-formed
+/// two-tag restriction AND a well-formed attestation, and nothing in either value
+/// says which the host meant. Guessing between them is the silent-wrong reading
+/// this whole surface exists to refuse — one guess registers a producer whose
+/// rows cannot back a restriction it never made, the other reports a domain tag
+/// back to an operator as an index generation. So the position is fixed: a spec
+/// that attests writes its `domains` position explicitly, and `None` there
+/// restricts nothing. The shape refusal spells all three accepted widths.
+///
+/// # Errors
+///
+/// `TypeError` naming the accepted shapes when the value is not a sequence of
+/// three, four or five positions, or when the fifth is not a two-member sequence;
+/// `TypeError` naming the field when an attestation member is neither `str` nor
+/// `None`, or when a mandatory position is not a string.
 fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer>> {
     let mut declared = Vec::with_capacity(producers.len());
     for (key, value) in producers {
         let producer: String = key
             .extract()
             .map_err(|_| PyTypeError::new_err("text producer keys must be IRI strings"))?;
-        let fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| {
+        let shape = || {
             PyTypeError::new_err(format!(
-                "text producer <{producer}>: the value is (stratum, predicate, graph)"
+                "text producer <{producer}>: the value is (stratum, predicate, graph), \
+                 (stratum, predicate, graph, domains), or (stratum, predicate, graph, domains, \
+                 (generation, incompleteness)) — an attestation is the fifth position, because a \
+                 fourth-position sequence is already a `domains` list and guessing between the \
+                 two would report one back as the other"
             ))
-        })?;
+        };
+        let mut fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
+        // Read off the tail first, deepest position first: the three mandatory
+        // fields are destructured as an array, which consumes the vector, so both
+        // optional positions have to leave before that happens.
+        let attestation = match fields.len() {
+            3 | 4 => Attestation::UNDECLARED,
+            5 => {
+                let trailing = fields.remove(4);
+                // A fifth position that is not even SHAPED like an attestation
+                // reports the accepted widths rather than a diagnostic about a
+                // position the caller may never have meant to write; one that is
+                // shaped like an attestation but carries the wrong member types
+                // keeps its own precise diagnostic, which `Attestation::read`
+                // raises.
+                Attestation::read(&format!("text producer <{producer}>"), &trailing)?
+                    .ok_or_else(shape)?
+            }
+            _ => return Err(shape()),
+        };
+        let domains = match fields.len() {
+            3 => None,
+            4 => Some(fields.remove(3)),
+            _ => return Err(shape()),
+        };
         let [stratum, predicate, graph] =
-            <[Bound<'_, PyAny>; 3]>::try_from(fields).map_err(|_| {
-                PyTypeError::new_err(format!(
-                    "text producer <{producer}>: the value is (stratum, predicate, graph)"
-                ))
-            })?;
+            <[Bound<'_, PyAny>; 3]>::try_from(fields).map_err(|_| shape())?;
         let field = |label: &str, value: &Bound<'_, PyAny>| -> PyResult<String> {
             value.extract().map_err(|_| {
                 PyTypeError::new_err(format!(
@@ -749,12 +1110,25 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
                 ))
             })
         };
+        let domains = match domains {
+            Some(value) if !value.is_none() => Some(value.extract::<Vec<String>>().map_err(|_| {
+                PyTypeError::new_err(format!(
+                    "text producer <{producer}>: `domains` is a list of domain-tag IRI strings, \
+                     or None for the unrestricted declaration (this producer may name anything). \
+                     An attestation is the FIFTH position, written after a `domains` position of \
+                     its own"
+                ))
+            })?),
+            _ => None,
+        };
         let graph =
             GraphSpec::parse(&producer, &field("graph", &graph)?).map_err(PyValueError::new_err)?;
         declared.push(TextProducer {
             stratum: field("stratum", &stratum)?,
             predicate: field("predicate", &predicate)?,
             graph,
+            domains,
+            attestation,
             producer,
         });
     }
@@ -862,15 +1236,22 @@ fn collect_statistics(
 
 /// Convert every Python argument the three entry points share into owned Rust
 /// data, so the engine call itself runs with the GIL released.
+///
+/// `top_k` is one of those shared arguments rather than `search`'s alone, because
+/// the row bound is a planning input: it decides how deep each stratum is read and
+/// therefore which plan a request is. A `plan` or `compile` call that did not carry
+/// it would report a depth, a `LIMIT` and an identity for a read nobody asked
+/// for.
 fn collect_call(
     data: &str,
     request: &Bound<'_, PyAny>,
     text_producers: &Bound<'_, PyDict>,
     statistics: &Bound<'_, PyDict>,
+    top_k: usize,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Call> {
-    let request = collect_request(request)?;
+    let request = collect_request(request, top_k)?;
     let statistics = collect_statistics(statistics, &request)?;
     Ok(Call {
         data: data.to_owned(),
@@ -1016,6 +1397,26 @@ fn planned_resolution_dict<'py>(
 /// Render one compiled plan as a dict: the plan document, the per-stratum
 /// SPARQL, the two identities that pin the units, and what the plan's depths
 /// will cost in rank resolution under the law the caller named.
+///
+/// Each unit carries its `"depth"` beside its `"sparql"`, because the emitted
+/// text is written exactly one row deeper than the plan reads: that last row is a
+/// probe the executor reads to
+/// tell an exhausted producer from a depth-cut one, and it is never a value. A
+/// host that runs the text itself has no other honest source for the number of
+/// rows it may keep — the depth is not recoverable from the text, and
+/// `planned_resolution` answers only when the call named a fusion law — so the
+/// bound travels with the text it bounds.
+///
+/// `"declared_rows"` travels beside it because the depth alone does not say which
+/// of two situations a host is in. A depth *below* the declaration leaves rows
+/// underneath the read; a depth *on* it means the producer has promised there is
+/// nothing further, and the probe row is what checks that promise. Those are
+/// different facts about the same run, and the difference is not recoverable from
+/// the depth, the text or the plan — only from the number the registry declared.
+/// It is `None` for a producer that declared no access mode and therefore no row
+/// count at all, because "declared nothing" and "declared zero" are different
+/// facts here too: an absent declaration can refuse nothing, while a zero is a
+/// measurement of the producer's data.
 fn compile_dict<'py>(
     py: Python<'py>,
     planned: &Plan,
@@ -1027,7 +1428,19 @@ fn compile_dict<'py>(
     for unit in &compiled.units {
         let entry = PyDict::new(py);
         entry.set_item("stratum", unit.stratum.as_str())?;
-        entry.set_item("sparql", &unit.sparql)?;
+        // Rendered rather than read off a field: the unit carries the query body
+        // and appends its own bound, so the text a host runs cannot disagree with
+        // the depth beside it. The value is byte-identical to what the field held.
+        entry.set_item("sparql", unit.sparql())?;
+        // The unit's own reportable bound, read off the field that carries it
+        // rather than re-derived from the text or looked up again in the plan:
+        // the text's `LIMIT` is the emitted bound, which includes the probe.
+        entry.set_item("depth", unit.depth())?;
+        // The declaration the depth above was checked against, projected and never
+        // defaulted: `None` stays `None` all the way out to the host, because a
+        // producer that declared no access mode declared no row count, and a zero
+        // put there in its place would be a measurement nobody took.
+        entry.set_item("declared_rows", unit.declared_rows())?;
         units.append(entry)?;
     }
     out.set_item("units", units)?;
@@ -1077,6 +1490,28 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
                 entry.set_item("status", "exhausted")?;
                 entry.set_item("rows_emitted", rows_emitted)?;
             }
+            ProducerStatus::DepthReached { rank } => {
+                entry.set_item("status", "depth_reached")?;
+                entry.set_item("rank", rank)?;
+            }
+            // The producer read to the row count it registered and could not be
+            // asked for the row past it, so how the read ended was not observable.
+            // It carries a rank like `"depth_reached"` and claims nothing about what
+            // lies below it, which is the whole difference between the two.
+            ProducerStatus::RowBoundReached { rank } => {
+                entry.set_item("status", "row_bound_reached")?;
+                entry.set_item("rank", rank)?;
+            }
+            // A unit running a query text the host supplied rather than one this
+            // layer rendered. The layer bounds only the outside of such a text, so
+            // what that text bounds inside itself — and therefore what it left
+            // unread — was not observable. It carries a rank like
+            // `"depth_reached"` and, like `"row_bound_reached"`, claims nothing
+            // about what lies below it.
+            ProducerStatus::SuppliedQueryEnded { rank } => {
+                entry.set_item("status", "supplied_query_ended")?;
+                entry.set_item("rank", rank)?;
+            }
             ProducerStatus::CeilingReached { bound } => {
                 entry.set_item("status", "ceiling_reached")?;
                 entry.set_item("bound", bound.to_decimal_lexical())?;
@@ -1092,6 +1527,85 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         statuses.set_item(stratum.as_str(), entry)?;
     }
     out.set_item("statuses", statuses)?;
+
+    // What the index behind each handed stream attested, keyed by stratum. The
+    // two axes are independent and each is independently absent: `None` under
+    // "generation" is "this producer declared no generation", and `None` under
+    // "incomplete" is "this producer said nothing about whether its index was
+    // whole". Neither absence may be read as a claim — least of all the second,
+    // which has no opposite to be read as: the engine-side `ServiceLevel` has no
+    // `Whole` variant, deliberately, because a producer stopped at the engine's
+    // row ceiling never looked at the rows it was licensed to skip and so could
+    // not certify wholeness even if asked. The seam asks the narrower question
+    // that has an honest answer on every path — *was your index NOT whole?* — so
+    // silence here is silence.
+    //
+    // The key set is the streams this fusion was handed, and a stratum that
+    // never became a stream is absent rather than reported as `Undeclared`:
+    // "declined to answer" and "was never asked" are different facts.
+    let attestations = PyDict::new(py);
+    for (stratum, attestation) in &result.trailer.attestations {
+        let entry = PyDict::new(py);
+        entry.set_item(
+            "generation",
+            match &attestation.generation {
+                IndexGeneration::Undeclared => None,
+                IndexGeneration::Declared(generation) => Some(&**generation),
+            },
+        )?;
+        entry.set_item(
+            "incomplete",
+            match &attestation.service {
+                ServiceLevel::Undeclared => None,
+                ServiceLevel::Incomplete { reason } => Some(reason.as_str()),
+            },
+        )?;
+        attestations.set_item(stratum.as_str(), entry)?;
+    }
+    out.set_item("attestations", attestations)?;
+
+    // Whether the scores are exact, read off the same attestations. `False` does
+    // not make the answer wrong: every row in it is a real row in this fusion's
+    // own certified order, and every score is a LOWER BOUND on the score the
+    // whole index would have produced. What does not follow is that a row absent
+    // from the answer would have stayed absent, or that the emitted order would
+    // have survived the missing contributions. The strata named are exactly the
+    // ones that attested an incomplete index, in canonical order, and each one's
+    // verbatim reason is under the same key in "attestations" — so the list is
+    // the set of indexes to rebuild rather than a flag to shrug at.
+    let exactness = PyDict::new(py);
+    match &result.trailer.exactness {
+        ScoreExactness::Exact => {
+            exactness.set_item("exact", true)?;
+            exactness.set_item("lower_bounds_for", Vec::<&str>::new())?;
+        }
+        ScoreExactness::LowerBounds { strata } => {
+            exactness.set_item("exact", false)?;
+            exactness.set_item(
+                "lower_bounds_for",
+                strata.iter().map(Iri::as_str).collect::<Vec<_>>(),
+            )?;
+        }
+    }
+    out.set_item("exactness", exactness)?;
+
+    // The candidate-domain declaration each handed stream fused under, verbatim:
+    // `None` where the producer promised only that it may name anything, and the
+    // tag IRIs in canonical order where it restricted itself. It is on the
+    // answer because it is an input the answer cannot otherwise be audited
+    // against — these declarations decide which streams fusion was allowed to
+    // skip when it certified a row, so a reader asking why a stratum stopped at
+    // a bound instead of being read to its end is asking about this map.
+    let domains = PyDict::new(py);
+    for (stratum, declared) in &result.trailer.domains {
+        domains.set_item(
+            stratum.as_str(),
+            declared
+                .tags()
+                .map(|tags| tags.iter().map(DomainTag::as_str).collect::<Vec<_>>()),
+        )?;
+    }
+    out.set_item("domains", domains)?;
 
     // Rank resolution at two altitudes, kept apart by name because they answer
     // two different questions. `planned_resolution` is what the admission waist
@@ -1132,6 +1646,12 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     )?;
     out.set_item("plan_id", result.plan_id.to_hex())?;
     out.set_item("profile_id", result.profile_id.to_hex())?;
+    // The third identity, rendered exactly as its two siblings are: 64 lowercase
+    // hex characters. It is the content identity of the attestation map above,
+    // so two answers that agree on all three were assembled from the same
+    // indexes in the same state — a difference no other field on this dict can
+    // show, because a rebuilt index moves none of them.
+    out.set_item("evidence_id", result.evidence_id.to_hex())?;
     Ok(out)
 }
 
@@ -1144,18 +1664,49 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
 /// statistics the planner actually consulted, and the plan's canonical identity.
 /// Nothing is executed, so this is the call a host makes to find out *why* a
 /// request would answer the way it will.
+///
+/// `top_k` is required here even though nothing runs. The bound decides how deep
+/// each stratum is read, so it decides what `"stratum_depths"` says and what
+/// `"plan_id"` is: a top-five request and a top-five-hundred request are two
+/// plans, not one plan read twice. Whether it actually narrows a depth is decided
+/// by the producers' own `domains` — over strata whose declared blocks do not
+/// overlap, each is planned to `top_k` rows and no deeper; over anything else the
+/// declared-or-measured bound stands. It never widens a depth and never changes an
+/// answer.
 #[pyfunction]
-#[pyo3(signature = (data, request, *, text_producers, statistics, data_format="turtle", base=None))]
+#[pyo3(signature = (
+    data,
+    request,
+    *,
+    text_producers,
+    statistics,
+    top_k,
+    data_format="turtle",
+    base=None,
+))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the pure stage's inputs are named, not bundled"
+)]
 fn plan<'py>(
     py: Python<'py>,
     data: &str,
     request: &Bound<'py, PyAny>,
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
+    top_k: usize,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    let call = collect_call(
+        data,
+        request,
+        text_producers,
+        statistics,
+        top_k,
+        data_format,
+        base,
+    )?;
     // Parsing, index construction and planning run detached (GIL released); the
     // result dict is built after the GIL is reacquired.
     let planned = py
@@ -1167,13 +1718,37 @@ fn plan<'py>(
 /// Plan, admit and emit: the per-stratum SPARQL the request compiles to.
 ///
 /// Returns the plan document under `"plan"` and, under `"units"`, one entry per
-/// stratum carrying the SPARQL text that stratum runs — the per-stratum depth
-/// is already a bound the plan carries, and the emitted text carries it as its
-/// own `LIMIT`. The admitted `"plan_id"` and the
+/// stratum carrying the `"sparql"` text that stratum runs and the `"depth"` that
+/// text is keyed to. The admitted `"plan_id"` and the
 /// `"registry_fingerprint"` the units were compiled against are alongside, so a
 /// host that logs a unit can say exactly which plan and which registry it came
 /// from. A host can read, log or execute those units itself; [`search`] is what
 /// runs them and fuses their rows.
+///
+/// `"depth"` is the reportable bound and it is **not** the `LIMIT` in
+/// `"sparql"`: the text is emitted exactly one row deeper, and that extra row is
+/// a probe that exists only so a reader can tell a producer that ran out from a
+/// read the depth cut. A host that runs the text itself keeps at most `"depth"`
+/// rows and reports none of what came after. "Exactly one row deeper" is exact and
+/// unconditional: the declared row bound does not cap it, including a declared bound
+/// of zero, because a bound equal to its own depth admits no row for the probe to
+/// arrive in and every such read would be reported as an exhaustion.
+///
+/// `"declared_rows"` is that declared bound, on the unit beside the depth it was
+/// checked against, and `None` for a producer that declared no access mode and so
+/// declared no row count at all. It is the one number that distinguishes a depth
+/// with rows still under it from a depth sitting *on* the producer's own promise
+/// that there are none — the case the probe row exists to check — and a host
+/// reading `"depth"` to know how many rows it may report is entitled to know which
+/// of the two it has.
+///
+/// One relation shape is bounded by something the text does not carry: one that
+/// takes the depth as an argument bounds itself by the number it was handed, which
+/// is never raised past the row count it registered. Where the depth already sits on
+/// that registration such a relation returns at most `"depth"` rows whatever its
+/// index holds, so a host running the text itself learns nothing about what lay
+/// below — and [`search`], which runs it, reports that stratum
+/// `"row_bound_reached"` rather than `"exhausted"`.
 ///
 /// `"planned_resolution"` is what those depths will cost in rank resolution,
 /// per stratum, **before** anything is executed: each entry names the
@@ -1194,6 +1769,11 @@ fn plan<'py>(
 /// `ValueError` that says which part is missing, because the three are one law
 /// between them.
 ///
+/// `top_k` is required, as it is on [`plan`] and for the same reason: the depths
+/// this stage emits a `LIMIT` for were derived from it. This stage narrows nothing
+/// of its own — a `LIMIT` below `"depth"` would leave `"depth"` and
+/// `"planned_resolution"` describing a read nobody took.
+///
 /// `decay` is `"reciprocal_rank"` or `"weighted_reciprocal_rank"`, and it is the
 /// part of the law that most changes the answer here: the depth a plan is fully
 /// separated to is a property of the rule first and of the weight second. A
@@ -1207,6 +1787,7 @@ fn plan<'py>(
     *,
     text_producers,
     statistics,
+    top_k,
     weights=None,
     k=None,
     decay=None,
@@ -1223,13 +1804,22 @@ fn compile<'py>(
     request: &Bound<'py, PyAny>,
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
+    top_k: usize,
     weights: Option<&Bound<'py, PyDict>>,
     k: Option<u32>,
     decay: Option<&str>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    let call = collect_call(
+        data,
+        request,
+        text_producers,
+        statistics,
+        top_k,
+        data_format,
+        base,
+    )?;
     // A law is its weights, its smoothing constant *and* its decay rule; any
     // part of one names no law at all, and silently supplying the rest would
     // report a resolution measured against arithmetic the host never wrote.
@@ -1287,6 +1877,70 @@ fn compile<'py>(
 /// rather than inferred. The two disagree whenever a top-k certified before
 /// reaching its planned depth, and that gap is the point: a depth a fusion never
 /// reached cost it nothing.
+///
+/// Every `"statuses"` entry spells its own ending, and there are exactly seven
+/// spellings. `"exhausted"` (with `"rows_emitted"`) is the ONLY completeness
+/// claim of the seven: that producer emitted every row it had. The other six
+/// each name who stopped the read and where. `"depth_reached"` (with `"rank"`)
+/// is the producer stopping at the depth the plan gave it, verified against the
+/// rows fusion really pulled: ranks one through `"rank"` were read and nothing
+/// below it was looked at. `"row_bound_reached"` (with `"rank"`) is the producer
+/// stopping at the row count IT declared it can serve per invocation: it takes its
+/// depth as an argument, the depth was already on that declaration, so the row past
+/// it could not be asked for and whether one exists was NOT observable — which is
+/// why it is not `"exhausted"`, and why reading deeper means raising that producer's
+/// declared bound rather than re-planning. `"ceiling_reached"` (with `"bound"`, an
+/// exact decimal `str`) is a contribution bound: every row at or above it was read
+/// and the rows below were not — usually written by a fusion the caller's `top_k`
+/// stopped. `"supplied_query_ended"` (with `"rank"`) is a unit running a query
+/// text the host wrote rather than one this layer rendered: the layer bounds only
+/// the outside of such a text, so what that text bounded inside itself — and
+/// therefore what it left unread — was not observable either, which is why it is
+/// its own word and not `"exhausted"`. `"execution_failed"` (with `"reason"`) is
+/// the producer that could not run at all, and `"terms_rejected"` is the producer
+/// that declined the request terms it was handed. A stratum that answered with
+/// nothing and one that could not answer stay distinguishable, because none of
+/// the seven is reduced to an aggregate flag.
+///
+/// `"attestations"` maps each stratum whose stream was handed to fusion to what
+/// the index behind it attested, as `{"generation": str | None, "incomplete":
+/// str | None}`. Both axes are independent, and each `None` is an ABSENCE: no
+/// generation was declared, or nothing was said about whether the index was
+/// whole. Neither is a claim, and the second has no opposite to be mistaken for
+/// one — the engine-side service level has no "whole" variant, because a
+/// producer stopped at the engine's row ceiling never looked at the rows it was
+/// licensed to skip. Read at the instant each stream was opened, so a stratum
+/// the `top_k` later stopped still reports both facts.
+///
+/// Either axis may be the HOST's word rather than the relation's: a
+/// `text_producers` value may carry a fifth `(generation, incompleteness)`
+/// position, each member a `str` or `None`, recorded verbatim. It is the only way
+/// an incompleteness reaches this answer at all, because the shipped text
+/// relation indexes the document it was handed and has no way to know what was
+/// missing from it. A declared generation replaces the content digest that
+/// relation would otherwise attest; a declared incompleteness is added beside it
+/// and leaves it alone. See this module's own documentation for both.
+///
+/// `"exactness"` is `{"exact": bool, "lower_bounds_for": list[str]}`, derived
+/// from those attestations alone and therefore unmoved by how deep this call
+/// read. When `"exact"` is `False`, every score in the answer is a LOWER BOUND
+/// on the score a whole index would have produced; the rows are still real rows
+/// in this fusion's own certified order, and what does not follow is that a row
+/// absent from the answer would have stayed absent. `"lower_bounds_for"` names
+/// exactly the strata that attested an incomplete index, in canonical order, and
+/// each one's verbatim reason is under the same key in `"attestations"`.
+///
+/// `"domains"` reports the candidate-domain declaration each handed stream fused
+/// under — `None` where the producer promised only that it may name anything, a
+/// sorted list of tag IRIs where it restricted itself — because those
+/// declarations decide which streams fusion was allowed to skip when it
+/// certified a row.
+///
+/// `"evidence_id"` is the content identity of `"attestations"`, rendered like
+/// `"plan_id"` and `"profile_id"`: 64 lowercase hex characters. Two answers that
+/// agree on all three were assembled from the same indexes in the same state,
+/// which no other field on the answer can show — a rebuilt index moves the
+/// dataset snapshot, the query text and the registry fingerprint not at all.
 ///
 /// `"cut_on_a_tie"` says whether the last row in the answer beat a *settled*
 /// rival it tied with exactly, so the final place was settled by the declared
@@ -1349,7 +2003,15 @@ fn search<'py>(
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    let call = collect_call(
+        data,
+        request,
+        text_producers,
+        statistics,
+        top_k,
+        data_format,
+        base,
+    )?;
     let declared = collect_weights(weights)?;
     // Read before the GIL is released, with every other Python-side argument:
     // the rule is owned Rust data by the time the ladder runs.
@@ -1359,7 +2021,7 @@ fn search<'py>(
     let result = py
         .detach(|| {
             let profile = build_profile(&declared, decay)?;
-            run_search(&call, &profile, TopK::new(top_k))
+            run_search(&call, &profile)
         })
         .map_err(PyValueError::new_err)?;
     search_dict(py, &result)
@@ -1586,421 +2248,4 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(class_width, m)?)?;
     m.add_function(wrap_pyfunction!(deepest_rank_within_width, m)?)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const NOTE: &str = "https://example.org/note";
-    const TITLE: &str = "https://example.org/title";
-    const TEXT_PRODUCER: &str = "https://example.org/pf/search";
-    const TITLE_PRODUCER: &str = "https://example.org/pf/title";
-    const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
-    const TITLE_STRATUM: &str = "https://example.org/stratum/title";
-
-    /// The fixture law's rule: the reciprocal truncated before the weight lands.
-    const TRUNCATED: DecayRule = DecayRule::ReciprocalRank { k: 60 };
-    /// The other rule, at the same smoothing constant: the weight folded into
-    /// the numerator.
-    const FOLDED: DecayRule = DecayRule::WeightedReciprocalRank { k: 60 };
-
-    const DATA: &str = concat!(
-        "<https://example.org/a> <https://example.org/note> \"the quick brown fox\" ;\n",
-        "  <https://example.org/title> \"quick notes\" .\n",
-        "<https://example.org/b> <https://example.org/note> \"a quick red fox\" ;\n",
-        "  <https://example.org/title> \"red herrings\" .\n",
-    );
-
-    fn producer(iri: &str, stratum: &str, predicate: &str) -> TextProducer {
-        TextProducer {
-            producer: iri.to_owned(),
-            stratum: stratum.to_owned(),
-            predicate: predicate.to_owned(),
-            graph: GraphSpec::Any,
-        }
-    }
-
-    fn call(terms: Vec<RequestTerm>, producers: Vec<TextProducer>) -> Call {
-        Call {
-            data: DATA.to_owned(),
-            media_type: NativeRdfFormat::Turtle.media_type(),
-            base: None,
-            request: RetrievalRequest::from_terms(terms),
-            producers,
-            statistics: HostStatistics {
-                source: "host-statistics".to_owned(),
-                revision: "r1".to_owned(),
-                ..HostStatistics::default()
-            },
-        }
-    }
-
-    fn lexical(text: &str, predicate: &str) -> RequestTerm {
-        RequestTerm::Lexical {
-            text: text.to_owned(),
-            language: None,
-            predicate: Some(Iri::parse(predicate).expect("fixture predicate")),
-        }
-    }
-
-    fn unit_weights(strata: &[&str]) -> Vec<(String, i128)> {
-        strata
-            .iter()
-            .map(|stratum| ((*stratum).to_owned(), SCALE))
-            .collect()
-    }
-
-    /// The headline: one request reaches two real producers over real data and
-    /// comes back as one fused ranking whose rows carry both provenances.
-    #[test]
-    fn two_text_producers_fuse_into_one_ranking() {
-        let call = call(
-            vec![lexical("quick fox", NOTE), lexical("quick", TITLE)],
-            vec![
-                producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE),
-                producer(TITLE_PRODUCER, TITLE_STRATUM, TITLE),
-            ],
-        );
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM, TITLE_STRATUM]), TRUNCATED)
-            .expect("the fixture profile is valid");
-        let result = run_search(&call, &profile, TopK::new(10)).expect("the producers answer");
-
-        assert_eq!(
-            result
-                .rows
-                .iter()
-                .map(|row| {
-                    (
-                        row.entity.as_str().to_owned(),
-                        row.contributions
-                            .iter()
-                            .map(|(stratum, rank, _)| (stratum.as_str().to_owned(), *rank))
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                (
-                    "<https://example.org/a>".to_owned(),
-                    vec![(TEXT_STRATUM.to_owned(), 1), (TITLE_STRATUM.to_owned(), 1),],
-                ),
-                (
-                    "<https://example.org/b>".to_owned(),
-                    vec![(TEXT_STRATUM.to_owned(), 2)],
-                ),
-            ],
-            "ex:a holds the needle in both indexed fields; ex:b only in the note"
-        );
-        assert!(
-            result.unserved_terms.is_empty(),
-            "every request term reached a producer"
-        );
-        assert_eq!(result.profile_id, profile.id());
-    }
-
-    /// A modality no registered producer accepts is reported per term, never
-    /// silently dropped.
-    #[test]
-    fn an_unaccepted_modality_is_reported_per_term() {
-        let call = call(
-            vec![
-                lexical("quick fox", NOTE),
-                RequestTerm::EntitySeed {
-                    entity: Term::new("<https://example.org/a>"),
-                },
-            ],
-            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
-        );
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), TRUNCATED)
-            .expect("the fixture profile is valid");
-        let result = run_search(&call, &profile, TopK::new(10)).expect("the producer answers");
-
-        assert_eq!(result.unserved_terms.len(), 1);
-        assert_eq!(result.unserved_terms[0].request_term, 1);
-        assert_eq!(
-            unserved_reason(result.unserved_terms[0].reason),
-            "no_producer_accepts"
-        );
-        assert!(
-            !result.rows.is_empty(),
-            "the term that WAS served still answers; an unserved neighbour is not a refusal"
-        );
-    }
-
-    /// The compile stage emits the stratum's SPARQL with the needle as a
-    /// rendered constant, so a host can read exactly what will run.
-    #[test]
-    fn compile_emits_the_stratum_sparql() {
-        let call = call(
-            vec![lexical("quick fox", NOTE)],
-            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
-        );
-        let (planned, compiled) = run_compile(&call, None).expect("a fresh plan is admitted");
-        assert_eq!(compiled.units.len(), 1);
-        assert_eq!(compiled.units[0].stratum.as_str(), TEXT_STRATUM);
-        assert!(
-            compiled.units[0].sparql.contains("\"quick fox\""),
-            "the needle is a rendered constant: {}",
-            compiled.units[0].sparql
-        );
-        assert!(
-            compiled.units[0].sparql.contains(TEXT_PRODUCER),
-            "the unit calls the producer the plan bound: {}",
-            compiled.units[0].sparql
-        );
-        assert_eq!(planned.statistics_snapshot.source, "host-statistics");
-        assert!(
-            compiled.resolution.is_empty(),
-            "a call that named no fusion law is told nothing about resolution, rather than being \
-             handed evidence measured against a law it never chose"
-        );
-    }
-
-    /// The waist answers what a plan will cost, without executing it: a call
-    /// that names the law it means to fuse under gets the resolution evidence
-    /// back from `compile`, not only from `search`.
-    #[test]
-    fn compile_reports_what_the_planned_depths_cost_under_a_named_law() {
-        let call = call(
-            vec![lexical("quick fox", NOTE)],
-            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
-        );
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), TRUNCATED)
-            .expect("the fixture profile is valid");
-        let (planned, compiled) =
-            run_compile(&call, Some(&profile)).expect("a fresh plan is admitted under a law");
-        let stratum = Iri::parse(TEXT_STRATUM).expect("fixture stratum");
-        let recorded = compiled
-            .resolution
-            .get(&stratum)
-            .copied()
-            .expect("a weighted stratum's resolution is recorded at the waist");
-        assert!(
-            recorded.fully_separated(),
-            "a unit weight separates every rank this small plan reads"
-        );
-        assert_eq!(
-            recorded.requested_depth, planned.stratum_depths[&stratum],
-            "the evidence names the depth the plan recorded"
-        );
-    }
-
-    /// Statistics are the host's, recorded verbatim, and a measured cardinality
-    /// lowers a stratum's depth rather than raising it.
-    #[test]
-    fn host_statistics_bound_the_planned_depth() {
-        let mut call = call(
-            vec![lexical("quick fox", NOTE)],
-            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
-        );
-        let (_, _, unbounded) = run_plan(&call).expect("the request plans");
-        let declared = unbounded
-            .stratum_depths
-            .values()
-            .copied()
-            .next()
-            .expect("the plan places one stratum");
-
-        call.statistics
-            .cardinality
-            .insert(TEXT_STRATUM.to_owned(), 1);
-        let (_, _, bounded) = run_plan(&call).expect("the request plans");
-        assert_eq!(
-            bounded.stratum_depths.values().copied().next(),
-            Some(1),
-            "a measured cardinality of one caps the stratum at one row (declared {declared})"
-        );
-        assert_eq!(bounded.statistics_snapshot.revision, "r1");
-        assert_eq!(
-            bounded.statistics_snapshot.entries.len(),
-            1,
-            "the planner records the statistic it consulted"
-        );
-    }
-
-    /// A registry with no producer is refused by name rather than answered with
-    /// an empty ranking, because PurRDF has no default producer to fall back on.
-    #[test]
-    fn an_empty_producer_set_is_refused() {
-        let call = call(vec![lexical("quick fox", NOTE)], Vec::new());
-        let error = run_plan(&call).expect_err("no producer is a refusal");
-        assert!(error.contains("no ranked producers"), "got {error}");
-    }
-
-    /// A multi-partition index cannot honestly declare a ranked order, and the
-    /// relation's own refusal reaches the host.
-    #[test]
-    fn a_multi_partition_index_refuses_to_declare_a_ranking() {
-        const TAGGED: &str = concat!(
-            "<https://example.org/a> <https://example.org/note> \"the quick fox\"@en .\n",
-            "<https://example.org/b> <https://example.org/note> \"le renard vif\"@fr .\n",
-        );
-        let mut call = call(
-            vec![lexical("quick fox", NOTE)],
-            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
-        );
-        call.data = TAGGED.to_owned();
-        let error = run_plan(&call).expect_err("two languages are two partitions");
-        assert!(error.contains("partitions"), "got {error}");
-    }
-
-    /// The neighbouring valid case: the same corpus in one language declares a
-    /// ranked order and answers.
-    #[test]
-    fn a_single_partition_index_declares_a_ranking_and_answers() {
-        const TAGGED: &str = concat!(
-            "<https://example.org/a> <https://example.org/note> \"the quick fox\"@en .\n",
-            "<https://example.org/b> <https://example.org/note> \"a quick hound\"@en .\n",
-        );
-        let mut call = call(
-            vec![lexical("quick", NOTE)],
-            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
-        );
-        call.data = TAGGED.to_owned();
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), TRUNCATED)
-            .expect("the fixture profile is valid");
-        let result = run_search(&call, &profile, TopK::new(10)).expect("one partition answers");
-        assert_eq!(result.rows.len(), 2, "both documents hold the needle");
-    }
-
-    /// Weights cross as exact raw units, and a non-positive one is refused by
-    /// the fusion law rather than silently ordering nothing.
-    #[test]
-    fn weights_are_exact_and_a_non_positive_one_is_refused() {
-        let profile = build_profile(&[(TEXT_STRATUM.to_owned(), SCALE / 2)], TRUNCATED)
-            .expect("half a unit is a valid weight");
-        assert_eq!(
-            profile
-                .weight(&Iri::parse(TEXT_STRATUM).expect("fixture stratum"))
-                .map(Fixed::to_decimal_lexical)
-                .as_deref(),
-            Some("0.500000000000")
-        );
-        assert!(
-            build_profile(&[(TEXT_STRATUM.to_owned(), 0)], TRUNCATED).is_err(),
-            "a zero weight is not a weight"
-        );
-    }
-
-    /// Graph selectors route by their spelling, and an unknown one is a typed
-    /// refusal naming what is accepted.
-    #[test]
-    fn graph_selectors_route_by_spelling() {
-        assert_eq!(
-            GraphSpec::parse(TEXT_PRODUCER, "any").expect("any"),
-            GraphSpec::Any
-        );
-        assert_eq!(
-            GraphSpec::parse(TEXT_PRODUCER, "default").expect("default"),
-            GraphSpec::Default
-        );
-        assert_eq!(
-            GraphSpec::parse(TEXT_PRODUCER, "https://example.org/g").expect("named"),
-            GraphSpec::Named("https://example.org/g".to_owned())
-        );
-        assert!(GraphSpec::parse(TEXT_PRODUCER, "every").is_err());
-    }
-
-    /// Decay rules route by their spelling, and an unknown one is a typed
-    /// refusal naming both accepted ones — there being no spelling that means
-    /// "whichever".
-    #[test]
-    fn decay_rules_route_by_spelling() {
-        assert_eq!(
-            decay_rule("reciprocal_rank", 60).expect("the truncated rule"),
-            TRUNCATED
-        );
-        assert_eq!(
-            decay_rule("weighted_reciprocal_rank", 60).expect("the folded rule"),
-            FOLDED
-        );
-        let error = decay_rule("rrf", 60).expect_err("an unknown rule is refused");
-        assert!(error.contains("unknown decay rule"), "got {error}");
-        assert!(
-            error.contains("\"reciprocal_rank\"") && error.contains("\"weighted_reciprocal_rank\""),
-            "the refusal names both accepted spellings: {error}"
-        );
-    }
-
-    /// The rule reaches the arithmetic, not only the profile's identity: the two
-    /// rules compute different contributions from the same weight and rank.
-    #[test]
-    fn the_two_rules_fuse_the_same_corpus_to_different_scores() {
-        let call = call(
-            vec![lexical("quick fox", NOTE)],
-            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
-        );
-        // A weight of one and a half units: the folded rule's single division
-        // keeps a raw unit the truncated rule's inner rounding discards.
-        let weights = [(TEXT_STRATUM.to_owned(), SCALE + SCALE / 2)];
-        let under = |decay| {
-            let profile = build_profile(&weights, decay).expect("the fixture profile is valid");
-            let result = run_search(&call, &profile, TopK::new(10)).expect("the producer answers");
-            (
-                profile.id(),
-                result.rows[0].score.to_decimal_lexical(),
-                result.profile_id,
-            )
-        };
-        let (truncated_id, truncated_score, truncated_answer_id) = under(TRUNCATED);
-        let (folded_id, folded_score, folded_answer_id) = under(FOLDED);
-
-        assert_ne!(
-            truncated_score, folded_score,
-            "the rule decides the number, so naming it has to change the answer"
-        );
-        assert_ne!(
-            truncated_id, folded_id,
-            "the rule is part of what the law's content identity fixes"
-        );
-        assert_eq!(truncated_answer_id, truncated_id);
-        assert_eq!(folded_answer_id, folded_id);
-    }
-
-    /// The refusal for a half-named law says which part arrived and which did
-    /// not, for every partial combination, and never fills the absent one in.
-    #[test]
-    fn a_partly_named_fusion_law_names_the_part_that_is_missing() {
-        let message = partial_fusion_law(true, true, false);
-        assert!(
-            message.contains("named `weights` and the smoothing constant `k`"),
-            "got {message}"
-        );
-        assert!(
-            message.contains("left the `decay` rule unnamed"),
-            "got {message}"
-        );
-
-        let message = partial_fusion_law(false, true, false);
-        assert!(
-            message.contains("named the smoothing constant `k`"),
-            "got {message}"
-        );
-        assert!(
-            message.contains("left `weights` and the `decay` rule unnamed"),
-            "got {message}"
-        );
-
-        let message = partial_fusion_law(true, false, false);
-        assert!(
-            message.contains("left the smoothing constant `k` and the `decay` rule unnamed"),
-            "got {message}"
-        );
-    }
-
-    /// Data format names route to media types, and an unknown one is refused.
-    #[test]
-    fn data_format_names_route_to_media_types() {
-        assert_eq!(data_media_type("turtle").expect("turtle"), "text/turtle");
-        assert_eq!(
-            data_media_type("ntriples").expect("ntriples"),
-            "application/n-triples"
-        );
-        assert_eq!(
-            data_media_type("nquads").expect("nquads"),
-            "application/n-quads"
-        );
-        assert!(data_media_type("trix").is_err());
-    }
 }

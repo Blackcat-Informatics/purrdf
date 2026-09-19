@@ -7,7 +7,7 @@
 //! so a protocol violation can be produced deliberately; the oracle recomputes
 //! the fused order from first principles and must agree with the engine.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,10 +15,12 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    ClassWidth, DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId,
-    FusionResult, FusionStream, Iri, MonotoneDepth, PlanId, ProducerReceipt, ProducerStatus,
-    ProtocolError, RECIP_K, RankedStream, RankedStreamImpl, StreamContract, Term, ToleratedDepth,
-    TopK, contribution, contribution_under,
+    CandidateDomains, ClassWidth, DecayRule, DomainTag, DuplicatePolicy, EvidenceId, Fixed,
+    FusedRow, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream,
+    IndexGeneration, Iri, MonotoneDepth, PfAttestation, PlanId, ProducerReceipt, ProducerStatus,
+    ProtocolError, RECIP_K, RankedRow, RankedStream, RankedStreamImpl, RowBlock, ScoreExactness,
+    ServiceLevel, StreamContract, StreamEnding, Term, ToleratedDepth, TopK, contribution,
+    contribution_under,
 };
 
 const K: u32 = 60;
@@ -79,7 +81,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 /// One scripted step of a mock producer.
 enum Step {
-    Row(u64, Fixed, Term),
+    Row(RankedRow<Term>),
     Fail(ProtocolError),
 }
 
@@ -89,7 +91,7 @@ enum Step {
 /// ascending ranks those scripts emit are not part of it -- that law holds for
 /// every stream and is checked rank by rank rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique)
+    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
 }
 
 /// A producer whose rows and failures are pre-scripted.
@@ -106,6 +108,10 @@ struct MockStream {
     /// the declaration states its own; everything else declares the strict,
     /// unique contract its scripted rows actually satisfy.
     contract: StreamContract,
+    /// What this stream attests about the index behind its rows. A scripted
+    /// stream descends from no index at all, so the honest default is the
+    /// undeclared attestation; the evidence fixtures state their own.
+    attestation: PfAttestation,
 }
 
 impl Drop for MockStream {
@@ -124,6 +130,7 @@ impl MockStream {
             pull_counter: Arc::new(AtomicUsize::new(0)),
             plan_id: None,
             contract: unique_items(),
+            attestation: PfAttestation::UNDECLARED,
         }
     }
 
@@ -151,6 +158,14 @@ impl MockStream {
         self.contract = contract;
         self
     }
+
+    /// The same producer, attesting `attestation` about the index behind its
+    /// rows. A fixture that says nothing keeps the default every stream that
+    /// descends from no index honestly reports.
+    fn attesting(mut self, attestation: PfAttestation) -> Self {
+        self.attestation = attestation;
+        self
+    }
 }
 
 // The trait's methods are `async`; the mock's bodies are synchronous because
@@ -160,12 +175,12 @@ impl MockStream {
 impl RankedStream for MockStream {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
         match self.steps.pop_front() {
-            Some(Step::Row(rank, score, item)) => {
+            Some(Step::Row(row)) => {
                 self.rows_emitted += 1;
                 self.pull_counter.fetch_add(1, Ordering::SeqCst);
-                Ok(Some((rank, score, item)))
+                Ok(Some(row))
             }
             Some(Step::Fail(error)) => Err(error),
             None => Ok(None),
@@ -177,21 +192,42 @@ impl RankedStream for MockStream {
     }
 
     fn contract(&self) -> StreamContract {
-        self.contract
+        self.contract.clone()
     }
 
     fn plan_id(&self) -> Option<PlanId> {
         self.plan_id
     }
+
+    fn attestation(&self) -> PfAttestation {
+        self.attestation.clone()
+    }
 }
 
 /// A well-formed row at `rank` for `weight` under `k`.
 fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> Step {
-    Step::Row(
+    Step::Row(RankedRow::new(
         rank,
         contribution(weight, rank, k).expect("fixture contribution fits"),
         Term::new(item),
-    )
+        // No block, which is what the `Unrestricted` declaration most fixtures
+        // here make owes. `row_in` is the same row drawn from a named block.
+        RowBlock::Undeclared,
+    ))
+}
+
+/// The same row, drawn from the block `block` names.
+///
+/// A restricted stream owes this on every row: its declaration is a promise
+/// about where its candidates lie, and the block is where an individual row
+/// backs it.
+fn row_in(rank: u64, weight: Fixed, k: u32, item: &str, block: &str) -> Step {
+    Step::Row(RankedRow::new(
+        rank,
+        contribution(weight, rank, k).expect("fixture contribution fits"),
+        Term::new(item),
+        RowBlock::Declared(domain(block)),
+    ))
 }
 
 fn exhausted(rows: u64) -> ProducerReceipt {
@@ -651,7 +687,12 @@ fn protocol_violations_are_typed() {
     let mismatch = vec![(
         stratum("text"),
         MockStream::new(
-            vec![Step::Row(1, Fixed::from_raw(1), Term::new("a"))],
+            vec![Step::Row(RankedRow::new(
+                1,
+                Fixed::from_raw(1),
+                Term::new("a"),
+                RowBlock::Undeclared,
+            ))],
             exhausted(1),
         ),
     )];
@@ -1230,10 +1271,23 @@ fn native_and_wasm_share_canonical_bytes_and_output() {
 //     This is no longer something a corpus can cause. The bound is the
 //     profile's stratum count and a candidate surfaces at most once per
 //     stratum, so reaching `strata + 1` means a stream set repeated a stratum
-//     (below) or a stream emitted one candidate twice (`ProtocolError`'s
-//     `DuplicateItem`, test 20). `fuse` refuses a repeated stratum before a row
-//     is read, so this drives `FusionStream` directly — which is the honest way
-//     to reach an invariant violation that no conforming input produces.
+//     (below) or a stream emitted one candidate twice — and the second of those
+//     is refused as the protocol violation it is (`ProtocolError`'s
+//     `DuplicateItem`, test 20) before any count can cross. `fuse` refuses a
+//     repeated stratum before a row is read, so this drives `FusionStream`
+//     directly — which is the honest way to reach an invariant violation that
+//     no conforming input produces.
+//
+//     The mechanism is the repeated stratum *tag* and nothing else, which is
+//     worth stating because the engine now also refuses a repeat whose earlier
+//     occurrence has already been emitted. That refusal cannot pre-empt this
+//     one: `a` is still an un-emitted frontier candidate when the third stream
+//     names it — the other streams are open and have not all named it, so it is
+//     not final and cannot have certified — so the emitted map is empty here
+//     and the contribution count is what the third contribution crosses. The
+//     property enumeration in test 20b asserts the converse for every
+//     conforming shape: no stream set built from distinct strata provokes this
+//     error at all.
 #[test]
 fn a_candidate_contributed_to_more_times_than_there_are_strata_is_refused() {
     let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
@@ -1397,6 +1451,13 @@ fn maximal_legitimate_score_stays_below_the_ceiling() {
 //     could reach it. This drives `FusionStream` directly (bypassing `fuse`'s
 //     duplicate-stratum guard) because getting here needs two streams sharing
 //     one stratum tag, which `fuse` itself refuses before fusion ever begins.
+//
+//     As in test 13, the mechanism is the shared stratum tag and not a repeat
+//     within one stream: `a` is named by the second stream while the first has
+//     already ended but `a` is still in the frontier un-emitted — it cannot
+//     have certified, because the second stream is open and has not named it —
+//     so nothing is in the emitted map and the contribution count is what the
+//     second contribution crosses.
 #[test]
 fn a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count() {
     // Two. `Fixed::from_integer` takes the number a reader means; the
@@ -1653,9 +1714,25 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     );
 }
 
-// 15. The bound stops the reading, not only the returning.
+// 15. The bound stops the reading, not only the returning — over ONE stratum.
+//
+// **The single-stratum case is degenerate, and the name says so.** With one
+// stream open there is no rival stratum that could still contribute to a
+// candidate, so the finality test every certification rests on is satisfied by
+// the first row pulled and the bound stops the read whatever the engine's
+// threshold arithmetic does. That is worth pinning — it is the shape a
+// single-producer request really has — but it is *not* evidence that the reading
+// is bounded in general, and a version of this test that claimed to be would
+// have stayed green throughout the fused top-k drain defect, which lived
+// entirely in the multi-stratum threshold.
+//
+// The load-bearing claim over several strata is
+// `declared_domains_bound_the_reading_over_disjoint_strata`, which measures the
+// same quantity across two disjoint strata and carries the counter-measurement:
+// without a domain declaration the identical streams drain, because with two
+// open streams nothing licenses an early stop.
 #[test]
-fn a_bounded_stop_closes_a_stream_instead_of_draining_it() {
+fn a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it() {
     // A stratum with far more rows than the bound asks for, and a counter on
     // every pull. If the terminal report drained the stream to make it declare
     // `Exhausted`, the count would be the whole stream and the memory bound
@@ -2014,7 +2091,7 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
 
 /// `DuplicatePolicy::Allowed`, with the strict ordering the fixtures' rows keep.
 fn allowed_duplicates() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Allowed)
+    StreamContract::new(DuplicatePolicy::Allowed, CandidateDomains::Unrestricted)
 }
 
 /// Two streams: `dense` as scripted, and a one-row `sparse` stream that stays
@@ -2022,8 +2099,9 @@ fn allowed_duplicates() -> StreamContract {
 ///
 /// Without the second stratum nothing is held: a single-stratum candidate is
 /// final the moment it is read, so it certifies and leaves the frontier before
-/// the next row arrives. The fixture is two strata because the frontier is where
-/// a declared-`Unique` stream's promise is checked.
+/// the next row arrives. The fixture is two strata because the frontier is *one*
+/// of the two places a declared-`Unique` stream's promise is checked, and this
+/// shape is what reaches it; the single-stratum fixtures below reach the other.
 fn dense_and_sparse(dense: MockStream) -> Vec<(Iri, MockStream)> {
     vec![
         (stratum("dense"), dense),
@@ -2038,11 +2116,21 @@ fn dense_sparse_profile() -> FusionProfile {
     profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K)
 }
 
+/// A declared-`Unique` stream's repeat is refused while the earlier occurrence
+/// is still an un-emitted frontier candidate.
+///
+/// This is the cheap half of the check — the frontier already holds the
+/// `seen_streams` set the refusal reads — and it is no longer the whole of it.
+/// The name carries no "while unemitted" qualifier because the behaviour has
+/// none: the repeat is refused either way, and the sibling test below is the
+/// same refusal reached after the earlier occurrence has left the frontier.
 #[test]
-fn a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted() {
+fn a_declared_unique_streams_repeat_is_refused() {
     let profile = dense_sparse_profile();
     // `a` cannot be emitted before the duplicate is read: the sparse stream is
     // open and has not named it, so it is not final and stays in the frontier.
+    // That makes this the in-frontier arm specifically, and the assertion below
+    // therefore pins the arm as well as the outcome.
     let streams = dense_and_sparse(MockStream::new(
         vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
         exhausted(2),
@@ -2054,9 +2142,13 @@ fn a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted() {
         matches!(
             &result,
             Err(FusionError::Protocol(error))
-                if matches!(&**error, ProtocolError::DuplicateItem { item } if item == "a")
+                if matches!(
+                    &**error,
+                    ProtocolError::DuplicateItem { item, stratum }
+                        if item == "a" && stratum == self::stratum("dense").as_str()
+                )
         ),
-        "expected DuplicateItem for `a`, got {result:?}"
+        "expected DuplicateItem naming `a` and the dense stratum, got {result:?}"
     );
 
     // THE NEIGHBOURING CASE: the same item named once by each of the two streams
@@ -2080,24 +2172,31 @@ fn a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted() {
     );
 }
 
-/// What a `Unique` declaration buys and what it costs, stated as one test
-/// because they are one decision.
+/// What a `Unique` declaration promises and what breaking it costs, stated as
+/// one test because they are one decision.
 ///
-/// A stream that promised no repeats keeps no identity set, so the promise is
-/// checked exactly where the engine needs that state anyway: the frontier. A
-/// repeat whose first occurrence has already been certified and removed is
-/// therefore *not* caught — that detection is precisely the retained-forever set
-/// the declaration said was unnecessary, and it is the one structure a fusion
-/// holds that grows with the rows pulled.
+/// The promise is held for the whole fusion, not merely while the earlier
+/// occurrence is still in the frontier. A candidate leaves the frontier the
+/// instant it certifies, so the frontier's own once-per-stream check cannot see
+/// a repeat that arrives afterwards — and if nothing else did, the same entity
+/// would reach the caller twice, the second time scored from one late rank
+/// alone. It does not: the engine keeps a record of what it has emitted, and a
+/// stream that contradicts its own declaration is told so, naming the entity and
+/// the stratum.
 ///
-/// This is pinned rather than left to be discovered. A producer that cannot make
-/// the promise has a complete, supported answer one line away, and the second
-/// half of this test is that answer: the same stream declared `Allowed` is
-/// de-duplicated in full.
+/// Refusing rather than silently dropping the late repeat is the deliberate
+/// half. A `Unique` declaration is a claim about the producer's index, and a
+/// producer that breaks it has a stream whose ranks are no longer trustworthy —
+/// returning a plausible answer computed from it would hide exactly the fact the
+/// consumer needs.
+///
+/// A producer that cannot make the promise has a complete, supported answer one
+/// line away, and the second half of this test is that answer: the same stream
+/// declared `Allowed` is de-duplicated in full.
 #[test]
-fn a_unique_declaration_is_relied_on_past_the_frontier_and_allowed_is_the_remedy() {
+fn a_unique_declarations_repeat_is_refused_past_the_frontier_and_allowed_is_the_remedy() {
     // One stratum, so `a` certifies the moment it is read and the repeat arrives
-    // after it left the frontier.
+    // after it left the frontier — which is the arm this test exists for.
     let profile = profile(&[("dense", Fixed::ONE)], K);
     let repeated = vec![(
         stratum("dense"),
@@ -2106,15 +2205,21 @@ fn a_unique_declaration_is_relied_on_past_the_frontier_and_allowed_is_the_remedy
             exhausted(2),
         ),
     )];
-    let fused = block_on(run_fuse(repeated, &profile));
-    assert_eq!(
-        fused
-            .rows
-            .iter()
-            .map(|fused_row| fused_row.entity.clone())
-            .collect::<Vec<_>>(),
-        vec![Term::new("a"), Term::new("a")],
-        "the promise is relied on: a repeat past the frontier reaches the answer"
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        repeated, &profile, TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(
+                    &**error,
+                    ProtocolError::DuplicateItem { item, stratum }
+                        if item == "a" && stratum == self::stratum("dense").as_str()
+                )
+        ),
+        "a repeat past the frontier must be refused naming `a` and the dense \
+         stratum, got {result:?}"
     );
 
     // The remedy, and it is complete: the identical stream, declaring the policy
@@ -2225,6 +2330,264 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
     );
 }
 
+/// **The reported defect, in the shape it was reported: one stratum, `[a, b,
+/// a]`.**
+///
+/// This is not a variation on the fixture above, it is the case a user actually
+/// hit, kept separate so that a later edit to the general fixtures cannot quietly
+/// stop covering it. `a` certifies at rank 1 and leaves the frontier, `b`
+/// certifies at rank 2, and only then does the stream name `a` again at rank 3 —
+/// the exact interleaving under which the frontier holds nothing to collide
+/// with.
+///
+/// It asserts both halves of the actionable report. The entity, because a
+/// consumer has to know which row to distrust; the stratum, because with several
+/// producers fused the entity alone does not say which declaration is wrong, and
+/// fixing the wrong producer is the same as fixing none.
+#[test]
+fn the_reported_single_stratum_repeat_is_refused_naming_the_item_and_the_stratum() {
+    let profile = profile(&[("dense", Fixed::ONE)], K);
+    let streams = vec![(
+        stratum("dense"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "a"),
+            ],
+            exhausted(3),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams, &profile, TOP_K,
+    ));
+    let Err(FusionError::Protocol(error)) = &result else {
+        panic!("expected a protocol refusal, got {result:?}");
+    };
+    let ProtocolError::DuplicateItem {
+        item,
+        stratum: named,
+    } = &**error
+    else {
+        panic!("expected DuplicateItem, got {error:?}");
+    };
+    assert_eq!(item, "a", "the refusal must name the repeated entity");
+    assert_eq!(
+        named,
+        stratum("dense").as_str(),
+        "the refusal must name the stratum whose producer broke its declaration"
+    );
+
+    // THE NEIGHBOURING CASE, and it is the one over-refusal would break: the
+    // same three rows with no repeat fuse into three rows and no refusal at all.
+    let clean = vec![(
+        stratum("dense"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "c"),
+            ],
+            exhausted(3),
+        ),
+    )];
+    let fused = block_on(run_fuse(clean, &profile));
+    assert_eq!(
+        fused
+            .rows
+            .iter()
+            .map(|fused_row| fused_row.entity.clone())
+            .collect::<Vec<_>>(),
+        vec![Term::new("a"), Term::new("b"), Term::new("c")],
+        "a stream of distinct items is not a duplicate and must answer in full"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 20b. The answer invariant, unconditionally: no fused answer ever contains one
+//      entity twice.
+//
+// The tests above pin named interleavings. This one pins the *property*, over
+// every shape the engine admits, because the invariant is not "we handled the
+// reported case" — it is a statement about all of them, and a statement about
+// all of them has to be checked over more than one.
+// ---------------------------------------------------------------------------
+
+/// The per-stratum row scripts the property enumeration draws from.
+///
+/// Chosen to cover the interleavings the invariant is about rather than to be
+/// random: distinct items, an immediate repeat, a repeat separated by another
+/// item (the reported defect's shape), a repeat at the very end of a longer
+/// stream, and scripts that overlap across strata so candidates genuinely have
+/// to be held in the frontier while other strata catch up.
+const PROPERTY_SCRIPTS: [&[&str]; 6] = [
+    &["a"],
+    &["a", "b"],
+    &["a", "b", "a"],
+    &["b", "a", "b", "c"],
+    &["c", "c"],
+    &["a", "b", "c", "a"],
+];
+
+/// **A fused answer never contains the same entity twice — for every stream
+/// set, every declared policy and every bound.**
+///
+/// Deterministic by enumeration rather than by a seeded generator, which is the
+/// stronger of the two here: this crate forbids nondeterminism, and an
+/// enumeration has no seed to drift, no shrinking step whose report depends on
+/// the run, and a failure that reproduces from the printed configuration alone.
+/// Every combination of one to four strata drawn from [`PROPERTY_SCRIPTS`], both
+/// [`DuplicatePolicy`] spellings, and every bound from zero to one past the
+/// longest script is executed through the shipped [`purrdf_retrieval::fuse`].
+///
+/// Exactly two outcomes are admissible, and the test asserts the disjunction
+/// rather than either branch:
+///
+/// * the fusion answered, and the entities in that answer are pairwise
+///   distinct; or
+/// * the fusion refused with [`ProtocolError::DuplicateItem`], which is the
+///   declared-`Unique` producer being told its promise is broken.
+///
+/// Anything else fails, and two "anything else"s are worth naming. A
+/// [`FusionError::MaxContributionsExceeded`] here would mean the contribution
+/// bound had become reachable from conforming input — it is an invariant
+/// violation and no stream set built from distinct strata may provoke one. And
+/// a [`FusionError::MalformedProfile`] would mean the post-emission check's
+/// impossibility proof is wrong. Both are caught by the same `else` arm, which
+/// prints the whole configuration.
+#[test]
+fn no_fused_answer_ever_contains_one_entity_twice() {
+    /// The strata names the enumeration tags its streams with, in order. Four,
+    /// because the profile's contribution maximum is the stratum count and four
+    /// distinct strata is the widest shape these scripts need.
+    const NAMES: [&str; 4] = ["s0", "s1", "s2", "s3"];
+
+    let mut configurations = 0_u32;
+    let mut refusals = 0_u32;
+    let mut answers = 0_u32;
+
+    for stratum_count in 1..=NAMES.len() {
+        // A fixed mixed-radix odometer over the script catalogue: configuration
+        // `n` gives stratum `i` the script at digit `i` of `n` in base
+        // `PROPERTY_SCRIPTS.len()`. Total order, no randomness, and the index is
+        // printable, so a failure names the exact stream set that produced it.
+        let combinations = PROPERTY_SCRIPTS
+            .len()
+            .pow(u32::try_from(stratum_count).expect("at most four strata fit in a u32 exponent"));
+        for combination in 0..combinations {
+            let scripts: Vec<&[&str]> = (0..stratum_count)
+                .map(|position| {
+                    let digit = (combination
+                        / PROPERTY_SCRIPTS
+                            .len()
+                            .pow(u32::try_from(position).expect("at most four positions")))
+                        % PROPERTY_SCRIPTS.len();
+                    PROPERTY_SCRIPTS[digit]
+                })
+                .collect();
+            let longest = scripts
+                .iter()
+                .map(|script| script.len())
+                .max()
+                .expect("at least one stratum");
+
+            for policy in [DuplicatePolicy::Unique, DuplicatePolicy::Allowed] {
+                // Zero through one past the longest script: zero is the bound
+                // that must certify nothing at all, and one past the longest is
+                // the bound that cannot be what stopped the run.
+                for bound in 0..=longest + 1 {
+                    configurations += 1;
+                    let weights: Vec<(&str, Fixed)> = NAMES[..stratum_count]
+                        .iter()
+                        .map(|name| (*name, Fixed::ONE))
+                        .collect();
+                    let profile = profile(&weights, K);
+                    let streams: Vec<(Iri, MockStream)> = scripts
+                        .iter()
+                        .enumerate()
+                        .map(|(position, script)| {
+                            let steps: Vec<Step> = script
+                                .iter()
+                                .enumerate()
+                                .map(|(offset, item)| {
+                                    let rank = u64::try_from(offset + 1).expect("small rank");
+                                    row(rank, Fixed::ONE, K, item)
+                                })
+                                .collect();
+                            let emitted = u64::try_from(script.len()).expect("short script");
+                            (
+                                stratum(NAMES[position]),
+                                MockStream::new(steps, exhausted(emitted)).declaring(
+                                    StreamContract::new(policy, CandidateDomains::Unrestricted),
+                                ),
+                            )
+                        })
+                        .collect();
+
+                    let context = format!(
+                        "strata {stratum_count}, combination {combination}, policy \
+                         {policy:?}, bound {bound}, scripts {scripts:?}"
+                    );
+                    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+                        streams,
+                        &profile,
+                        TopK::new(bound),
+                    ));
+                    match result {
+                        Ok(fused) => {
+                            answers += 1;
+                            let mut distinct = BTreeSet::new();
+                            for fused_row in &fused.rows {
+                                assert!(
+                                    distinct.insert(fused_row.entity.clone()),
+                                    "a fused answer contained {:?} twice — {context}",
+                                    fused_row.entity
+                                );
+                            }
+                            assert!(
+                                fused.rows.len() <= bound,
+                                "the answer exceeded its own bound — {context}"
+                            );
+                        }
+                        Err(FusionError::Protocol(error))
+                            if matches!(&*error, ProtocolError::DuplicateItem { .. }) =>
+                        {
+                            refusals += 1;
+                            assert_eq!(
+                                policy,
+                                DuplicatePolicy::Unique,
+                                "an `Allowed` stream is de-duplicated, never refused — {context}"
+                            );
+                        }
+                        Err(other) => {
+                            panic!(
+                                "neither a distinct answer nor a duplicate refusal: {other:?} — {context}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The crossing guards. Without them this test would pass over an
+    // enumeration that never ran, or one in which every single configuration
+    // refused and "the entities are distinct" was never actually checked.
+    assert_eq!(
+        configurations, 17_720,
+        "the enumeration must be the fixed size it claims, or it has silently \
+         changed what it covers"
+    );
+    assert!(
+        refusals > 0,
+        "no configuration was refused, so the refusal branch is untested"
+    );
+    assert!(
+        answers > 0,
+        "no configuration answered, so the distinctness branch is untested"
+    );
+}
+
 #[test]
 fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
     // A contribution is the profile's own function of the rank, so a weight
@@ -2251,8 +2614,18 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
         stratum("thin"),
         MockStream::new(
             vec![
-                Step::Row(1, first, Term::new("a")),
-                Step::Row(2, second, Term::new("b")),
+                Step::Row(RankedRow::new(
+                    1,
+                    first,
+                    Term::new("a"),
+                    RowBlock::Undeclared,
+                )),
+                Step::Row(RankedRow::new(
+                    2,
+                    second,
+                    Term::new("b"),
+                    RowBlock::Undeclared,
+                )),
             ],
             exhausted(2),
         ),
@@ -2297,11 +2670,16 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
             MockStream::new(
                 vec![
                     row(1, Fixed::ONE, K, "a"),
-                    Step::Row(2, risen, Term::new("b")),
+                    Step::Row(RankedRow::new(
+                        2,
+                        risen,
+                        Term::new("b"),
+                        RowBlock::Undeclared,
+                    )),
                 ],
                 exhausted(2),
             )
-            .declaring(contract),
+            .declaring(contract.clone()),
         )];
         let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
             streams, &heavy, TOP_K,
@@ -2596,11 +2974,12 @@ fn deep_profile(decay: DecayRule, weight: Fixed) -> FusionProfile {
 fn deep_stream(decay: DecayRule, weight: Fixed, rows: u64) -> MockStream {
     let steps = (1..=rows)
         .map(|rank| {
-            Step::Row(
+            Step::Row(RankedRow::new(
                 rank,
                 contribution_under(decay, weight, rank).expect("fixture contribution fits"),
                 Term::new(format!("d{rank:07}")),
-            )
+                RowBlock::Undeclared,
+            ))
         })
         .collect();
     MockStream::new(steps, exhausted(rows))
@@ -2876,8 +3255,18 @@ fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
         stratum("deep"),
         MockStream::new(
             vec![
-                Step::Row(1, plateau, Term::new("a")),
-                Step::Row(2, forged, Term::new("b")),
+                Step::Row(RankedRow::new(
+                    1,
+                    plateau,
+                    Term::new("a"),
+                    RowBlock::Undeclared,
+                )),
+                Step::Row(RankedRow::new(
+                    2,
+                    forged,
+                    Term::new("b"),
+                    RowBlock::Undeclared,
+                )),
             ],
             exhausted(2),
         ),
@@ -2903,8 +3292,18 @@ fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
         stratum("deep"),
         MockStream::new(
             vec![
-                Step::Row(1, plateau, Term::new("a")),
-                Step::Row(2, plateau, Term::new("b")),
+                Step::Row(RankedRow::new(
+                    1,
+                    plateau,
+                    Term::new("a"),
+                    RowBlock::Undeclared,
+                )),
+                Step::Row(RankedRow::new(
+                    2,
+                    plateau,
+                    Term::new("b"),
+                    RowBlock::Undeclared,
+                )),
             ],
             exhausted(2),
         ),
@@ -4114,11 +4513,12 @@ async fn collided_fusion_at(top_k: TopK) -> FusionResult<Term> {
                 .enumerate()
                 .map(|(index, name)| {
                     let rank = u64::try_from(index + 1).expect("four rows");
-                    Step::Row(
+                    Step::Row(RankedRow::new(
                         rank,
                         contribution_under(decay, weight, rank).expect("fits"),
                         Term::new(*name),
-                    )
+                        RowBlock::Undeclared,
+                    ))
                 })
                 .collect(),
             exhausted(4),
@@ -4540,7 +4940,13 @@ fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end
     // And the same pair on the in-crate producer that actually mints the
     // refusal. Asked too early it refuses; asked after its rows ran out — one
     // more pull, nothing else changed — it answers with the count it emitted.
-    let mut stream = RankedStreamImpl::new(vec![(1, Term::new("a")), (2, Term::new("b"))]);
+    let mut stream = RankedStreamImpl::new(
+        vec![
+            (1, Term::new("a"), RowBlock::Undeclared),
+            (2, Term::new("b"), RowBlock::Undeclared),
+        ],
+        StreamEnding::Exhausted,
+    );
     assert!(
         block_on(stream.next())
             .expect("the first row pulls")
@@ -4642,5 +5048,1866 @@ fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused()
     assert_eq!(
         fused.rows[0].score,
         contribution(Fixed::ONE, 1, K).expect("fits")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A read ending the producer authored, and the evidence it answered from
+//
+// Two different kinds of fact meet in the trailer here, and every test below
+// exists to keep them apart. `ProducerStatus` says who stopped the read; an
+// attestation says what the index behind the rows was. The first is written
+// when a stream ends and can be written *over* by a bounded stop; the second is
+// pinned before the first row is pulled and nothing a caller does can move it.
+// ---------------------------------------------------------------------------
+
+/// A producer that names a generation and declares nothing about wholeness.
+fn attests(generation: &str) -> PfAttestation {
+    PfAttestation {
+        generation: IndexGeneration::declared(generation),
+        service: ServiceLevel::Undeclared,
+    }
+}
+
+/// A producer that names a generation and declares that index was **not** whole.
+fn attests_short(generation: &str, reason: &str) -> PfAttestation {
+    PfAttestation {
+        generation: IndexGeneration::declared(generation),
+        service: ServiceLevel::Incomplete {
+            reason: reason.to_owned(),
+        },
+    }
+}
+
+// T3.1. A producer-authored ending for a read the planned depth stopped.
+//
+// The rows are returned and the ending is carried verbatim: fusion has no way
+// of telling a stream that stopped at its depth from one that ran out — both
+// simply stop yielding — so the producer is the only party that can say which
+// happened, and this is the channel it says it on.
+#[test]
+fn a_depth_ending_is_carried_and_its_rank_is_still_measured_against_the_rows() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let scripted = || vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")];
+
+    let stopped = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(scripted(), ProducerReceipt::DepthReached { rank: 2 }),
+        )],
+        &profile,
+    ));
+    assert_eq!(
+        stopped.rows.len(),
+        2,
+        "a depth-stopped stream still contributed every row it emitted"
+    );
+    assert_eq!(
+        stopped.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::DepthReached { rank: 2 }),
+        "the producer's own ending reaches the trailer in rank space, unreworded"
+    );
+    assert_ne!(
+        stopped.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 2 }),
+        "and it is emphatically not a completeness claim: rows existed below rank 2"
+    );
+
+    // The refusal: a depth ending may stop the read, it may not miscount it.
+    // Two rows were pulled and the receipt names rank one, so the producer is
+    // claiming it never emitted the row fusion already holds.
+    let forged = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(
+            stratum("text"),
+            MockStream::new(scripted(), ProducerReceipt::DepthReached { rank: 1 }),
+        )],
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &forged,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ForgedReceipt { declared: 1, actual: 2 })
+        ),
+        "expected ForgedReceipt {{ declared: 1, actual: 2 }}, got {forged:?}"
+    );
+
+    // THE NEIGHBOURING CASE that must still succeed, because the refusal above
+    // is about the count and not about stopping: the same two rows with the
+    // honest rank fuse, and so does a one-row stream that stopped at rank one.
+    let honest = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a")],
+                ProducerReceipt::DepthReached { rank: 1 },
+            ),
+        )],
+        &profile,
+    ));
+    assert_eq!(honest.rows.len(), 1);
+    assert_eq!(
+        honest.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::DepthReached { rank: 1 }),
+        "a depth of one is a legitimate depth, not a forgery"
+    );
+}
+
+// T3.2. The trailer names exactly what the handed streams attested.
+#[test]
+fn the_trailer_carries_every_handed_streams_attestation_and_invents_none() {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::ONE),
+            ("geo", Fixed::ONE),
+        ],
+        K,
+    );
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(attests("a")),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1))
+                .attesting(attests_short("b", "shard 3 of 4 failed to load")),
+        ),
+        // The third says nothing at all, which is what a stream that descends
+        // from no index honestly reports.
+        (
+            stratum("geo"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "c")], exhausted(1)),
+        ),
+    ];
+
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(
+        result.trailer.attestations,
+        BTreeMap::from([
+            (stratum("text"), attests("a")),
+            (
+                stratum("vector"),
+                attests_short("b", "shard 3 of 4 failed to load")
+            ),
+            (stratum("geo"), PfAttestation::UNDECLARED),
+        ]),
+        "every handed stream is named, with its own attestation and nobody else's"
+    );
+
+    // A producer that never became a stream gets a status and no attestation.
+    // Its absence is the honest answer: no index of its was ever opened, so
+    // there is nothing it attested — and `Undeclared` would be the wrong
+    // answer, because that means a producer was asked and stayed silent.
+    let completed = result
+        .trailer
+        .completed_with([(stratum("absent"), ProducerStatus::TermsRejected)]);
+    assert!(
+        completed.statuses.contains_key(&stratum("absent")),
+        "a producer that never became a stream still gets a status"
+    );
+    assert!(
+        !completed.attestations.contains_key(&stratum("absent")),
+        "but no attestation, fabricated or otherwise"
+    );
+    assert_eq!(
+        completed.attestations.len(),
+        3,
+        "so the attestation keys stay a subset of the statuses'"
+    );
+}
+
+// T3.3. The load-bearing consequence of reading the attestation at `open`.
+#[test]
+fn a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer() {
+    // One stratum, three rows, and a bound that stops the read at the first.
+    // The stream is therefore closed by fusion rather than by its own receipt —
+    // which is exactly the path that would have destroyed an incompleteness
+    // held as a terminal fact, because a stopped stream never returns a receipt
+    // at all.
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let streams = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "c"),
+            ],
+            exhausted(3),
+        )
+        .attesting(attests_short(
+            "2026-09-18T00:00:00Z",
+            "replica is 2 segments behind",
+        )),
+    )];
+
+    let bounded = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams,
+        &profile,
+        TopK::new(1),
+    ))
+    .expect("a bounded fusion succeeds");
+
+    assert_eq!(bounded.rows.len(), 1, "the bound is the bound");
+    assert!(
+        matches!(
+            bounded.trailer.statuses.get(&stratum("text")),
+            Some(&ProducerStatus::CeilingReached { .. })
+        ),
+        "the bound stopped this stream, so its status is fusion's own bounded stop, \
+         got {:?}",
+        bounded.trailer.statuses.get(&stratum("text"))
+    );
+    assert_eq!(
+        bounded
+            .trailer
+            .attestations
+            .get(&stratum("text"))
+            .map(|attestation| &attestation.service),
+        Some(&ServiceLevel::Incomplete {
+            reason: "replica is 2 segments behind".to_owned()
+        }),
+        "and the short index it served from survives the stop that overwrote nothing \
+         else about it"
+    );
+}
+
+// T3.4. An incomplete stratum makes every score a lower bound — and the rows
+// are still returned, because a short index produced real rows in a real order.
+#[test]
+fn an_incomplete_stratum_makes_the_scores_lower_bounds_without_refusing_the_rows() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let streams = |vector: PfAttestation| {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)).attesting(vector),
+            ),
+        ]
+    };
+
+    // Nothing declared short: the sums are exact over every contribution that
+    // was due. Note what this does *not* say — most producers attest nothing,
+    // and `Exact` is the narrow true claim that none of them declared itself
+    // short, never a certificate that the indexes were whole.
+    let exact = block_on(run_fuse(streams(PfAttestation::UNDECLARED), &profile));
+    assert_eq!(
+        exact.trailer.exactness,
+        ScoreExactness::Exact,
+        "no stratum declared itself short, so nothing makes these scores floors"
+    );
+
+    // One stratum short: every score in the answer is a floor, and the trailer
+    // names the stratum to rebuild rather than raising an anonymous flag.
+    let bounded = block_on(run_fuse(
+        streams(attests_short("b", "segment rebuilding")),
+        &profile,
+    ));
+    assert_eq!(
+        bounded.trailer.exactness,
+        ScoreExactness::LowerBounds {
+            strata: BTreeSet::from([stratum("vector")])
+        },
+        "exactly the stratum that declared itself short, and no other"
+    );
+    assert_eq!(
+        bounded.rows.len(),
+        2,
+        "and the rows are returned, not refused: a short index still produced \
+         real rows in a real order"
+    );
+    assert_eq!(
+        bounded
+            .rows
+            .iter()
+            .map(|fused| fused.score)
+            .collect::<Vec<_>>(),
+        exact
+            .rows
+            .iter()
+            .map(|fused| fused.score)
+            .collect::<Vec<_>>(),
+        "the arithmetic did not change; what changed is what may be concluded from it"
+    );
+
+    // The reason a caller can act on it: the verbatim reason is readable under
+    // the same key the exactness named.
+    assert_eq!(
+        bounded
+            .trailer
+            .attestations
+            .get(&stratum("vector"))
+            .map(|attestation| &attestation.service),
+        Some(&ServiceLevel::Incomplete {
+            reason: "segment rebuilding".to_owned()
+        })
+    );
+}
+
+// T3.5. The third identity: equal evidence digests equally, and a rebuilt index
+// does not.
+#[test]
+fn the_evidence_identity_moves_exactly_when_the_evidence_does() {
+    // The injectivity fixtures at the foot of this test need profiles of their
+    // own, and they are built here, before the binding below shadows the
+    // helper that builds them.
+    let split_profile = profile(&[("ab", Fixed::ONE)], K);
+    let joined_profile = profile(&[("a", Fixed::ONE)], K);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let streams = |text: PfAttestation| {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(text),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1))
+                    .attesting(attests_short("v-1", "one shard offline")),
+            ),
+        ]
+    };
+
+    let first = block_on(run_fuse(streams(attests("t-1")), &profile));
+    let repeat = block_on(run_fuse(streams(attests("t-1")), &profile));
+    let rebuilt = block_on(run_fuse(streams(attests("t-2")), &profile));
+
+    assert_eq!(
+        first.trailer.evidence_id, repeat.trailer.evidence_id,
+        "identically-attesting streams are identical evidence"
+    );
+    assert_ne!(
+        first.trailer.evidence_id, rebuilt.trailer.evidence_id,
+        "one rebuilt generation is different evidence, and nothing else in the \
+         answer would have said so"
+    );
+    // The gap the third identity closes, stated as the assertion it is: the
+    // plan and the law are byte-identical across a rebuild.
+    assert_eq!(first.trailer.plan_id, rebuilt.trailer.plan_id);
+    assert_eq!(first.trailer.profile_id, rebuilt.trailer.profile_id);
+
+    // The identity is re-derivable from bytes a holder of the answer has, which
+    // is what makes it auditable rather than merely present.
+    assert_eq!(
+        EvidenceId::from_canonical(&first.trailer.evidence_canonical_bytes()),
+        first.trailer.evidence_id,
+        "the id in the trailer is the digest of the trailer's own canonical bytes"
+    );
+    assert_ne!(
+        first.trailer.evidence_canonical_bytes(),
+        rebuilt.trailer.evidence_canonical_bytes(),
+        "and the bytes themselves differ, so the difference is not a digest artefact"
+    );
+
+    // Injectivity, which is what the length framing buys: a stratum suffix and
+    // a generation that run together the same way must not encode alike.
+    let split = block_on(run_fuse(
+        vec![(
+            stratum("ab"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(attests("c")),
+        )],
+        &split_profile,
+    ));
+    let joined = block_on(run_fuse(
+        vec![(
+            stratum("a"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
+                .attesting(attests("bc")),
+        )],
+        &joined_profile,
+    ));
+    assert_ne!(
+        split.trailer.evidence_canonical_bytes(),
+        joined.trailer.evidence_canonical_bytes(),
+        "framed fields cannot run together into one another's bytes"
+    );
+    assert_ne!(split.trailer.evidence_id, joined.trailer.evidence_id);
+}
+
+// T3.6. A trailer is non-consuming and re-callable, and the two kinds of fact
+// behave differently across two reads — which is the whole point of pinning one
+// of them at `open`.
+#[test]
+fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let streams = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "c"),
+            ],
+            exhausted(3),
+        )
+        .attesting(attests_short("g-7", "shard 1 offline")),
+    )];
+    let mut fusion = FusionStream::new(streams, profile);
+
+    block_on(fusion.next())
+        .expect("the first row certifies")
+        .expect("a row");
+    let early = block_on(fusion.trailer()).expect("a trailer mid-stream");
+    assert!(
+        matches!(
+            early.statuses.get(&stratum("text")),
+            Some(&ProducerStatus::CeilingReached { .. })
+        ),
+        "mid-stream the producer has not ended, so it is reported at the bound \
+         reading had reached, got {:?}",
+        early.statuses.get(&stratum("text"))
+    );
+
+    block_on(fusion.next()).expect("the second row certifies");
+    block_on(fusion.next()).expect("the third row certifies");
+    let late = block_on(fusion.trailer()).expect("a trailer after the stream ended");
+
+    // What moved: how the read ended, because the read moved.
+    assert_eq!(
+        late.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 3 }),
+        "the stream reached its own receipt between the two reads"
+    );
+    assert_ne!(
+        early.statuses, late.statuses,
+        "so the statuses are as of each read, exactly as the resolution counters are"
+    );
+
+    // What did not move, and must not: an index generation is pinned when the
+    // index is opened, so how deep a caller chose to read cannot change what
+    // answered, whether it was whole, or the identity built from those two.
+    assert_eq!(
+        early.attestations, late.attestations,
+        "the attestations were read before the first row and never re-asked"
+    );
+    assert_eq!(
+        early.evidence_id, late.evidence_id,
+        "so the evidence identity is the same identity at any read depth"
+    );
+    assert_eq!(
+        early.exactness, late.exactness,
+        "and so is the exactness derived from it"
+    );
+    assert_eq!(
+        late.exactness,
+        ScoreExactness::LowerBounds {
+            strata: BTreeSet::from([stratum("text")])
+        },
+        "which is `LowerBounds` throughout, because the index was short throughout"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T6. Declared candidate domains: the reading is bounded where the producers
+//     said it could be, and the answer never moves.
+//
+// The defect these fixtures pin is a drain. Fusion certifies a candidate only
+// once every stream that could still name it has named it, and with no
+// declaration "could still name it" is true of every open stream — so over
+// strata whose candidate sets do not overlap, nothing ever certifies while
+// another stream is open, and a top-five answer over two thousand-row strata
+// reads two thousand rows. The trailer then compounds it: a stream that was
+// DRAINED reports `Exhausted`, which is a completeness claim the caller's bound
+// never asked anyone to earn.
+//
+// A producer's declaration is what removes it. `CandidateDomains` names the
+// blocks of the candidate universe a producer may draw from, fusion skips
+// exactly the streams that provably cannot name the candidate in hand, and the
+// scores are the scores they always were. Every test below is in one of three
+// families, and the third is the one that makes the other two worth having:
+//
+//   * the BOUND — how much was read (T6.1, T6.2, T6.4, T6.8 in
+//     `fusion_frontier_alloc.rs`);
+//   * the REFUSAL — a declaration held to, with its valid neighbours (T6.5);
+//   * the SOUNDNESS — the answer under a declaration is the answer without one
+//     (T6.3), because a bound that changes the rows is not a bound, it is a bug.
+// ---------------------------------------------------------------------------
+
+/// Two caller-named blocks of a candidate universe. Nothing here mints them:
+/// they are `example.org` IRIs a host chose, exactly as strata are.
+const DOMAIN_DOCS: &str = "http://example.org/domain/documents";
+const DOMAIN_PEOPLE: &str = "http://example.org/domain/people";
+
+fn domain(tag: &str) -> DomainTag {
+    DomainTag::parse(tag).expect("fixture domain tags are valid IRIs")
+}
+
+fn within(tags: &[&str]) -> CandidateDomains {
+    CandidateDomains::within(tags.iter().map(|tag| domain(tag)))
+}
+
+/// One stratum of a domain fixture: who it is, what it promises, what it emits.
+struct StratumSpec {
+    /// The stratum's short name, spelled into an IRI by [`stratum`].
+    name: &'static str,
+    /// The blocks this producer declares it may name. Its items are all drawn
+    /// from them, so the declaration is true — which is the precondition every
+    /// soundness claim below rests on.
+    tags: Vec<&'static str>,
+    /// This stratum's weight in the fixture profile.
+    weight: Fixed,
+    /// The items it emits, in rank order, ranks 1..=len.
+    items: Vec<String>,
+}
+
+/// Which declaration a run is made under.
+///
+/// The three are a lattice, from the widest promise to the narrowest, and every
+/// one of them is TRUE of the same streams. That is what makes comparing them a
+/// measurement of the declaration rather than of three different fixtures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Declared {
+    /// Every stream may name anything: the promise every producer made before
+    /// the term existed, and the behaviour this engine had then.
+    Nothing,
+    /// Every stream names the union of every block in play. True, and useless:
+    /// each stream's declaration meets every other's, so nothing may be
+    /// skipped. It is the middle of the lattice and exists to separate "a
+    /// declaration was read" from "a declaration was USED".
+    TheUnion,
+    /// Each stream's own blocks, as the spec states them.
+    ItsOwnBlocks,
+}
+
+fn spec_profile(spec: &[StratumSpec]) -> FusionProfile {
+    let weights: Vec<(&str, Fixed)> = spec
+        .iter()
+        .map(|stratum| (stratum.name, stratum.weight))
+        .collect();
+    profile(&weights, K)
+}
+
+/// Every block any stratum in `spec` declares, in canonical order.
+fn spec_union(spec: &[StratumSpec]) -> Vec<&'static str> {
+    let mut union: BTreeSet<&'static str> = BTreeSet::new();
+    for stratum in spec {
+        union.extend(stratum.tags.iter().copied());
+    }
+    union.into_iter().collect()
+}
+
+/// The block a fixture item really lies in, read off the item itself.
+///
+/// The fixtures mint `doc/…` and `person/…` items, so the block is a property of
+/// the item rather than of the stream that emitted it — which is exactly what the
+/// partition axiom says a block is, and what lets the cross-cutting stratum name
+/// items from both blocks truthfully.
+fn block_of(item: &str) -> &'static str {
+    if item.contains("/doc/") {
+        DOMAIN_DOCS
+    } else {
+        DOMAIN_PEOPLE
+    }
+}
+
+/// The fixture's streams, each declaring what `declared` says it declares.
+fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStream)> {
+    let union = spec_union(spec);
+    spec.iter()
+        .map(|entry| {
+            let steps: Vec<Step> = entry
+                .items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let rank = u64::try_from(index + 1).expect("fixture ranks fit");
+                    match declared {
+                        // An unrestricted stream owes no per-row block and names
+                        // none: this is the fixture as it was before blocks
+                        // existed, which is what the differential compares
+                        // against.
+                        Declared::Nothing => row(rank, entry.weight, K, item),
+                        // A restricted stream backs its declaration row by row,
+                        // with the block the item is really in.
+                        Declared::TheUnion | Declared::ItsOwnBlocks => {
+                            row_in(rank, entry.weight, K, item, block_of(item))
+                        }
+                    }
+                })
+                .collect();
+            let emitted = u64::try_from(steps.len()).expect("fixture row counts fit");
+            let domains = match declared {
+                Declared::Nothing => CandidateDomains::Unrestricted,
+                Declared::TheUnion => within(&union),
+                Declared::ItsOwnBlocks => within(&entry.tags),
+            };
+            (
+                stratum(entry.name),
+                MockStream::new(steps, exhausted(emitted))
+                    .declaring(StreamContract::new(DuplicatePolicy::Unique, domains)),
+            )
+        })
+        .collect()
+}
+
+/// The eager oracle: every item's total, computed from the script rather than
+/// from the engine, ordered by the declared total tie-break.
+fn spec_oracle(spec: &[StratumSpec]) -> Vec<(String, Fixed, u64)> {
+    let mut totals: BTreeMap<String, (Fixed, u64)> = BTreeMap::new();
+    for entry in spec {
+        for (index, item) in entry.items.iter().enumerate() {
+            let rank = u64::try_from(index + 1).expect("fixture ranks fit");
+            let value = contribution(entry.weight, rank, K).expect("fixture contributions fit");
+            let seen = totals
+                .entry(item.clone())
+                .or_insert((Fixed::ZERO, u64::MAX));
+            seen.0 = seen.0.checked_add(value).expect("fixture sums fit");
+            seen.1 = seen.1.min(rank);
+        }
+    }
+    let mut ordered: Vec<(String, Fixed, u64)> = totals
+        .into_iter()
+        .map(|(item, (score, rank))| (item, score, rank))
+        .collect();
+    ordered.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then(left.2.cmp(&right.2))
+            .then(left.0.cmp(&right.0))
+    });
+    ordered
+}
+
+fn fuse_spec(spec: &[StratumSpec], declared: Declared, top_k: TopK) -> FusionResult<Term> {
+    block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        spec_streams(spec, declared),
+        &spec_profile(spec),
+        top_k,
+    ))
+    .expect("the fixture streams obey the protocol")
+}
+
+fn ranks_pulled(result: &FusionResult<Term>, name: &str) -> u64 {
+    result
+        .trailer
+        .resolution
+        .get(&stratum(name))
+        .expect("the fixture profile weights every fixture stratum")
+        .ranks_pulled
+}
+
+/// `count` items in one block, named so that the block's own order is the
+/// lexical order the tie-break falls back on.
+fn block_items(prefix: &str, count: u64) -> Vec<String> {
+    (1..=count)
+        .map(|index| format!("http://example.org/{prefix}/{index:06}"))
+        .collect()
+}
+
+/// **Case A**, the reported reproduction: two thousand-row strata whose
+/// candidate sets are disjoint, each declaring its own block.
+fn case_a() -> Vec<StratumSpec> {
+    vec![
+        StratumSpec {
+            name: "docs",
+            tags: vec![DOMAIN_DOCS],
+            weight: Fixed::ONE,
+            items: block_items("doc", 1_000),
+        },
+        StratumSpec {
+            name: "people",
+            tags: vec![DOMAIN_PEOPLE],
+            weight: Fixed::ONE,
+            items: block_items("person", 1_000),
+        },
+    ]
+}
+
+/// **Case B**: the same disjoint shape, with both streams shorter than the
+/// caller's bound. Nothing here can end at a ceiling, because the rows run out
+/// first — the valid neighbour of case A's bounded stop.
+fn case_b() -> Vec<StratumSpec> {
+    vec![
+        StratumSpec {
+            name: "docs",
+            tags: vec![DOMAIN_DOCS],
+            weight: Fixed::ONE,
+            items: block_items("doc", 2),
+        },
+        StratumSpec {
+            name: "people",
+            tags: vec![DOMAIN_PEOPLE],
+            weight: Fixed::ONE,
+            items: block_items("person", 2),
+        },
+    ]
+}
+
+/// **Case C**: one short stratum beside one long one. The short one exhausts
+/// and says so; the long one is stopped at a bound and says that.
+fn case_c() -> Vec<StratumSpec> {
+    vec![
+        StratumSpec {
+            name: "docs",
+            tags: vec![DOMAIN_DOCS],
+            weight: Fixed::ONE,
+            items: block_items("doc", 3),
+        },
+        StratumSpec {
+            name: "people",
+            tags: vec![DOMAIN_PEOPLE],
+            weight: Fixed::ONE,
+            items: block_items("person", 1_000),
+        },
+    ]
+}
+
+/// **The cross-cutting configuration**: two disjoint strata and a third that
+/// names candidates from BOTH blocks — a quality prior, a popularity rank, any
+/// signal that applies to the whole corpus.
+///
+/// It is why a declaration is a SET of blocks per producer rather than a
+/// partition of the strata. Forced to name one block, such a producer would
+/// have to lie in one direction or the other; allowed to name both, it stays
+/// truthful, still meets both disjoint strata, and the bound survives.
+fn case_cross_cutting() -> Vec<StratumSpec> {
+    let docs = block_items("doc", 1_000);
+    let people = block_items("person", 1_000);
+    // The prior ranks the same universe, alternating blocks, so it genuinely
+    // names candidates both other strata name.
+    let mixed: Vec<String> = docs
+        .iter()
+        .zip(people.iter())
+        .flat_map(|(doc, person)| [doc.clone(), person.clone()])
+        .take(1_000)
+        .collect();
+    vec![
+        StratumSpec {
+            name: "docs",
+            tags: vec![DOMAIN_DOCS],
+            weight: Fixed::ONE,
+            items: docs,
+        },
+        StratumSpec {
+            name: "people",
+            tags: vec![DOMAIN_PEOPLE],
+            weight: Fixed::ONE,
+            items: people,
+        },
+        StratumSpec {
+            name: "prior",
+            tags: vec![DOMAIN_DOCS, DOMAIN_PEOPLE],
+            weight: Fixed::ONE,
+            items: mixed,
+        },
+    ]
+}
+
+// T6.1. The reading is bounded by the caller's `k`, not by the streams' length.
+#[test]
+fn declared_domains_bound_the_reading_over_disjoint_strata() {
+    // The bound each assertion is measured against, spelled as the arithmetic
+    // it comes from rather than as "small": `k` rows have to be certified, and
+    // certifying the last of them requires the threshold to fall below it,
+    // which costs one unmerged head per stream that is still open. A ceiling of
+    // `k + streams` is therefore the claim; anything at the streams' length is
+    // the drain.
+    let bound = TopK::new(5);
+
+    let a = fuse_spec(&case_a(), Declared::ItsOwnBlocks, bound);
+    assert_eq!(a.rows.len(), 5, "the bound is what stopped this run");
+    assert!(
+        ranks_pulled(&a, "docs") <= 7,
+        "case A read {} ranks from the documents stratum; the bound is 5 + 2",
+        ranks_pulled(&a, "docs")
+    );
+    assert!(
+        ranks_pulled(&a, "people") <= 7,
+        "case A read {} ranks from the people stratum; the bound is 5 + 2",
+        ranks_pulled(&a, "people")
+    );
+
+    // And the counter-measurement, so the ceiling above is known to be doing
+    // work: without the declaration the identical streams drain completely.
+    let drained = fuse_spec(&case_a(), Declared::Nothing, bound);
+    assert_eq!(
+        ranks_pulled(&drained, "docs"),
+        1_000,
+        "with no declaration there is nothing to license an early stop, and the \
+         drain is what this whole mechanism removes"
+    );
+    assert_eq!(ranks_pulled(&drained, "people"), 1_000);
+    // And the status the drain produces, which is the other half of what the
+    // declaration buys: a stream read to its end reports the vocabulary's one
+    // completeness claim, so the undeclared run is not merely slower, it
+    // answers a different question about the stratum than the bounded run does.
+    for block in ["docs", "people"] {
+        assert_eq!(
+            drained.trailer.statuses.get(&stratum(block)),
+            Some(&ProducerStatus::Exhausted {
+                rows_emitted: 1_000
+            }),
+            "the undeclared run drained {block} and says so"
+        );
+    }
+
+    // Case C: one stratum really does run out, and the bound applies to the
+    // other. A ceiling that only held when both streams were long would be a
+    // ceiling that never met a short stratum.
+    let c = fuse_spec(&case_c(), Declared::ItsOwnBlocks, bound);
+    assert_eq!(
+        c.trailer.statuses.get(&stratum("docs")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 3 }),
+        "three rows were all it had, so it is exhausted rather than bounded"
+    );
+    assert_eq!(ranks_pulled(&c, "docs"), 3);
+    assert!(
+        ranks_pulled(&c, "people") <= 7,
+        "case C read {} ranks from the long stratum; the bound is 5 + 2",
+        ranks_pulled(&c, "people")
+    );
+
+    // The cross-cutting configuration: a producer that names EVERY block must
+    // not collapse the bound. It cannot be skipped by anyone — it meets every
+    // candidate's domain — so it is read as deeply as certification needs, and
+    // that is still `k` plus a head per stream.
+    let cross = fuse_spec(&case_cross_cutting(), Declared::ItsOwnBlocks, bound);
+    assert_eq!(cross.rows.len(), 5);
+    for name in ["docs", "people", "prior"] {
+        assert!(
+            ranks_pulled(&cross, name) <= 8,
+            "the cross-cutting configuration read {} ranks from {name}; the bound is 5 + 3",
+            ranks_pulled(&cross, name)
+        );
+    }
+}
+
+// T6.2. A stream the bound stopped says so, and a stream that ran out says
+// that. The two are different claims and the trailer must not merge them.
+#[test]
+fn a_bounded_domain_run_reports_a_ceiling_and_an_exhausted_one_reports_exhaustion() {
+    let bound = TopK::new(5);
+    let a = fuse_spec(&case_a(), Declared::ItsOwnBlocks, bound);
+
+    for name in ["docs", "people"] {
+        let pulled = ranks_pulled(&a, name);
+        // The bound is computed here, from the profile's own law over the rank
+        // this run actually reached — never read back out of the value under
+        // test. A head is the last row pulled and is not yet merged, so
+        // everything at or above its contribution was read and nothing below
+        // it was.
+        let expected = contribution(Fixed::ONE, pulled, K).expect("the fixture contribution fits");
+        assert_eq!(
+            a.trailer.statuses.get(&stratum(name)),
+            Some(&ProducerStatus::CeilingReached { bound: expected }),
+            "a stratum stopped by the row bound is closed at the contribution it \
+             was read down to, never drained into an `Exhausted` it did not earn"
+        );
+    }
+
+    // Case B: both streams are shorter than the bound, so nothing is stopped
+    // and both reach their own receipt. This is the valid neighbour — a
+    // `CeilingReached` written here would be a bound claimed where the rows
+    // simply ran out.
+    let b = fuse_spec(&case_b(), Declared::ItsOwnBlocks, bound);
+    for name in ["docs", "people"] {
+        assert_eq!(
+            b.trailer.statuses.get(&stratum(name)),
+            Some(&ProducerStatus::Exhausted { rows_emitted: 2 }),
+            "case B's streams ran out; nothing bounded them"
+        );
+    }
+
+    // Case C carries one of each, in one trailer.
+    let c = fuse_spec(&case_c(), Declared::ItsOwnBlocks, bound);
+    assert_eq!(
+        c.trailer.statuses.get(&stratum("docs")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 3 })
+    );
+    let people_pulled = ranks_pulled(&c, "people");
+    assert_eq!(
+        c.trailer.statuses.get(&stratum("people")),
+        Some(&ProducerStatus::CeilingReached {
+            bound: contribution(Fixed::ONE, people_pulled, K).expect("the contribution fits"),
+        }),
+    );
+}
+
+/// The ANSWER a fused row carries: what it is, what it scored, and where that
+/// score came from. Everything a caller reads as the result.
+///
+/// [`FusedRow::threshold_witness`] is deliberately not here, and it is the one
+/// field of a row that is a statement about the READ rather than about the
+/// answer: it is the threshold in force at the instant the row certified, so it
+/// falls as the streams are read further and is zero once they are exhausted. A
+/// declaration that lets fusion stop early certifies the identical row against
+/// a higher threshold — a *stronger* witness, not a different answer — and
+/// requiring the two runs to agree on it would be requiring the bounded run to
+/// have read as far as the draining one, which is the whole thing being
+/// removed. It is checked below as the invariant it really is: a certified
+/// row's score is never beneath the threshold it was certified against.
+fn answer_of(row: &FusedRow) -> (Term, Fixed, Vec<(Iri, u64, Fixed)>) {
+    (row.entity.clone(), row.score, row.contributions.clone())
+}
+
+/// The trailer facts a declaration is ALLOWED to move, named once so the
+/// soundness assertions below can say what they cover by saying what they do
+/// not.
+///
+/// Four of them, and each is a statement about the READ rather than about the
+/// answer: `ranks_pulled` and `collisions_observed` count rows this run
+/// actually pulled, `statuses` says how each stream's read ended, and
+/// `cut_on_a_tie` reports whether the last emitted row beat a rival that was
+/// already settled *at the moment it was emitted* — which depends on how far
+/// the other streams had been read. `domains` moves too, and is not in the same
+/// category: it is the declaration under test, an input echoed back for audit,
+/// not a result. Within a row, `threshold_witness` moves for the same reason —
+/// see [`answer_of`].
+///
+/// Everything else in a trailer must be identical, and `assert_same_answer`
+/// checks each one by name.
+fn assert_same_answer(
+    declared: &FusionResult<Term>,
+    unrestricted: &FusionResult<Term>,
+    oracle: &[(String, Fixed, u64)],
+    top_k: TopK,
+    context: &str,
+) {
+    // The rows as answers: entity, score and per-stratum provenance. A
+    // declaration that changed any of these would be buying its bound with a
+    // wrong answer.
+    let declared_answers: Vec<_> = declared.rows.iter().map(answer_of).collect();
+    let unrestricted_answers: Vec<_> = unrestricted.rows.iter().map(answer_of).collect();
+    assert_eq!(
+        declared_answers, unrestricted_answers,
+        "{context}: the declared run's rows differ from the same streams fused \
+         with no declaration at all"
+    );
+
+    // And every row of both runs is certified against a threshold it really
+    // beat, which is what makes the differing witnesses above a difference in
+    // strength rather than in kind.
+    for row in declared.rows.iter().chain(&unrestricted.rows) {
+        assert!(
+            row.score >= row.threshold_witness,
+            "{context}: {} was certified at a score beneath the threshold in \
+             force, which certification forbids",
+            row.entity
+        );
+    }
+
+    // And against the oracle, so "both engines agree" cannot be both engines
+    // being wrong the same way.
+    let expected: Vec<&(String, Fixed, u64)> = oracle.iter().take(top_k.get()).collect();
+    assert_eq!(
+        declared.rows.len(),
+        expected.len(),
+        "{context}: row count against the oracle"
+    );
+    for (row, (item, score, rank)) in declared.rows.iter().zip(&expected) {
+        assert_eq!(row.entity, Term::new(item.clone()), "{context}: order");
+        assert_eq!(row.score, *score, "{context}: score of {item}");
+        let best = row
+            .contributions
+            .iter()
+            .map(|(_, rank, _)| *rank)
+            .min()
+            .expect("a row has at least one contribution");
+        assert_eq!(best, *rank, "{context}: best rank of {item}");
+    }
+
+    // The identities and the evidence: none of them is a function of how deep
+    // this run read, so none of them may move with the declaration.
+    assert_eq!(
+        declared.trailer.profile_id, unrestricted.trailer.profile_id,
+        "{context}: the fusion law is the law, whatever the producers declared"
+    );
+    assert_eq!(declared.trailer.plan_id, unrestricted.trailer.plan_id);
+    assert_eq!(
+        declared.trailer.evidence_id,
+        unrestricted.trailer.evidence_id
+    );
+    assert_eq!(
+        declared.trailer.attestations,
+        unrestricted.trailer.attestations
+    );
+    assert_eq!(declared.trailer.exactness, unrestricted.trailer.exactness);
+
+    // The resolution map: the same strata, each with the same separation. Its
+    // other two fields are counts of what was read and are expected to differ —
+    // that difference is the whole point — so they are compared nowhere here.
+    assert_eq!(
+        declared.trailer.resolution.keys().collect::<Vec<_>>(),
+        unrestricted.trailer.resolution.keys().collect::<Vec<_>>(),
+        "{context}: the same strata are reported either way"
+    );
+    for (stratum_iri, measured) in &declared.trailer.resolution {
+        assert_eq!(
+            measured.separation, unrestricted.trailer.resolution[stratum_iri].separation,
+            "{context}: separation is a property of the law and of the stratum's \
+             weight, never of how deep this run read"
+        );
+    }
+}
+
+// T6.3. THE SOUNDNESS TEST. A declaration changes how much is read and nothing
+// else: the same rows, the same scores, the same provenance, whether the
+// streams declare their blocks, declare the union of every block, or declare
+// nothing at all — and all three agree with an eager oracle that never ran the
+// engine.
+#[test]
+fn a_declaration_changes_the_reading_and_never_the_answer() {
+    for (name, spec, bound) in [
+        ("case A", case_a(), TopK::new(5)),
+        ("case B", case_b(), TopK::new(5)),
+        ("case C", case_c(), TopK::new(5)),
+        ("cross-cutting", case_cross_cutting(), TopK::new(5)),
+    ] {
+        let declared = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
+        let unrestricted = fuse_spec(&spec, Declared::Nothing, bound);
+        assert_same_answer(&declared, &unrestricted, &spec_oracle(&spec), bound, name);
+    }
+}
+
+/// A deterministic stream of values, seeded once per configuration.
+///
+/// A named, fixed recurrence rather than a random-number generator: every
+/// configuration below is reproduced exactly by its index, so a failure names a
+/// case a reader can rebuild, and nothing in an assertion depends on a draw.
+fn seeded(state: &mut u64) -> u64 {
+    // A 64-bit xorshift. Its only property that matters here is that it is a
+    // pure function of its state, identical on every target.
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+/// Configuration `index` of the differential: three strata over a twelve-item
+/// universe partitioned into two blocks, with a cross-cutting third producer.
+///
+/// The partition is what makes every declaration TRUE — each item is in exactly
+/// one block and each producer emits only items from the blocks it declares —
+/// which is the precondition the whole mechanism assumes and which a host is
+/// responsible for. A configuration that violated it would be testing the
+/// refusal, and the refusal is T6.5's subject.
+fn differential_spec(index: u64) -> Vec<StratumSpec> {
+    let mut state = index.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    // Each item's block, drawn once and then respected by every producer.
+    let blocks: Vec<&'static str> = (0..12)
+        .map(|_: u64| {
+            if seeded(&mut state).is_multiple_of(2) {
+                DOMAIN_DOCS
+            } else {
+                DOMAIN_PEOPLE
+            }
+        })
+        .collect();
+    // The item's own name says which block it is in, so the partition is
+    // readable from any row in isolation — which is what lets every producer here
+    // name the same block for the same item without a second table to keep in
+    // step. The draw above is still what decides it.
+    let universe: Vec<String> = blocks
+        .iter()
+        .enumerate()
+        .map(|(item, block)| {
+            let space = if *block == DOMAIN_DOCS {
+                "doc"
+            } else {
+                "person"
+            };
+            format!("http://example.org/{space}/{item:04}")
+        })
+        .collect();
+    let pick = |state: &mut u64, allowed: &[&'static str]| -> Vec<String> {
+        let mut chosen: Vec<String> = universe
+            .iter()
+            .zip(&blocks)
+            .filter(|(_, block)| allowed.contains(block))
+            .filter(|_| !seeded(state).is_multiple_of(3))
+            .map(|(item, _)| item.clone())
+            .collect();
+        // A deterministic rotation, so the strata disagree about the order of
+        // the items they share — which is what makes the fusion do work.
+        if !chosen.is_empty() {
+            let rotation = (seeded(state) % chosen.len() as u64) as usize;
+            chosen.rotate_left(rotation);
+        }
+        chosen
+    };
+    let weights = [
+        Fixed::ONE,
+        Fixed::from_raw(700_000_000_000),
+        Fixed::from_raw(300_000_000_000),
+    ];
+    let docs_items = pick(&mut state, &[DOMAIN_DOCS]);
+    let people_items = pick(&mut state, &[DOMAIN_PEOPLE]);
+    let prior_items = pick(&mut state, &[DOMAIN_DOCS, DOMAIN_PEOPLE]);
+    vec![
+        StratumSpec {
+            name: "docs",
+            tags: vec![DOMAIN_DOCS],
+            weight: weights[(seeded(&mut state) % 3) as usize],
+            items: docs_items,
+        },
+        StratumSpec {
+            name: "people",
+            tags: vec![DOMAIN_PEOPLE],
+            weight: weights[(seeded(&mut state) % 3) as usize],
+            items: people_items,
+        },
+        StratumSpec {
+            name: "prior",
+            tags: vec![DOMAIN_DOCS, DOMAIN_PEOPLE],
+            weight: weights[(seeded(&mut state) % 3) as usize],
+            items: prior_items,
+        },
+    ]
+}
+
+// T6.3, continued: the same claim over 256 deterministically seeded
+// configurations, plus the lattice property the mechanism rests on.
+#[test]
+fn the_differential_holds_under_declared_domains_over_many_configurations() {
+    let mut exercised = 0_u32;
+    for index in 0..256 {
+        let spec = differential_spec(index);
+        // A configuration where nothing is emitted proves nothing, so the ones
+        // that do work are counted and the count is asserted at the end.
+        if spec.iter().all(|entry| entry.items.is_empty()) {
+            continue;
+        }
+        for bound in [TopK::new(1), TopK::new(3), TopK::new(8)] {
+            let nothing = fuse_spec(&spec, Declared::Nothing, bound);
+            let union = fuse_spec(&spec, Declared::TheUnion, bound);
+            let own = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
+            let oracle = spec_oracle(&spec);
+            let context = format!("configuration {index}, bound {bound}");
+            assert_same_answer(&own, &nothing, &oracle, bound, &context);
+            assert_same_answer(&union, &nothing, &oracle, bound, &context);
+
+            // The lattice property, and the reason the middle rung exists.
+            // Reading is non-increasing as the declarations get finer: a wider
+            // promise licenses nothing a narrower one does not. `TheUnion` is a
+            // real declaration that licenses no skipping at all, so it must
+            // read exactly what no declaration reads — if it read less, the
+            // engine would be skipping a stream that had promised nothing.
+            for entry in &spec {
+                let widest = ranks_pulled(&nothing, entry.name);
+                let middle = ranks_pulled(&union, entry.name);
+                let finest = ranks_pulled(&own, entry.name);
+                assert_eq!(
+                    widest, middle,
+                    "{context}: {} — a declaration that meets every other \
+                     declaration licenses no early stop",
+                    entry.name
+                );
+                assert!(
+                    finest <= middle,
+                    "{context}: {} — a finer declaration read MORE ({finest} \
+                     against {middle}), which is the lattice inverted",
+                    entry.name
+                );
+            }
+            exercised += 1;
+        }
+    }
+    assert!(
+        exercised >= 200,
+        "the differential must exercise at least 200 configurations, ran {exercised}"
+    );
+}
+
+/// The smallest weight the fixed-point carries, and the one whose decay collides
+/// immediately: at this weight ranks one and two already share a contribution value.
+///
+/// `Fixed::ONE` collides too, but not until rank 1_000_941 — past the end of any
+/// fixture here — so a collision assertion over a `case_a` run at `Fixed::ONE` is an
+/// assertion that zero equals zero. It would pass with the collision counter emptied,
+/// and it would pass against the very estimate its own message forbids. This is the
+/// weight the two sibling tests that enter the collided regime already use.
+const COLLIDED_WEIGHT: Fixed = Fixed::from_raw(1);
+
+/// [`case_a`] at [`COLLIDED_WEIGHT`]: the same streams, the same blocks, the same
+/// lengths, weighted so that adjacent ranks collide from the second one on.
+fn case_a_collided() -> Vec<StratumSpec> {
+    case_a()
+        .into_iter()
+        .map(|entry| StratumSpec {
+            weight: COLLIDED_WEIGHT,
+            ..entry
+        })
+        .collect()
+}
+
+// T6.4. The two measured fields stay measurements. `collisions_observed` counts
+// what this run actually saw, and `separation` is the profile's own answer for
+// the stratum — neither is estimated from the other.
+//
+// The fixture is weighted into the collided regime on purpose, and the guard below
+// holds it there: a counter assertion over a read containing no collision is an
+// assertion about nothing, which is what this test used to be.
+//
+// That weight is also why the reading here is the full drain rather than the bounded
+// prefix T6.1 measures, and the two facts are the same fact. A declaration licenses an
+// early stop only when a threshold can fall below the live heads, and a collided
+// regime is precisely where it cannot: every rank carries one contribution value, so
+// nothing separates and nothing may be skipped. No single weight can put a collision
+// inside a read that a declaration shortened — what this test measures is the
+// counters, in the one regime where the collision counter has anything to count.
+#[test]
+fn the_resolution_counters_stay_observations_under_a_declared_domain() {
+    let bound = TopK::new(5);
+    let spec = case_a_collided();
+    let result = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
+    let law = spec_profile(&spec);
+
+    for entry in &spec {
+        let measured = result
+            .trailer
+            .resolution
+            .get(&stratum(entry.name))
+            .expect("the fixture profile weights every fixture stratum");
+
+        // Derived from the rows this run pulled, by walking the profile's curve
+        // over exactly those ranks: two adjacent ranks collide when the
+        // fixed-point decay gives them one value. Computed here rather than
+        // predicted from `separation`, so a count that drifted from the rows
+        // would fail even where the profile's a-priori bound was unchanged.
+        let mut expected = 0_u64;
+        for rank in 2..=measured.ranks_pulled {
+            let previous =
+                contribution(entry.weight, rank - 1, K).expect("the fixture contribution fits");
+            let current =
+                contribution(entry.weight, rank, K).expect("the fixture contribution fits");
+            if previous == current {
+                expected += 1;
+            }
+        }
+        // Non-vacuity, the crossing guard its siblings carry: a fixture whose
+        // pulled ranks hold no collision makes the equality below `0 == 0`, which
+        // an emptied counter satisfies as readily as a correct one.
+        assert!(
+            expected > 0,
+            "{}: the pulled ranks must contain a collision, or the count below \
+             asserts nothing",
+            entry.name
+        );
+        assert_eq!(
+            measured.collisions_observed, expected,
+            "the collision count must be what the pulled rows show, not an \
+             estimate from the profile's bound"
+        );
+        assert_eq!(
+            measured.separation,
+            law.monotone_depth(&stratum(entry.name))
+                .expect("the profile weights this stratum"),
+            "separation is the profile's own answer for this stratum, and what the \
+             read did does not move it"
+        );
+    }
+}
+
+// T6.5. The declaration is held to, and the refusal is narrow.
+//
+// Two streams whose declarations put one candidate in two disjoint blocks
+// cannot both be telling the truth about it. The consumer says so — naming the
+// item, the offending stratum, and the stratum whose declaration it
+// contradicted — rather than picking a side, because it has already certified
+// rows on the strength of those declarations.
+#[test]
+fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
+    let shared = "http://example.org/doc/000001";
+    let docs = || {
+        MockStream::new(
+            vec![row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS)],
+            ProducerReceipt::Exhausted { rows_emitted: 1 },
+        )
+    };
+
+    // (i) While the candidate is still in the frontier. `people`'s first row
+    // names the candidate `docs` has just put there, so the contradiction is
+    // found against a live frontier entry.
+    let in_frontier = vec![
+        (
+            stratum("docs"),
+            docs().declaring(StreamContract::new(
+                DuplicatePolicy::Unique,
+                within(&[DOMAIN_DOCS]),
+            )),
+        ),
+        (
+            stratum("people"),
+            MockStream::new(
+                vec![
+                    // `people` says this candidate came from ITS block, which is
+                    // what makes the pair of declarations contradictory rather
+                    // than merely unusual.
+                    row_in(1, Fixed::ONE, K, shared, DOMAIN_PEOPLE),
+                    row_in(
+                        2,
+                        Fixed::ONE,
+                        K,
+                        "http://example.org/person/000001",
+                        DOMAIN_PEOPLE,
+                    ),
+                ],
+                exhausted(2),
+            )
+            .declaring(StreamContract::new(
+                DuplicatePolicy::Unique,
+                within(&[DOMAIN_PEOPLE]),
+            )),
+        ),
+    ];
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        in_frontier,
+        &profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K),
+        TopK::new(10),
+    ))
+    .expect_err("a declaration this row contradicts must be refused");
+    match error {
+        FusionError::Protocol(protocol) => match *protocol {
+            ProtocolError::OutsideDeclaredDomain {
+                item,
+                stratum: offender,
+                named_by,
+            } => {
+                assert_eq!(item, shared, "the refusal names the candidate");
+                assert_eq!(
+                    offender,
+                    stratum("people").as_str(),
+                    "and the stratum whose stream broke its own declaration"
+                );
+                assert_eq!(
+                    named_by,
+                    stratum("docs").as_str(),
+                    "and the declaration it contradicted, without which a reader \
+                     cannot find the other half of the disagreement"
+                );
+            }
+            other => panic!("expected an outside-domain refusal, got {other:?}"),
+        },
+        other => panic!("expected a protocol refusal, got {other:?}"),
+    }
+
+    // (ii) After the candidate has been certified and left the frontier. A
+    // promise that lapses once a row is emitted is a promise that depends on
+    // how deep the caller read, which is not a promise.
+    let after_emission = vec![
+        (
+            stratum("docs"),
+            docs().declaring(StreamContract::new(
+                DuplicatePolicy::Unique,
+                within(&[DOMAIN_DOCS]),
+            )),
+        ),
+        (
+            stratum("people"),
+            MockStream::new(
+                vec![
+                    row_in(
+                        1,
+                        Fixed::ONE,
+                        K,
+                        "http://example.org/person/000001",
+                        DOMAIN_PEOPLE,
+                    ),
+                    row_in(2, Fixed::ONE, K, shared, DOMAIN_PEOPLE),
+                ],
+                exhausted(2),
+            )
+            .declaring(StreamContract::new(
+                DuplicatePolicy::Unique,
+                within(&[DOMAIN_PEOPLE]),
+            )),
+        ),
+    ];
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        after_emission,
+        &profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K),
+        TopK::new(10),
+    ))
+    .expect_err("the promise is held for the whole fusion, not only for the frontier");
+    assert!(
+        matches!(
+            &error,
+            FusionError::Protocol(protocol)
+                if matches!(
+                    &**protocol,
+                    ProtocolError::OutsideDeclaredDomain { item, stratum: offender, named_by }
+                        if item == shared
+                            && offender == stratum("people").as_str()
+                            && named_by == stratum("docs").as_str()
+                )
+        ),
+        "a late name must be refused exactly as an early one is, got {error:?}"
+    );
+}
+
+// T6.5b. The axiom itself, held against the ROWS rather than the declarations.
+//
+// Two declarations can overlap — both naming `documents` — and still place one
+// candidate in two different blocks, one row each. Nothing about that pair of
+// promises is contradictory, so `OutsideDeclaredDomain` cannot see it; what is
+// contradictory is the pair of rows, and it is exactly the case the threshold's
+// per-block maximum under-bounds, because the streams that reach one block and
+// the streams that reach the other are different sets.
+//
+// The shipped-path proof of this refusal is `search.rs`'s
+// `two_streams_naming_one_candidate_from_two_blocks_are_refused`. What is pinned
+// here is the engine-level case a producer reaches through `fuse` with its own
+// streams, including the one row `pull` never sees: a repeat a permissive
+// duplicate policy discards.
+#[test]
+fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
+    let shared = "http://example.org/doc/000001";
+    let law = profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K);
+    // Overlapping declarations: both admit `documents`, so a candidate both name
+    // is perfectly possible and the declaration-level refusal stays silent.
+    let overlapping = || {
+        StreamContract::new(
+            DuplicatePolicy::Unique,
+            within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+        )
+    };
+    let pair = |left_block: &'static str, right_block: &'static str| {
+        vec![
+            (
+                stratum("docs"),
+                MockStream::new(
+                    vec![row_in(1, Fixed::ONE, K, shared, left_block)],
+                    exhausted(1),
+                )
+                .declaring(overlapping()),
+            ),
+            (
+                stratum("people"),
+                MockStream::new(
+                    vec![row_in(1, Fixed::ONE, K, shared, right_block)],
+                    exhausted(1),
+                )
+                .declaring(overlapping()),
+            ),
+        ]
+    };
+
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(DOMAIN_DOCS, DOMAIN_PEOPLE),
+        &law,
+        TopK::new(10),
+    ))
+    .expect_err("a candidate in two blocks falsifies the axiom the threshold rests on");
+    match error {
+        FusionError::Protocol(protocol) => match *protocol {
+            ProtocolError::CandidateInTwoBlocks {
+                item,
+                stratum: offender,
+                block,
+                named_by,
+                named_by_block,
+            } => {
+                assert_eq!(item, shared, "the refusal names the candidate");
+                assert_eq!(offender, stratum("people").as_str());
+                assert_eq!(block, DOMAIN_PEOPLE, "the block the later row claimed");
+                assert_eq!(named_by, stratum("docs").as_str());
+                assert_eq!(
+                    named_by_block, DOMAIN_DOCS,
+                    "and the placement it contradicted — either producer could be \
+                     the one that tagged wrongly, so both are named"
+                );
+            }
+            other => panic!("expected a two-block refusal, got {other:?}"),
+        },
+        other => panic!("expected a protocol refusal, got {other:?}"),
+    }
+
+    // The valid neighbour, one block different: both streams place the candidate
+    // in the SAME block. Two producers ranking one entity is what fused
+    // enumeration is for, and it fuses into one row carrying both contributions.
+    let agreeing = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(DOMAIN_DOCS, DOMAIN_DOCS),
+        &law,
+        TopK::new(10),
+    ))
+    .expect("agreeing placements are the ordinary overlapping case");
+    assert_eq!(agreeing.rows.len(), 1, "one candidate, one row");
+    assert_eq!(agreeing.rows[0].entity, Term::new(shared));
+    assert_eq!(
+        agreeing.rows[0].contributions.len(),
+        2,
+        "and both strata's contributions, which is what the agreement buys"
+    );
+}
+
+// T6.5d. An unrestricted stream owes no block — and a block it volunteers is
+// still evidence about the CANDIDATE, so it is honoured rather than discarded.
+//
+// Both halves are executed, because both are decisions. Discarding the volunteered
+// block would throw away a host's own evidence that its tagging is wrong;
+// *requiring* one would refuse a producer that promised nothing and therefore
+// tightened nothing.
+#[test]
+fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses() {
+    let shared = "http://example.org/doc/000001";
+    let law = profile(&[("wide", Fixed::ONE), ("people", Fixed::ONE)], K);
+    let restricted = || StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_PEOPLE]));
+    let pair = |volunteered: Step| {
+        vec![
+            (
+                stratum("wide"),
+                MockStream::new(vec![volunteered], exhausted(1)).declaring(unique_items()),
+            ),
+            (
+                stratum("people"),
+                MockStream::new(
+                    vec![row_in(1, Fixed::ONE, K, shared, DOMAIN_PEOPLE)],
+                    exhausted(1),
+                )
+                .declaring(restricted()),
+            ),
+        ]
+    };
+
+    // Volunteered and contradictory: the unrestricted stream places the candidate
+    // in `documents` and the restricted one in `people`. One candidate cannot be
+    // in two blocks, and an unrestricted declaration does not make the claim
+    // unfalsifiable — it only means this stream was never obliged to make it.
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS)),
+        &law,
+        TopK::new(10),
+    ))
+    .expect_err("a volunteered block that contradicts a placement is still a contradiction");
+    assert!(
+        matches!(
+            &error,
+            FusionError::Protocol(protocol)
+                if matches!(&**protocol, ProtocolError::CandidateInTwoBlocks { item, .. } if item == shared)
+        ),
+        "expected a two-block refusal, got {error:?}"
+    );
+
+    // Silent, which is what an unrestricted stream owes: no block, nothing to
+    // contradict, and the two streams fuse the shared candidate into one row.
+    let quiet = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        pair(row(1, Fixed::ONE, K, shared)),
+        &law,
+        TopK::new(10),
+    ))
+    .expect("an unrestricted stream owes no block and is not refused for naming none");
+    assert_eq!(quiet.rows.len(), 1, "one candidate, one row");
+    assert_eq!(
+        quiet.rows[0].contributions.len(),
+        2,
+        "and both strata contributed, exactly as they did before blocks existed"
+    );
+}
+
+// T6.5c. The row `pull` never sees. A stream that declared `Allowed` has its
+// repeats discarded by the consumer, and a discarded row is still a row the
+// producer made claims about: it may not smuggle a second, different placement
+// for a candidate past the check by repeating it.
+#[test]
+fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
+    let shared = "http://example.org/doc/000001";
+    let law = profile(&[("docs", Fixed::ONE)], K);
+    let repeating = || {
+        StreamContract::new(
+            DuplicatePolicy::Allowed,
+            within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+        )
+    };
+    let stream = |second_block: &'static str| {
+        vec![(
+            stratum("docs"),
+            MockStream::new(
+                vec![
+                    row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS),
+                    row_in(2, Fixed::ONE, K, shared, second_block),
+                ],
+                exhausted(2),
+            )
+            .declaring(repeating()),
+        )]
+    };
+
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        stream(DOMAIN_PEOPLE),
+        &law,
+        TopK::new(10),
+    ))
+    .expect_err("a repeat may be dropped; its claim about the candidate may not be");
+    assert!(
+        matches!(
+            &error,
+            FusionError::Protocol(protocol)
+                if matches!(
+                    &**protocol,
+                    ProtocolError::CandidateInTwoBlocks { item, block, named_by_block, .. }
+                        if item == shared
+                            && block == DOMAIN_PEOPLE
+                            && named_by_block == DOMAIN_DOCS
+                )
+        ),
+        "the second placement must be refused even though the row it rode in on \
+         was about to be discarded, got {error:?}"
+    );
+
+    // The valid neighbour: the identical repeat, placed in the block the first
+    // row already placed the candidate in. That contradicts nothing, so it is
+    // de-duplicated exactly as this policy says it must be — one row, one
+    // contribution, and the producer still charged for both rows it emitted.
+    let consistent = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        stream(DOMAIN_DOCS),
+        &law,
+        TopK::new(10),
+    ))
+    .expect("a repeat that agrees about the candidate's block is an ordinary repeat");
+    assert_eq!(
+        consistent.rows.len(),
+        1,
+        "the repeat was dropped, not fused"
+    );
+    assert_eq!(
+        consistent.rows[0].contributions.len(),
+        1,
+        "one contribution per stratum, at the best rank the stream gave it"
+    );
+    assert_eq!(
+        consistent.trailer.statuses.get(&stratum("docs")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 2 }),
+        "and the dropped row is still a row the producer emitted"
+    );
+}
+
+// T6.5's valid neighbours. The refusal above is about a pair of DECLARATIONS,
+// not about two producers naming one entity — which is the case fused
+// enumeration exists for, and which must keep working unchanged.
+#[test]
+fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise() {
+    let shared = "http://example.org/doc/000001";
+    let law = profile(&[("docs", Fixed::ONE), ("people", Fixed::ONE)], K);
+    // Each side is a declaration and the row that backs it. A restricted stream
+    // owes a block on every row, and both sides name the block the shared
+    // candidate is really in — it is one document, and it is in one block, which
+    // is the axiom holding rather than being violated.
+    let both_naming = |left: (StreamContract, Step), right: (StreamContract, Step)| {
+        vec![
+            (
+                stratum("docs"),
+                MockStream::new(vec![left.1], exhausted(1)).declaring(left.0),
+            ),
+            (
+                stratum("people"),
+                MockStream::new(vec![right.1], exhausted(1)).declaring(right.0),
+            ),
+        ]
+    };
+    let blockless = || row(1, Fixed::ONE, K, shared);
+    let in_docs = || row_in(1, Fixed::ONE, K, shared, DOMAIN_DOCS);
+
+    // (i) No declaration at all: one row, two contributions, the sum of both.
+    let unrestricted = block_on(run_fuse(
+        both_naming((unique_items(), blockless()), (unique_items(), blockless())),
+        &law,
+    ));
+    let doubled = contribution(Fixed::ONE, 1, K)
+        .expect("fits")
+        .checked_add(contribution(Fixed::ONE, 1, K).expect("fits"))
+        .expect("fits");
+    assert_eq!(unrestricted.rows.len(), 1);
+    assert_eq!(unrestricted.rows[0].entity, Term::new(shared));
+    assert_eq!(unrestricted.rows[0].score, doubled);
+    assert_eq!(unrestricted.rows[0].contributions.len(), 2);
+
+    // (ii) Two producers declared over the SAME block, naming the same entity:
+    // the declarations agree, so nothing is refused and the answer is
+    // identical. This is the case a stratum-derived tag would have broken.
+    let agreeing = block_on(run_fuse(
+        both_naming(
+            (
+                StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
+                in_docs(),
+            ),
+            (
+                StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
+                in_docs(),
+            ),
+        ),
+        &law,
+    ));
+    assert_eq!(
+        agreeing.rows, unrestricted.rows,
+        "two producers over one block are the ordinary overlapping case, and \
+         the declaration must not cost them their fused row"
+    );
+
+    // (iii) Declarations that overlap without being equal: `docs` names one
+    // block, the cross-cutting producer names both. They meet, so the candidate
+    // fuses.
+    let overlapping = block_on(run_fuse(
+        both_naming(
+            (
+                StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS])),
+                in_docs(),
+            ),
+            (
+                StreamContract::new(
+                    DuplicatePolicy::Unique,
+                    within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+                ),
+                // The cross-cutting producer names two blocks and says which one
+                // THIS row came from, which is the whole point of a per-row
+                // block: a several-block declaration is backed row by row.
+                in_docs(),
+            ),
+        ),
+        &law,
+    ));
+    assert_eq!(overlapping.rows, unrestricted.rows);
+}
+
+// T6.6. The declaration is part of the producer's identity, and of nothing
+// else's. It reaches the registry fingerprint — pinned in `sparql-eval`'s own
+// `ranked_retrieval_fingerprint.rs` and, through the plan, in `plan.rs` — and
+// it must NOT reach the fusion profile, which describes the law rather than the
+// producers.
+#[test]
+fn a_declaration_never_moves_the_fusion_profiles_identity() {
+    let spec = case_a();
+    let law = spec_profile(&spec);
+    let bound = TopK::new(5);
+
+    let declared = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
+    let unrestricted = fuse_spec(&spec, Declared::Nothing, bound);
+
+    assert_eq!(
+        declared.trailer.profile_id,
+        law.id(),
+        "the trailer names the law in force"
+    );
+    assert_eq!(
+        unrestricted.trailer.profile_id,
+        law.id(),
+        "and the same law under a different set of producer declarations"
+    );
+
+    // The profile is a function of its strata, weights and decay rule, and a
+    // producer's promise about its own candidates is none of those. A caller
+    // comparing two answers' `profile_id` is asking whether they were scored
+    // by the same law; folding a producer's declaration in would make that
+    // question unanswerable.
+    assert_eq!(declared.trailer.profile_id, unrestricted.trailer.profile_id);
+    assert_eq!(
+        law.id(),
+        spec_profile(&case_b()).id(),
+        "the fixture profiles are the same law"
+    );
+}
+
+// T6.7. The licence must not leak into the case the membership test exists for.
+//
+// `is_final` skips a stream that CANNOT name a candidate. A stream that can
+// name it — same block, or no declaration — still blocks certification even
+// when its contribution is exactly zero, because a zero contribution is still a
+// rank, a provenance entry and a possible better rank. The test next door
+// (`a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one`) pins
+// that with no declarations at all; this one pins it with declarations present
+// and agreeing, which is where a too-eager skip would hide.
+#[test]
+fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification() {
+    let law = profile(
+        &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
+        K,
+    );
+    let dense_contribution = contribution(Fixed::ONE, 1, K).expect("fits");
+    let target = "http://example.org/doc/000001";
+    let same_block = || StreamContract::new(DuplicatePolicy::Unique, within(&[DOMAIN_DOCS]));
+
+    let streams = vec![
+        (
+            stratum("dense"),
+            MockStream::new(
+                vec![row_in(1, Fixed::ONE, K, target, DOMAIN_DOCS)],
+                exhausted(1),
+            )
+            .declaring(same_block()),
+        ),
+        (
+            stratum("sparse"),
+            MockStream::new(
+                vec![
+                    row_in(
+                        1,
+                        ZERO_CONTRIBUTING_WEIGHT,
+                        K,
+                        "http://example.org/doc/000002",
+                        DOMAIN_DOCS,
+                    ),
+                    row_in(2, ZERO_CONTRIBUTING_WEIGHT, K, target, DOMAIN_DOCS),
+                ],
+                exhausted(2),
+            )
+            .declaring(same_block()),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &law));
+
+    let entities: Vec<&str> = result
+        .rows
+        .iter()
+        .map(|fused| fused.entity.as_str())
+        .collect();
+    assert_eq!(
+        entities,
+        vec![target, "http://example.org/doc/000002"],
+        "two candidates were named, so two rows are the whole answer — the \
+         target emitted twice would be one candidate with two scores"
+    );
+    let fused = &result.rows[0];
+    assert_eq!(fused.score, dense_contribution);
+    assert_eq!(
+        fused.contributions.len(),
+        2,
+        "a stream in the SAME block can still name this candidate, so it is \
+         awaited — the declaration licenses skipping only what it excludes"
+    );
+    assert_eq!(fused.contributions[0].0, stratum("dense"));
+    assert_eq!(fused.contributions[1], (stratum("sparse"), 2, Fixed::ZERO));
+}
+
+// T6.9's engine-side half: the trailer echoes the declarations the fusion ran
+// under, keyed by stratum, so an answer can be audited against them. The
+// registry-to-trailer route is pinned end to end in `search.rs`.
+#[test]
+fn the_trailer_reports_the_declarations_the_fusion_ran_under() {
+    let spec = case_a();
+    let bound = TopK::new(5);
+
+    let declared = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
+    assert_eq!(
+        declared.trailer.domains,
+        BTreeMap::from([
+            (stratum("docs"), within(&[DOMAIN_DOCS])),
+            (stratum("people"), within(&[DOMAIN_PEOPLE])),
+        ]),
+        "every handed stream's declaration is reported, verbatim and keyed by \
+         its stratum"
+    );
+
+    let unrestricted = fuse_spec(&spec, Declared::Nothing, bound);
+    assert_eq!(
+        unrestricted.trailer.domains,
+        BTreeMap::from([
+            (stratum("docs"), CandidateDomains::Unrestricted),
+            (stratum("people"), CandidateDomains::Unrestricted),
+        ]),
+        "and a fusion that was licensed to skip nothing says so, rather than \
+         leaving a reader to infer it from an absent key"
+    );
+    assert_eq!(
+        unrestricted.trailer.domains.keys().collect::<Vec<_>>(),
+        unrestricted.trailer.attestations.keys().collect::<Vec<_>>(),
+        "the key set is the streams this fusion was handed, exactly as the \
+         attestation map's is"
     );
 }

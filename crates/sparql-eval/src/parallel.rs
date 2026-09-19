@@ -1038,14 +1038,46 @@ where
 /// minting caller (e.g. `eval_extend`, `eval_group`'s per-group compute) can
 /// push [`MintedRow`]s instead, since the worker's forked child (and its
 /// scratch) is gone by the time the caller can re-intern against the parent.
-pub(crate) fn par_chunk_try_map_init<T, S, R>(
+///
+/// Each chunk's state is additionally **harvested** once its items have all been folded:
+/// `harvest` runs on that chunk's state, on the worker that owns it, and the results
+/// come back beside the rows in chunk-index order.
+///
+/// # Why a fork-per-chunk primitive harvests at all
+///
+/// A forked [`crate::eval::EvalCtx`] child is not purely scratch. Most of what it
+/// accumulates is genuinely private and dies with it, but some of it is a fact ABOUT the
+/// evaluation that the parent owes its caller — a relation's attestation
+/// ([`crate::witness::RelationWitness`]) is the motivating one. Before this, the only
+/// way out of a chunk was the `Vec<R>` of rows, so such a fact had two possible fates:
+/// silently lost, or carried in a shared lock taken once per row. A per-chunk harvest is
+/// neither — it is read once per chunk, on the worker that owns the state, with no
+/// synchronization at all.
+///
+/// The harvests come back in **chunk-index order**, the same order the rows reduce in.
+/// A caller folding a commutative, associative accumulator (which
+/// [`crate::witness::RelationWitness::merge`] is, deliberately) does not depend on that
+/// order; one that is not commutative must, and gets it.
+///
+/// A chunk that short-circuits on an `Err` is NOT harvested: its state is dropped with
+/// the error. That is the honest outcome, because the reduce below discards that chunk's
+/// rows too — an evaluation that failed has no partial evidence to report, only a
+/// diagnostic.
+///
+/// A caller with nothing to harvest passes `|_| ()` and ignores the second half of the
+/// pair; the harvest is a parameter rather than a second primitive so there is exactly
+/// ONE implementation of the chunking, the per-chunk `init`, the short-circuit and the
+/// chunk-index-ordered reduce.
+pub(crate) fn par_chunk_try_map_init<T, S, R, H>(
     items: &[T],
     init: impl Fn() -> S + Sync,
     push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
-) -> Result<Vec<R>, EvalError>
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, Vec<H>), EvalError>
 where
     T: Sync,
     R: Send,
+    H: Send,
 {
     if !should_parallelize(items.len()) {
         let mut state = init();
@@ -1053,13 +1085,14 @@ where
         for item in items {
             push(&mut state, &mut out, item)?;
         }
-        return Ok(out);
+        let harvested = harvest(&mut state);
+        return Ok((out, vec![harvested]));
     }
 
     use rayon::prelude::*;
 
     let size = chunk_size_for(items.len());
-    let per_chunk: Vec<Result<Vec<R>, EvalError>> = items
+    let per_chunk: Vec<Result<(Vec<R>, H), EvalError>> = items
         .par_chunks(size)
         .map(|chunk| {
             let mut state = init();
@@ -1067,20 +1100,24 @@ where
             for item in chunk {
                 push(&mut state, &mut acc, item)?;
             }
-            Ok(acc)
+            let harvested = harvest(&mut state);
+            Ok((acc, harvested))
         })
         .collect();
 
     let mut out = Vec::with_capacity(
         per_chunk
             .iter()
-            .map(|r| r.as_ref().map_or(0, Vec::len))
+            .map(|r| r.as_ref().map_or(0, |(rows, _)| rows.len()))
             .sum(),
     );
+    let mut harvests = Vec::with_capacity(per_chunk.len());
     for chunk_result in per_chunk {
-        out.extend(chunk_result?);
+        let (rows, harvested) = chunk_result?;
+        out.extend(rows);
+        harvests.push(harvested);
     }
-    Ok(out)
+    Ok((out, harvests))
 }
 
 /// The reducing sibling of [`par_chunk_try_map_init`]: rather than flattening
@@ -2009,8 +2046,15 @@ mod tests {
                 )))]);
                 Ok(())
             },
+            |state| *state,
         )
         .expect("no errors");
+        let (result, harvests) = result;
+        assert_eq!(
+            harvests.len(),
+            init_calls.load(std::sync::atomic::Ordering::Relaxed),
+            "every chunk that ran `init` is harvested exactly once"
+        );
         let indices: Vec<u32> = result
             .iter()
             .map(|row| match row[0] {
@@ -2045,8 +2089,15 @@ mod tests {
                 )))]);
                 Ok(())
             },
+            |state| *state,
         )
         .expect("no errors");
+        let (result, harvests) = result;
+        assert_eq!(
+            harvests.len(),
+            init_calls.load(std::sync::atomic::Ordering::Relaxed),
+            "every chunk that ran `init` is harvested exactly once"
+        );
         let indices: Vec<u32> = result
             .iter()
             .map(|row| match row[0] {
@@ -2079,8 +2130,15 @@ mod tests {
                 )))]);
                 Ok(())
             },
+            |state| *state,
         )
         .expect("no errors");
+        let (result, harvests) = result;
+        assert_eq!(
+            harvests.len(),
+            init_calls.load(std::sync::atomic::Ordering::Relaxed),
+            "every chunk that ran `init` is harvested exactly once"
+        );
         let indices: Vec<u32> = result
             .iter()
             .map(|row| match row[0] {
@@ -2102,7 +2160,7 @@ mod tests {
         let _parallel_guard = force_parallel_for_test(true);
         let _chunk_guard = force_chunk_size_for_test(5);
         let items: Vec<usize> = (0..40).collect();
-        let result: Result<Vec<Solution>, EvalError> = par_chunk_try_map_init(
+        let result: Result<(Vec<Solution>, Vec<()>), EvalError> = par_chunk_try_map_init(
             &items,
             || (),
             |(), _acc, &i| {
@@ -2115,6 +2173,7 @@ mod tests {
                 }
                 Ok(())
             },
+            |()| (),
         );
         let err = result.unwrap_err();
         assert_eq!(err, EvalError::internal("error at 6"));

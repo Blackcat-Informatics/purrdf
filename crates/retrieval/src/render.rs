@@ -110,6 +110,28 @@ pub(crate) fn sparql_term(value: &TermValue) -> Result<String, RenderError> {
     Ok(out)
 }
 
+/// Render a literal that carries neither a language tag nor a base direction as
+/// a SPARQL constant, which cannot fail.
+///
+/// [`RenderError`]'s three refusals are a blank node, a base direction with no
+/// tag, and a tag that is not a `LANGTAG`. A literal with no tag and no direction
+/// has none of them available to it, so this returns the text rather than a
+/// `Result` a caller could not act on — and it is the *same* writer
+/// [`sparql_term`] uses, so a value rendered here and the same value rendered
+/// there are byte-identical rather than two spellings that agree today.
+///
+/// It exists for a value rendered on a path that has no error to return: the
+/// depth argument [`compile`](crate::compile) renders into a self-bounding
+/// producer's call is a decimal integer with the producer's declared datatype, and
+/// it is rendered every time the unit's text is asked for.
+pub(crate) fn typed_literal(lexical_form: &str, datatype: &str) -> String {
+    let mut out = String::with_capacity(lexical_form.len() + datatype.len() + 6);
+    // Infallible for this shape: `write_literal` refuses only a direction without a
+    // tag and a malformed tag, and neither is supplied.
+    let _ = write_literal(lexical_form, datatype, None, None, &mut out);
+    out
+}
+
 /// The exact byte length of `value`'s canonical lexical when nothing in it needs
 /// escaping, which is the overwhelmingly common case.
 ///

@@ -417,6 +417,13 @@ impl GeoEntry {
 /// lexicographically. No map's iteration order reaches a result, so two hosts
 /// that ingest the same triples in different orders build indexes with the same
 /// contents *and* the same [`source_fingerprint`](Self::source_fingerprint).
+///
+/// An index holding nothing is well formed and needs no special case anywhere: it
+/// has no entries, an empty asserted vector for every relation, and a real
+/// fingerprint over its configuration and its (empty) contents, so two empty
+/// indexes under different configurations stay distinguishable and the value moves
+/// the moment the first geometry lands. See
+/// [`from_dataset`](Self::from_dataset) for the reachable route to it.
 #[derive(Clone, Debug)]
 pub struct GeoIndex {
     /// The configuration this index was built under.
@@ -456,11 +463,26 @@ impl GeoIndex {
     /// would only inflate the declared row bound. Its asserted triples are
     /// unaffected — those are collected separately, in step 4.
     ///
+    /// # The empty index, and why an absent graph reaches it
+    ///
+    /// A [`GraphSelector::Named`] graph the dataset has not interned holds
+    /// nothing, because a graph IRI is interned only once a quad is in that
+    /// graph. So no quad can match the selector, and the projection is the empty
+    /// index: no entries, no asserted pair under any relation, and a
+    /// [`source_fingerprint`](Self::source_fingerprint) computed by the same call
+    /// over the same (empty) contents the populated path uses.
+    ///
+    /// That is an ordinary operating state rather than a fault — an index standing
+    /// ready before the data it will hold arrives is exactly what a host building
+    /// one over a graph it is about to load has. It is also the posture this
+    /// function already takes one step below for an absent serialization
+    /// property, and the two conditions are the same class: a term the corpus has
+    /// not got yet. What stays a refusal is a configuration with no subject at all
+    /// — an empty serialization list, which [`GeoIndexConfig::new`] rejects,
+    /// because this crate mints no vocabulary to guess one.
+    ///
     /// # Errors
     ///
-    /// * [`GeoError::Config`] if a [`GraphSelector::Named`] graph is not interned
-    ///   in `dataset` at all — a configuration pointing at a graph that is not
-    ///   there is a wiring mistake, not an empty index.
     /// * [`GeoError::Unsupported`], naming the datatype, if a configured
     ///   serialization property's object carries `geo:gmlLiteral`,
     ///   `geo:kmlLiteral` or `geo:dggsLiteral`. The caller put that property in
@@ -473,7 +495,24 @@ impl GeoIndex {
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
     ) -> Result<Self, GeoError> {
-        let graph = resolve_graph(dataset, config.graph())?;
+        let Some(graph) = resolve_graph(dataset, config.graph()) else {
+            // The configured named graph is not interned, so the dataset holds no
+            // quad in it and nothing can match. The empty projection is built
+            // through the ordinary steps — an empty entry table, one empty
+            // asserted vector per relation so `asserted` stays in bounds, and the
+            // same `fingerprint` call — rather than a second construction path
+            // that could drift from the first.
+            let entries: Vec<GeoEntry> = Vec::new();
+            let asserted: Vec<Vec<(TermValue, TermValue)>> =
+                vec![Vec::new(); SpatialRelation::ALL.len()];
+            let source_fingerprint = fingerprint(config, &entries, &asserted);
+            return Ok(Self {
+                config: config.clone(),
+                entries,
+                asserted,
+                source_fingerprint,
+            });
+        };
         let datatypes = Datatypes::of(vocab);
 
         // Step 1 — the geometry nodes, keyed by dataset id so step 2 can join
@@ -779,26 +818,18 @@ fn parse_serialization(
 
 /// Resolve the caller's [`GraphSelector`] against the dataset in hand.
 ///
-/// # Errors
-///
-/// [`GeoError::Config`] when a named graph is not interned in `dataset` at all.
+/// [`None`] where the selector names a graph this dataset has not interned:
+/// nothing is in a graph that is not there, so no quad can match and the caller
+/// projects the empty index. This cannot fail — an absent graph is a state of the
+/// corpus, not a fault in the wiring.
 fn resolve_graph<D: DatasetView>(
     dataset: &D,
     selector: &GraphSelector,
-) -> Result<GraphMatch<D::Id>, GeoError> {
-    Ok(match selector {
+) -> Option<GraphMatch<D::Id>> {
+    Some(match selector {
         GraphSelector::Any => GraphMatch::Any,
         GraphSelector::Default => GraphMatch::Default,
-        GraphSelector::Named(name) => {
-            let Some(id) = dataset.term_id_by_value(name) else {
-                return Err(GeoError::config(format!(
-                    "the configured named graph {name:?} is not present in the dataset; a \
-                     configuration pointing at a graph that is not there is a wiring mistake, and \
-                     answering it with an empty index would hide that"
-                )));
-            };
-            GraphMatch::Named(id)
-        }
+        GraphSelector::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
     })
 }
 
@@ -1607,6 +1638,15 @@ mod tests {
             .expect("one IRI is a valid serialization set")
     }
 
+    /// The same serialization set, scoped to the named graph [`GRAPH`].
+    fn named_config() -> GeoIndexConfig {
+        GeoIndexConfig::new(
+            vec![TermValue::iri(geo("asWKT"))],
+            GraphSelector::Named(TermValue::iri(GRAPH)),
+        )
+        .expect("an IRI selector")
+    }
+
     /// The four-branch fixture: two features, each with a default geometry, and
     /// both geometries also standing alone as spatial objects.
     ///
@@ -2209,10 +2249,11 @@ mod tests {
         );
     }
 
-    /// A named graph selector must hold an IRI, and the graph must be present in
-    /// the dataset. Both neighbours are exercised.
+    /// A named graph selector must hold an IRI. The neighbouring valid case — the
+    /// same list under an IRI selector, over a dataset that holds the graph — is
+    /// exercised alongside it.
     #[test]
-    fn a_named_graph_selector_is_checked_and_a_present_graph_is_accepted() {
+    fn a_named_graph_selector_must_hold_an_iri_and_an_iri_selector_is_accepted() {
         assert!(matches!(
             GeoIndexConfig::new(
                 vec![TermValue::iri(geo("asWKT"))],
@@ -2221,24 +2262,95 @@ mod tests {
             Err(GeoError::Config(_))
         ));
 
-        let named = GeoIndexConfig::new(
+        let in_graph = dataset_in(&four_branch_rows(), Some(GRAPH));
+        let index = GeoIndex::from_dataset(&*in_graph, &vocab(), &named_config())
+            .expect("the graph exists");
+        assert_eq!(index.len(), 4, "and it indexes the graph's spatial objects");
+    }
+
+    /// A graph the dataset has not interned yields the **empty index** rather than
+    /// a refusal. A graph IRI is interned only once a quad is in that graph, so
+    /// refusing here would mean an index could never stand ready before the data
+    /// it will hold arrives — and the same function already reads an absent
+    /// serialization property as an ordinary empty match.
+    ///
+    /// The empty index is a real index: it answers every relation with no asserted
+    /// pairs, and it carries a genuine fingerprint rather than a placeholder.
+    #[test]
+    fn a_graph_the_dataset_has_not_interned_builds_an_empty_index() {
+        let default_graph = dataset_of(&four_branch_rows());
+        let index = GeoIndex::from_dataset(&*default_graph, &vocab(), &named_config())
+            .expect("an absent graph is a corpus state, not a wiring fault");
+
+        assert_eq!(index.len(), 0, "nothing is in a graph that is not there");
+        assert!(index.is_empty());
+        assert_ne!(
+            index.source_fingerprint(),
+            0,
+            "an empty index still attests a generation"
+        );
+        for relation in SpatialRelation::ALL {
+            assert!(
+                index.asserted(relation).is_empty(),
+                "{relation:?} must answer with no asserted pairs, in bounds"
+            );
+        }
+    }
+
+    /// Two empty indexes under **different** configurations have different
+    /// fingerprints, so the digest still distinguishes configurations rather than
+    /// collapsing to one constant for every empty index.
+    #[test]
+    fn two_empty_indexes_under_different_configurations_disagree_on_their_fingerprint() {
+        let dataset = dataset_of(&four_branch_rows());
+        let other = GeoIndexConfig::new(
             vec![TermValue::iri(geo("asWKT"))],
-            GraphSelector::Named(TermValue::iri(GRAPH)),
+            GraphSelector::Named(iri("g2")),
         )
         .expect("an IRI selector");
 
-        // Absent from the dataset: a wiring mistake, not an empty index.
-        let default_graph = dataset_of(&four_branch_rows());
-        assert!(matches!(
-            GeoIndex::from_dataset(&*default_graph, &vocab(), &named),
-            Err(GeoError::Config(_))
-        ));
+        let one = GeoIndex::from_dataset(&*dataset, &vocab(), &named_config()).expect("empty");
+        let two = GeoIndex::from_dataset(&*dataset, &vocab(), &other).expect("empty");
 
-        // The neighbouring VALID case: the same configuration over a dataset
-        // that actually holds the graph.
-        let in_graph = dataset_in(&four_branch_rows(), Some(GRAPH));
-        let index = GeoIndex::from_dataset(&*in_graph, &vocab(), &named).expect("the graph exists");
-        assert_eq!(index.len(), 4, "and it indexes the graph's spatial objects");
+        assert!(one.is_empty() && two.is_empty(), "both hold nothing");
+        assert_ne!(
+            one.source_fingerprint(),
+            two.source_fingerprint(),
+            "the configuration is digested before any content"
+        );
+    }
+
+    /// The same configuration, once the data lands in that graph, builds non-empty,
+    /// retrieves its geometries, and has a fingerprint different from the empty
+    /// one. This is the direction the old refusal hid: the empty index is a stage
+    /// on the way to this one, not a wrong answer standing in for it.
+    #[test]
+    fn the_same_configuration_builds_non_empty_once_the_data_lands_in_that_graph() {
+        let before =
+            GeoIndex::from_dataset(&*dataset_of(&four_branch_rows()), &vocab(), &named_config())
+                .expect("empty before the data lands");
+
+        let after = GeoIndex::from_dataset(
+            &*dataset_in(&four_branch_rows(), Some(GRAPH)),
+            &vocab(),
+            &named_config(),
+        )
+        .expect("populated once it has");
+
+        assert_eq!(after.len(), 4, "the graph's four spatial objects");
+        let point = after
+            .entry_of(&iri("gp"))
+            .expect("the point is an entry in its own right");
+        assert_eq!(
+            point.geometries().len(),
+            1,
+            "and its geometry came back with it"
+        );
+        assert_ne!(
+            before.source_fingerprint(),
+            after.source_fingerprint(),
+            "the fingerprint moves the moment the first geometry lands"
+        );
     }
 
     /// A serialization this crate does not implement is refused **by name**: the

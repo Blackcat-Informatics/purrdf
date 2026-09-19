@@ -35,7 +35,10 @@ The stages:
   wildcard arm that swallows it. It deliberately carries modalities ahead of the
   producers that answer them — producers are caller-supplied configuration, not
   a bound on what may be asked — and a term this registry has nobody for is
-  reported per term as an `UnservedTerm`, never dropped.
+  reported per term as an `UnservedTerm`, never dropped. A request also states
+  how much of the answer it is for, as a `ReadBound` over the bounded and the
+  complete case — a planning input rather than a trailing preference, because it
+  is what each stratum's depth is derived from.
 * `plan(request, registry, statistics)` — the pure planner. It matches request
   terms to producers by a lookup over the producers' declared capabilities,
   records selected and rejected producers with reasons, derives per-stratum
@@ -73,14 +76,93 @@ The stages:
   a stratum's whole result before its first row is readable, so stopping here
   buys independent per-stratum receipts and no cross-stratum accounting — never
   a cheaper enumeration than reading the stratum costs.
-* `fuse(streams, profile, k)` / `search(…, k)` — the exact fixed-point
-  reciprocal-rank fusion, bounded by the caller's `TopK` because fused
+* `fuse(streams, profile, k)` / `search(request, …)` — the exact fixed-point
+  reciprocal-rank fusion, bounded by the request's own `TopK` because fused
   enumeration is top-k by construction. The bound stops the reading as well as
   the returning: a producer still holding rows when it is reached is reported at
   the contribution it was read down to, never drained to make it declare
   exhaustion. The answer carries every applicable producer's own status in its
   trailer — including those that could not answer — and every request term that
   reached nothing.
+
+  `search` reads the bound from the request rather than taking one of its own,
+  because the planner already derived every depth from it. `fuse` is the
+  lower-level entry and still takes one — a caller assembling its own streams has
+  no request to read it from — and refuses a bound the streams were not planned
+  for (`FusionError::ReadBoundMismatch`), so the two cannot drift.
+
+## The bound is a read bound, not only a row bound
+
+Over strata whose producers declare pairwise **disjoint** candidate blocks, each
+candidate has exactly one naming stratum, so its fused score is one weighted
+contribution that falls with rank and the global top `k` is a merge of per-stratum
+prefixes: nothing below per-stratum rank `k` can enter it. The planner therefore
+records a depth of `min(declared, statistics-narrowed, k)`, the compiled unit is
+emitted at that depth plus its probe row, and the work a bounded search does is
+flat in the corpus rather than linear in it. The proof, the tie case and the
+neighbours it must not fire on are on `plan`'s own documentation.
+
+Any overlap between two declarations, or any `Unrestricted` stratum, and the
+declared-or-measured bound stands exactly as it did — scores sum across strata
+there and the merge argument has no premise. The answer is identical either way;
+only the reading moves.
+
+## What a producer owes this layer
+
+Every number in that answer is a function of what the producers said about
+themselves, so what a producer owes is written down in one place:
+[`PRODUCER-CONTRACT.md`](PRODUCER-CONTRACT.md), rendered in the API docs as the
+`producer_contract` module. Fifteen obligations — memory bounded by the depth
+rather than by the corpus, filters applied during selection and expressing
+eligibility rather than relevance, scoring statistics drawn from the index's
+declared scope, duplicate fan-in collapsed inside the producer, cardinality
+projected only where the index already holds it, the difference between a
+capability declaration and a cardinality declaration, an honest unfiltered row
+bound, a ceiling honoured for efficiency and never for correctness, a pinned
+snapshot the volatility declaration is true of, statistics that narrow without
+ever zeroing, an attested generation, a declared shortfall, and declared
+candidate domains.
+
+Each entry states the obligation, the failure it prevents, and **who enforces
+it**: the layer *checks* some of them, and a breach is a named refusal; it
+*believes* the rest, and a breach is a wrong answer — those entries name the test
+in this repository that proves the shipped producers keep the promise, or say
+plainly that no test covers it. Read it before writing a `RankedDeclaration`.
+
+## What a read ending says, and what the index attested
+
+A producer's terminal status says **who stopped the read**, and there are six
+spellings. `Exhausted` is the only completeness claim in the vocabulary — the
+producer emitted every row it had. `DepthReached` is the planned depth stopping a
+producer that had more to give, stated in rank space. `RowBoundReached` is the
+producer's own declared row bound stopping it: a producer that takes its depth as
+an argument, read to the number it registered, so the row past it could not be
+asked for and whether one exists was not observable. `CeilingReached` is a
+contribution bound, written either by the producer or by a fused top-k that
+stopped reading. `TermsRejected` is the producer declining the terms it was
+handed, and `ExecutionFailed` is a run that could not happen. Neither of the last
+two carries a row.
+
+What the *index* attested is a separate axis, read from every stream **before a
+single row is pulled**, because a generation is pinned when a cursor opens. The
+ordering is load-bearing rather than tidy: held as a terminal status, an
+incomplete index would be overwritten by a bounded stop — a stream a top-k
+stopped never returns a receipt at all — and the fact would vanish in exactly the
+runs where the bound mattered. So a stratum that was both stopped and short
+reports both.
+
+That axis reaches the answer three ways. `FusionTrailer::attestations` carries it
+verbatim, per stratum: which generation answered, and the verbatim reason if that
+index declared itself short. `FusionTrailer::exactness` says how to read a fused
+score — `Exact` when no handed stream declared itself short, or `LowerBounds`
+naming exactly the strata that did, because a stratum serving from a short index
+omits whatever its missing shard held and a candidate that shard would have named
+is summed one contribution light. And `EvidenceId` digests the attestation map
+into the third identity an answer carries: `PlanId` names the question,
+`FusionProfileId` names the law, `EvidenceId` names the index generations that
+answered. The third exists because the first two are derived from configuration,
+and configuration is exactly what does not change when an index is rebuilt
+underneath a running system. Two answers are comparable iff all three agree.
 
 Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no
