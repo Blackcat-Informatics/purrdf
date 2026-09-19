@@ -929,7 +929,8 @@ impl<S: RankedStream> FusionStream<S> {
     /// is consumed here rather than retained, because it is already structural
     /// in `seen_items` and nothing later asks for it again.
     ///
-    /// The contract's other term — [`StreamContract::domains`] — is retained,
+    /// The contract's other term —
+    /// [`StreamContract::domains`](crate::StreamContract::domains) — is retained,
     /// because it is asked on every step. It is what lets this engine skip a
     /// stream that *provably* cannot name a candidate when deciding whether
     /// that candidate's score is final, and skipping those streams is the

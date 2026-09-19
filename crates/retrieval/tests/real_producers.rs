@@ -1272,7 +1272,7 @@ fn twinned_vectors() -> Vec<(&'static str, Vec<f64>)> {
 fn the_knn_producer_names_each_target_once_when_two_rows_share_one_vector() {
     let rows = twinned_vectors();
     let row_count = u64::try_from(rows.len()).expect("the fixture is small");
-    // The guard admits the whole space and a `k` as large as it: the plan's
+    // The guard admits the whole space and a `k` as large as it: the planned
     // depth is the producer's declared row bound, which is
     // `min(max_neighbours, rows)`, so a tighter guard would read only a prefix
     // and the twins might never both be reached.

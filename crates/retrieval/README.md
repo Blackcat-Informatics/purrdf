@@ -82,6 +82,60 @@ The stages:
   trailer — including those that could not answer — and every request term that
   reached nothing.
 
+## What a producer owes this layer
+
+Every number in that answer is a function of what the producers said about
+themselves, so what a producer owes is written down in one place:
+[`PRODUCER-CONTRACT.md`](PRODUCER-CONTRACT.md), rendered in the API docs as the
+`producer_contract` module. Fifteen obligations — memory bounded by the depth
+rather than by the corpus, filters applied during selection and expressing
+eligibility rather than relevance, scoring statistics drawn from the index's
+declared scope, duplicate fan-in collapsed inside the producer, cardinality
+projected only where the index already holds it, the difference between a
+capability declaration and a cardinality declaration, an honest unfiltered row
+bound, a ceiling honoured for efficiency and never for correctness, a pinned
+snapshot the volatility declaration is true of, statistics that narrow without
+ever zeroing, an attested generation, a declared shortfall, and declared
+candidate domains.
+
+Each entry states the obligation, the failure it prevents, and **who enforces
+it**: the layer *checks* some of them, and a breach is a named refusal; it
+*believes* the rest, and a breach is a wrong answer — those entries name the test
+in this repository that proves the shipped producers keep the promise, or say
+plainly that no test covers it. Read it before writing a `RankedDeclaration`.
+
+## What a read ending says, and what the index attested
+
+A producer's terminal status says **who stopped the read**, and there are five
+spellings. `Exhausted` is the only completeness claim in the vocabulary — the
+producer emitted every row it had. `DepthReached` is the planned depth stopping a
+producer that had more to give, stated in rank space. `CeilingReached` is a
+contribution bound, written either by the producer or by a fused top-k that
+stopped reading. `TermsRejected` is the producer declining the terms it was
+handed, and `ExecutionFailed` is a run that could not happen. Neither of the last
+two carries a row.
+
+What the *index* attested is a separate axis, read from every stream **before a
+single row is pulled**, because a generation is pinned when a cursor opens. The
+ordering is load-bearing rather than tidy: held as a terminal status, an
+incomplete index would be overwritten by a bounded stop — a stream a top-k
+stopped never returns a receipt at all — and the fact would vanish in exactly the
+runs where the bound mattered. So a stratum that was both stopped and short
+reports both.
+
+That axis reaches the answer three ways. `FusionTrailer::attestations` carries it
+verbatim, per stratum: which generation answered, and the verbatim reason if that
+index declared itself short. `FusionTrailer::exactness` says how to read a fused
+score — `Exact` when no handed stream declared itself short, or `LowerBounds`
+naming exactly the strata that did, because a stratum serving from a short index
+omits whatever its missing shard held and a candidate that shard would have named
+is summed one contribution light. And `EvidenceId` digests the attestation map
+into the third identity an answer carries: `PlanId` names the question,
+`FusionProfileId` names the law, `EvidenceId` names the index generations that
+answered. The third exists because the first two are derived from configuration,
+and configuration is exactly what does not change when an index is rebuilt
+underneath a running system. Two answers are comparable iff all three agree.
+
 Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no
 default registry and no built-in producer.

@@ -300,6 +300,39 @@ Refusing the permissive declaration instead would be the mirror failure:
 a policy whose own definition names the consumer's obligation, rejected by
 the consumer for exercising it.
 
+**A producer also declares which blocks of the candidate universe it may
+name**, beside its duplicate policy and on the same terms: host-supplied
+configuration, read at registration, carried to the consumer it was
+written for. `Unrestricted` is the *wider* promise — "this producer may
+name anything" — and is what every stream effectively said before the
+declaration existed; a restriction names blocks of a **partition** of the
+candidate universe, so a candidate lies in exactly one block, and it is
+never empty, because a promise to name nothing describes a producer that
+should not be registered rather than a narrow one. Nothing is defaulted
+from a stratum or a graph: the host is the only party that knows whether
+its text index and its vector index name the same entities, and a
+consumer guessing that pair either refuses a query that was valid or
+certifies a score missing a contribution the other stream was about to
+make. A wrong guess here is a wrong answer, so there is no guess.
+
+The declaration is not an optimizer hint, because the threshold it feeds
+is part of the certification argument. `T` bounds the score of an item
+**nobody has named yet**, and such an item lies in exactly one block, so
+the only contributions it can still collect are those of the streams that
+can reach *its* block. The bound is therefore the **largest per-block sum
+of the open heads**, with every unrestricted head counted in every
+block's sum because such a stream may name anything. Summing every head
+instead is also sound — it is an upper bound of this one — but it is
+looser, and a threshold that is too high is precisely what stops
+certification: no candidate rises above it, nothing is emitted, and the
+fusion pulls rows it had no need for. When every open stream declares
+`Unrestricted` there are no blocks to range over and the expression
+reduces **exactly** to the sum of every open head, which is the identical
+value the threshold carried before declarations existed. A per-*candidate*
+sum would be tighter still and is not available: this bound is about
+items nobody has seen, so there is no candidate to take a block from, and
+narrowing it by some *other* item's namers would be unsound.
+
 A rank claim read in contribution space does **not** read the same way,
 and the reason is worth stating because this section once said the
 opposite.
@@ -399,6 +432,63 @@ would then assert a completeness the fusion never established. The
 trailer reports the state each producer is in; it does not put producers
 into a state so that it has something to report.
 
+**There are five read endings, and exactly one of them is a completeness
+claim.** `Exhausted` — the producer emitted every row it had — is that
+one, and it is the only one. The other four name the stopper rather than
+the state: the planned depth, stated in rank space, for a producer that
+stopped where it was told and had more to give; a contribution bound,
+stated in the profile's fixed-point space, written by the producer or by a
+top-k that stopped reading; the producer's refusal of the terms it was
+handed; and a run that could not happen. The depth ending and the
+contribution ending are deliberately not one variant even though both mean
+"not complete", because they name different knobs: the first is answered
+by re-planning deeper, the second by certifying further rows against the
+same streams, and neither number converts into the other. A depth ending
+is measured against the rows fusion actually pulled — a producer may stop
+at its depth, but it may not miscount what it emitted.
+
+**What the index attested is a different axis, and it is read before any
+row is pulled.** Which generation of its index answered, and whether that
+index was whole, are facts the relation's cursor alone holds: the dataset
+snapshot, the query text and the registry fingerprint are all unchanged by
+a rebuild. A generation is pinned when a cursor opens, so the value read
+there is true of every row that follows.
+
+That ordering is load-bearing rather than tidy, and it is the reason this
+is an axis rather than a sixth ending. A terminal receipt is **overwritten
+by a bounded stop** — a stream the top-k stopped never returns a receipt
+at all — so an incompleteness held terminally would be destroyed exactly in
+the runs where the bound mattered, and the answer would name the bound
+while silently losing the hole beneath it. Held as an attestation, a
+stratum that was both stopped and short reports both facts: the bounded
+stop in its status, the short index in the attestation map beside it. The
+map is keyed only by the streams the fusion was actually handed; a stratum
+whose unit never ran has no attestation, and that absence is left as an
+absence rather than filled with "declared nothing", which would report a
+producer that was never asked as one that declined to answer.
+
+The seam asks the narrow question — *was your index NOT whole?* — and has
+no variant for wholeness, for the same reason §7's ending problem exists: a
+relation that stopped at a ceiling it was licensed to stop at is not
+incomplete, and could not honestly certify completeness either, because it
+never looked at the rows it skipped. Silence is therefore silence, never a
+certificate.
+
+**A short index makes every score a lower bound, and the answer says so.**
+A stratum serving from a short index omits whatever its missing shard
+held, so a candidate that shard would have named is summed one
+contribution light; labelling that "exact" would be a bound on the read
+presented as a value. So the trailer carries a score-exactness reading
+beside the statuses: exact when no handed stream declared itself short, or
+lower-bounds **naming exactly the strata that did**, so a caller knows
+which indexes to rebuild and can read each one's verbatim reason under the
+same key. The rows are returned either way, because a short index still
+produced real rows in a real order — what cannot be concluded is that a
+row absent from the answer would have stayed absent. The reading is derived
+from the attestations alone, so unlike the statuses it does not move as a
+caller certifies further rows: how deep a caller read changes which streams
+are still open, never whether an index was whole.
+
 ## 7. Fused is top-k by construction; unfused carries no cross-stratum accounting
 
 The two rungs differ in kind, and the difference is algebraic rather than
@@ -434,6 +524,41 @@ This surface does not offer it as though it were free. A caller who wants
 to walk everything wants the unfused rung, whose cost is one stratum's
 materialized result.
 
+**The bound on the reading is licensed by the producers' declared candidate
+domains, and it is verified only over the rows actually pulled.** The two
+halves are separate claims and are stated separately.
+
+The *licence* is §5's declaration. Certification asks whether any open
+stream could still name a candidate; with nothing to answer that question
+it must assume every open stream could, so over strata whose candidate
+sets do not overlap no candidate is ever final while another stream
+remains open — a top-ten over two disjoint million-row strata reads two
+million rows and grows a frontier to match. Weakening the test was not
+available, and the reason is structural rather than a matter of nerve.
+**The engine has no random access.** A ranked stream offers "next row" and
+"how did you end", so the only way to learn that a same-domain stream does
+*not* hold a candidate is to read it until it names the candidate or ends.
+Certifying sooner without a declaration would emit a score that a
+still-open stream might have raised — a lower bound presented as an exact
+value — and would let an emitted candidate be named again by a stream
+still open. Exact scores and a `k`-bounded read over non-overlapping strata
+are jointly achievable only if the producers say which candidates they can
+name. So the finality test stays a membership question and gains only a
+**smaller quantifier**: the streams that provably cannot name the
+candidate are skipped, and nothing about what a live stream owes a
+candidate changes. A live head contributing zero still blocks its
+candidate, because a sum cannot answer a membership question.
+
+The *verification* reaches exactly as far as the rows pulled. A stream
+that names a candidate its declaration cannot reach is refused, and the
+refusal names the stratum whose own declaration — already applied — put
+that candidate out of reach, so the contradiction is legible rather than
+resolved by picking a side. A false declaration that no pulled row
+contradicts yields a score that declaration made wrong. That is the
+identical trust the uniqueness declaration already carries, whose breach
+is likewise detected only when the repeat is actually read, and it is
+recorded here as trust rather than as a proof.
+
 ## 8. `plan` is a pure function, and a plan knows what it assumed
 
 Planning consults statistics — cardinalities, selectivities, whatever the
@@ -454,12 +579,79 @@ plan records. It does not by itself reproduce the final order, because
 the fusion profile enters at `fuse` and is deliberately not a plan input
 — planning legitimately happens without knowing how the result will be
 fused, and forcing that choice early would couple two stages this design
-keeps apart. A reproducible **answer** is therefore a pair of
-identities, the pinned plan and the fusion profile in force, and
-anything reporting a fused order names both. Replaying a plan against
+keeps apart. Replaying a plan against
 statistics that have moved is a detectable condition with a declared
 behavior at admission — never a silent replan and never a silent
 pretense that nothing changed.
+
+A reproducible **answer** is a **triple** of identities, and this section
+used to say a pair. The pinned plan names the question that was asked; the
+fusion profile names the law the rows were fused under; and the evidence
+names the index generations that answered, digested over the per-stratum
+attestation map §6 describes. Two answers are comparable iff all three
+agree — one equality comparison over a triple, rather than a map diff
+every caller would write differently.
+
+The third is not a restatement of the other two, and the argument for it
+is precisely that the first two are derived from **configuration**.
+Configuration is exactly what does not change when an index is rebuilt
+underneath a running system: the same plan, under the same law, over a
+rebuilt index returns different rows while both other identities stay
+byte-identical. Only a producer can close that gap, because only its
+cursor knows a rebuild happened.
+
+What is worth recording beside that, because the opposite is the natural
+expectation, is that a rebuild often moves the **plan** identity too. A
+producer that measures its declared row bound from the index — which is
+what an honest unfiltered bound means for an index-backed producer, and
+what the shipped lexical producer does — publishes a different declaration
+after a rebuild that changes its document counts. That declaration reaches
+the registry's content fingerprint, the plan records the fingerprint and
+derives its per-stratum depths from the same declaration, and so the plan
+identity moves with it. The evidence identity is the one that moves on a
+change that alters **no declaration at all** — a rebuild over the same row
+counts, a re-ranking under a different law, a replica catching up — which
+is exactly the case the other two cannot see.
+
+## 9. The producer contract
+
+Every number in a fused answer is a function of what the producers said
+about themselves. The sections above say what the *layer* does with those
+declarations; what a producer owes in exchange is written down as its own
+document, `crates/retrieval/PRODUCER-CONTRACT.md`, shipped with the crate
+and rendered in its API documentation as the `producer_contract` module so
+that a host reads it beside the types that enforce it.
+
+Fifteen obligations, each stating the obligation, the failure it prevents,
+and **who enforces it**. That third part is the reason it is one document
+rather than fifteen scattered doc comments, because the obligations divide
+into two kinds that must not be read as one:
+
+* some are **checked** — the layer measures the rows as they arrive, and a
+  breach is a named refusal that says which dimension failed and which
+  stratum failed it. The rank law, the uniqueness promise, the domain
+  declaration, the depth against the declared row bound and the recorded
+  depth of zero are all of this kind. A producer cannot make the layer
+  unsound in these dimensions; it can only make its own call fail.
+* the rest are **believed** — no consumer-side measure can see inside host
+  code, so a breach is a wrong answer rather than an error. Whether a
+  filter expressed eligibility or relevance, whether a scoring statistic
+  came from the index or from the filtered subset, whether a declared row
+  bound is honest, and whether an attested generation moves when the
+  answerable rows move are all of this kind. Those entries say so plainly
+  and name the test that proves the shipped producers keep the promise,
+  or state that no test covers it.
+
+Three of the fifteen are one doctrine wearing three hats, and reading them
+apart loses the argument: an honest unfiltered row bound, a ceiling
+honoured for efficiency only, and a declared shortfall are three purchases
+of the same distinction, because *"I stopped early"* and *"I am
+exhausted"* are the same empty cursor. The engine withholds a ceiling it
+cannot account for; the executor reads one row past the depth it recorded,
+and that probe row — read, never reported, absent from every identity and
+every resolution number — is what separates a cut read from an exhausted
+one; and the producer declares the shortfall only it can know. No single
+altitude answers the question, which is why the layer buys it at three.
 
 ## Open questions, and the answers the implementation records
 

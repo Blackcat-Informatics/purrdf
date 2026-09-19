@@ -554,11 +554,11 @@ struct UnionBranch<T> {
     rows: Vec<T>,
     /// The certificate, when a governor stopped the arm short.
     certificate: Option<crate::governor::lift::Certificate>,
-    /// What the relations this branch invoked attested, taken from the branch's own
+    /// What the relations this arm invoked attested, taken from the branch's own
     /// forked child before that child dies with the closure. Rides WITH the rows rather
     /// than being merged inside the closure because the parent context is borrowed
     /// immutably for the duration of the join — and because the branch-order rule below
-    /// decides whether this branch contributed anything at all.
+    /// decides whether this arm contributed anything at all.
     witness: crate::witness::RelationWitness,
 }
 

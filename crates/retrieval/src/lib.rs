@@ -45,6 +45,15 @@
 //! to fuse resumes through the same exported bridge `search` itself uses,
 //! [`RankedStreamAdapter`], so the two compositions cannot drift.
 //!
+//! Every number in the answer those stages assemble is a function of what the
+//! producers said about themselves, so what a producer owes this layer is
+//! written down in one place: [`producer_contract`]. Fifteen obligations, each
+//! with the failure it prevents and with whether this layer *checks* it — a
+//! breach is a named refusal — or *believes* it, in which case the entry names
+//! the test that proves the shipped producers keep the promise. A host wiring up
+//! its own ranked relation reads that before it writes a
+//! [`RankedDeclaration`](purrdf_sparql_eval::RankedDeclaration).
+//!
 //! # Nothing is lost between the stages
 //!
 //! Each stage knows something the next one structurally cannot, and the answer
@@ -247,6 +256,14 @@
 //! Two answers are comparable iff all three agree — one equality comparison over
 //! a triple, rather than a map diff each caller would write differently.
 //!
+//! The third moves for a reason a producer has to supply, so it is the one
+//! identity a misconfigured registry can silently flatten: an index that attests
+//! nothing makes every answer over every generation of it carry one
+//! [`EvidenceId`]. What a generation owes — that it move exactly when the rows
+//! that can be returned move, and that the producer say whether it is a
+//! content-derived digest or a host-scoped label — is A13 of
+//! [`producer_contract`].
+//!
 //! What an index attested is a different kind of fact from how a read ended, and
 //! it is kept apart from one deliberately. A producer's terminal
 //! [`ProducerStatus`] says who stopped the read — the plan's depth, fusion's
@@ -320,6 +337,21 @@ mod render;
 mod request;
 mod search;
 mod statistics;
+
+/// The fifteen obligations a ranked producer owes this layer, and who holds it
+/// to each one.
+///
+/// Documentation only — this module declares no item. It is the crate's
+/// `PRODUCER-CONTRACT.md` rendered here so that a host writing a
+/// [`purrdf_sparql_eval::PropertyFunction`] reads the contract beside the types
+/// that enforce it, rather than in a file it has to go and find.
+///
+/// Every entry states the obligation, the failure it prevents, and whether the
+/// layer *checks* it — a breach is a named refusal — or *believes* it, in which
+/// case a breach is a wrong answer and the entry names the test that proves the
+/// shipped producers keep the promise.
+#[doc = include_str!("../PRODUCER-CONTRACT.md")]
+pub mod producer_contract {}
 
 pub use admission::{AdmissionEnvironment, AdmissionError};
 pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, compile};

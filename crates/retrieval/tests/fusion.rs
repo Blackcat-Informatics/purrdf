@@ -5000,7 +5000,7 @@ fn attests_short(generation: &str, reason: &str) -> PfAttestation {
     }
 }
 
-// T3.1. A producer-authored ending for a read the plan's depth stopped.
+// T3.1. A producer-authored ending for a read the planned depth stopped.
 //
 // The rows are returned and the ending is carried verbatim: fusion has no way
 // of telling a stream that stopped at its depth from one that ran out — both

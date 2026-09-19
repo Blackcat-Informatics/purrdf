@@ -194,8 +194,8 @@ fn canonical_bytes_and_decode_round_trip() {
 /// discriminator byte.
 ///
 /// A reason is the evidence a caller reads to find out why its answer is
-/// narrower than it asked for, and the byte it is written as lands in the plan's
-/// identity. A reason that decoded as a *different* reason would be a plan that
+/// narrower than it asked for, and the byte it is written as lands in the
+/// identity of the plan. A reason that decoded as a *different* reason would be a plan that
 /// reads back as blaming the wrong dimension while still carrying an identity
 /// the caller recognises, so every variant is encoded and decoded here rather
 /// than only the ones a fixture happens to produce.
@@ -692,7 +692,7 @@ fn crate_sources_contain_no_function_pointers() {
 }
 
 // ---------------------------------------------------------------------------
-// T6.6. A producer's candidate-domain declaration reaches the plan's identity.
+// T6.6. A producer's candidate-domain declaration reaches the plan identity.
 //
 // A plan records the content fingerprint of the registry it was planned
 // against, and the fingerprint folds in every declared field of every ranked

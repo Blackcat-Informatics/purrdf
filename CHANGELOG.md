@@ -166,9 +166,185 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   PURREMB stores matrices at either width, and widening `f32` at load costs twice
   the resident memory while changing no arithmetic; the kernels now accept either
   width and widen per component inside the fold.
+- **retrieval:** `ProducerStatus::DepthReached` and `ProducerReceipt::DepthReached`,
+  a read ending authored by the producer and stated in **rank** space: ranks one
+  through `rank` were read, and the rows did not run out -- the planned depth did.
+  It is deliberately not `CeilingReached`, which is fusion's ending and whose
+  stopping point is a contribution in the profile's fixed-point space that the
+  producer was never given. The two name different knobs -- re-plan deeper, or
+  certify further rows against the same streams -- and neither number converts
+  into the other. Fusion checks `rank` against the rows it actually pulled and
+  refuses a disagreement as `ProtocolError::ForgedReceipt`, exactly as it checks
+  an exhaustion count: the depth is a licence to stop reading, never a licence to
+  misreport. `Exhausted` is now the only completeness claim in the vocabulary,
+  and every other ending names the stopper.
+- **retrieval:** `FusionTrailer::attestations`, a per-stratum record of what the
+  index behind each stream attested -- which generation answered, and the
+  verbatim reason if that index declared itself short. It is read from
+  `RankedStream::attestation` in `FusionStream::new`, **before any row is
+  pulled**, because a generation is pinned when a cursor opens. That ordering is
+  load-bearing rather than tidy: a terminal receipt is overwritten by a bounded
+  stop -- a stream a top-k stopped never returns a receipt at all -- so an
+  incompleteness held terminally would be destroyed exactly in the runs where the
+  bound mattered. Held as an attestation, a stratum that was both stopped and
+  short reports both facts. The map keys only the streams the fusion was handed; a
+  stratum whose unit never ran is absent rather than filled with "declared
+  nothing", which would report a producer that was never asked as one that
+  declined to answer.
+- **retrieval:** `ScoreExactness` on the trailer. A stratum serving from a short
+  index omits whatever its missing shard held, so a candidate that shard would
+  have named is summed one contribution light; labelling that "exact" would be a
+  bound on the read presented as a value. `Exact` says the narrower true thing --
+  no handed stream declared itself short -- and is never a certificate that every
+  index was whole, because most producers attest nothing and there is no variant
+  with which to attest wholeness. `LowerBounds` names exactly the strata that did
+  declare a shortfall, so a caller knows which indexes to rebuild and reads each
+  one's reason under the same key in `attestations`. The answer is per fusion
+  rather than per row because the per-row question is not computable: knowing
+  which particular candidates lost a contribution would mean knowing what the
+  missing shard held. It is derived from the attestations alone, so it does not
+  move as a caller certifies further rows.
+- **retrieval:** `EvidenceId`, the third identity a fused answer carries, on both
+  `FusionTrailer` and `SearchResult`. `PlanId` names the question that was asked
+  and `FusionProfileId` names the law the rows were fused under, and neither moves
+  when an index is rebuilt underneath a running system -- both are derived from
+  configuration, which is exactly what a rebuild does not change. `EvidenceId` is
+  the content identity of the attestation map, so one equality comparison over the
+  triple decides whether two answers are comparable at all.
+- **retrieval:** Candidate domains reach fusion. `StreamContract` carries the
+  producer's `CandidateDomains` beside its duplicate policy, `StratumUnit` and
+  `StratumStream` carry it through, and `FusionTrailer::domains` reports what each
+  handed stream fused under, so an answer can be audited against the declarations
+  that decided which streams fusion was allowed to skip. `ProtocolError::OutsideDeclaredDomain`
+  refuses a stream that names a candidate its declaration cannot reach, carrying
+  three fields because each answers a different question: the item says what, the
+  stratum says who broke it, and the third names the stratum whose own declaration
+  -- already applied -- put the candidate out of reach. The answer is not silently
+  widened instead, because the declaration has already been used: fusion certified
+  candidates early on the strength of it, so an earlier row may already have been
+  emitted on the assumption this stream would never name the candidate.
+- **retrieval:** `PRODUCER-CONTRACT.md`, published with the crate and rendered in
+  its API documentation as the doc-only `producer_contract` module. Fifteen
+  obligations a ranked producer owes this layer, each stating the obligation, the
+  failure it prevents, and who enforces it -- the layer, where a breach is a named
+  refusal, or the producer, where a breach is a wrong answer and the entry names
+  the test that proves the shipped producers keep the promise, or says that none
+  does. Three of the fifteen are one doctrine wearing three hats, because "I
+  stopped early" and "I am exhausted" are the same empty cursor: the engine
+  withholds a ceiling it cannot account for, the executor reads one row past the
+  depth it recorded, and the producer declares the shortfall only it can know.
+- **sparql-eval:** `PfCursor::generation` and `PfCursor::service_level`, both
+  defaulted to an honest absence, through which a relation's cursor attests the
+  two facts about an invocation that nothing else can see: which generation of its
+  index answered, and whether that index was whole. The generation is read
+  immediately after `open`, where the snapshot is pinned and the claim is true of
+  every row that follows; the service level is read when the invocation **ends**,
+  so a relation that discovers a missing shard on its four-hundredth pull still
+  has somewhere to say so. There is deliberately no variant for wholeness and
+  never will be: a relation that stopped at the engine's ceiling licence is not
+  incomplete and could not honestly certify completeness either, so the seam asks
+  only the narrow question it has an honest answer to on every path. `Undeclared`
+  is silence, never a certificate.
+- **sparql-eval:** `RelationWitness` and `RelationAttestations`, the per-query
+  ledger those declarations accumulate into, reachable on the governed receipt
+  through `RelationIdentity::witness`. Every field is a set or a count and never a
+  sequence, because a query can invoke one relation thousands of times across
+  several forked workers in an order the evaluator is free to choose, and an
+  ordered log would describe the schedule as much as the index. The record is
+  owned per context and merged at every fork join rather than shared behind a
+  lock; set union and a saturating count make the merge commutative and
+  associative, so the result is a function of what was attested rather than of who
+  finished first. It rides the receipt beside the governor evidence already there,
+  because an attestation describes an outcome rather than being one.
+- **sparql-eval:** `EvalError::RelationIncomplete`, raised where a relation
+  declares its index short and the entry point has nowhere to record it. A short
+  bag whose receipt nobody can read is precisely what the hard-fail doctrine
+  exists to prevent.
+- **sparql-eval:** `CandidateDomains` and `DomainTag`, the second promise a ranked
+  producer makes about its own rows, declared where it declares its duplicate
+  handling. A consumer fusing several ranked streams has exactly one way to learn
+  that a stream will not name a candidate -- read that stream to its end -- and
+  over strata whose candidate sets do not overlap that is every row of every
+  stream, however small the caller's top-k. `Unrestricted` is the wider promise
+  rather than the weaker one: it says the producer may name anything, it is
+  today's behaviour exactly, and a fusion whose every stream declares it computes
+  precisely the numbers it computed before this existed. Nothing is defaulted from
+  a stratum or a graph, because the host is the only party that knows whether its
+  text index and its vector index name the same entities, and a wrong guess is a
+  wrong answer. An empty restriction is refused at `register_ranked`, where the
+  declaration is committed: a promise to name nothing describes a producer that
+  should not be registered.
+- **text, sparql-eval:** Both shipped ranked producers attest a content-derived
+  generation for the index that answered. The text relation declares its index
+  fingerprint, which closes over the documents, the term dictionary, every
+  posting, the partition statistics, the configured predicates and the ranking
+  law; the two neighbouring digests were rejected against the rule that a
+  generation must move exactly when the answerable rows move, and the rejections
+  are pinned as tests -- the digest of the source rows does not move when the same
+  rows are re-ranked under a different law, though every emitted score does, and
+  the analyzer digest holds no document at all. The embedding relation cannot
+  declare its matrix alone, because the map from a row to the RDF term it stands
+  for is a host argument: PURREMB allows a target to be disclosed by digest alone,
+  so two spaces over byte-identical artifacts with different bindings return a
+  different term at every position. Its declared value folds the projection digest
+  (rather than the matrix digest, because a prefix policy lets two spaces share
+  one stored matrix and differ in the prefix taken), the family contract that
+  names the metric, and every bound term in row order. The bound on work is
+  excluded: it decides how hard a search tries, never which rows exist or how they
+  rank. Both values are computed once where the snapshot is pinned, out of any
+  per-row path.
+- **python:** The retrieval answer carries the evidence the Rust surface does.
+  `"attestations"` maps a stratum to `{"generation": str | None, "incomplete":
+  str | None}`, with the two axes independently absent because a silent producer
+  is making no claim in either direction; `"exactness"` is `{"exact": bool,
+  "lower_bounds_for": list[str]}`, naming the strata whose declarations make every
+  score a lower bound rather than an exact sum; `"domains"` reports the
+  candidate-domain declaration each stream fused under, so an answer can be
+  audited against its own inputs; and `"evidence_id"` sits beside `"plan_id"` and
+  `"profile_id"` in the same 64-character lowercase hex spelling, so one
+  comparison over the three decides whether two answers are comparable.
+- **python:** A host declares a producer's candidate domains where it declares the
+  rest of that producer: the ranked-producer tuple takes an optional fourth
+  element, a list of domain-tag IRI strings, with `None` -- and omission -- meaning
+  "may name anything". An empty list is refused by name before it reaches
+  registration, because a promise to name nothing is not a restriction, and
+  because the refusal on the far side of the boundary is a panic that must never
+  cross it.
 
 ### Fixed
 
+- **retrieval:** A fused answer could contain the same entity twice. Certifying a
+  candidate removes it from the frontier, and the check that held a stream to its
+  declared uniqueness read only the frontier, so a stream naming that entity again
+  afterwards started a fresh candidate and the answer carried it a second time --
+  with a score summed from one stratum instead of all of them. The invariant a
+  consumer needs is unconditional, for any stream set, any declared policy and any
+  bound, so it is now enforced against every arrival rather than against the window
+  that happened to be open: a candidate that leaves the frontier by certification
+  leaves behind the set of streams that named it, and a stream that names it again
+  is refused by name. A stream declaring that repeats happen is unaffected -- its
+  repeat is dropped before it becomes a head, which is what that declaration asks
+  the consumer to do. The cost is charged against emissions rather than pulls, so a
+  bounded call holds at most as many entries as rows it returns however long the
+  streams are, and what a uniqueness declaration buys its way out of is still
+  bought: there is no per-row identity set per stream.
+- **retrieval:** A fused top-k drained every stream. Certification asks whether any
+  open stream could still name a candidate, and with nothing to answer that
+  question it had to assume every open stream could -- so over strata whose
+  candidate sets do not overlap, no candidate was ever final while another stream
+  remained open, and a top-ten over two million-row strata read two million rows
+  and grew a frontier to match. Weakening the test was not available: the engine
+  has no random access, so the only way to learn that a stream does not name a
+  candidate is to read it to its end, and certifying sooner would emit a score
+  missing a contribution and call it exact. Exact scores and a bounded read are
+  jointly reachable only if fusion is told which candidates a stream can name, so a
+  producer now declares its candidate domains and the finality test keeps its
+  meaning while gaining a smaller quantifier. Two thousand-row disjoint strata at a
+  bound of five read four ranks each where they previously read a thousand, and a
+  stratum that names everything keeps the bound for its neighbours instead of
+  collapsing it. The answer is unchanged: rows, scores and provenance are identical
+  to the draining run and to an independent oracle across hundreds of
+  configurations, and the ranks read never rise as a declaration is refined.
 - **retrieval:** Fusion no longer refuses a well-formed producer stream when the
   profile's own fixed-point decay gives two adjacent ranks one contribution. A
   producer's ordering declaration is a claim about **ranks**, and the check was
@@ -249,6 +425,82 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **retrieval:** A statistics-derived stratum depth is floored at one row. An
+  estimate narrows a read; it never eliminates one. A provider reporting a
+  selectivity of zero parts per million, or a cardinality of zero, scaled a
+  stratum's depth to zero: the compiled unit read nothing and the trailer still
+  reported exhaustion with zero rows, which is the strongest completeness claim
+  the vocabulary has, minted for a query that was never run. A tiny non-zero
+  selectivity was already safe through ceiling division; zero was the one input
+  that escaped it, and it arrives by two roads -- an honest `selectivity_ppm` of
+  zero, and a measured cardinality of zero, which lands in the bound before the
+  ratio is applied. Emptiness is now reported by the producer's own receipt
+  against rows fusion verified rather than by a plan that declined to ask.
+- **retrieval:** A producer whose every declared mode promises no rows is rejected
+  at the placement pass as `RejectionReason::DeclaresNoRows`, rather than floored
+  to one row. The position is the point: the rejection is recorded where the
+  accepted and carried sets are populated, so a request term only that producer
+  accepts is reported as "every accepting producer rejected it" rather than as
+  "nothing accepts it", which are different facts about a registry. "Declared no
+  rows" and "declared nothing" also stay distinct -- a producer that declared no
+  access mode bounds no depth, and inventing a zero for it would refuse a plan the
+  registry never spoke against.
+- **retrieval:** A recorded stratum depth of zero is refused at the admission waist
+  as `AdmissionError::ZeroDepth`. Given the floor and the rejection above, a zero
+  can now only come from an edited plan; admitted, it would emit `LIMIT 0`, invoke
+  no relation, and report the stratum exhausted with nothing. A stratum that is to
+  read nothing carries no depth entry at all.
+- **retrieval:** A compiled unit is emitted one row deeper than its stratum reads,
+  bounded by whatever row count the producer declared, and the executor hands on
+  only the rows the depth allows. The extra row is read and never reported: it
+  decides whether the stream ended because the producer ran out or because the
+  plan stopped it, and it appears in no plan field, no identity and no resolution
+  number. Where the depth already equals the producer's declared bound there is
+  nothing further to promise, so no probe is emitted and exhaustion is honest by
+  contract. A stratum read to its planned depth over a larger answer now says so,
+  where it previously claimed the strongest completeness the vocabulary has for a
+  read the plan itself had cut. The executor also now runs each unit through the
+  governed entry with every ceiling declined, so it can read the producer's
+  attestation off the receipt that already carries the run's evidence; a witness
+  that does not describe exactly one relation, one generation and at most one
+  incompleteness means the snapshot moved underneath the query and is refused as
+  `ExecutionError::InconsistentWitness`.
+- **retrieval:** `ProtocolError::DuplicateItem` now names the stratum whose stream
+  repeated the item, beside the item itself. A repeated item names *what* went
+  wrong and the stratum names *who*, and a consumer fusing several producers can
+  act on the pair and on neither half alone: the item does not say which of five
+  strata to go and fix, and the stratum does not say which of its rows to look at.
+- **sparql-eval:** `RankedDeclaration` gains a `domains` field
+  carrying the producer's `CandidateDomains`, declared beside its duplicate policy
+  because the two are the same kind of fact -- a promise the producer makes about
+  its own rows that a consumer holds it to. It reaches the registry's content
+  fingerprint through `RankedDeclaration::canonical_description`, and so reaches a
+  plan's identity and is verified at admission rather than taken on faith: two
+  registries that differ only in what their producers may name fuse differently
+  and must not share a digest. A host that does not restrict its candidates writes
+  `CandidateDomains::Unrestricted`. The whole ranked-retrieval declaration surface
+  postdates the last release, so this widens a type no published version carries.
+- **BREAKING** **sparql-eval:** `RelationIdentity` gains a `witness` field. The
+  fingerprint covers everything a registry *declares*, which is exactly what the
+  planner reads -- and a relation's index can be rebuilt underneath it without any
+  declaration changing, so two governed runs of one query over one dataset snapshot
+  could carry byte-identical identities and different rows with nothing on the
+  receipt to say why. The identity says which relations could have been asked; the
+  witness says what the ones that were asked reported about themselves. All three
+  parts are independently empty, and an empty witness is never a claim that an
+  index was whole.
+- **sparql-eval:** A query whose relation declares its index incomplete is refused
+  at an entry point that cannot record the declaration, rather than returning the
+  short bag. The governed lane, which has a receipt to carry the witness, answers
+  and records it; the ungoverned lane and `UPDATE` refuse, and the update writes
+  nothing. A relation that declares nothing short is unaffected on every lane.
+- **text, sparql-eval:** `TextSearchRelation::ranked_declaration` and
+  `EmbeddingKnnRelation::ranked_declaration` take the producer's `CandidateDomains`
+  as a further argument, passed through into the declaration unchanged. Neither
+  producer supplies one of its own, and neither could: the tags describe how a
+  host's corpora partition, which is knowledge only the host has. A host that does
+  not restrict its candidates passes `CandidateDomains::Unrestricted`, which is
+  the behaviour both had before.
 - **retrieval:** `DecayRule::class_width` and `FusionProfile::class_width`
   answer with the new `ClassWidth` rather than a bare `u64`, and the Python
   `retrieval.class_width` answers `int | None` rather than `int`. The search for
