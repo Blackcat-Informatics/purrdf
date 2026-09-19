@@ -227,13 +227,14 @@ use pyo3::types::{PyDict, PyList};
 use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
     Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason,
-    RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, Statistics, Term, ToleratedDepth,
-    TopK, UnservedReason,
+    RequestTerm, RetrievalRequest, ScoreExactness, ScoreInterval, SearchResult, Statistics, Term,
+    ToleratedDepth, TopK, UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, IndexGeneration, PropertyFunctionRegistry, ServiceLevel,
+    CandidateDomains, Completeness, DomainTag, IndexGeneration, OrderFidelity,
+    PropertyFunctionRegistry, RankFidelity, ServiceLevel,
 };
 
 /// The number of decimal digits in one whole fixed-point unit.
@@ -310,6 +311,21 @@ struct TextProducer {
     /// does not know, and it is exactly what this binding declared before the
     /// parameter existed.
     domains: Option<Vec<String>>,
+    /// What this producer's own search promises about the rows it can name, as
+    /// the host spelled it, or `None` for the exhaustive declaration.
+    ///
+    /// Host-supplied for the reason `domains` is, and the reason is the same
+    /// shape. BM25 over the index this relation holds is exhaustive: every
+    /// document carrying a query term is scored, with no pruning and no early
+    /// exit. Whether that index covers what the host means by its corpus is a
+    /// fact the relation cannot see. A host that indexed a sample, one partition
+    /// of a larger collection, or a snapshot it knows has fallen behind has a
+    /// genuinely lossy producer, and this is the only place it can say so.
+    ///
+    /// `None` declares the top of the lattice, which is what this binding
+    /// declared before the parameter existed and what a host with a complete
+    /// index means.
+    fidelity: Option<String>,
 }
 
 /// The statistics provider the host supplied, as owned data.
@@ -481,12 +497,69 @@ fn build_registry(
             )
         })?;
         let domains = candidate_domains(&producer.producer, producer.domains.as_deref())?;
+        let fidelity = declared_fidelity(&producer.producer, producer.fidelity.as_deref())?;
         let declaration = relation
-            .ranked_declaration(stratum, Some(producer.predicate.clone()), domains)
+            .ranked_declaration(stratum, Some(producer.predicate.clone()), fidelity, domains)
             .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
         registry.register_ranked(&producer.producer, Arc::new(relation), declaration);
     }
     Ok(registry)
+}
+
+/// The fidelity `declared` states, or the exhaustive declaration where it said
+/// nothing.
+///
+/// `None` means "complete and order-faithful", which is what a host with an
+/// index covering its corpus means and what this binding declared before the
+/// parameter existed. `"exact"` says the same thing explicitly. Anything else
+/// must be `"lossy: <evidence>"`, carrying the host's own words about what its
+/// producer does not promise.
+///
+/// # Why the evidence is required, and refused here rather than below
+///
+/// A declared loss with nothing behind it reports a degraded stratum while
+/// saying nothing a reader can act on, and it is indistinguishable in a rendered
+/// answer from a producer that declared no loss at all. `register_ranked`
+/// refuses it by **panicking**, which must never cross the FFI boundary, so the
+/// refusal is made here as an ordinary Python error — the same reason an empty
+/// domain list is refused here.
+///
+/// The neighbouring valid cases are deliberately close: `None` and `"exact"`
+/// both register, and so does any `"lossy:"` with real prose after it.
+fn declared_fidelity(producer: &str, declared: Option<&str>) -> Result<RankFidelity, String> {
+    let Some(declared) = declared else {
+        return Ok(RankFidelity::EXACT);
+    };
+    if declared == "exact" {
+        return Ok(RankFidelity::EXACT);
+    }
+    let Some(evidence) = declared.strip_prefix("lossy:") else {
+        return Err(format!(
+            "text producer <{producer}>: `fidelity` is \"exact\" or \"lossy: <evidence>\", \
+             got {declared:?}. A producer that promises everything says the first; one whose \
+             index does not cover its corpus says the second and states what it does not \
+             promise"
+        ));
+    };
+    if evidence.trim().is_empty() {
+        return Err(format!(
+            "text producer <{producer}>: `fidelity` declares a loss but supplies no evidence \
+             for it. A consumer carries this string into its answer verbatim, so an empty one \
+             reports a degraded stratum while saying nothing a reader can act on. State what \
+             the producer does not promise, or declare \"exact\""
+        ));
+    }
+    Ok(RankFidelity {
+        completeness: Completeness::Lossy {
+            evidence: Arc::from(evidence.trim()),
+        },
+        // A text index that covers only part of a corpus still ranks what it
+        // holds truly: BM25 is exact over the documents it scored, so an
+        // emitted rank is a lower bound on the true rank. Only a producer
+        // comparing APPROXIMATED values is order-perturbed, and no text
+        // relation does.
+        order: OrderFidelity::Faithful,
+    })
 }
 
 /// Build the fusion law from the host's weights and the decay rule it named.
@@ -864,14 +937,20 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             .map_err(|_| PyTypeError::new_err("text producer keys must be IRI strings"))?;
         let shape = || {
             PyTypeError::new_err(format!(
-                "text producer <{producer}>: the value is (stratum, predicate, graph) or \
-                 (stratum, predicate, graph, domains)"
+                "text producer <{producer}>: the value is (stratum, predicate, graph), \
+                 (stratum, predicate, graph, domains) or \
+                 (stratum, predicate, graph, domains, fidelity)"
             ))
         };
         let mut fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
-        // Read off the tail first: the three mandatory fields are destructured
-        // as an array, which consumes the vector, so the optional fourth has to
-        // leave before that happens.
+        // Read off the tail first, longest first: the three mandatory fields are
+        // destructured as an array, which consumes the vector, so every optional
+        // field has to leave before that happens.
+        let fidelity = match fields.len() {
+            3 | 4 => None,
+            5 => Some(fields.remove(4)),
+            _ => return Err(shape()),
+        };
         let domains = match fields.len() {
             3 => None,
             4 => Some(fields.remove(3)),
@@ -895,6 +974,15 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             })?),
             _ => None,
         };
+        let fidelity = match fidelity {
+            Some(value) if !value.is_none() => Some(value.extract::<String>().map_err(|_| {
+                PyTypeError::new_err(format!(
+                    "text producer <{producer}>: `fidelity` is \"exact\" or \"lossy: <evidence>\", \
+                     or None for the exhaustive declaration"
+                ))
+            })?),
+            _ => None,
+        };
         let graph =
             GraphSpec::parse(&producer, &field("graph", &graph)?).map_err(PyValueError::new_err)?;
         declared.push(TextProducer {
@@ -902,6 +990,7 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             predicate: field("predicate", &predicate)?,
             graph,
             domains,
+            fidelity,
             producer,
         });
     }
@@ -1203,6 +1292,66 @@ fn compile_dict<'py>(
     Ok(out)
 }
 
+/// Render one stratum's declared fidelity as a dict.
+///
+/// A **tagged** shape on each axis: the key `"completeness"` is always present
+/// and carries `"complete"` or `"lossy"`, and `"evidence"` appears only with the
+/// degraded tag. The alternative -- a `{"lossy": bool, "evidence": str | None}`
+/// product -- makes `{"lossy": True, "evidence": None}` a perfectly well-formed
+/// dict, which is exactly the "declared a loss but disclosed nothing" state the
+/// Rust side refuses at registration. Re-introducing it here would put the
+/// ambiguity back at the binding, one layer below where it was removed.
+///
+/// There is no `None` anywhere in the result, and no absent key means "exact":
+/// silence is what this whole surface exists to stop a consumer having to
+/// interpret.
+fn fidelity_dict<'py>(py: Python<'py>, fidelity: &RankFidelity) -> PyResult<Bound<'py, PyDict>> {
+    let entry = PyDict::new(py);
+    match &fidelity.completeness {
+        Completeness::Complete => entry.set_item("completeness", "complete")?,
+        Completeness::Lossy { evidence } => {
+            entry.set_item("completeness", "lossy")?;
+            entry.set_item("completeness_evidence", &**evidence)?;
+        }
+    }
+    match &fidelity.order {
+        OrderFidelity::Faithful => entry.set_item("order", "faithful")?,
+        OrderFidelity::Perturbed { evidence } => {
+            entry.set_item("order", "perturbed")?;
+            entry.set_item("order_evidence", &**evidence)?;
+        }
+    }
+    Ok(entry)
+}
+
+/// Render one row's score interval as a dict.
+///
+/// Tagged for the reason above. `"bound"` is `True` with `"deficit"` and
+/// `"inflation"` beside it, or `False` with `"perturbed"` naming the strata for
+/// which no finite bound exists. The two shapes carry different keys rather than
+/// one shape with nullable numbers, because a `None` deficit and a zero deficit
+/// mean opposite things -- "no bound could be computed" and "nothing was
+/// withheld" -- and a caller reading a nullable field will eventually conflate
+/// them.
+fn interval_dict<'py>(py: Python<'py>, interval: &ScoreInterval) -> PyResult<Bound<'py, PyDict>> {
+    let entry = PyDict::new(py);
+    match interval {
+        ScoreInterval::Bounded { deficit, inflation } => {
+            entry.set_item("bounded", true)?;
+            entry.set_item("deficit", deficit.to_decimal_lexical())?;
+            entry.set_item("inflation", inflation.to_decimal_lexical())?;
+        }
+        ScoreInterval::Unbounded { perturbed } => {
+            entry.set_item("bounded", false)?;
+            entry.set_item(
+                "perturbed",
+                perturbed.iter().map(Iri::as_str).collect::<Vec<_>>(),
+            )?;
+        }
+    }
+    Ok(entry)
+}
+
 /// Render one fused answer as a dict.
 fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
@@ -1225,6 +1374,11 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
             contributions.append(contribution)?;
         }
         entry.set_item("contributions", contributions)?;
+        // How far a degraded stratum could have moved THIS row, in both
+        // directions. Zero-width on both terms when every stratum was
+        // exhaustive, which is every answer this surface produced before the
+        // term existed.
+        entry.set_item("interval", interval_dict(py, &row.interval)?)?;
         rows.append(entry)?;
     }
     out.set_item("rows", rows)?;
@@ -1354,6 +1508,37 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         )?;
     }
     out.set_item("domains", domains)?;
+
+    // What each handed stream declared about the rows it can name, keyed like
+    // "attestations" and "domains" beside it. This is where a consumer learns a
+    // stratum was served approximately, and where that producer's own words
+    // about the loss are read -- verbatim, never parsed or re-worded here.
+    //
+    // It is read WITH "statuses", never instead of it. A status says how the
+    // read ENDED; a fidelity says whether the rows that ended it were all the
+    // rows that were DUE. "exhausted" beside a "lossy" declaration is neither a
+    // contradiction nor a completeness claim: the producer emitted every row its
+    // search produced, and the declaration says the search does not produce
+    // every row there was.
+    let fidelities = PyDict::new(py);
+    for (stratum, fidelity) in &result.trailer.fidelities {
+        fidelities.set_item(stratum.as_str(), fidelity_dict(py, fidelity)?)?;
+    }
+    out.set_item("fidelities", fidelities)?;
+
+    // How many leading rows keep their places whatever the degraded strata did
+    // or did not find. This is the answer a consumer with a completeness
+    // obligation actually has: told only that a stratum was approximate, its
+    // one safe move is to downgrade the whole answer, and this lets it present
+    // the certain part as settled and mark the rest.
+    //
+    // It claims membership and never absence. A row past the prefix is
+    // POSSIBLE, not excluded, and a candidate no producer named is not spoken
+    // for at all -- not naming things is precisely what a lossy search does.
+    out.set_item(
+        "certain_prefix",
+        result.trailer.certain_prefix(&result.rows),
+    )?;
 
     // Rank resolution at two altitudes, kept apart by name because they answer
     // two different questions. `planned_resolution` is what the admission waist

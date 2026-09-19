@@ -398,7 +398,12 @@ def test_an_attestation_has_two_independently_absent_axes() -> None:
     # Exactness is derived from exactly those attestations, and no producer here
     # declared a short index — which is the narrow true thing, not a certificate
     # that every index was whole.
-    assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
+    assert answer["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }
 
 
 def test_a_terminal_status_carries_one_of_five_spellings() -> None:
@@ -547,7 +552,12 @@ def test_a_declared_domain_changes_the_reading_and_not_the_answer() -> None:
 
     # The shorter read is still an exact one: nothing here attested a short
     # index, so the scores are sums of every contribution that was due.
-    assert declared["exactness"] == {"exact": True, "lower_bounds_for": []}
+    assert declared["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }
 
 
 def test_an_empty_domain_declaration_is_refused_and_its_neighbours_are_not() -> None:
@@ -1695,3 +1705,213 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
             f"{decay}, raw {raw}: the reported depth is never the one a "
             "'separated from both neighbours' reading would predict"
         )
+
+
+# ---------------------------------------------------------------------------
+# What each producer promises about its own rows, and what an answer may be
+# read to claim because of it.
+#
+# The fidelity term is host-supplied for the reason ``domains`` is: BM25 over
+# the index the relation holds is exhaustive, and whether that index covers what
+# the host means by its corpus is a fact the relation cannot see. A host that
+# indexed a sample says so here or nowhere.
+# ---------------------------------------------------------------------------
+
+LOSS = "approximate: a 10% sample of the corpus; an empty result proves nothing"
+
+
+def _is_zero(lexical: str) -> bool:
+    """Whether a rendered fixed-point value is zero.
+
+    Compared numerically rather than as text: a `Fixed` renders in its full
+    decimal lexical (`"0.000000000000"`), and pinning the spelling here would
+    make this test fail if the scale ever changed, which is not what it is about.
+    """
+    return float(lexical) == 0.0
+
+
+def _with_fidelity(
+    *entries: tuple[str, str, str, str | None],
+) -> dict[str, tuple[Any, ...]]:
+    """``(producer, stratum, predicate, fidelity)`` as the engine's map.
+
+    The five-element spelling, with ``domains`` left unrestricted so the
+    fidelity term is the only thing under test.
+    """
+    return {
+        producer: (stratum, predicate, "any", None, fidelity)
+        for producer, stratum, predicate, fidelity in entries
+    }
+
+
+def _answer(producers: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """One fused answer over ``producers``, with the fixture's usual inputs."""
+    kwargs: dict[str, Any] = {
+        "text_producers": producers,
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    kwargs.update(overrides)
+    return retrieval.search(
+        DATA,
+        [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
+        **kwargs,
+    )
+
+
+def test_every_stratum_reports_its_fidelity_on_both_axes() -> None:
+    answer = _answer(BOTH)
+    assert set(answer["fidelities"]) == set(answer["attestations"]), (
+        "keyed like the maps beside it: every stream fusion was handed, and "
+        "nothing else"
+    )
+    for stratum, fidelity in answer["fidelities"].items():
+        assert fidelity["completeness"] == "complete", stratum
+        assert fidelity["order"] == "faithful", stratum
+        # Absent, not null. A `None` would be a third state to interpret, which
+        # is the ambiguity this surface exists to remove.
+        assert "completeness_evidence" not in fidelity, stratum
+        assert "order_evidence" not in fidelity, stratum
+
+
+def test_an_exhaustive_answer_is_exact_and_wholly_certain() -> None:
+    answer = _answer(BOTH)
+    assert answer["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }
+    for row in answer["rows"]:
+        assert row["interval"]["bounded"] is True
+        assert _is_zero(row["interval"]["deficit"])
+        assert _is_zero(row["interval"]["inflation"])
+    assert answer["certain_prefix"] == len(answer["rows"]), (
+        "nothing was withheld and nothing was promoted, so every row keeps its "
+        "place -- which is the answer this engine always gave"
+    )
+
+
+def test_a_declared_loss_reaches_the_answer_verbatim_and_on_both_sides() -> None:
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+        )
+    )
+
+    degraded = answer["fidelities"][NOTE_STRATUM]
+    assert degraded["completeness"] == "lossy"
+    assert degraded["completeness_evidence"] == LOSS, (
+        "the string the host published is the string a consumer reads: not a "
+        "boolean derived downstream, not a summary, not a re-wording"
+    )
+    assert degraded["order"] == "faithful", (
+        "a partial index still ranks what it holds truly; only a producer "
+        "comparing approximated values is order-perturbed"
+    )
+
+    # The neighbour that must not be swept up with it.
+    assert answer["fidelities"][TITLE_STRATUM]["completeness"] == "complete"
+
+    # Named on BOTH sides, and only the responsible stratum.
+    assert answer["exactness"]["exact"] is False
+    assert answer["exactness"]["deficit"] == [NOTE_STRATUM]
+    assert answer["exactness"]["inflation"] == [NOTE_STRATUM], (
+        "fusion scores by rank, so a stratum that misses a row also promotes "
+        "every row behind it -- the error runs in both directions"
+    )
+    assert answer["exactness"]["unbounded"] == []
+
+
+def test_a_status_alone_is_not_a_completeness_claim() -> None:
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+        )
+    )
+    # The status is exactly what an exhaustive producer reports. That is the
+    # whole problem, and why the fidelity has to sit beside it.
+    assert answer["statuses"][NOTE_STRATUM]["status"] in STATUS_SPELLINGS
+    assert answer["fidelities"][NOTE_STRATUM]["completeness"] == "lossy"
+
+
+def test_a_declared_loss_bounds_each_row_and_can_shorten_the_certain_prefix() -> None:
+    exhaustive = _answer(BOTH)
+    degraded = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, f"lossy: {LOSS}"),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, None),
+        )
+    )
+
+    named = [
+        row
+        for row in degraded["rows"]
+        if any(c["stratum"] == NOTE_STRATUM for c in row["contributions"])
+    ]
+    assert named, "the fixture has rows the degraded stratum named"
+    for row in named:
+        assert row["interval"]["inflation"] != "0", (
+            "a row the lossy stratum named may have been promoted by a row it "
+            "missed, so its whole contribution from that stratum is suspect"
+        )
+
+    assert degraded["certain_prefix"] <= exhaustive["certain_prefix"]
+    assert _ranking(degraded) == _ranking(exhaustive), (
+        "and the rows are identical either way: a declaration changes what the "
+        "answer may be read to claim, never what the answer is"
+    )
+
+
+def test_an_empty_loss_evidence_is_refused_and_its_neighbours_are_not() -> None:
+    def search(fidelity: str | None) -> dict[str, Any]:
+        return _answer(
+            _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, fidelity)),
+            weights={NOTE_STRATUM: retrieval.SCALE},
+        )
+
+    # Refused: a declared loss that discloses nothing reports a degraded
+    # stratum while saying nothing a reader can act on.
+    with pytest.raises(ValueError, match="supplies no evidence"):
+        search("lossy:")
+    with pytest.raises(ValueError, match="supplies no evidence"):
+        search("lossy:    ")
+    # Refused: an unrecognised spelling, naming both accepted ones.
+    with pytest.raises(ValueError, match="exact"):
+        search("approximate")
+
+    # The neighbours that must still work. Over-refusal is the mirror of the
+    # silent-drop bug and it hides perfectly: every test above passes either way.
+    assert search(None)["fidelities"][NOTE_STRATUM]["completeness"] == "complete"
+    assert search("exact")["fidelities"][NOTE_STRATUM]["completeness"] == "complete"
+    real = search(f"lossy: {LOSS}")
+    assert real["fidelities"][NOTE_STRATUM]["completeness_evidence"] == LOSS
+
+
+def test_the_three_producer_spellings_agree_where_they_overlap() -> None:
+    """A three-, four- and five-element spec that say the same thing agree."""
+    three = _answer(NOTE_ONLY, weights={NOTE_STRATUM: retrieval.SCALE})
+    four = _answer(
+        _declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)),
+        weights={NOTE_STRATUM: retrieval.SCALE},
+    )
+    five = _answer(
+        _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)),
+        weights={NOTE_STRATUM: retrieval.SCALE},
+    )
+    assert _ranking(three) == _ranking(four) == _ranking(five)
+    assert three["fidelities"] == four["fidelities"] == five["fidelities"], (
+        "the shorter spellings are the same declaration, so they declare the same "
+        "thing: omitting the term means exhaustive, it does not mean unstated"
+    )
+    assert three["exactness"] == four["exactness"] == five["exactness"]
+    # Not `plan_id`: a plan identity folds the registry's per-process INSTANCE
+    # id alongside its content, so two separately built registries never share
+    # one even when they declare identically. The content is what these three
+    # spellings share, and `canonical_description`'s injectivity test in
+    # `crates/sparql-eval` is where that is pinned.

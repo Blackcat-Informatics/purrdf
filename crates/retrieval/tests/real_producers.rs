@@ -45,8 +45,8 @@ use purrdf_core::{
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, DecayRule, Fixed, FusionError, FusionProfile, Iri, ProtocolError,
-    RankedStreamAdapter, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
-    Term, TopK, compile, contribution, execute, fuse, plan, search,
+    RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest, SearchError, SearchResult,
+    Statistics, Term, TopK, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace,
@@ -316,6 +316,7 @@ fn registry() -> PropertyFunctionRegistry {
         .ranked_declaration(
             kernel_iri(TEXT_STRATUM),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             // This fixture's notes and its embedded entities are the SAME
             // entities — the whole point of the file is a candidate both real
             // producers name — so neither restricts its domain, and the fusion
@@ -943,6 +944,7 @@ fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry {
         .ranked_declaration(
             kernel_iri(TEXT_STRATUM),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");
@@ -1199,6 +1201,7 @@ fn the_text_producer_declares_unique_only_where_one_subject_can_appear_once() {
         .ranked_declaration(
             stratum.clone(),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect_err("a multi-partition index has no one ranked order to declare");
@@ -1218,6 +1221,7 @@ fn the_text_producer_declares_unique_only_where_one_subject_can_appear_once() {
         .ranked_declaration(
             stratum,
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");
@@ -1423,6 +1427,7 @@ fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<At
         .ranked_declaration(
             kernel_iri(TEXT_STRATUM),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
         )
         .expect("a single-partition index declares a ranked order");

@@ -58,8 +58,8 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, parse_iri,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus, RequestTerm,
-    RetrievalRequest, SearchResult, Statistics, Term, TopK, search,
+    AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus, RankFidelity,
+    RequestTerm, RetrievalRequest, SearchResult, Statistics, Term, TopK, search,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry,
@@ -275,6 +275,7 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         .ranked_declaration(
             parse_iri(TEXT_STRATUM).expect("the host's stratum IRI is valid"),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             // This host's notes and its embedded entities are the same
             // entities — the example's whole point is a candidate both
             // producers name — so neither producer restricts its domain.

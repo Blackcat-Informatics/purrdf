@@ -1015,6 +1015,25 @@ impl FusionTrailer {
     ///
     /// * Every stratum exhaustive ⇒ every interval is zero-width ⇒ the prefix is
     ///   the whole of `rows`, which is the answer this engine always gave.
+    ///
+    /// # Why the comparison admits equality
+    ///
+    /// The test is `floor(i) >= ceiling(j)`, not `>`, and the difference is not
+    /// a rounding convenience — it is what keeps the common case from reading
+    /// as uncertain. Two rows with the *same* score are ordinary: fixed-point
+    /// reciprocal-rank decay quantizes adjacent ranks to one value routinely,
+    /// and an exhaustive fusion with a tie in it has zero-width intervals on
+    /// every row. Under a strict comparison that answer would report a certain
+    /// prefix ending at the tie, claiming doubt where there is none.
+    ///
+    /// Equality is sound because the intervals still order the true scores:
+    /// `true(i) >= floor(i) >= ceiling(j) >= true(j)`. What equality does not
+    /// settle is which of two *exactly* tied rows comes first, and that was
+    /// never this function's claim — it is decided by the engine's total
+    /// tie-break (best rank, then canonical term order), replayably, and
+    /// reported for the last emitted row as
+    /// [`FusionTrailer::cut_on_a_tie`].
+    ///
     /// * Any row carrying [`ScoreInterval::Unbounded`] ⇒ `0`. An unbounded row
     ///   could outscore anything, so nothing above it is safe either, and a
     ///   prefix "certain except for one unbounded rival" is not certain.
@@ -1061,7 +1080,7 @@ impl FusionTrailer {
             // stopped the prefix there.
             let settled = rows[position + 1..]
                 .iter()
-                .all(|rival| ceiling(rival).is_some_and(|rival_ceiling| mine > rival_ceiling));
+                .all(|rival| ceiling(rival).is_some_and(|rival_ceiling| mine >= rival_ceiling));
             if !settled {
                 break;
             }

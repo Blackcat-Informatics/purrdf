@@ -7223,3 +7223,83 @@ fn an_open_stream_is_charged_its_head_and_a_lossy_one_its_first_rank() {
         "but it did not name this row, so it promoted nothing here"
     );
 }
+
+// T9.8. Tied scores with zero uncertainty are still certain.
+//
+// Found by the Python suite, whose fixture ties where the Rust fixtures above
+// happen not to. Fixed-point reciprocal-rank decay quantizes adjacent ranks to
+// one value routinely, so a tie inside an exhaustive answer is the ordinary
+// case, not a corner. A strict comparison reported a certain prefix ending at
+// the tie -- claiming doubt about an answer in which nothing was degraded and
+// nothing could have been different.
+#[test]
+fn tied_rows_in_an_exhaustive_answer_are_all_certain() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    // `a` is named by both strata and leads. `b` and `c` are named once each at
+    // the same rank, so they carry identical scores.
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "c")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+        ],
+        &profile,
+    ));
+
+    let scores: Vec<Fixed> = fused.rows.iter().map(|r| r.score).collect();
+    assert!(
+        scores.windows(2).any(|pair| pair[0] == pair[1]),
+        "the fixture must actually tie, or this test proves nothing: {scores:?}"
+    );
+    assert_eq!(
+        fused.trailer.certain_prefix(&fused.rows),
+        fused.rows.len(),
+        "every interval is zero-width, so nothing could have been different and \
+         every row keeps its place -- a tie is decided by the engine's own total \
+         tie-break, which is not uncertainty about the answer"
+    );
+}
+
+// T9.9. The same tie under a declared loss is NOT certain, which is what makes
+// the test above a statement about uncertainty rather than a rubber stamp.
+#[test]
+fn tied_rows_stop_being_certain_once_a_stratum_declares_a_loss() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                ),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(
+                    vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "c")],
+                    ProducerReceipt::Exhausted { rows_emitted: 2 },
+                )
+                .declaring(lossy_contract()),
+            ),
+        ],
+        &profile,
+    ));
+
+    assert!(
+        fused.trailer.certain_prefix(&fused.rows) < fused.rows.len(),
+        "now the tied rows could have been ordered differently, because the \
+         lossy stratum may have withheld from one and promoted the other"
+    );
+}

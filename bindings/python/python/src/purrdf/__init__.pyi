@@ -2051,7 +2051,9 @@ class slice:
 # stratum S emitted item I more than once" — is a producer that declared unique
 # candidates and repeated one, and names its stratum for the same reason.
 _TextProducerSpec: TypeAlias = (
-    tuple[str, str, str] | tuple[str, str, str, list[str] | None]
+    tuple[str, str, str]
+    | tuple[str, str, str, list[str] | None]
+    | tuple[str, str, str, list[str] | None, str | None]
 )
 
 class retrieval:
@@ -2216,18 +2218,50 @@ class retrieval:
     # streams fusion was handed are keyed; a stratum that never became a stream is
     # absent rather than reported as having declined to answer.
     #
-    # `"exactness"` is `{"exact": bool, "lower_bounds_for": list[str]}`, derived
-    # from those attestations alone and therefore unmoved by how deep this call
-    # read. `True` says no stratum in this fusion declared itself short — the
-    # narrow true thing, not a certificate that every index was whole. When
-    # `"exact"` is `False`, every score in the answer is a LOWER BOUND on the
-    # score a whole index would have produced; the rows are still real rows in
-    # this fusion's own certified order, and what does NOT follow is that a row
-    # absent from the answer would have stayed absent, or that the emitted order
-    # would have survived the missing contributions. `"lower_bounds_for"` names
-    # exactly the strata that attested an incomplete index, in canonical order,
-    # and each one's verbatim reason is under the same key in `"attestations"` —
-    # so it is the list of indexes to rebuild rather than a flag to shrug at.
+    # `"fidelities"` maps a stratum to what its producer declared about the rows
+    # it can name, on two independent axes. `"completeness"` is `"complete"` or
+    # `"lossy"`; `"order"` is `"faithful"` or `"perturbed"`. Where an axis is
+    # degraded, `"completeness_evidence"` / `"order_evidence"` carries that
+    # producer's OWN words for it, verbatim — never parsed here, never re-worded.
+    # The evidence key is absent, not `None`, when the axis is not degraded:
+    # silence is the thing this surface exists to stop a caller interpreting.
+    #
+    # It is read WITH `"statuses"`, never instead of it. A status says how the
+    # read ENDED; a fidelity says whether the rows that ended it were all the
+    # rows that were DUE. `"exhausted"` beside a `"lossy"` declaration is neither
+    # a contradiction nor a completeness claim: the producer emitted every row
+    # its search produced, and the declaration says the search does not produce
+    # every row there was.
+    #
+    # `"exactness"` is `{"exact": bool, "deficit": list[str],
+    # "inflation": list[str], "unbounded": list[str]}`, derived from those
+    # declarations and attestations alone and therefore unmoved by how deep this
+    # call read. `True` says no stratum in this fusion declared itself degraded —
+    # the narrow true thing, not a certificate that every index was whole and
+    # every search exhaustive.
+    #
+    # When `"exact"` is `False`, every score is an ESTIMATE rather than a value,
+    # and the error runs in BOTH directions — which is why there is no
+    # `"lower_bounds_for"` key. Fusion scores by RANK and nothing else, so a
+    # stratum that fails to name a row does not merely withhold that row's
+    # contribution: every row behind the missing one moves up a rank and collects
+    # a larger one than it earned. A candidate the degraded stratum missed is
+    # summed too LOW; one it named is summed too HIGH. `"deficit"` and
+    # `"inflation"` name the strata responsible on each side, and `"unbounded"`
+    # names strata whose declared ORDER is perturbed, for which no finite bound
+    # exists at all. The rows are still real rows in this fusion's own certified
+    # order; what does NOT follow is that a row absent from the answer would have
+    # stayed absent.
+    #
+    # Each row's `"interval"` carries the size of its own error: `{"bounded":
+    # True, "deficit": str, "inflation": str}` in the same fixed-point lexical as
+    # `"score"`, or `{"bounded": False, "perturbed": list[str]}` where no finite
+    # bound exists. `"certain_prefix"` is how many LEADING rows keep their places
+    # whatever the degraded strata did or did not find — the answer a caller with
+    # a completeness obligation actually has, since without it the only safe move
+    # is to downgrade the whole answer. It claims membership and never absence: a
+    # row past the prefix is POSSIBLE, not excluded, and a candidate no producer
+    # named is not spoken for at all.
     #
     # `"domains"` maps a stratum to the candidate-domain declaration its stream
     # fused under: `None` where the producer promised only that it may name

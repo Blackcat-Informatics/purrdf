@@ -490,6 +490,9 @@ mod tests {
             .ranked_declaration(
                 iri::parse(STRATUM).expect("the fixture stratum IRI is valid"),
                 Some(NOTE.to_owned()),
+                // The fixture index holds every document the fixture dataset
+                // has, so the exhaustive declaration is the true one.
+                sparql::RankFidelity::EXACT,
                 // The facade fixture fuses one stratum, so there is no second
                 // producer for a narrower declaration to certify against; the
                 // widest promise is the honest one.

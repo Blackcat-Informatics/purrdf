@@ -239,7 +239,7 @@ fn declaration_types_contain_no_function_pointers() {
 /// framing change. Never edit it to match a run — re-run this test and record
 /// what it reports.
 const FIXTURE_FINGERPRINT: &str =
-    "9885c36f03c59cc5745845361cf8e2da32fa7c5e2b8d511ae0abad0ae7763e85";
+    "5b3def55bb23292f2d7e70f87d78129358e72cb231246f04be6edcb8cbcf3c89";
 
 #[test]
 fn the_fingerprint_is_the_same_string_every_time_the_registry_is_rebuilt() {
