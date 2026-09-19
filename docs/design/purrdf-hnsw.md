@@ -286,7 +286,7 @@ present, and hard-fails there if the target is absent.
 ## 5. The approximation contract
 
 This index is approximate, and the contract is declared rather than implied.
-Three governed channels carry it:
+Four governed channels carry it:
 
 1. **The artifact.** The guard's `IndexLossContract` and the evidence string are
    bound into the implementation identity and checked at bind time.
@@ -299,6 +299,28 @@ Three governed channels carry it:
    asserts that even when a query misses the exact oracle's nearest row, the
    empty and non-empty answers are ordinary cursor results and never a
    completeness claim.
+4. **The composed answer.** The three channels above all address a caller
+   reading this relation directly, and none of them survives composition. Fuse
+   these rows with an exhaustive producer's and the answer reports one terminal
+   status per stratum — `Exhausted` for both — with nothing to say which one
+   offered candidates and which returned everything it had. So the promise is
+   also declared where a consumer of *composed* rows reads it, through
+   `HnswRelation::ranked_declaration`, and carried verbatim into
+   `FusionTrailer::fidelities`.
+
+   The completeness axis is this profile's own evidence string. The order axis
+   is **derived from the loaded loss contract** rather than asserted: an index
+   whose guard says `transforms_vectors` compares approximated values and can
+   rank a row it found *better* than that row was due, which removes the one
+   inequality every score bound rests on. This profile does not transform
+   vectors, so it is lossy but order-faithful, and a fused answer's error stays
+   bounded.
+
+   A relation registered *without* a ranked declaration is not silently fused:
+   it forms no stratum, contributes no trailer entry, and the request reports
+   its term as unserved. Reaching for the unranked registration by mistake is a
+   planner that says so, never a stream that fuses while claiming to be
+   exhaustive.
 
 The call shape matches the exact kNN relation, so the two are interchangeable in
 query text:
