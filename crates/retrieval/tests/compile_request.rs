@@ -2061,6 +2061,204 @@ fn a_bound_gives_an_unbounded_declaration_a_finite_depth_and_its_absence_still_r
     );
 }
 
+/// One stratum whose producer *declares* `rows` rows per invocation and emits two,
+/// optionally restricted to a single block of the candidate universe.
+///
+/// The declared number and the corpus behind it are deliberately unrelated: these
+/// cases are about the depth a declaration licenses, and a fixture that really held
+/// four billion rows would be a test of the allocator. The block is a parameter
+/// because a declared block set is one of the two premises that let a request's own
+/// bound become the depth — without it the declaration stands and the bound narrows
+/// nothing at all.
+fn deep_registry(rows: u64, block: Option<&str>) -> PropertyFunctionRegistry {
+    let accepted = vec![alternative(
+        TermPattern::of_kind(TermKind::Literal),
+        value_at(1),
+    )];
+    let spec = Spec::new("deep", accepted).rows(rows, 2);
+    let spec = match block {
+        None => spec,
+        Some(tag) => spec.within(tag),
+    };
+    registry_of(vec![("deep", spec)]).0
+}
+
+#[test]
+fn a_declared_row_bound_no_depth_can_read_is_refused_and_the_one_below_it_plans() {
+    let stats = statistics(&[]);
+    let needle = || vec![lexical("quick brown fox", None)];
+    // The deepest depth a read can be taken to. It is one shallower than the
+    // deepest a plan can express, because the read is emitted one row past the
+    // depth: that probe row is how the executor tells a read the bound cut from a
+    // read that ran out, and at `u32::MAX` it is not a number a `LIMIT` can hold.
+    let deepest = u32::MAX - 1;
+
+    // The valid neighbour first, so the refusals below cannot be read as a range
+    // that swallowed it: a declaration of exactly that many rows plans, records the
+    // depth, and is emitted with the probe row one past it.
+    assert_eq!(
+        depths_and_limits(
+            &deep_registry(u64::from(deepest), None),
+            &stats,
+            &RetrievalRequest::complete(needle()),
+        ),
+        BTreeMap::from([("deep".to_owned(), (deepest, u32::MAX))]),
+        "the deepest readable depth is read, recorded and probed like any other"
+    );
+
+    // One row deeper, and a declaration well past the range: neither is a bound any
+    // recordable depth serves. Truncating them to `u32::MAX` recorded a depth below
+    // the bound it claimed to serve, and — at that exact value — the one depth the
+    // compiler cannot emit a probe row past, so the read would have been reported
+    // exhausted whatever the relation held.
+    for declared in [u64::from(u32::MAX), u64::from(u32::MAX) + 100] {
+        let refused = plan(
+            &RetrievalRequest::complete(needle()),
+            &deep_registry(declared, None),
+            &stats,
+        )
+        .expect_err("a bound no recordable depth can serve is refused");
+        match refused {
+            PlanError::DepthBeyondPlanRange {
+                ref stratum,
+                bound,
+                ceiling,
+            } => {
+                assert_eq!(**stratum, iri(&ex("stratum/deep")));
+                assert_eq!(bound, declared, "the refusal names the number, not a clamp");
+                assert_eq!(ceiling, deepest);
+            }
+            ref other => panic!("expected DepthBeyondPlanRange, got {other:?}"),
+        }
+    }
+
+    // The unbounded declaration keeps its own distinct refusal. "Nothing bounds this
+    // read at all" and "the bound is deeper than a read can go" are two facts, and
+    // the second must not swallow the first.
+    let unbounded = plan(
+        &RetrievalRequest::complete(needle()),
+        &deep_registry(u64::MAX, None),
+        &stats,
+    )
+    .expect_err("an unbounded declaration with nothing to bound it is refused");
+    assert!(
+        matches!(unbounded, PlanError::StatisticsUnavailable { .. }),
+        "expected StatisticsUnavailable, got {unbounded:?}"
+    );
+
+    // And an ordinary declaration is untouched by any of it.
+    assert_eq!(
+        depths_and_limits(
+            &deep_registry(7, None),
+            &stats,
+            &RetrievalRequest::complete(needle()),
+        ),
+        BTreeMap::from([("deep".to_owned(), (7, 8))]),
+        "a depth nowhere near the ceiling is derived exactly as it was"
+    );
+}
+
+#[test]
+fn a_read_bound_no_rank_can_address_is_refused_and_the_addressable_ones_plan() {
+    let stats = statistics(&[]);
+    let needle = || vec![lexical("quick brown fox", None)];
+    let disjoint = Some(("block/notes", "block/titles"));
+    let addressable =
+        usize::try_from(u64::from(u32::MAX)).expect("a 64-bit host addresses a 32-bit rank");
+
+    // Refused: a fused row count no rank addresses. This is the configuration the
+    // truncation hid in — disjoint blocks and unique candidates, where the bound IS
+    // each stratum's depth — so the plan recorded `Bounded(k)` beside a depth below
+    // `k`, and nothing anywhere compared the two.
+    for requested in [addressable + 1, usize::MAX / 2] {
+        let refused = plan(
+            &RetrievalRequest::bounded(needle(), TopK::new(requested)),
+            &two_stratum_registry(400, disjoint),
+            &stats,
+        )
+        .expect_err("a bound no depth can reach is refused");
+        match refused {
+            PlanError::ReadBoundBeyondDepthRange {
+                requested: named,
+                ceiling,
+            } => {
+                assert_eq!(named, requested, "the refusal names the number asked for");
+                assert_eq!(ceiling, u64::from(u32::MAX));
+            }
+            ref other => panic!("expected ReadBoundBeyondDepthRange, got {other:?}"),
+        }
+    }
+
+    // Both valid neighbours: the largest bound a rank addresses, and an ordinary
+    // small one. Neither is refused, and neither moves a depth — the declaration is
+    // below the first and the second narrows to itself, exactly as before.
+    for (bound, expected) in [
+        (
+            TopK::new(addressable),
+            BTreeMap::from([
+                ("notes".to_owned(), (400, 401)),
+                ("titles".to_owned(), (400, 401)),
+            ]),
+        ),
+        (
+            TopK::new(9),
+            BTreeMap::from([
+                ("notes".to_owned(), (9, 10)),
+                ("titles".to_owned(), (9, 10)),
+            ]),
+        ),
+    ] {
+        assert_eq!(
+            depths_and_limits(
+                &two_stratum_registry(400, disjoint),
+                &stats,
+                &RetrievalRequest::bounded(needle(), bound),
+            ),
+            expected,
+            "an addressable bound plans: {bound}"
+        );
+    }
+
+    // Where such a bound really would BE the depth — an unbounded declaration whose
+    // one stratum declares its block, so the request's bound is the whole of what
+    // bounds the read — the two ceilings part company, and they should. The bound is
+    // expressible as a rank, so the request is not what is refused; the *read* it
+    // would need is one row deeper than any depth can be taken to, and the refusal
+    // names that stratum and that number.
+    let refused = plan(
+        &RetrievalRequest::bounded(needle(), TopK::new(addressable)),
+        &deep_registry(u64::MAX, Some("block/deep")),
+        &stats,
+    )
+    .expect_err("a read at the rank ceiling leaves no room for the probe row");
+    match refused {
+        PlanError::DepthBeyondPlanRange {
+            ref stratum,
+            bound,
+            ceiling,
+        } => {
+            assert_eq!(**stratum, iri(&ex("stratum/deep")));
+            assert_eq!(bound, u64::from(u32::MAX));
+            assert_eq!(ceiling, u32::MAX - 1);
+        }
+        ref other => panic!("expected DepthBeyondPlanRange, got {other:?}"),
+    }
+
+    // Its neighbour, one rank shallower, is the deepest read this layer takes — and
+    // it is served from the request's bound alone, against a declaration that bounds
+    // nothing.
+    assert_eq!(
+        depths_and_limits(
+            &deep_registry(u64::MAX, Some("block/deep")),
+            &stats,
+            &RetrievalRequest::bounded(needle(), TopK::new(addressable - 1)),
+        ),
+        BTreeMap::from([("deep".to_owned(), (u32::MAX - 1, u32::MAX))]),
+        "the deepest readable depth is reachable from a bound as well as from a \
+         declaration"
+    );
+}
+
 #[test]
 fn the_bound_is_in_the_identity_so_two_bounds_are_two_plans() {
     let stats = statistics(&[]);

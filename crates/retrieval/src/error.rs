@@ -14,8 +14,8 @@
 ///
 /// The planning variants are refusals with a named dimension — no producer
 /// reaches the request, a request term is malformed, a stratum has no finite
-/// depth, or a registered relation's declaration refused to be read — rather
-/// than a plausible plan built over a fallback.
+/// depth or one no rank can address, or a registered relation's declaration
+/// refused to be read — rather than a plausible plan built over a fallback.
 ///
 /// [`Plan`]: crate::Plan
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +62,70 @@ pub enum PlanError {
         /// The stratum whose depth could not be bounded. Boxed so recording it
         /// does not inflate every `Result<_, PlanError>`.
         predicate: Box<crate::iri::Iri>,
+    },
+
+    /// A stratum's derived row bound is deeper than any depth a read can be taken
+    /// to, so no recordable depth can serve it.
+    ///
+    /// The bound is the registry's declared row count, narrowed by whatever the
+    /// statistics measured and by the request's own bound — the number this
+    /// stratum would have to read to answer the request in full. A plan carries a
+    /// per-stratum depth as a `u32`, and the deepest depth that can be *read* is
+    /// one shallower than that: the unit is emitted one row past the depth so the
+    /// executor can tell a read the bound cut from a read that ran out, and at
+    /// `u32::MAX` that probe row is not expressible.
+    ///
+    /// It is refused rather than clamped, and the clamp it replaces is why. A
+    /// derived bound above the range was truncated to `u32::MAX` with nothing
+    /// saying so: the plan then recorded a depth **below** the bound it claimed to
+    /// serve, and — in exactly the configuration where the depth is supposed to
+    /// *be* the request's bound, disjoint strata declaring unique candidates — that
+    /// contradiction was internal to the plan and nothing downstream compared the
+    /// two. A depth this layer cannot read is a depth it cannot verify, so it is
+    /// named here instead of served silently.
+    ///
+    /// The stratum is boxed for the reason [`Self::StatisticsUnavailable`] boxes
+    /// its own predicate.
+    #[error(
+        "stratum {stratum} would have to read {bound} rows, which no recordable depth can serve: a \
+         plan carries a per-stratum depth as a 32-bit rank and a read is emitted one row deeper \
+         than its depth, so {ceiling} is the deepest depth that can be read"
+    )]
+    DepthBeyondPlanRange {
+        /// The stratum whose derived bound cannot be recorded as a depth.
+        stratum: Box<crate::iri::Iri>,
+        /// The row count the stratum would have had to read.
+        bound: u64,
+        /// The deepest depth a read can be taken to.
+        ceiling: u32,
+    },
+
+    /// The request's own row bound is a number no depth can ever reach.
+    ///
+    /// A [`ReadBound::Bounded`](crate::ReadBound::Bounded) states how many fused
+    /// rows the answer is for, and where the producers' declarations license it
+    /// that number *is* each stratum's depth (see [`plan`](crate::plan)). A plan
+    /// records a depth as a 32-bit rank, so a bound above `u32::MAX` names a row
+    /// no rank can address: the number could never be served, whatever registry it
+    /// met.
+    ///
+    /// Refused at the request rather than where it happens to bind, because the
+    /// alternative is a refusal that depends on which registry the request reaches
+    /// — served silently wherever some declaration was smaller, and a truncated
+    /// depth wherever it was not. A bound at `u32::MAX` is expressible as a rank
+    /// and is admitted here; whether a *stratum* can read that deep is the
+    /// separate question [`Self::DepthBeyondPlanRange`] answers, with its own
+    /// ceiling, because the read goes one row deeper than the depth.
+    #[error(
+        "the request bounds the answer at {requested} fused rows, which no depth can reach: a plan \
+         records a per-stratum depth as a 32-bit rank, so {ceiling} is the largest bound this \
+         layer can plan a read for"
+    )]
+    ReadBoundBeyondDepthRange {
+        /// The bound the request stated.
+        requested: usize,
+        /// The largest bound a 32-bit rank can address.
+        ceiling: u64,
     },
 
     /// A registered relation's declaration could not be read while planning.

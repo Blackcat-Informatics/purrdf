@@ -28,6 +28,16 @@
 //!   stratum bounded at nothing is never allowed to answer and would still be
 //!   reported exhausted, so the one thing a depth may never be is a claim of
 //!   emptiness that no producer made;
+//! * every stratum depth is shallow enough for the emitted bound to carry its
+//!   probe row ([`AdmissionError::DepthWithoutProbe`]) — the same rule as the one
+//!   above, read at the other end of the range. The unit is emitted one row
+//!   deeper than the depth so the executor can tell a read the bound cut from a
+//!   read that ran out; at [`u32::MAX`] that row is not expressible in the
+//!   `LIMIT` the compiler writes, and the read would be reported
+//!   [`Exhausted`](crate::ProducerStatus::Exhausted) — this layer's strongest
+//!   completeness claim — for a stratum whose ending nobody was able to observe.
+//!   A depth whose ending cannot be verified is refused rather than certified,
+//!   and [`ProbedDepth`] is the type that carries the proof to the compiler;
 //! * every bound producer can actually be *invoked* for the request terms the
 //!   plan gives it — every declared placement renders, no two contend for one
 //!   position, and some declared access pattern serves the result;
@@ -357,6 +367,45 @@ pub enum AdmissionError {
         stratum: Box<Iri>,
     },
 
+    /// A stratum's recorded depth is so deep that the emitted bound cannot carry
+    /// the probe row one past it, so how the read ended could not be observed.
+    ///
+    /// This is [`Self::ZeroDepth`]'s mirror at the other end of the range, and the
+    /// two refuse the same thing: a completeness claim made about the bound rather
+    /// than about the data. A unit is emitted one row deeper than its depth, and
+    /// that row is the whole of how [`execute`](crate::execute) tells a read the
+    /// depth cut ([`DepthReached`](crate::ProducerStatus::DepthReached)) from a
+    /// read that ran out ([`Exhausted`](crate::ProducerStatus::Exhausted)). At
+    /// `u32::MAX` the `LIMIT` the compiler writes cannot express that row, so the
+    /// emitted bound would equal the depth, no probe could ever arrive, and every
+    /// such read — however many rows the relation still held — would be reported
+    /// exhausted. Saturating the bound there is exactly the fault the probe exists
+    /// to close, reappearing at the one depth where the mitigation is dropped.
+    ///
+    /// The planner cannot write this: it refuses a derived bound no recordable
+    /// depth can serve ([`PlanError::DepthBeyondPlanRange`](crate::PlanError)), so
+    /// a depth here was hand-built or edited. `ceiling` is the deepest depth that
+    /// **can** be read — one shallower than the deepest a plan can express,
+    /// because the read goes one row deeper than the depth — and a plan wanting
+    /// more rows than that from one stratum is past what this layer's rank
+    /// encoding can carry, not past a policy.
+    ///
+    /// The stratum IRI is boxed for the reason [`Self::ZeroDepth`] boxes its own.
+    #[error(
+        "stratum {stratum} declares depth {depth}, which leaves no room for the probe row: a read \
+         is emitted one row deeper than its depth, so {ceiling} is the deepest depth whose ending \
+         can be observed and anything past it would be reported exhausted without being read to \
+         its end"
+    )]
+    DepthWithoutProbe {
+        /// The stratum whose depth cannot be probed.
+        stratum: Box<Iri>,
+        /// The depth the plan recorded.
+        depth: u32,
+        /// The deepest depth whose emitted bound can still carry a probe row.
+        ceiling: u32,
+    },
+
     /// A stratum's recorded depth exceeds the registry's declared row bound.
     #[error(
         "stratum {stratum} declares depth {requested}, but the registry bounds it at {declared}"
@@ -470,6 +519,7 @@ impl AdmissionError {
             Self::InsufficientBindings { .. } => "insufficient_bindings",
             Self::HollowBinding { .. } => "hollow_binding",
             Self::ZeroDepth { .. } => "zero_depth",
+            Self::DepthWithoutProbe { .. } => "depth_without_probe",
             Self::DepthBoundViolation { .. } => "depth_bound_violation",
             Self::StaleStatistics { .. } => "stale_statistics",
             Self::RegistryMismatch { .. } => "registry_instance_mismatch",
@@ -478,6 +528,92 @@ impl AdmissionError {
             Self::UnsatisfiablePlacement { .. } => "unsatisfiable_placement",
             Self::MalformedPlan { .. } => "malformed_plan",
         }
+    }
+}
+
+/// The deepest depth a read can be taken to, which is one shallower than the
+/// deepest depth a plan can express.
+///
+/// A plan records a per-stratum depth as a `u32`, so `u32::MAX` is the deepest
+/// depth that is *expressible*. It is not the deepest that can be *read*: the
+/// unit is emitted one row deeper than the depth, and that probe row is the whole
+/// of how the executor tells a read the bound cut from a read that ran out. A
+/// depth of `u32::MAX` would need a `LIMIT` of `u32::MAX + 1` to carry it, so the
+/// probe would vanish and the read would be certified exhausted without ever
+/// having been read to its end.
+///
+/// So this — and not `u32::MAX` — is the ceiling the planner derives depths
+/// against and the waist admits them against. The distinction is the same one
+/// [`MonotoneDepth`](crate::MonotoneDepth) draws between a measured range and an
+/// expressible one: what fits in the field and what can be honestly read are two
+/// numbers, and conflating them is how a bound becomes a completeness claim.
+pub(crate) const MAX_READ_DEPTH: u32 = u32::MAX - 1;
+
+/// A stratum depth that has passed the waist: at least one row, and shallow
+/// enough that the emitted bound one row deeper than it still fits the `LIMIT`
+/// the compiler writes.
+///
+/// It exists so the compiler cannot be handed a depth whose probe row does not
+/// fit. `emitted_limit` used to add that row with a saturating `+ 1`, which at
+/// `u32::MAX` silently emitted a bound *equal* to the depth — no probe could
+/// arrive, and the read was reported `Exhausted` however many rows the relation
+/// still held. The saturation was the only thing standing between an unprobeable
+/// depth and a false completeness claim, and a saturating operator makes no
+/// claim at all.
+///
+/// The field is private to this module and the only constructor is
+/// [`ProbedDepth::admit`], so a value of this type *is* the proof that both
+/// checks were made. [`ProbedDepth::probe`] can therefore add its row with plain
+/// arithmetic: there is no case left for a saturation to hide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProbedDepth(u32);
+
+impl ProbedDepth {
+    /// Admit `depth` for `stratum`, refusing both ends of the range by name.
+    ///
+    /// The floor and the ceiling are checked here, before anything is looked up
+    /// and for every recorded stratum, because neither has anything to do with
+    /// what the registry declared: a zero reads nothing whatever the registry
+    /// says about that stratum, and a depth whose probe row is inexpressible
+    /// cannot report its own ending whatever the registry says either. The
+    /// registry's own declared row bound is a third, separate dimension, decided
+    /// by the caller once it holds one of these.
+    ///
+    /// Neither end is a value the planner can produce — it records a depth only
+    /// for a stratum a surviving producer ranks under, floors what it derives at
+    /// one and refuses a bound past the ceiling — so a depth refused here came
+    /// from a plan that was hand-built or edited, whatever the registry says about
+    /// that stratum. The refusals name that stratum because the value belongs to
+    /// the plan in hand and a caller has to be able to find it.
+    fn admit(depth: u32, stratum: &Iri) -> Result<Self, AdmissionError> {
+        if depth == 0 {
+            return Err(AdmissionError::ZeroDepth {
+                stratum: Box::new(stratum.clone()),
+            });
+        }
+        if depth > MAX_READ_DEPTH {
+            return Err(AdmissionError::DepthWithoutProbe {
+                stratum: Box::new(stratum.clone()),
+                depth,
+                ceiling: MAX_READ_DEPTH,
+            });
+        }
+        Ok(Self(depth))
+    }
+
+    /// The depth itself: the number the plan recorded, and the number every field
+    /// keyed to the read is keyed to.
+    pub(crate) const fn get(self) -> u32 {
+        self.0
+    }
+
+    /// One row past the depth — the probe slot.
+    ///
+    /// Exact, not saturating: [`Self::admit`] refused the one depth for which
+    /// this addition would have had to saturate, so there is no value of this
+    /// type it can overflow on.
+    pub(crate) const fn probe(self) -> u32 {
+        self.0 + 1
     }
 }
 
@@ -505,6 +641,17 @@ pub(crate) struct AdmittedRegistry<'a> {
     /// ranked stratum the registry declares has an entry, including the strata
     /// this plan records no depth for.
     pub(crate) stratum_row_bounds: BTreeMap<Iri, RowBound>,
+    /// Every depth the plan recorded, as the admitted [`ProbedDepth`] it passed
+    /// this waist as — one entry per entry of
+    /// [`Plan::stratum_depths`](crate::Plan::stratum_depths), and the map the
+    /// compiler emits its units from.
+    ///
+    /// The compiler reads the depths from here rather than from the plan, and that
+    /// is the point of carrying them: a `u32` read straight off the plan is a
+    /// number that may be zero or unprobeable, and the emitter would be trusting
+    /// that some earlier pass looked. Read as [`ProbedDepth`] it cannot be either,
+    /// because nothing outside this module can build one.
+    pub(crate) stratum_depths: BTreeMap<Iri, ProbedDepth>,
     /// The environment registry's declared content fingerprint.
     pub(crate) fingerprint: String,
     /// The environment registry's live instance identity.
@@ -934,26 +1081,28 @@ pub(crate) fn admit_plan<'a>(
         }
     }
 
-    // 7. Per-stratum depth bounds, from both sides. A recorded depth may be
+    // 7. Per-stratum depth bounds, from three sides. A recorded depth may be
     //    lower than the registry's declared row bound (statistics narrow a read)
-    //    and never higher, and it may never be zero, because a read of nothing
-    //    is not a read.
+    //    and never higher; it may never be zero, because a read of nothing is not
+    //    a read; and it may never be so deep that the emitted bound cannot carry
+    //    the probe row that says how the read ended, because a read whose ending
+    //    nobody could observe must not be reported as an exhaustion.
+    //
+    //    The first is the registry's dimension and is decided here. The other two
+    //    are properties of the depth alone — a zero reads nothing whatever the
+    //    registry declared, and an unprobeable depth cannot report its ending
+    //    whatever the registry declared — so they are `ProbedDepth::admit`'s, and
+    //    the type it returns is what the compiler emits from.
+    let mut admitted_depths: BTreeMap<Iri, ProbedDepth> = BTreeMap::new();
     for (stratum, depth) in &plan.stratum_depths {
-        // Checked before anything is looked up, and for every recorded stratum,
-        // because the reason has nothing to do with what the registry declared:
-        // the planner records a depth only for a stratum a surviving producer
-        // ranks under, and the depth it derives is floored at one, so a zero is
-        // an edited plan whatever the registry says about that stratum. Admitted
-        // it would emit `LIMIT 0`, which hands back no row whatever the relation
-        // holds, and report the stratum exhausted with nothing — a completeness
-        // claim about the bound rather than about the data, and identical
-        // afterwards to an honest empty answer. A stratum that is to read nothing
-        // carries no entry at all.
-        if *depth == 0 {
-            return Err(AdmissionError::ZeroDepth {
-                stratum: Box::new(stratum.clone()),
-            });
-        }
+        let depth = ProbedDepth::admit(*depth, stratum)?;
+        // Recorded before the registry's own dimension is decided, because the
+        // `Undeclared` arm below leaves this loop without reaching its end and the
+        // compiler emits one unit per entry of this map: a stratum missing from it
+        // is a producer missing from the emitted text, which is the silent
+        // narrowing the waist exists to prevent. Nothing is admitted early by
+        // recording it — a refusal below returns the whole `Result`, map and all.
+        admitted_depths.insert(stratum.clone(), depth);
         let declared = match strata.get(stratum) {
             // Declared nothing, so it bounds nothing: there is no number here
             // for a depth to exceed, and inventing zero would refuse a plan the
@@ -984,11 +1133,11 @@ pub(crate) fn admit_plan<'a>(
             // zero-depth case above already returned.
             None => 0,
         };
-        if u64::from(*depth) > declared {
+        if u64::from(depth.get()) > declared {
             return Err(AdmissionError::DepthBoundViolation {
                 stratum: Box::new(stratum.clone()),
                 declared: u32::try_from(declared).unwrap_or(u32::MAX),
-                requested: *depth,
+                requested: depth.get(),
             });
         }
     }
@@ -997,6 +1146,7 @@ pub(crate) fn admit_plan<'a>(
         descriptors,
         stratum_bindings,
         stratum_row_bounds: strata,
+        stratum_depths: admitted_depths,
         fingerprint,
         instance_id,
     })

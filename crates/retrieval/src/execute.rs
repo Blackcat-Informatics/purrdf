@@ -142,11 +142,18 @@
 //! only ever say `Exhausted`, which is the strongest completeness claim this
 //! layer makes, uttered about a read the plan itself cut short.
 //!
-//! The slot exists at every depth, including a depth that already equals the
-//! producer's declared row bound, and that last case is why the slot's arrival
-//! is read against the declaration rather than reported blind. Below the
-//! declaration, the extra row means the *depth* stopped the read, which is
-//! `DepthReached`. At the declaration, it means the producer yielded a row it
+//! The slot exists at every depth a plan can carry — including a depth that
+//! already equals the producer's declared row bound, and that last case is why the
+//! slot's arrival is read against the declaration rather than reported blind. It
+//! exists at every such depth because the one depth whose slot would not fit a
+//! 32-bit `LIMIT` is refused before it reaches this stage, at the admission waist
+//! ([`AdmissionError::DepthWithoutProbe`](crate::AdmissionError)) and in the
+//! planner ([`PlanError::DepthBeyondPlanRange`](crate::PlanError)): a read whose
+//! ending nobody could have observed must not arrive here to be reported as an
+//! exhaustion.
+//!
+//! Below the declaration, the extra row means the *depth* stopped the read, which
+//! is `DepthReached`. At the declaration, it means the producer yielded a row it
 //! promised did not exist, and [`bound_to_depth`] refuses the whole run
 //! ([`ExecutionError::RowBoundBreached`]) rather than truncating to the depth
 //! and calling the result exhausted. When the declaration is honest the slot
@@ -722,6 +729,13 @@ type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
 ///
 /// A stratum whose registry declared no bound carries no promise for a row to
 /// break, so its probe is always the ordinary `DepthReached`.
+///
+/// The `depth + 1`-th row can arrive at every depth this function can be called
+/// with: the compiler emits a bound strictly deeper than the depth, which it can
+/// do for every depth because the waist refuses the one depth whose probe row a
+/// 32-bit bound cannot express. Without that refusal this comparison would be
+/// unsatisfiable at exactly that depth, and every such read — cut or not — would
+/// leave here as `Exhausted`.
 fn bound_to_depth(
     mut ranked: Vec<(u64, Term, RowBlock)>,
     depth: u32,

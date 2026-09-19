@@ -358,6 +358,28 @@ fn registry_with_an_empty_producer() -> PropertyFunctionRegistry {
     registry
 }
 
+/// One mandatory catch-all producer that declares more rows per invocation than
+/// any depth can be read to.
+///
+/// The declaration is what this fixture is for: a plan over it can hold a depth at
+/// the top of the 32-bit rank range without the registry's own row bound refusing
+/// it first, which is the only way to reach the ceiling dimension at the waist. The
+/// relation still emits three rows, because what is being tested is the bound the
+/// text carries and not the corpus behind it.
+fn registry_with_a_deep_producer() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/deep"),
+        producer(u64::from(u32::MAX), "deep/", 3),
+        ranked(
+            &ex("stratum/deep"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
+    );
+    registry
+}
+
 struct MockStatistics {
     source: String,
     revision: String,
@@ -1882,6 +1904,87 @@ fn a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under()
         unit.depth, 1,
         "the depth is one; the probe row is a read and never a recorded value"
     );
+}
+
+#[test]
+fn a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling() {
+    // The zero-depth refusal above, read at the other end of the range. A unit is
+    // emitted one row deeper than its depth so the executor can tell a read the
+    // bound cut from a read that ran out; at the top of the 32-bit rank range that
+    // row is not expressible, the emitted bound would equal the depth, and the read
+    // would be reported `Exhausted` — this layer's strongest completeness claim —
+    // for a stratum the `LIMIT` may well have cut. The registry is not what refuses
+    // it: this producer declares four billion rows, so its bound has room for
+    // either depth below.
+    let registry = registry_with_a_deep_producer();
+    let mut stats = statistics("r1");
+    stats.cardinalities.insert(iri(&ex("stratum/deep")), 1_000);
+    let mut plan = fresh_plan(&registry, &stats);
+    let deep = iri(&ex("stratum/deep"));
+    assert_eq!(
+        plan.stratum_depths[&deep], 1_000,
+        "the planner's own depth is the measured cardinality, nowhere near the ceiling"
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    plan.stratum_depths.insert(deep.clone(), u32::MAX);
+    let error = compile(&plan, &env).expect_err("a depth with no room for its probe row");
+    match error {
+        AdmissionError::DepthWithoutProbe {
+            ref stratum,
+            depth,
+            ceiling,
+        } => {
+            assert_eq!(**stratum, deep);
+            assert_eq!(depth, u32::MAX);
+            assert_eq!(
+                ceiling,
+                u32::MAX - 1,
+                "the ceiling is the deepest depth whose ending can be observed"
+            );
+        }
+        ref other => panic!("expected DepthWithoutProbe, got {other:?}"),
+    }
+    assert_eq!(error.dimension(), "depth_without_probe");
+
+    // The neighbour, and it is the one that matters most here: one rank shallower
+    // is the deepest read this layer can take, and it must still plan, admit and
+    // compile — with the probe row present, which is the whole difference between
+    // the two depths.
+    plan.stratum_depths.insert(deep.clone(), u32::MAX - 1);
+    let compiled = compile(&plan, &env).expect("the deepest readable depth admits");
+    let unit = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == deep)
+        .expect("the stratum emits a unit");
+    assert_eq!(unit.depth, u32::MAX - 1);
+    assert!(
+        unit.sparql.ends_with(&format!("LIMIT {}", u32::MAX)),
+        "the emitted bound is one row deeper than the depth, at the ceiling as \
+         anywhere else: {}",
+        unit.sparql
+    );
+    assert!(
+        emitted_bound(&unit.sparql) > unit.depth,
+        "and the probe slot is what that inequality is: a bound equal to its own \
+         depth could never report how the read ended"
+    );
+}
+
+/// The `LIMIT` a unit's outer `SELECT` carries.
+fn emitted_bound(sparql: &str) -> u32 {
+    sparql
+        .rsplit("LIMIT ")
+        .next()
+        .expect("an emitted unit carries a LIMIT")
+        .trim()
+        .parse()
+        .expect("an emitted LIMIT is a number")
 }
 
 #[test]

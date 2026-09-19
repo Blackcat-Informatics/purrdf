@@ -547,6 +547,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   apart. `None` there is a registry that declared no access mode and therefore no
   bound, which promises nothing for a row to breach.
 
+- **retrieval:** At the deepest depth a plan can express, that probe row vanished
+  again and `ProducerStatus::Exhausted` was minted from a bounded read. The emitted
+  bound is the depth plus one row, and the addition saturated -- so at a depth of
+  `u32::MAX` the emitted `LIMIT` *equalled* the depth, no row could ever arrive
+  past it, and every such read was reported with the strongest completeness claim
+  this layer has however many rows the relation still held. That is the fault the
+  probe row exists to close, surviving at the one depth where the mitigation was
+  dropped: a saturating operator looked like arithmetic hygiene and was a silent
+  completeness claim.
+
+  Both ends of the depth range are refused by name now, rather than one floored and
+  the other saturated. The admission waist refuses a depth whose probe row is
+  inexpressible as `AdmissionError::DepthWithoutProbe`, the mirror of
+  `AdmissionError::ZeroDepth` and enforced beside it, and it hands the compiler an
+  admitted depth as a type that cannot carry the refused value -- so a unit whose
+  `LIMIT` equals its own depth is unwritable rather than merely unwritten, and the
+  row past the depth is added with exact arithmetic.
+
+  The planner no longer truncates a bound no such depth can serve. A derived row
+  bound above the range was clamped to `u32::MAX` with nothing saying so, which
+  recorded a depth *below* the bound it claimed to serve -- and in exactly the
+  configuration where the bound is supposed to *be* the depth, disjoint strata
+  declaring unique candidates, that contradiction was internal to the plan and
+  nothing downstream compared the two. It is `PlanError::DepthBeyondPlanRange` now,
+  naming the stratum, the number and the ceiling. A request bound above what a
+  32-bit rank addresses is refused once at the request itself, as
+  `PlanError::ReadBoundBeyondDepthRange`, rather than wherever it happens to bind:
+  deferred, one such bound was served silently against a registry whose
+  declarations were smaller and truncated against one whose were not.
+
+  Nothing an ordinary request reaches moves. The refusals begin at a read of four
+  billion rows from one producer per invocation; the deepest depth below them
+  still plans, admits and compiles, with its probe row present and its emitted
+  bound exactly where it was, and no plan identity, recorded depth or emitted
+  `LIMIT` changes anywhere else.
+
 - **python:** A ranked producer declared with more than one candidate-domain tag
   failed at the wrong time. One tag entails where every row of that producer
   lies, so a consumer reads the block off the declaration; several tags say only
@@ -571,11 +607,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `"sparql"`, so the text's `LIMIT` was the only number in reach and it is the
   wrong one. Each unit now carries `"depth"` beside its text -- the bound the
   plan itself recorded, not a number re-derived from the emitted `LIMIT` -- and the
-  surface states the obligation: keep at most `"depth"` rows. Where the
-  producer's declared row bound already equals the depth no probe is emitted and
-  the two numbers coincide, which is exactly why the bound cannot be read off the
-  text. `"planned_resolution"` was no fallback either: it is empty unless the call
-  names a fusion law.
+  surface states the obligation: keep at most `"depth"` rows. The emitted `LIMIT`
+  reaches one row past the depth at every depth a plan can carry -- including a
+  depth that already sits on the producer's declared row bound -- so the text's own
+  number is never the reportable one. `"planned_resolution"` was no fallback
+  either: it is empty unless the call names a fusion law.
 - **retrieval:** A fused answer could contain the same entity twice. Certifying a
   candidate removes it from the frontier, and the check that held a stream to its
   declared uniqueness read only the frontier, so a stream naming that entity again

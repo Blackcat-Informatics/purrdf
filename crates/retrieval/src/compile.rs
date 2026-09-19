@@ -169,6 +169,27 @@
 //! [`PlannedResolution::requested_depth`] are unchanged by this, and so is the
 //! plan's identity.
 //!
+//! # Every depth that reaches here has room for its probe row, because the rest
+//! are refused
+//!
+//! "The slot exists at every depth" is a claim about the depths this stage can be
+//! handed, and there is exactly one it would be false for: `u32::MAX`, where the
+//! row past the depth is not a number a `LIMIT` this emitter writes can hold. A
+//! saturating `+ 1` there emitted a bound equal to the depth — the probe erased,
+//! no row able to arrive past the depth, and therefore `Exhausted` reported for a
+//! read the bound may have cut. Saturation looked like arithmetic hygiene and was
+//! the same silent completeness claim as `LIMIT 0`, at the other end of the range.
+//!
+//! So it is refused rather than saturated, and refused at the waist where every
+//! other depth invariant lives ([`AdmissionError::DepthWithoutProbe`], the mirror
+//! of [`AdmissionError::ZeroDepth`]). The planner does not derive such a depth
+//! either: it refuses a bound no readable depth can serve
+//! ([`PlanError::DepthBeyondPlanRange`](crate::PlanError)) instead of clamping it
+//! to the ceiling. What reaches [`emitted_limit`] is a [`ProbedDepth`] — a depth
+//! the waist has already proved can carry its probe — so the probe row is added
+//! with exact arithmetic and the emitted `LIMIT` is never equal to the depth it
+//! bounds.
+//!
 //! The probe slot is not an over-refusal either, because it costs nothing when
 //! the declaration is honest. A producer that declared it can yield `n` rows per
 //! invocation and can really only yield `n` returns `n` rows into an `n + 1` row
@@ -222,7 +243,7 @@ use std::collections::BTreeMap;
 
 use purrdf_sparql_eval::{PfDescriptor, RankedDeclaration, RegistryId};
 
-use crate::admission::{AdmissionEnvironment, AdmissionError, RowBound, admit_plan};
+use crate::admission::{AdmissionEnvironment, AdmissionError, ProbedDepth, RowBound, admit_plan};
 use crate::fuse::TopK;
 use crate::id::PlanId;
 use crate::iri::Iri;
@@ -257,10 +278,12 @@ pub struct StratumUnit {
     /// the answer, exactly as [`Plan::stratum_depths`] records it.
     ///
     /// This is **not** the `LIMIT` in [`Self::sparql`]. The emitted bound is one
-    /// row deeper, at every depth, so that the executor can tell a read the depth
-    /// cut from a read that ran out; see this module's header. The probe row is a
-    /// read and never a value, so the number a consumer reasons about — and the
-    /// number every other field of this bundle is keyed to — is this one.
+    /// row deeper, at every depth a unit can be compiled for — a depth whose extra
+    /// row is not expressible is refused before this stage rather than emitted
+    /// without one — so that the executor can tell a read the depth cut from a read
+    /// that ran out; see this module's header. The probe row is a read and never a
+    /// value, so the number a consumer reasons about — and the number every other
+    /// field of this bundle is keyed to — is this one.
     ///
     /// It travels on the unit rather than being looked up again from the plan
     /// for the reason [`Self::contract`] does: [`execute`](crate::execute) is
@@ -412,7 +435,14 @@ pub fn compile(
     let admitted = admit_plan(plan, env)?;
 
     let mut units = Vec::new();
-    for (stratum, depth) in &plan.stratum_depths {
+    // The depths are read from the admitted view rather than from the plan, and
+    // the map has one entry per entry of `Plan::stratum_depths`, so this iterates
+    // exactly the strata the plan recorded a depth for. What it cannot iterate is
+    // a depth nobody checked: a `ProbedDepth` exists only where the waist refused
+    // neither a zero nor a depth too deep to carry its probe row, which is what
+    // makes an emitted `LIMIT` equal to its own depth unwritable here rather than
+    // merely unwritten.
+    for (stratum, depth) in &admitted.stratum_depths {
         let Some(binding) = admitted.stratum_bindings.get(stratum) else {
             // A stratum the plan gives a depth but no producer has no relation
             // to run, so there is nothing to emit for it. That is the only case
@@ -449,7 +479,7 @@ pub fn compile(
             stratum: stratum.clone(),
             sparql,
             contract: StreamContract::declared(declaration),
-            depth: *depth,
+            depth: depth.get(),
             declared_rows: match bound {
                 RowBound::Declared(declared) => Some(declared),
                 RowBound::Undeclared => None,
@@ -463,7 +493,8 @@ pub fn compile(
     // stratum the profile does not weight contributes nothing to that fusion, so
     // a profile silent about it has nothing to report and gets no entry.
     let resolution = env.fusion_profile.map_or_else(BTreeMap::new, |profile| {
-        plan.stratum_depths
+        admitted
+            .stratum_depths
             .iter()
             .filter_map(|(stratum, depth)| {
                 profile.monotone_depth(stratum).map(|separation| {
@@ -471,7 +502,7 @@ pub fn compile(
                         stratum.clone(),
                         PlannedResolution {
                             separation,
-                            requested_depth: *depth,
+                            requested_depth: depth.get(),
                         },
                     )
                 })
@@ -539,13 +570,19 @@ fn ranked_declaration<'a>(
 /// where the probe is most needed and the one depth an under-declaring producer
 /// lands a plan on.
 ///
-/// The addition saturates because it is arithmetic on untrusted input, and the
-/// saturation is not a silent narrowing: at `u32::MAX` the extra row is not
-/// expressible in a `LIMIT` this emitter can write, so the read ends exactly
-/// where it would have ended anyway and is reported as what it is.
+/// The addition is exact rather than saturating, and it is exact because of the
+/// argument's type. A saturating `+ 1` at `u32::MAX` emitted a bound *equal* to
+/// the depth: no probe row could arrive, `execute` writes `DepthReached` only when
+/// a row arrives past the depth, and the read was therefore reported `Exhausted`
+/// — the strongest completeness claim this layer has — for a stratum the `LIMIT`
+/// may well have cut. That is the fault this whole header is about, surviving at
+/// the one depth where the mitigation was dropped. So the depth arrives as a
+/// [`ProbedDepth`], which the waist mints only for a depth whose probe row fits
+/// ([`AdmissionError::DepthWithoutProbe`]), and the row past it is added by
+/// [`ProbedDepth::probe`] with nothing left to saturate.
 ///
 /// A declared bound wider than a `u32` is clamped before the `min`, which cannot
-/// change the answer: `depth` is a `u32`, so a wider bound can never be the
+/// change the answer: the depth is a `u32`, so a wider bound can never be the
 /// smaller of the two.
 ///
 /// # A declared zero still emits one row, and the floor is now structural
@@ -561,19 +598,24 @@ fn ranked_declaration<'a>(
 /// `max(1, …)` on top of that would be a guard with nothing left to guard, so
 /// the floor is documented rather than re-applied — and it is the `+ 1`'s
 /// placement, not an extra call, that holds it.
-fn emitted_limit(depth: u32, bound: RowBound) -> u32 {
-    let ceiling = match bound {
+fn emitted_limit(depth: ProbedDepth, bound: RowBound) -> u32 {
+    match bound {
         // The declaration caps how far the read is taken, and the probe row sits
         // one past that cap rather than being erased by it: a row arriving there
         // is the producer contradicting its own declaration, which `execute`
         // refuses by name instead of reporting as exhaustion.
-        RowBound::Declared(declared) => u32::try_from(declared).unwrap_or(u32::MAX).min(depth),
+        //
+        // The cap is at most the depth, so one row past the cap is at most one row
+        // past the depth — which is the number `ProbedDepth::probe` already proves
+        // expressible, and this addition therefore cannot overflow either.
+        RowBound::Declared(declared) => {
+            u32::try_from(declared).unwrap_or(u32::MAX).min(depth.get()) + 1
+        }
         // Nothing was declared, so there is no cap and no promise to read the
         // ending off: the probe is the only way to learn whether the depth cut
         // the read.
-        RowBound::Undeclared => depth,
-    };
-    ceiling.saturating_add(1)
+        RowBound::Undeclared => depth.probe(),
+    }
 }
 
 /// The number handed to a producer that declares a
@@ -594,8 +636,8 @@ fn emitted_limit(depth: u32, bound: RowBound) -> u32 {
 /// reason: a declared zero would otherwise ask such a producer for no rows at
 /// all, and an answer of nothing to a request for nothing proves nothing about
 /// the index.
-fn depth_argument(depth: u32, bound: RowBound) -> u32 {
-    let probe = depth.saturating_add(1);
+fn depth_argument(depth: ProbedDepth, bound: RowBound) -> u32 {
+    let probe = depth.probe();
     match bound {
         RowBound::Declared(declared) => u32::try_from(declared)
             .unwrap_or(u32::MAX)

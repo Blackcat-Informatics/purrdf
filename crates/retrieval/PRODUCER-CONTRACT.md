@@ -428,9 +428,27 @@ one depth — the depth that already equals the producer's declared bound, where
 the `min` would select the declaration and the unit would be emitted at its own
 depth with no slot to probe with. That is the one depth an under-declaring
 producer lands a plan on, and it is the one where `Exhausted` would be a guess.
-Outside, the slot exists at every depth. It raises the emitted `LIMIT` only: the
-recorded depth is the number admission holds a plan to, and it does not move, so
-no plan field, identity or resolution number moves with it.
+Outside, the slot exists at every depth a plan can carry. It raises the emitted
+`LIMIT` only: the recorded depth is the number admission holds a plan to, and it
+does not move, so no plan field, identity or resolution number moves with it.
+
+There is exactly one depth for which that could not be arranged — the top of the
+32-bit rank range, where the row past the depth is not a number a `LIMIT` can hold
+— and it is **refused** rather than emitted without a slot. Saturating there would
+have emitted a bound equal to the depth, so no probe could arrive and the read
+would be certified `Exhausted` however many rows your relation still held: the
+`LIMIT 0` fault at the other end of the range. The planner refuses a derived bound
+that deep (`PlanError::DepthBeyondPlanRange`), a request bound no rank can address
+(`PlanError::ReadBoundBeyondDepthRange`), and the waist refuses such a depth in an
+edited plan (`AdmissionError::DepthWithoutProbe`, the mirror of
+`AdmissionError::ZeroDepth`). Nothing you can declare short of four billion rows
+per invocation reaches any of them. Pinned by
+`a_declared_row_bound_no_depth_can_read_is_refused_and_the_one_below_it_plans` and
+`a_read_bound_no_rank_can_address_is_refused_and_the_addressable_ones_plan` in
+`tests/compile_request.rs`, and by
+`a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling` in
+`tests/admission_tests.rs`, each of which executes the depth one rank shallower and
+requires it to plan, admit and compile with its probe row present.
 
 The slot is not an over-refusal either, because it costs an honest producer
 nothing. A producer that declared `n` and really holds `n` returns `n` rows into

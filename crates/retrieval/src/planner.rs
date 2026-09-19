@@ -258,6 +258,27 @@
 //! reads, and reports its own emptiness. Refusing it here would have thrown the
 //! producer's receipt away and reported "no registered producer accepts any term
 //! of the request" about a producer that accepts the term.
+//!
+//! # Nothing here records a depth it cannot read, either
+//!
+//! The floor has a ceiling, and it is the same rule read from the other end. A
+//! depth is a 32-bit rank, and the read is emitted one row deeper than the depth so
+//! the executor can tell a read the bound cut from a read that ran out — so the
+//! deepest depth that can be *read* is one shallower than the deepest a plan can
+//! *express* ([`MAX_READ_DEPTH`]). A derived bound past that used to be truncated
+//! to [`u32::MAX`], which recorded a depth below the bound it was derived to serve
+//! and, at that exact value, left the compiler no room for the probe row: the read
+//! would then have been reported exhausted however many rows the relation held.
+//! Both halves are completeness claims made about a number rather than about the
+//! data, so the bound is refused by name instead —
+//! [`PlanError::DepthBeyondPlanRange`] for a stratum's own derived bound, and
+//! [`PlanError::ReadBoundBeyondDepthRange`] for a request bound above what any rank
+//! addresses, which is checked once at the request because no registry could serve
+//! it.
+//!
+//! Neither is reachable by an ordinary request: a depth at the ceiling is over four
+//! billion rows from one producer per invocation, and every depth below it is
+//! derived, recorded and emitted exactly as it was.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -265,6 +286,7 @@ use purrdf_sparql_eval::{
     CandidateDomains, DuplicatePolicy, PfDescriptor, PropertyFunctionRegistry, RankedDeclaration,
 };
 
+use crate::admission::MAX_READ_DEPTH;
 use crate::error::PlanError;
 use crate::iri::Iri;
 use crate::matching::{carries_content, pattern_matches, place};
@@ -315,6 +337,10 @@ const PPM_UNIT: u64 = 1_000_000;
 /// * [`PlanError::StatisticsUnavailable`] when a selected producer declares an
 ///   unbounded row count, statistics supply no cardinality to bound it, and the
 ///   request's own bound licenses no prefix either.
+/// * [`PlanError::ReadBoundBeyondDepthRange`] when the request's own bound is
+///   above [`u32::MAX`], which no per-stratum depth can address.
+/// * [`PlanError::DepthBeyondPlanRange`] when a stratum's derived bound is deeper
+///   than a read can be taken to, so no recordable depth would serve it.
 pub fn plan(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry,
@@ -325,6 +351,14 @@ pub fn plan(
     for term in &request.terms {
         validate_term(term)?;
     }
+    // Neither can a bound no depth can address. It is checked here, beside the
+    // terms, because it is a property of the request alone: a stated bound is what
+    // each stratum's depth becomes wherever the declarations license the prefix,
+    // and a depth is a 32-bit rank. Deferring it to the stratum that happens to
+    // bind would make the refusal a function of which registry the request met —
+    // silently served wherever some declaration was smaller than the bound, and
+    // silently truncated wherever it was not.
+    validate_bound(request.bound)?;
 
     // 2. Read the registry's own declarations once. `describe` is IRI-sorted, so
     //    every derived vector below is a pure function of the registry's
@@ -452,7 +486,13 @@ pub fn plan(
         // registry's only producer the plan then failed with
         // `NoApplicableProducers`, a message that denies the very acceptance the
         // matching pass had just recorded.
-        let depth = provisional.get(stratum).copied().unwrap_or(u32::MAX);
+        //
+        // A stratum with no provisional entry is handed the deepest depth a read
+        // can be taken to, for the reason `depth_bounds` carries that number for a
+        // bound no depth can serve: this value only lets `place` run, and the one
+        // property it owes is that no producer is handed a depth *smaller* than
+        // the one its stratum finally records.
+        let depth = provisional.get(stratum).copied().unwrap_or(MAX_READ_DEPTH);
         if place(
             &candidate.producer,
             descriptor,
@@ -537,7 +577,24 @@ pub fn plan(
                 predicate: Box::new(stratum.clone()),
             });
         }
-        stratum_depths.insert(stratum.clone(), u32::try_from(bound).unwrap_or(u32::MAX));
+        // Recorded only where the number is a depth a read can actually be taken
+        // to. Truncating it to `u32::MAX` recorded a depth **below** the bound it
+        // was derived to serve, with nothing anywhere comparing the two — and the
+        // truncated value was then the one depth the compiler could not emit a
+        // probe row past, so the read would have been reported exhausted whatever
+        // the relation held. Both halves of that are refusals, so this is one:
+        // the number and the ceiling, named.
+        let depth = match u32::try_from(bound) {
+            Ok(depth) if depth <= MAX_READ_DEPTH => depth,
+            Ok(_) | Err(_) => {
+                return Err(PlanError::DepthBeyondPlanRange {
+                    stratum: Box::new(stratum.clone()),
+                    bound,
+                    ceiling: MAX_READ_DEPTH,
+                });
+            }
+        };
+        stratum_depths.insert(stratum.clone(), depth);
     }
 
     // 5. Capture the statistics the planner actually consulted: the strata it
@@ -612,9 +669,19 @@ enum Outcome<'a> {
 /// This is the provisional bound placement is run against, not the bound the
 /// plan records: it is computed over the widest set (every producer whose terms
 /// matched), so a producer can only ever be handed a depth at least as large as
-/// the one its stratum finally records. An unbounded stratum with no statistic
-/// has no finite depth here; it is carried as [`u32::MAX`] rather than refused,
-/// because the refusal belongs to the surviving set and is raised there.
+/// the one its stratum finally records. A stratum whose bound no depth can serve
+/// — an unbounded declaration with no statistic to bound it, or a bound above
+/// [`MAX_READ_DEPTH`] — has no finite depth here; it is carried as
+/// [`MAX_READ_DEPTH`] rather than refused, because the refusal belongs to the
+/// surviving set and is raised there.
+///
+/// Carried as the read ceiling rather than as [`u32::MAX`], and the distinction is
+/// the point of the number. Such a stratum has no final depth to be smaller than:
+/// either its producer is dropped at placement, or the surviving-set loop refuses
+/// the plan by name ([`PlanError::DepthBeyondPlanRange`]). So the invariant above
+/// still holds, and no depth this planner hands to anything is one no plan could
+/// record. Nothing reads this value as a row count and no plan records it: it
+/// decides only whether a producer's declared depth placement *renders*.
 ///
 /// The terms read are the **carried** ones, matching what `plan` finally
 /// records. Reading the accepted set instead would let a stratum's provisional
@@ -665,7 +732,9 @@ fn depth_bounds(
         .map(|(stratum, declared)| {
             let reached = terms_at(terms, reaching.get(&stratum));
             let bound = capped(declared, &stratum, &reached, statistics, None);
-            let depth = u32::try_from(bound).unwrap_or(u32::MAX);
+            let depth = u32::try_from(bound)
+                .unwrap_or(MAX_READ_DEPTH)
+                .min(MAX_READ_DEPTH);
             (stratum, depth)
         })
         .collect()
@@ -1018,6 +1087,37 @@ fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
         term: Box::new(term.clone()),
         reason: reason.to_owned(),
     })
+}
+
+/// Refuse a read bound no depth can address.
+///
+/// A [`ReadBound::Bounded`] states a count of fused rows, and where the surviving
+/// declarations license the prefix that count *is* every stratum's depth. A depth
+/// is a 32-bit rank, so a bound above [`u32::MAX`] names a row no rank addresses
+/// and no read this layer plans could ever reach — under any registry, which is
+/// why it is refused here rather than at the stratum it happens to bind.
+///
+/// A bound at exactly [`u32::MAX`] is expressible as a rank and is admitted, and
+/// so is every ordinary bound below it. Whether some stratum can be *read* that
+/// deep is a different question with a different ceiling — the read goes one row
+/// past the depth — and it is answered per stratum, by name, where the depth is
+/// derived. A bound of zero is admitted too, and floored to the single probing row
+/// by [`capped`]: a bound may narrow a read and may never eliminate one.
+///
+/// [`ReadBound::Complete`] states no number, so there is none to refuse: the
+/// depths are the declarations' and the statistics', each of which is checked
+/// where it is derived.
+fn validate_bound(bound: ReadBound) -> Result<(), PlanError> {
+    let ceiling = u64::from(u32::MAX);
+    match bound {
+        ReadBound::Bounded(top_k) if top_k.get() as u64 > ceiling => {
+            Err(PlanError::ReadBoundBeyondDepthRange {
+                requested: top_k.get(),
+                ceiling,
+            })
+        }
+        ReadBound::Bounded(_) | ReadBound::Complete => Ok(()),
+    }
 }
 
 /// A producer's worst-case declared row count across its access modes.
