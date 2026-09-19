@@ -2197,8 +2197,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        ClassCatalog, LoweredConstraint, PreparedTargets, ShapePlan, lower_shapes,
-        lower_standalone_expression,
+        ClassCatalog, LoweredConstraint, PlannedConstraint, PreparedTargets, ShapePlan,
+        lower_shapes, lower_standalone_expression,
     };
     use crate::engine::parse_shapes;
     use crate::expression::NodeExpr;
@@ -2687,5 +2687,165 @@ ex:Inner a sh:NodeShape ;
         assert_send_sync::<super::DatasetBinding>();
         assert_send_sync::<Arc<super::LoweredShapes>>();
         assert_send_sync::<ShapePlan<'static>>();
+    }
+
+    // -----------------------------------------------------------------------
+    // Constraint-kind totality: every `PlannedConstraint` variant names itself
+    // -----------------------------------------------------------------------
+
+    /// Declare, in ONE place, both the exhaustive kind-name match and the list
+    /// of names it produces — so the two can never drift from each other, only
+    /// from [`COMMITTED_KIND_NAMES`] below, which is typed out separately.
+    ///
+    /// # Why a macro rather than calling the match on real values
+    ///
+    /// Building a real [`PlannedConstraint`] for all thirty-one variants would
+    /// mean fabricating a [`ShapePlan`], a `LoweredExpr`, a `ComponentValidator`
+    /// and more for variants that carry no data this check needs. A `match` is
+    /// exhaustiveness-checked by the compiler as soon as it is compiled,
+    /// independent of whether it is ever called with a value — so the arm list
+    /// alone, expanded twice by this macro, gives both the COMPILE-TIME
+    /// guarantee (no `_` arm, no top-level `..`, so an added variant fails the
+    /// build) and a genuine RUNTIME list to assert against, with no value
+    /// construction required.
+    macro_rules! planned_constraint_kind_names {
+        ($($pattern:pat => $name:literal),+ $(,)?) => {
+            /// One arm per [`PlannedConstraint`] variant, mapping it to the
+            /// stable kind name `tests/change_path_alloc.rs` names its
+            /// allocation cases with.
+            ///
+            /// Deliberately no `_` arm and no top-level `..`: a `..` INSIDE one
+            /// arm's own field pattern (e.g. `In { .. }`) is fine, it discards
+            /// that variant's fields, not the exhaustiveness check over
+            /// variants.
+            #[expect(
+                dead_code,
+                reason = "exercised for its COMPILE-TIME exhaustiveness check; PRODUCED_KIND_NAMES \
+                          below is the runtime witness of the same arm list"
+            )]
+            const fn kind_name(constraint: &PlannedConstraint<'_>) -> &'static str {
+                match constraint {
+                    $($pattern => $name),+
+                }
+            }
+
+            /// The names [`kind_name`]'s arms produce, in declaration order —
+            /// expanded from the exact same arm list, so it cannot say anything
+            /// the match does not.
+            const PRODUCED_KIND_NAMES: &[&str] = &[$($name),+];
+        };
+    }
+
+    planned_constraint_kind_names! {
+        PlannedConstraint::Class(_) => "class",
+        PlannedConstraint::Datatype(_) => "datatype",
+        PlannedConstraint::NodeKind(_) => "node_kind",
+        PlannedConstraint::MinCount(_) => "min_count",
+        PlannedConstraint::MaxCount(_) => "max_count",
+        PlannedConstraint::In { .. } => "in",
+        PlannedConstraint::HasValue { .. } => "has_value",
+        PlannedConstraint::Pattern { .. } => "pattern",
+        PlannedConstraint::MinLength(_) => "min_length",
+        PlannedConstraint::MaxLength(_) => "max_length",
+        PlannedConstraint::UniqueLang(_) => "unique_lang",
+        PlannedConstraint::LanguageIn(_) => "language_in",
+        PlannedConstraint::Not(_) => "not",
+        PlannedConstraint::Closed { .. } => "closed",
+        PlannedConstraint::MinInclusive(_) => "min_inclusive",
+        PlannedConstraint::MaxInclusive(_) => "max_inclusive",
+        PlannedConstraint::MinExclusive(_) => "min_exclusive",
+        PlannedConstraint::MaxExclusive(_) => "max_exclusive",
+        PlannedConstraint::And(_) => "and",
+        PlannedConstraint::Or(_) => "or",
+        PlannedConstraint::Xone(_) => "xone",
+        PlannedConstraint::Node(_) => "node",
+        PlannedConstraint::Sparql { .. } => "sparql",
+        PlannedConstraint::Equals(_) => "equals",
+        PlannedConstraint::Disjoint(_) => "disjoint",
+        PlannedConstraint::LessThan(_) => "less_than",
+        PlannedConstraint::LessThanOrEquals(_) => "less_than_or_equals",
+        PlannedConstraint::QualifiedValueShape { .. } => "qualified_value_shape",
+        PlannedConstraint::Expression { .. } => "expression",
+        PlannedConstraint::NodeByExpression { .. } => "node_by_expression",
+        PlannedConstraint::Component { .. } => "component",
+    }
+
+    /// The committed list [`PRODUCED_KIND_NAMES`] is expected to equal, sorted.
+    ///
+    /// Typed out independently of the macro invocation above, so an editor who
+    /// changes an arm's name (or adds/removes an arm) must, as a SEPARATE and
+    /// deliberate act, update this list for the test below to pass again — a
+    /// silent rename would otherwise sail through unnoticed since nothing else
+    /// in this module reads these strings back. `tests/change_path_alloc.rs`
+    /// reads this same set of names by scanning `PlannedConstraint`'s
+    /// declaration directly (it cannot see this `pub(crate)` type otherwise),
+    /// so drift here is drift against that file's coverage guard too.
+    const COMMITTED_KIND_NAMES: &[&str] = &[
+        "and",
+        "class",
+        "closed",
+        "component",
+        "datatype",
+        "disjoint",
+        "equals",
+        "expression",
+        "has_value",
+        "in",
+        "language_in",
+        "less_than",
+        "less_than_or_equals",
+        "max_count",
+        "max_exclusive",
+        "max_inclusive",
+        "max_length",
+        "min_count",
+        "min_exclusive",
+        "min_inclusive",
+        "min_length",
+        "node",
+        "node_by_expression",
+        "node_kind",
+        "not",
+        "or",
+        "pattern",
+        "qualified_value_shape",
+        "sparql",
+        "unique_lang",
+        "xone",
+    ];
+
+    /// **The kind names an exhaustive match over every `PlannedConstraint`
+    /// variant produces are exactly [`COMMITTED_KIND_NAMES`], no more, no
+    /// fewer, no different spelling.**
+    ///
+    /// [`kind_name`]'s match already refuses to COMPILE over a variant with no
+    /// arm (the exhaustiveness check fires unconditionally, whether or not the
+    /// function is called), so adding a variant and forgetting this list is
+    /// already a build failure. What this test catches is the other kind of
+    /// drift a compiler cannot: an arm whose STRING was mistyped or renamed
+    /// (still exhaustive, still compiles, still wrong), or a duplicate name two
+    /// different variants were accidentally given. Source order in the enum is
+    /// not asserted — only the SET, sorted, is — because reordering variants is
+    /// not a semantic change and should not be able to redden this test.
+    #[test]
+    fn every_planned_constraint_variant_has_a_stable_committed_kind_name() {
+        let mut produced: Vec<&str> = PRODUCED_KIND_NAMES.to_vec();
+        produced.sort_unstable();
+        let mut deduped = produced.clone();
+        deduped.dedup();
+        assert_eq!(
+            deduped.len(),
+            produced.len(),
+            "two PlannedConstraint variants produce the same kind name"
+        );
+        let mut committed: Vec<&str> = COMMITTED_KIND_NAMES.to_vec();
+        committed.sort_unstable();
+        assert_eq!(
+            produced, committed,
+            "the kind names PlannedConstraint's exhaustive match produces no longer match the \
+             committed list; if this is a deliberate rename or a genuinely new variant, update \
+             COMMITTED_KIND_NAMES here AND the equivalent list `tests/change_path_alloc.rs` scans \
+             `plan.rs` to compute"
+        );
     }
 }

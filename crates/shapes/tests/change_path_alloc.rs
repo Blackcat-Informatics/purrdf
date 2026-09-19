@@ -1928,3 +1928,357 @@ fn every_test_in_this_binary_takes_the_measure_lock_first() {
          silently shift its pinned figure: {offenders:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 7. The coverage guard: every constraint kind has an allocation case
+// ---------------------------------------------------------------------------
+
+/// Every variant identifier declared on `enum PlannedConstraint` in
+/// `crates/shapes/src/plan.rs`, in source order.
+///
+/// [`PlannedConstraint`] is `pub(crate)` — deliberately: widening it just so an
+/// integration test could `match` over it would be the wrong trade. So this
+/// test cannot import the type at all; the only way it can enumerate the
+/// variants is to read the declaration itself, exactly as the measure-lock
+/// guard above reads this file's own source and `product_model_census.rs`
+/// reads the crate's model types: a source scan with `syn`, already a
+/// dev-dependency of this crate for that reason.
+///
+/// [`PlannedConstraint`]: ../src/plan.rs
+#[derive(Default)]
+struct PlannedConstraintVariants(Vec<String>);
+
+impl<'ast> syn::visit::Visit<'ast> for PlannedConstraintVariants {
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        if item.ident == "PlannedConstraint" {
+            self.0 = item
+                .variants
+                .iter()
+                .map(|variant| variant.ident.to_string())
+                .collect();
+        }
+        syn::visit::visit_item_enum(self, item);
+    }
+}
+
+/// Convert a `PascalCase` variant identifier to the `snake_case` kind name this
+/// file's [`CASES`] are named with (e.g. `NodeKind` -> `node_kind`).
+///
+/// Every `PlannedConstraint` variant identifier is plain ASCII words with no
+/// adjacent capitals (no acronyms), so "insert `_` before an interior capital,
+/// then lowercase everything" is exact for the whole enum; it is not offered as
+/// a general-purpose converter.
+fn to_kind_name(variant: &str) -> String {
+    let mut out = String::with_capacity(variant.len() + 4);
+    for (index, ch) in variant.char_indices() {
+        if ch.is_ascii_uppercase() {
+            if index != 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// The two RDF 1.2 constraint surfaces `PropertyShape` carries OUTSIDE
+/// `PlannedConstraint`: `sh:reifierShape` and `sh:reificationRequired`
+/// (`crates/shapes/src/shapes.rs` fields `reifier_shapes` and
+/// `reification_required`). Both produce violations
+/// (`crates/shapes/src/constraints.rs::eval_reifier_shapes`), and neither is
+/// ever wrapped in a `PlannedConstraint` variant — `plan.rs` reads
+/// `property.reifier_shapes` straight off the property shape — so a scan of
+/// the enum alone would miss both. They are added to the checked kind set by
+/// name here instead.
+const REIFICATION_KIND_NAMES: &[&str] = &["reifier_shapes", "reification_required"];
+
+/// Every kind name this coverage guard requires a case (or an accounted-for
+/// absence) for: every `PlannedConstraint` variant, snake-cased, plus the two
+/// reification kinds above.
+fn all_constraint_kind_names() -> Vec<String> {
+    let source = include_str!("../src/plan.rs");
+    let parsed = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("plan.rs must parse as Rust: {error}"));
+    let mut collector = PlannedConstraintVariants::default();
+    syn::visit::Visit::visit_file(&mut collector, &parsed);
+    assert!(
+        !collector.0.is_empty(),
+        "the scan found no variants on `enum PlannedConstraint` in plan.rs, so this guard is \
+         reading nothing"
+    );
+
+    let mut names: Vec<String> = collector
+        .0
+        .iter()
+        .map(|variant| to_kind_name(variant))
+        .collect();
+    names.extend(REIFICATION_KIND_NAMES.iter().map(|name| (*name).to_owned()));
+    names
+}
+
+/// Kinds whose mechanical `snake_case` name (the direct conversion of the
+/// `PlannedConstraint` variant name above) matches no single [`CASES`] entry,
+/// even though the kind genuinely IS exercised there — split, across entries
+/// named for the sub-constraints it composes, because those names are more
+/// informative than the kind's own. Renaming the existing entries to match is
+/// out of scope here (an existing `CASES` entry must not change), so the
+/// mapping is recorded instead.
+///
+/// `sh:qualifiedValueShape` is the one case: `PlannedConstraint::QualifiedValueShape`
+/// carries the shape, its siblings, both counts and the disjointness flag as
+/// ONE constraint, but `CASES` exercises it through two scenarios named for
+/// which count it violates.
+const KIND_NAME_ALIASES: &[(&str, &[&str])] = &[(
+    "qualified_value_shape",
+    &["qualified_min_count", "qualified_max_count"],
+)];
+
+/// One [`SIBLING_FILE_COVERAGE`] entry: a kind, the sibling file that measures
+/// it (repository-relative to this crate, i.e. relative to `CARGO_MANIFEST_DIR`),
+/// the exact `CASES` name(s) there that measure it, and the reason a `CASES`
+/// entry HERE would be the wrong place for it.
+///
+/// The file and case names are DATA, not prose, precisely so
+/// [`every_sibling_file_coverage_entry_names_a_real_case`] can check them
+/// against the sibling file's actual source rather than trusting a sentence
+/// that nothing re-reads.
+type SiblingCoverageEntry = (
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static str,
+);
+
+/// Kinds validated for allocation behaviour in a SIBLING allocation-measuring
+/// file rather than in THIS file's [`CASES`].
+///
+/// `tests/sparql_path_alloc.rs`'s own module documentation states plainly why
+/// these three do not belong among `CASES`: `sh:sparql`, a SHACL-SPARQL custom
+/// constraint component, and a SHACL-AF `sh:expression` function call each
+/// charge a focus node a real, nonzero marginal allocation cost per query
+/// evaluation or per expression tuple TODAY, so the `delta(2N) == delta(N)`
+/// claim `CASES` exists to pin does NOT hold for them yet — asserting it here
+/// would be asserting something false. The true, closed-form claim
+/// (`allocations(N) == CONSTANT + per_focus_node * N`) is pinned in that file
+/// instead.
+///
+/// This is a recorded COST, not a permanent exemption: the per-focus-node
+/// charge on these three surfaces is itself a defect this same effort means to
+/// eliminate. When it is, these entries should move OUT of
+/// `SIBLING_FILE_COVERAGE` and become genuine zero-growth entries in `CASES`
+/// below — at which point [`every_constraint_kind_is_covered_by_an_allocation_case`]
+/// stays green through the move, having lost nothing it was checking before.
+const SIBLING_FILE_COVERAGE: &[SiblingCoverageEntry] = &[
+    (
+        "sparql",
+        "tests/sparql_path_alloc.rs",
+        &["sh:sparql"],
+        "a SHACL-SPARQL SELECT constraint on a node shape runs one query per focus node, pinned \
+         there in closed form (a constant plus a per-focus-node marginal cost), not as a \
+         zero-growth case — see that file's module documentation for why the zero-growth claim \
+         does not hold for it today.",
+    ),
+    (
+        "component",
+        "tests/sparql_path_alloc.rs",
+        &["sh:ask component", "sh:select component"],
+        "a custom SHACL-SPARQL constraint component runs a query per value node (ASK) or per \
+         focus node (SELECT), pinned there in closed form, not as a zero-growth case — see that \
+         file's module documentation for why the zero-growth claim does not hold for it today.",
+    ),
+    (
+        "expression",
+        "tests/sparql_path_alloc.rs",
+        &["sh:expression call"],
+        "a SHACL-AF node-expression function call routes through the scalar-expression seam once \
+         per tuple of its argument value-sets, pinned there in closed form, not as a zero-growth \
+         case — see that file's module documentation for why the zero-growth claim does not hold \
+         for it today.",
+    ),
+];
+
+/// Every `name:` string literal found inside a `const CASES` item, in source
+/// order.
+///
+/// Scoped to the `CASES` declaration specifically, via [`CasesConstFinder`],
+/// rather than scanning the whole file for any struct literal with a `name`
+/// field: a sibling file's `CASES` names the measured cases, and nothing else
+/// in it should be mistaken for one.
+#[derive(Default)]
+struct CaseNamesInExpr(Vec<String>);
+
+impl<'ast> syn::visit::Visit<'ast> for CaseNamesInExpr {
+    fn visit_expr_struct(&mut self, item: &'ast syn::ExprStruct) {
+        for field in &item.fields {
+            if let syn::Member::Named(ident) = &field.member
+                && ident == "name"
+                && let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(literal),
+                    ..
+                }) = &field.expr
+            {
+                self.0.push(literal.value());
+            }
+        }
+        syn::visit::visit_expr_struct(self, item);
+    }
+}
+
+/// Locates `const CASES` in a parsed file and collects the `name:` literals of
+/// every struct literal inside its initializer.
+#[derive(Default)]
+struct CasesConstFinder(Vec<String>);
+
+impl<'ast> syn::visit::Visit<'ast> for CasesConstFinder {
+    fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
+        if item.ident == "CASES" {
+            let mut names = CaseNamesInExpr::default();
+            syn::visit::Visit::visit_expr(&mut names, &item.expr);
+            self.0 = names.0;
+        }
+        syn::visit::visit_item_const(self, item);
+    }
+}
+
+/// Every `name:` string literal `const CASES` carries in the file at
+/// `CARGO_MANIFEST_DIR`-relative `path`.
+///
+/// # Panics
+///
+/// Panics — naming `path` and the underlying error — when `path` does not read
+/// as a file or does not parse as Rust: a typo'd sibling-file path must fail
+/// loudly here rather than silently matching nothing.
+fn sibling_case_names(path: &str) -> Vec<String> {
+    let full_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    let source = std::fs::read_to_string(&full_path).unwrap_or_else(|error| {
+        panic!(
+            "SIBLING_FILE_COVERAGE names {path:?}, which does not read as a file at {}: {error}",
+            full_path.display()
+        )
+    });
+    let parsed = syn::parse_file(&source).unwrap_or_else(|error| {
+        panic!("SIBLING_FILE_COVERAGE's {path:?} must parse as Rust: {error}")
+    });
+    let mut finder = CasesConstFinder::default();
+    syn::visit::Visit::visit_file(&mut finder, &parsed);
+    finder.0
+}
+
+/// **Every [`SIBLING_FILE_COVERAGE`] entry names a file that exists, parses,
+/// and really carries every case it claims.**
+///
+/// [`every_allocation_exclusion_names_a_real_case`] is the analogous check for
+/// `ALLOCATION_EXCLUSIONS`, but it can lean on the compiler: `CASES` is right
+/// there in the same translation unit, so a renamed or deleted case is already
+/// a compile error via `case.name`. A SIBLING file's `CASES` is NOT in this
+/// translation unit, so nothing else would notice a case renamed or deleted
+/// there, or a path typo'd here: the coverage hatch would keep silently
+/// satisfying [`every_constraint_kind_is_covered_by_an_allocation_case`] while
+/// the kind it claims to cover quietly went unmeasured — exactly the failure
+/// shape this whole guard exists to rule out.
+#[test]
+fn every_sibling_file_coverage_entry_names_a_real_case() {
+    let _guard = measure_lock();
+    for (kind, path, case_names, reason) in SIBLING_FILE_COVERAGE {
+        assert!(
+            !reason.trim().is_empty(),
+            "SIBLING_FILE_COVERAGE entry {kind:?} carries no stated reason"
+        );
+        let found = sibling_case_names(path);
+        assert!(
+            !found.is_empty(),
+            "SIBLING_FILE_COVERAGE entry {kind:?} names {path:?}, but no `const CASES` with any \
+             `name:` field was found there"
+        );
+        let mut missing: Vec<&str> = case_names
+            .iter()
+            .copied()
+            .filter(|case_name| !found.iter().any(|name| name == case_name))
+            .collect();
+        missing.sort_unstable();
+        assert!(
+            missing.is_empty(),
+            "SIBLING_FILE_COVERAGE entry {kind:?} claims case(s) {missing:?} in {path:?}, but that \
+             file's CASES carries no entry with that name"
+        );
+    }
+}
+
+/// Every kind name this file (together with its documented aliases and its
+/// documented, source-verified sibling-file coverage) accounts for, by ANY of:
+/// a [`CASES`] entry, an [`ALLOCATION_EXCLUSIONS`] entry, a
+/// [`KIND_NAME_ALIASES`] entry whose target names ARE a `CASES` entry, or a
+/// [`SIBLING_FILE_COVERAGE`] entry.
+fn covered_kind_names() -> std::collections::HashSet<String> {
+    let mut covered: std::collections::HashSet<String> =
+        CASES.iter().map(|case| case.name.to_owned()).collect();
+    covered.extend(
+        ALLOCATION_EXCLUSIONS
+            .iter()
+            .map(|(name, _)| (*name).to_owned()),
+    );
+    covered.extend(
+        SIBLING_FILE_COVERAGE
+            .iter()
+            .map(|(kind, ..)| (*kind).to_owned()),
+    );
+    for (kind, aliases) in KIND_NAME_ALIASES {
+        if aliases.iter().any(|alias| covered.contains(*alias)) {
+            covered.insert((*kind).to_owned());
+        }
+    }
+    covered
+}
+
+/// **Every SHACL constraint kind `PlannedConstraint` can express, plus the two
+/// RDF 1.2 reification surfaces `PropertyShape` carries outside it, is covered
+/// by an allocation case** — this file's [`CASES`], its
+/// [`ALLOCATION_EXCLUSIONS`], or the documented sibling-file coverage above.
+///
+/// This is the totality half of the guard the per-variant allocation audit
+/// promised: the compiler-enforced match in `plan.rs` (`kind_name`,
+/// `#[cfg(test)] mod tests`) makes it impossible to add a `PlannedConstraint`
+/// variant without naming it; this test makes it impossible for a named kind
+/// to carry no allocation coverage anywhere without that absence being stated
+/// and argued, rather than merely never noticed.
+///
+/// # Ignored — read before removing the `#[ignore]`
+///
+/// This test is EXPECTED to fail today, and does. Three kinds are covered
+/// NOWHERE in any allocation-measuring file in this crate
+/// (`change_path_alloc.rs`, `sparql_path_alloc.rs`, `box_role_alloc.rs`):
+///
+/// * `node_by_expression` — `sh:nodeByExpression`, the SHACL-AF node-expression
+///   constraint that selects a shape IRI to validate the focus node against;
+/// * `reifier_shapes` — `sh:reifierShape` on a property shape;
+/// * `reification_required` — `sh:reificationRequired` on a property shape.
+///
+/// `box_role_alloc.rs` DOES drive a shape with `sh:reificationRequired true`
+/// (case `reifier_cbox`), but only to pin the graph-box-role VECTOR the
+/// reifier path adds; it asserts nothing about the change path's allocation
+/// behaviour for that constraint, so it does not count as coverage here.
+///
+/// Leave this `#[ignore]`d until a case (or a stated `ALLOCATION_EXCLUSIONS` /
+/// `SIBLING_FILE_COVERAGE` entry, argued on its own merits) lands for exactly
+/// these three kinds; then remove the `#[ignore]`. If the assertion below ever
+/// fails while naming a DIFFERENT set, this comment is stale — update it to
+/// match reality rather than silencing the test.
+#[ignore = "node_by_expression, reifier_shapes and reification_required have no allocation \
+            coverage anywhere in this crate yet; see the doc comment on this test"]
+#[test]
+fn every_constraint_kind_is_covered_by_an_allocation_case() {
+    let _guard = measure_lock();
+    let covered = covered_kind_names();
+    let mut uncovered: Vec<String> = all_constraint_kind_names()
+        .into_iter()
+        .filter(|name| !covered.contains(name))
+        .collect();
+    uncovered.sort_unstable();
+    uncovered.dedup();
+    assert!(
+        uncovered.is_empty(),
+        "constraint kinds with no allocation coverage anywhere in this crate: {uncovered:?}"
+    );
+}
