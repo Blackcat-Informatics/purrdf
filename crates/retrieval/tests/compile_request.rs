@@ -1178,6 +1178,14 @@ fn a_producer_declaring_no_rows_is_planned_at_one_row_and_still_serves_its_term(
 /// arrive past it, so the stratum was certified `Exhausted` whatever the index turned
 /// out to hold: an index that really was empty and one holding nine rows produced
 /// byte-identical trailers. One row past the depth is what tells them apart.
+///
+/// The probe alone was not enough, and this is the one declaration where it could not
+/// be. Every other declaration the waist admits a depth *inside*, so the only row that
+/// can exceed it is the probe past the depth; a zero is read at the floor of one, so
+/// the first row back is already past the declaration while still inside the depth. A
+/// breach compared only about the probe therefore missed it, and one row behind a
+/// declaration of none was certified exhausted. All three sizes below — none, one, nine
+/// — are executed, so the floor still buys the honest producer its verified emptiness.
 #[test]
 fn a_declared_zero_is_read_past_rather_than_obeyed_and_a_wrong_one_is_refused() {
     let empty_stratum = iri(&ex("stratum/empty"));
@@ -1231,20 +1239,31 @@ fn a_declared_zero_is_read_past_rather_than_obeyed_and_a_wrong_one_is_refused() 
         "and it really was opened: a bound equal to the depth would have faked this"
     );
 
-    // One row behind a declaration of none. The read reached for a second and there
-    // was none, so this stratum genuinely is complete at one row — which is what the
-    // floor buys, and it is a claim about the data rather than about the zero.
+    // ONE row behind a declaration of none. The floor of one is what lets an honestly
+    // empty producer report its own emptiness; it is not a licence to hold a row. This
+    // read came back inside its floored depth, so the breach was invisible to a
+    // comparison made only about the row PAST the depth, and the answer was the
+    // strongest completeness claim in the vocabulary —
+    // `Exhausted { rows_emitted: 1 }` — over a producer that had already contradicted
+    // its own registration. The declaration is now compared against the rows pulled
+    // whether or not the depth was reached.
     let (holds_one, _) = holding(1);
-    assert_eq!(
-        run(&holds_one).expect("the unit runs").statuses[&empty_stratum],
-        ProducerStatus::Exhausted { rows_emitted: 1 },
-        "the floored row is a real read, and what it found is what is reported"
+    let first = run(&holds_one).expect_err("one row from a producer that declared none");
+    assert!(
+        matches!(
+            first,
+            ExecutionError::RowBoundBreached {
+                declared: 0,
+                pulled: 1,
+                ..
+            }
+        ),
+        "the FIRST row already breaches a declared zero, and says so: {first:?}"
     );
 
-    // Nine rows behind a declaration of none. The second row arrives, and it is the
-    // producer contradicting the registry — refused by name, exactly as a wrong
-    // declaration of any other size is, instead of certified as an exhaustion at one
-    // row.
+    // Nine rows behind a declaration of none. The second row arrives too, and the
+    // refusal is the same one at the same dimension — the count is the only thing that
+    // differs, which is what makes the row above a breach rather than a special case.
     let (holds_nine, _) = holding(9);
     let error = run(&holds_nine).expect_err("a second row from a producer that declared none");
     assert!(
@@ -1648,9 +1667,15 @@ fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exha
                 .statuses[stratum]
                 .clone()
         };
-    let running = |compiled: &CompiledRetrieval, query: String| CompiledRetrieval {
-        units: vec![supplying(&compiled.units[0], query)],
-        ..compiled.clone()
+    let running = |compiled: &CompiledRetrieval, query: String| {
+        CompiledRetrieval::new(
+            vec![supplying(&compiled.units[0], query)],
+            compiled.plan_id,
+            compiled.registry_id,
+            compiled.registry_fingerprint.clone(),
+            compiled.fused_bound,
+            compiled.resolution.clone(),
+        )
     };
 
     // (1) THE EVALUATOR-BOUNDED SHAPE. Nine rows behind a depth of three, bounded by

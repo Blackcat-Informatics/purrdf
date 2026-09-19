@@ -342,7 +342,7 @@ use purrdf_sparql_eval::{
     CandidateDomains, DuplicatePolicy, PfDescriptor, PropertyFunctionRegistry, RankedDeclaration,
 };
 
-use crate::admission::MAX_READ_DEPTH;
+use crate::admission::{MAX_READ_DEPTH, declared_row_bound};
 use crate::error::PlanError;
 use crate::iri::Iri;
 use crate::matching::{carries_content, pattern_matches, place};
@@ -433,7 +433,7 @@ pub fn plan(
     // 3. Match request terms to producers by declared capability only. This pass
     //    settles term matching and nothing else; a producer that matches here is
     //    still only a candidate, because whether its declaration can actually
-    //    *render* those terms into its argument positions is decided in step 5.
+    //    *render* those terms into its argument positions is decided in step 4.
     let mut candidates: Vec<Candidate<'_>> = Vec::new();
     for descriptor in &descriptors {
         let producer = descriptor.iri.clone();
@@ -493,13 +493,7 @@ pub fn plan(
         });
     }
 
-    // 4. The depth every candidate would be invoked at. `place` renders the
-    //    per-stratum depth into an argument for a producer that declares a depth
-    //    placement, so the bound has to exist before placement runs — over the
-    //    term-matched set, which is the widest set placement can survive from.
-    let provisional = depth_bounds(&candidates, &request.terms, statistics);
-
-    // 5. Placement: can this producer's declaration actually render the terms it
+    // 4. Placement: can this producer's declaration actually render the terms it
     //    matched into its own argument positions, under a mode it declares? A
     //    producer that cannot is rejected here rather than emitted as a call that
     //    silently drops the facet it could not write.
@@ -542,28 +536,25 @@ pub fn plan(
         // `NoApplicableProducers`, a message that denies the very acceptance the
         // matching pass had just recorded.
         //
-        // A stratum with no provisional entry is handed the deepest depth a read
-        // can be taken to, for the reason `depth_bounds` carries that number for a
-        // bound no depth can serve: this value only lets `place` run, and the one
-        // property it owes is that no producer is handed a depth *smaller* than
-        // the one its stratum finally records.
-        let depth = provisional.get(stratum).copied().unwrap_or(MAX_READ_DEPTH);
-        if place(
+        // Placement takes no depth, which is why this pass runs before any depth
+        // exists rather than after a provisional one. The access mode an invocation
+        // has is decided by which argument positions are occupied, and the position a
+        // declared depth placement occupies is occupied whatever number lands in it —
+        // so the mode, and therefore the row bound the next step reads at that mode,
+        // are knowable before a depth is chosen.
+        let Ok(invocation) = place(
             &candidate.producer,
             descriptor,
             declaration,
             &request.terms,
             carried,
-            depth,
-        )
-        .is_err()
-        {
+        ) else {
             decisions.push(ProducerDecision::Rejected {
                 producer: candidate.producer.clone(),
                 reason: RejectionReason::UnsatisfiedConstraint,
             });
             continue;
-        }
+        };
         decisions.push(ProducerDecision::Selected {
             producer: candidate.producer.clone(),
             stratum: stratum.clone(),
@@ -573,7 +564,17 @@ pub fn plan(
             stratum: stratum.clone(),
             request_terms: carried.clone(),
         });
-        selected.push((stratum.clone(), declared_row_bound(descriptor)));
+        // The declaration read at the mode this producer will actually be invoked
+        // under — the waist's own function, called here rather than restated, because
+        // the depth derived from this number is the depth that waist holds to it.
+        // Read at the widest mode instead, a plan recorded a depth the invoked mode
+        // had declared it could not serve.
+        selected.push((
+            stratum.clone(),
+            declared_row_bound(descriptor, Some(invocation.mode))
+                .rows()
+                .unwrap_or(0),
+        ));
         surviving_declarations.insert(
             stratum.clone(),
             (&declaration.domains, declaration.duplicates),
@@ -584,7 +585,7 @@ pub fn plan(
         return Err(PlanError::NoApplicableProducers);
     }
 
-    // 5b. Per-TERM evidence, which the per-producer decisions above cannot
+    // 4b. Per-TERM evidence, which the per-producer decisions above cannot
     //     carry. A request term the bindings do not reach went unserved, and the
     //     two ways that happens are different facts about the registry: nothing
     //     declared a shape that accepts it at all, or something did and every
@@ -593,7 +594,7 @@ pub fn plan(
     //     than as a term that quietly fell out of the plan.
     let unserved_terms = unserved_terms(&request.terms, &candidates, &bindings);
 
-    // 6. Per-stratum depth over the SURVIVING set: a producer dropped in step 5
+    // 5. Per-stratum depth over the SURVIVING set: a producer dropped in step 4
     //    can lower its stratum's worst-case bound, and recording the wider bound
     //    would license a depth no remaining producer can fill. The bound is the
     //    declared row count, capped by a measured cardinality when statistics
@@ -652,11 +653,11 @@ pub fn plan(
         stratum_depths.insert(stratum.clone(), depth);
     }
 
-    // 5. Capture the statistics the planner actually consulted: the strata it
+    // 6. Capture the statistics the planner actually consulted: the strata it
     //    placed and the predicates the request named.
     let statistics_snapshot = capture_statistics(request, &strata, &reaching, statistics);
 
-    // 6. Record both registry identities.
+    // 7. Record both registry identities.
     Ok(Plan {
         version: Plan::VERSION,
         request_terms: request.terms.clone(),
@@ -717,81 +718,6 @@ enum Outcome<'a> {
         /// actually receives, and therefore the ones it is bound to.
         carried: Vec<u32>,
     },
-}
-
-/// The depth each stratum would carry over the term-matched candidates.
-///
-/// This is the provisional bound placement is run against, not the bound the
-/// plan records: it is computed over the widest set (every producer whose terms
-/// matched), so a producer can only ever be handed a depth at least as large as
-/// the one its stratum finally records. A stratum whose bound no depth can express
-/// — an unbounded declaration with no statistic to bound it, or a declared bound
-/// above [`MAX_READ_DEPTH`] — is carried as [`MAX_READ_DEPTH`] here.
-///
-/// Carried as the read ceiling rather than as [`u32::MAX`], and the distinction is
-/// the point of the number: it is the deepest depth `plan` itself can record, so no
-/// depth this planner hands to anything is one no plan could record. Such a stratum
-/// has no smaller final depth to contradict either — its producer is dropped at
-/// placement, or `plan` records this same ceiling, which is where the unbounded
-/// declaration lands as well. Nothing reads this value as
-/// a row count and no plan records it: it decides only whether a producer's declared
-/// depth placement *renders*.
-///
-/// The terms read are the **carried** ones, matching what `plan` finally
-/// records. Reading the accepted set instead would let a stratum's provisional
-/// depth be narrowed by a selectivity its final depth is not, which is the one
-/// direction the invariant above forbids.
-///
-/// The request's own bound ([`ReadBound`]) is deliberately **not** applied here,
-/// for that same invariant. This depth exists only so [`place`] can be run, and
-/// the one property it owes is that no producer is ever handed a depth smaller
-/// than the one its stratum finally records; the request's bound only ever lowers
-/// a depth, so applying it on this side could only push against that direction
-/// while buying nothing — the number never reaches a plan, a unit or a row.
-///
-/// Every finite depth here carries [`capped`]'s floor of one, which matters
-/// more at this step than at the final one: this is the depth [`place`] renders
-/// into a producer's declared depth argument, so a zero would hand a relation a
-/// literal instruction to return nothing before anything had read a row. The
-/// floor applies to a registry bound of zero exactly as it does to a measured
-/// zero, and for the same reason — the one row it asks for is the probe that lets
-/// the producer say, in its own receipt, that it has none.
-fn depth_bounds(
-    candidates: &[Candidate<'_>],
-    terms: &[RequestTerm],
-    statistics: &impl Statistics,
-) -> BTreeMap<Iri, u32> {
-    let mut bounds: BTreeMap<Iri, u64> = BTreeMap::new();
-    let mut reaching: BTreeMap<Iri, BTreeSet<u32>> = BTreeMap::new();
-    for candidate in candidates {
-        let Outcome::Matched {
-            descriptor,
-            stratum,
-            carried,
-            ..
-        } = &candidate.outcome
-        else {
-            continue;
-        };
-        // One producer per stratum, so this key is fresh: see `plan`'s own
-        // `declared_bounds` for why there is no worst case to take here.
-        bounds.insert(stratum.clone(), declared_row_bound(descriptor));
-        reaching
-            .entry(stratum.clone())
-            .or_default()
-            .extend(carried.iter().copied());
-    }
-    bounds
-        .into_iter()
-        .map(|(stratum, declared)| {
-            let reached = terms_at(terms, reaching.get(&stratum));
-            let bound = capped(declared, &stratum, &reached, statistics, None);
-            let depth = u32::try_from(bound)
-                .unwrap_or(MAX_READ_DEPTH)
-                .min(MAX_READ_DEPTH);
-            (stratum, depth)
-        })
-        .collect()
 }
 
 /// The request terms a recorded index set names, in ascending index order.
@@ -1192,19 +1118,6 @@ fn validate_bound(bound: ReadBound) -> Result<(), PlanError> {
         }
         ReadBound::Bounded(_) | ReadBound::Complete => Ok(()),
     }
-}
-
-/// A producer's worst-case declared row count across its access modes.
-///
-/// This is the registry's own cost declaration (`rows_per_invocation` per
-/// declared mode), read from the descriptor — never a parallel field.
-fn declared_row_bound(descriptor: &PfDescriptor) -> u64 {
-    descriptor
-        .modes
-        .iter()
-        .map(|mode| mode.rows_per_invocation)
-        .max()
-        .unwrap_or(0)
 }
 
 /// The predicate a request term names, when it names one.

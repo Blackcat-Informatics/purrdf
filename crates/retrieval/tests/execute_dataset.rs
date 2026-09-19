@@ -1476,3 +1476,128 @@ fn the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it() {
         "and the sibling stratum answered, because nothing whole-run happened"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 10. The bundle above the unit decides whose read the evidence describes
+// ---------------------------------------------------------------------------
+
+/// Re-tagging, swapping or dropping a unit AFTER the bundle was assembled is refused
+/// by name, and a bundle a caller assembles for itself still runs.
+///
+/// A unit's numbers and its query were sealed one at a time, each because a writable
+/// value there decided what a run could claim. The tag *above* them was the one left
+/// open: `CompiledRetrieval::units` is a public `Vec` and a unit's stratum is a public
+/// field, and every later step of a run is keyed by that stratum — the status map, the
+/// tag on the stream, the per-stratum weight a fusion profile applies. So three edits
+/// each produced a served answer carrying the real plan identity:
+///
+/// * renaming one unit's stratum onto its neighbour's ran two units and recorded ONE
+///   status, so a producer's evidence was simply gone;
+/// * swapping the two strata attached each status to the other producer's read, and the
+///   fused answer came back `Exact` over six rows;
+/// * removing a unit answered from one stratum fewer, still `Exact`, still under the
+///   plan identity of a plan that had two.
+///
+/// The waist already enforces the same implication one stage earlier — a stratum missing
+/// from the compiled set is a producer missing from the emitted text — and it is
+/// enforced from plan into `compile` and not from `compile` into `execute`. This is that
+/// second half.
+///
+/// The seam it must not close is executed first and last: a bundle assembled by a
+/// caller, and a unit whose *query* a caller substituted, both run. Only a bundle that
+/// changed after assembly is refused.
+#[test]
+fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not() {
+    let registry = fixture_registry();
+    let stats = statistics();
+    let alpha = iri(&ex(STRATA[0]));
+    let beta = iri(&ex(STRATA[1]));
+
+    // The seam, first: a bundle assembled out of the compiler's own units runs exactly
+    // as the compiler's own bundle does. Recording the attribution is not a lock on the
+    // door.
+    let source = compiled(&registry, &stats);
+    let by_hand = CompiledRetrieval::new(
+        source.units.clone(),
+        source.plan_id,
+        source.registry_id,
+        source.registry_fingerprint.clone(),
+        source.fused_bound,
+        source.resolution,
+    );
+    let execution = block_on(execute(&by_hand, &registry, &*dataset_of(&[])))
+        .expect("a bundle a caller assembled runs");
+    assert_eq!(
+        execution.statuses.len(),
+        2,
+        "both producers answered, each under its own stratum"
+    );
+
+    // (1) One unit's stratum renamed onto its neighbour's. Two units run, and without
+    //     the check they wrote one status between them.
+    let mut renamed = compiled(&registry, &stats);
+    renamed.units[1].stratum = alpha.clone();
+    let error = block_on(execute(&renamed, &registry, &*dataset_of(&[])))
+        .expect_err("a unit reporting under another producer's stratum");
+    match error {
+        ExecutionError::UnitsNotAsAssembled { plan, reason } => {
+            assert_eq!(plan, renamed.plan_id, "the refusal names the bundle's plan");
+            assert!(
+                reason.contains(alpha.as_str()) && reason.contains(beta.as_str()),
+                "and says which tag moved where: {reason}"
+            );
+        }
+        other => panic!("expected UnitsNotAsAssembled, got {other:?}"),
+    }
+
+    // (2) The two strata swapped. Both units still run and both statuses are still
+    //     written — each onto the other producer's read, which is why a count of
+    //     statuses could never have caught this.
+    let mut swapped = compiled(&registry, &stats);
+    swapped.units[0].stratum = beta;
+    swapped.units[1].stratum = alpha;
+    assert!(
+        matches!(
+            block_on(execute(&swapped, &registry, &*dataset_of(&[]))),
+            Err(ExecutionError::UnitsNotAsAssembled { .. })
+        ),
+        "a swap crosses two producers' evidence and is refused"
+    );
+
+    // (3) A unit removed. The narrowing the waist exists to prevent, one stage later.
+    let mut dropped = compiled(&registry, &stats);
+    dropped.units.remove(1);
+    match block_on(execute(&dropped, &registry, &*dataset_of(&[]))) {
+        Err(ExecutionError::UnitsNotAsAssembled { reason, .. }) => assert!(
+            reason.contains("assembled with 2 unit(s) and holds 1"),
+            "the count is reported before any position, because a removal shifts every \
+             position after it: {reason}"
+        ),
+        other => panic!("expected UnitsNotAsAssembled, got {other:?}"),
+    }
+
+    // (4) The promise a stream is held to is part of the attribution: a duplicate
+    //     policy rewritten after assembly is the same class of edit, and fusion reads
+    //     that policy before it pulls a row.
+    let mut relaxed = compiled(&registry, &stats);
+    relaxed.units[0].contract = StreamContract {
+        duplicates: DuplicatePolicy::Allowed,
+        domains: relaxed.units[0].contract.domains.clone(),
+    };
+    assert!(
+        matches!(
+            block_on(execute(&relaxed, &registry, &*dataset_of(&[]))),
+            Err(ExecutionError::UnitsNotAsAssembled { .. })
+        ),
+        "a rewritten declaration is not the declaration the producer made"
+    );
+
+    // And the seam once more, at the end: substituting a unit's QUERY is what
+    // `StratumUnit::new` is for, and it still runs. The attribution deliberately
+    // records neither the text nor the numbers, so the one thing refused above is the
+    // one thing that was wrong.
+    let mut supplied = compiled(&registry, &stats);
+    running(&mut supplied, 0, mentions_fox());
+    block_on(execute(&supplied, &registry, &*dataset_of(&[])))
+        .expect("a caller's own text in a compiled unit still runs");
+}

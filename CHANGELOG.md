@@ -440,6 +440,44 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **retrieval:** The declared row bound is read at the mode the producer is actually
+  invoked in. `rows_per_invocation` is a function of the mode, and the layer had been
+  taking the maximum across every mode a producer declared -- so a depth was admitted
+  that the invoked mode had declared it could not serve, a producer beating its invoked
+  mode's bound went unrefused whenever another mode declared a larger number, and the
+  number handed to a self-bounding producer was capped against the wrong mode, so a
+  producer guarding its own bound lost its whole stratum. The bound is now the tightest
+  declared under any mode that subsumes the invocation -- the same lattice rule
+  placement admits the call by, and a producer serving through a subsuming mode emits
+  at most that mode's rows, since the extra bindings only filter. There is one function
+  computing it, called from the planner and the waist alike, where there were two.
+  Every fixture in the suite had declared a single mode and ignored the parameter,
+  which is why the difference was unobservable; one now answers a different number per
+  mode.
+- **retrieval:** A query text a caller supplies is wrapped rather than appended to. The
+  layer's bound was written after the caller's text, so a text carrying a top-level
+  bound of its own produced two bound clauses, of which the parser kept the last -- the
+  caller's vanished, three rows came back where two were asked for, and the ending
+  named the caller's text as the stopper of a read it had not stopped. The text is now
+  a sub-select under the layer's bound, so both stand: the caller's applies to the
+  pattern it was written against and the layer's to whatever that resolves to.
+  Wrapping rather than refusing, because refusing would mean parsing the text, which
+  this layer does not do and the seam deliberately admits text that is not SPARQL.
+- **retrieval:** A compiled bundle is checked against the set it was assembled with
+  before any unit runs (`ExecutionError::UnitsNotAsAssembled`). The unit list and each
+  unit's stratum were writable, so a unit removed from the bundle yielded a narrower
+  answer under the genuine plan identity, and two units' strata swapped attached each
+  producer's evidence to the other. The bundle now records, privately, which stratum
+  each position was assembled under; a count that moved or a stratum that moved is
+  refused by name, with the count reported first because a removal shifts every
+  position after it.
+- **retrieval:** A producer declaring no rows that returns one is refused. The breach
+  check sat inside the depth-cut arm on the reasoning that the emitted bound never
+  asks for a second row past the declaration, which is false at a declared zero: the
+  floored depth of one is emitted one row deeper like any other, so the first row
+  already breaches and was being reported as an exhaustion of one row. The check runs
+  first now, and a declared zero over an index holding anything is
+  `ExecutionError::RowBoundBreached` like a wrong declaration of any other size.
 - **retrieval:** A bounded request narrows a stratum's depth to `k` only where that
   stratum also declared `DuplicatePolicy::Unique`. The narrowing rested on the
   candidate-domain declarations alone, and the merge argument behind it counts

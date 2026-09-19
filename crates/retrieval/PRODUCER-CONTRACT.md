@@ -574,6 +574,17 @@ the bound from the index. The layer's promise is narrower and exact — it never
 reports exhaustion on the strength of a bound you got wrong; it reports that it read
 to your bound and stopped.
 
+**If you declare several modes, the bound that binds is the tightest of the ones
+serving the call.** This obligation is per mode, and A8 tells you to declare many, so
+"your declaration" has to name one number. The layer reads the bound at the mode your
+producer is invoked in: the tightest declared under any mode that subsumes the
+invocation, which is the same lattice rule placement admitted the call by. A producer
+serving through a subsuming mode emits at most that mode's rows, since the extra
+bindings only filter, so every subsuming mode is a valid bound and the smallest is the
+promise you actually made about this read. The number you are handed, the depth the
+waist admits and the breach the executor refuses all use that one number, computed in
+one place — never the widest mode you happen to have declared elsewhere.
+
 This is what makes A8's reading of `rows_per_invocation` hold on this path rather
 than needing an exception carved out of it. The number remains an estimate in
 A8's sense — nothing can check it against your index, and it may be wrong without

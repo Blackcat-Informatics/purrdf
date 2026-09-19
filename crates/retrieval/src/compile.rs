@@ -310,10 +310,11 @@ use crate::admission::{
     AdmissionEnvironment, AdmissionError, MAX_READ_DEPTH, ProbedDepth, RowBound, Unprobeable,
     admit_plan,
 };
+use crate::execute::ExecutionError;
 use crate::fuse::TopK;
 use crate::id::PlanId;
 use crate::iri::Iri;
-use crate::matching::{PlacementError, place, render_slots};
+use crate::matching::{Invocation, UnitArgument, render_slots};
 use crate::plan::{Plan, ProducerBinding};
 use crate::ranked_stream::StreamContract;
 use crate::reciprocal_rank::MonotoneDepth;
@@ -368,34 +369,6 @@ struct RenderedQuery {
     /// whose declaration names one; `None` for a producer that names no block per
     /// row, which renders the text this compiler emitted before blocks existed.
     block: Option<usize>,
-}
-
-/// One argument position of a rendered call.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum UnitArgument {
-    /// A position rendered once, at emission: a constant
-    /// [`place`](crate::matching::place) put a request facet into, or the free
-    /// `?cN` variable of a position nothing was placed into. Neither depends on the
-    /// depth.
-    Placed(String),
-    /// The depth argument of a producer that declared a
-    /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement), held as the datatype
-    /// that producer declared for it and rendered from the unit's own depth every
-    /// time the text is asked for.
-    ///
-    /// The number is [`depth_argument`]'s, which is not [`emitted_limit`]'s — see
-    /// this module's header for why a request and a ceiling are not one number.
-    Depth {
-        /// The literal datatype IRI the producer declared for its depth argument.
-        datatype: String,
-    },
-}
-
-impl UnitArgument {
-    /// Whether this position is the depth argument.
-    const fn is_depth(&self) -> bool {
-        matches!(*self, Self::Depth { .. })
-    }
 }
 
 impl RenderedQuery {
@@ -715,7 +688,10 @@ impl StratumUnit {
     /// for the reason they are different facts at the waist.
     ///
     /// `query` is carried verbatim and is bounded by this layer only on the outside:
-    /// [`Self::sparql`] is that text plus `LIMIT depth + 1`. Whatever else the text
+    /// [`Self::sparql`] is that text as a sub-`SELECT` of a query bounded at
+    /// `LIMIT depth + 1`. It wraps rather than follows, because a text carrying a
+    /// top-level bound of its own can hold no second one — see [`supplied_text`], which
+    /// is where that argument lives. Whatever else the text
     /// bounds — a sub-`SELECT` of its own, a pattern that matches less — is the
     /// caller's and is not visible from here, so the read it describes is **never**
     /// certified [`Exhausted`](crate::ProducerStatus::Exhausted); see this type's
@@ -814,9 +790,10 @@ impl StratumUnit {
     ///
     /// For a query this layer rendered, that is the whole query assembled from its
     /// parts with both bounds — the branch's row ceiling and the unit's own — computed
-    /// from [`Self::depth()`]. For a query a caller supplied, it is that text plus the
-    /// unit's own bound, which is the only bound this layer can write onto a text it
-    /// did not assemble.
+    /// from [`Self::depth()`]. For a query a caller supplied, it is that text wrapped in
+    /// a query carrying the unit's own bound, which is the only bound this layer can
+    /// write over a text it did not assemble; [`supplied_text`] has the argument for why
+    /// it wraps rather than follows.
     ///
     /// Derived rather than stored, so the bounds the read is taken under and the depth
     /// the ending is judged against cannot be different numbers. The probe row is
@@ -827,9 +804,7 @@ impl StratumUnit {
     pub fn sparql(&self) -> String {
         match &self.query {
             UnitQuery::Rendered(rendered) => rendered.text(self.depth, self.declared_rows),
-            UnitQuery::Supplied(text) => {
-                format!("{text}\nLIMIT {}", emitted_limit(self.depth))
-            }
+            UnitQuery::Supplied(text) => supplied_text(text, self.depth),
         }
     }
 
@@ -866,6 +841,44 @@ impl StratumUnit {
     }
 }
 
+/// Which producer's read one unit's evidence is attributed to, and the promise that
+/// read is held to — recorded when a bundle is assembled, so
+/// [`execute`](crate::execute) can tell the units it was handed from the units the
+/// bundle was built out of.
+///
+/// These two are the bundle's half of the hole [`StratumUnit`]'s own header describes.
+/// The unit's numbers and its text are no longer writable, but the *tag* above them was:
+/// a stratum IRI renamed onto its neighbour's attached one producer's status to the
+/// other producer's read, a swap crossed both, and dropping a unit narrowed the answer
+/// by a whole producer — each with a real plan identity on the bundle, an `Exact`
+/// exactness on the fused answer, and nothing anywhere reporting it. The waist enforces
+/// "a stratum missing from the compiled set is a producer missing from the emitted text"
+/// from the plan into `compile`; this is the same implication carried the one stage
+/// further, from `compile` into `execute`.
+///
+/// What it deliberately does **not** record is the unit's query, depth or declared row
+/// bound. Substituting a text of one's own is the documented seam
+/// ([`StratumUnit::new`]) and so is reading a stratum less deeply than the plan did; both
+/// go through a checked constructor and neither can mint a false ending. Recording them
+/// here would refuse the seam instead of the substitution above it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnitAttribution {
+    /// The stratum the unit's rows are reported under.
+    stratum: Iri,
+    /// The duplicate policy and candidate domains its stream is held to.
+    contract: StreamContract,
+}
+
+impl UnitAttribution {
+    /// Read one unit's attribution off the unit.
+    fn of(unit: &StratumUnit) -> Self {
+        Self {
+            stratum: unit.stratum.clone(),
+            contract: unit.contract.clone(),
+        }
+    }
+}
+
 /// The admitted, compiled plan: the query units plus the identities that pin them.
 ///
 /// `plan_id` is the plan's canonical identity, so a stream or answer can name the
@@ -873,9 +886,25 @@ impl StratumUnit {
 /// registry the units were compiled against, so [`execute`](crate::execute) can
 /// refuse to run the same text against a different registry and silently obtain a
 /// different meaning.
+///
+/// # The units are writable and are checked
+///
+/// A bundle is assembled through [`Self::new`] — by [`compile`] or by a caller that
+/// starts at [`execute`](crate::execute) — and records the attribution above each unit
+/// as it is handed over. `execute` refuses a unit list that is no longer that one, so
+/// re-tagging, swapping or dropping a unit after the fact is a named refusal rather than
+/// an answer served under a real plan identity. See [`UnitAttribution`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRetrieval {
     /// Per-stratum query units, ordered by stratum IRI.
+    ///
+    /// Writable, and checked rather than sealed: a caller may substitute a unit's
+    /// query — that is [`StratumUnit::new`]'s whole purpose — but the set of producers
+    /// the bundle answers for, and which read each one's evidence describes, is fixed
+    /// when the bundle is assembled. [`execute`](crate::execute) refuses a unit list
+    /// that is not the one this bundle was built from
+    /// ([`ExecutionError::UnitsNotAsAssembled`](crate::ExecutionError::UnitsNotAsAssembled));
+    /// see [`UnitAttribution`] for what is compared and what is deliberately not.
     pub units: Vec<StratumUnit>,
     /// The canonical identity of the admitted plan.
     pub plan_id: PlanId,
@@ -911,6 +940,101 @@ pub struct CompiledRetrieval {
     /// a caller that has not yet chosen one is not asked to, and gets no
     /// resolution evidence because none can honestly be computed.
     pub resolution: BTreeMap<Iri, PlannedResolution>,
+    /// Which producer each unit answered for when the bundle was assembled, in
+    /// order — see [`UnitAttribution`].
+    ///
+    /// Private, and private for the reason a [`StratumUnit`]'s depth is: it is what
+    /// [`Self::units`] is checked *against*, so a field a caller could rewrite
+    /// alongside the units would check nothing at all.
+    attribution: Vec<UnitAttribution>,
+}
+
+impl CompiledRetrieval {
+    /// Assemble a bundle out of `units` and the identities that pin them.
+    ///
+    /// This is the seam a caller starts at to drive [`execute`](crate::execute) over a
+    /// bundle of its own, and it is a function rather than a struct literal for one
+    /// reason: the attribution above each unit — which producer's read it answers for,
+    /// and the promise that read is held to — is recorded here, from the units actually
+    /// handed over, and is what those units are checked against later. A literal could
+    /// not record it, and a bundle that recorded nothing could be re-tagged after the
+    /// fact with a real plan identity still on it.
+    ///
+    /// Nothing is refused here. A caller assembling its own bundle is making its own
+    /// claim about which producers answered, exactly as a caller assembling its own
+    /// [`Plan`] is; what the record buys is that the claim cannot change afterwards.
+    #[must_use]
+    pub fn new(
+        units: Vec<StratumUnit>,
+        plan_id: PlanId,
+        registry_id: RegistryId,
+        registry_fingerprint: String,
+        fused_bound: TopK,
+        resolution: BTreeMap<Iri, PlannedResolution>,
+    ) -> Self {
+        let attribution = units.iter().map(UnitAttribution::of).collect();
+        Self {
+            units,
+            plan_id,
+            registry_id,
+            registry_fingerprint,
+            fused_bound,
+            resolution,
+            attribution,
+        }
+    }
+
+    /// Refuse a unit list that is not the one this bundle was assembled from, naming
+    /// what moved.
+    ///
+    /// Read by [`execute`](crate::execute) before anything runs, because every later
+    /// step is keyed by the stratum a unit carries: the status map, the stream's own
+    /// tag, and the per-stratum weight the fusion profile applies. A tag that moved
+    /// after assembly misdirects all three at once.
+    ///
+    /// The count is reported before the per-position comparison, because a removal
+    /// shifts every position after it and reporting the first shifted tag would name a
+    /// unit nothing was done to.
+    pub(crate) fn tagged_as_assembled(&self) -> Result<(), ExecutionError> {
+        let held: Vec<UnitAttribution> = self.units.iter().map(UnitAttribution::of).collect();
+        if held.len() != self.attribution.len() {
+            return Err(ExecutionError::UnitsNotAsAssembled {
+                plan: self.plan_id,
+                reason: format!(
+                    "it was assembled with {} unit(s) and holds {}, so a producer it \
+                     answers for is one this bundle was not built to answer for",
+                    self.attribution.len(),
+                    held.len()
+                ),
+            });
+        }
+        for (position, (assembled, held)) in self.attribution.iter().zip(&held).enumerate() {
+            if assembled.stratum != held.stratum {
+                return Err(ExecutionError::UnitsNotAsAssembled {
+                    plan: self.plan_id,
+                    reason: format!(
+                        "the unit at position {position} was assembled under stratum {} and \
+                         now reports under {}, which attaches its read's evidence to \
+                         another producer",
+                        assembled.stratum, held.stratum
+                    ),
+                });
+            }
+            if assembled.contract != held.contract {
+                return Err(ExecutionError::UnitsNotAsAssembled {
+                    plan: self.plan_id,
+                    reason: format!(
+                        "the unit at position {position} reports under stratum {} with a \
+                         duplicate policy or candidate domain the bundle was not assembled \
+                         with, so the promise its stream is held to is not the one its \
+                         producer declared",
+                        held.stratum
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// What a planned depth costs in rank resolution under a named fusion profile.
@@ -1013,14 +1137,17 @@ pub fn compile(
             .get(stratum)
             .copied()
             .unwrap_or(RowBound::Undeclared);
-        let query = emit_query(
-            plan,
-            binding,
-            declaration,
-            &admitted.descriptors,
-            *depth,
-            bound,
-        )?;
+        // The placement the waist derived and judged the depth against. A stratum with
+        // a binding always has one — the waist places every binding it admits — and a
+        // stratum without one never reaches here, because the lookup above already
+        // skipped it.
+        let Some(invocation) = admitted.stratum_invocations.get(stratum) else {
+            return Err(malformed(
+                binding,
+                "was admitted without a placement, so there is no invocation to emit",
+            ));
+        };
+        let query = emit_query(binding, declaration, &admitted.descriptors, invocation)?;
         units.push(StratumUnit::emitted(
             stratum.clone(),
             query,
@@ -1053,14 +1180,14 @@ pub fn compile(
             .collect()
     });
 
-    Ok(CompiledRetrieval {
+    Ok(CompiledRetrieval::new(
         units,
-        plan_id: plan.id(),
-        registry_id: admitted.instance_id,
-        registry_fingerprint: admitted.fingerprint,
-        fused_bound: fused_bound(plan),
+        plan.id(),
+        admitted.instance_id,
+        admitted.fingerprint,
+        fused_bound(plan),
         resolution,
-    })
+    ))
 }
 
 /// The [`TopK`] a fusion of this plan's units must be run at.
@@ -1138,6 +1265,48 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
     depth.probe()
 }
 
+/// The whole text a unit runs over a query a caller supplied: that text as a
+/// sub-`SELECT`, with this layer's bound on the result of the whole of it.
+///
+/// The layer's bound **wraps** the caller's text rather than following it, and the
+/// difference is the difference between a query and an invalid one. Appended, the two
+/// bounds are two `LimitClause`es of one `SolutionModifier`, which the grammar
+/// (`LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause LimitClause?`)
+/// admits exactly one of; a text carrying its own top-level `LIMIT 2` was emitted as
+/// `... LIMIT 2 LIMIT 13`, and where a parser keeps the last clause the caller's own
+/// bound simply vanished — three rows came back from a text that asked for two, and the
+/// ending named that text as the stopper for a read it had not stopped.
+///
+/// Wrapped, both bounds stand and neither is this layer's opinion about the other: the
+/// caller's applies to the pattern it was written against, and this layer's applies to
+/// whatever that whole text resolves to, which is the only result this layer can
+/// honestly bound. That is also the outer bound the type's own contract promises, so the
+/// promise is now true of the text rather than of the intention behind it.
+///
+/// # Why this is a wrap and not a refusal
+///
+/// A refusal would have to know whether a supplied text already carries a top-level
+/// solution modifier, and knowing that means parsing it. This layer does not parse
+/// SPARQL, and the seam deliberately admits a text that is not SPARQL at all —
+/// [`execute`](crate::execute) reports the parser's own diagnostic as that stratum's
+/// [`ProducerStatus::ExecutionFailed`](crate::ProducerStatus::ExecutionFailed), which
+/// is a status a caller reaches on purpose. A gate at the constructor would therefore
+/// have to refuse either every text it could not parse — closing the seam — or nothing,
+/// which is no gate. Wrapping needs to know nothing about the text and leaves every
+/// runnable text runnable.
+///
+/// The projection is `*` rather than the two columns
+/// [`execute`](crate::execute) reads, because naming them would *add* those columns to
+/// a text that did not project them: an unbound `?candidate` projected by this layer
+/// reads back as a row whose candidate column is absent, where a text that projects no
+/// candidate should be reported as exactly that.
+fn supplied_text(text: &str, depth: ProbedDepth) -> String {
+    format!(
+        "SELECT * WHERE {{\n  {{ {text} }}\n}}\nLIMIT {}",
+        emitted_limit(depth)
+    )
+}
+
 /// The number handed to a producer that declares a
 /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement), for a stratum planned
 /// at `depth` over a producer the registry bounds at `declared_rows`.
@@ -1185,16 +1354,17 @@ fn depth_argument(depth: ProbedDepth, declared_rows: Option<u64>) -> u32 {
 /// Neither bound is written here, and that is the whole point of the return type:
 /// [`RenderedQuery::text`] renders the branch's row ceiling and the unit's own bound
 /// from the depth, every time the text is asked for, so there is no string in between
-/// for either number to be edited in. What `depth` and `bound` are needed for at this
-/// stage is [`place`]: the depth argument occupies an argument slot, and which slots
-/// are occupied decides the access mode the invocation must satisfy.
+/// for either number to be edited in.
+///
+/// The `invocation` is the waist's own — placement runs there, because the access mode
+/// it derives is what the depth was admitted against. Emitting from a *second*
+/// placement would build the text under a mode nothing had judged the depth by, which
+/// is why this takes the invocation rather than deriving one.
 fn emit_query(
-    plan: &Plan,
     binding: &ProducerBinding,
     declaration: &RankedDeclaration,
     descriptors: &BTreeMap<String, PfDescriptor>,
-    depth: ProbedDepth,
-    bound: RowBound,
+    invocation: &Invocation,
 ) -> Result<RenderedQuery, AdmissionError> {
     let descriptor = descriptors
         .get(&binding.producer)
@@ -1208,29 +1378,6 @@ fn emit_query(
         ));
     }
 
-    // The plan is untrusted input, so what `place` decided when the planner
-    // called it is decided again here, by that same function and never by a
-    // second approximation: every facet the declaration places renders into a
-    // SPARQL constant, no two placements contend for one argument position, and
-    // some declared access pattern serves the resulting invocation.
-    //
-    // What `place` does NOT re-derive is that the bound terms are carried at
-    // all. It iterates the matching alternative's placements, so an alternative
-    // declaring none gives it nothing to do and it returns success on a binding
-    // that transports nothing. That property is a different rule —
-    // `matching::carries_content`, which the planner applies when it chooses
-    // what to bind — and admission re-derives it before emission is reached
-    // (`AdmissionError::HollowBinding`).
-
-    let invocation = place(
-        &binding.producer,
-        descriptor,
-        declaration,
-        &plan.request_terms,
-        &binding.request_terms,
-        depth_argument(depth, bound.rows()),
-    )
-    .map_err(|error| unsatisfiable(binding, &error))?;
     let candidate = declaration.candidate_position;
     if candidate >= total || invocation.mode.is_bound(candidate) {
         // The registry validates that the candidate position exists and is never
@@ -1257,24 +1404,12 @@ fn emit_query(
         }
     };
 
-    // Every slot is rendered here except the depth argument's, which is held as the
-    // datatype its producer declared and rendered from the unit's own depth instead.
-    // `place` filled that slot too — it had to, to derive the access mode — and the
-    // text it produced is discarded rather than carried, so the number in the emitted
-    // call is the one `RenderedQuery::text` computes and never a copy of it.
-    let args = render_slots(&invocation).map_err(|error| unrenderable(binding, &error))?;
-    let arguments: Vec<UnitArgument> = args
-        .into_iter()
-        .enumerate()
-        .map(
-            |(position, text)| match declaration.depth_placement.as_ref() {
-                Some(placement) if placement.position == position => UnitArgument::Depth {
-                    datatype: placement.datatype.clone(),
-                },
-                Some(_) | None => UnitArgument::Placed(text),
-            },
-        )
-        .collect();
+    // Every slot is rendered here except the depth argument's, which comes back as the
+    // datatype its producer declared and is rendered from the unit's own depth instead.
+    // Which position that is comes from the placement itself rather than from a second
+    // reading of the declaration, so the number in the emitted call is the one
+    // `RenderedQuery::text` computes and never a copy of it.
+    let arguments = render_slots(invocation).map_err(|error| unrenderable(binding, &error))?;
     let (subject_arguments, object_arguments) = arguments.split_at(subject);
     Ok(RenderedQuery {
         producer: binding.producer.clone(),
@@ -1289,22 +1424,6 @@ fn emit_query(
 fn malformed(binding: &ProducerBinding, what: &str) -> AdmissionError {
     AdmissionError::MalformedPlan {
         reason: format!("producer {} {what}", binding.producer),
-    }
-}
-
-/// A producer that cannot be invoked for the terms the plan gives it.
-fn unsatisfiable(binding: &ProducerBinding, error: &PlacementError) -> AdmissionError {
-    match Iri::parse(&binding.producer) {
-        Ok(producer) => AdmissionError::UnsatisfiablePlacement {
-            producer: Box::new(producer),
-            rule: error.rule(),
-            detail: error.to_string(),
-            invocation: error.invocation(),
-            declared: error.declared(),
-        },
-        Err(invalid) => AdmissionError::MalformedPlan {
-            reason: format!("plan binds invalid producer IRI {invalid}"),
-        },
     }
 }
 

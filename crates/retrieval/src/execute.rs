@@ -434,10 +434,39 @@ pub enum ExecutionError {
         /// The row bound the registry declared for this stratum, as
         /// [`StratumUnit::declared_rows()`](crate::StratumUnit::declared_rows) carries it.
         declared: u64,
-        /// How many rows the read actually returned, which is one past
-        /// `declared`: the probe slot is the only row past the declaration the
-        /// emitted bound ever asks for.
+        /// How many rows the read actually returned, which is past `declared` and
+        /// usually one past it: the probe slot is the only row past the declaration
+        /// the emitted bound asks for, except at a declared zero, where the depth is
+        /// read at the floor of one and the bound therefore asks for two.
         pulled: u64,
+    },
+
+    /// The bundle's units are not the units it was assembled from.
+    ///
+    /// Every later step of a run is keyed by the stratum a unit carries — the status
+    /// map, the tag on the stream, the per-stratum weight a fusion profile applies —
+    /// so the tag above a unit decides *whose* read the evidence describes. It was a
+    /// public field on a public `Vec` above a type whose own numbers and text had
+    /// already been sealed, and three edits to it each produced a served answer with a
+    /// real plan identity on it: a stratum renamed onto its neighbour's lost one
+    /// producer's evidence entirely, a swap crossed two producers' statuses, and
+    /// dropping a unit answered from one stratum fewer at `ScoreExactness::Exact`.
+    ///
+    /// The bundle records its attribution when it is assembled
+    /// ([`CompiledRetrieval::new`](crate::CompiledRetrieval::new)), so this refusal is
+    /// about a bundle that *changed*, never about a caller assembling its own. It is
+    /// the compile-to-execute half of the implication the admission waist already
+    /// enforces from a plan into `compile`: a stratum missing from the set is a
+    /// producer missing from the answer, and that must be a refusal rather than a
+    /// silently narrower read.
+    #[error("the compiled bundle for plan {plan} is not the bundle it was assembled as: {reason}")]
+    UnitsNotAsAssembled {
+        /// The plan identity the bundle names, so a report can say which bundle
+        /// moved. Carried by value: it is a fixed 32-byte digest, not a growable
+        /// field like the [`Iri`]s the other variants box.
+        plan: PlanId,
+        /// What moved, named at the position it moved in.
+        reason: String,
     },
 }
 
@@ -644,6 +673,12 @@ pub async fn execute<D: DatasetView + Sync>(
             got: registry.instance_id(),
         });
     }
+    // Which producers this bundle answers for, before any of them is asked anything.
+    // Checked here rather than per unit because the condition is about the SET: a
+    // missing unit is only visible against the set the bundle was assembled with, and
+    // running the units that remain would report a narrowed answer under a real plan
+    // identity before the check could be reached.
+    compiled.tagged_as_assembled()?;
 
     let engine = NativeSparqlEngine::new();
     let mut streams = Vec::with_capacity(compiled.units.len());
@@ -854,6 +889,13 @@ type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
 /// A stratum whose registry declared no bound carries no promise for a row to
 /// break, so its probe is always the ordinary `DepthReached`.
 ///
+/// The comparison is made against the declaration before the depth is consulted,
+/// because a declared **zero** is the one declaration the depth is read *wider*
+/// than: the floor of one is what lets such a producer report its own emptiness,
+/// so the emitted bound asks for two rows and the first one back is already more
+/// than the declaration allows. Compared only from inside the depth arm, that row
+/// counted as within the depth and earned a certified exhaustion.
+///
 /// The `depth + 1`-th row can arrive at every depth this function can be called
 /// with: the compiler emits a bound strictly deeper than the depth, which it can
 /// do for every depth because the waist refuses the one depth whose probe row a
@@ -868,23 +910,34 @@ fn bound_to_depth(
     stratum: &Iri,
 ) -> Result<BoundedRead, ExecutionError> {
     let ceiling = usize::try_from(depth).unwrap_or(usize::MAX);
+    let pulled = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
+    // Consulted against the declaration alone, before the depth is looked at,
+    // because the declaration and the depth are not the same ceiling. They coincide
+    // at every declaration the waist admits a depth *inside*, where the only row
+    // that can breach is the probe past the depth — which is why this used to sit
+    // inside the arm below. At a declared **zero** they do not coincide: the depth
+    // is read at the floor of one, so the emitted bound asks for two and the FIRST
+    // row already returns more than the producer promised. Judged from inside the
+    // depth arm, that row was within the depth and so never compared, and a
+    // producer that declared an empty index and then named one candidate was
+    // certified `Exhausted { rows_emitted: 1 }` — a completeness claim over a read
+    // whose declaration it had already broken.
+    //
+    // Hoisting it refuses nothing that was admitted before: the waist holds every
+    // recorded depth at or below the declaration, so a read inside its depth can
+    // exceed the declaration only where the floor widened one, and the floored row
+    // is the probe that lets an honestly empty producer report `Exhausted { 0 }`
+    // — which it still does, because zero is not above zero.
+    if let Some(declared) = declared_rows
+        && pulled > declared
+    {
+        return Err(ExecutionError::RowBoundBreached {
+            stratum: Box::new(stratum.clone()),
+            declared,
+            pulled,
+        });
+    }
     if ranked.len() > ceiling {
-        let pulled = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
-        // Consulted only here, on the one row the declaration could possibly be
-        // breached by: the emitted bound never asks for a second. A declared zero
-        // reaches this arm like any other wrong declaration — the emitted bound is
-        // one row past the floored depth of one, so a producer that declared an
-        // empty index and then returned two rows is caught here rather than
-        // certified exhausted on the strength of the first.
-        if let Some(declared) = declared_rows
-            && pulled > declared
-        {
-            return Err(ExecutionError::RowBoundBreached {
-                stratum: Box::new(stratum.clone()),
-                declared,
-                pulled,
-            });
-        }
         ranked.truncate(ceiling);
         let rank = u64::from(depth);
         return Ok((

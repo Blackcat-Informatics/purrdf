@@ -72,6 +72,24 @@ fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
 }
 
+/// A bundle of `units` under the identities `compiled` carries.
+///
+/// Assembled through [`CompiledRetrieval::new`] rather than written as a literal,
+/// because the attribution a bundle is checked against is recorded when it is
+/// assembled — a caller handing `execute` a bundle of its own is the seam, and a
+/// bundle re-tagged after assembly is the refusal. Starting at `execute` therefore
+/// goes through the same constructor `compile` does.
+fn bundle_of(units: Vec<StratumUnit>, compiled: &CompiledRetrieval) -> CompiledRetrieval {
+    CompiledRetrieval::new(
+        units,
+        compiled.plan_id,
+        compiled.registry_id,
+        compiled.registry_fingerprint.clone(),
+        compiled.fused_bound,
+        compiled.resolution.clone(),
+    )
+}
+
 fn iri(text: &str) -> Iri {
     Iri::parse(text).expect("fixture IRIs are valid")
 }
@@ -706,12 +724,22 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     // it rather than carrying it. Every case above and below varies a number while
     // reusing this text, so none of them could observe a bound that disagreed with the
     // depth beside it.
+    //
+    // The caller's text is a sub-`SELECT` of the bounded query rather than the front of
+    // it, because a text carrying a top-level bound of its own can hold no second one:
+    // appended, the two are two `LIMIT` clauses of one solution modifier, which the
+    // grammar admits one of, and the caller's is the one a last-clause-wins parser
+    // drops. `a_supplied_bound_is_not_destroyed_by_the_layers_own` executes that case.
     for depth in [1_u32, 3, 12] {
         let unit = rebuild(depth, Some(12)).expect("a depth inside the declaration builds");
         assert_eq!(
             unit.sparql(),
-            format!("{query}\nLIMIT {}", depth + 1),
-            "the text a unit runs is its query bounded one row past its own depth"
+            format!(
+                "SELECT * WHERE {{\n  {{ {query} }}\n}}\nLIMIT {}",
+                depth + 1
+            ),
+            "the text a unit runs is its query wrapped in a read bounded one row past \
+             its own depth"
         );
     }
 
@@ -785,10 +813,7 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     // gate on dishonest numbers and not a lock on the door. What it does not get is the
     // certificate above — same producer, same three rows, same depth, and a text this
     // layer cannot see the bounds of, so the ending names that text.
-    let bundle = CompiledRetrieval {
-        units: vec![by_hand],
-        ..compiled
-    };
+    let bundle = bundle_of(vec![by_hand], &compiled);
     let execution =
         block_on(execute(&bundle, &registry, &*common::empty_dataset())).expect("the unit runs");
     assert_eq!(
@@ -824,10 +849,7 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     )
     .expect("depth three inside a thousand-row declaration is admitted");
     let cut = block_on(execute(
-        &CompiledRetrieval {
-            units: vec![shallow],
-            ..nine_compiled
-        },
+        &bundle_of(vec![shallow], &nine_compiled),
         &nine,
         &*common::empty_dataset(),
     ))
@@ -837,6 +859,78 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
         ProducerStatus::DepthReached { rank: 3 },
         "nine rows read at depth three ended at the depth, and a caller's text keeps \
          the ending it CAN observe: the fourth row arrived, so something is down there"
+    );
+}
+
+/// A supplied text's own top-level bound survives this layer's, and the ending is
+/// the caller's text rather than a read that text did not take.
+///
+/// The layer's bound used to FOLLOW the caller's text, which made two `LIMIT`
+/// clauses of one solution modifier — a shape the grammar admits exactly one of
+/// (`LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause LimitClause?`).
+/// A parser that keeps the last clause therefore dropped the caller's: a text asking
+/// for two rows over a producer holding nine returned THREE, and the stream's ending
+/// named that text as the stopper for a read it had not stopped. Wrapping the text
+/// instead leaves the caller's bound applying to the pattern it was written against
+/// and this layer's applying to the whole of it.
+///
+/// Both halves are executed, because a wrap that bounded the caller's text away would
+/// be the mirror fault: the unbounded neighbour reads to the *depth*, which is the
+/// case that proves the wrap did not become a second ceiling of its own.
+#[test]
+fn a_supplied_bound_is_not_destroyed_by_the_layers_own() {
+    let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 1_000, 9);
+    let stats = single_statistics(&ex("stratum/hand"), 1_000);
+    let request = RetrievalRequest::complete(vec![lexical_term()]);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let compiled = compile(&plan(&request, &registry, &stats).expect("plans"), &env)
+        .expect("the plan is admitted");
+
+    // The caller's own text, bounded at two by the caller. The depth is four, so this
+    // layer's own bound is five: whichever bound is dropped, the row count says which.
+    let bounded = format!("{}\nLIMIT 2", hand_written(&ex("pf/hand")));
+    let unit = StratumUnit::new(
+        compiled.units[0].stratum.clone(),
+        bounded,
+        compiled.units[0].contract.clone(),
+        4,
+        Some(1_000),
+    )
+    .expect("depth four inside a thousand-row declaration is admitted");
+    let bundle = bundle_of(vec![unit], &compiled);
+    let execution =
+        block_on(execute(&bundle, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&stratum("hand")],
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "the caller asked for two rows and got two: its bound is inside this layer's \
+         rather than beside it, so neither clause replaced the other"
+    );
+
+    // The neighbouring valid case: the same text with no bound of its own reads to the
+    // depth over the same nine-row producer. The wrap bounds the whole read at
+    // `depth + 1`, so the fifth row arrives and the depth is named as the stopper —
+    // which is what proves the wrap did not narrow the read to something else.
+    let unbounded = StratumUnit::new(
+        compiled.units[0].stratum.clone(),
+        hand_written(&ex("pf/hand")),
+        compiled.units[0].contract.clone(),
+        4,
+        Some(1_000),
+    )
+    .expect("depth four inside a thousand-row declaration is admitted");
+    let open = bundle_of(vec![unbounded], &compiled);
+    let execution =
+        block_on(execute(&open, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&stratum("hand")],
+        ProducerStatus::DepthReached { rank: 4 },
+        "with nothing of the caller's bounding it, the same text reads to the depth and \
+         the probe row past it arrives"
     );
 }
 
