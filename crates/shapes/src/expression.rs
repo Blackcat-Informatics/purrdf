@@ -87,17 +87,18 @@
 //! produces the order it was asked for. Their determinism comes from their inputs
 //! being deterministic, not from a final sort.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf::{FastMap, FastSet, TermId};
+use ::purrdf::{FastMap, FastSet, IdVec, TermId};
 
 use crate::data::ShaclData;
 use crate::model::xsd;
 use crate::path;
 use crate::plan::{LoweredExpr, ShapePlan};
 use crate::shapes::{Path, Shape};
-use crate::term::{Literal, NamedNode, Term};
+use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids};
 
 /// The reserved `shnex:var` name that denotes the current focus node.
 ///
@@ -368,7 +369,7 @@ pub enum ShapeArg {
         /// The same handle `Constraint::NodeByExpression` carries, for the same
         /// reason: a shape that names another shape cannot resolve it while it is
         /// itself still being parsed.
-        shapes: Arc<OnceLock<FastMap<String, Shape>>>,
+        shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
     },
 }
 
@@ -1178,6 +1179,89 @@ pub(crate) fn eval_planned_node_expr(
     eval_planned_node_expr_in_scope(store, focus, expr, lowered, plan, guard, Scope::EMPTY)
 }
 
+/// The shape nodes a `sh:nodeByExpression` production yielded, in whichever key
+/// space it was able to yield them in.
+///
+/// Both arms carry the SAME nodes the owned-term evaluator would have produced;
+/// what differs is only whether a term had to be built to say so. See
+/// [`eval_planned_shape_nodes`].
+pub(crate) enum ShapeNodes<'a> {
+    /// Nodes in TERM space — borrowed from the expression when the expression
+    /// itself names them, owned when the general evaluator materialized them.
+    Terms(Cow<'a, [Term]>),
+    /// Nodes in IDENTITY space, as the data graph interned them.
+    Interned(IdVec),
+}
+
+/// The shape nodes `expr` produces from the INTERNED focus `focus_id`, for the
+/// kinds that can say so without building a single term — or `None` for a kind
+/// that cannot, which the caller answers through [`eval_planned_node_expr`].
+///
+/// # Why this exists beside the general evaluator
+///
+/// `sh:nodeByExpression` (SHACL 1.2 Node Expressions §7.2) evaluates its
+/// expression ONCE PER VALUE NODE and resolves every node it produces against the
+/// shapes graph's shape index. Routed through [`eval_planned_node_expr`], that
+/// charges every value node a `Vec` plus one materialized term per produced node,
+/// and then a second materialization of the value node itself to hand the
+/// evaluator an owned focus — for an answer whose every part was already an
+/// identity or already a term the shapes graph owns. This is the marginal cost
+/// [`crate::plan`] exists to remove, arriving one layer up.
+///
+/// # Why the answers cannot differ
+///
+/// Each arm below is the arm of `eval_node_expr_at_depth` it replaces, with the
+/// materialization removed and nothing else changed:
+///
+/// * `sh:this` returns the focus node, which by this function's precondition IS
+///   `focus_id`;
+/// * a constant returns itself, and the general evaluator clones it only because
+///   its signature owns its output;
+/// * a path walks the SAME lowered path from the same focus through the same
+///   [`path::eval_planned_ids_from_id`] the general arm reaches underneath, and
+///   canonicalizes the result the same way — [`canonical_cmp_ids`] streams the
+///   very rendering [`crate::term::canonical_cmp`] compares, and the interner is
+///   injective, so sorting the identities and sorting their terms put the nodes in
+///   one order and dedup them to one set.
+///
+/// The general evaluator wraps every expression in the structural
+/// [`RecursionGuard`], and no guard is taken here. Nothing is skipped by that: all
+/// three kinds are LEAVES, the guard's only observable effect is refusing a tree
+/// nested past [`MAX_NODE_EXPR_DEPTH`], and this function is only ever called on
+/// the root of an expression tree, where the structural counter is zero.
+///
+/// # Errors
+///
+/// As [`eval_planned_node_expr`] for the kinds it answers — i.e. only when
+/// `lowered` does not describe `expr`.
+pub(crate) fn eval_planned_shape_nodes<'a>(
+    store: &ShaclData,
+    focus_id: TermId,
+    expr: &'a NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+) -> Result<Option<ShapeNodes<'a>>, String> {
+    Ok(match expr {
+        NodeExpr::Constant(term) => {
+            Some(ShapeNodes::Terms(Cow::Borrowed(std::slice::from_ref(term))))
+        }
+        NodeExpr::This => Some(ShapeNodes::Interned(smallvec::smallvec![focus_id])),
+        NodeExpr::Path(_) => {
+            let ds = store.core_view();
+            let mut ids =
+                path::eval_planned_ids_from_id(ds, focus_id, lowered.path(0)?, plan.binding())?;
+            // Unstable is exact here where the owned-term arm's stable sort is:
+            // the walk deduplicated the identities before returning them, and the
+            // interner is injective, so no two elements compare equal and there is
+            // no relative order for stability to preserve.
+            ids.sort_unstable_by(|left, right| canonical_cmp_ids(ds, *left, *right));
+            ids.dedup();
+            Some(ShapeNodes::Interned(ids))
+        }
+        _ => None,
+    })
+}
+
 /// [`eval_node_expr_in_scope`] against a lowering the shapes-graph walk produced.
 ///
 /// # Errors
@@ -1733,13 +1817,13 @@ fn eval_node_expr_at_depth(
                                     .to_owned()
                             })?;
                             let shape_plan = plan
-                                .indexed(lowered.index()?, &shape_iri.to_string(), resolved)?
+                                .indexed(lowered.index()?, shape_iri, resolved)?
                                 .ok_or_else(|| {
-                                    format!(
-                                        "shnex:conformsToShape shape argument produced \
+                                format!(
+                                    "shnex:conformsToShape shape argument produced \
                                          {shape_iri}, which is not a shape of this shapes graph"
-                                    )
-                                })?;
+                                )
+                            })?;
                             Ok(vec![bool_literal(conforms_guarded(
                                 store, only, shape_plan, guard,
                             )?)])

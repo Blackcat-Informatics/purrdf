@@ -78,6 +78,22 @@ impl ValueNode {
         }
     }
 
+    /// The id this value node ALREADY carries, without consulting `ds`.
+    ///
+    /// Deliberately narrower than [`Self::as_id`], which also resolves a foreign
+    /// term. A caller that will go on to describe this value node in identity
+    /// space needs the arm, not just an id: a `Foreign` term that happens to be
+    /// interned still reports itself verbatim at the report boundary, so treating
+    /// it as interned would substitute the interner's rendering for the term the
+    /// expression produced.
+    #[inline]
+    const fn interned(&self) -> Option<TermId> {
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(_) => None,
+        }
+    }
+
     /// The interned id of this value node, if it has one. A `Foreign` term is
     /// resolved against `ds` in case it happens to be interned (usually it is not).
     fn as_id(&self, ds: &impl ShaclRead) -> Option<TermId> {
@@ -1514,6 +1530,33 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
     roles
 }
 
+/// The plan for the shape a `sh:nodeByExpression` index resolves the INTERNED
+/// produced node `id` to.
+///
+/// The binding re-keyed every shape node this data graph interns when it was taken
+/// (`DatasetBinding::indexed_node`), so the common answer costs two hash lookups
+/// and builds no term at all — which is the whole point: the lookup happens once
+/// per value node per produced node.
+///
+/// A miss there is NOT yet "no such shape". The binding describes the dataset as it
+/// stood when it was taken, and a produced node whose term the binding never saw
+/// still has to be offered to the index BY TERM before it can be called
+/// unresolvable — otherwise a shape node interned after the bind would be refused
+/// for a shape that is right there in the index. That materialization runs only on
+/// the miss, which is either that case or the error path.
+fn indexed_shape_by_id<'a>(
+    plan: ShapePlan<'a>,
+    index: u32,
+    resolved: &'a FastMap<Term, Shape>,
+    ds: &impl ShaclRead,
+    id: TermId,
+) -> Result<Option<ShapePlan<'a>>, String> {
+    if let Some(node) = plan.binding().indexed_node(index, id)? {
+        return plan.indexed(index, node, resolved);
+    }
+    plan.indexed(index, &term_id_to_native(ds, id), resolved)
+}
+
 // ── Per-constraint evaluator ───────────────────────────────────────────────────
 
 /// Evaluate a single constraint against the provided value node set.
@@ -2421,63 +2464,109 @@ fn eval_constraint<'a, S: ResultSink>(
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             let next_depth = depth.saturating_add(1);
             for value_node in value_nodes {
-                // Preserve the interned identity before materializing the term, so
-                // the conformance re-entry below does not pay a reverse hash probe
-                // to recover what the value node already knew.
-                let value_id = value_node.as_id(ds);
-                let value_node = value_node.to_term(ds);
-                let produced = crate::expression::eval_planned_node_expr(
-                    store,
-                    &value_node,
-                    expr,
-                    lowered,
-                    context.plan,
-                    &mut guard,
-                )
-                .map_err(|e| {
-                    format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
-                })?;
-                for shape_node in produced {
-                    let shape_plan = context
-                        .plan
-                        .indexed(index, &shape_node.to_string(), resolved)?
-                        .ok_or_else(|| {
-                            format!(
-                                "sh:nodeByExpression constraint on shape {source_shape}: \
-                                 {shape_node} is not a shape of this shapes graph"
-                            )
-                        })?;
-                    // A failing conformance check is a FAILURE the spec requires be
-                    // produced, so it propagates rather than counting as "does not
-                    // conform".
-                    //
-                    // The AMBIENT lowering is threaded through, exactly as every
-                    // other recursive arm does: rebuilding one here would run the
-                    // whole cycle-aware shape walk once per value node per produced
-                    // shape. The lowering covers the shapes this index resolves to
-                    // because the walk ENTERS the index itself.
-                    let conforms = conforms_with_id_depth(
+                // The conformance re-entry and the report boundary both read the
+                // value node's own representation, so it is resolved ONCE here and
+                // never re-probed: an interned value node recurses as its identity
+                // and is materialized only where a result is built.
+                let judged = value_node.as_focus(ds);
+                // The id-native production: an interned value node whose expression
+                // can name its shape nodes without building a term. The general
+                // evaluator answers everything else, and is handed the owned focus
+                // term it speaks — which is the only place that term is built.
+                let produced = match value_node.interned() {
+                    Some(id) => crate::expression::eval_planned_shape_nodes(
                         store,
-                        &value_id.map_or_else(
-                            || FocusNode::Foreign(value_node.clone()),
-                            FocusNode::Interned,
-                        ),
-                        shape_plan,
-                        next_depth,
+                        id,
+                        expr,
+                        lowered,
+                        context.plan,
                     )
                     .map_err(|e| {
                         format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
-                    })?;
-                    if !conforms {
-                        emit!({
-                            let mut r = result!(
-                                sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
-                                Some(value_node.clone())
+                    })?,
+                    None => None,
+                };
+                let produced = match produced {
+                    Some(produced) => produced,
+                    None => {
+                        let focus = value_node.to_term(ds);
+                        crate::expression::ShapeNodes::Terms(Cow::Owned(
+                            crate::expression::eval_planned_node_expr(
+                                store,
+                                &focus,
+                                expr,
+                                lowered,
+                                context.plan,
+                                &mut guard,
+                            )
+                            .map_err(|e| {
+                                format!(
+                                    "sh:nodeByExpression constraint on shape {source_shape}: {e}"
+                                )
+                            })?,
+                        ))
+                    }
+                };
+
+                // One produced shape node: resolve it, check the value node against
+                // it, and record the violation the spec asks for.
+                //
+                // A failing conformance check is a FAILURE the spec requires be
+                // produced, so it propagates rather than counting as "does not
+                // conform".
+                //
+                // The AMBIENT lowering is threaded through, exactly as every other
+                // recursive arm does: rebuilding one here would run the whole
+                // cycle-aware shape walk once per value node per produced shape. The
+                // lowering covers the shapes this index resolves to because the walk
+                // ENTERS the index itself.
+                macro_rules! check_against {
+                    ($shape_plan:expr, $shape_node:expr) => {{
+                        let shape_plan = $shape_plan.ok_or_else(|| {
+                            format!(
+                                "sh:nodeByExpression constraint on shape {source_shape}: {} is \
+                                 not a shape of this shapes graph",
+                                $shape_node
+                            )
+                        })?;
+                        let conforms =
+                            conforms_with_id_depth(store, &judged, shape_plan, next_depth)
+                                .map_err(|e| {
+                                    format!(
+                                        "sh:nodeByExpression constraint on shape \
+                                         {source_shape}: {e}"
+                                    )
+                                })?;
+                        if !conforms {
+                            emit!({
+                                let mut r = result!(
+                                    sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
+                                    Some(value_node.to_term(ds))
+                                );
+                                r.severity.clone_from(&sev);
+                                r.message.clone_from(&msg);
+                                r
+                            });
+                        }
+                    }};
+                }
+
+                match &produced {
+                    crate::expression::ShapeNodes::Terms(terms) => {
+                        for shape_node in terms.as_ref() {
+                            check_against!(
+                                context.plan.indexed(index, shape_node, resolved)?,
+                                shape_node
                             );
-                            r.severity.clone_from(&sev);
-                            r.message.clone_from(&msg);
-                            r
-                        });
+                        }
+                    }
+                    crate::expression::ShapeNodes::Interned(ids) => {
+                        for &shape_id in ids {
+                            check_against!(
+                                indexed_shape_by_id(context.plan, index, resolved, ds, shape_id)?,
+                                term_id_to_native(ds, shape_id)
+                            );
+                        }
                     }
                 }
             }
@@ -3675,6 +3764,109 @@ mod tests {
             "ex:alpha sorts before ex:zeta canonically and interns after it, so this order is \
              the canonical one and its reverse is the insertion one"
         );
+    }
+
+    /// **`sh:nodeByExpression` resolves every shape node its expression can
+    /// produce, in BOTH directions and through all three production routes.**
+    ///
+    /// The constraint resolves its shape nodes per value node against the shapes
+    /// graph's shape index, and there are now three ways a node reaches that
+    /// lookup: as a borrowed constant the expression names, as an interned
+    /// identity a path walk produced out of the data, and as an owned term the
+    /// general node-expression evaluator materialized. A production that resolved
+    /// nothing would report NO violation — a silent pass — and one that resolved
+    /// too little would refuse a shapes graph that is correct. Neither shows up in
+    /// a one-directional test, so both directions run here for every route.
+    ///
+    /// `ex:NotAShape` is interned by the data graph exactly like `ex:KindShape`
+    /// is, so the refusal is reached through the same lookup as the acceptance and
+    /// not through a node the index could never have been asked about.
+    #[test]
+    fn node_by_expression_resolves_the_shapes_it_produces_and_refuses_only_the_rest() {
+        const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n\
+             @prefix ex: <http://example.org/ns#> .\n\
+             ex:Computed a sh:NodeShape ;\n\
+                 sh:nodeByExpression [ shnex:pathValues ex:kind ] .\n\
+             ex:Named a sh:NodeShape ;\n\
+                 sh:nodeByExpression ex:KindShape .\n\
+             ex:Combined a sh:NodeShape ;\n\
+                 sh:nodeByExpression [ sh:union ( [ shnex:pathValues ex:kind ] ) ] .\n\
+             ex:Absent a sh:NodeShape ;\n\
+                 sh:nodeByExpression ex:AbsentShape .\n\
+             ex:KindShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n\
+             ex:AbsentShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             ex:good ex:kind ex:KindShape ; ex:name \"present\" .\n\
+             ex:bad ex:kind ex:KindShape .\n\
+             ex:stray ex:kind ex:NotAShape .\n",
+        );
+        let shapes = crate::engine::parse_shapes(SHAPES, None)
+            .expect("the sh:nodeByExpression shapes graph must parse");
+        let shape_named = |local: &str| {
+            shapes
+                .node_shapes
+                .iter()
+                .find(|shape| shape.id == ex(local))
+                .unwrap_or_else(|| panic!("ex:{local} must be parsed as a node shape"))
+        };
+        let data = shacl_data(&store);
+
+        // Every route: the produced shape IS a shape, so it resolves and JUDGES.
+        // `ex:good` satisfies it and `ex:bad` does not, which is what says the
+        // resolution reached a shape with a constraint in it rather than an empty
+        // one that conforms vacuously.
+        //
+        // `ex:Absent` is the neighbouring-valid case for the identity re-keying
+        // the binding performs: `ex:AbsentShape` is a perfectly good shape of this
+        // shapes graph that the DATA graph never mentions, so it has no dataset
+        // identity to be re-keyed under. It must still resolve — a lookup that
+        // could only answer for shapes the data happens to intern would refuse it.
+        for local in ["Computed", "Named", "Combined", "Absent"] {
+            let shape = shape_named(local);
+            assert!(
+                super::validate_shape(&data, &ex("good"), shape)
+                    .unwrap_or_else(|error| panic!("ex:{local} must validate ex:good: {error}"))
+                    .is_empty(),
+                "ex:{local}: a conforming node must produce no result"
+            );
+            let results = super::validate_shape(&data, &ex("bad"), shape)
+                .unwrap_or_else(|error| panic!("ex:{local} must validate ex:bad: {error}"));
+            assert_eq!(
+                results.len(),
+                1,
+                "ex:{local}: the produced shape must judge ex:bad and report it"
+            );
+            assert!(
+                results[0]
+                    .source_constraint_component
+                    .as_str()
+                    .ends_with("NodeByExpressionConstraintComponent"),
+                "ex:{local}: got {}",
+                results[0].source_constraint_component.as_str()
+            );
+        }
+
+        // The NEIGHBOURING REFUSAL, on the one route that can reach it: a computed
+        // production is the only one whose shape node is not known until a value
+        // node arrives, so it is the only one that can produce a node the shapes
+        // graph does not describe.
+        for local in ["Computed", "Combined"] {
+            let error = super::validate_shape(&data, &ex("stray"), shape_named(local))
+                .expect_err("a produced node that is not a shape must be a hard error");
+            assert!(
+                error.contains("is not a shape of this shapes graph"),
+                "ex:{local}: got {error}"
+            );
+            assert!(
+                error.contains("NotAShape"),
+                "ex:{local}: the diagnostic must name the produced node, got {error}"
+            );
+        }
     }
 
     #[test]

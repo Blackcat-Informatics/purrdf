@@ -434,7 +434,7 @@ pub(crate) struct AstParts {
     /// The single shared shape index every `sh:nodeByExpression` constraint and
     /// computed [`ShapeArg`] in [`Self::node_shapes`] was decoded against, left
     /// empty for the assembling stage to fill.
-    pub(crate) shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
+    pub(crate) shape_index: Arc<OnceLock<FastMap<Term, Shape>>>,
     /// The REUSABLE ANALYSIS: the cycle-aware class walk's result, carried rather
     /// than recomputed.
     ///
@@ -1372,7 +1372,7 @@ struct AstReader<'a> {
     /// The declaration table, materialized before any body or shape is read.
     functions: Vec<Arc<CustomFunction>>,
     /// The ONE shape-index handle every decoded site is given a clone of.
-    shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
+    shape_index: Arc<OnceLock<FastMap<Term, Shape>>>,
 }
 
 impl<'a> AstReader<'a> {

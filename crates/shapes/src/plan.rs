@@ -268,10 +268,29 @@ impl LoweredShapes {
         for (class, position) in classes.entries() {
             class_ids[position] = dataset.term_id_by_iri(class.as_str());
         }
+        // Each shape index, re-keyed by the identity THIS data graph gives the
+        // shape nodes it interns. A `sh:nodeByExpression` computed out of the data
+        // produces its shape nodes as identities, and without this row every one of
+        // them would have to be materialized into a term before the index could be
+        // asked about it — once per value node. A shape node the data graph does
+        // not intern simply has no entry: it can never be the answer to a
+        // data-derived production, and the term-keyed lookup still reaches it.
+        let indexes: Box<[FastMap<TermId, Term>]> = self
+            .indexes
+            .iter()
+            .map(|index| {
+                index
+                    .shapes
+                    .keys()
+                    .filter_map(|node| Some((resolve_id(dataset, node)?, node.clone())))
+                    .collect()
+            })
+            .collect();
         DatasetBinding {
             terms,
             sets,
             class_ids,
+            indexes,
         }
     }
 
@@ -329,9 +348,10 @@ struct LoweredIndex {
     /// `OnceLock` cell, and an address is only unique while the allocation is
     /// alive. Holding the `Arc` is what makes the key stable for as long as the
     /// lowering that uses it.
-    cell: Arc<OnceLock<FastMap<String, Shape>>>,
-    /// The lowering of every shape the index can resolve to, by shape IRI.
-    shapes: FastMap<String, LoweredShape>,
+    cell: Arc<OnceLock<FastMap<Term, Shape>>>,
+    /// The lowering of every shape the index can resolve to, keyed — like the
+    /// cell beside it — by the shape's own identity term.
+    shapes: FastMap<Term, LoweredShape>,
 }
 
 /// The stage-0 lowering of one shape: its own constraints and its property shapes.
@@ -580,6 +600,16 @@ pub(crate) struct DatasetBinding {
     /// row answers target resolution, which is given a class IRI by name out of a
     /// `Target` and has no slot to index with.
     class_ids: Box<[Option<TermId>]>,
+    /// Each shape index's shape nodes, by the dataset identity this data graph
+    /// gives them — positionally parallel to [`LoweredShapes::indexes`].
+    ///
+    /// The map is the WRONG WAY ROUND on purpose: it answers "which shape node is
+    /// this identity", not "which identity is this shape node", because the
+    /// question a `sh:nodeByExpression` asks per value node arrives as an identity
+    /// the data graph produced and has to come back out as the term the index is
+    /// keyed by. Empty for a shapes graph that names no shape index, so the row
+    /// costs a shapes graph without one nothing at all.
+    indexes: Box<[FastMap<TermId, Term>]>,
 }
 
 impl DatasetBinding {
@@ -636,6 +666,25 @@ impl DatasetBinding {
         self.sets
             .get(slot as usize)
             .ok_or_else(|| slot_defect("id-set", slot))
+    }
+
+    /// The shape node the `index`-th shape index holds under the dataset identity
+    /// `id`.
+    ///
+    /// `Ok(None)` is the ordinary answer for an identity that is not one of that
+    /// index's shape nodes — including a shape node this data graph interned only
+    /// after the binding was taken. It is NOT a refusal on its own: the caller
+    /// still has the term-keyed lookup to fall back to, which is the one that
+    /// decides whether the produced node names a shape.
+    ///
+    /// # Errors
+    /// Returns an error when the index position is not one the lowering handed out.
+    #[inline]
+    pub(crate) fn indexed_node(&self, index: u32, id: TermId) -> Result<Option<&Term>, String> {
+        self.indexes
+            .get(index as usize)
+            .map(|nodes| nodes.get(&id))
+            .ok_or_else(|| slot_defect("shape-index", index))
     }
 }
 
@@ -756,25 +805,30 @@ impl<'a> ShapePlan<'a> {
     }
 
     /// The plan for the shape a `sh:nodeByExpression` / `shnex:conformsToShape`
-    /// index resolves `iri` to.
+    /// index resolves the shape node `id` to.
     ///
     /// `None` when the index holds no such shape, which the evaluator already
-    /// treats as an unresolved shape IRI.
+    /// treats as an unresolved shape node.
+    ///
+    /// The key is the shape's IDENTITY TERM, not a rendering of it. Both maps are
+    /// keyed that way, so a caller that already holds the produced node hands it
+    /// over by reference: the lookup a node expression performs once per value
+    /// node costs a hash of the term the caller already owns and nothing else.
     ///
     /// # Errors
     /// Returns an error when the index position is not one the lowering handed out.
     pub(crate) fn indexed(
         &self,
         index: u32,
-        iri: &str,
-        shapes: &'a FastMap<String, Shape>,
+        id: &Term,
+        shapes: &'a FastMap<Term, Shape>,
     ) -> Result<Option<Self>, String> {
         let lowered = self
             .graph
             .indexes
             .get(index as usize)
             .ok_or_else(|| slot_defect("shape-index", index))?;
-        let (Some(shape), Some(lowered)) = (shapes.get(iri), lowered.shapes.get(iri)) else {
+        let (Some(shape), Some(lowered)) = (shapes.get(id), lowered.shapes.get(id)) else {
             return Ok(None);
         };
         Ok(Some(self.nested(shape, lowered)))
@@ -1045,7 +1099,7 @@ pub(crate) enum PlannedConstraint<'a> {
         /// Its lowering.
         lowered: &'a LoweredExpr,
         /// The shapes graph's IRI-named shape index.
-        shapes: &'a Arc<OnceLock<FastMap<String, Shape>>>,
+        shapes: &'a Arc<OnceLock<FastMap<Term, Shape>>>,
         /// The position of that index's lowering.
         index: u32,
         /// The per-constraint message override.
@@ -1587,7 +1641,7 @@ impl ShapeWalk {
     }
 
     /// The position of the lowered form of `index`, entering it exactly once.
-    fn index_position(&mut self, index: &Arc<OnceLock<FastMap<String, Shape>>>) -> u32 {
+    fn index_position(&mut self, index: &Arc<OnceLock<FastMap<Term, Shape>>>) -> u32 {
         let cell = Arc::as_ptr(index).addr();
         if let Some(position) = self
             .indexes
@@ -1615,9 +1669,9 @@ impl ShapeWalk {
             // instead of describing them from an arbitrary chain, and keeps the
             // derivation independent of arrival order.
             let saved = self.footprint.enter_unrooted();
-            let lowered: FastMap<String, LoweredShape> = shapes
+            let lowered: FastMap<Term, LoweredShape> = shapes
                 .iter()
-                .map(|(iri, shape)| (iri.clone(), lower_shape(shape, self)))
+                .map(|(id, shape)| (id.clone(), lower_shape(shape, self)))
                 .collect();
             self.footprint.leave(saved);
             self.indexes[position as usize].shapes = lowered;
