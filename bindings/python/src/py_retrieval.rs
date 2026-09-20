@@ -1636,12 +1636,18 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
     }
     out.set_item("stratum_derivations", derivations)?;
 
-    // Recomputed here rather than reported as a boolean the caller must trust:
-    // planning just built this plan, so a failure is this build disagreeing with
-    // itself and is raised rather than rendered.
-    planned
-        .certify()
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    // Nothing is certified here. This renders a plan and adds no semantics to
+    // it, and certifying would add one: `plan` and `compile` both reach this
+    // function, so every Python `compile` would be able to raise a refusal
+    // `purrdf_retrieval::plan` never raises — a surface that answers a
+    // different question from the engine underneath it.
+    //
+    // It would also be the wrong place to pay for the answer. Certifying is a
+    // per-stratum re-derivation of numbers planning computed a moment earlier,
+    // and it is documented as the COLD path for exactly that reason; admission
+    // deliberately does not call it either. The check is not absent, it is
+    // `retrieval.certify_plan`, asked once by whoever received a document
+    // rather than on every call by whoever produced one.
 
     out.set_item(
         "registry_content_fingerprint",
@@ -2160,10 +2166,14 @@ fn plan<'py>(
 /// each one with the engine's own arithmetic and refuses a plan the two disagree
 /// about — the depth is a checkable claim rather than an asserted one.
 ///
-/// It is the COLD path. The question it answers — is this document internally
-/// coherent at all — is a property of the bytes alone and has nothing to do with
-/// the registry or the statistics in force now, which is why it is asked once,
-/// here, by the party that received them.
+/// It is the COLD path, and deliberately on no hot one. [`plan`], [`compile`]
+/// and [`search`] do not run it, and neither does admission: planning just built
+/// the plan those stages return, so certifying it there would re-derive, once
+/// per stratum and on every call, a number this build had computed a moment
+/// earlier. The question this answers — is this document internally coherent at
+/// all — is a property of the bytes alone and has nothing to do with the
+/// registry or the statistics in force now, which is why it is asked once, here,
+/// by the party that received them.
 ///
 /// Every refusal raises `retrieval.PlanDocumentError` carrying a pinned
 /// `.refusal` name; branch on that, never on the message. A version this build

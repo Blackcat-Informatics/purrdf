@@ -2375,14 +2375,17 @@ class retrieval:
     # is a closed enum rendered by an exhaustive match, so a cause this list does
     # not name is a compile error in the binding rather than a word handed to a
     # caller. The depth is recomputable from those inputs, which is
-    # what makes it a checkable claim rather than an asserted one; `plan`
-    # recomputes it before returning and raises if this build disagrees with
-    # itself. `"statistics"["entries"]` names EVERY subject planning consulted —
+    # what makes it a checkable claim rather than an asserted one — and
+    # `certify_plan` is where it is recomputed, over a document that came from
+    # somewhere else. `plan` does NOT recompute it: it just derived every one of
+    # those depths, so checking them here would charge every caller on every
+    # call, once per stratum, for an answer this build had a moment earlier.
+    # `"statistics"["entries"]` names EVERY subject planning consulted —
     # each of those strata, and each predicate the request named — so a caller
     # asking one question ("which statistics was this planned against?") reads
     # one list. A stratum's entry is a projection of its derivation rather than a
-    # second consultation of the host, and `plan` refuses a plan whose two
-    # records of one stratum disagree; a subject that is both a stratum and a
+    # second consultation of the host, and `certify_plan` refuses a plan whose
+    # two records of one stratum disagree; a subject that is both a stratum and a
     # request predicate is named once, carrying the derivation's own values.
     #
     # In both, "cardinality" and "selectivity_ppm" are `None` when the provider
@@ -2430,10 +2433,12 @@ class retrieval:
     # every input those depths were derived from, so this recomputes each with
     # the engine's own arithmetic and refuses a plan the two disagree about.
     #
-    # It is the COLD path. What it answers — is this document internally coherent
-    # at all — is a property of the bytes alone, unmoved by the registry or the
-    # statistics in force now, so it is asked once by the party that received
-    # them.
+    # It is the COLD path and is on no hot one: `plan`, `compile` and `search`
+    # do not run it, and neither does admission. What it answers — is this
+    # document internally coherent at all — is a property of the bytes alone,
+    # unmoved by the registry or the statistics in force now, so it is asked once
+    # by the party that received them rather than on every call by the party that
+    # produced them.
     #
     # Every refusal raises `retrieval.PlanDocumentError` with a pinned `.refusal`
     # name; branch on that, never on the message. A layout this build does not
