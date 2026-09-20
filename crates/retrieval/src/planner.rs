@@ -1092,15 +1092,15 @@ fn prefixed(narrowed: u64, inputs: &DepthInputs) -> u64 {
 /// Built from the **same** functions `depth_from` applies, in the same order, so
 /// the explanation is a reading of that derivation rather than a second
 /// derivation that happens to agree with it. Every leg below is a call into that
-/// derivation's own pieces — [`measured_bound`], [`narrowed`], [`prefixed`], and
-/// for the ceiling [`bound_by_ceiling`], which runs [`clamp_depth`] itself. A
+/// derivation's own pieces — `measured_bound`, `narrowed`, `prefixed`, and
+/// for the ceiling `bound_by_ceiling`, which runs `clamp_depth` itself. A
 /// caller looking at a depth of one cannot otherwise tell a floored zero from a
 /// declaration of one row, and the two call for completely different action.
 ///
 /// The ceiling leg used to be the exception and it was wrong for it. It asked
 /// whether the derived bound fitted in a `u32`, which is a restatement of where
 /// the ceiling is rather than a reading of it — and it restated it one row too
-/// wide, because [`MAX_READ_DEPTH`] is `u32::MAX - 1`. A bound of exactly
+/// wide, because `MAX_READ_DEPTH` is `u32::MAX - 1`. A bound of exactly
 /// `u32::MAX` therefore converted cleanly, skipped this arm, and was reported as
 /// the declaration (or the cardinality, or the selectivity) that named it, while
 /// the depth beside it had been cut to the ceiling with nothing saying so. It is

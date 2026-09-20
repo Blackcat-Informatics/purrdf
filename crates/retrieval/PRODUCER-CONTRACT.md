@@ -774,7 +774,7 @@ over, and the licensed prefix — and each statistic is absent there exactly whe
 the provider reported none. An unknown cardinality is not a zero one at the
 provider boundary, and it is not a zero one in the record either: writing one
 would put a measurement nobody took beside a depth, where
-[`Plan::certify`](crate::Plan::certify) would then recompute the depth
+[`Plan::certify`] would then recompute the depth
 from it and agree. The same holds for the declaration, for the reason the
 paragraph above gives — inventing a zero for a producer that declared nothing
 would refuse a plan the registry never spoke against — so the layer refuses that
