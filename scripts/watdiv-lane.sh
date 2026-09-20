@@ -422,6 +422,10 @@ queries_digest() {
 lane_require_query_count "${QUERIES}" 20 "WATDIV_OUT='${OUT}'"
 rq_count=20
 require_nonempty_file "${QUERIES}/queries.tsv" "the instantiated query index"
+# EXISTING IS NOT BEING PRODUCED, and the report directs the reader here for the
+# explanation of every empty result -- so the record gets the same check its
+# sibling four lines up already had.
+require_nonempty_file "${QUERIES}/provenance.txt" "the instantiation provenance record"
 
 queries_sha="$(queries_digest)"
 

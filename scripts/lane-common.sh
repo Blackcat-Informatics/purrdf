@@ -215,13 +215,24 @@ lane_flatten_detail() {
 # The digest of an emitted query set, in name order. This is the reproducibility
 # handle AND the tripwire for a concurrent run, so the name is folded in beside
 # the bytes: two files that swapped contents must not digest the same.
+#
+# EVERY file in the directory is covered, not just the `.rq` ones. The index the
+# result loop actually reads and the provenance record that says which candidate
+# each substitution drew -- and out of how many -- were outside the certificate
+# while the report pointed the reader at them for the explanation of every empty
+# result. A change to what is RECORDED was invisible to the digest that certifies
+# the run, and the index could be rewritten underneath the loop without tripping
+# the concurrency check. Globbing the directory rather than a list of names also
+# means a sidecar added later cannot quietly fall outside the certificate.
 lane_query_set_digest() {
   local directory="$1"
   python3 -c '
 import hashlib, pathlib, sys
 digest = hashlib.sha256()
-for path in sorted(pathlib.Path(sys.argv[1]).glob("*.rq")):
+root = pathlib.Path(sys.argv[1])
+for path in sorted((p for p in root.iterdir() if p.is_file()), key=lambda p: p.name.encode("utf-8")):
     digest.update(path.name.encode("utf-8"))
+    digest.update(b"\x00")
     digest.update(path.read_bytes())
 print(digest.hexdigest())
 ' "${directory}"

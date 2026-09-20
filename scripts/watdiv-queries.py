@@ -551,7 +551,24 @@ def read_candidates(path: Path, dataset_sha256: str) -> Candidates | None:
         prefixed, _, iri = line.partition("\t")
         if iri:
             by_type.setdefault(prefixed, []).append(iri)
-    return Candidates(dataset_sha256, {key: tuple(value) for key, value in by_type.items()})
+    # RE-CANONICALISE RATHER THAN TRUST THE FILE'S ORDER. Candidate order IS the
+    # workload: `uniform_index` indexes into these tuples, so the same seed over a
+    # differently ordered list is a different query set. On the fresh-scrape path
+    # that order is a property of this program (`scrape_candidates` sorts by UTF-8
+    # bytes); read back without this sort it became a property of a file under
+    # ``target/``. A candidates.tsv written by an earlier version whose canonical
+    # order differed has the same dataset digest and the same counts, so it is a
+    # cache HIT -- and it would silently produce different queries at one seed.
+    # The header version cannot guard that, because ordering is not part of what
+    # it names. One sort over a few hundred thousand strings buys back the
+    # invariant.
+    return Candidates(
+        dataset_sha256,
+        {
+            key: tuple(sorted(value, key=lambda iri: iri.encode("utf-8")))
+            for key, value in by_type.items()
+        },
+    )
 
 
 # ── Instantiation ───────────────────────────────────────────────────────────────
@@ -621,7 +638,36 @@ def instantiate(
     # Emit only the prefixes the instantiated text actually uses. Substituting a
     # placeholder with a full IRI can retire a prefix entirely, and a PREFIX
     # declaration for a prefix nothing names is noise in a file meant to be read.
-    used = sorted({match for match in _PREFIXED.findall(body) if match in namespaces})
+    #
+    # A NAME THE MODEL DOES NOT DECLARE IS A HARD FAILURE, not something to skip
+    # past. `if match in namespaces` reads like a filter for retired prefixes, but
+    # it also silently swallowed a prefixed name whose prefix the data model never
+    # declared: the PREFIX line was dropped, the emitted .rq referenced an
+    # undeclared prefix, the CLI refused to parse it, and the lane reported the
+    # parser's complaint as CANNOT-EXECUTE -- a symptom, never the cause. `expand`
+    # already treats this exact condition as fatal and names the prefix; this is
+    # the same law and now says the same thing.
+    # Quoted literals AND angle-bracketed IRIs are removed before scanning.
+    # `_PREFIXED` is deliberately loose: a literal such as "note: see below"
+    # matches it, and so does the `a:b` inside `<http://example.org/a:b>`, because
+    # the lookbehind only blocks a match immediately after `<`. Since
+    # instantiation substitutes full IRIs into these bodies, scanning the raw text
+    # would refuse legal output -- the over-refusal that mirrors the silent drop
+    # this check exists to fix. Only prefixes outside literals and IRIs count, in
+    # both directions.
+    scannable = re.sub(r'<[^>\s]*>|"[^"\n]*"|\'[^\'\n]*\'', " ", body)
+    found = sorted(set(_PREFIXED.findall(scannable)))
+    undeclared = [prefix for prefix in found if prefix not in namespaces]
+    if undeclared:
+        sys.exit(
+            f"FAIL: {template.name} uses prefix(es) {undeclared} that the WatDiv data "
+            "model does not declare.\n"
+            f"  Declared prefixes: {', '.join(sorted(namespaces))}\n"
+            "  An emitted query naming an undeclared prefix does not parse, and the "
+            "lane would report the parser's complaint as the diagnosis rather than "
+            "this."
+        )
+    used = found
     header = "\n".join(f"PREFIX {prefix}: <{namespaces[prefix]}>" for prefix in used)
     text = (header + "\n" + body if header else body).strip() + "\n"
     return Query(template.name, text, tuple(choices))

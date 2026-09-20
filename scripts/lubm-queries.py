@@ -452,13 +452,18 @@ def self_test(namespace: str) -> int:
     # be exactly those the published file projects -- this is the check that a
     # "normalisation" did not quietly become a rewrite.
     published = _split_blocks(PUBLISHED.read_text(encoding="utf-8"))
+    projections_unchanged = True
     for (number, block), query in zip(published, queries, strict=True):
         before = re.findall(r"\?\w+", _strip_comments(block).partition("WHERE")[0])
         after = re.findall(r"\?\w+", query.text.partition("WHERE")[0])
         if before != after:
             print(f"SELF-TEST FAIL: Q{number} projection changed: {before} -> {after}")
-            ok = False
-    check(True, "every projection keeps its variables, spelling and order")
+            projections_unchanged = False
+    # This was `check(True, ...)`. The loop above set `ok` correctly so the exit
+    # status was right, but the REPORT printed OK on the very run where the loop
+    # had just printed SELF-TEST FAIL -- a self-test whose output contradicted
+    # itself, which is worse than one that stays quiet.
+    check(projections_unchanged, "every projection keeps its variables, spelling and order")
 
     # Every query carries a regime, and every regime names a CLI value the binary
     # actually offers (or none at all).
