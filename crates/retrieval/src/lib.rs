@@ -405,7 +405,7 @@ pub mod producer_contract {}
 pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
 pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, UnitError, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
-pub use error::{FusionError, PlanError, StatisticsDimension};
+pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
 pub use execute::{
     ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, StreamEnding, execute,
 };

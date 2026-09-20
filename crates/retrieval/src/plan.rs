@@ -37,7 +37,7 @@ use purrdf_text::Fixed;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::canonical::{Reader, Writer};
-use crate::error::{PlanError, StatisticsDimension};
+use crate::error::{CanonicalSection, PlanError, StatisticsDimension};
 use crate::fuse::TopK;
 use crate::id::{PLAN_VERSION, PlanId};
 use crate::iri::{Iri, Term};
@@ -1432,16 +1432,62 @@ fn write_depths(writer: &mut Writer, depths: &HashMap<Iri, u32>) {
     }
 }
 
-/// Read the per-stratum depths. The encoded order is sorted; the map that comes
-/// back does not preserve it and does not need to, because the next encode sorts
-/// again.
+/// Refuse a canonical key that does not strictly follow the key before it.
+///
+/// One comparison against the previous key refuses a reordering and a repeat
+/// together, in a single linear pass over a document the decoder does not
+/// control. The alternative — searching what has already been read for a repeat
+/// — is quadratic in the document's own length, and the document's length is the
+/// caller's choice.
+///
+/// The two refusals are separate values because they are separate facts. Out of
+/// order is a statement about the *encoding*, identical in every section, so the
+/// section travels as a field. A repeat is a statement about the *data*, and
+/// what it means depends on what the key indexes, so each caller supplies its
+/// own.
+fn require_ascending(
+    section: CanonicalSection,
+    previous: Option<&str>,
+    key: &str,
+    duplicate: impl FnOnce(String) -> PlanError,
+) -> Result<(), PlanError> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    match key.cmp(previous) {
+        core::cmp::Ordering::Greater => Ok(()),
+        core::cmp::Ordering::Equal => Err(duplicate(key.to_owned())),
+        core::cmp::Ordering::Less => Err(PlanError::NonAscendingCanonicalKeys {
+            section,
+            previous: previous.to_owned(),
+            key: key.to_owned(),
+        }),
+    }
+}
+
+/// Read the per-stratum depths, which the encoding lists ascending by stratum.
+///
+/// The order is required rather than merely produced. The map this returns does
+/// not preserve it — it does not need to, because [`write_depths`] sorts again —
+/// but a decoder that accepted any order would accept as many distinct encodings
+/// of one plan as the section has permutations, each digesting to that plan's
+/// single id. A repeated stratum is refused for a sharper reason still: the map
+/// would silently keep whichever depth arrived last.
 fn read_depths(reader: &mut Reader<'_>) -> Result<HashMap<Iri, u32>, PlanError> {
     let count = reader.count()?;
     let mut depths = HashMap::with_capacity(count.min(1024));
+    let mut previous: Option<Iri> = None;
     for _ in 0..count {
         let key = read_iri(reader, "stratum depth key")?;
+        require_ascending(
+            CanonicalSection::StratumDepths,
+            previous.as_ref().map(Iri::as_str),
+            key.as_str(),
+            |stratum| PlanError::DuplicateStratumDepth { stratum },
+        )?;
         let value = reader.u32()?;
-        depths.insert(key, value);
+        depths.insert(key.clone(), value);
+        previous = Some(key);
     }
     Ok(depths)
 }
@@ -1537,6 +1583,12 @@ fn write_derivations(writer: &mut Writer, derivations: &BTreeMap<Iri, DepthInput
 
 /// Read the per-stratum derivations written by [`write_derivations`].
 ///
+/// The strata are required to arrive strictly ascending, which is the order the
+/// [`BTreeMap`] this fills would impose anyway. Requiring it is what stops that
+/// imposition from being a silent repair: a reordered document would decode to
+/// the plan it is not an encoding of, and would have been accepted as one of
+/// many spellings of a plan whose identity is supposed to be its bytes.
+///
 /// A repeated stratum is refused rather than collapsed by the map: two
 /// derivations for one stratum are two explanations of one depth, and silently
 /// keeping the last would let a forged plan carry an explanation the encoder
@@ -1544,8 +1596,15 @@ fn write_derivations(writer: &mut Writer, derivations: &BTreeMap<Iri, DepthInput
 fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs>, PlanError> {
     let count = reader.count()?;
     let mut derivations = BTreeMap::new();
+    let mut previous: Option<Iri> = None;
     for _ in 0..count {
         let stratum = read_iri(reader, "stratum derivation key")?;
+        require_ascending(
+            CanonicalSection::StratumDerivations,
+            previous.as_ref().map(Iri::as_str),
+            stratum.as_str(),
+            |subject| PlanError::DuplicateStatisticsSubject { subject },
+        )?;
         let inputs = DepthInputs {
             declared: reader.u64()?,
             cardinality: reader.option_u64("derivation cardinality presence")?,
@@ -1553,11 +1612,8 @@ fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs
             selectivity_terms: reader.u32_slice()?,
             licensed_prefix: reader.option_u64("derivation licensed prefix presence")?,
         };
-        if derivations.insert(stratum.clone(), inputs).is_some() {
-            return Err(PlanError::DuplicateStatisticsSubject {
-                subject: stratum.as_str().to_owned(),
-            });
-        }
+        derivations.insert(stratum.clone(), inputs);
+        previous = Some(stratum);
     }
     Ok(derivations)
 }
@@ -1593,23 +1649,38 @@ fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
 /// That now holds for the cardinality as well as the selectivity — the two are
 /// one rule, written once.
 ///
-/// A repeated subject is refused by name, by the same construction law a caller
-/// with a `Vec` is held to: two rows for one subject are two answers to one
-/// question, and the decoder has no more basis for picking between them than the
-/// constructor does.
+/// The subjects are required to arrive strictly ascending, which refuses a
+/// reordering and a repeat in one linear pass. A repeated subject is refused by
+/// name, by the same law a caller with a `Vec` is held to: two rows for one
+/// subject are two answers to one question, and the decoder has no more basis
+/// for picking between them than the constructor does. A *reordering* is refused
+/// because the entries' order is established by [`StatisticsEntries`], so an
+/// unordered document is not an encoding of any plan — accepting it would have
+/// meant silently canonicalising bytes whose whole purpose is to be the plan's
+/// identity.
 fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
     let source = reader.string("statistics source")?;
     let revision = reader.string("statistics revision")?;
     let count = reader.count()?;
     let mut entries: Vec<StatisticsEntry> = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
+        let subject = reader.string("statistics subject")?;
+        require_ascending(
+            CanonicalSection::StatisticsEntries,
+            entries.last().map(|entry| entry.subject.as_str()),
+            &subject,
+            |subject| PlanError::DuplicateStatisticsSubject { subject },
+        )?;
         entries.push(StatisticsEntry {
-            subject: reader.string("statistics subject")?,
+            subject,
             cardinality: reader.option_u64("statistics cardinality presence")?,
             selectivity_ppm: reader.option_u64("statistics selectivity presence")?,
             selectivity_terms: reader.u32_slice()?,
         });
     }
+    // Built through the constructor rather than around it, even though the loop
+    // above has already proved what it checks. A decoder holding itself to the
+    // value's own law is a decoder that cannot drift from it.
     Ok(StatisticsSnapshot {
         source,
         revision,

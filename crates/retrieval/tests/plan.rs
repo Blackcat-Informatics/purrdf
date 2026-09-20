@@ -9,10 +9,10 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
-    ProducerDecision, RankFidelity, ReadBound, RegistryId, RejectionReason, RequestTerm,
-    StatisticsDimension, StatisticsEntries, StatisticsEntry, StatisticsSnapshot, Term, TopK,
-    UnservedReason, UnservedTerm,
+    CanonicalSection, DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin,
+    ProducerBinding, ProducerDecision, RankFidelity, ReadBound, RegistryId, RejectionReason,
+    RequestTerm, StatisticsDimension, StatisticsEntries, StatisticsEntry, StatisticsSnapshot, Term,
+    TopK, UnservedReason, UnservedTerm,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
@@ -36,34 +36,35 @@ fn edit_rows(plan: &mut Plan, edit: impl FnOnce(&mut Vec<StatisticsEntry>)) {
         StatisticsEntries::new(rows).expect("the edited rows name each subject once");
 }
 
-/// The canonical bytes of `plan` with its statistics entries written in `order`
-/// — including orders and repetitions no [`StatisticsEntries`] can hold.
+/// The canonical bytes of `plan` with one length-framed keyed section written in
+/// `order` — including orders and repetitions the plan's own containers cannot
+/// hold.
 ///
 /// [`Plan::canonical_bytes`] cannot produce these, which is exactly why the
-/// decoder's refusals have to be driven by bytes rather than by a value: the
-/// value type establishes the order and refuses a repeated subject, so a forged
-/// document is the only remaining way in.
+/// decoder's refusals have to be driven by bytes rather than by a value: a
+/// `BTreeMap` and a [`StatisticsEntries`] both establish their order and refuse
+/// a repeated key, so a forged document is the only remaining way in — and it is
+/// a way in, because the decoder reads whatever a caller hands it.
 ///
-/// The splice is layout-agnostic rather than a hand-written encoding. The entry
-/// sequence is located by encoding the same plan with no rows and with one: the
+/// The splice is layout-agnostic rather than a hand-written encoding. The
+/// section is located by encoding the same plan with no items and with one: the
 /// two agree up to the framed count and differ there, which names the count's
-/// offset and hence the suffix. Each row's block is then cut out of a one-row
+/// offset and hence the suffix. Each item's block is then cut out of a one-item
 /// encoding of the same plan. Nothing here knows the plan's field order, so a
-/// later field added anywhere leaves it correct.
-fn forge_statistics_entries(plan: &Plan, order: &[StatisticsEntry]) -> Vec<u8> {
-    let encode_with = |rows: Vec<StatisticsEntry>| {
+/// field added anywhere leaves it correct.
+fn forge_section<T: Clone>(plan: &Plan, set: impl Fn(&mut Plan, Vec<T>), order: &[T]) -> Vec<u8> {
+    let encode_with = |items: Vec<T>| {
         let mut forged = plan.clone();
-        forged.statistics_snapshot.entries =
-            StatisticsEntries::new(rows).expect("each spliced encoding carries at most one row");
+        set(&mut forged, items);
         forged.canonical_bytes()
     };
     let empty = encode_with(Vec::new());
-    let single = encode_with(vec![order.first().expect("an order names a row").clone()]);
+    let single = encode_with(vec![order.first().expect("an order names an item").clone()]);
     let count_offset = empty
         .iter()
         .zip(&single)
         .position(|(left, right)| left != right)
-        .expect("the framed entry count differs between no rows and one");
+        .expect("the framed item count differs between no items and one");
     let suffix = &empty[count_offset + 8..];
 
     let mut bytes = empty[..count_offset].to_vec();
@@ -72,12 +73,42 @@ fn forge_statistics_entries(plan: &Plan, order: &[StatisticsEntry]) -> Vec<u8> {
             .expect("a fixture order fits a u64")
             .to_le_bytes(),
     );
-    for entry in order {
-        let block = encode_with(vec![entry.clone()]);
+    for item in order {
+        let block = encode_with(vec![item.clone()]);
         bytes.extend_from_slice(&block[count_offset + 8..block.len() - suffix.len()]);
     }
     bytes.extend_from_slice(suffix);
     bytes
+}
+
+/// [`forge_section`] over the statistics snapshot's entries.
+fn forge_statistics_entries(plan: &Plan, order: &[StatisticsEntry]) -> Vec<u8> {
+    forge_section(
+        plan,
+        |forged, rows| {
+            forged.statistics_snapshot.entries = StatisticsEntries::new(rows)
+                .expect("each spliced encoding carries at most one row");
+        },
+        order,
+    )
+}
+
+/// [`forge_section`] over the per-stratum depths.
+fn forge_stratum_depths(plan: &Plan, order: &[(Iri, u32)]) -> Vec<u8> {
+    forge_section(
+        plan,
+        |forged, rows| forged.stratum_depths = rows.into_iter().collect(),
+        order,
+    )
+}
+
+/// [`forge_section`] over the per-stratum depth derivations.
+fn forge_stratum_derivations(plan: &Plan, order: &[(Iri, DepthInputs)]) -> Vec<u8> {
+    forge_section(
+        plan,
+        |forged, rows| forged.stratum_derivations = rows.into_iter().collect(),
+        order,
+    )
 }
 
 fn stratum() -> Iri {
@@ -1230,6 +1261,185 @@ fn a_canonical_document_naming_one_subject_twice_is_refused() {
     );
     let decoded = Plan::from_canonical_bytes(&spliced).expect("an honest document decodes");
     assert_eq!(decoded, plan);
+}
+
+/// The baseline widened to two strata, every recorded number distinct.
+///
+/// Distinct declarations, distinct depths and distinct snapshot rows, so a
+/// decoder that dropped one record, kept the wrong one of two, or mapped a value
+/// onto the wrong stratum fails on a number rather than on a shape. It certifies
+/// before it is returned, so every fixture below starts from a plan whose own
+/// evidence supports it.
+fn two_strata() -> Plan {
+    let mut plan = baseline();
+    let second = iri("http://example.org/stratum/b");
+    plan.stratum_derivations.insert(
+        second.clone(),
+        DepthInputs {
+            declared: 4,
+            cardinality: Some(4),
+            selectivity_ppm: None,
+            selectivity_terms: Vec::new(),
+            licensed_prefix: Some(25),
+        },
+    );
+    plan.stratum_depths.insert(second.clone(), 4);
+    edit_rows(&mut plan, |rows| {
+        rows.push(StatisticsEntry {
+            subject: second.as_str().to_owned(),
+            cardinality: Some(4),
+            selectivity_ppm: None,
+            selectivity_terms: Vec::new(),
+        });
+    });
+    plan.certify()
+        .expect("the widened baseline is honest about both of its strata");
+    plan
+}
+
+/// A canonical document whose subjects are not ascending is refused, and the
+/// same splice in ascending order is the encoder's own bytes.
+///
+/// Both halves run. A decoder that refused every spliced document would pass the
+/// first assertion alone — so the neighbour asserts byte equality with
+/// [`Plan::canonical_bytes`], which proves the refusal is about the order rather
+/// than about the forging.
+#[test]
+fn a_canonical_document_listing_subjects_out_of_order_is_refused() {
+    let plan = two_strata();
+    let rows = plan.statistics_snapshot.entries.to_vec();
+    let mut reversed = rows.clone();
+    reversed.reverse();
+
+    match Plan::from_canonical_bytes(&forge_statistics_entries(&plan, &reversed))
+        .expect_err("an unordered snapshot is refused")
+    {
+        PlanError::NonAscendingCanonicalKeys {
+            section,
+            previous,
+            key,
+        } => {
+            assert_eq!(section, CanonicalSection::StatisticsEntries);
+            assert_eq!(previous, rows[2].subject, "the key read before it");
+            assert_eq!(key, rows[1].subject, "and the key that did not follow it");
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    let honest = forge_statistics_entries(&plan, &rows);
+    assert_eq!(
+        honest,
+        plan.canonical_bytes(),
+        "the ascending splice is the encoder's own document"
+    );
+    let decoded = Plan::from_canonical_bytes(&honest).expect("an ascending document decodes");
+    assert_eq!(decoded.statistics_snapshot.entries.to_vec(), rows);
+}
+
+/// A canonical document that repeats or reorders a stratum derivation is
+/// refused, and the same splice in ascending order decodes to the plan it was
+/// cut from.
+#[test]
+fn a_canonical_document_repeating_or_reordering_a_derivation_is_refused() {
+    let plan = two_strata();
+    let ordered: Vec<(Iri, DepthInputs)> = plan
+        .stratum_derivations
+        .iter()
+        .map(|(stratum, inputs)| (stratum.clone(), inputs.clone()))
+        .collect();
+    let mut reversed = ordered.clone();
+    reversed.reverse();
+
+    match Plan::from_canonical_bytes(&forge_stratum_derivations(&plan, &reversed))
+        .expect_err("unordered derivations are refused")
+    {
+        PlanError::NonAscendingCanonicalKeys {
+            section,
+            previous,
+            key,
+        } => {
+            assert_eq!(section, CanonicalSection::StratumDerivations);
+            assert_eq!(previous, ordered[1].0.as_str());
+            assert_eq!(key, ordered[0].0.as_str());
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    let repeated = [ordered[0].clone(), ordered[0].clone()];
+    match Plan::from_canonical_bytes(&forge_stratum_derivations(&plan, &repeated))
+        .expect_err("two derivations of one stratum are refused")
+    {
+        PlanError::DuplicateStatisticsSubject { subject } => {
+            assert_eq!(subject, ordered[0].0.as_str());
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The neighbour: two derivations for two strata, ascending. Their
+    // declarations differ, so a decoder that kept one twice or mapped one onto
+    // the other fails on the number.
+    let honest = forge_stratum_derivations(&plan, &ordered);
+    assert_eq!(honest, plan.canonical_bytes());
+    let decoded = Plan::from_canonical_bytes(&honest).expect("ascending derivations decode");
+    assert_eq!(decoded.stratum_derivations, plan.stratum_derivations);
+    assert_eq!(decoded.stratum_derivations[&ordered[0].0].declared, 10);
+    assert_eq!(decoded.stratum_derivations[&ordered[1].0].declared, 4);
+}
+
+/// A canonical document that repeats or reorders a stratum depth is refused, and
+/// the same splice in ascending order decodes to the plan it was cut from.
+///
+/// The repeat is the sharper of the two: the `HashMap` the decoder fills would
+/// have kept whichever depth arrived last, so a forged document could have
+/// chosen how deep a stratum is read while the plan beside it said otherwise.
+#[test]
+fn a_canonical_document_repeating_or_reordering_a_depth_is_refused() {
+    let plan = two_strata();
+    let mut ordered: Vec<(Iri, u32)> = plan
+        .stratum_depths
+        .iter()
+        .map(|(stratum, depth)| (stratum.clone(), *depth))
+        .collect();
+    ordered.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut reversed = ordered.clone();
+    reversed.reverse();
+
+    match Plan::from_canonical_bytes(&forge_stratum_depths(&plan, &reversed))
+        .expect_err("unordered depths are refused")
+    {
+        PlanError::NonAscendingCanonicalKeys {
+            section,
+            previous,
+            key,
+        } => {
+            assert_eq!(section, CanonicalSection::StratumDepths);
+            assert_eq!(previous, ordered[1].0.as_str());
+            assert_eq!(key, ordered[0].0.as_str());
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // Two depths for one stratum, and they differ — so the map would have
+    // silently answered with the second.
+    let repeated = [
+        (ordered[0].0.clone(), ordered[0].1),
+        (ordered[0].0.clone(), ordered[0].1 + 5),
+    ];
+    match Plan::from_canonical_bytes(&forge_stratum_depths(&plan, &repeated))
+        .expect_err("two depths for one stratum are refused")
+    {
+        PlanError::DuplicateStratumDepth { stratum } => {
+            assert_eq!(stratum, ordered[0].0.as_str());
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    let honest = forge_stratum_depths(&plan, &ordered);
+    assert_eq!(honest, plan.canonical_bytes());
+    let decoded = Plan::from_canonical_bytes(&honest).expect("ascending depths decode");
+    assert_eq!(decoded.stratum_depths, plan.stratum_depths);
+    assert_eq!(decoded.stratum_depths[&ordered[0].0], 10);
+    assert_eq!(decoded.stratum_depths[&ordered[1].0], 4);
 }
 
 /// A hand-written serde document is held to the entries' construction law: a

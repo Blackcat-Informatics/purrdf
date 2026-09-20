@@ -172,13 +172,63 @@ pub enum PlanError {
     ///
     /// The snapshot is a record of what a provider reported about a subject, so
     /// two rows for one subject are two answers to one question with nothing
-    /// saying which was used. The encoding sorts by subject, so a duplicate is
-    /// also the one shape under which sorting does not make the bytes a pure
-    /// function of the entries.
+    /// saying which was used. Refused rather than resolved, because resolving it
+    /// — keeping the first, the last, or the wider — would be inventing a rule
+    /// the data does not carry.
     #[error("statistics snapshot names subject {subject} more than once")]
     DuplicateStatisticsSubject {
         /// The repeated subject, as its recorded text.
         subject: String,
+    },
+
+    /// A canonical encoding recorded two depths for one stratum.
+    ///
+    /// A depth decides how deep that stratum is actually read, so two of them
+    /// are two different reads with nothing saying which the plan describes. The
+    /// map the decoder fills would keep whichever arrived last — a silent choice
+    /// between two claims — so the encoding is refused instead.
+    #[error("plan canonical encoding records a depth for stratum {stratum} more than once")]
+    DuplicateStratumDepth {
+        /// The repeated stratum, as its recorded IRI text.
+        stratum: String,
+    },
+
+    /// A canonical encoding listed a keyed section's keys out of ascending
+    /// order.
+    ///
+    /// Canonical bytes are the plan's identity, which requires the map from
+    /// plans to encodings to run both ways: one plan, one encoding, and one
+    /// encoding, one plan. A decoder that accepted any order would break the
+    /// second half — the same plan would have as many valid encodings as its
+    /// sections have permutations, each digesting to the plan's one id while
+    /// being a document the encoder would never write. So the order is required
+    /// on the way in, exactly as it is established on the way out.
+    ///
+    /// It is also what makes the check affordable. Comparing each key against
+    /// the one before it refuses a repeat and a reordering in one linear pass,
+    /// where scanning everything already read for a repeat is quadratic in the
+    /// length of a document the decoder does not control.
+    ///
+    /// # Why the section is a field rather than three variants
+    ///
+    /// Out-of-order is one fact about an encoding, and it means the same thing
+    /// wherever it occurs: these bytes are not canonical. The section says where,
+    /// and carrying it as a typed field is how
+    /// [`StatisticsEntryContradictsDerivation`](Self::StatisticsEntryContradictsDerivation)
+    /// carries its dimension. A *repeated* key is the opposite case — what two
+    /// rows for one key mean depends entirely on what the key indexes, so each
+    /// section refuses a repeat by its own name.
+    #[error(
+        "plan canonical encoding lists {section} key {key} after {previous}; a canonical encoding \
+         orders them ascending"
+    )]
+    NonAscendingCanonicalKeys {
+        /// Which keyed section was being decoded.
+        section: CanonicalSection,
+        /// The key read immediately before, as its recorded text.
+        previous: String,
+        /// The key that did not follow it, as its recorded text.
+        key: String,
     },
 
     /// A recorded depth is not the depth its own recorded inputs derive.
@@ -257,6 +307,36 @@ pub enum PlanError {
         /// What the derivation records for it.
         derivation: String,
     },
+}
+
+/// Which keyed section of a canonical encoding was being decoded.
+///
+/// Carried by
+/// [`PlanError::NonAscendingCanonicalKeys`](PlanError::NonAscendingCanonicalKeys)
+/// so a refusal says which of a plan's three keyed sequences was not ordered.
+/// They are written by different encoders, read into different containers and
+/// keyed on different things, and a caller repairing a document needs to know
+/// which one moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CanonicalSection {
+    /// The per-stratum depths, keyed by stratum IRI.
+    StratumDepths,
+    /// The per-stratum depth derivations, keyed by stratum IRI.
+    StratumDerivations,
+    /// The statistics snapshot's entries, keyed by subject.
+    StatisticsEntries,
+}
+
+impl core::fmt::Display for CanonicalSection {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let name = match self {
+            Self::StratumDepths => "stratum depth",
+            Self::StratumDerivations => "stratum derivation",
+            Self::StatisticsEntries => "statistics snapshot",
+        };
+        formatter.write_str(name)
+    }
 }
 
 /// Which statistic a plan's two records of one stratum disagree about.
