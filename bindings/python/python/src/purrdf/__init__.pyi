@@ -2299,11 +2299,29 @@ _TextProducerSpec: TypeAlias = (
     | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity]
 )
 
+class _PlanDocumentError(ValueError):
+    """A refusal from the plan-document boundary: `certify_plan`, `explain_depth`.
+
+    `refusal` is one of the engine's pinned kebab-case names. Decode side:
+    `version`, `truncated`, `trailing-bytes`, `invalid-tag`, `invalid-utf8`,
+    `invalid-iri`, `non-ascending-keys`, `duplicate-stratum-depth`,
+    `duplicate-stratum-derivation`, `duplicate-statistics-subject`. Certificate
+    side: `depth-not-derivable`, `depth-without-derivation`,
+    `derivation-without-depth`, `derivation-without-statistics-entry`,
+    `statistics-entry-contradicts-derivation`. Branch on it, never on `str(exc)`.
+    """
+
+    refusal: str
+
 class retrieval:
     # The decimal exponent of one whole fixed-point unit.
     SCALE_DIGITS: int
     # One whole fixed-point unit, in raw units: the weight `Fixed::ONE`.
     SCALE: int
+    # Spelled with an explicit `TypeAlias`, exactly as `purrdf.shapes` spells its
+    # own re-exports and for the same reason: this is a type a caller ANNOTATES
+    # with, and a plain `X = X` reads to a type checker as a variable.
+    PlanDocumentError: TypeAlias = _PlanDocumentError
 
     # Every entry point that takes a smoothing constant `k` also takes the
     # `decay` rule it belongs to, as one of two spellings, with no default:
@@ -2381,6 +2399,12 @@ class retrieval:
     # strata whose declared blocks do not overlap each stratum is planned to `k`
     # rows and no deeper, and over anything else the declared-or-measured bound
     # stands. It never widens a depth, and it never changes an answer.
+    #
+    # `"canonical_bytes"` is the plan's canonical, length-framed encoding as
+    # `bytes` — what a host stores, logs, or sends somewhere else. `"plan_id"` is
+    # its digest, so the two are one fact: a plan can leave this process and be
+    # handed back to `certify_plan`, which is where the recorded depths are
+    # checked against the recorded inputs.
     @staticmethod
     def plan(
         data: str,
@@ -2392,6 +2416,53 @@ class retrieval:
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
+    # Decode a plan document and check every depth it records against the inputs
+    # it records beside them.
+    #
+    # `plan_bytes` is exactly what `plan(...)["canonical_bytes"]` handed out, and
+    # the answer is the DECODED plan rendered as `plan` renders it — so a host
+    # reads back the document it received rather than the one it believes it
+    # sent. The round trip is exact: an untampered document renders equal to the
+    # dict it came from, `"plan_id"` included.
+    #
+    # A plan is untrusted input. It can be edited and it can be forged, and its
+    # depths decide how deep each stratum is actually read. The plan records
+    # every input those depths were derived from, so this recomputes each with
+    # the engine's own arithmetic and refuses a plan the two disagree about.
+    #
+    # It is the COLD path. What it answers — is this document internally coherent
+    # at all — is a property of the bytes alone, unmoved by the registry or the
+    # statistics in force now, so it is asked once by the party that received
+    # them.
+    #
+    # Every refusal raises `retrieval.PlanDocumentError` with a pinned `.refusal`
+    # name; branch on that, never on the message. A layout this build does not
+    # write is `version`; a keyed section out of order is `non-ascending-keys`;
+    # one stratum recorded twice is `duplicate-stratum-depth` or
+    # `duplicate-stratum-derivation`; a depth that does not follow from its own
+    # inputs is `depth-not-derivable`; a stratum the snapshot names nowhere is
+    # `derivation-without-statistics-entry`; and a snapshot row saying something
+    # other than the derivation beside it is
+    # `statistics-entry-contradicts-derivation`.
+    @staticmethod
+    def certify_plan(plan_bytes: bytes) -> dict[str, builtins.object]: ...
+    # Which recorded input bound `stratum`'s depth in the plan document
+    # `plan_bytes`, or `None` when that plan records no derivation for it.
+    #
+    # One of `"declaration"`, `"cardinality"`, `"selectivity"`,
+    # `"licensed_prefix"`, `"floor"`, `"unbounded"` or `"read_ceiling"` — the
+    # same closed vocabulary `plan` renders under each derivation's `"cause"`,
+    # from the same engine call. A depth of one is the motivating case: it
+    # arrives by four different roads with four different remedies, and the
+    # number alone does not say which.
+    #
+    # It reads the derivation the document records and does NOT certify it. "Which
+    # leg bound this number" and "does this number follow from those legs" are
+    # different questions, and `certify_plan` answers the second over the whole
+    # plan at once. Raises `retrieval.PlanDocumentError` for every way the
+    # document itself is refused, plus `invalid-iri` when `stratum` is not an IRI.
+    @staticmethod
+    def explain_depth(plan_bytes: bytes, stratum: str) -> str | None: ...
     # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
     #
     # Each entry under `"units"` is `{"stratum": str, "sparql": str, "depth": int,

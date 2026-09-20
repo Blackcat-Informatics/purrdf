@@ -1819,3 +1819,96 @@ fn a_version_three_document_is_refused_by_name() {
         other => panic!("a stale layout must be refused by name, not by a parse error: {other:?}"),
     }
 }
+
+/// Every refusal names itself, and no two refusals name the same thing.
+///
+/// [`PlanError::refusal`] is what a caller branches on — a host receiving plans
+/// from somewhere it does not control, a binding rendering them into its own
+/// vocabulary — so two variants sharing a name would make two different facts
+/// indistinguishable at exactly the moment the caller is trying to tell them
+/// apart, and a copy-pasted arm is how that happens. The exhaustive match in
+/// `refusal` already makes an *unnamed* variant a compile error; this is the
+/// other half.
+#[test]
+fn every_plan_refusal_has_its_own_pinned_name() {
+    let stratum = || "https://example.org/stratum/text".to_owned();
+    let refusals = [
+        PlanError::VersionMismatch {
+            found: 3,
+            expected: PLAN_VERSION,
+        },
+        PlanError::NoApplicableProducers,
+        PlanError::InvalidRequestTerm {
+            term: Box::new(RequestTerm::Lexical {
+                text: "quick".to_owned(),
+                language: None,
+                predicate: None,
+            }),
+            reason: "empty".to_owned(),
+        },
+        PlanError::ReadBoundBeyondDepthRange {
+            requested: 1,
+            ceiling: 2,
+        },
+        PlanError::RegistryDeclaration {
+            message: "panicked".to_owned(),
+        },
+        PlanError::Truncated { offset: 0 },
+        PlanError::InvalidTag {
+            what: "metric",
+            tag: 9,
+        },
+        PlanError::InvalidUtf8 { what: "producer" },
+        Iri::parse("not an iri").expect_err("a malformed IRI is refused"),
+        PlanError::TrailingBytes { extra: 1 },
+        PlanError::UndeclaredRowBound {
+            stratum: stratum(),
+            producer: "https://example.org/pf/text".to_owned(),
+        },
+        PlanError::DuplicateStatisticsSubject { subject: stratum() },
+        PlanError::DuplicateStratumDerivation { stratum: stratum() },
+        PlanError::DuplicateStratumDepth { stratum: stratum() },
+        PlanError::NonAscendingCanonicalKeys {
+            section: CanonicalSection::StratumDepths,
+            previous: stratum(),
+            key: stratum(),
+        },
+        PlanError::DepthNotDerivable {
+            stratum: stratum(),
+            recorded: 2,
+            derived: 1,
+        },
+        PlanError::DepthWithoutDerivation { stratum: stratum() },
+        PlanError::DerivationWithoutDepth { stratum: stratum() },
+        PlanError::DerivationWithoutStatisticsEntry { stratum: stratum() },
+        PlanError::StatisticsEntryContradictsDerivation {
+            stratum: stratum(),
+            dimension: StatisticsDimension::Cardinality,
+            snapshot: "2".to_owned(),
+            derivation: "3".to_owned(),
+        },
+    ];
+
+    let mut seen: BTreeMap<&'static str, String> = BTreeMap::new();
+    for refusal in &refusals {
+        let name = refusal.refusal();
+        assert!(
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'),
+            "a refusal name is pinned, machine-readable and kebab-case; {name:?} is not"
+        );
+        if let Some(previous) = seen.insert(name, format!("{refusal}")) {
+            panic!(
+                "two refusals both name themselves {name:?}: {previous} — and {refusal}; a caller \
+                 branching on the name cannot tell them apart"
+            );
+        }
+    }
+    assert_eq!(
+        seen.len(),
+        refusals.len(),
+        "every refusal above contributes its own name"
+    );
+}

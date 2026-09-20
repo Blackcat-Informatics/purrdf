@@ -377,6 +377,56 @@ pub enum PlanError {
     },
 }
 
+impl PlanError {
+    /// The pinned, machine-readable name of this refusal.
+    ///
+    /// A refusal's message is prose and may be reworded; this is the contract. A
+    /// caller branching on which refusal it received — a host receiving plans
+    /// from somewhere it does not control, a binding rendering them into its own
+    /// vocabulary — reads this and never `to_string`.
+    ///
+    /// # It lives here rather than at each caller
+    ///
+    /// The enum is `#[non_exhaustive]`, so a match written in any other crate
+    /// needs a wildcard arm, and a wildcard arm over a *name* has nothing honest
+    /// to return: it would have to invent a word for a refusal it cannot name,
+    /// handed to the caller at the one moment the caller is trying to find out
+    /// which refusal it got. Inside this module the match is exhaustive, so a
+    /// variant added without a name is a compile error here — the same discipline
+    /// [`DepthCause`](crate::DepthCause) gets from being a closed enum.
+    ///
+    /// Every name is fixed once issued, for the reason a canonical tag is: a
+    /// caller that branches on the string is broken by a rename exactly as
+    /// silently as by a renumbered discriminator.
+    #[must_use]
+    pub fn refusal(&self) -> &'static str {
+        match self {
+            Self::VersionMismatch { .. } => "version",
+            Self::NoApplicableProducers => "no-applicable-producers",
+            Self::InvalidRequestTerm { .. } => "invalid-request-term",
+            Self::ReadBoundBeyondDepthRange { .. } => "read-bound-beyond-depth-range",
+            Self::RegistryDeclaration { .. } => "registry-declaration",
+            Self::Truncated { .. } => "truncated",
+            Self::InvalidTag { .. } => "invalid-tag",
+            Self::InvalidUtf8 { .. } => "invalid-utf8",
+            Self::InvalidIri { .. } => "invalid-iri",
+            Self::TrailingBytes { .. } => "trailing-bytes",
+            Self::UndeclaredRowBound { .. } => "undeclared-row-bound",
+            Self::DuplicateStatisticsSubject { .. } => "duplicate-statistics-subject",
+            Self::DuplicateStratumDerivation { .. } => "duplicate-stratum-derivation",
+            Self::DuplicateStratumDepth { .. } => "duplicate-stratum-depth",
+            Self::NonAscendingCanonicalKeys { .. } => "non-ascending-keys",
+            Self::DepthNotDerivable { .. } => "depth-not-derivable",
+            Self::DepthWithoutDerivation { .. } => "depth-without-derivation",
+            Self::DerivationWithoutDepth { .. } => "derivation-without-depth",
+            Self::DerivationWithoutStatisticsEntry { .. } => "derivation-without-statistics-entry",
+            Self::StatisticsEntryContradictsDerivation { .. } => {
+                "statistics-entry-contradicts-derivation"
+            }
+        }
+    }
+}
+
 /// Which keyed section of a canonical encoding was being decoded.
 ///
 /// Carried by
