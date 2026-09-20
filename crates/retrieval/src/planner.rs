@@ -978,7 +978,7 @@ fn consult(
 /// its declaration cannot answer on the registry's behalf: is that still true?
 /// The producer answers with [`crate::ProducerStatus::Exhausted`] and a row count of
 /// zero, which is a true completeness claim, because it really did read. So
-/// [`crate::admission`] admits a depth of one against a declared zero, and the
+/// admission admits a depth of one against a declared zero, and the
 /// compiler's `emitted_limit` never writes a `LIMIT 0`; the floor and those two
 /// are one rule in three places.
 ///
@@ -999,7 +999,7 @@ fn consult(
 /// that is not a field of [`DepthInputs`] cannot reach this arithmetic at all**,
 /// which is what keeps the record complete as the derivation grows.
 ///
-/// The [`MAX_READ_DEPTH`] clamp is applied **here** rather than at the call site,
+/// The `MAX_READ_DEPTH` clamp is applied **here** rather than at the call site,
 /// because a checker that recomputed the bound and omitted the clamp would
 /// disagree with the planner at the ceiling and refuse an honest plan.
 #[must_use]
@@ -1103,7 +1103,7 @@ pub fn depth_cause(inputs: &DepthInputs) -> DepthCause {
 
 /// Record a derived bound at the deepest depth a read can be taken to.
 ///
-/// Recorded at [`MAX_READ_DEPTH`] wherever the derived bound is deeper than
+/// Recorded at `MAX_READ_DEPTH` wherever the derived bound is deeper than
 /// that — including the genuinely unbounded [`u64::MAX`], which is the same fact
 /// about the read: more rows than a read can reach. This used to be
 /// `PlanError::StatisticsUnavailable`, and what made that refusal obsolete is

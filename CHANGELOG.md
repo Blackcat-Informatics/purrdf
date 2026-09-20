@@ -1321,12 +1321,44 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   repairs differ. It closes a latent defect -- a plan could be fused at any bound,
   including one its depths could not honestly serve, with nothing catching it.
 
-- **BREAKING** **retrieval:** `PLAN_VERSION` is 3. The canonical plan encoding
-  appends the request's read bound after the per-term unserved evidence, which
-  every recorded depth is derived from; a version-2 plan's bytes end where the
-  bound would begin, so the decoder refuses the old layout by name instead of
-  running off the end of it. Every plan identity moves, as does the plan document's
-  JSON, which now carries `"read_bound"`.
+- **BREAKING** **retrieval:** `PLAN_VERSION` is 4. A plan now records **every
+  input each stratum's depth was derived from** — the registry's declared row
+  bound, the reported cardinality, the selectivity that was actually applied
+  together with the request terms it aggregates over, and whether the request's
+  row bound was licensed to bound that stratum — in a new `stratum_derivations`
+  field. `Plan::certify` recomputes each depth from the inputs beside it through
+  the same arithmetic the planner ran (`depth_from`, also public) and refuses a
+  plan the two disagree about; `Plan::explain_depth` names which input bound a
+  depth, which distinguishes the four roads to a depth of one that were
+  previously indistinguishable. Both are cold paths: admission does not call
+  them.
+
+  Version 3 appended the request's read bound after the per-term unserved
+  evidence because a plan that did not record it "recorded depths whose
+  derivation could not be reconstructed". That bound is what the caller asked
+  for, and whether it was *allowed* to bound a given stratum is decided
+  separately, from the shape of the surviving declarations — so two plans could
+  agree on every recorded field and still have derived their depths from
+  different numbers. Version 4 closes that, along with the declared row bound,
+  which no plan recorded at all.
+
+  `StatisticsEntry.cardinality` is now `Option<u64>`, absent where the provider
+  reported none, under the same presence discriminator its selectivity already
+  used. A provider that reported only a selectivity narrowed a planned depth and
+  was then dropped from the snapshot entirely, so the plan was built against
+  evidence it did not record. `StatisticsEntry` also carries
+  `selectivity_terms`, the request-term indices its aggregate came from: the
+  aggregate is a sum, so a provider moving the same total onto a different term
+  previously left a byte-identical plan describing a different measurement. The
+  snapshot's entries now carry the request predicates only — the subjects no
+  depth is derived for — and are sorted by subject, with a duplicate subject
+  refused at decode, so a hand-built plan can no longer carry many identities for
+  one content.
+
+  A version-3 plan's bytes lie at different offsets under this layout, so the
+  decoder refuses the old version by name instead of misreading it. Every plan
+  identity moves, as does the plan document's JSON, which now carries
+  `"stratum_derivations"` and `"selectivity_terms"`.
 
 - **BREAKING** **python:** `retrieval.plan` and `retrieval.compile` take the
   `top_k` keyword `retrieval.search` already took, and all three require it. The

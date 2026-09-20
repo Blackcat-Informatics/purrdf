@@ -148,10 +148,9 @@ pub enum PlanError {
     ///
     /// Unreachable against a registry that did not move under the plan, and
     /// refused rather than defaulted for exactly that reason.
-    /// [`place`](crate::matching) admits an invocation only when some declared
-    /// mode subsumes it, and the declared row bound is read by filtering on that
-    /// same predicate — so a placement that succeeded has already proved the
-    /// filter is non-empty.
+    /// Placement admits an invocation only when some declared mode subsumes it,
+    /// and the declared row bound is read by filtering on that same predicate —
+    /// so a placement that succeeded has already proved the filter is non-empty.
     ///
     /// The alternative was a default, and every available default is a lie about
     /// a number the depth is derived from: zero declares an empty relation and

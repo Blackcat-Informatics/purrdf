@@ -408,12 +408,22 @@ pub struct StatisticsEntry {
     pub selectivity_terms: Vec<u32>,
 }
 
-/// The statistics a plan was planned against.
+/// The statistics a plan was planned against, for the subjects no depth is
+/// derived for.
 ///
 /// Statistics are an explicit input to planning, not something the planner
 /// reaches into a store for; the emitted plan records what it assumed so a
 /// replay against moved statistics is a detectable condition rather than a
-/// silent replan.
+/// silent replan. "What it assumed" is defined rather than implied: an entry
+/// exists for every subject planning consulted, and each statistic is absent
+/// when the provider reported none — so a subject the provider was silent about
+/// is still named, and a subject nothing consulted is absent rather than
+/// recorded as empty.
+///
+/// The strata are **not** here. Their statistics produce a number, so they are
+/// recorded in [`Plan::stratum_derivations`] beside the depth they produced,
+/// where [`Plan::certify`] can check the one against the other. What remains
+/// here is context: the request's own predicates, which bound nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatisticsSnapshot {
     /// A caller-supplied label for the statistics provider.
