@@ -79,6 +79,50 @@ impl Writer {
             }
         }
     }
+
+    /// Write a present/absent discriminant and, when present, a little-endian
+    /// `u64`.
+    ///
+    /// Absence is a tag rather than a sentinel value because every `u64` is a
+    /// legal measurement: zero is "the provider measured none", and a sentinel
+    /// would make one measurement unrepresentable in order to spell the absence
+    /// of all of them. The discriminant is the same one
+    /// [`Self::option_string`] writes, so the encoding spells "present" one way
+    /// throughout.
+    pub(crate) fn option_u64(&mut self, value: Option<u64>) {
+        match value {
+            None => self.u8(0),
+            Some(value) => {
+                self.u8(1);
+                self.u64(value);
+            }
+        }
+    }
+
+    /// Write a present/absent discriminant and, when present, a little-endian
+    /// `i128`.
+    ///
+    /// The discriminant is the one [`Self::option_string`] and
+    /// [`Self::option_u64`] write, so the encoding spells "present" one way
+    /// throughout — which is a property of this module only for as long as every
+    /// optional field is written through it.
+    pub(crate) fn option_i128(&mut self, value: Option<i128>) {
+        match value {
+            None => self.u8(0),
+            Some(value) => {
+                self.u8(1);
+                self.i128(value);
+            }
+        }
+    }
+
+    /// Write a length-framed run of little-endian `u32`s.
+    pub(crate) fn u32_slice(&mut self, values: &[u32]) {
+        self.u64(values.len() as u64);
+        for value in values {
+            self.u32(*value);
+        }
+    }
 }
 
 /// A cursor over canonical bytes.
@@ -178,6 +222,48 @@ impl<'a> Reader<'a> {
             1 => Ok(Some(self.string(what)?)),
             tag => Err(PlanError::InvalidTag { what, tag }),
         }
+    }
+
+    /// Read a present/absent discriminant and, when present, a `u64`.
+    ///
+    /// An absent value stays absent. "The provider measured nothing" and "the
+    /// provider measured zero" are different facts, and a decoder that read the
+    /// first as the second would turn silence into a claim.
+    pub(crate) fn option_u64(&mut self, what: &'static str) -> Result<Option<u64>, PlanError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => Ok(Some(self.u64()?)),
+            tag => Err(PlanError::InvalidTag { what, tag }),
+        }
+    }
+
+    /// Read a present/absent discriminant and, when present, an `i128`.
+    ///
+    /// A discriminant that is neither is a typed refusal rather than a
+    /// treated-as-absent field: the optional values written this way are the
+    /// endpoints of a constrained request term, and reading a constrained one as
+    /// unconstrained would widen the query the plan describes.
+    pub(crate) fn option_i128(&mut self, what: &'static str) -> Result<Option<i128>, PlanError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => Ok(Some(self.i128()?)),
+            tag => Err(PlanError::InvalidTag { what, tag }),
+        }
+    }
+
+    /// Read a length-framed run of little-endian `u32`s.
+    ///
+    /// The declared count is capped before it is used to reserve, so a hostile
+    /// encoding cannot make a short document allocate a long vector; the loop
+    /// still reads every element the count names and runs out of bytes by name
+    /// if the document lied.
+    pub(crate) fn u32_slice(&mut self) -> Result<Vec<u32>, PlanError> {
+        let count = self.count()?;
+        let mut values = Vec::with_capacity(count.min(1024));
+        for _ in 0..count {
+            values.push(self.u32()?);
+        }
+        Ok(values)
     }
 
     /// Read a length prefix and return it as a `usize`.

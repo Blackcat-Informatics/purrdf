@@ -30,14 +30,14 @@
 //! registry. Those two cases must be admitted on different terms, so the plan
 //! records which it is in [`PlanOrigin`] rather than leaving admission to guess.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use purrdf_sparql_eval::RegistryId;
 use purrdf_text::Fixed;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::canonical::{Reader, Writer};
-use crate::error::PlanError;
+use crate::error::{CanonicalSection, PlanError, StatisticsDimension};
 use crate::fuse::TopK;
 use crate::id::{PLAN_VERSION, PlanId};
 use crate::iri::{Iri, Term};
@@ -81,8 +81,12 @@ const UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED: u8 = 1;
 const UNSERVED_UNBOUND: u8 = 2;
 const UNSERVED_ACCEPTED_WITHOUT_PLACEMENT: u8 = 3;
 
-const PRESENT: u8 = 1;
-const ABSENT: u8 = 0;
+// There is no presence discriminator here. Absence is spelled once, by the
+// `option_*` helpers on [`Writer`](crate::canonical::Writer) and
+// [`Reader`](crate::canonical::Reader), and every optional field in this module
+// goes through them. A second pair of constants matching those helpers byte for
+// byte would be one edit away from not matching them, and the encoding would
+// then spell "present" two ways while claiming to spell it one.
 
 /// Serde bridge for [`RegistryId`], which carries its counter privately and has
 /// no serde impl of its own. The value is encoded as the raw `u64` counter; a
@@ -290,31 +294,348 @@ pub struct UnservedTerm {
     pub reason: UnservedReason,
 }
 
-/// One entry of a statistics snapshot.
+/// Everything one stratum's planned depth was derived from.
+///
+/// # Why a plan records this
+///
+/// A depth is a claim about how deep a read may go, and a claim a reader cannot
+/// check is a claim a reader must take on trust. These fields are the *arguments*
+/// to [`depth_from`](crate::depth_from), the one function that derives a depth —
+/// so recording them makes [`Plan::certify`] able to recompute the number beside
+/// them and refuse a plan whose depth does not follow from its own inputs.
+///
+/// That framing is also what keeps the record honest as the derivation grows:
+/// `depth_from` takes nothing but a `DepthInputs`, so **an input that is not
+/// recorded here cannot be an input at all**. A leg that goes unrecorded is a
+/// compile error rather than a plan that silently under-explains itself.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StatisticsEntry {
-    /// A caller-supplied subject label (a predicate IRI, a producer IRI, …).
-    pub subject: String,
-    /// The cardinality the statistics provider reported for it.
-    pub cardinality: u64,
-    /// An optional selectivity in parts per million.
+pub struct DepthInputs {
+    /// The registry's declared row bound for this stratum, read at the mode the
+    /// producer will actually be invoked under.
+    ///
+    /// [`u64::MAX`] is the genuinely unbounded declaration — more rows than any
+    /// read can reach — and is the one value that skips the selectivity step
+    /// below, because a fraction of an unmeasured total is not a measurement.
+    pub declared: u64,
+    /// The cardinality the statistics provider reported, or `None` when it
+    /// reported none.
+    ///
+    /// Absent is not zero. Zero is a measurement — "the provider counted no
+    /// rows" — and it narrows the bound before any ratio applies; absence is the
+    /// provider declining to answer, and it leaves the declaration standing.
+    pub cardinality: Option<u64>,
+    /// The aggregate selectivity **that was applied**, in parts per million, or
+    /// `None` when none was.
+    ///
+    /// This is the number the depth was actually derived from, never one
+    /// recomputed beside it. The distinction is load-bearing: an unbounded
+    /// stratum never reaches the selectivity step at all, so a provider may well
+    /// report a selectivity for it that bounded nothing — and recording that
+    /// value here would describe a derivation that did not happen.
     pub selectivity_ppm: Option<u64>,
+    /// The strictly ascending request-term indices whose reported selectivity
+    /// contributed to [`Self::selectivity_ppm`]. Empty when none did.
+    ///
+    /// The aggregate is a **sum** over the terms a provider answered for, so the
+    /// sum alone does not say which terms those were: a provider that moved a
+    /// selectivity from one term to another at an unchanged total would leave an
+    /// identical record, and the move — which is a different statement about the
+    /// data — would be undetectable. Recording the domain makes the aggregate's
+    /// derivation as checkable as the depth's.
+    ///
+    /// Checkable is meant literally, and both halves of the law are enforced on
+    /// the untrusted paths. The order and the distinctness are decidable from the
+    /// run alone, so a document breaking either is refused at the decoder, as
+    /// [`PlanError::NonAscendingSelectivityTerms`] and
+    /// [`PlanError::DuplicateSelectivityTerm`]. That the indices address this
+    /// plan's own request is decidable only against
+    /// [`Plan::request_terms`](Plan::request_terms), so it is
+    /// [`Plan::certify`]'s, as [`PlanError::SelectivityTermOutOfRange`].
+    pub selectivity_terms: Vec<u32>,
+    /// The request's licensed row prefix, or `None` when the registry's own
+    /// bound stood.
+    ///
+    /// Recorded separately from [`Plan::read_bound`] because they answer
+    /// different questions. The read bound is what the caller *asked for*; this
+    /// is whether the declarations let that number bound this stratum. A plan
+    /// carrying only the first records a depth whose derivation cannot be
+    /// reconstructed whenever the answer was "no".
+    pub licensed_prefix: Option<u64>,
 }
 
-/// The statistics a plan was planned against.
+/// Which recorded input bound a stratum's depth.
+///
+/// Returned by [`Plan::explain_depth`]. The variants are the legs of
+/// [`depth_from`](crate::depth_from) in the order that function applies them, so
+/// the answer names the constraint that actually bound the number rather than
+/// the first one that could have.
+///
+/// # The classification is closed, deliberately
+///
+/// Closed rather than `#[non_exhaustive]`, for the reason
+/// [`RequestTerm`](crate::RequestTerm) and
+/// [`EmbeddingError`](crate::EmbeddingError) are: what a caller gets when a
+/// variant is added later is an exhaustive `match` that stops compiling, which
+/// is exactly the signal a caller rendering these to its own vocabulary wants.
+/// `#[non_exhaustive]` would replace that compile error with a wildcard arm, and
+/// a wildcard arm over a *classification* has nothing honest to return — the
+/// Python binding's had to invent the word `"unknown"`, which is a vocabulary
+/// term naming no leg of any derivation, handed to a caller at the one surface
+/// that exists to let it check the depth for itself.
+///
+/// The argument for openness is weaker here than anywhere else in this crate,
+/// because these variants are not a list of things that happen to exist. They
+/// are the legs of one fixed arithmetic, plus its floor and its ceiling, and
+/// `depth_from` takes nothing but a [`DepthInputs`] — so a new cause can only
+/// arrive with a new field there, which is a breaking change to a serialized
+/// plan already.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DepthCause {
+    /// The registry's declared row bound was the narrowest input.
+    Declaration,
+    /// The provider's reported cardinality was narrower than the declaration.
+    Cardinality,
+    /// The applied selectivity scaled the bound below what the declaration and
+    /// cardinality allowed.
+    Selectivity,
+    /// The request's licensed row prefix was the narrowest input.
+    LicensedPrefix,
+    /// Every other input reached zero and the floor lifted the read to a single
+    /// probing row, so that emptiness is reported by the producer rather than
+    /// claimed by the plan.
+    ///
+    /// Zero arrives by every road the derivation has — a declaration, a
+    /// measurement, a selectivity that scaled the bound to nothing, or a request
+    /// licensing no rows — and the last of those is reported here even under an
+    /// unbounded declaration, where it is the only input the derivation had.
+    /// The alternative would credit the request's bound with a depth of one that
+    /// the request asked zero of.
+    Floor,
+    /// The declaration promised more rows than a read can reach and no licensed
+    /// prefix narrowed it, so the depth is the deepest a read can be taken to.
+    ///
+    /// A prefix that is itself [`u64::MAX`] narrows nothing, so it lands here
+    /// rather than under [`Self::LicensedPrefix`]: the recorded depth would be
+    /// the same number with the prefix absent, and naming it as the cause would
+    /// credit the request's bound with a narrowing the request did not make.
+    Unbounded,
+    /// The derived bound was finite but deeper than a plan can record, so it sits
+    /// at the read ceiling.
+    ///
+    /// Decided by the clamp itself rather than by a comparison beside it, so the
+    /// depth and this cause cannot disagree about where the ceiling is — the
+    /// full argument is on
+    /// [`depth_cause`](crate::depth_cause). It reaches this variant from either
+    /// branch of the derivation: a finite declaration whose narrowed bound is
+    /// deeper than the ceiling, and an unbounded one whose licensed prefix is.
+    ReadCeiling,
+}
+
+/// One entry of a statistics snapshot: what a provider said about one subject
+/// planning consulted.
+///
+/// A subject is here for one of two reasons, and the row reads the same either
+/// way. A **stratum** is here because a depth was derived for it; its row is a
+/// projection of the [`DepthInputs`] recorded in
+/// [`Plan::stratum_derivations`](Plan::stratum_derivations), so the two records
+/// state the same statistics and [`Plan::certify`] refuses a plan in which they
+/// disagree. A **request predicate** is here because planning asked about it in
+/// order to report: nothing derives a number from it — only a stratum's own
+/// selectivity bounds a stratum's depth — so its row is context alone.
+///
+/// A subject that is both carries the stratum's row, because that is the
+/// consultation that bound a depth.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatisticsEntry {
+    /// The subject this row reports on: a stratum a depth was derived for, or
+    /// the predicate of one of the request's terms.
+    ///
+    /// Those two are the whole vocabulary, because they are the only subjects
+    /// planning consults — [`Plan::certify`] refuses a row naming anything else,
+    /// as [`PlanError::UnconsultedStatisticsSubject`].
+    pub subject: String,
+    /// The cardinality the statistics provider reported for it, or `None` when
+    /// it reported none.
+    ///
+    /// Absent rather than zero, for the reason
+    /// [`DepthInputs::cardinality`] is: "the provider measured nothing" and "the
+    /// provider measured zero" are different facts, and collapsing them would
+    /// turn silence into a claim that no row matches.
+    pub cardinality: Option<u64>,
+    /// An optional selectivity in parts per million.
+    pub selectivity_ppm: Option<u64>,
+    /// The strictly ascending request-term indices whose reported selectivity
+    /// contributed to [`Self::selectivity_ppm`], for the reason
+    /// [`DepthInputs::selectivity_terms`] records them — and held to the same two
+    /// refusals, in the same two places: the order and the distinctness at the
+    /// decoder, the addressability at [`Plan::certify`].
+    pub selectivity_terms: Vec<u32>,
+}
+
+/// The entries of a [`StatisticsSnapshot`]: ascending by subject, each subject
+/// named once.
+///
+/// # The order is the type's law, not the encoder's
+///
+/// A plan's identity is a digest of its canonical bytes, and [`Plan`] documents
+/// that two plans are equal iff their canonical bytes are equal iff their ids
+/// are. A bare `Vec` cannot hold that up: comparing two snapshots compares their
+/// vectors position by position, so a snapshot built descending is *unequal* to
+/// its ascending twin — while an encoder that sorted before writing would give
+/// the two identical bytes and therefore one identity. That is the biconditional
+/// broken in the middle, and it is broken for exactly as long as the ordering
+/// law lives in the encoder rather than in the value.
+///
+/// So the law lives here, where [`Plan::stratum_derivations`] already keeps its
+/// own: order is established on construction, every read is of an ordered
+/// sequence, and the encoder writes what it is given. Two constructions from the
+/// same entries in any order are the same value, byte for byte and field for
+/// field.
+///
+/// # Order is established; a duplicate is refused
+///
+/// The two are treated differently because they carry different amounts of
+/// information. The order a caller happened to build its entries in says nothing
+/// about the data — the snapshot is a set of rows keyed by subject, so
+/// establishing the ascending order loses nothing a reader could have wanted.
+///
+/// A repeated subject is not like that. Two rows for one subject are two answers
+/// to one question, and nothing in the value says which the plan was planned
+/// against: keeping the first, the last, or the wider of them would be inventing
+/// a rule the data does not carry. It is refused by name with
+/// [`PlanError::DuplicateStatisticsSubject`], on every path in — including
+/// serde's, so a hand-written JSON document is held to the same law as a caller
+/// with a `Vec`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "Vec<StatisticsEntry>")]
+pub struct StatisticsEntries(Vec<StatisticsEntry>);
+
+impl StatisticsEntries {
+    /// The entries of `entries`, ordered ascending by subject.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::DuplicateStatisticsSubject`] when two entries name one
+    /// subject.
+    pub fn new(mut entries: Vec<StatisticsEntry>) -> Result<Self, PlanError> {
+        entries.sort_unstable_by(|left, right| left.subject.cmp(&right.subject));
+        if let Some(pair) = entries
+            .windows(2)
+            .find(|pair| pair[0].subject == pair[1].subject)
+        {
+            return Err(PlanError::DuplicateStatisticsSubject {
+                subject: pair[0].subject.clone(),
+            });
+        }
+        Ok(Self(entries))
+    }
+
+    /// The row this snapshot records for `subject`, or `None` when it records
+    /// none.
+    ///
+    /// A binary search rather than a scan, which the ascending order makes
+    /// exact. [`Plan::certify`] asks this once per stratum, so a scan would make
+    /// certifying a plan quadratic in a plan's own size — over a value that
+    /// arrives from wherever a plan arrives from.
+    #[must_use]
+    pub fn get_subject(&self, subject: &str) -> Option<&StatisticsEntry> {
+        self.0
+            .binary_search_by(|entry| entry.subject.as_str().cmp(subject))
+            .ok()
+            .map(|index| &self.0[index])
+    }
+}
+
+impl core::ops::Deref for StatisticsEntries {
+    type Target = [StatisticsEntry];
+
+    /// Read-only slice access: iteration, indexing, `len`, `to_vec`.
+    ///
+    /// Read-only is the point. A `&mut` view would let a caller move one
+    /// subject's text and leave the sequence unordered or doubled, which is the
+    /// state this type exists to make unrepresentable; an edit goes through
+    /// [`Self::new`], which re-establishes the law over the whole sequence.
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a StatisticsEntries {
+    type Item = &'a StatisticsEntry;
+    type IntoIter = core::slice::Iter<'a, StatisticsEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl TryFrom<Vec<StatisticsEntry>> for StatisticsEntries {
+    type Error = PlanError;
+
+    /// The conversion serde's `try_from` runs, so a deserialized snapshot is
+    /// held to [`StatisticsEntries::new`]'s law rather than admitted around it.
+    fn try_from(entries: Vec<StatisticsEntry>) -> Result<Self, Self::Error> {
+        Self::new(entries)
+    }
+}
+
+impl Serialize for StatisticsEntries {
+    /// Serialized as the bare sequence of its entries, so the serde document is
+    /// a JSON **array** of rows — the shape the Python surface reads as a list
+    /// and the planner goldens pin.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+/// The statistics a plan was planned against, for every subject planning
+/// consulted.
 ///
 /// Statistics are an explicit input to planning, not something the planner
 /// reaches into a store for; the emitted plan records what it assumed so a
 /// replay against moved statistics is a detectable condition rather than a
-/// silent replan.
+/// silent replan. "What it assumed" is defined rather than implied: an entry
+/// exists for every subject planning consulted, and each statistic is absent
+/// when the provider reported none — so a subject the provider was silent about
+/// is still named, and a subject nothing consulted is absent rather than
+/// recorded as empty.
+///
+/// The strata are here too, and so are their statistics in
+/// [`Plan::stratum_derivations`], because the two answer different questions. A
+/// derivation binds a stratum's statistics to the one depth they produced, which
+/// is what makes that depth recomputable. This names, in one place, every subject
+/// an answer to this plan depended on a provider for, whether or not a number
+/// came of it — which is what makes "the statistics moved" a question a caller
+/// can ask of the snapshot alone. A stratum's entry here is a projection of its
+/// derivation rather than a second consultation, and [`Plan::certify`] refuses a
+/// plan whose two records of one stratum disagree.
+///
+/// # Both halves of that claim are checked
+///
+/// "An entry for every subject consulted, and none for a subject nothing
+/// consulted" is two statements, and a checker that enforced only the first
+/// would leave the second wherever a forger reached for it — a row can be added
+/// as easily as removed, and the plan then reads back as evidence about a
+/// consultation that never happened. [`Plan::certify`] refuses both directions:
+/// [`PlanError::DerivationWithoutStatisticsEntry`] for a stratum named nowhere
+/// here, and [`PlanError::UnconsultedStatisticsSubject`] for a row naming
+/// neither a stratum nor a request predicate.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatisticsSnapshot {
     /// A caller-supplied label for the statistics provider.
     pub source: String,
     /// The provider-declared revision of the snapshot.
     pub revision: String,
-    /// The snapshot's entries, in caller order.
-    pub entries: Vec<StatisticsEntry>,
+    /// The snapshot's entries, ascending by subject.
+    ///
+    /// A [`StatisticsEntries`] rather than a `Vec`, so that order is a property
+    /// of the value and not of the encoder that writes it: the bytes — and
+    /// therefore the plan's identity — are a pure function of the entries, and
+    /// so is equality, which is what makes [`Plan`]'s biconditional true rather
+    /// than nearly true. A snapshot naming one subject twice is refused at
+    /// construction rather than ordered into an arbitrary winner, because two
+    /// rows for one subject are two answers to one question.
+    pub entries: StatisticsEntries,
 }
 
 /// A retrieval plan: pure data, versioned and content-addressed.
@@ -385,6 +706,19 @@ pub struct Plan {
     pub unserved_terms: Vec<UnservedTerm>,
     /// Per-stratum maximum depth, keyed by stratum label.
     pub stratum_depths: HashMap<Iri, u32>,
+    /// What each of those depths was derived from, keyed by the same labels.
+    ///
+    /// One entry per stratum in [`Self::stratum_depths`], carrying every input
+    /// [`depth_from`](crate::depth_from) consumed to produce it. This is what
+    /// makes a recorded depth a checkable claim rather than an asserted one:
+    /// [`Self::certify`] recomputes each depth from the inputs beside it and
+    /// refuses a plan the two disagree about.
+    ///
+    /// A [`BTreeMap`](std::collections::BTreeMap) rather than a
+    /// [`HashMap`](std::collections::HashMap) so the ordering law lives in the
+    /// type instead of in a sort the encoder has to remember — the depths above
+    /// predate that reasoning and are sorted at the encoder instead.
+    pub stratum_derivations: BTreeMap<Iri, DepthInputs>,
     /// The statistics snapshot the plan was planned against.
     pub statistics_snapshot: StatisticsSnapshot,
     /// The live registry instance the plan was planned against. This is a
@@ -424,6 +758,7 @@ impl PartialEq for Plan {
             && self.producer_decisions == other.producer_decisions
             && self.unserved_terms == other.unserved_terms
             && self.stratum_depths == other.stratum_depths
+            && self.stratum_derivations == other.stratum_derivations
             && self.statistics_snapshot == other.statistics_snapshot
             && self.registry_instance_id == other.registry_instance_id
             && self.registry_content_fingerprint == other.registry_content_fingerprint
@@ -449,6 +784,7 @@ impl Plan {
         write_bindings(&mut writer, &self.producer_bindings);
         write_decisions(&mut writer, &self.producer_decisions);
         write_depths(&mut writer, &self.stratum_depths);
+        write_derivations(&mut writer, &self.stratum_derivations);
         write_statistics(&mut writer, &self.statistics_snapshot);
         writer.u64(self.registry_instance_id.as_u64());
         writer.string(&self.registry_content_fingerprint);
@@ -477,6 +813,7 @@ impl Plan {
         let producer_bindings = read_bindings(&mut reader)?;
         let producer_decisions = read_decisions(&mut reader)?;
         let stratum_depths = read_depths(&mut reader)?;
+        let stratum_derivations = read_derivations(&mut reader)?;
         let statistics_snapshot = read_statistics(&mut reader)?;
         let registry_instance_id = RegistryId::from_raw(reader.u64()?);
         let registry_content_fingerprint = reader.string("registry content fingerprint")?;
@@ -496,6 +833,7 @@ impl Plan {
             producer_decisions,
             unserved_terms,
             stratum_depths,
+            stratum_derivations,
             statistics_snapshot,
             registry_instance_id,
             registry_content_fingerprint,
@@ -506,6 +844,160 @@ impl Plan {
     #[must_use]
     pub fn id(&self) -> PlanId {
         PlanId::from_canonical(&self.canonical_bytes())
+    }
+
+    /// Recompute every recorded depth from its own recorded inputs, and refuse a
+    /// plan the two disagree about.
+    ///
+    /// A plan is untrusted input: it can be edited, and it can be forged. Its
+    /// depths are the numbers that decide how deep each stratum is actually read,
+    /// so a depth nothing checks is a number a caller must take on the plan's
+    /// word. Because [`Self::stratum_derivations`] records every input
+    /// [`depth_from`](crate::depth_from) consumes, that word is checkable: this
+    /// runs the planner's own arithmetic over the plan's own evidence and
+    /// compares.
+    ///
+    /// # This is the cold path
+    ///
+    /// Admission does **not** call this, deliberately. Admitting a plan is on the
+    /// hot path of every read, and it answers a different question — is this plan
+    /// still valid against the registry and statistics in force *now*. Certifying
+    /// asks whether the plan is internally coherent *at all*, which is a property
+    /// of the value alone and does not change between admissions. Splitting them
+    /// keeps the per-read cost where it was and leaves the check available to
+    /// anyone receiving a plan from somewhere they do not control.
+    ///
+    /// # The two records of one stratum must agree
+    ///
+    /// A stratum's statistics are recorded twice — in [`Self::stratum_derivations`],
+    /// bound to the depth they produced, and in [`Self::statistics_snapshot`],
+    /// which names every subject planning consulted. The planner writes the
+    /// second as a projection of the first, so they agree by construction in any
+    /// plan it emitted; a plan in which they differ was edited or forged, and its
+    /// two readings license different depths with nothing saying which is the
+    /// measurement. Both directions are checked here, so neither record can
+    /// quietly become the other's contradiction.
+    ///
+    /// The snapshot's own membership is checked in both directions too: a
+    /// stratum it does not name is refused, and so is a row naming a subject
+    /// planning never consulted — which is anything that is neither a stratum
+    /// nor the predicate of one of this plan's request terms. The first
+    /// direction alone would let a forged plan *add* evidence, which reads back
+    /// as a consultation that did not happen.
+    ///
+    /// # Which stratum a refusal names is a function of the plan
+    ///
+    /// Every loop below walks a sorted key list or a
+    /// [`BTreeMap`](std::collections::BTreeMap), never [`Self::stratum_depths`]
+    /// in its own iteration order. A `HashMap` walk would make the *first*
+    /// disagreement a plan carries several of depend on hash order, so two
+    /// processes refusing one forged plan could name two different strata and a
+    /// caller comparing the messages would think the plans differed.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::DepthNotDerivable`] when a recorded depth is not the depth
+    /// its inputs derive; [`PlanError::DepthWithoutDerivation`] and
+    /// [`PlanError::DerivationWithoutDepth`] when the depth and derivation maps
+    /// do not name the same strata;
+    /// [`PlanError::DerivationWithoutStatisticsEntry`] when the snapshot does not
+    /// name a stratum a depth was derived for;
+    /// [`PlanError::StatisticsEntryContradictsDerivation`] when it names one and
+    /// says something else about it; and
+    /// [`PlanError::SelectivityTermOutOfRange`] when a derivation's or a snapshot
+    /// row's recorded selectivity-term run addresses a term this plan's own
+    /// request does not carry; and
+    /// [`PlanError::UnconsultedStatisticsSubject`] when the snapshot names a
+    /// subject that is neither a stratum nor a predicate of one of this plan's
+    /// request terms. Each is a refusal rather than a repair: a plan whose depth
+    /// and evidence disagree has no reading under which one of them is the truth.
+    pub fn certify(&self) -> Result<(), PlanError> {
+        let mut recorded: Vec<(&Iri, u32)> = self
+            .stratum_depths
+            .iter()
+            .map(|(stratum, depth)| (stratum, *depth))
+            .collect();
+        recorded.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        for (stratum, depth) in recorded {
+            let Some(inputs) = self.stratum_derivations.get(stratum) else {
+                return Err(PlanError::DepthWithoutDerivation {
+                    stratum: stratum.as_str().to_owned(),
+                });
+            };
+            let derived = crate::depth_from(inputs);
+            if derived != depth {
+                return Err(PlanError::DepthNotDerivable {
+                    stratum: stratum.as_str().to_owned(),
+                    recorded: depth,
+                    derived,
+                });
+            }
+        }
+        for (stratum, inputs) in &self.stratum_derivations {
+            if !self.stratum_depths.contains_key(stratum) {
+                return Err(PlanError::DerivationWithoutDepth {
+                    stratum: stratum.as_str().to_owned(),
+                });
+            }
+            // The run's own addressability before the two records are compared,
+            // so a plan that is wrong in both ways is named by the narrower fact:
+            // a contradiction between two runs is a question about which of them
+            // is the measurement, and it is not worth asking of a run that
+            // addresses nothing.
+            require_addressable(
+                stratum.as_str(),
+                &inputs.selectivity_terms,
+                self.request_terms.len(),
+            )?;
+            reconcile(stratum, inputs, &self.statistics_snapshot)?;
+        }
+        // The subjects planning consults, which is exactly the set a snapshot row
+        // may name: every stratum a depth was derived for, and the predicate of
+        // every request term. Both are read off this plan, which is what makes
+        // the question a property of the value.
+        //
+        // Materialized once rather than searched per row. The loop below is over
+        // the snapshot, and asking `stratum_derivations` and `request_terms`
+        // afresh for each of its rows would make certifying a plan quadratic in
+        // that plan's own size — over a value that arrives from wherever a plan
+        // arrives from.
+        let mut consulted: BTreeSet<&str> =
+            self.stratum_derivations.keys().map(Iri::as_str).collect();
+        consulted.extend(
+            self.request_terms
+                .iter()
+                .filter_map(crate::planner::term_predicate)
+                .map(Iri::as_str),
+        );
+        for entry in &self.statistics_snapshot.entries {
+            require_addressable(
+                &entry.subject,
+                &entry.selectivity_terms,
+                self.request_terms.len(),
+            )?;
+            if !consulted.contains(entry.subject.as_str()) {
+                return Err(PlanError::UnconsultedStatisticsSubject {
+                    subject: entry.subject.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Which recorded input bound `stratum`'s depth, or `None` when the plan
+    /// records no derivation for it.
+    ///
+    /// A depth of one is the motivating case. It arrives by four different roads
+    /// — a declaration of zero or one row, a measured cardinality, a selectivity
+    /// that scaled the bound down to nothing, or the floor that stops any of them
+    /// reaching zero — and a caller looking at the number alone cannot tell which,
+    /// even though the four have completely different remedies. Recording the
+    /// inputs makes the question a total function of the plan.
+    #[must_use]
+    pub fn explain_depth(&self, stratum: &Iri) -> Option<DepthCause> {
+        self.stratum_derivations
+            .get(stratum)
+            .map(crate::depth_cause)
     }
 
     /// The per-term evidence **this** plan supports: every request term no
@@ -746,20 +1238,43 @@ fn read_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Iri, PlanErro
     Iri::parse(&text)
 }
 
+/// Write an optional IRI as its canonical text through the writer's own
+/// presence discriminant.
+///
+/// The counterpart of [`read_option_iri`], and the reason both exist: the
+/// presence byte is the writer's, so an optional IRI is spelled exactly as
+/// every other optional field is rather than by a constant that agrees with it
+/// today.
+fn write_option_iri(writer: &mut Writer, value: Option<&Iri>) {
+    writer.option_string(value.map(Iri::as_str));
+}
+
+/// Read an optional IRI written by [`write_option_iri`], re-parsing a present
+/// one for the reason [`read_iri`] re-parses.
+///
+/// An absence stays absent and a discriminant that is neither is refused by
+/// [`Reader::option_string`] under the same `what` the IRI itself would be —
+/// one field, one name, whichever half of it was malformed.
+fn read_option_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Option<Iri>, PlanError> {
+    reader
+        .option_string(what)?
+        .map(|text| Iri::parse(&text))
+        .transpose()
+}
+
 /// Write an optional exact value as a presence byte and, when present, its raw
 /// scaled integer.
 ///
 /// The raw `i128` is written rather than a rendered decimal: it is the value's
 /// exact representation, so the encoding neither rounds nor depends on a
 /// formatter.
+///
+/// Written through [`Writer::option_i128`] rather than a presence byte of this
+/// module's own, so the claim that the encoding spells "present" one way
+/// throughout is a property of the code rather than of two constants that
+/// happen to agree.
 fn write_option_fixed(writer: &mut Writer, value: Option<Fixed>) {
-    match value {
-        None => writer.u8(ABSENT),
-        Some(value) => {
-            writer.u8(PRESENT);
-            writer.i128(value.into_raw());
-        }
-    }
+    writer.option_i128(value.map(Fixed::into_raw));
 }
 
 /// Read an optional exact value written by [`write_option_fixed`].
@@ -768,14 +1283,9 @@ fn write_option_fixed(writer: &mut Writer, value: Option<Fixed>) {
 /// a treated-as-absent field, because silently reading a constrained endpoint
 /// as unconstrained would widen the query the plan describes.
 fn read_option_fixed(reader: &mut Reader<'_>) -> Result<Option<Fixed>, PlanError> {
-    match reader.u8()? {
-        ABSENT => Ok(None),
-        PRESENT => Ok(Some(Fixed::from_raw(reader.i128()?))),
-        tag => Err(PlanError::InvalidTag {
-            what: "optional fixed value",
-            tag,
-        }),
-    }
+    Ok(reader
+        .option_i128("optional fixed value")?
+        .map(Fixed::from_raw))
 }
 
 /// Write one request term: its arm's discriminator byte, then that arm's fields
@@ -797,7 +1307,7 @@ fn write_request_term(writer: &mut Writer, term: &RequestTerm) {
             writer.u8(TERM_LEXICAL);
             writer.string(text);
             writer.option_string(language.as_deref());
-            writer.option_string(predicate.as_ref().map(Iri::as_str));
+            write_option_iri(writer, predicate.as_ref());
         }
         RequestTerm::Vector {
             embedding,
@@ -859,16 +1369,7 @@ fn read_request_term(reader: &mut Reader<'_>) -> Result<RequestTerm, PlanError> 
         TERM_LEXICAL => {
             let text = reader.string("lexical text")?;
             let language = reader.option_string("lexical language")?;
-            let predicate = match reader.u8()? {
-                ABSENT => None,
-                PRESENT => Some(read_iri(reader, "lexical predicate")?),
-                tag => {
-                    return Err(PlanError::InvalidTag {
-                        what: "lexical predicate presence",
-                        tag,
-                    });
-                }
-            };
+            let predicate = read_option_iri(reader, "lexical predicate")?;
             Ok(RequestTerm::Lexical {
                 text,
                 language,
@@ -1061,75 +1562,357 @@ fn write_depths(writer: &mut Writer, depths: &HashMap<Iri, u32>) {
     }
 }
 
-/// Read the per-stratum depths. The encoded order is sorted; the map that comes
-/// back does not preserve it and does not need to, because the next encode sorts
-/// again.
+/// Refuse a canonical key that does not strictly follow the key before it.
+///
+/// One comparison against the previous key refuses a reordering and a repeat
+/// together, in a single linear pass over a document the decoder does not
+/// control. The alternative — searching what has already been read for a repeat
+/// — is quadratic in the document's own length, and the document's length is the
+/// caller's choice.
+///
+/// The two refusals are separate values because they are separate facts. Out of
+/// order is a statement about the *encoding*, identical in every section, so the
+/// section travels as a field. A repeat is a statement about the *data*, and
+/// what it means depends on what the key indexes, so each caller supplies its
+/// own.
+fn require_ascending(
+    section: CanonicalSection,
+    previous: Option<&str>,
+    key: &str,
+    duplicate: impl FnOnce(String) -> PlanError,
+) -> Result<(), PlanError> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    match key.cmp(previous) {
+        core::cmp::Ordering::Greater => Ok(()),
+        core::cmp::Ordering::Equal => Err(duplicate(key.to_owned())),
+        core::cmp::Ordering::Less => Err(PlanError::NonAscendingCanonicalKeys {
+            section,
+            previous: previous.to_owned(),
+            key: key.to_owned(),
+        }),
+    }
+}
+
+/// Refuse a selectivity-term run that is not strictly ascending.
+///
+/// The run is the domain of a **sum**, so it is a set and its order carries
+/// nothing about the data. That is exactly why the order has to be required
+/// rather than tolerated: `[0, 1]` and `[1, 0]` would otherwise be two encodings
+/// of one plan, each digesting to that plan's single id, which is the
+/// plan-to-bytes biconditional broken one nesting level below the section keys
+/// [`require_ascending`] holds up.
+///
+/// A repeat is refused by its own name, by the law that function states: out of
+/// order is a fact about the encoding, a repeat is a fact about the data — here,
+/// one term counted twice into a total the arithmetic reached once.
+///
+/// Decided from the run alone, which is why it lives on the decode path. Whether
+/// the indices address any term of the plan's own request is a different fact,
+/// decidable only against [`Plan::request_terms`], and it is
+/// [`Plan::certify`]'s.
+fn require_ascending_terms(
+    section: CanonicalSection,
+    subject: &str,
+    terms: &[u32],
+) -> Result<(), PlanError> {
+    for pair in terms.windows(2) {
+        match pair[1].cmp(&pair[0]) {
+            core::cmp::Ordering::Greater => {}
+            core::cmp::Ordering::Equal => {
+                return Err(PlanError::DuplicateSelectivityTerm {
+                    section,
+                    subject: subject.to_owned(),
+                    request_term: pair[1],
+                });
+            }
+            core::cmp::Ordering::Less => {
+                return Err(PlanError::NonAscendingSelectivityTerms {
+                    section,
+                    subject: subject.to_owned(),
+                    previous: pair[0],
+                    request_term: pair[1],
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Read the per-stratum depths, which the encoding lists ascending by stratum.
+///
+/// The order is required rather than merely produced. The map this returns does
+/// not preserve it — it does not need to, because [`write_depths`] sorts again —
+/// but a decoder that accepted any order would accept as many distinct encodings
+/// of one plan as the section has permutations, each digesting to that plan's
+/// single id. A repeated stratum is refused for a sharper reason still: the map
+/// would silently keep whichever depth arrived last.
 fn read_depths(reader: &mut Reader<'_>) -> Result<HashMap<Iri, u32>, PlanError> {
     let count = reader.count()?;
     let mut depths = HashMap::with_capacity(count.min(1024));
+    let mut previous: Option<Iri> = None;
     for _ in 0..count {
         let key = read_iri(reader, "stratum depth key")?;
+        require_ascending(
+            CanonicalSection::StratumDepths,
+            previous.as_ref().map(Iri::as_str),
+            key.as_str(),
+            |stratum| PlanError::DuplicateStratumDepth { stratum },
+        )?;
         let value = reader.u32()?;
-        depths.insert(key, value);
+        depths.insert(key.clone(), value);
+        previous = Some(key);
     }
     Ok(depths)
 }
 
-/// Write the statistics snapshot: the provider's label and revision, then each
-/// entry's subject, cardinality and optional selectivity.
+/// Refuse a stratum whose snapshot row says anything other than its derivation.
 ///
-/// The entries go out in list order rather than sorted, because the planner
-/// already emits them in a deterministic order (ascending by subject) and the
-/// encoding reproduces the field it was given.
+/// The planner writes the row as a projection of `inputs`, so the two are equal
+/// in any plan it emitted and this reads as a no-op there. It earns its keep on
+/// the plans [`Plan::certify`] exists for: edited ones, forged ones, and ones
+/// written by a build whose projection differed.
+///
+/// The dimensions are tested in the order [`depth_from`](crate::depth_from)
+/// consumes them, so a plan disagreeing about several is named by the one
+/// nearest the arithmetic — and the order is fixed rather than incidental, which
+/// is what makes the reported dimension a function of the plan.
+///
+/// A missing row is a different fact from a wrong one and is refused separately:
+/// one is a snapshot that forgot a subject, the other a snapshot that
+/// contradicts one.
+fn reconcile(
+    stratum: &Iri,
+    inputs: &DepthInputs,
+    snapshot: &StatisticsSnapshot,
+) -> Result<(), PlanError> {
+    let Some(entry) = snapshot.entries.get_subject(stratum.as_str()) else {
+        return Err(PlanError::DerivationWithoutStatisticsEntry {
+            stratum: stratum.as_str().to_owned(),
+        });
+    };
+    let disagreement = if entry.cardinality != inputs.cardinality {
+        Some((
+            StatisticsDimension::Cardinality,
+            measurement(entry.cardinality),
+            measurement(inputs.cardinality),
+        ))
+    } else if entry.selectivity_ppm != inputs.selectivity_ppm {
+        Some((
+            StatisticsDimension::SelectivityPpm,
+            measurement(entry.selectivity_ppm),
+            measurement(inputs.selectivity_ppm),
+        ))
+    } else if entry.selectivity_terms != inputs.selectivity_terms {
+        Some((
+            StatisticsDimension::SelectivityTerms,
+            format!("{:?}", entry.selectivity_terms),
+            format!("{:?}", inputs.selectivity_terms),
+        ))
+    } else {
+        None
+    };
+    match disagreement {
+        Some((dimension, snapshot, derivation)) => {
+            Err(PlanError::StatisticsEntryContradictsDerivation {
+                stratum: stratum.as_str().to_owned(),
+                dimension,
+                snapshot,
+                derivation,
+            })
+        }
+        None => Ok(()),
+    }
+}
+
+/// Refuse a selectivity-term run that addresses a term the request does not
+/// carry.
+///
+/// The run is written as indices into [`Plan::request_terms`], so an index past
+/// the end of that list names nothing: the aggregate's domain becomes
+/// unreadable, and the record that exists to make a sum checkable stops being
+/// checkable. An **empty** run is legal and is the common case — a subject whose
+/// selectivity nothing contributed to records `[]`, and every stratum planned
+/// under an unbounded declaration or a silent provider is one of those.
+///
+/// It is decided here rather than on the decode path because it is not a fact
+/// about one section of a document: it relates a record to the plan's request,
+/// which is the kind of question [`Plan::certify`] exists to ask. Deciding it at
+/// the decoder would also make a legal [`Plan`] value — every field of which is
+/// public — one that its own canonical bytes could not be read back into.
+fn require_addressable(
+    subject: &str,
+    terms: &[u32],
+    request_terms: usize,
+) -> Result<(), PlanError> {
+    for index in terms {
+        if *index as usize >= request_terms {
+            return Err(PlanError::SelectivityTermOutOfRange {
+                subject: subject.to_owned(),
+                request_term: *index,
+                request_terms,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// One reported statistic, rendered for a refusal message.
+///
+/// An absent measurement renders as the word rather than as a number, because
+/// "the provider measured nothing" and "the provider measured zero" are the two
+/// facts this whole record exists to keep apart — and a message that printed
+/// `0` for both would collapse them at the one moment a reader is trying to tell
+/// which of them moved.
+fn measurement(value: Option<u64>) -> String {
+    value.map_or_else(|| "absent".to_owned(), |value| value.to_string())
+}
+
+/// Write the per-stratum derivations, sorted by stratum IRI.
+///
+/// The map is a [`BTreeMap`], so the sort is already the type's; the count and
+/// the field order are what the encoding adds. Each record is the argument list
+/// [`depth_from`](crate::depth_from) consumed, written in the order that
+/// function reads it, so the bytes and the derivation tell the same story in the
+/// same sequence.
+fn write_derivations(writer: &mut Writer, derivations: &BTreeMap<Iri, DepthInputs>) {
+    writer.u64(derivations.len() as u64);
+    for (stratum, inputs) in derivations {
+        write_iri(writer, stratum);
+        writer.u64(inputs.declared);
+        writer.option_u64(inputs.cardinality);
+        writer.option_u64(inputs.selectivity_ppm);
+        writer.u32_slice(&inputs.selectivity_terms);
+        writer.option_u64(inputs.licensed_prefix);
+    }
+}
+
+/// Read the per-stratum derivations written by [`write_derivations`].
+///
+/// The strata are required to arrive strictly ascending, which is the order the
+/// [`BTreeMap`] this fills would impose anyway. Requiring it is what stops that
+/// imposition from being a silent repair: a reordered document would decode to
+/// the plan it is not an encoding of, and would have been accepted as one of
+/// many spellings of a plan whose identity is supposed to be its bytes.
+///
+/// A repeated stratum is refused rather than collapsed by the map: two
+/// derivations for one stratum are two explanations of one depth, and silently
+/// keeping the last would let a forged plan carry an explanation the encoder
+/// never wrote. It is refused as a repeated **derivation**, because that is the
+/// record this decoder reads — a statistics subject is a different dimension of
+/// the same plan, and naming it here would send a reader to inspect the snapshot
+/// over a document whose snapshot is fine.
+///
+/// Each record's selectivity-term run is held to the same ascending law, by
+/// [`require_ascending_terms`]: it is the domain of a sum, so its order says
+/// nothing about the data and every permutation would otherwise be another
+/// encoding of one plan.
+fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs>, PlanError> {
+    let count = reader.count()?;
+    let mut derivations = BTreeMap::new();
+    let mut previous: Option<Iri> = None;
+    for _ in 0..count {
+        let stratum = read_iri(reader, "stratum derivation key")?;
+        require_ascending(
+            CanonicalSection::StratumDerivations,
+            previous.as_ref().map(Iri::as_str),
+            stratum.as_str(),
+            |stratum| PlanError::DuplicateStratumDerivation { stratum },
+        )?;
+        let inputs = DepthInputs {
+            declared: reader.u64()?,
+            cardinality: reader.option_u64("derivation cardinality presence")?,
+            selectivity_ppm: reader.option_u64("derivation selectivity presence")?,
+            selectivity_terms: reader.u32_slice()?,
+            licensed_prefix: reader.option_u64("derivation licensed prefix presence")?,
+        };
+        require_ascending_terms(
+            CanonicalSection::StratumDerivations,
+            stratum.as_str(),
+            &inputs.selectivity_terms,
+        )?;
+        derivations.insert(stratum.clone(), inputs);
+        previous = Some(stratum);
+    }
+    Ok(derivations)
+}
+
+/// Write the statistics snapshot: the provider's label and revision, then each
+/// entry's subject, optional cardinality, optional selectivity and that
+/// selectivity's term domain.
+///
+/// **The entries are not sorted here.** They arrive ascending because
+/// [`StatisticsEntries`] establishes that on construction, which is where the
+/// law belongs: a sort at the encoder makes the *bytes* a pure function of the
+/// entries while leaving the *value* order-sensitive, so a descending snapshot
+/// and its ascending twin would share an identity and compare unequal. The
+/// encoder writes the sequence it is given, exactly as it does for
+/// [`write_derivations`]'s [`BTreeMap`].
 fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
     writer.string(&snapshot.source);
     writer.string(&snapshot.revision);
     writer.u64(snapshot.entries.len() as u64);
     for entry in &snapshot.entries {
         writer.string(&entry.subject);
-        writer.u64(entry.cardinality);
-        match entry.selectivity_ppm {
-            None => writer.u8(ABSENT),
-            Some(value) => {
-                writer.u8(PRESENT);
-                writer.u64(value);
-            }
-        }
+        writer.option_u64(entry.cardinality);
+        writer.option_u64(entry.selectivity_ppm);
+        writer.u32_slice(&entry.selectivity_terms);
     }
 }
 
 /// Read the statistics snapshot written by [`write_statistics`].
 ///
-/// An absent selectivity stays absent: "the provider measured nothing" and
-/// "the provider measured zero" are different facts, and a decoder that read
-/// the first as the second would turn silence into a claim that no row matches.
+/// An absent value stays absent: "the provider measured nothing" and "the
+/// provider measured zero" are different facts, and a decoder that read the
+/// first as the second would turn silence into a claim that no row matches.
+/// That now holds for the cardinality as well as the selectivity — the two are
+/// one rule, written once.
+///
+/// The subjects are required to arrive strictly ascending, which refuses a
+/// reordering and a repeat in one linear pass. A repeated subject is refused by
+/// name, by the same law a caller with a `Vec` is held to: two rows for one
+/// subject are two answers to one question, and the decoder has no more basis
+/// for picking between them than the constructor does. A *reordering* is refused
+/// because the entries' order is established by [`StatisticsEntries`], so an
+/// unordered document is not an encoding of any plan — accepting it would have
+/// meant silently canonicalising bytes whose whole purpose is to be the plan's
+/// identity.
+///
+/// Each row's selectivity-term run is held to that same ascending law, by
+/// [`require_ascending_terms`], for the same reason and one nesting level in.
 fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
     let source = reader.string("statistics source")?;
     let revision = reader.string("statistics revision")?;
     let count = reader.count()?;
-    let mut entries = Vec::with_capacity(count.min(1024));
+    let mut entries: Vec<StatisticsEntry> = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
         let subject = reader.string("statistics subject")?;
-        let cardinality = reader.u64()?;
-        let selectivity_ppm = match reader.u8()? {
-            ABSENT => None,
-            PRESENT => Some(reader.u64()?),
-            tag => {
-                return Err(PlanError::InvalidTag {
-                    what: "statistics selectivity presence",
-                    tag,
-                });
-            }
-        };
-        entries.push(StatisticsEntry {
+        require_ascending(
+            CanonicalSection::StatisticsEntries,
+            entries.last().map(|entry| entry.subject.as_str()),
+            &subject,
+            |subject| PlanError::DuplicateStatisticsSubject { subject },
+        )?;
+        let entry = StatisticsEntry {
             subject,
-            cardinality,
-            selectivity_ppm,
-        });
+            cardinality: reader.option_u64("statistics cardinality presence")?,
+            selectivity_ppm: reader.option_u64("statistics selectivity presence")?,
+            selectivity_terms: reader.u32_slice()?,
+        };
+        require_ascending_terms(
+            CanonicalSection::StatisticsEntries,
+            &entry.subject,
+            &entry.selectivity_terms,
+        )?;
+        entries.push(entry);
     }
+    // Built through the constructor rather than around it, even though the loop
+    // above has already proved what it checks. A decoder holding itself to the
+    // value's own law is a decoder that cannot drift from it.
     Ok(StatisticsSnapshot {
         source,
         revision,
-        entries,
+        entries: StatisticsEntries::new(entries)?,
     })
 }

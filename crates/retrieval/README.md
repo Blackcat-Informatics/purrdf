@@ -43,8 +43,16 @@ The stages:
   terms to producers by a lookup over the producers' declared capabilities,
   records selected and rejected producers with reasons, derives per-stratum
   depths from the registry's own row-bound declarations capped by statistics,
-  and records the statistics snapshot and both registry identities. It opens no
-  store, no file and no clock.
+  and records **every input each depth was derived from** alongside the
+  statistics snapshot and both registry identities. It opens no store, no file
+  and no clock.
+* `Plan::certify` / `depth_from` / `Plan::explain_depth` — a recorded depth is a
+  checkable claim, not an asserted one. `depth_from` is the one arithmetic path
+  the planner runs and a reader can re-run; `certify` recomputes every depth from
+  the plan's own recorded inputs and refuses a plan the two disagree about;
+  `explain_depth` names which input bound a depth, so a depth of one says whether
+  it came from a declaration, a measurement, a selectivity or the floor. Cold
+  paths: admission calls none of them.
 * `Statistics` — the caller-supplied cardinality/selectivity input planning
   consults. There is no built-in provider. Both are exact integers — a
   selectivity is parts per million, never a float — and both **lower** a

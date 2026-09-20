@@ -62,16 +62,21 @@
       {
         "cardinality": 500,
         "selectivity_ppm": 500000,
+        "selectivity_terms": [
+          0
+        ],
         "subject": "http://example.org/body"
       },
       {
         "cardinality": 100,
         "selectivity_ppm": null,
+        "selectivity_terms": [],
         "subject": "http://example.org/stratum/text"
       },
       {
         "cardinality": 1000,
         "selectivity_ppm": null,
+        "selectivity_terms": [],
         "subject": "http://example.org/stratum/universal"
       }
     ],
@@ -82,6 +87,22 @@
     "http://example.org/stratum/text": 100,
     "http://example.org/stratum/universal": 200
   },
+  "stratum_derivations": {
+    "http://example.org/stratum/text": {
+      "cardinality": 100,
+      "declared": 100,
+      "licensed_prefix": null,
+      "selectivity_ppm": null,
+      "selectivity_terms": []
+    },
+    "http://example.org/stratum/universal": {
+      "cardinality": 1000,
+      "declared": 200,
+      "licensed_prefix": null,
+      "selectivity_ppm": null,
+      "selectivity_terms": []
+    }
+  },
   "unserved_terms": [],
-  "version": 3
+  "version": 4
 }

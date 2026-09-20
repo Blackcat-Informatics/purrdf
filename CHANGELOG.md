@@ -1401,8 +1401,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   A bound also gives a finite depth to a producer that declares unboundedly many
   rows, where previously only a measured cardinality could: such a read, taken for
   an answer that provably cannot use more than `k` rows, is a read of `k` rows.
-  `PlanError::StatisticsUnavailable` still refuses the same declaration asked for
-  everything.
+  The same declaration asked for everything is not refused: it is recorded at the
+  deepest depth a read can be taken to, and the read's own ending names that depth
+  as the stopper. `PlanError::StatisticsUnavailable`, which used to refuse it, is
+  removed in this same release.
 
   The probe row is untouched: the emitted bound is still the depth plus one
   wherever the declaration leaves room, and a depth *argument* is still never
@@ -1420,12 +1422,111 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   repairs differ. It closes a latent defect -- a plan could be fused at any bound,
   including one its depths could not honestly serve, with nothing catching it.
 
-- **BREAKING** **retrieval:** `PLAN_VERSION` is 3. The canonical plan encoding
-  appends the request's read bound after the per-term unserved evidence, which
-  every recorded depth is derived from; a version-2 plan's bytes end where the
-  bound would begin, so the decoder refuses the old layout by name instead of
-  running off the end of it. Every plan identity moves, as does the plan document's
-  JSON, which now carries `"read_bound"`.
+- **BREAKING** **retrieval:** `PLAN_VERSION` is 4. A plan now records **every
+  input each stratum's depth was derived from** — the registry's declared row
+  bound, the reported cardinality, the selectivity that was actually applied
+  together with the request terms it aggregates over, and whether the request's
+  row bound was licensed to bound that stratum — in a new `stratum_derivations`
+  field. `Plan::certify` recomputes each depth from the inputs beside it through
+  the same arithmetic the planner ran (`depth_from`, also public) and refuses a
+  plan the two disagree about; `Plan::explain_depth` names which input bound a
+  depth, which distinguishes the four roads to a depth of one that were
+  previously indistinguishable. Both are cold paths: admission does not call
+  them.
+
+  Certifying is the whole coherence question rather than the arithmetic alone.
+  Beyond `DepthNotDerivable` it refuses a depth with no derivation and a
+  derivation with no depth, a stratum the snapshot names nowhere
+  (`DerivationWithoutStatisticsEntry`), a snapshot row that says something else
+  than the derivation beside it (`StatisticsEntryContradictsDerivation`, naming
+  the dimension that moved), and a recorded selectivity domain that indexes a
+  term the request it was planned for does not carry
+  (`SelectivityTermOutOfRange`). Which stratum a refusal names is a function of
+  the plan: every walk is over sorted keys, so two processes refusing one forged
+  plan name the same one.
+
+  Version 3 appended the request's read bound after the per-term unserved
+  evidence because a plan that did not record it "recorded depths whose
+  derivation could not be reconstructed". That bound is what the caller asked
+  for, and whether it was *allowed* to bound a given stratum is decided
+  separately, from the shape of the surviving declarations — so two plans could
+  agree on every recorded field and still have derived their depths from
+  different numbers. Version 4 closes that, along with the declared row bound,
+  which no plan recorded at all.
+
+  `StatisticsEntry.cardinality` is now `Option<u64>`, absent where the provider
+  reported none, under the same presence discriminator its selectivity already
+  used. A provider that reported only a selectivity narrowed a planned depth and
+  was then dropped from the snapshot entirely, so the plan was built against
+  evidence it did not record. `StatisticsEntry` also carries
+  `selectivity_terms`, the request-term indices its aggregate came from: the
+  aggregate is a sum, so a provider moving the same total onto a different term
+  previously left a byte-identical plan describing a different measurement. That
+  domain is a strictly ascending set of indices into the request a plan records,
+  and a plan is held to it: a run out of order is `NonAscendingSelectivityTerms`
+  and a repeated index is `DuplicateSelectivityTerm`, both at decode, where the
+  fact is decidable from the run alone; an index addressing no term of the
+  request is `SelectivityTermOutOfRange`, at `Plan::certify`, where the request
+  is. An empty run is legal and is the common case — it is what a subject no
+  selectivity was reported for records.
+
+  The snapshot's entries name **every subject planning consulted** — each stratum
+  a depth was derived for, and each predicate the request names. A stratum's row
+  is a projection of its `DepthInputs` rather than a second consultation, which
+  is what `StatisticsEntryContradictsDerivation` holds up; a request predicate's
+  row derives nothing and is context alone. A subject nothing consulted is absent
+  rather than recorded as empty, and both halves of that are checked: a stratum
+  named nowhere is `DerivationWithoutStatisticsEntry`, and a row naming anything
+  outside those two kinds is `UnconsultedStatisticsSubject`. Enforcing only the
+  first would have left a plan able to *add* evidence — a row reads back as a
+  consultation whether or not one happened.
+
+  Their order is the value's law and not the encoder's.
+  `StatisticsSnapshot.entries` is a `StatisticsEntries`, which establishes the
+  ascending order on construction and refuses a repeated subject by name
+  (`DuplicateStatisticsSubject`) on every path in, serde's included. A sort at
+  the encoder would have made the bytes a pure function of the entries while
+  leaving the value order-sensitive, so a descending snapshot and its ascending
+  twin would have shared an identity and compared unequal.
+
+  A canonical document must arrive in the order the encoder writes. Every keyed
+  section — the depths, the derivations and the snapshot's entries — is required
+  to ascend at decode, as `NonAscendingCanonicalKeys` carrying a typed
+  `CanonicalSection`, and a repeat in each is refused by that section's own name:
+  `DuplicateStratumDepth`, `DuplicateStratumDerivation`,
+  `DuplicateStatisticsSubject`. A decoder that accepted any order would have
+  admitted as many documents for one plan as its sections have permutations, each
+  digesting to that plan's single id.
+
+  Planning gains one refusal of its own: `PlanError::UndeclaredRowBound`, raised
+  by `retrieval::plan` and by nothing else -- it reaches a caller of `plan`, never
+  a caller of `compile` -- for a producer placed on a stratum whose declaration
+  states no row bound at the mode it is invoked under. Placement and the row-bound
+  read then disagree about one snapshot of the registry, so it ends the whole plan
+  where a placement failure rejects only the producer it is a fact about:
+  continuing would have derived every other stratum's depth from the same broken
+  reading.
+
+  A version-3 plan's bytes lie at different offsets under this layout, so the
+  decoder refuses the old version by name instead of misreading it. Every plan
+  identity moves, as does the plan document's JSON, which now carries
+  `"stratum_derivations"` and `"selectivity_terms"`.
+
+- **python:** A plan can leave the process and be checked on the way back in.
+  `retrieval.plan` returns that plan's canonical, length-framed encoding under
+  `"canonical_bytes"` — the bytes `"plan_id"` is the digest of — and
+  `retrieval.certify_plan` reads one back, refusing it or returning it rendered
+  exactly as `plan` renders it. `retrieval.explain_depth` answers which input
+  bound one stratum's depth in a received document, from the same closed
+  vocabulary `plan` renders under each derivation's `"cause"`. The plan dict also
+  carries `"stratum_derivations"`, one entry per stratum with every input its
+  depth was derived from.
+
+  Every refusal from that boundary raises `retrieval.PlanDocumentError`, a
+  `ValueError` subclass carrying a pinned kebab-case `.refusal` name — branch on
+  that, never on the message. The names are the engine's own and the class
+  documents all of them. A host that has not certified a document it received is
+  reading a depth nothing checked.
 
 - **BREAKING** **python:** `retrieval.plan` and `retrieval.compile` take the
   `top_k` keyword `retrieval.search` already took, and all three require it. The

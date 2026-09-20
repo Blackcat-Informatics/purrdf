@@ -39,13 +39,13 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
-    ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
-    Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
-    ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream, RankedStreamAdapter,
-    RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness,
-    SearchError, SearchResult, Statistics, StatisticsSnapshot, StratumUnit, StreamContract,
-    StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm, compile, contribution,
-    execute, fuse, plan, search,
+    DepthInputs, ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult,
+    FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
+    RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock,
+    ScoreExactness, SearchError, SearchResult, Statistics, StatisticsEntries, StatisticsSnapshot,
+    StratumUnit, StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm,
+    compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,
@@ -595,10 +595,23 @@ fn start_at_compile_hand_built_plan() {
             reason: UnservedReason::AcceptedWithoutPlacement,
         }],
         stratum_depths,
+        // The depth this fixture asserts, with the inputs that derive it: a
+        // declared ten rows, the provider's matching ten, and no request bound.
+        // A hand-built plan is still held to its own evidence.
+        stratum_derivations: BTreeMap::from([(
+            iri(&ex("stratum/hand")),
+            DepthInputs {
+                declared: 10,
+                cardinality: Some(10),
+                selectivity_ppm: None,
+                selectivity_terms: Vec::new(),
+                licensed_prefix: None,
+            },
+        )]),
         statistics_snapshot: StatisticsSnapshot {
             source: stats.source().to_owned(),
             revision: stats.revision().to_owned(),
-            entries: Vec::new(),
+            entries: StatisticsEntries::default(),
         },
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: registry.content_fingerprint().expect("fingerprint"),

@@ -142,6 +142,479 @@ pub enum PlanError {
         /// The number of unconsumed bytes.
         extra: usize,
     },
+
+    /// A producer that placement accepted declares no row bound at the mode it
+    /// will be invoked under.
+    ///
+    /// # Why this cannot happen, written down where a change would break it
+    ///
+    /// `plan` reads `PropertyFunctionRegistry::describe` **once**, and both
+    /// steps below read that one snapshot, so there is no window for the
+    /// registry to move between them. Within that snapshot:
+    ///
+    /// * `matching::place` admits an invocation only when
+    ///   `descriptor.modes` holds a declared mode that `subsumes` the invoked
+    ///   one, and refuses with `PlacementError::NoSatisfiableMode` otherwise;
+    /// * `admission::declared_row_bound` reads the bound by filtering that same
+    ///   `descriptor.modes` on that same `subsumes` predicate against that same
+    ///   invoked mode, and returns `RowBound::Undeclared` only when the filter
+    ///   is empty.
+    ///
+    /// Same collection, same predicate, same argument: a placement that
+    /// succeeded has already proved the filter is non-empty. Reaching this
+    /// variant therefore means those two readings disagree, which is a defect in
+    /// this crate rather than anything a caller's registry did — so the message
+    /// names the disagreement rather than diagnosing a registry that moved,
+    /// which within one snapshot it cannot have. Anything narrowing what `place`
+    /// admits, or widening what `declared_row_bound` filters out, breaks the
+    /// argument, and this is where it is written.
+    ///
+    /// # Why it is refused rather than defaulted
+    ///
+    /// Every available default is a lie about a number the depth is derived
+    /// from: zero declares an empty relation and floors the read to a single
+    /// probing row, while [`u64::MAX`] declares an unbounded one. A missing
+    /// declaration can refuse nothing and a zero is a measurement, so the
+    /// absence is reported here rather than resolved into either. The guard
+    /// stays as defence in depth precisely because the proof above is a proof
+    /// about today's two functions.
+    ///
+    /// # Why it ends the whole plan
+    ///
+    /// The neighbouring failure — `place` returning `Err` — records
+    /// [`ProducerDecision::Rejected`](crate::ProducerDecision) and planning
+    /// continues, and the asymmetry is deliberate.
+    ///
+    /// A placement failure is a fact **about that producer**: its declarations
+    /// do not admit this request's invocation,
+    /// [`RejectionReason`](crate::RejectionReason) has a variant that says so,
+    /// and the other producers are unaffected. This is not a fact about the
+    /// producer at all. No rejection reason means "the planner could not read a
+    /// number it had just proved was there", and recording
+    /// [`UnsatisfiedConstraint`](crate::RejectionReason::UnsatisfiedConstraint)
+    /// would report the producer as
+    /// having failed a constraint it did not fail — the misattribution a
+    /// recorded derivation exists to remove. Worse, it would drop the stratum
+    /// from the plan looking exactly like a producer that honestly did not
+    /// apply.
+    ///
+    /// And the condition is not local. Both readings run for **every** placed
+    /// producer, so a disagreement between them is not confined to the one
+    /// producer it became visible at: continuing would emit a plan whose other
+    /// strata were derived by the same broken reading, under a registry
+    /// fingerprint asserting it was planned against declarations it was not read
+    /// from. One refusal that names the producer is the smaller harm than a plan
+    /// that looks complete.
+    #[error(
+        "producer {producer} was placed on stratum {stratum} but declares no row bound at the mode it is invoked under; placement and the row-bound read disagree about one snapshot of the registry's declarations"
+    )]
+    UndeclaredRowBound {
+        /// The stratum whose declaration went missing.
+        stratum: String,
+        /// The producer that was placed without one.
+        producer: String,
+    },
+
+    /// A statistics snapshot named one subject twice.
+    ///
+    /// The snapshot is a record of what a provider reported about a subject, so
+    /// two rows for one subject are two answers to one question with nothing
+    /// saying which was used. Refused rather than resolved, because resolving it
+    /// — keeping the first, the last, or the wider — would be inventing a rule
+    /// the data does not carry.
+    #[error("statistics snapshot names subject {subject} more than once")]
+    DuplicateStatisticsSubject {
+        /// The repeated subject, as its recorded text.
+        subject: String,
+    },
+
+    /// A canonical encoding recorded two derivations for one stratum.
+    ///
+    /// A derivation is the argument list a depth was computed from, so two of
+    /// them are two explanations of one number — and the plan carries only one
+    /// of those numbers, so at most one of the explanations can be the one it
+    /// was derived by. Refused rather than resolved by the map that reads them,
+    /// which would keep whichever arrived last and let a forged document carry
+    /// an explanation the encoder never wrote.
+    ///
+    /// This is the derivation record's own refusal and not
+    /// [`DuplicateStatisticsSubject`](Self::DuplicateStatisticsSubject). The two
+    /// name different dimensions of one plan: a snapshot subject is something a
+    /// provider was *asked about*, a stratum derivation is something a depth was
+    /// *computed from*, and a reader repairing a document needs to know which of
+    /// the plan's two records of a stratum it is holding.
+    #[error("plan canonical encoding records a derivation for stratum {stratum} more than once")]
+    DuplicateStratumDerivation {
+        /// The repeated stratum, as its recorded IRI text.
+        stratum: String,
+    },
+
+    /// A canonical encoding recorded two depths for one stratum.
+    ///
+    /// A depth decides how deep that stratum is actually read, so two of them
+    /// are two different reads with nothing saying which the plan describes. The
+    /// map the decoder fills would keep whichever arrived last — a silent choice
+    /// between two claims — so the encoding is refused instead.
+    #[error("plan canonical encoding records a depth for stratum {stratum} more than once")]
+    DuplicateStratumDepth {
+        /// The repeated stratum, as its recorded IRI text.
+        stratum: String,
+    },
+
+    /// A canonical encoding listed a keyed section's keys out of ascending
+    /// order.
+    ///
+    /// Canonical bytes are the plan's identity, which requires the map from
+    /// plans to encodings to run both ways: one plan, one encoding, and one
+    /// encoding, one plan. A decoder that accepted any order would break the
+    /// second half — the same plan would have as many valid encodings as its
+    /// sections have permutations, each digesting to the plan's one id while
+    /// being a document the encoder would never write. So the order is required
+    /// on the way in, exactly as it is established on the way out.
+    ///
+    /// It is also what makes the check affordable. Comparing each key against
+    /// the one before it refuses a repeat and a reordering in one linear pass,
+    /// where scanning everything already read for a repeat is quadratic in the
+    /// length of a document the decoder does not control.
+    ///
+    /// # Why the section is a field rather than three variants
+    ///
+    /// Out-of-order is one fact about an encoding, and it means the same thing
+    /// wherever it occurs: these bytes are not canonical. The section says where,
+    /// and carrying it as a typed field is how
+    /// [`StatisticsEntryContradictsDerivation`](Self::StatisticsEntryContradictsDerivation)
+    /// carries its dimension. A *repeated* key is the opposite case — what two
+    /// rows for one key mean depends entirely on what the key indexes, so each
+    /// section refuses a repeat by its own name.
+    #[error(
+        "plan canonical encoding lists {section} key {key} after {previous}; a canonical encoding \
+         orders them ascending"
+    )]
+    NonAscendingCanonicalKeys {
+        /// Which keyed section was being decoded.
+        section: CanonicalSection,
+        /// The key read immediately before, as its recorded text.
+        previous: String,
+        /// The key that did not follow it, as its recorded text.
+        key: String,
+    },
+
+    /// A canonical encoding listed one record's selectivity-term run out of
+    /// ascending order.
+    ///
+    /// The run is the domain of a **sum**, so the order it is written in carries
+    /// no information about the data: `[1, 0]` and `[0, 1]` name one term set
+    /// contributing one aggregate. Both spellings would therefore be encodings of
+    /// one plan, each digesting to that plan's single id — the same break in the
+    /// plan-to-bytes biconditional that
+    /// [`NonAscendingCanonicalKeys`](Self::NonAscendingCanonicalKeys) refuses at
+    /// the level of a section's keys, one nesting level further in.
+    ///
+    /// It carries the record's own subject as well as the section, because a run
+    /// is nested inside a keyed entry: the section alone says which of a plan's
+    /// two selectivity records moved, and a plan has one such record per stratum
+    /// and per snapshot row.
+    #[error(
+        "plan canonical encoding lists {section} {subject} selectivity term {request_term} after \
+         {previous}; a canonical encoding orders them ascending"
+    )]
+    NonAscendingSelectivityTerms {
+        /// Which keyed section the run was nested in.
+        section: CanonicalSection,
+        /// The stratum or snapshot subject whose run it is, as its recorded text.
+        subject: String,
+        /// The index read immediately before.
+        previous: u32,
+        /// The index that did not follow it.
+        request_term: u32,
+    },
+
+    /// A canonical encoding named one request term twice in one selectivity-term
+    /// run.
+    ///
+    /// The run is the domain of a sum over the terms a provider answered for, and
+    /// a domain is a set: one term contributed to the aggregate once or not at
+    /// all. A repeat says the same term was counted twice into a total the
+    /// arithmetic reached once, so the run and the number beside it describe two
+    /// different measurements.
+    ///
+    /// One variant rather than one per section, which is where this parts company
+    /// with [`DuplicateStratumDerivation`](Self::DuplicateStratumDerivation) and
+    /// [`DuplicateStatisticsSubject`](Self::DuplicateStatisticsSubject). Those
+    /// keys index different dimensions of a plan, so a repeat means a different
+    /// thing in each. Both selectivity-term runs index the *same* dimension — the
+    /// plan's own request — so a repeat is one fact, and the section and subject
+    /// locate the record that carries it.
+    #[error(
+        "plan canonical encoding records {section} {subject} selectivity term {request_term} \
+         twice; the aggregate is a sum over distinct terms"
+    )]
+    DuplicateSelectivityTerm {
+        /// Which keyed section the run was nested in.
+        section: CanonicalSection,
+        /// The stratum or snapshot subject whose run it is, as its recorded text.
+        subject: String,
+        /// The repeated index.
+        request_term: u32,
+    },
+
+    /// A recorded depth is not the depth its own recorded inputs derive.
+    ///
+    /// Raised only by [`Plan::certify`](crate::Plan::certify). A plan records
+    /// every input its depths were derived from precisely so this is a checkable
+    /// claim rather than an asserted one; a mismatch means the plan was edited,
+    /// forged, or written by a build whose arithmetic differed, and in all three
+    /// cases the depth beside the inputs describes a read the inputs do not
+    /// license.
+    #[error(
+        "stratum {stratum} records depth {recorded}, but its recorded inputs derive depth {derived}"
+    )]
+    DepthNotDerivable {
+        /// The stratum whose depth does not follow from its inputs.
+        stratum: String,
+        /// The depth the plan records.
+        recorded: u32,
+        /// The depth the plan's own recorded inputs derive.
+        derived: u32,
+    },
+
+    /// A stratum carries a recorded depth with no recorded derivation.
+    ///
+    /// An unrecorded input cannot be checked, so a depth without its inputs is
+    /// exactly the unverifiable claim the derivation record exists to abolish.
+    #[error("stratum {stratum} records a depth with no recorded derivation")]
+    DepthWithoutDerivation {
+        /// The stratum whose derivation is missing.
+        stratum: String,
+    },
+
+    /// A stratum carries a recorded derivation with no recorded depth.
+    ///
+    /// The mirror of [`DepthWithoutDerivation`](Self::DepthWithoutDerivation),
+    /// and refused separately because it is a different edit: inputs for a
+    /// stratum the plan does not read at all.
+    #[error("stratum {stratum} records a derivation with no recorded depth")]
+    DerivationWithoutDepth {
+        /// The stratum whose depth is missing.
+        stratum: String,
+    },
+
+    /// A stratum a depth was derived for is named by no statistics-snapshot row.
+    ///
+    /// The snapshot's whole claim is that it names every subject planning
+    /// consulted, and a stratum is the subject planning consulted in order to
+    /// *decide*. A snapshot missing one is a plan asserting it consulted nothing
+    /// for a depth it recorded — so the omission is refused rather than repaired
+    /// from the derivation, which would let the plan's two records drift apart
+    /// silently in exactly the direction this check exists to catch.
+    #[error("stratum {stratum} records a derivation with no statistics snapshot entry")]
+    DerivationWithoutStatisticsEntry {
+        /// The stratum the snapshot does not name.
+        stratum: String,
+    },
+
+    /// A stratum's statistics-snapshot row contradicts its own recorded
+    /// derivation.
+    ///
+    /// The row is written as a projection of the derivation, so the two agree by
+    /// construction in any plan this build emitted. A plan in which they differ
+    /// was edited or forged, and the two readings license different depths with
+    /// nothing saying which is the measurement — so it is refused, naming the
+    /// dimension that disagreed and both of its values.
+    #[error(
+        "stratum {stratum} records {dimension} {snapshot} in its statistics snapshot and {derivation} in its derivation"
+    )]
+    StatisticsEntryContradictsDerivation {
+        /// The stratum whose two records disagree.
+        stratum: String,
+        /// Which statistic they disagree about.
+        dimension: StatisticsDimension,
+        /// What the snapshot entry records for that dimension.
+        snapshot: String,
+        /// What the derivation records for it.
+        derivation: String,
+    },
+
+    /// A recorded selectivity-term run names an index the plan's own request does
+    /// not carry.
+    ///
+    /// Raised only by [`Plan::certify`](crate::Plan::certify). The run is the
+    /// domain of a selectivity aggregate, written as indices into
+    /// [`Plan::request_terms`](crate::Plan::request_terms) so that a reader can
+    /// read the aggregate's derivation back onto the terms the caller wrote. An
+    /// index addressing no term of that request names nothing at all: the
+    /// aggregate's domain becomes unreadable, and the record that exists to make
+    /// the sum checkable stops being checkable.
+    ///
+    /// It is the derivation's and the snapshot's member of the family the
+    /// admission waist already enforces for
+    /// [`ProducerBinding::request_terms`](crate::ProducerBinding::request_terms)
+    /// and [`UnservedTerm::request_term`](crate::UnservedTerm::request_term). It
+    /// is decided here rather than there because the plan carries its own request
+    /// — so this is a property of the value alone, like every other question
+    /// `certify` answers, and it holds for a plan reached by any path in rather
+    /// than only for one being admitted against a registry.
+    #[error(
+        "subject {subject} records selectivity term {request_term}, but the plan carries \
+         {request_terms} request term(s)"
+    )]
+    SelectivityTermOutOfRange {
+        /// The stratum or snapshot subject whose run it is, as its recorded text.
+        subject: String,
+        /// The index that addresses no term.
+        request_term: u32,
+        /// How many terms the plan's own request carries.
+        request_terms: usize,
+    },
+
+    /// A statistics-snapshot row names a subject nothing in the plan consulted.
+    ///
+    /// Raised only by [`Plan::certify`](crate::Plan::certify), and the mirror of
+    /// [`DerivationWithoutStatisticsEntry`](Self::DerivationWithoutStatisticsEntry):
+    /// that one refuses a consultation with no row, this one a row with no
+    /// consultation. Both directions are needed, because the snapshot's claim
+    /// runs both ways —
+    /// [`StatisticsSnapshot`](crate::StatisticsSnapshot) states that it names
+    /// every subject planning consulted *and* that a subject nothing consulted is
+    /// absent rather than recorded as empty. Enforcing only the first leaves the
+    /// second exactly where a forger would reach for it: a row can be added, and
+    /// the plan then reads back as evidence about a consultation that never
+    /// happened.
+    ///
+    /// Planning consults two kinds of subject and no others: a stratum, asked
+    /// about in order to *decide* a depth, and the predicate of a request term,
+    /// asked about in order to *report*. Both are read off the plan itself, so
+    /// this is a property of the value alone, like every other question `certify`
+    /// answers.
+    #[error(
+        "the statistics snapshot names subject {subject}, which is neither a stratum this plan \
+         derives a depth for nor a predicate of any of its request terms"
+    )]
+    UnconsultedStatisticsSubject {
+        /// The subject nothing consulted, as its recorded text.
+        subject: String,
+    },
+}
+
+impl PlanError {
+    /// The pinned, machine-readable name of this refusal.
+    ///
+    /// A refusal's message is prose and may be reworded; this is the contract. A
+    /// caller branching on which refusal it received — a host receiving plans
+    /// from somewhere it does not control, a binding rendering them into its own
+    /// vocabulary — reads this and never `to_string`.
+    ///
+    /// # It lives here rather than at each caller
+    ///
+    /// The enum is `#[non_exhaustive]`, so a match written in any other crate
+    /// needs a wildcard arm, and a wildcard arm over a *name* has nothing honest
+    /// to return: it would have to invent a word for a refusal it cannot name,
+    /// handed to the caller at the one moment the caller is trying to find out
+    /// which refusal it got. Inside this module the match is exhaustive, so a
+    /// variant added without a name is a compile error here — the same discipline
+    /// [`DepthCause`](crate::DepthCause) gets from being a closed enum.
+    ///
+    /// Every name is fixed once issued, for the reason a canonical tag is: a
+    /// caller that branches on the string is broken by a rename exactly as
+    /// silently as by a renumbered discriminator.
+    #[must_use]
+    pub fn refusal(&self) -> &'static str {
+        match self {
+            Self::VersionMismatch { .. } => "version",
+            Self::NoApplicableProducers => "no-applicable-producers",
+            Self::InvalidRequestTerm { .. } => "invalid-request-term",
+            Self::ReadBoundBeyondDepthRange { .. } => "read-bound-beyond-depth-range",
+            Self::RegistryDeclaration { .. } => "registry-declaration",
+            Self::Truncated { .. } => "truncated",
+            Self::InvalidTag { .. } => "invalid-tag",
+            Self::InvalidUtf8 { .. } => "invalid-utf8",
+            Self::InvalidIri { .. } => "invalid-iri",
+            Self::TrailingBytes { .. } => "trailing-bytes",
+            Self::UndeclaredRowBound { .. } => "undeclared-row-bound",
+            Self::DuplicateStatisticsSubject { .. } => "duplicate-statistics-subject",
+            Self::DuplicateStratumDerivation { .. } => "duplicate-stratum-derivation",
+            Self::DuplicateStratumDepth { .. } => "duplicate-stratum-depth",
+            Self::NonAscendingCanonicalKeys { .. } => "non-ascending-keys",
+            Self::NonAscendingSelectivityTerms { .. } => "non-ascending-selectivity-terms",
+            Self::DuplicateSelectivityTerm { .. } => "duplicate-selectivity-term",
+            Self::SelectivityTermOutOfRange { .. } => "selectivity-term-out-of-range",
+            Self::UnconsultedStatisticsSubject { .. } => "unconsulted-statistics-subject",
+            Self::DepthNotDerivable { .. } => "depth-not-derivable",
+            Self::DepthWithoutDerivation { .. } => "depth-without-derivation",
+            Self::DerivationWithoutDepth { .. } => "derivation-without-depth",
+            Self::DerivationWithoutStatisticsEntry { .. } => "derivation-without-statistics-entry",
+            Self::StatisticsEntryContradictsDerivation { .. } => {
+                "statistics-entry-contradicts-derivation"
+            }
+        }
+    }
+}
+
+/// Which keyed section of a canonical encoding was being decoded.
+///
+/// Carried by
+/// [`PlanError::NonAscendingCanonicalKeys`](PlanError::NonAscendingCanonicalKeys)
+/// so a refusal says which of a plan's three keyed sequences was not ordered.
+/// They are written by different encoders, read into different containers and
+/// keyed on different things, and a caller repairing a document needs to know
+/// which one moved.
+///
+/// The two sections that nest a selectivity-term run inside each entry carry it
+/// for the same reason, on
+/// [`PlanError::NonAscendingSelectivityTerms`](PlanError::NonAscendingSelectivityTerms)
+/// and
+/// [`PlanError::DuplicateSelectivityTerm`](PlanError::DuplicateSelectivityTerm):
+/// a plan records one run per stratum and one per snapshot row, so the section
+/// and the entry's own subject together are what locate it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CanonicalSection {
+    /// The per-stratum depths, keyed by stratum IRI.
+    StratumDepths,
+    /// The per-stratum depth derivations, keyed by stratum IRI.
+    StratumDerivations,
+    /// The statistics snapshot's entries, keyed by subject.
+    StatisticsEntries,
+}
+
+impl core::fmt::Display for CanonicalSection {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let name = match self {
+            Self::StratumDepths => "stratum depth",
+            Self::StratumDerivations => "stratum derivation",
+            Self::StatisticsEntries => "statistics snapshot",
+        };
+        formatter.write_str(name)
+    }
+}
+
+/// Which statistic a plan's two records of one stratum disagree about.
+///
+/// Carried by
+/// [`PlanError::StatisticsEntryContradictsDerivation`](PlanError::StatisticsEntryContradictsDerivation)
+/// so the refusal names a dimension rather than reporting that "the statistics"
+/// differ: the three are measured separately, edited separately, and lead to
+/// different depths, and a caller repairing a plan needs to know which one moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StatisticsDimension {
+    /// The row count the provider reported for the subject.
+    Cardinality,
+    /// The aggregate selectivity, in parts per million, that was applied.
+    SelectivityPpm,
+    /// The request-term indices that aggregate was summed over.
+    SelectivityTerms,
+}
+
+impl core::fmt::Display for StatisticsDimension {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let name = match self {
+            Self::Cardinality => "cardinality",
+            Self::SelectivityPpm => "selectivity in parts per million",
+            Self::SelectivityTerms => "selectivity terms",
+        };
+        formatter.write_str(name)
+    }
 }
 
 /// A failure raised while building a profile or fusing ranked streams.
