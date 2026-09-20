@@ -81,8 +81,12 @@ const UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED: u8 = 1;
 const UNSERVED_UNBOUND: u8 = 2;
 const UNSERVED_ACCEPTED_WITHOUT_PLACEMENT: u8 = 3;
 
-const PRESENT: u8 = 1;
-const ABSENT: u8 = 0;
+// There is no presence discriminator here. Absence is spelled once, by the
+// `option_*` helpers on [`Writer`](crate::canonical::Writer) and
+// [`Reader`](crate::canonical::Reader), and every optional field in this module
+// goes through them. A second pair of constants matching those helpers byte for
+// byte would be one edit away from not matching them, and the encoding would
+// then spell "present" two ways while claiming to spell it one.
 
 /// Serde bridge for [`RegistryId`], which carries its counter privately and has
 /// no serde impl of its own. The value is encoded as the raw `u64` counter; a
@@ -1117,20 +1121,43 @@ fn read_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Iri, PlanErro
     Iri::parse(&text)
 }
 
+/// Write an optional IRI as its canonical text through the writer's own
+/// presence discriminant.
+///
+/// The counterpart of [`read_option_iri`], and the reason both exist: the
+/// presence byte is the writer's, so an optional IRI is spelled exactly as
+/// every other optional field is rather than by a constant that agrees with it
+/// today.
+fn write_option_iri(writer: &mut Writer, value: Option<&Iri>) {
+    writer.option_string(value.map(Iri::as_str));
+}
+
+/// Read an optional IRI written by [`write_option_iri`], re-parsing a present
+/// one for the reason [`read_iri`] re-parses.
+///
+/// An absence stays absent and a discriminant that is neither is refused by
+/// [`Reader::option_string`] under the same `what` the IRI itself would be —
+/// one field, one name, whichever half of it was malformed.
+fn read_option_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Option<Iri>, PlanError> {
+    reader
+        .option_string(what)?
+        .map(|text| Iri::parse(&text))
+        .transpose()
+}
+
 /// Write an optional exact value as a presence byte and, when present, its raw
 /// scaled integer.
 ///
 /// The raw `i128` is written rather than a rendered decimal: it is the value's
 /// exact representation, so the encoding neither rounds nor depends on a
 /// formatter.
+///
+/// Written through [`Writer::option_i128`] rather than a presence byte of this
+/// module's own, so the claim that the encoding spells "present" one way
+/// throughout is a property of the code rather than of two constants that
+/// happen to agree.
 fn write_option_fixed(writer: &mut Writer, value: Option<Fixed>) {
-    match value {
-        None => writer.u8(ABSENT),
-        Some(value) => {
-            writer.u8(PRESENT);
-            writer.i128(value.into_raw());
-        }
-    }
+    writer.option_i128(value.map(Fixed::into_raw));
 }
 
 /// Read an optional exact value written by [`write_option_fixed`].
@@ -1139,14 +1166,9 @@ fn write_option_fixed(writer: &mut Writer, value: Option<Fixed>) {
 /// a treated-as-absent field, because silently reading a constrained endpoint
 /// as unconstrained would widen the query the plan describes.
 fn read_option_fixed(reader: &mut Reader<'_>) -> Result<Option<Fixed>, PlanError> {
-    match reader.u8()? {
-        ABSENT => Ok(None),
-        PRESENT => Ok(Some(Fixed::from_raw(reader.i128()?))),
-        tag => Err(PlanError::InvalidTag {
-            what: "optional fixed value",
-            tag,
-        }),
-    }
+    Ok(reader
+        .option_i128("optional fixed value")?
+        .map(Fixed::from_raw))
 }
 
 /// Write one request term: its arm's discriminator byte, then that arm's fields
@@ -1168,7 +1190,7 @@ fn write_request_term(writer: &mut Writer, term: &RequestTerm) {
             writer.u8(TERM_LEXICAL);
             writer.string(text);
             writer.option_string(language.as_deref());
-            writer.option_string(predicate.as_ref().map(Iri::as_str));
+            write_option_iri(writer, predicate.as_ref());
         }
         RequestTerm::Vector {
             embedding,
@@ -1230,16 +1252,7 @@ fn read_request_term(reader: &mut Reader<'_>) -> Result<RequestTerm, PlanError> 
         TERM_LEXICAL => {
             let text = reader.string("lexical text")?;
             let language = reader.option_string("lexical language")?;
-            let predicate = match reader.u8()? {
-                ABSENT => None,
-                PRESENT => Some(read_iri(reader, "lexical predicate")?),
-                tag => {
-                    return Err(PlanError::InvalidTag {
-                        what: "lexical predicate presence",
-                        tag,
-                    });
-                }
-            };
+            let predicate = read_option_iri(reader, "lexical predicate")?;
             Ok(RequestTerm::Lexical {
                 text,
                 language,

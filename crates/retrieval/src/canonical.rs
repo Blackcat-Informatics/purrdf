@@ -99,6 +99,23 @@ impl Writer {
         }
     }
 
+    /// Write a present/absent discriminant and, when present, a little-endian
+    /// `i128`.
+    ///
+    /// The discriminant is the one [`Self::option_string`] and
+    /// [`Self::option_u64`] write, so the encoding spells "present" one way
+    /// throughout — which is a property of this module only for as long as every
+    /// optional field is written through it.
+    pub(crate) fn option_i128(&mut self, value: Option<i128>) {
+        match value {
+            None => self.u8(0),
+            Some(value) => {
+                self.u8(1);
+                self.i128(value);
+            }
+        }
+    }
+
     /// Write a length-framed run of little-endian `u32`s.
     pub(crate) fn u32_slice(&mut self, values: &[u32]) {
         self.u64(values.len() as u64);
@@ -216,6 +233,20 @@ impl<'a> Reader<'a> {
         match self.u8()? {
             0 => Ok(None),
             1 => Ok(Some(self.u64()?)),
+            tag => Err(PlanError::InvalidTag { what, tag }),
+        }
+    }
+
+    /// Read a present/absent discriminant and, when present, an `i128`.
+    ///
+    /// A discriminant that is neither is a typed refusal rather than a
+    /// treated-as-absent field: the optional values written this way are the
+    /// endpoints of a constrained request term, and reading a constrained one as
+    /// unconstrained would widen the query the plan describes.
+    pub(crate) fn option_i128(&mut self, what: &'static str) -> Result<Option<i128>, PlanError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => Ok(Some(self.i128()?)),
             tag => Err(PlanError::InvalidTag { what, tag }),
         }
     }
