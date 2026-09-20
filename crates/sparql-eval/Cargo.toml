@@ -220,6 +220,15 @@ name = "construct_builder"
 harness = false
 
 [[bench]]
+# What one property-function invocation allocates: attesting a shared index
+# generation vs copying it per invocation, and the same relation on a lane that
+# can carry a witness vs one that cannot. Reports allocation COUNTS (a property
+# of the code, not of the machine) and peak bytes — no timing, no threshold.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "relation_attestation_alloc"
+harness = false
+
+[[bench]]
 # Per-row cost of SPARQL `REGEX`/`REPLACE` after the shared XSD/XPath
 # translation was inserted: a constant pattern (cache hit — matching, not
 # compiling), `REPLACE` through `CompiledPattern::replace_all`, and a

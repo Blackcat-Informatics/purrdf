@@ -101,14 +101,16 @@ use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{
-    DistanceMetric, EmbeddingView, Iri, TargetId, TargetSetId, TermValue, VectorDtype,
-    VectorSpaceId, verify_embedding,
+    ContentDigest, DistanceMetric, EmbeddingView, FamilyContractDigest, Iri,
+    ProjectionContentDigest, TargetId, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
+    verify_embedding,
 };
 
 use crate::error::EvalError;
 use crate::property_fn::{
-    AcceptedTerm, DepthPlacement, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, IndexGeneration, PfArgs,
+    PfArity, PfCursor, PfRow, PropertyFunction, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement,
 };
 use crate::user_fn::Volatility;
 
@@ -127,6 +129,12 @@ const KNN_MODE: &str = "fbbf";
 
 /// `xsd:double`, the datatype every emitted distance carries.
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+
+/// The domain separator every [`EmbeddingSpace`] generation opens with, so this
+/// digest can never equal a digest of another kind that happens to fold a
+/// structurally identical field sequence — the same discipline
+/// `crate::property_fn_plan`'s registry fingerprint follows.
+const SPACE_GENERATION_DOMAIN: &str = "purrdf-sparql-eval/embedding-space-generation/v1";
 
 // ---------------------------------------------------------------------------
 // The guard
@@ -251,6 +259,14 @@ pub struct EmbeddingSpace {
     rows_by_term: Vec<usize>,
     /// The bounds one invocation is held to.
     guard: KnnGuard,
+    /// The generation every cursor over this space attests, folded once at
+    /// construction — see [`space_generation`].
+    ///
+    /// Shared rather than owned: the space is immutable, so this hex is a constant
+    /// of it, and [`IndexGeneration::Declared`] holds the same `Arc<str>`. Attesting
+    /// it — which the engine asks for once per invocation, and an invocation is once
+    /// per driving row — is a refcount bump instead of a fresh copy of the digest.
+    generation: Arc<str>,
 }
 
 impl EmbeddingSpace {
@@ -345,6 +361,16 @@ impl EmbeddingSpace {
         let mut rows_by_term: Vec<usize> = (0..row_count).collect();
         rows_by_term.sort_unstable_by(|&left, &right| terms[left].cmp(&terms[right]));
 
+        // Folded here, where the snapshot is pinned: the artifact has verified,
+        // the projection's own digest has been recomputed against its bytes by
+        // that verification, and the host's bindings have been proved to cover
+        // every row exactly once. Nothing after this point can move it.
+        let generation = space_generation(
+            effective.projection().content_digest(),
+            family.contract_digest(),
+            &terms,
+        );
+
         Ok(Self {
             kernel,
             metric,
@@ -354,7 +380,27 @@ impl EmbeddingSpace {
             terms,
             rows_by_term,
             guard,
+            generation,
         })
+    }
+
+    /// The generation this space attests for every row it returns.
+    ///
+    /// A content identity, comparable across processes and machines. It folds the
+    /// projection digest, the family contract that names the metric, and every
+    /// bound term in row order — and it moves exactly when the rows this space can
+    /// return move, which is what makes it worth comparing.
+    ///
+    /// The projection digest rather than the matrix digest, because a prefix policy
+    /// lets two spaces share one stored matrix and differ in the prefix taken. The
+    /// bindings are folded because the map from a row to the RDF term it stands for
+    /// is a host argument: two spaces over byte-identical artifacts with different
+    /// bindings return a different term at every position, and a matrix-only
+    /// identity would call them one generation. The bound on work is excluded — it
+    /// decides how hard a search tries, never which rows exist or how they rank.
+    #[must_use]
+    pub fn generation(&self) -> &str {
+        &self.generation
     }
 
     /// How many candidate rows this space holds.
@@ -494,6 +540,85 @@ fn bind_terms(
         )));
     }
     Ok(bound)
+}
+
+/// The generation one [`EmbeddingSpace`] attests: a domain-separated digest over
+/// the exact vectors it will rank and the exact terms it will name them by.
+///
+/// # Why the matrix digest alone is not the answer
+///
+/// The obvious candidate is the artifact's own `MatrixContentDigest` — a
+/// verified digest of the stored scalar bytes, already computed, free to read.
+/// It is not sufficient, and the reason is visible in [`EmbeddingSpace::from_artifact`]'s
+/// signature: `bindings` is a **host argument**, not artifact content. PURREMB
+/// deliberately allows a target to be disclosed by digest alone, so the map
+/// from a row to the RDF term it stands for is knowledge the host supplies, and
+/// two spaces built from byte-identical artifact bytes with different bindings
+/// return *different terms* at position 0 of every row. A generation that moved
+/// only with the matrix would attest "same generation" across two spaces whose
+/// answers disagree on every row — exactly the silent-same-generation failure
+/// the attestation exists to make impossible. So the bindings are folded in,
+/// in row order, through `TermValue::canonical_bytes` (which is injective, so
+/// no two distinct term sequences can share an encoding).
+///
+/// # The three facts folded, and why each is load-bearing
+///
+/// * The **projection content digest**, not the matrix content digest. A
+///   projection is the `(matrix, vector space)` pair this space actually reads,
+///   and its digest covers the scalar dtype, the row count, the *effective*
+///   dimension and the prefix-postprocessing policy along with the logical row
+///   bytes. Under a Matryoshka policy two vector spaces share one stored matrix
+///   and differ only in the prefix they take, so the matrix digest is equal
+///   across two spaces that rank differently and the projection digest is not.
+///   `verify_embedding` has already recomputed it against the bytes, so reading
+///   it here is a read and not a second scan of the vectors.
+/// * The **family contract digest**, because the projection digest carries the
+///   vectors but not the law they are compared under. The family contract is
+///   what declares the [`DistanceMetric`], and the same vectors ranked under
+///   cosine and under squared Euclidean are two different orderings of the same
+///   candidates.
+/// * The **bound terms**, in row order, per the argument above. The row count is
+///   folded ahead of them so a shorter sequence can never be the prefix of a
+///   longer one under a framing that already length-prefixes each field.
+///
+/// # What is deliberately not folded
+///
+/// The [`KnnGuard`]. It bounds the work one invocation may spend and the `k` one
+/// invocation may ask for; it decides no row's presence and no row's rank. A
+/// generation that moved when a host retuned a budget would report a rebuilt
+/// index where none was rebuilt.
+///
+/// # No clock, no counter, no RNG
+///
+/// Every input is content. Two processes that open the same artifact bytes with
+/// the same bindings attest the same generation, which is the whole point of
+/// declaring one: a host comparing two answers' evidence is comparing the
+/// indexes, not the runs.
+fn space_generation(
+    projection: ProjectionContentDigest,
+    family: FamilyContractDigest,
+    terms: &[TermValue],
+) -> Arc<str> {
+    let mut bytes = Vec::new();
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "domain",
+        SPACE_GENERATION_DOMAIN.as_bytes(),
+    );
+    crate::registry_id::append_framed_part(&mut bytes, "projection", projection.as_bytes());
+    crate::registry_id::append_framed_part(&mut bytes, "family-contract", family.as_bytes());
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "row-count",
+        &(terms.len() as u64).to_be_bytes(),
+    );
+    let mut term_bytes = Vec::new();
+    for term in terms {
+        term_bytes.clear();
+        term.canonical_bytes(&mut term_bytes);
+        crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);
+    }
+    Arc::from(ContentDigest::of(&bytes).to_hex())
 }
 
 /// Read every row of `effective` into one row-major `f64` buffer.
@@ -728,12 +853,31 @@ impl EmbeddingKnnRelation {
     /// contiguous and ascending, which is the one rank law
     /// [`RankedDeclaration`] holds every ranked producer to. Terms are distinct
     /// within a space and a search returns distinct rows, so no item repeats.
+    ///
+    /// # `domains` comes from the host, and cannot come from anywhere else
+    ///
+    /// Which blocks of the candidate universe this space's neighbours lie in is
+    /// a fact about the *corpus the space was built over*, and this relation
+    /// cannot see it: it holds vectors and row numbers, and the terms those
+    /// rows carry are whatever the host embedded. Only the host knows whether
+    /// the entities in this space are the same entities its text index ranks,
+    /// or a disjoint population. So the tags are a parameter.
+    ///
+    /// Deriving one from the stratum would be the dangerous convenience:
+    /// two producers over one entity space would receive two tags a consumer
+    /// reads as disjoint, and that is not a conservative mistake in either
+    /// direction — it makes a fusion refuse a valid query when both producers
+    /// name one entity, and certify a score missing the other producer's
+    /// contribution when they do not. [`CandidateDomains::Unrestricted`] is the
+    /// honest value where the host does not know, and it is today's behaviour
+    /// exactly.
     #[must_use]
     pub fn ranked_declaration(
         &self,
         stratum: Iri,
         seed: TermKind,
         depth_datatype: String,
+        domains: CandidateDomains,
     ) -> RankedDeclaration {
         RankedDeclaration {
             stratum,
@@ -751,6 +895,14 @@ impl EmbeddingKnnRelation {
             }),
             candidate_position: Self::NEIGHBOUR,
             duplicates: DuplicatePolicy::Unique,
+            domains,
+            // This relation projects a neighbour and a distance; it knows
+            // nothing of a host's partition, so it has no position to read a
+            // per-row block out of and says so. A host whose vector index spans
+            // several blocks declares one producer per block, or declares
+            // `CandidateDomains::Unrestricted`; see
+            // `RankedDeclaration::block_position`.
+            block_position: None,
             mandatory: false,
         }
     }
@@ -1022,6 +1174,17 @@ impl PfCursor for KnnCursor {
     /// nothing about the size of the space they were selected from.
     fn take_work(&mut self) -> u64 {
         core::mem::take(&mut self.unreported_work)
+    }
+
+    /// The generation of the space this cursor is searching, read through the
+    /// `Arc` pinned in `open`.
+    ///
+    /// The space is immutable once built, so the reading is true for every row
+    /// this cursor goes on to emit — which is exactly the property the seam
+    /// documents for the instant it takes this reading at. The digest itself is
+    /// not copied out: the attestation shares the space's own `Arc<str>`.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Declared(Arc::clone(&self.space.generation))
     }
 }
 

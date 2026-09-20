@@ -22,6 +22,37 @@
 //! zero leaves `U(x)` equal to `L(x)` while the stream carrying it can still
 //! name `x`.
 //!
+//! *Could* still name it is where a producer's own declaration enters. A stream
+//! that declared [`CandidateDomains::Within`] has promised its candidates lie in
+//! named blocks of the candidate universe, so a candidate outside those blocks
+//! is one it will never name — and waiting for it would be waiting forever. The
+//! membership test is therefore asked of the streams that can name `x` and
+//! skipped for the streams that provably cannot, which is a *smaller
+//! quantifier*, not a weaker test: nothing about what a live stream owes a
+//! candidate changes. A stream that then names a candidate its declaration
+//! cannot reach is refused ([`ProtocolError::OutsideDeclaredDomain`]), and a
+//! fusion whose streams declare [`CandidateDomains::Unrestricted`] skips
+//! nothing and computes exactly what it computed before the term existed. What
+//! the licence buys is the reading: without it, strata whose candidate sets do
+//! not overlap are read to their ends however small the caller's top-k, because
+//! no confirmation is ever coming.
+//!
+//! # The axiom under the licence, and where it is checked
+//!
+//! Both the skip and the threshold are sound under one axiom: the host's tags
+//! **partition** the candidate universe, so a candidate lies in exactly one
+//! block. That is a fact about the host's corpus, and it is checked rather than
+//! assumed. Every row of a restricted stream names the block it was drawn from
+//! ([`RowBlock`]); [`FusionStream::fetch`] holds that block against the stream's
+//! own declaration; and [`FusionStream::pull`] holds it against the block an
+//! earlier row placed the same candidate in, refusing the pair as
+//! [`ProtocolError::CandidateInTwoBlocks`]. A candidate in two blocks is exactly
+//! what would make the threshold under-count — the streams that reach one block
+//! and the streams that reach the other are different sets — so it fails the
+//! fusion instead of quietly reordering its answer. Verification reaches the rows
+//! this fusion pulled and no further, which is the same limit the duplicate and
+//! domain promises carry.
+//!
 //! The frontier is not the whole of what a fusion holds, and saying otherwise
 //! would overstate it. De-duplicating a stream that declared
 //! [`DuplicatePolicy::Allowed`] needs the set of items that stream has already
@@ -33,24 +64,54 @@
 //! that wants every row still pays for every row, because it asked for them one
 //! at a time.
 //!
-//! A stream that declared [`DuplicatePolicy::Unique`] is not charged for that
-//! set at all — there is nothing to de-duplicate, so no identity set is built
-//! for it — and it is the one structure here that grows with the rows pulled
-//! rather than with the disagreement window. Declaring uniqueness truthfully is
-//! therefore what makes a deep answer affordable, and `fusion_frontier_alloc`
-//! measures the difference rather than asserting it.
+//! A stream that declared [`DuplicatePolicy::Unique`] is not charged for a
+//! per-row identity set — there is nothing to de-duplicate, so none is built
+//! for it — and that set is the one structure here that grows with the rows
+//! pulled rather than with the disagreement window. Declaring uniqueness
+//! truthfully is therefore what makes a deep answer affordable, and
+//! `fusion_frontier_alloc` measures the difference rather than asserting it.
+//!
+//! # What every fusion is charged, whatever any stream declared
+//!
+//! One entry per row **emitted**, in [`FusionStream`]'s `emitted` map: the
+//! candidate's term and the set of stream indexes that named it. That is the
+//! price of the answer invariant — *a fused answer never contains the same
+//! entity twice* — and it is stated here rather than left to be discovered,
+//! because it is the one cost that is not a stream's own declaration to avoid.
+//!
+//! It is charged against **emissions, not pulls**, and the difference is the
+//! whole argument:
+//!
+//! * A bounded call — [`fuse`](crate::fuse) under a caller's
+//!   [`TopK`](crate::TopK) — emits at most `k` rows, so the map holds at most
+//!   `k` entries however long the streams are. The bound that already governs
+//!   the answer governs this too, with no second knob.
+//! * A caller that drains gets no asymptotic surprise either, because what
+//!   enters the map is what *left* the frontier, and strictly smaller: a
+//!   certified candidate's contribution vector and its lower bound are dropped
+//!   and only the stream-index set survives, moved rather than rebuilt. Peak
+//!   live bytes therefore do not grow by a term the frontier was not already
+//!   paying.
+//!
+//! What the map is emphatically not is the retained-forever *per-stream*
+//! identity set a [`DuplicatePolicy::Unique`] declaration buys its way out of.
+//! That one grows with every row a stream emits, duplicated per stream; this
+//! one grows with the rows the *fusion* returns, once for all strata together.
 
 use core::fmt;
-use std::collections::{BTreeMap, BTreeSet, btree_map};
+use std::collections::{BTreeMap, BTreeSet, HashMap, btree_map};
 
-use purrdf_sparql_eval::DuplicatePolicy;
+use purrdf_sparql_eval::{
+    CandidateDomains, DomainTag, DuplicatePolicy, IndexGeneration, PfAttestation, ServiceLevel,
+};
 use purrdf_text::Fixed;
 
+use crate::canonical::Writer;
 use crate::error::FusionError;
 use crate::fusion_profile::FusionProfile;
-use crate::id::PlanId;
+use crate::id::{EVIDENCE_VERSION, EvidenceId, PlanId};
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock};
 use crate::reciprocal_rank::MonotoneDepth;
 
 /// A candidate's identity in the frontier: its canonical term.
@@ -62,9 +123,52 @@ pub type CandidateId = Term;
 /// that contributed — and every applicable one that could not — keeps its own
 /// status, so "all producers answered" and "one could not" stay distinguishable.
 ///
+/// # `Exhausted` is the only completeness claim in the vocabulary
+///
+/// There are seven variants and exactly one of them says a stratum's rows ran
+/// out. Every other one names *who stopped the read*, and they are six
+/// different parties stopping it at six different places:
+///
+/// * [`Self::DepthReached`] — the **plan's depth** stopped the producer, at a
+///   rank. The rows below it exist and were not looked at.
+/// * [`Self::RowBoundReached`] — the producer's **own declared row bound** stopped
+///   it, at a rank. Whether rows lie below that rank was not observable: this is
+///   the producer that takes its depth as an argument, read to the number it
+///   registered, so no row past it could be asked for. See
+///   [`ProducerReceipt::RowBoundReached`] for why neither neighbour is true of it.
+/// * [`Self::SuppliedQueryEnded`] — the **caller's own query text** stopped it, at a
+///   rank. This layer bounded the outside of a text it did not write, so what that
+///   text bounded inside itself, and therefore what it left unread, is not
+///   observable. See [`ProducerReceipt::SuppliedQueryEnded`].
+/// * [`Self::CeilingReached`] — a **contribution bound** stopped the read, at a
+///   value in the profile's fixed-point space. Either the producer's own
+///   declared bound or, far more often, the one a bounded fusion wrote down
+///   when the caller's [`TopK`](crate::TopK) was satisfied.
+/// * [`Self::TermsRejected`] — the **producer** stopped it before it began, by
+///   declining the request terms it was handed.
+/// * [`Self::ExecutionFailed`] — the **run** stopped it: the unit could not
+///   execute at all.
+///
+/// A consumer therefore reads completeness by looking for one variant rather
+/// than by eliminating the others, which is the property that makes this
+/// vocabulary safe to extend: a read ending added later is incomplete by
+/// construction instead of complete by omission.
+///
+/// The first two are the pair most easily confused, and collapsing them would
+/// lose the fact a consumer acts on. Both say "this stratum is not complete",
+/// but they differ in who stopped the read and in what space the stopping point
+/// is expressed — a rank the producer was handed as its depth, versus a
+/// contribution the producer never saw. The remedy differs with them:
+/// [`Self::DepthReached`] is answered by re-planning deeper, and
+/// [`Self::CeilingReached`] by certifying further rows from the same streams.
+/// Neither number converts into the other — a rank becomes a contribution only
+/// under a profile, and a contribution does not become a rank again once
+/// fixed-point decay has quantized two adjacent ranks to one value — so a
+/// consumer handed the merged fact could only guess which knob to turn.
+///
 /// # Where each variant comes from
 ///
-/// Three of the four are the producer's own declaration, converted from the
+/// Six of the seven are the producer's own declaration, converted from the
 /// receipt it returned through [`RankedStream::receipt`] — plus, for the strata
 /// that never became a stream, the executor's report carried in by
 /// [`FusionTrailer::completed_with`].
@@ -95,15 +199,88 @@ pub type CandidateId = Term;
 /// can say either. The fusion engine validates the claim against the rows the
 /// stream actually emitted, so it cannot be used to hide them.
 ///
+/// [`Self::DepthReached`] has exactly one author too, the producer, and it is
+/// the only ending in this enum that fusion has no way of observing for itself:
+/// a stream that stops at its depth and a stream that stops because it ran out
+/// look identical from here — both simply stop yielding rows. So it is believed
+/// where it is stated and checked where it is checkable: fusion verifies the
+/// rank against the rows it actually pulled
+/// ([`ProtocolError::ForgedReceipt`]) and takes the producer's word for the
+/// rows it says it did not look at, which is the only party that knows.
+///
 /// [`RankedStreamImpl`](crate::RankedStreamImpl), this crate's own executor
 /// stream, materializes its rows and declares [`Self::Exhausted`]; a unit that
 /// cannot run at all becomes [`Self::ExecutionFailed`].
+///
+/// # What is deliberately not in this enum: an incomplete index
+///
+/// A producer whose index was short — a shard that failed to load, a segment
+/// mid-rebuild, a replica that has not caught up — has *not* described a read
+/// ending, and it gets no variant here. That fact is true of the invocation
+/// from the instant it opened and stays true however the read then ends, so it
+/// travels as an attestation instead
+/// ([`RankedStream::attestation`], reported in
+/// [`FusionTrailer::attestations`]), pinned at `open` before a row is pulled.
+///
+/// The reason is not taxonomy, it is survival. Terminal statuses are
+/// overwritten by a bounded stop: a fusion that satisfies its
+/// [`TopK`](crate::TopK) writes [`Self::CeilingReached`] over every stream it
+/// stopped, and a stream it stopped never returns a receipt at all. An
+/// incompleteness held as a terminal status would therefore be destroyed
+/// exactly in the runs where it mattered most — the bounded ones — and the
+/// answer would name the bound while silently losing the hole beneath it.
+/// Pinned at open, both facts reach the trailer together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerStatus {
     /// The producer emitted every row it had.
     Exhausted {
         /// How many rows it emitted.
         rows_emitted: u64,
+    },
+    /// The producer stopped at the depth it was given, and more rows existed.
+    ///
+    /// The mirror of [`ProducerReceipt::DepthReached`], verified: `rank` is the
+    /// last rank the producer emitted, and fusion has checked it against the
+    /// rows it actually pulled. Ranks one through `rank` were read; nothing
+    /// below `rank` was looked at.
+    ///
+    /// Authored by the producer, in **rank** space — which is what separates it
+    /// from [`Self::CeilingReached`], authored (usually) by fusion in
+    /// contribution space. See this type's header for why the two are not one
+    /// variant.
+    DepthReached {
+        /// The last 1-based rank the producer emitted, equal to the number of
+        /// rows fusion pulled from it.
+        rank: u64,
+    },
+    /// The producer stopped at the row bound it had itself declared, so whether
+    /// anything lay below that rank could not be observed.
+    ///
+    /// The mirror of [`ProducerReceipt::RowBoundReached`], verified the same way
+    /// [`Self::DepthReached`] is: `rank` is the last rank the producer emitted and
+    /// fusion has checked it against the rows it actually pulled. Unlike
+    /// `DepthReached` it claims nothing about rows below that rank — the read could
+    /// not be taken one row further to find out, which is the whole of what this
+    /// ending reports.
+    RowBoundReached {
+        /// The last 1-based rank the producer emitted, which is the declared row
+        /// bound it read to and the number of rows fusion pulled from it.
+        rank: u64,
+    },
+    /// The stream ran a query text a caller supplied rather than one this layer
+    /// rendered, so what stopped the read — and what it left unread — was not
+    /// observable.
+    ///
+    /// The mirror of [`ProducerReceipt::SuppliedQueryEnded`], verified the way
+    /// [`Self::DepthReached`] is: `rank` is the last rank the stream emitted and fusion
+    /// has checked it against the rows it actually pulled. Like
+    /// [`Self::RowBoundReached`] it claims nothing about rows below that rank; unlike
+    /// it, the party that cut the read is the caller that wrote the query, and the
+    /// honest remedy is to run the query [`compile`](crate::compile) renders.
+    SuppliedQueryEnded {
+        /// The last 1-based rank the stream emitted, which is the number of rows
+        /// fusion pulled from it. Zero for a stream that emitted nothing.
+        rank: u64,
     },
     /// Reading stopped at a contribution bound rather than at the end of the
     /// rows. Declared by the producer, or written down by a fusion the caller's
@@ -127,7 +304,7 @@ impl From<ProducerReceipt> for ProducerStatus {
     /// Carry a producer's own terminal declaration into the fused trailer,
     /// variant for variant.
     ///
-    /// The two enums are deliberately separate types for the same four facts:
+    /// The two enums are deliberately separate types for the same six facts:
     /// a [`ProducerReceipt`] is what a producer *claims* on the input protocol,
     /// and a [`ProducerStatus`] is what the trailer *reports* after fusion has
     /// checked that claim against the rows it actually pulled. Keeping them
@@ -143,6 +320,9 @@ impl From<ProducerReceipt> for ProducerStatus {
     fn from(receipt: ProducerReceipt) -> Self {
         match receipt {
             ProducerReceipt::Exhausted { rows_emitted } => Self::Exhausted { rows_emitted },
+            ProducerReceipt::DepthReached { rank } => Self::DepthReached { rank },
+            ProducerReceipt::RowBoundReached { rank } => Self::RowBoundReached { rank },
+            ProducerReceipt::SuppliedQueryEnded { rank } => Self::SuppliedQueryEnded { rank },
             ProducerReceipt::CeilingReached { bound } => Self::CeilingReached { bound },
             ProducerReceipt::ExecutionFailed { reason } => Self::ExecutionFailed { reason },
             ProducerReceipt::TermsRejected => Self::TermsRejected,
@@ -150,12 +330,15 @@ impl From<ProducerReceipt> for ProducerStatus {
     }
 }
 
-/// One fused row: a candidate with its exact score and its provenance.
+/// One fused row: a candidate with its fused score and its provenance.
 ///
 /// `contributions` names, for every stratum the candidate surfaced in, the
 /// 1-based rank and the contribution that stratum made. Their checked sum is
-/// `score`. `threshold_witness` is the global threshold in force when the row
-/// was certified, so a reader can replay the certification.
+/// `score` — exact over the strata that answered, and a lower bound where one
+/// of them served from an index it attested was not whole (see
+/// [`FusionTrailer::exactness`]). `threshold_witness` is the global threshold
+/// in force when the row was certified, so a reader can replay the
+/// certification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusedRow {
     /// The candidate, in its canonical term lexical — `<http://example.org/doc>`,
@@ -165,7 +348,34 @@ pub struct FusedRow {
     /// [`RequestTerm::EntitySeed`](crate::RequestTerm::EntitySeed) takes, so a
     /// fused row can be handed straight back as the seed of a follow-up request.
     pub entity: Term,
-    /// The exact fused score.
+    /// The fused score: the checked sum of the contributions in
+    /// [`Self::contributions`], exact over the strata that answered.
+    ///
+    /// The arithmetic is exact and always was — every summand is a checked
+    /// fixed-point value the engine re-derived itself — but arithmetic is not
+    /// the whole of the claim. Whether this number is the candidate's *whole*
+    /// score depends on whether every stratum that could have contributed to it
+    /// had a whole index to contribute from, and that is a fact about the
+    /// producers, not about the sum. A stratum serving from a short index omits
+    /// the rows its missing shard held, so a candidate that shard would have
+    /// named is summed without that contribution and scores lower than it
+    /// should.
+    ///
+    /// So this field is not an unconditional exactness claim, and reading it as
+    /// one is the very fault this protocol exists to prevent — a bound on the
+    /// read silently becoming a value. The trailer says which reading applies:
+    /// [`FusionTrailer::exactness`] is [`ScoreExactness::Exact`] when no handed
+    /// stream attested an incomplete index, and
+    /// [`ScoreExactness::LowerBounds`] naming the short strata otherwise, in
+    /// which case every score here is a **lower bound** on the true one. This
+    /// is the same refusal to overstate that the row list itself already makes:
+    /// a returned row is never a completeness claim, and the trailer is where
+    /// completeness is asserted.
+    ///
+    /// [`Self::threshold_witness`] certifies the *order* under the scores that
+    /// were summed, and it stays replayable either way — it is a fact about
+    /// this fusion's own arithmetic. It does not, and cannot, certify that the
+    /// summands were all the summands there were.
     pub score: Fixed,
     /// Per-stratum provenance: `(stratum, rank, contribution)`.
     pub contributions: Vec<(Iri, u64, Fixed)>,
@@ -223,7 +433,66 @@ pub struct StratumResolution {
     pub collisions_observed: u64,
 }
 
-/// The terminal report of a fusion: every producer's status and both identities.
+/// Whether the fused scores in an answer are the scores, or floors under them.
+///
+/// A fused score is the checked sum of a candidate's contributions across
+/// strata. The arithmetic is exact in every case; what varies is whether all
+/// the summands were there to be summed. A stratum serving from an index it
+/// attests was **not whole** ([`ServiceLevel::Incomplete`]) omits whatever its
+/// missing shard held, so any candidate that shard would have named is summed
+/// short — a real score, one contribution light.
+///
+/// Labelling such a score "exact" would be the fault this whole protocol
+/// exists to remove: a bound on the read presented as a value. So the trailer
+/// states which of the two readings applies, once, for the whole answer, and
+/// the rows are still returned either way. Refusing to answer at all would be
+/// the mirror error — a short index still produced real rows in a real order,
+/// and a caller that knows the scores are floors can use them.
+///
+/// # Why the answer is per fusion rather than per row
+///
+/// The honest per-row answer is not computable. Knowing which *particular*
+/// candidates lost a contribution would mean knowing what the missing shard
+/// held, which is precisely what nobody has — the producer least of all, since
+/// a shard that failed to load cannot be consulted about its contents. What is
+/// knowable is the set of strata that could have contributed and could not
+/// fully, and that is what [`Self::LowerBounds`] names. A per-row flag would
+/// have to be either fabricated or set on every row, and the second is this
+/// value spelled once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScoreExactness {
+    /// Every handed stream served from an index it did not attest was short, so
+    /// each score is the exact sum of every contribution that was due.
+    ///
+    /// Not a certificate that every index was whole. Most producers attest
+    /// nothing at all ([`ServiceLevel::Undeclared`] is silence, and there is no
+    /// `Whole` variant to attest), so this says the narrower true thing: no
+    /// stratum in this fusion declared itself short. It is the strongest claim
+    /// the seam can carry, and reading it as more would put words in the mouth
+    /// of every producer that stayed silent.
+    Exact,
+    /// At least one handed stream attested an incomplete index, so every score
+    /// in this answer is a lower bound on the score the whole index would have
+    /// produced.
+    ///
+    /// The order is still this fusion's own certified order over the
+    /// contributions it did receive, and the rows are real rows. What cannot be
+    /// concluded is that a row absent from the answer would have stayed absent,
+    /// or that the emitted order would have survived the missing contributions.
+    LowerBounds {
+        /// Exactly the strata that attested [`ServiceLevel::Incomplete`], in
+        /// canonical stratum order.
+        ///
+        /// Naming them rather than raising a flag is what makes the fact
+        /// actionable: these are the indexes to rebuild, and a caller can read
+        /// each one's verbatim reason out of
+        /// [`FusionTrailer::attestations`] under the same key.
+        strata: BTreeSet<Iri>,
+    },
+}
+
+/// The terminal report of a fusion: every producer's status, what their indexes
+/// attested, and all three identities.
 ///
 /// The trailer is the only place completeness may be asserted. A consumer that
 /// read a prefix and stopped holds evidence the answer is incomplete; nothing
@@ -232,10 +501,74 @@ pub struct StratumResolution {
 pub struct FusionTrailer {
     /// Every producer's own status, keyed by its stratum.
     pub statuses: BTreeMap<Iri, ProducerStatus>,
+    /// What each handed stream's index attested, keyed by its stratum: which
+    /// generation answered, and whether that generation was whole.
+    ///
+    /// Read from [`RankedStream::attestation`] in
+    /// [`FusionStream::new`](FusionStream::new), **before any row is pulled**.
+    /// A generation is pinned when an index is opened, so the value read there
+    /// is the truth for the whole read — asking at the end would ask a stream
+    /// that a bounded fusion may have stopped, and the answer would depend on
+    /// how deep the caller happened to read.
+    ///
+    /// # Both facts survive a bounded stop
+    ///
+    /// This is the load-bearing consequence of reading at construction. A
+    /// stratum that attests [`ServiceLevel::Incomplete`] and is then stopped by
+    /// the caller's [`TopK`](crate::TopK) appears **twice** in this trailer: as
+    /// [`ProducerStatus::CeilingReached`] in [`Self::statuses`], and as
+    /// `Incomplete` here. Had incompleteness been a terminal receipt instead,
+    /// the bounded stop would have overwritten it — a stopped stream never
+    /// returns a receipt at all — and the answer would have lost the hole in
+    /// the index exactly in the runs where the bound made it matter.
+    ///
+    /// # The key set is a subset of [`Self::statuses`]'
+    ///
+    /// Only the streams this fusion was handed are keyed. A stratum that never
+    /// became a stream — one whose unit failed to run, added afterwards through
+    /// [`FusionTrailer::completed_with`] — has no attestation to name, because
+    /// no index of its was ever opened. Its absence from this map is the honest
+    /// answer, and it is deliberately not filled with
+    /// [`PfAttestation::UNDECLARED`]: `Undeclared` means a producer was asked
+    /// and said nothing, and fabricating it here would report a producer that
+    /// was never asked as one that declined to answer.
+    pub attestations: BTreeMap<Iri, PfAttestation>,
+    /// Whether the fused scores are exact, or floors under the scores a whole
+    /// index would have produced.
+    ///
+    /// [`ScoreExactness::Exact`] when no handed stream attested an incomplete
+    /// index, and [`ScoreExactness::LowerBounds`] naming exactly the strata
+    /// that did.
+    ///
+    /// # As of when
+    ///
+    /// Like every other field here it is as of the moment
+    /// [`FusionStream::trailer`] was called, but unlike [`Self::statuses`] and
+    /// [`Self::resolution`] it does not move between calls, and that difference
+    /// is the point. Its inputs are [`Self::attestations`], pinned before the
+    /// first row was pulled; how deep a caller then read changes which streams
+    /// are still open, never whether an index was whole. A caller that reads a
+    /// trailer, certifies more rows and reads another gets a different set of
+    /// statuses and the same exactness — which is exactly the invariance a read
+    /// bound must not be able to destroy.
+    pub exactness: ScoreExactness,
     /// The pinned plan the fused rows came from, when one is attached.
     pub plan_id: Option<PlanId>,
     /// The fusion profile in force.
     pub profile_id: crate::id::FusionProfileId,
+    /// The evidence these rows were produced against: the content identity of
+    /// [`Self::attestations`].
+    ///
+    /// The third of the three identities an answer carries.
+    /// [`Self::plan_id`] pins the question, [`Self::profile_id`] pins the law,
+    /// and this pins the index generations that answered — so one equality
+    /// comparison over the triple decides whether two answers are comparable at
+    /// all. See [`EvidenceId`] for why the plan and the law are not enough on
+    /// their own.
+    ///
+    /// Derived from the attestation map alone, so it is as immovable across
+    /// repeated [`FusionStream::trailer`] calls as that map is.
+    pub evidence_id: EvidenceId,
     /// What each stream's rank resolution cost this fusion, keyed by stratum.
     ///
     /// Keyed by every stream this fusion was handed whose stratum the profile
@@ -261,6 +594,34 @@ pub struct FusionTrailer {
     /// read from this stream", and a producer that never became a stream was
     /// never read from.
     pub resolution: BTreeMap<Iri, StratumResolution>,
+    /// The candidate-domain declaration each handed stream fused under, keyed
+    /// by its stratum.
+    ///
+    /// Read from [`RankedStream::contract`] in
+    /// [`FusionStream::new`](FusionStream::new), **before any row is pulled**,
+    /// and reported verbatim. It is in the trailer because it is an input to
+    /// the answer that the answer cannot otherwise be audited against: these
+    /// declarations decide which streams fusion was allowed to skip when it
+    /// certified a row, so a reader asking *why did this stratum stop at a
+    /// bound instead of being read further* is asking about exactly this map.
+    ///
+    /// An answer whose every entry is
+    /// [`CandidateDomains::Unrestricted`] was certified with no licence to skip
+    /// anything, which is the strongest reading a fused row can have and is
+    /// what every answer this engine produced before domains existed carried.
+    /// An answer carrying a [`CandidateDomains::Within`] entry was certified
+    /// partly on that producer's word, and the map is where a reader finds
+    /// whose word it was.
+    ///
+    /// # The key set matches [`Self::attestations`]'
+    ///
+    /// Every stream this fusion was handed, and nothing else. A stratum that
+    /// never became a stream — added afterwards by
+    /// [`FusionTrailer::completed_with`] — declared nothing to this fusion
+    /// because it was never read, and filling it with `Unrestricted` would
+    /// report a producer that was never asked as one that promised to name
+    /// anything.
+    pub domains: BTreeMap<Iri, CandidateDomains>,
     /// Whether the last row in the answer ties on score with a *settled* rival
     /// left outside it.
     ///
@@ -298,7 +659,85 @@ pub struct FusionTrailer {
     pub cut_on_a_tie: bool,
 }
 
+// Canonical discriminators for the evidence encoding. One tag space per enum,
+// never reused, so a variant added to either enum takes the next free tag and
+// leaves every identity already issued exactly where it was.
+const GENERATION_UNDECLARED: u8 = 0;
+const GENERATION_DECLARED: u8 = 1;
+const SERVICE_UNDECLARED: u8 = 0;
+const SERVICE_INCOMPLETE: u8 = 1;
+
+/// Write `attestations` as the canonical bytes an [`EvidenceId`] digests.
+///
+/// One encoder, reached both by [`FusionTrailer::evidence_canonical_bytes`] and
+/// by the fusion that mints the identity, so the bytes an answer's id was taken
+/// over are the same bytes a holder of that answer can re-derive. Two encoders
+/// agreeing today is a property that decays; one encoder is a property that
+/// holds.
+///
+/// # The only canonical encoding of what the indexes attested
+///
+/// It is also the only one in the tree, and that is deliberate. The evaluator's
+/// own per-relation ledger (`purrdf_sparql_eval::RelationWitness`) mints no bytes
+/// of its own, so there is nothing here to agree with. The ledger could not be
+/// the source of these bytes even if it did: it is keyed by RELATION IRI where
+/// this is keyed by stratum, it holds sets where this holds the single generation
+/// and service level a conforming unit's run collapses to (`sole_attestation` in
+/// `crate::execute`), and it counts invocations — a quantity that follows the
+/// evaluator's chunking of driving rows rather than anything an index said. An
+/// evidence identity derived from that count would move between two runs over one
+/// unchanged index, which is the exact opposite of what this identity is for.
+pub(crate) fn evidence_canonical_bytes(attestations: &BTreeMap<Iri, PfAttestation>) -> Vec<u8> {
+    let mut writer = Writer::new();
+    writer.u16(EVIDENCE_VERSION);
+    writer.u64(attestations.len() as u64);
+    for (stratum, attestation) in attestations {
+        writer.string(stratum.as_str());
+        match &attestation.generation {
+            IndexGeneration::Undeclared => writer.u8(GENERATION_UNDECLARED),
+            IndexGeneration::Declared(generation) => {
+                writer.u8(GENERATION_DECLARED);
+                writer.string(generation);
+            }
+        }
+        match &attestation.service {
+            ServiceLevel::Undeclared => writer.u8(SERVICE_UNDECLARED),
+            ServiceLevel::Incomplete { reason } => {
+                writer.u8(SERVICE_INCOMPLETE);
+                // The host's verbatim reason is part of the identity rather
+                // than decoration beside it: one generation read twice, once
+                // missing a shard and once behind a lagging replica, is
+                // different evidence and must not digest alike.
+                writer.string(reason);
+            }
+        }
+    }
+    writer.into_bytes()
+}
+
 impl FusionTrailer {
+    /// The canonical bytes [`Self::evidence_id`] is the digest of.
+    ///
+    /// A pure function of [`Self::attestations`]: the layout version, the entry
+    /// count, then every `(stratum, generation, service level)` in canonical
+    /// stratum order, each variable-length part framed by its own length and
+    /// every integer little-endian. Sorting comes free from the `BTreeMap` and
+    /// is relied on, so no iteration order can reach the digest; the framing is
+    /// what makes the encoding injective, so no two different maps can share
+    /// bytes by running their fields together; the little-endian integers are
+    /// what make it identical on every target, wasm32 included.
+    ///
+    /// Public because an identity nobody can re-derive is an identity nobody
+    /// can audit. A caller holding a trailer can recompute
+    /// [`EvidenceId::from_canonical`] over these bytes and confirm the id it
+    /// was handed, or archive the bytes beside an answer so a later run can be
+    /// compared against the evidence this one actually had — the same reason
+    /// [`Plan::canonical_bytes`](crate::Plan::canonical_bytes) is public.
+    #[must_use]
+    pub fn evidence_canonical_bytes(&self) -> Vec<u8> {
+        evidence_canonical_bytes(&self.attestations)
+    }
+
     /// Add the status of every producer that never became a stream, and return
     /// the completed trailer.
     ///
@@ -315,6 +754,13 @@ impl FusionTrailer {
     /// against the rows actually pulled ([`ProtocolError::ForgedReceipt`]), and
     /// an unverified report of the same stratum cannot be allowed to overwrite
     /// one that was; `statuses` fills only the strata the fusion never saw.
+    ///
+    /// Only [`Self::statuses`] grows. A producer that never became a stream
+    /// gets no [`Self::attestations`] entry and does not change
+    /// [`Self::evidence_id`], because no index of its was opened and there is
+    /// nothing it attested — naming it `Undeclared` would report a producer
+    /// that was never asked as one that answered with silence, and would make
+    /// the evidence identity depend on a stratum that contributed no evidence.
     ///
     /// The result does not depend on `statuses`' iteration order: its keys are
     /// distinct and each is inserted only where nothing stands.
@@ -340,6 +786,52 @@ struct Head {
     rank: u64,
     contribution: Fixed,
     item: Term,
+    /// The block the producer said this row was drawn from, already measured
+    /// against the stream's own declaration in [`FusionStream::fetch`].
+    ///
+    /// Carried on the head rather than checked and dropped there, because the
+    /// claim it makes is about the **candidate** and the candidate is not known
+    /// to collide with anything until [`FusionStream::pull`] looks it up. Two
+    /// streams that place one candidate in two blocks is the fact that falsifies
+    /// the axiom the threshold rests on, and it cannot be seen one row at a time.
+    block: RowBlock,
+}
+
+/// The block a candidate has been placed in, and the stream that placed it
+/// there.
+///
+/// Held per candidate rather than per stream, because a stream declared over
+/// several blocks names a different one on different rows: there is no
+/// per-stream answer to read this off. The stream index travels with the tag
+/// because it is half of what [`ProtocolError::CandidateInTwoBlocks`] reports —
+/// a reader that learns a candidate was placed in two blocks and not which two
+/// producers did it has nothing to go and fix.
+///
+/// `Option<BlockWitness>` is this crate's ordinary "not recorded yet", not a
+/// defaulted [`RowBlock`]: the absence here means *no row has named a block for
+/// this candidate*, which is a fact about the engine's own state rather than a
+/// producer's declaration. The producer-facing absence stays
+/// [`RowBlock::Undeclared`], where it is a first-class value precisely so it
+/// cannot be unwrapped into one.
+///
+/// # Why it is held behind a `Box`
+///
+/// A [`DomainTag`] carries a parsed IRI — its text and the byte ranges of five
+/// components — so it is well over a hundred bytes wide, and the value it lives
+/// in is the one structure whose size the frontier argument is about. Inline, it
+/// would be charged to **every** frontier candidate, including every candidate of
+/// a fusion where no stream declared anything at all: the measured peak of the
+/// unrestricted fixtures in `fusion_frontier_alloc` rose by tens of kilobytes on
+/// exactly that. Behind a `Box` the unplaced candidate pays one pointer and the
+/// placed one pays a single small allocation, so the cost follows the rows that
+/// actually named a block rather than the frontier's width.
+#[derive(Clone, Debug)]
+struct BlockWitness {
+    /// The stream that first named a block for the candidate, indexed exactly as
+    /// `heads` and `domains` are.
+    stream: usize,
+    /// The block it named.
+    block: DomainTag,
 }
 
 /// A candidate's accumulated NRA state.
@@ -347,7 +839,40 @@ struct Head {
 struct CandidateState {
     lower_bound: Fixed,
     contributions: Vec<(Iri, u64, Fixed)>,
+    /// The streams that have named this candidate.
+    ///
+    /// It answers two questions, and the second is why no separate field holds
+    /// `Dom(x)`. It is the membership half of [`FusionStream::is_final`]; and
+    /// it *is* `Dom(x)` — the set of blocks this candidate can lie in is
+    /// exactly the intersection of the declared domains of the streams in here,
+    /// so storing that intersection would be storing a pure function of a set
+    /// the engine already holds. Derived on demand by
+    /// [`FusionStream::could_name`], which costs a scan over a handful of tags
+    /// and no allocation at all; a stored copy would cost one heap-allocated
+    /// tag set **per candidate**, in the one structure whose size the frontier
+    /// argument is about.
     seen_streams: BTreeSet<usize>,
+    /// The block this candidate has been placed in, and by which stream, once
+    /// some row has named one.
+    ///
+    /// It is the axiom's per-candidate witness: every later row naming this
+    /// candidate is measured against it, and a row naming a different block is
+    /// refused as [`ProtocolError::CandidateInTwoBlocks`]. A candidate no row
+    /// has placed holds `None` and constrains nothing, which is the honest state
+    /// for a candidate only unrestricted streams have named.
+    ///
+    /// # What it costs, and why it is not derived instead
+    ///
+    /// One pointer per frontier candidate, and one small allocation for each
+    /// candidate a row actually placed — the first placement only; later rows
+    /// compare and write nothing. A candidate no row placed, which is every
+    /// candidate of a fusion that declares nothing, pays the pointer and no heap
+    /// at all. It cannot be derived from `seen_streams` the way `Dom(x)` is: `Dom(x)` is a function of
+    /// the *declarations*, which the engine already holds, whereas this is a
+    /// function of the **rows**, which are gone as soon as they are merged. A
+    /// stream declared over several blocks names a different one on different
+    /// rows, so there is nothing per-stream to recompute it from.
+    block: Option<Box<BlockWitness>>,
 }
 
 impl CandidateState {
@@ -362,6 +887,7 @@ impl CandidateState {
             lower_bound: Fixed::ZERO,
             contributions: Vec::new(),
             seen_streams: BTreeSet::new(),
+            block: None,
         }
     }
 
@@ -372,6 +898,107 @@ impl CandidateState {
             .map(|(_, rank, _)| *rank)
             .min()
             .unwrap_or(u64::MAX)
+    }
+}
+
+/// What survives a candidate's certification, so the answer invariant can
+/// outlive the frontier.
+///
+/// Deliberately not a second `CandidateState`. Once a row is emitted its score
+/// is settled and its provenance has been handed to the caller, so the only
+/// question anyone can still ask about it is the one this answers: *which
+/// streams already named it*. Keeping anything more would be keeping a copy of
+/// the answer, which is the caller's to hold and not this engine's.
+#[derive(Clone, Debug)]
+struct EmittedRecord {
+    /// The stream indexes that contributed to the candidate before it
+    /// certified — [`CandidateState::seen_streams`], moved out of the state
+    /// being dropped rather than rebuilt.
+    ///
+    /// It carries the candidate's `Dom(x)` with it, at no extra cost: the
+    /// blocks a certified candidate could lie in are the intersection of the
+    /// declarations of exactly these streams, so a stream naming it *after* it
+    /// certified is held to the same declaration a stream naming it before
+    /// would have been. Without that, the domain promise would hold only while
+    /// a candidate sat in the frontier — which is to say it would hold or not
+    /// depending on how deep the caller happened to read, the identical failure
+    /// the [`DuplicatePolicy::Unique`] promise is kept past the frontier to
+    /// avoid.
+    named_by: BTreeSet<usize>,
+    /// The block the candidate was placed in before it certified, moved out of
+    /// the state being dropped rather than rebuilt.
+    ///
+    /// It is kept past the frontier for exactly the reason `named_by` is. A
+    /// candidate's placement is a fact about the candidate, so a stream naming it
+    /// *after* it certified is measured against the same placement a stream
+    /// naming it before would have been — otherwise the axiom would hold or not
+    /// depending on how deep the caller happened to read, which is no invariant
+    /// at all.
+    block: Option<Box<BlockWitness>>,
+}
+
+/// The lookup policy for [`FusionStream`]'s emitted map: the workspace's
+/// fixed-key, seed-free [`ahash`] hasher.
+///
+/// # Why a hasher at all, in a crate that is otherwise byte-deterministic
+///
+/// Because this is the one structure here whose *order* is provably unobserved.
+/// It is consulted by key and never iterated — no `for` loop, no `values()`, no
+/// `keys()` — so its iteration order reaches no output, no identity and no
+/// ordering decision. Every ordered structure in this engine is ordered because
+/// something reads it in order: the frontier is scanned to pick an emittable
+/// candidate, `statuses` and `attestations` are serialized into the trailer and
+/// digested into [`EvidenceId`], and `seen_streams` is both scanned and moved
+/// into [`EmittedRecord`]. Those are `BTree`s and must stay `BTree`s. This one
+/// answers `contains` and nothing else, so the repo's hot-map rule applies and
+/// the lookup is paid at hash speed rather than at `log n` comparisons over
+/// whole candidate terms.
+///
+/// Fixed-key rather than `RandomState` for the reason every interner in this
+/// workspace is: `wasm32-unknown-unknown` has no random source to seed one
+/// from, and a per-process seed would put nondeterminism into a crate whose
+/// entire claim is the same answer on every target. See `purrdf-core`'s
+/// `hash` module for the workspace policy this follows.
+type EmittedHasher = core::hash::BuildHasherDefault<ahash::AHasher>;
+
+/// The emitted-candidate table, wrapping the one hash map in this crate so that
+/// **the type enforces what the argument above claims**.
+///
+/// The claim is that this map's iteration order reaches no answer, and it is
+/// true because the map is consulted by key and never walked. Left as a bare
+/// [`HashMap`] that would be a property of today's call sites: `.iter()`,
+/// `.values()`, `.keys()`, `.drain()` and `.retain()` are all one keystroke
+/// away, each of them a way for a hash order to become part of a row order, a
+/// status map or an [`EvidenceId`] — and nothing about the field would object.
+///
+/// So the operations the engine actually needs are the only operations that
+/// exist: record a certification, and ask about one candidate. There is no
+/// iterator, no `len`, and no accessor that hands the inner map out, which
+/// means a future edit that wanted to walk this table would have to add the
+/// method here — beside the reason it must not — rather than reach for one that
+/// was already there.
+#[derive(Debug, Default)]
+struct EmittedTable {
+    /// The certified candidates, keyed by canonical term. Private with no
+    /// escape hatch: see this type's own docs for why that is the point.
+    entries: HashMap<Term, EmittedRecord, EmittedHasher>,
+}
+
+impl EmittedTable {
+    /// Record that `item` has certified, under the record its frontier state
+    /// left behind.
+    ///
+    /// The displaced value, if any, is dropped rather than returned: a candidate
+    /// leaves the frontier exactly once, so a second insertion under one key
+    /// cannot happen, and returning a value no caller may read would only
+    /// invite one to start reading it.
+    fn record(&mut self, item: Term, record: EmittedRecord) {
+        self.entries.insert(item, record);
+    }
+
+    /// What `item` carried when it certified, or `None` if it never has.
+    fn get(&self, item: &Term) -> Option<&EmittedRecord> {
+        self.entries.get(item)
     }
 }
 
@@ -407,8 +1034,53 @@ pub struct FusionStream<S: RankedStream> {
     /// the promise structural — there is no set for a later edit to start
     /// filling on a stream that declined to pay for one.
     seen_items: Vec<Option<BTreeSet<Term>>>,
+    /// What every handed stream declared about the blocks of the candidate
+    /// universe it may name, read in [`Self::new`] before a single row was
+    /// pulled, and held for the whole fusion.
+    ///
+    /// Indexed by stream, exactly as `heads` and `seen_items` are, because that
+    /// is how every question asked of it is shaped: *can stream `s` still name
+    /// this candidate* is asked of `s` at the moment `s` has an open head. Held
+    /// rather than consumed — unlike the duplicate term, which becomes
+    /// structural in `seen_items` and is never asked again — because the answer
+    /// is needed on every finality test, every upper bound, every threshold and
+    /// every pull.
+    domains: Vec<CandidateDomains>,
+    /// What every handed stream attested about the index behind it, read in
+    /// [`Self::new`] before a single row was pulled and never read again.
+    ///
+    /// Held rather than re-asked for the same reason it is read early: a
+    /// generation is pinned when the index opens, so one read is the truth for
+    /// the whole fusion, and a second read at the end would be a read of
+    /// whatever state a bounded stop left the stream in.
+    attestations: BTreeMap<Iri, PfAttestation>,
     statuses: BTreeMap<Iri, ProducerStatus>,
     frontier: BTreeMap<CandidateId, CandidateState>,
+    /// Every candidate that has left the frontier by being certified, and the
+    /// streams that named it while it was there.
+    ///
+    /// This is what makes *a fused answer never contains the same entity twice*
+    /// an unconditional property of this engine rather than a property of how
+    /// deep a caller happened to read. The frontier alone cannot carry it: a
+    /// candidate is removed the instant it certifies, so a stream naming it
+    /// afterwards would find nothing to collide with and would start a fresh
+    /// candidate — the same entity emitted a second time, with a wrong, small
+    /// score and a best rank drawn from one stratum instead of all of them.
+    ///
+    /// Written in [`Self::next`], at the one place a candidate leaves the
+    /// frontier, and read in [`Self::pull`], before the frontier is touched.
+    /// Nothing else may write it: an entry here means *this row is in the
+    /// caller's answer*, and a second author would make that stop being true.
+    ///
+    /// # What it costs, and why that is the right unit
+    ///
+    /// One entry per row emitted — the term, and the stream-index set moved out
+    /// of the certified [`CandidateState`] rather than allocated afresh. The
+    /// module header carries the full argument; the short form is that this
+    /// grows with the rows this fusion **returns**, never with the rows it
+    /// pulls, so a bounded [`TopK`](crate::TopK) bounds it and a drain pays for
+    /// something strictly smaller than the frontier entry it replaces.
+    emitted: EmittedTable,
     threshold: Fixed,
     /// Whether the most recently emitted row took its place over a rival it tied
     /// with exactly on score.
@@ -435,13 +1107,37 @@ impl<S: RankedStream> FusionStream<S> {
     /// Build a fusion engine over `streams` under `profile`.
     ///
     /// Every stream's declared contract is read here, before any row is pulled,
-    /// through [`RankedStream::contract`] — so what the engine holds is decided
-    /// by the producers' own declarations rather than by one law applied to all
-    /// of them. A stream declaring [`DuplicatePolicy::Allowed`] gets an identity
-    /// set to de-duplicate against; one declaring [`DuplicatePolicy::Unique`]
-    /// gets none. The contract is consumed here rather than retained: its one
-    /// remaining term is already structural in `seen_items`, and nothing later
-    /// in the engine asks a stream what it declared.
+    /// through [`RankedStream::contract`] — so what the engine holds, and what
+    /// it may certify, is decided by the producers' own declarations rather
+    /// than by one law applied to all of them. A stream declaring
+    /// [`DuplicatePolicy::Allowed`] gets an identity set to de-duplicate
+    /// against; one declaring [`DuplicatePolicy::Unique`] gets none. That term
+    /// is consumed here rather than retained, because it is already structural
+    /// in `seen_items` and nothing later asks for it again.
+    ///
+    /// The contract's other term —
+    /// [`StreamContract::domains`](crate::StreamContract::domains) — is retained,
+    /// because it is asked on every step. It is what lets this engine skip a
+    /// stream that *provably* cannot name a candidate when deciding whether
+    /// that candidate's score is final, and skipping those streams is the
+    /// difference between a top-ten answer that reads a few dozen rows and one
+    /// that drains two million. Reading it before the first pull matters for
+    /// the same reason the duplicate term is read there: the declaration
+    /// governs row one, so a declaration consulted later would be a declaration
+    /// that had not applied to the rows already merged under it.
+    ///
+    /// Every stream's attestation is read here too, and it is read *here*
+    /// rather than at the end for a reason the contract does not share: an
+    /// index generation is pinned when the index is opened, so the version that
+    /// answers the first row is the version that answers the last, and reading
+    /// it before the first pull is reading the truth for the whole fusion at
+    /// the one instant every stream is guaranteed to be in. Reading it at the
+    /// end would instead ask each stream in whatever state this fusion happened
+    /// to leave it — and for a stream a bounded top-k stopped, that is a state
+    /// with no terminal report at all, so an attested incompleteness would be
+    /// lost precisely when the bound made it matter. Unlike the contract, it is
+    /// retained: the trailer reports it verbatim and derives both
+    /// [`FusionTrailer::exactness`] and [`FusionTrailer::evidence_id`] from it.
     ///
     /// No plan identity is attached; use [`with_plan_id`](Self::with_plan_id) to
     /// name the pinned plan the streams came from. [`fuse`](crate::fuse) does
@@ -451,12 +1147,32 @@ impl<S: RankedStream> FusionStream<S> {
     #[must_use]
     pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
         let count = streams.len();
-        let seen_items = streams
+        // One read of each contract, both terms taken from it. Asking twice
+        // would let a stream answer differently the second time and leave the
+        // engine holding two halves of two declarations.
+        let contracts: Vec<_> = streams
             .iter()
-            .map(|(_, stream)| match stream.contract().duplicates {
+            .map(|(_, stream)| stream.contract())
+            .collect();
+        let seen_items = contracts
+            .iter()
+            .map(|contract| match contract.duplicates {
                 DuplicatePolicy::Unique => None,
                 DuplicatePolicy::Allowed => Some(BTreeSet::new()),
             })
+            .collect();
+        let domains: Vec<CandidateDomains> = contracts
+            .into_iter()
+            .map(|contract| contract.domains)
+            .collect();
+        // Keyed by stratum, exactly as `statuses` is, so the two maps are read
+        // under one key. A caller driving this type directly may hand it two
+        // streams tagged with one stratum — `fuse` refuses that before pulling
+        // — and both maps collapse such a pair the same way rather than
+        // disagreeing about how many producers there were.
+        let attestations = streams
+            .iter()
+            .map(|(stratum, stream)| (stratum.clone(), stream.attestation()))
             .collect();
         Self {
             streams,
@@ -470,8 +1186,11 @@ impl<S: RankedStream> FusionStream<S> {
             last_contribution: vec![None; count],
             collisions_observed: vec![0; count],
             seen_items,
+            domains,
+            attestations,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
+            emitted: EmittedTable::default(),
             threshold: Fixed::ZERO,
             last_row_won_a_tie: false,
         }
@@ -515,7 +1234,28 @@ impl<S: RankedStream> FusionStream<S> {
                     .frontier
                     .values()
                     .any(|rival| rival.lower_bound == state.lower_bound && self.is_final(rival));
-                let mut contributions = state.contributions;
+                // The candidate leaves the frontier here and nowhere else, so
+                // this is the only place the record of its emission can be
+                // written. `seen_streams` is **moved** out of a state that is
+                // being dropped either way: rebuilding the set would allocate a
+                // second copy of something already owned, to hold exactly the
+                // same members. The key is cloned because the row carries the
+                // term to the caller — one clone per row *emitted*, which is
+                // the same unit the map itself is charged in, and not a clone
+                // on the per-row-pulled path.
+                let CandidateState {
+                    lower_bound,
+                    mut contributions,
+                    seen_streams,
+                    block,
+                } = state;
+                self.emitted.record(
+                    id.clone(),
+                    EmittedRecord {
+                        named_by: seen_streams,
+                        block,
+                    },
+                );
                 contributions.sort_by(|left, right| {
                     left.0
                         .as_str()
@@ -524,7 +1264,7 @@ impl<S: RankedStream> FusionStream<S> {
                 });
                 return Ok(Some(FusedRow {
                     entity: id,
-                    score: state.lower_bound,
+                    score: lower_bound,
                     contributions,
                     threshold_witness: self.threshold,
                 }));
@@ -619,11 +1359,49 @@ impl<S: RankedStream> FusionStream<S> {
             })
             .collect();
 
+        // Derived from the attestations pinned at construction, never from the
+        // statuses just written. A stream stopped at a bound has a bounded
+        // status and may still have served from a short index; those are two
+        // facts and this is the second one, so nothing about how deep this
+        // fusion read may reach this derivation.
+        let short_strata: BTreeSet<Iri> = self
+            .attestations
+            .iter()
+            .filter(|(_, attestation)| {
+                matches!(attestation.service, ServiceLevel::Incomplete { .. })
+            })
+            .map(|(stratum, _)| stratum.clone())
+            .collect();
+        let exactness = if short_strata.is_empty() {
+            ScoreExactness::Exact
+        } else {
+            ScoreExactness::LowerBounds {
+                strata: short_strata,
+            }
+        };
+
         Ok(FusionTrailer {
             statuses: self.statuses.clone(),
+            // Digested through the one encoder the trailer's own
+            // `evidence_canonical_bytes` calls, so the identity in an answer
+            // and the identity a holder of that answer re-derives cannot come
+            // from two encodings that drifted apart.
+            evidence_id: EvidenceId::from_canonical(&evidence_canonical_bytes(&self.attestations)),
+            attestations: self.attestations.clone(),
+            exactness,
             plan_id: self.plan_id,
             profile_id: self.profile.id(),
             resolution,
+            // Keyed like `attestations`, from the same pre-pull read, so a pair
+            // of streams a caller tagged with one stratum collapses the same
+            // way in both maps rather than making them disagree about how many
+            // producers there were.
+            domains: self
+                .streams
+                .iter()
+                .enumerate()
+                .map(|(index, (stratum, _))| (stratum.clone(), self.domains[index].clone()))
+                .collect(),
             cut_on_a_tie: self.last_row_won_a_tie,
         })
     }
@@ -671,7 +1449,13 @@ impl<S: RankedStream> FusionStream<S> {
                 let (_, stream) = &mut self.streams[index];
                 stream.next().await
             };
-            let Some((rank, producer_contribution, item)) = pulled? else {
+            let Some(RankedRow {
+                rank,
+                contribution: producer_contribution,
+                item,
+                block,
+            }) = pulled?
+            else {
                 let receipt = {
                     let (_, stream) = &mut self.streams[index];
                     stream.receipt().await
@@ -716,6 +1500,18 @@ impl<S: RankedStream> FusionStream<S> {
                 .into());
             }
 
+            // The row's own claim about where it came from, measured against the
+            // promise this stream made at registration and against nothing else
+            // — a candidate this row collides with is `pull`'s question, and it
+            // is asked there because it cannot be asked one row at a time.
+            //
+            // Checked on every row the producer emits, including one this
+            // function is about to drop as a declared duplicate, for the reason
+            // the rank and the contribution are: a dropped row is still a row
+            // the producer made claims about, and an unchecked claim is a hole a
+            // permissive duplicate policy could hide a false placement in.
+            self.check_declared_block(index, &block, rank, &item)?;
+
             // Ordered after the re-derivation on purpose: the collision count is
             // a claim about the *profile's* value at this rank, so it must run
             // on a value already proven to be that one. A forged contribution is
@@ -728,35 +1524,47 @@ impl<S: RankedStream> FusionStream<S> {
             self.rows_pulled[index] += 1;
 
             let item: Term = item.into();
-            match self.seen_items[index].as_mut() {
-                // `Unique`: the producer promised no repeats, so there is no set
-                // to consult and none to grow. The promise is not unchecked —
-                // `pull` refuses a stream that contributes to one frontier
-                // candidate twice — but once a candidate has been certified and
-                // removed there is nothing left to check it against, and the
-                // retained-forever set that would be is exactly what this arm
-                // declines to pay for. See [`Self::pull`].
-                None => {
-                    return Ok(Some(Head {
-                        rank,
-                        contribution: expected,
-                        item,
-                    }));
-                }
+            let repeated = match self.seen_items[index].as_mut() {
+                // `Unique`: the producer promised no repeats, so there is no
+                // per-stream identity set to consult and none to grow — that
+                // set is exactly what this arm declines to pay for, and it is
+                // the structure that would grow with every row this stream
+                // emits. The promise is not thereby unchecked: `pull` refuses a
+                // repeat whether the earlier occurrence is still a frontier
+                // candidate or has already been certified and emitted, from
+                // state the engine keeps per *emitted row* rather than per
+                // pulled row. See [`Self::pull`].
+                //
+                // Nothing is dropped here, which is the difference that matters
+                // to a caller: under this declaration a repeat becomes a
+                // refusal naming the item and the stratum, not a silently
+                // discarded row.
+                None => false,
                 // `Allowed`: the producer said repeats happen and the consumer
                 // must de-duplicate, so the consumer de-duplicates. The insert's
                 // own answer is the test, so the repeat costs one set operation
                 // rather than a lookup and an insert.
-                Some(seen) => {
-                    if seen.insert(item.clone()) {
-                        return Ok(Some(Head {
-                            rank,
-                            contribution: expected,
-                            item,
-                        }));
-                    }
-                }
+                Some(seen) => !seen.insert(item.clone()),
+            };
+            if !repeated {
+                return Ok(Some(Head {
+                    rank,
+                    contribution: expected,
+                    item,
+                    block,
+                }));
             }
+            // The row is about to be discarded as a declared duplicate, and its
+            // placement is checked first — this is the one row whose block
+            // `pull` will never see, because a dropped row never becomes a head.
+            // Discarding the claim with the row would leave a hole exactly
+            // where a permissive duplicate policy could hide a false placement:
+            // a stream could name a candidate in one block, then name it again
+            // in another, and the second claim would vanish with the row that
+            // carried it. The candidate it collides with is looked up wherever
+            // it now lives, frontier or emitted, so the check does not lapse
+            // when the row is certified.
+            self.check_candidate_block(&item, index, &block, self.placed_block(&item))?;
         }
     }
 
@@ -786,12 +1594,40 @@ impl<S: RankedStream> FusionStream<S> {
     }
 
     /// Record a terminal receipt, refusing one the rows contradict.
+    ///
+    /// Every receipt that states a count is measured against the rows this
+    /// fusion actually pulled, and the four counting receipts are measured
+    /// identically. [`ProducerReceipt::Exhausted`] states how many rows it
+    /// emitted; [`ProducerReceipt::DepthReached`],
+    /// [`ProducerReceipt::RowBoundReached`] and
+    /// [`ProducerReceipt::SuppliedQueryEnded`] state the last rank it emitted, which is
+    /// the same number because ranks are contiguous from one — a law already
+    /// enforced row by row in [`Self::fetch`]. A producer may stop at the depth it
+    /// was given or at the bound it declared, and a caller may run a query of its own;
+    /// none of them may miscount what was emitted, and the licence to stop reading is
+    /// deliberately not also a licence to
+    /// misreport. What fusion cannot check is the claim about rows nobody pulled:
+    /// that a depth-stopped stream still held rows below its last rank is the
+    /// producer's word, and a stream stopped at its own declared bound or inside a
+    /// caller's own text makes no claim there at all — which is exactly why those
+    /// endings are not `Exhausted`.
     fn finish(&mut self, index: usize, receipt: ProducerReceipt) -> Result<(), FusionError> {
         let actual = self.rows_pulled[index];
         match &receipt {
             ProducerReceipt::Exhausted { rows_emitted } if *rows_emitted != actual => {
                 return Err(ProtocolError::ForgedReceipt {
                     declared: *rows_emitted,
+                    actual,
+                }
+                .into());
+            }
+            ProducerReceipt::DepthReached { rank }
+            | ProducerReceipt::RowBoundReached { rank }
+            | ProducerReceipt::SuppliedQueryEnded { rank }
+                if *rank != actual =>
+            {
+                return Err(ProtocolError::ForgedReceipt {
+                    declared: *rank,
                     actual,
                 }
                 .into());
@@ -833,13 +1669,111 @@ impl<S: RankedStream> FusionStream<S> {
         best.map(|(index, _)| index)
     }
 
-    /// The threshold `T`: the summed contribution of every current head.
+    /// The threshold `T`: the most an item nobody has named yet could score.
+    ///
+    /// The largest, over the blocks of the candidate universe the open streams
+    /// can still reach, of the summed contribution of the open heads that can
+    /// reach that block. Every [`CandidateDomains::Unrestricted`] head counts
+    /// in every block's sum, because such a stream may name anything.
+    ///
+    /// # Why the largest per-block sum, and not the global sum
+    ///
+    /// Because `T` bounds the score of an item **not yet in the frontier**, and
+    /// such an item lies in exactly one block ([`DomainTag`] is a block of a
+    /// partition). So the only contributions it can still collect are those of
+    /// the streams that can reach *its* block, and the tightest sound bound is
+    /// the best that any single block offers. Summing every head instead would
+    /// also be sound — it is an upper bound of this one — but it is a looser
+    /// bound, and a threshold that is too high is precisely what stops
+    /// certification: no candidate rises above it, nothing is emitted, and the
+    /// fusion pulls rows it had no need for. That is the drain this whole
+    /// mechanism removes, so leaving it in the threshold would give the rest of
+    /// the work back.
+    ///
+    /// A per-*candidate* sum would be tighter still and is not available here:
+    /// this bound is about items nobody has seen, and there is no candidate to
+    /// take a domain from. Using a frontier candidate's narrowed `Dom(x)` would
+    /// bound the unseen items by what some *other* item's namers declared,
+    /// which is unsound.
+    ///
+    /// # It reduces exactly to the old sum
+    ///
+    /// When every open stream declares `Unrestricted` there are no blocks to
+    /// range over, the `Unrestricted` running sum is the sum of every open
+    /// head, and that is the answer — the identical value this function
+    /// returned before domains existed, for every fusion that does not declare
+    /// them.
+    ///
+    /// # The axiom is verified as far as the rows reach, not trusted
+    ///
+    /// "An item not yet in the frontier lies in exactly one block" is the axiom
+    /// this bound is sound under, and it is a fact about the host's corpus that
+    /// no consumer can derive. It is not taken on faith either: every row a
+    /// restricted stream emits names the block it was drawn from, every named
+    /// block is held against that stream's own declaration
+    /// ([`ProtocolError::UnbackedDomainDeclaration`],
+    /// [`ProtocolError::BlockOutsideDeclaredDomain`]), and two rows that place
+    /// one candidate in two blocks refuse the fusion outright
+    /// ([`ProtocolError::CandidateInTwoBlocks`]) instead of letting this bound
+    /// under-count what that candidate could still collect. A tagging that
+    /// violates the axiom therefore fails loudly rather than producing a
+    /// plausible order.
+    ///
+    /// What is **not** verified is a violation among rows nobody pulled. Two
+    /// streams that would have placed one candidate in two blocks at ranks this
+    /// fusion never reached leave no trace here, and the bound stays as sound as
+    /// the tagging was. That is the identical standard
+    /// [`ProtocolError::OutsideDeclaredDomain`] and the
+    /// [`DuplicatePolicy::Unique`] promise already meet — a promise about unread
+    /// rows is checked where the rows arrive, and reading further to check it
+    /// would spend exactly the reading the declaration exists to save.
     fn compute_threshold(&self) -> Result<Fixed, FusionError> {
-        let mut threshold = Fixed::ZERO;
-        for head in self.heads.iter().flatten() {
-            threshold = threshold
-                .checked_add(head.contribution)
-                .map_err(|_| FusionError::Overflow)?;
+        // The floor of every block's sum: a stream that may name anything may
+        // name the unseen item, whichever block it is in. It is also the whole
+        // answer when no open stream restricts itself, and the honest bound for
+        // an unseen item lying in a block no restricted stream declared.
+        let mut unrestricted = Fixed::ZERO;
+        for (index, head) in self.heads.iter().enumerate() {
+            let Some(head) = head else { continue };
+            if matches!(self.domains[index], CandidateDomains::Unrestricted) {
+                unrestricted = unrestricted
+                    .checked_add(head.contribution)
+                    .map_err(|_| FusionError::Overflow)?;
+            }
+        }
+        let mut threshold = unrestricted;
+        // Every block any open restricted stream named is a block an unseen
+        // item could be in, and no other block can beat the floor above.
+        // Collected into an ordered set so the scan is over distinct tags and
+        // is identical on every target.
+        let mut blocks: BTreeSet<&DomainTag> = BTreeSet::new();
+        for (index, head) in self.heads.iter().enumerate() {
+            if head.is_none() {
+                continue;
+            }
+            if let Some(tags) = self.domains[index].tags() {
+                blocks.extend(tags);
+            }
+        }
+        for block in blocks {
+            let mut sum = unrestricted;
+            for (index, head) in self.heads.iter().enumerate() {
+                let Some(head) = head else { continue };
+                match &self.domains[index] {
+                    // Already counted in the floor.
+                    CandidateDomains::Unrestricted => {}
+                    CandidateDomains::Within(tags) => {
+                        if tags.contains(block) {
+                            sum = sum
+                                .checked_add(head.contribution)
+                                .map_err(|_| FusionError::Overflow)?;
+                        }
+                    }
+                }
+            }
+            if sum > threshold {
+                threshold = sum;
+            }
         }
         Ok(threshold)
     }
@@ -851,10 +1785,18 @@ impl<S: RankedStream> FusionStream<S> {
     /// question and cannot answer it: a live head whose contribution is
     /// [`Fixed::ZERO`] adds nothing to the sum, so an open stream that has not
     /// yet reached `x` is indistinguishable from an exhausted one. Certifying
-    /// on that sum emits `x`, removes it from the frontier, and lets the stream
-    /// that was still open put it back carrying only its later contribution —
-    /// the same candidate emitted twice, the second time with a wrong, small
-    /// score and a best rank drawn from one stratum instead of all of them.
+    /// on that sum emits `x` and removes it from the frontier while a stream
+    /// that could still name it is open — a candidate certified on a score that
+    /// was not yet final, from a conforming producer under a legal profile.
+    ///
+    /// Two things rest on this being the membership test. The obvious one is
+    /// the score: `x` is emitted having been paid a contribution it had not
+    /// yet received. The second is [`Self::pull`]'s impossibility proof for the
+    /// post-emission duplicate check — `named_by` is the `seen_streams` of the
+    /// certifying moment, and it is only because certification requires *no
+    /// open unseen stream* that a later name from an unseen stream is
+    /// contradictory rather than routine. Under the arithmetic gate that arm
+    /// would be reachable by ordinary input.
     ///
     /// A zero contribution is not hypothetical. The profile admits any weight
     /// strictly above zero, and
@@ -878,23 +1820,92 @@ impl<S: RankedStream> FusionStream<S> {
     /// change a score. That is the price of a weight the caller declared and the
     /// scale cannot represent, and it is paid in pulls rather than in wrong
     /// answers.
+    ///
+    /// # The declared-domain clause ADDS a licence; it weakens no test
+    ///
+    /// "Could still name it" is answered by two facts, not one. A stream can
+    /// still name `x` when it is open **and** its declared domains meet
+    /// `Dom(x)` — where `Dom(x)` is the intersection of the declarations of the
+    /// streams that already named `x`. A stream whose declaration cannot reach
+    /// `Dom(x)` is not a stream this test is unsure about: it is a stream that
+    /// has promised, at registration, never to name this candidate, and a
+    /// stream that breaks that promise is refused in [`Self::pull`] before it
+    /// can reach any of this.
+    ///
+    /// So nothing above is relaxed. For every stream that *can* name `x` the
+    /// test is the same membership question it has always been, zero-valued
+    /// heads included, and both arguments that rest on it survive intact:
+    ///
+    /// * the score, because a skipped stream is one whose contribution to `x`
+    ///   is not merely zero but impossible; and
+    /// * [`Self::pull`]'s impossibility proof for the post-emission duplicate
+    ///   check, which now has two ways to reach its contradiction rather than
+    ///   one — the stream was finished, or the stream was outside `Dom(x)` and
+    ///   was refused at the domain gate that runs first. Neither arm lets a
+    ///   conforming stream name a certified candidate it had not contributed
+    ///   to.
+    ///
+    /// Where every stream declares [`CandidateDomains::Unrestricted`] the extra
+    /// clause is never true — everything meets everything — and this is exactly
+    /// the test it was before domains existed.
     fn is_final(&self, state: &CandidateState) -> bool {
-        self.heads
-            .iter()
-            .enumerate()
-            .all(|(index, head)| head.is_none() || state.seen_streams.contains(&index))
+        self.heads.iter().enumerate().all(|(index, head)| {
+            head.is_none()
+                || state.seen_streams.contains(&index)
+                || !self.could_name(index, &state.seen_streams)
+        })
     }
 
-    /// `U(x)`: `L(x)` plus the current head of every stream that has not yet
-    /// contributed to `x`.
+    /// Whether stream `index` could still name a candidate that the streams in
+    /// `named_by` have already named.
+    ///
+    /// This is `domains[index] ∩ Dom(x) ≠ ∅`, computed without building
+    /// `Dom(x)`. `Dom(x)` is the intersection of the declarations of the
+    /// streams in `named_by`, so a block both sides admit is exactly a block
+    /// this stream declares that *every* namer also declares — which is the
+    /// loop below, and which allocates nothing. A stream that declared
+    /// [`CandidateDomains::Unrestricted`] may name anything and is always a
+    /// yes; a candidate named only by `Unrestricted` streams constrains
+    /// nothing and every stream is a yes for it, which is why a fusion with no
+    /// declarations anywhere behaves exactly as it did before they existed.
+    ///
+    /// `named_by` is never empty where this is called from — a candidate is in
+    /// the frontier, or in `emitted`, only because some stream put it there —
+    /// and on an empty set the answer is `true` for every stream, which is the
+    /// right answer anyway: nothing has been declared about a candidate nobody
+    /// has named.
+    fn could_name(&self, index: usize, named_by: &BTreeSet<usize>) -> bool {
+        match &self.domains[index] {
+            CandidateDomains::Unrestricted => true,
+            CandidateDomains::Within(tags) => tags.iter().any(|tag| {
+                named_by
+                    .iter()
+                    .all(|namer| self.domains[*namer].admits(tag))
+            }),
+        }
+    }
+
+    /// `U(x)`: `L(x)` plus the current head of every stream that could still
+    /// contribute to `x` — open, unseen, and declared over a domain `Dom(x)`
+    /// meets.
     ///
     /// This is a *comparison* quantity — the most `x` could still become — and
     /// is asked nothing else. Whether `x` is done is [`Self::is_final`]'s
     /// question, and a sum cannot answer it.
+    ///
+    /// The domain clause is the same licence [`Self::is_final`] takes, and it
+    /// must be taken in both or neither: a stream that cannot name `x` adds
+    /// nothing to what `x` can become, so counting its head here would inflate
+    /// `U(x)` with a contribution that will never arrive and would keep `x`
+    /// blocking rivals it cannot actually beat. Where every stream declares
+    /// [`CandidateDomains::Unrestricted`] this is the sum it always was.
     fn upper_bound(&self, state: &CandidateState) -> Result<Fixed, FusionError> {
         let mut bound = state.lower_bound;
         for (index, head) in self.heads.iter().enumerate() {
             if state.seen_streams.contains(&index) {
+                continue;
+            }
+            if !self.could_name(index, &state.seen_streams) {
                 continue;
             }
             if let Some(head) = head {
@@ -1032,46 +2043,366 @@ impl<S: RankedStream> FusionStream<S> {
         Ok(best)
     }
 
+    /// The blocks stream `index` declared, rendered in canonical order for a
+    /// refusal to carry.
+    ///
+    /// Empty for an unrestricted stream, which declared none. Allocated only on
+    /// a refusal path: nothing on the row loop calls this.
+    fn declared_blocks(&self, index: usize) -> Vec<String> {
+        self.domains[index].tags().map_or_else(Vec::new, |tags| {
+            tags.iter().map(|tag| tag.as_str().to_owned()).collect()
+        })
+    }
+
+    /// Hold one row's block against the promise its own stream made.
+    ///
+    /// Two obligations, and they are not symmetric, because the declarations are
+    /// not:
+    ///
+    /// * a [`CandidateDomains::Within`] stream owes a block on every row. It has
+    ///   promised its candidates lie in named blocks, fusion has *already used*
+    ///   that promise — skipping streams and bounding unseen items by a single
+    ///   block — and a row that names nothing backs nothing, so the restriction
+    ///   is refused as [`ProtocolError::UnbackedDomainDeclaration`] rather than
+    ///   quietly read as the wider promise it did not make;
+    /// * a [`CandidateDomains::Unrestricted`] stream owes nothing. It restricts
+    ///   no arithmetic — its head is counted in every block's bound — so there
+    ///   is no promise for a row to back, and [`RowBlock::Undeclared`] is its
+    ///   honest answer. It may still name a block, and one it names is kept:
+    ///   `admits` is true of every tag under that declaration, so this function
+    ///   passes it through to the candidate-level check where a block is evidence
+    ///   about the candidate.
+    ///
+    /// A row naming a block its own declaration excludes is
+    /// [`ProtocolError::BlockOutsideDeclaredDomain`] — a stream contradicting
+    /// itself, which needs no second stream to witness it and is therefore not
+    /// [`ProtocolError::OutsideDeclaredDomain`].
+    ///
+    /// The item is cloned only to render a refusal. On the conforming path this
+    /// function allocates nothing and touches no state.
+    fn check_declared_block(
+        &self,
+        index: usize,
+        block: &RowBlock,
+        rank: u64,
+        item: &S::Item,
+    ) -> Result<(), FusionError> {
+        match block {
+            RowBlock::Undeclared => {
+                if self.domains[index].tags().is_some() {
+                    return Err(ProtocolError::UnbackedDomainDeclaration {
+                        stratum: self.streams[index].0.as_str().to_owned(),
+                        declared: self.declared_blocks(index),
+                        rank,
+                    }
+                    .into());
+                }
+            }
+            RowBlock::Declared(tag) => {
+                if !self.domains[index].admits(tag) {
+                    let named: Term = item.clone().into();
+                    return Err(ProtocolError::BlockOutsideDeclaredDomain {
+                        item: named.as_str().to_owned(),
+                        stratum: self.streams[index].0.as_str().to_owned(),
+                        block: tag.as_str().to_owned(),
+                        declared: self.declared_blocks(index),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Hold one row's block against the block this candidate has already been
+    /// placed in.
+    ///
+    /// This is where the axiom the whole declared-domain arithmetic rests on is
+    /// actually checked: a [`DomainTag`] names a block of a *partition*, so a
+    /// candidate lies in exactly one block, and two rows that place one candidate
+    /// in two different blocks are a proof the host's tagging does not describe
+    /// its corpus. The refusal names both strata and both blocks
+    /// ([`ProtocolError::CandidateInTwoBlocks`]), because either producer could
+    /// be the one that tagged wrongly and this layer cannot know which.
+    ///
+    /// Silence is not a disagreement. A row that named no block — every row of an
+    /// unrestricted stream — contradicts nothing, and a candidate no row has
+    /// placed yet has nothing to contradict; both are `Ok` here, and neither is
+    /// upgraded into a claim.
+    fn check_candidate_block(
+        &self,
+        item: &Term,
+        index: usize,
+        block: &RowBlock,
+        placed: Option<&BlockWitness>,
+    ) -> Result<(), FusionError> {
+        let (Some(tag), Some(witness)) = (block.tag(), placed) else {
+            return Ok(());
+        };
+        if *tag == witness.block {
+            return Ok(());
+        }
+        Err(ProtocolError::CandidateInTwoBlocks {
+            item: item.as_str().to_owned(),
+            stratum: self.streams[index].0.as_str().to_owned(),
+            block: tag.as_str().to_owned(),
+            named_by: self.streams[witness.stream].0.as_str().to_owned(),
+            named_by_block: witness.block.as_str().to_owned(),
+        }
+        .into())
+    }
+
+    /// The block some row has already placed `item` in, wherever that candidate
+    /// now lives.
+    ///
+    /// The frontier first, then the emitted map, because those are the two states
+    /// a named candidate can be in and a certified one has left the first for the
+    /// second. Consulting both is what keeps the axiom from lapsing at
+    /// certification: the placement a candidate was emitted under is still the
+    /// placement every later row is measured against.
+    fn placed_block(&self, item: &Term) -> Option<&BlockWitness> {
+        self.frontier
+            .get(item)
+            .and_then(|state| state.block.as_deref())
+            .or_else(|| {
+                self.emitted
+                    .get(item)
+                    .and_then(|record| record.block.as_deref())
+            })
+    }
+
+    /// The placement a row establishes for a candidate that had none, or `None`
+    /// where there is nothing new to record.
+    ///
+    /// A candidate is placed once and then only compared against: the first row
+    /// that names a block owns the placement, so the tag is cloned at most once
+    /// per candidate rather than on every row that names it. A row that names no
+    /// block records nothing, and never erases a placement another row made —
+    /// silence cannot overwrite evidence.
+    fn placement_for(
+        index: usize,
+        block: &RowBlock,
+        placed: Option<&BlockWitness>,
+    ) -> Option<Box<BlockWitness>> {
+        match (block.tag(), placed) {
+            (Some(tag), None) => Some(Box::new(BlockWitness {
+                stream: index,
+                block: tag.clone(),
+            })),
+            _ => None,
+        }
+    }
+
+    /// The stratum to name as `named_by` in an
+    /// [`ProtocolError::OutsideDeclaredDomain`], given the streams that already
+    /// named the candidate and the stream that just did.
+    ///
+    /// Preference goes to a namer whose own declaration is genuinely disjoint
+    /// from the offender's, because that is the pair a reader can act on: two
+    /// declarations that directly contradict each other. `Dom(x)` is an
+    /// intersection, so a stream can fail to meet it without being disjoint
+    /// from any single namer — several narrow declarations can close a door no
+    /// one of them closed alone — and in that case the first namer is reported
+    /// as the witness that the narrowing began.
+    ///
+    /// Deterministic either way: `named_by` is an ordered set of stream
+    /// indexes, and the streams are in the order the caller handed them over,
+    /// so two runs of the same fusion name the same stratum.
+    fn domain_witness(&self, named_by: &BTreeSet<usize>, offender: usize) -> String {
+        let disjoint = named_by
+            .iter()
+            .find(|namer| !self.domains[**namer].intersects(&self.domains[offender]));
+        let witness = disjoint.or_else(|| named_by.iter().next());
+        witness.map_or_else(
+            // No namer at all cannot happen — a candidate is in the frontier or
+            // the emitted map only because some stream put it there — but the
+            // lookup is total and the total answer says exactly that rather
+            // than panicking on a library path a caller reaches with its own
+            // streams.
+            || "<none>".to_owned(),
+            |namer| self.streams[*namer].0.as_str().to_owned(),
+        )
+    }
+
     /// Process stream `index`'s head into the frontier, then advance it.
     ///
     /// # Errors
     ///
     /// [`FusionError::Overflow`] when the checked sum leaves the fixed-point
     /// range, [`FusionError::MaxContributionsExceeded`] when the candidate has
-    /// been contributed to once more than there are strata, and
-    /// [`ProtocolError::DuplicateItem`] when this stream would contribute to one
-    /// frontier candidate twice.
+    /// been contributed to once more than there are strata,
+    /// [`ProtocolError::DuplicateItem`] when this stream would name one
+    /// candidate twice — whether the earlier occurrence is still a frontier
+    /// candidate or has already been certified and emitted — and
+    /// [`ProtocolError::OutsideDeclaredDomain`] when this stream names a
+    /// candidate its own declaration cannot reach, from either arm below: the
+    /// candidate may still be in the frontier or may already have certified, and
+    /// the refusal names the stratum whose declaration put it out of reach
+    /// through [`Self::domain_witness`]. [`ProtocolError::CandidateInTwoBlocks`]
+    /// when this row places the candidate in a different block from the one an
+    /// earlier row placed it in — the axiom the threshold rests on.
     ///
-    /// # Where a declared-`Unique` stream's promise is actually checked
+    /// # Why the placement is checked on the frontier arm and not the emitted one
     ///
-    /// Here, and only here. A stream that declared
-    /// [`DuplicatePolicy::Unique`] keeps no identity set — that is the whole
-    /// saving the declaration buys, since the set is the one structure that
-    /// grows with the rows pulled — so the refusal below is the engine's own,
-    /// derived from state it needs anyway: `seen_streams` must mean "this stream
-    /// has contributed, once" at the point [`Self::is_final`] reads it, and the
-    /// insert's own return value is the test, so the check costs one `BTreeSet`
-    /// operation and no extra memory at all.
+    /// Because a row naming a *certified* candidate cannot reach a placement
+    /// disagreement: it is refused above it, every time. Suppose stream `s` names
+    /// `x` now and `x` has certified. Either `s` is in `x`'s `named_by`, in which
+    /// case the duplicate arm answers — or, under
+    /// [`DuplicatePolicy::Allowed`], [`Self::fetch`] discarded the row and checked
+    /// its placement there, which is the one place that check is reachable for a
+    /// dropped row. Or `s` is not in `named_by`, and then certification required
+    /// of `s` either a `None` head (a finished stream, never pulled again) or that
+    /// its declaration could not reach `Dom(x)` — and that second case is
+    /// [`ProtocolError::OutsideDeclaredDomain`], raised immediately below on the
+    /// same immutable declarations, which cannot have changed since. So the
+    /// placement check on this arm could only ever be dead weight, and the arm
+    /// says what it can actually observe instead.
     ///
-    /// Its reach is exactly the frontier's, and that bound is worth stating
-    /// plainly: a repeat is refused for as long as the earlier occurrence is
-    /// still un-emitted, which is every repeat that could corrupt a candidate's
-    /// score or its best rank. A stream that repeats an item *after* that item
-    /// has already been certified and removed is not detected, because detecting
-    /// it is precisely the retained-forever set the producer's declaration said
-    /// was unnecessary. `Unique` is a promise this layer relies on; a producer
-    /// that cannot make it declares [`DuplicatePolicy::Allowed`] instead and is
-    /// de-duplicated in [`Self::fetch`], completely and at the cost the policy
-    /// implies.
+    /// # Where a declared-`Unique` stream's promise is checked
     ///
-    /// Under `Allowed` this arm is unreachable rather than merely unused: a
+    /// Here, in two places, and the pair is deliberately not one place.
+    ///
+    /// The first is the frontier itself, and it is free: `seen_streams` must
+    /// already mean "this stream has contributed, once" at the point
+    /// [`Self::is_final`] reads it, so the insert's own return value is the
+    /// test and the check costs one `BTreeSet` operation and no extra memory at
+    /// all. It catches every repeat whose earlier occurrence is still
+    /// un-emitted — that is, every repeat that could corrupt a candidate's
+    /// score or its best rank before the caller ever sees the row.
+    ///
+    /// The second is `emitted`, consulted below, and it is what the first one
+    /// cannot be: unconditional. A candidate is removed from the frontier the
+    /// instant it certifies, so a stream naming it afterwards collides with
+    /// nothing and would open a fresh candidate — **the same entity in the
+    /// answer twice**, the second time scored from one stratum's late rank
+    /// alone. Bounding the promise by the frontier would make the answer
+    /// invariant depend on how deep the caller happened to read, and "the same
+    /// entity appears twice, but only in long answers" is not a weaker
+    /// guarantee than the invariant, it is the absence of one.
+    ///
+    /// So the promise is held for the whole fusion, and the cost is stated
+    /// rather than hidden: one `emitted` entry per row **returned**. That is
+    /// the unit that matters. A [`TopK`](crate::TopK)-bounded call cannot hold
+    /// more entries than the answer it is building, and a caller that drains
+    /// pays, per candidate, strictly less than the frontier entry the emission
+    /// just released — the contribution vector and lower bound are dropped and
+    /// only the stream-index set survives, moved rather than rebuilt. What a
+    /// [`DuplicatePolicy::Unique`] declaration buys its way out of is untouched
+    /// by this: that is the *per-stream* identity set, one per stream and
+    /// growing with every row that stream emits, and no such set is built here.
+    ///
+    /// # The repeat is surfaced, not smoothed over
+    ///
+    /// The alternative — silently dropping the late repeat, as
+    /// [`Self::fetch`] does for a stream that declared
+    /// [`DuplicatePolicy::Allowed`] — would also keep the answer invariant, and
+    /// it is the wrong answer for a `Unique` declaration. The declaration is a
+    /// claim about the producer's index, and a producer that breaks it has a
+    /// stream whose *ranks* can no longer be trusted either: the same entity at
+    /// two ranks means one of them is wrong, and every rank below the repeat is
+    /// suspect with it. Dropping the row would return a plausible answer
+    /// computed from evidence the layer has just proven unreliable. Refusing
+    /// names the entity and the stratum, which is what a consumer can act on.
+    /// A producer that cannot make the promise declares `Allowed` instead and
+    /// is de-duplicated in [`Self::fetch`], completely and at the cost the
+    /// policy implies — that route is one line away and is the supported one.
+    ///
+    /// # Why the second arm below is an internal error and not a variant
+    ///
+    /// The `emitted` lookup has two outcomes, and only one of them is a
+    /// producer's fault. If the record says this stream named the candidate
+    /// before, the `Unique` promise is broken and
+    /// [`ProtocolError::DuplicateItem`] is exactly what happened. If it says
+    /// this stream did *not*, no producer has done anything wrong and the
+    /// engine's own certification argument has failed — so it is reported as
+    /// the invariant violation it is, in the same shape [`Self::next`] uses for
+    /// a candidate that vanished from the frontier.
+    ///
+    /// That arm is unreachable, and here is the proof. Suppose stream `s` names
+    /// `x` now, `x` has certified, and `s` is not in `x`'s `named_by`.
+    /// Certification required [`Self::is_final`], which requires of *every*
+    /// index either that its head was `None` or that it is in `seen_streams` —
+    /// and `named_by` is precisely the `seen_streams` of that moment. So `s`'s
+    /// head was `None` when `x` certified. A head is `None` only once
+    /// [`Self::finish`] has recorded the stream's terminal receipt, and a
+    /// finished stream is never pulled again. Therefore `s` could not name `x`
+    /// now, and the hypothesis is contradictory.
+    ///
+    /// Note what that proof rests on: `is_final` being a *membership* test over
+    /// open streams rather than the arithmetic `U(x) == L(x)` it replaced.
+    /// Under the arithmetic gate a stream with a zero-valued head could be open
+    /// and unseen while `x` certified, and this arm would be reachable — by a
+    /// conforming producer, through a legal profile. The two guards are one
+    /// argument, and weakening either re-opens the other.
+    ///
+    /// # The proof under declared domains
+    ///
+    /// [`Self::is_final`] now admits a second way for a stream to be open and
+    /// unseen at certification: `s`'s declared domains did not meet `Dom(x)`.
+    /// The proof extends by a case rather than breaking, because that case is
+    /// refused before it can arrive here. Suppose again that `s` names `x` now,
+    /// `x` has certified, and `s` is not in `named_by`. Certification required
+    /// of `s` either that its head was `None` — the finished-stream case above,
+    /// unchanged — or that `s`'s declaration could not reach `Dom(x)`. In the
+    /// second case `s` is naming a candidate it promised never to name, and the
+    /// domain gate immediately above this arm has already refused the row as
+    /// [`ProtocolError::OutsideDeclaredDomain`]. Either way this arm is
+    /// unreachable, and in neither way is a producer's fault reported as an
+    /// engine invariant violation.
+    ///
+    /// That is also why `Dom(x)` is carried into the emitted record rather than
+    /// dropped with the frontier entry: the gate needs the declaration the
+    /// candidate certified under, and a candidate that has left the frontier no
+    /// longer has one anywhere else.
+    ///
+    /// Under `Allowed` neither arm is reachable rather than merely unused: a
     /// repeat is dropped in [`Self::fetch`] and never becomes a head, so no
-    /// second row from one stream ever reaches one frontier candidate.
+    /// second row from one stream ever reaches the frontier or this lookup.
     async fn pull(&mut self, index: usize) -> Result<(), FusionError> {
         let Some(head) = self.heads[index].take() else {
             return Ok(());
         };
         let stratum = self.streams[index].0.clone();
+
+        // Asked before the frontier is consulted, let alone touched, and before
+        // the two profile bounds below — the same discipline the rest of this
+        // function keeps: a refused row leaves every structure here exactly as
+        // it found it. Ordering against the bounds is not load-bearing for
+        // reachability (a certified candidate is absent from the frontier, so
+        // its contribution count would restart at one and cross nothing), but
+        // it is load-bearing for the diagnosis: the honest report for this row
+        // is that a stream repeated an item, not that some budget was spent.
+        if let Some(record) = self.emitted.get(&head.item) {
+            if record.named_by.contains(&index) {
+                return Err(ProtocolError::DuplicateItem {
+                    item: head.item.as_str().to_owned(),
+                    stratum: stratum.as_str().to_owned(),
+                }
+                .into());
+            }
+            // Ordered before the impossibility arm below, which is what keeps
+            // that arm's proof true: a stream outside `Dom(x)` is one of the
+            // two ways certification could have left this stream open and
+            // unseen, and it is answered here as the broken declaration it is
+            // rather than reported as an engine invariant violation. The
+            // promise is held past the frontier for the same reason the
+            // duplicate promise is: a guarantee that lapses once a row is
+            // emitted is a guarantee that depends on how deep the caller read.
+            if !self.could_name(index, &record.named_by) {
+                let named_by = self.domain_witness(&record.named_by, index);
+                return Err(ProtocolError::OutsideDeclaredDomain {
+                    item: head.item.as_str().to_owned(),
+                    stratum: stratum.as_str().to_owned(),
+                    named_by,
+                }
+                .into());
+            }
+            return Err(FusionError::MalformedProfile(format!(
+                "stream {index} named candidate {} after it certified without having \
+                 contributed to it, which certification forbids",
+                head.item.as_str()
+            )));
+        }
 
         // The candidate's next state is derived before the frontier is touched,
         // for two reasons. It lets the bounds be refused while `head.item` is
@@ -1091,6 +2422,39 @@ impl<S: RankedStream> FusionStream<S> {
         // the count above is bounded by half the ceiling — see
         // [`FusionProfile::ceiling`](crate::FusionProfile::ceiling).
         let existing = self.frontier.get(&head.item);
+        // The declaration is checked before anything is written, so a refused
+        // row leaves the frontier exactly as it found it — the same discipline
+        // the two profile bounds below keep. A candidate nobody has named yet
+        // constrains nothing, so only an existing entry can contradict this
+        // stream: `Dom(x)` narrows as streams name it, and a stream whose own
+        // blocks it no longer meets is a stream naming a candidate it promised
+        // never to name.
+        if let Some(state) = existing
+            && !self.could_name(index, &state.seen_streams)
+        {
+            let named_by = self.domain_witness(&state.seen_streams, index);
+            return Err(ProtocolError::OutsideDeclaredDomain {
+                item: head.item.as_str().to_owned(),
+                stratum: stratum.as_str().to_owned(),
+                named_by,
+            }
+            .into());
+        }
+        // The second of the two questions asked of a candidate already in the
+        // frontier: the declaration check above asks whether these declarations
+        // can both be true of it, and this asks whether these *rows* can. The
+        // second is the axiom the threshold rests on, and it is checked before
+        // anything is written so a refused row leaves the frontier exactly as it
+        // found it. This is the reachable placement check for a row that becomes
+        // a head; the other is in `fetch`, for the row a permissive duplicate
+        // policy discards. See this function's docs for why a certified
+        // candidate needs no third.
+        let placed = existing.and_then(|state| state.block.as_deref());
+        self.check_candidate_block(&head.item, index, &head.block, placed)?;
+        // Derived while the immutable borrow is still live, so the entry below
+        // needs no second lookup: at most one tag clone per candidate, and none
+        // at all for a candidate already placed or a row that named no block.
+        let placement = Self::placement_for(index, &head.block, placed);
         let lower_bound = existing
             .map_or(Fixed::ZERO, |state| state.lower_bound)
             .checked_add(head.contribution)
@@ -1114,14 +2478,28 @@ impl<S: RankedStream> FusionStream<S> {
                     .contributions
                     .push((stratum, head.rank, head.contribution));
                 state.seen_streams.insert(index);
+                // The candidate's placement, where this row named one. A
+                // candidate nobody has placed keeps `None`, which constrains
+                // nothing and is what every candidate only unrestricted streams
+                // name looks like.
+                state.block = placement;
             }
             btree_map::Entry::Occupied(mut occupied) => {
                 if !occupied.get_mut().seen_streams.insert(index) {
                     // Refused before anything is written, so the frontier is
                     // left exactly as it was found — the same discipline the
                     // two profile bounds above keep.
+                    //
+                    // The stratum is named here for the same reason it is named
+                    // at the post-emission site: one refusal, one meaning, and
+                    // a consumer that cannot tell which of the two places
+                    // caught the repeat also does not have to. The item is read
+                    // off the occupied entry's key rather than off `head`,
+                    // because the frontier took ownership of the term when this
+                    // row's predecessor put it there.
                     return Err(ProtocolError::DuplicateItem {
                         item: occupied.key().as_str().to_owned(),
+                        stratum: stratum.as_str().to_owned(),
                     }
                     .into());
                 }
@@ -1130,6 +2508,13 @@ impl<S: RankedStream> FusionStream<S> {
                 state
                     .contributions
                     .push((stratum, head.rank, head.contribution));
+                // Only a candidate no row had placed can gain a placement here,
+                // and `placement_for` has already decided that: a placement is
+                // established once and afterwards only compared against, so this
+                // never overwrites the witness a refusal would name.
+                if let Some(witness) = placement {
+                    state.block = Some(witness);
+                }
             }
         }
 

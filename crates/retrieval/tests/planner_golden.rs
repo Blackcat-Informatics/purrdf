@@ -13,13 +13,13 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Iri, Metric, Plan, PlanError, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
-    UnservedReason, UnservedTerm, plan,
+    Iri, Metric, Plan, PlanError, RegistryId, RejectionReason, RequestTerm, RetrievalRequest,
+    Statistics, Term, UnservedReason, UnservedTerm, plan,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,15 +61,15 @@ fn seed_term() -> RequestTerm {
 }
 
 fn mixed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), vector_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), vector_term(), seed_term()])
 }
 
 fn lexical_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term()])
+    RetrievalRequest::complete(vec![lexical_term()])
 }
 
 fn vector_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![vector_term()])
+    RetrievalRequest::complete(vec![vector_term()])
 }
 
 /// Each accepted pattern, with the request term's value rendered into the
@@ -111,6 +111,8 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -166,6 +168,8 @@ fn pair_registry() -> PropertyFunctionRegistry {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );
@@ -174,7 +178,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
 
 /// A request of two shapes one producer can hold at once.
 fn lexical_and_seed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
 }
 
 /// The mixed registry: one catch-all (`Any`) producer, one
@@ -381,6 +385,49 @@ fn canonical_json(plan: &Plan) -> String {
 // 1. Golden tests
 // ---------------------------------------------------------------------------
 
+/// The identity of the plan the mixed-request golden records.
+///
+/// Pinned as a literal beside the golden document rather than read back out of
+/// it. A golden compared only as rendered text answers "did the text move"; the
+/// identity answers "did the plan move", over the canonical bytes every later
+/// stage keys on, and a change that altered the identity while leaving the
+/// rendering alone would otherwise pass unnoticed.
+const MIXED_REQUEST_PLAN_ID: &str =
+    "812a811b57d65ec25b35f210d1830a0c053baa5de5fc5e72fbd4f80a39f02d15";
+
+/// The identity of the plan the lexical-request golden records, pinned for the
+/// reason [`MIXED_REQUEST_PLAN_ID`] is.
+const LEXICAL_REQUEST_PLAN_ID: &str =
+    "d4949c9af9995f02c8768881961d410287165cee67cd02091f42f1f2d9e4f981";
+
+/// A plan's content identity, with the per-process registry instance counter
+/// pinned exactly as [`canonical_json`] pins it.
+///
+/// [`Plan::id`] digests the canonical bytes, and those bytes carry
+/// [`Plan::registry_instance_id`] — a counter minted per registry per process,
+/// so the live value differs from run to run and from test order to test order.
+/// Pinning it to zero is what makes the identity a property of the *plan* rather
+/// than of the process that happened to build it, and leaves every durable field
+/// covered.
+fn pinned_id(plan: &Plan) -> String {
+    let mut pinned = plan.clone();
+    pinned.registry_instance_id = RegistryId::from_raw(0);
+    pinned.id().to_hex()
+}
+
+/// A plan's per-stratum depths, keyed by stratum IRI in a deterministic order.
+///
+/// The recorded map is a `HashMap`, so it is collected into an ordered one here
+/// to be compared whole: asserting the map rather than one key at a time is what
+/// makes an *extra* stratum depth a failure, and an extra depth licenses reading
+/// rows in a stratum the assertion never mentioned.
+fn depths_of(plan: &Plan) -> BTreeMap<String, u32> {
+    plan.stratum_depths
+        .iter()
+        .map(|(stratum, depth)| (stratum.as_str().to_owned(), *depth))
+        .collect()
+}
+
 /// NOT part of the normal test run (`#[ignore]`): (re)writes both committed
 /// planner goldens from the planner's current output.
 ///
@@ -426,6 +473,16 @@ fn golden_mixed_request_matches() {
         "planner output drifted from the golden; update {} if intended",
         golden_path("mixed_request.json").display()
     );
+    assert_eq!(
+        depths_of(&plan),
+        BTreeMap::from([
+            (ex("stratum/graph"), 50),
+            (ex("stratum/text"), 100),
+            (ex("stratum/universal"), 200),
+        ]),
+        "the depths this fixture derives, named rather than eyeballed out of the golden"
+    );
+    assert_eq!(pinned_id(&plan), MIXED_REQUEST_PLAN_ID);
 }
 
 #[test]
@@ -438,6 +495,12 @@ fn golden_lexical_request_matches() {
         "planner output drifted from the golden; update {} if intended",
         golden_path("lexical_request.json").display()
     );
+    assert_eq!(
+        depths_of(&plan),
+        BTreeMap::from([(ex("stratum/text"), 100), (ex("stratum/universal"), 200),]),
+        "the depths this fixture derives, named rather than eyeballed out of the golden"
+    );
+    assert_eq!(pinned_id(&plan), LEXICAL_REQUEST_PLAN_ID);
 }
 
 #[test]
@@ -544,6 +607,8 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );
@@ -584,7 +649,7 @@ fn unmatched_and_unranked_producers_are_rejected() {
 
 #[test]
 fn language_and_predicate_constraints_are_enforced() {
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::Lexical {
+    let request = RetrievalRequest::complete(vec![RequestTerm::Lexical {
         text: "different".to_owned(),
         language: Some("fr".to_owned()),
         predicate: Some(iri(&ex("other"))),
@@ -665,6 +730,8 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );
@@ -672,7 +739,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
 }
 
 fn lexical_and_vector_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), vector_term()])
+    RetrievalRequest::complete(vec![lexical_term(), vector_term()])
 }
 
 #[test]
@@ -838,7 +905,7 @@ fn an_interval_term_no_registry_producer_takes_is_reported_per_term() {
     // lexical term still reaches it, so the request plans and the answer is
     // honest about what it could not serve.
     let request =
-        RetrievalRequest::from_terms(vec![lexical_term(), temporal_term(), numeric_range_term()]);
+        RetrievalRequest::complete(vec![lexical_term(), temporal_term(), numeric_range_term()]);
     let plan = plan(&request, &literal_only_registry(), &fixture_statistics())
         .expect("the lexical term still reaches a producer");
 
@@ -899,10 +966,12 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             depth_placement: None,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         },
     );
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::Temporal {
+    let request = RetrievalRequest::complete(vec![RequestTerm::Temporal {
         predicate: iri(&ex("observed")),
         lower: Some("2026-01-01T00:00:00Z".to_owned()),
         upper: None,
@@ -935,7 +1004,7 @@ fn an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans() {
             upper: None,
         },
     ] {
-        let request = RetrievalRequest::from_terms(vec![empty]);
+        let request = RetrievalRequest::complete(vec![empty]);
         let error = plan(&request, &mixed_registry(), &fixture_statistics())
             .expect_err("an interval with neither endpoint constrains nothing");
         match error {
@@ -948,7 +1017,7 @@ fn an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans() {
     // The neighbouring valid cases: one endpoint is a half-open interval, and it
     // plans.
     for half_open in [temporal_term(), numeric_range_term()] {
-        let request = RetrievalRequest::from_terms(vec![half_open]);
+        let request = RetrievalRequest::complete(vec![half_open]);
         assert!(
             plan(&request, &mixed_registry(), &fixture_statistics()).is_ok(),
             "an interval carrying an endpoint is a question"
@@ -958,7 +1027,7 @@ fn an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans() {
 
 #[test]
 fn an_inverted_numeric_range_is_refused_but_a_degenerate_one_plans() {
-    let inverted = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+    let inverted = RetrievalRequest::complete(vec![RequestTerm::NumericRange {
         predicate: iri(&ex("price")),
         lower: Some(purrdf_retrieval::Fixed::from_raw(2)),
         upper: Some(purrdf_retrieval::Fixed::from_raw(1)),
@@ -973,7 +1042,7 @@ fn an_inverted_numeric_range_is_refused_but_a_degenerate_one_plans() {
     }
     // The neighbouring valid case, one raw unit away: equal endpoints are a
     // single point, which is a perfectly good question.
-    let degenerate = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+    let degenerate = RetrievalRequest::complete(vec![RequestTerm::NumericRange {
         predicate: iri(&ex("price")),
         lower: Some(purrdf_retrieval::Fixed::from_raw(1)),
         upper: Some(purrdf_retrieval::Fixed::from_raw(1)),
@@ -989,7 +1058,7 @@ fn an_interval_predicate_reaches_the_statistics_snapshot() {
     // The interval names a predicate, so planning consults the statistics for
     // it exactly as it does for a needle's predicate; an arm the planner did not
     // teach `term_predicate` about would silently consult nothing.
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+    let request = RetrievalRequest::complete(vec![RequestTerm::NumericRange {
         predicate: iri(&ex("body")),
         lower: Some(purrdf_retrieval::Fixed::ONE),
         upper: None,
@@ -1071,7 +1140,7 @@ fn a_request_that_reaches_nothing_is_refused() {
 
 #[test]
 fn malformed_terms_are_refused_with_a_name() {
-    let request = RetrievalRequest::from_terms(vec![RequestTerm::Lexical {
+    let request = RetrievalRequest::complete(vec![RequestTerm::Lexical {
         text: "   ".to_owned(),
         language: None,
         predicate: None,
@@ -1150,25 +1219,65 @@ fn statistics_lower_but_never_raise_the_declared_bound() {
     assert_eq!(plan.stratum_depths[&iri(&ex("stratum/universal"))], 1_000);
 }
 
+/// An unbounded declaration with no statistic to narrow it reads to the ceiling,
+/// and its finite neighbours read exactly where they always did.
+///
+/// This used to be `PlanError::StatisticsUnavailable`. What made the refusal
+/// obsolete is that the same planner now records *any* declaration larger than a
+/// read can reach at the deepest readable depth, with the probe row one past it: a
+/// declaration of `u64::MAX` and one of `u64::MAX - 1` produce the same depth, the
+/// same emitted bound and the same ending, so refusing the first while serving the
+/// second was a refusal one declared row wide. Nothing is claimed about the rows
+/// below the ceiling — the read ends `DepthReached`, which names the planned depth
+/// as the stopper.
 #[test]
-fn an_unbounded_stratum_without_statistics_is_refused() {
-    let mut registry = PropertyFunctionRegistry::new();
-    registry.register_ranked(
-        ex("pf/unbounded"),
-        relation(u64::MAX),
-        ranked(
-            &ex("stratum/endless"),
-            vec![TermPattern::of_kind(TermKind::Any)],
-            true,
-        ),
-    );
-    let error = plan(&lexical_request(), &registry, &no_stratum_cardinality())
-        .expect_err("an unbounded stratum with no statistic has no finite depth");
-    match error {
-        PlanError::StatisticsUnavailable { predicate } => {
-            assert_eq!(*predicate, iri(&ex("stratum/endless")));
-        }
-        other => panic!("expected StatisticsUnavailable, got {other:?}"),
+fn an_unbounded_stratum_without_statistics_reads_to_the_ceiling() {
+    let endless = |declared: u64| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            ex("pf/unbounded"),
+            relation(declared),
+            ranked(
+                &ex("stratum/endless"),
+                vec![TermPattern::of_kind(TermKind::Any)],
+                true,
+            ),
+        );
+        registry
+    };
+    // The deepest depth a read can be taken to: one shallower than the deepest a
+    // rank can express, because the read is emitted one row past the depth.
+    let deepest = u32::MAX - 1;
+
+    for declared in [u64::MAX, u64::MAX - 1, u64::from(u32::MAX)] {
+        let planned = plan(
+            &lexical_request(),
+            &endless(declared),
+            &no_stratum_cardinality(),
+        )
+        .expect("a declaration larger than a read can reach is planned, not refused");
+        assert_eq!(
+            planned.stratum_depths[&iri(&ex("stratum/endless"))],
+            deepest,
+            "a declaration of {declared} rows records the deepest readable depth"
+        );
+    }
+
+    // The valid neighbours a ceiling must not disturb: a declaration a read can
+    // reach, with no statistic in sight, is still exactly its own number.
+    for declared in [1, 40, u64::from(deepest)] {
+        let planned = plan(
+            &lexical_request(),
+            &endless(declared),
+            &no_stratum_cardinality(),
+        )
+        .expect("a reachable declaration plans");
+        let depth = u32::try_from(declared).expect("the fixture declarations fit a rank");
+        assert_eq!(
+            planned.stratum_depths[&iri(&ex("stratum/endless"))],
+            depth,
+            "a declaration of {declared} rows is the depth, untouched by the ceiling"
+        );
     }
 }
 
@@ -1271,14 +1380,32 @@ fn a_selectivity_rounds_up_and_never_raises_a_declared_depth() {
         );
     }
 
-    // Zero is a measurement, not an absence: the provider says no row under
-    // this stratum matches, and the plan records the depth that follows.
+    // Zero is a measurement, not an absence, and it is also not a verdict. The
+    // provider says no row under this stratum matches; the planner narrows the
+    // read to one row and lets the producer be the thing that reports the
+    // emptiness, because a depth of zero never lets the relation answer and would
+    // still be reported as an exhausted stratum. An estimate narrows a read; it
+    // never eliminates one.
     let none = selectivity_statistics(vec![(iri(&ex("stratum/text")), lexical_term(), 0)]);
     assert_eq!(
         plan(&lexical_request(), &mixed_registry(), &none)
             .expect("plans")
             .stratum_depths[&iri(&ex("stratum/text"))],
-        0
+        1
+    );
+
+    // The snapshot still records what the provider actually said. The floor is
+    // the planner's decision about the depth, not an edit of the measurement.
+    assert_eq!(
+        plan(&lexical_request(), &mixed_registry(), &none)
+            .expect("plans")
+            .statistics_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.subject == ex("stratum/text"))
+            .and_then(|entry| entry.selectivity_ppm),
+        Some(0),
+        "the provider reported zero and the plan says so"
     );
 }
 

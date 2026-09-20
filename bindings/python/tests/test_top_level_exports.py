@@ -131,7 +131,14 @@ def test_stub_signatures_match_the_built_bindings() -> None:
     approve a failing one.
 
     The sweep is over each engine's whole surface rather than a hand-listed pair,
-    so a future entry point is covered without anyone remembering to add it.
+    so a future entry point is covered without anyone remembering to add it. The
+    engines themselves ARE hand-listed, which is the one thing here nobody is
+    spared remembering: an engine missing from that tuple ships its stub with
+    nothing holding it to the binding, and the sweep would report a clean run over
+    the engines it did visit. So the vacuity guard is per engine as well as
+    overall — every name in the tuple must contribute at least one comparison —
+    which turns a stub block that stopped parsing, or an engine whose surface
+    emptied, into a failure rather than a silently smaller sweep.
     """
     import re
 
@@ -152,8 +159,9 @@ def test_stub_signatures_match_the_built_bindings() -> None:
             out.append(f"{name}=" if has_default else name)
         return out
 
-    checked = 0
-    for engine in ("entail", "shapes", "shex"):
+    engines = ("entail", "shapes", "shex", "retrieval")
+    checked: dict[str, int] = dict.fromkeys(engines, 0)
+    for engine in engines:
         body = re.search(rf"\nclass {engine}:\n(.*?)(?:\n\S|\Z)", text, re.DOTALL)
         assert body, f"no `class {engine}:` block in {stub}"
         for name, params in re.findall(
@@ -179,7 +187,14 @@ def test_stub_signatures_match_the_built_bindings() -> None:
                 f"so this drift approves a call that raises TypeError, or rejects "
                 f"one that works."
             )
-            checked += 1
+            checked[engine] += 1
 
-    # A parser that silently matched nothing would make every assertion vacuous.
-    assert checked >= 15, f"only {checked} signature(s) compared; the parser regressed"
+    # A parser that silently matched nothing would make every assertion vacuous,
+    # and so would an engine whose block parsed to no comparable entry point.
+    silent = sorted(engine for engine, count in checked.items() if count == 0)
+    assert not silent, (
+        f"no signature compared for {silent}: the stub block did not parse, or the "
+        f"engine's entry points are no longer reachable through `purrdf`"
+    )
+    total = sum(checked.values())
+    assert total >= 15, f"only {total} signature(s) compared; the parser regressed"

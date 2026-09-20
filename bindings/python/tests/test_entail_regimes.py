@@ -1077,3 +1077,57 @@ def test_the_import_table_is_required_rather_than_defaulted() -> None:
         entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, entailed)  # type: ignore[call-arg]
+
+
+def test_every_regime_member_selects_a_distinct_native_regime() -> None:
+    """Seven members, seven native regimes, in the order the enum declares them.
+
+    The Rust side of this map is a wildcard-free ``match``, so the compiler forces
+    it to be revisited when either enum grows — but the compiler can only check
+    the arms it is given, and it cannot see that ``Regime.OWL_DIRECT`` reaches
+    ``OwlDirect`` rather than ``Simple``. Two members wired to one native regime
+    would produce no error anywhere: both spellings would be accepted, both would
+    close a document, and one of them would quietly be reasoning under the wrong
+    calculus.
+
+    The reported name is derived from the member's own name here rather than
+    written down, so the spelling convention — screaming snake in Python, kebab
+    case on the wire — is itself pinned, and a member renamed on one side of it
+    fails.
+    """
+    reported = []
+    for regime, program in REGIME_CALLS:
+        _, report = entail.materialize_nt(SCHEMA, regime, program)
+        lines = [
+            line.removeprefix("regime ")
+            for line in report.splitlines()
+            if line.startswith("regime ")
+        ]
+        assert len(lines) == 1, f"{regime}: one regime line per report, got {lines}"
+        reported.append(lines[0])
+
+    assert reported == ACCEPTED_SPELLINGS, (
+        "each member reaches its own native regime, and the seven arrive in the "
+        "order the enum declares them"
+    )
+    assert len(set(reported)) == len(reported), "no two members share a regime"
+
+
+def test_the_python_enum_has_exactly_the_seven_members_these_tests_range_over() -> None:
+    """An eighth member added without a test is a failure, not an omission.
+
+    ``REGIME_CALLS`` and ``ALL_REGIMES`` are hand-written seven-row tables, and
+    every cross-cutting assertion in this file ranges over one of them. Nothing
+    otherwise connects those tables to the enum, so a member added to the binding
+    would simply never be exercised — the tables would still be seven rows, still
+    pass, and still be silent about the new one.
+    """
+    exported = {name for name in dir(entail.Regime) if name.isupper()}
+    ranged_over = {
+        spelling.upper().replace("-", "_") for spelling in ACCEPTED_SPELLINGS
+    }
+    assert exported == ranged_over, (
+        "the enum's members and the spellings these tests range over are the same "
+        "seven; a member on one side and not the other is untested surface"
+    )
+    assert len(exported) == len(ALL_REGIMES) == len(REGIME_CALLS) == 7

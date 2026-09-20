@@ -21,13 +21,15 @@
 use std::sync::Arc;
 
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError, PfArgs,
+    PfArity, PfCursor, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const EX_REL: &str = "http://example.org/ns#ranked";
 const EX_STRATUM: &str = "http://example.org/stratum/a";
+/// A caller-named block of a candidate universe. Nothing here mints it.
+const EX_DOMAIN: &str = "http://example.org/domain/documents";
 
 /// A two-position relation that never actually opens — the declaration surface
 /// is the subject under test, and the relation itself is identical across every
@@ -93,6 +95,8 @@ fn ranked_declaration() -> RankedDeclaration {
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory: true,
     }
 }
@@ -152,6 +156,62 @@ fn a_changed_declaration_changes_the_fingerprint() {
     );
 }
 
+#[test]
+fn a_declared_candidate_domain_moves_the_fingerprint_and_a_repeat_of_it_does_not() {
+    // The two declarations differ in one field, and it is a field that changes
+    // what a consumer is ALLOWED TO DO with the rows: under a restriction a
+    // fusion may certify a candidate without reading this producer at all. Two
+    // wirings that fuse differently may not share a digest, or a plan admitted
+    // against one would run against the other and read a different number of
+    // rows for the same question.
+    let unrestricted = registry_declaring(Some(ranked_declaration()));
+    let restricted = registry_declaring(Some(RankedDeclaration {
+        domains: CandidateDomains::within([
+            DomainTag::parse(EX_DOMAIN).expect("fixture domain tag")
+        ]),
+        ..ranked_declaration()
+    }));
+    assert_ne!(
+        unrestricted
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        restricted
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        "the candidate-domain declaration must reach the digest"
+    );
+
+    // The canonical description is where it reaches it, and the two spellings
+    // differ there too — byte level, not merely digest level, so a failure here
+    // says which layer drifted.
+    assert_ne!(
+        ranked_declaration().canonical_description(),
+        RankedDeclaration {
+            domains: CandidateDomains::within([
+                DomainTag::parse(EX_DOMAIN).expect("fixture domain tag"),
+            ]),
+            ..ranked_declaration()
+        }
+        .canonical_description(),
+    );
+
+    // And the digest is still a function of the declaration rather than of the
+    // instance: the same restriction, built again, fingerprints alike.
+    let same = registry_declaring(Some(RankedDeclaration {
+        domains: CandidateDomains::within([
+            DomainTag::parse(EX_DOMAIN).expect("fixture domain tag")
+        ]),
+        ..ranked_declaration()
+    }));
+    assert_eq!(
+        restricted
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        same.content_fingerprint()
+            .expect("declarations are readable"),
+    );
+}
+
 /// The grep gate on the declaration types: no function pointer may appear in the
 /// module that defines them.
 #[test]
@@ -160,6 +220,47 @@ fn declaration_types_contain_no_function_pointers() {
     assert!(
         !SOURCE.contains("fn("),
         "property_fn.rs contains a function pointer; ranked declarations must be owned data"
+    );
+}
+
+#[test]
+fn a_declared_block_column_moves_the_fingerprint() {
+    // Whether a producer's rows name the block they were drawn from decides what
+    // a consumer can VERIFY, not merely what it reads: a restriction no row backs
+    // is refused, and one every row backs is held to the rows. Two wirings that
+    // verify differently may not share a digest, for the same reason two that
+    // fuse differently may not — a plan admitted against one would run against
+    // the other.
+    // Position 1 carries this fixture's needle, so the pair below is stated over
+    // a declaration that places no request facet at all — leaving position 1 free
+    // to be read back as the block. The two still differ in exactly one field,
+    // which is what makes this a claim about that field.
+    let bare = RankedDeclaration {
+        accepted_terms: Vec::new(),
+        ..ranked_declaration()
+    };
+    let silent = registry_declaring(Some(bare.clone()));
+    let naming = registry_declaring(Some(RankedDeclaration {
+        block_position: Some(1),
+        ..bare.clone()
+    }));
+    assert_ne!(
+        silent
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        naming
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        "the block column must reach the digest"
+    );
+    assert_ne!(
+        bare.canonical_description(),
+        RankedDeclaration {
+            block_position: Some(1),
+            ..bare
+        }
+        .canonical_description(),
+        "and it reaches it through the canonical description, byte level"
     );
 }
 
@@ -178,7 +279,7 @@ fn declaration_types_contain_no_function_pointers() {
 /// framing change. Never edit it to match a run — re-run this test and record
 /// what it reports.
 const FIXTURE_FINGERPRINT: &str =
-    "1e7e04a44497fe601c9b0924e0008927ae7fbee52b491ee0785451d7a76aee0d";
+    "8f898041be994d883bb13bd260df377b44a614145c336cd00b171a7a73e11a4a";
 
 #[test]
 fn the_fingerprint_is_the_same_string_every_time_the_registry_is_rebuilt() {

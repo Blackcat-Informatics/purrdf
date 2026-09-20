@@ -41,8 +41,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_retrieval::{
-    DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, RankedStreamAdapter, RankedStreamImpl,
-    StreamContract, Term, TopK, fuse,
+    CandidateDomains, DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, RankedStreamAdapter,
+    RankedStreamImpl, RowBlock, StreamContract, StreamEnding, Term, TopK, fuse,
 };
 
 /// A minimal executor. The adapter's rows are already materialized, so nothing
@@ -78,13 +78,25 @@ fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
         DecayRule::ReciprocalRank { k: 60 },
     )
     .expect("a strictly positive weight is a valid profile");
-    let rows: Vec<(u64, Term)> = (1..=ranks)
-        .map(|rank| (rank, Term::new(format!("d{rank:07}"))))
+    let rows: Vec<(u64, Term, RowBlock)> = (1..=ranks)
+        .map(|rank| {
+            (
+                rank,
+                Term::new(format!("d{rank:07}")),
+                // The contract below declares `Unrestricted`, which owes no
+                // per-row block: this repro is about decay ties, not domains.
+                RowBlock::Undeclared,
+            )
+        })
         .collect();
-    let contract = StreamContract::new(DuplicatePolicy::Unique);
-    let adapter =
-        RankedStreamAdapter::new(RankedStreamImpl::new(rows), contract, &profile, &stratum)
-            .expect("the profile weights this stratum");
+    let contract = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
+    let adapter = RankedStreamAdapter::new(
+        RankedStreamImpl::new(rows, StreamEnding::Exhausted),
+        contract,
+        &profile,
+        &stratum,
+    )
+    .expect("the profile weights this stratum");
     block_on(fuse(vec![(stratum, adapter)], &profile, TopK::new(top_k)))
         .map(|fused| fused.rows.len())
         .map_err(|error| format!("{error:?}"))

@@ -865,15 +865,48 @@ impl NativeSparqlEngine {
         )
     }
 
-    /// The ONE governed evaluation body: admit the plan under `state`'s ceilings, build
-    /// the context, apply `options`, evaluate on the trip-aware channel, materialize.
+    /// The context every governed lane evaluates in: governors attached, a federated
+    /// source injected where the entry has one, `options` applied, and witnessing armed.
     ///
-    /// Every governed entry — per-call or operation-scoped, local or federated, over an
-    /// infallible or a fallible view — reaches evaluation through here, so the charge
-    /// points, the admission estimate, and the options application are wired once. The
-    /// two axes the entries differ on are parameters: `source` (a federated entry injects
-    /// one) and who owns `state` (a per-call entry built it; an operation entry was
-    /// handed the one its whole operation charges).
+    /// One builder for both governed egresses — the owned [`GovernedOutcome`] below and
+    /// the borrowed [`Self::query_governed_interned_in_operation`] — because what
+    /// distinguishes a governed context from an ungoverned one is exactly what a second
+    /// builder could forget. Witnessing is the case in point: a governed outcome carries
+    /// a `RelationIdentity`, which has a slot for the witness, so the execution can
+    /// REPORT a relation that declares its index was not whole instead of refusing the
+    /// query. See `EvalCtx::witnessing`: the flag is a fact about the return type, never
+    /// a caller's preference, and a governed lane that left it unset would hand back a
+    /// receipt whose witness said nothing about relations that were invoked.
+    fn governed_ctx<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
+        state: &Arc<GovernorState>,
+        options: QueryOptions<'d>,
+    ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
+        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
+        if let Some(source) = source {
+            ctx = ctx.with_remote(source);
+        }
+        let mut ctx = apply_query_options(ctx, options)?;
+        ctx.witnessing = true;
+        Ok(ctx)
+    }
+
+    /// The governed evaluation body behind the owned egress: admit the plan under
+    /// `state`'s ceilings, build the context, apply `options`, evaluate on the
+    /// trip-aware channel, materialize.
+    ///
+    /// Every governed entry that answers with an owned [`GovernedOutcome`] — per-call or
+    /// operation-scoped, local or federated, over an infallible or a fallible view —
+    /// reaches evaluation through here, so the charge points, the admission estimate,
+    /// and the options application are wired once. The two axes the entries differ on
+    /// are parameters: `source` (a federated entry injects one) and who owns `state` (a
+    /// per-call entry built it; an operation entry was handed the one its whole
+    /// operation charges). The one governed entry that does not answer with an owned
+    /// outcome, [`Self::query_governed_interned_in_operation`], shares this body's
+    /// context builder ([`Self::governed_ctx`]) and its verdict ([`resolve_governed`])
+    /// and differs only in the egress, which borrows the outcome instead of owning it.
     fn query_governed_prepared_in_state<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
@@ -897,11 +930,7 @@ impl NativeSparqlEngine {
         ) {
             return refused.map(GovernedOutcome::BudgetExhausted);
         }
-        let mut ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
-        if let Some(source) = source {
-            ctx = ctx.with_remote(source);
-        }
-        let mut ctx = apply_query_options(ctx, options)?;
+        let mut ctx = self.governed_ctx(dataset, source, state, options)?;
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
                 prepared,
@@ -914,7 +943,7 @@ impl NativeSparqlEngine {
                 &mut ctx,
             )?,
         };
-        Ok(materialize_governed(evaluated, &ctx, state, identity))
+        Ok(materialize_governed(evaluated, &mut ctx, state, identity))
     }
 
     /// [`Self::query_governed`] with a
@@ -1952,8 +1981,7 @@ impl NativeSparqlEngine {
         ) {
             return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
         }
-        let ctx = self.eval_ctx(dataset).with_governors(Arc::clone(state));
-        let mut ctx = apply_query_options(ctx, options)?;
+        let mut ctx = self.governed_ctx(dataset, None, state, options)?;
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
                 &prepared,
@@ -1966,20 +1994,22 @@ impl NativeSparqlEngine {
                 &mut ctx,
             )?,
         };
-        Ok(match resolve_governed(evaluated, &ctx, state, identity) {
-            GovernedResolution::Complete {
-                outcome,
-                evidence,
-                relations,
-            } => InternedGoverned::Complete {
-                value: visit(borrow_outcome(&outcome, &ctx)),
-                evidence,
-                relations,
+        Ok(
+            match resolve_governed(evaluated, &mut ctx, state, identity) {
+                GovernedResolution::Complete {
+                    outcome,
+                    evidence,
+                    relations,
+                } => InternedGoverned::Complete {
+                    value: visit(borrow_outcome(&outcome, &ctx)),
+                    evidence,
+                    relations,
+                },
+                GovernedResolution::Exhausted(exhausted) => {
+                    InternedGoverned::BudgetExhausted(Box::new(exhausted))
+                }
             },
-            GovernedResolution::Exhausted(exhausted) => {
-                InternedGoverned::BudgetExhausted(Box::new(exhausted))
-            }
-        })
+        )
     }
 
     /// Like [`SparqlEngine::query`], but with a
@@ -2447,6 +2477,12 @@ fn relation_identity(
     Ok(RelationIdentity {
         fingerprint: prepared.relations.clone(),
         iris,
+        // EMPTY here by construction: this is computed BEFORE evaluation (once, so the
+        // refusal, complete and truncated arms all carry the same identity), and nothing
+        // has attested yet. `resolve_governed` fills it from the context on the arms
+        // that actually ran — once, for both governed egresses; the admission-refusal
+        // arm keeps it empty, which is the true statement that no relation was invoked.
+        witness: crate::witness::RelationWitness::default(),
     })
 }
 
@@ -2663,9 +2699,18 @@ fn certain_partial(result: SparqlResult, positional_prefix: bool) -> PartialAnsw
 /// 2. **The certificate is restated in the egress vocabulary.** The evaluator's internal
 ///    three-way classification maps one-for-one onto [`PartialAnswers`], so the public
 ///    claim is the analysis's claim rather than a second, hand-maintained reading of it.
+/// 3. **The relation witness is moved off the context onto the receipt.** It is per-run
+///    evidence accumulated during evaluation and it dies with `ctx`, exactly as the rows
+///    do, so it crosses here or not at all. Moved rather than cloned: there is one
+///    witness for one execution and two copies of it could only ever disagree.
+///
+/// No governed entry point is added for it, and that is the point: a witness is evidence
+/// ABOUT an outcome, not an outcome. The governed receipt is already where per-run
+/// evidence rides — [`GovernorEvidence`] is the precedent — so a caller reads it from
+/// the place it already looks for what this execution did.
 fn materialize_governed<D: DatasetView + Sync>(
     evaluated: EvaluatedOutcome<D::Id>,
-    ctx: &EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'_, D>,
     state: &GovernorState,
     relations: RelationIdentity,
 ) -> GovernedOutcome {
@@ -2696,6 +2741,12 @@ fn materialize_governed<D: DatasetView + Sync>(
 /// One reading matters: `state` is shared across an operation's workers, so two
 /// `state.evidence()` calls can legitimately disagree, and a verdict derived from
 /// one and reported with the other would be self-contradictory.
+///
+/// The relation witness is taken out of the context here, for the same reason: it
+/// is the record of what every relation this execution invoked attested, both
+/// egresses report it on the same `relations` slot, and a second place that read it
+/// would be a second chance to hand one of them an empty ledger for a run that
+/// invoked relations.
 enum GovernedResolution<I: purrdf_core::ViewTermId> {
     /// The execution completed and no governor had tripped when it did.
     Complete {
@@ -2703,20 +2754,27 @@ enum GovernedResolution<I: purrdf_core::ViewTermId> {
         outcome: Outcome<I>,
         /// This execution's resource receipt, read exactly once.
         evidence: purrdf_core::GovernorEvidence,
-        /// The registry identity the plan was admitted under.
+        /// The registry identity the plan was admitted under, carrying the witness
+        /// this execution's relations wrote.
         relations: RelationIdentity,
     },
     /// A governor stopped the execution; the partial answers are already resolved.
     Exhausted(BudgetExhausted),
 }
 
-/// Decide a governed execution's verdict, materializing only a trip's partials.
+/// Decide a governed execution's verdict, materializing only a trip's partials, and
+/// move the context's relation witness onto the receipt.
 fn resolve_governed<D: DatasetView + Sync>(
     evaluated: EvaluatedOutcome<D::Id>,
-    ctx: &EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'_, D>,
     state: &GovernorState,
     relations: RelationIdentity,
 ) -> GovernedResolution<D::Id> {
+    let relations = RelationIdentity {
+        witness: core::mem::take(&mut ctx.witness),
+        ..relations
+    };
+    let ctx = &*ctx;
     match evaluated {
         EvaluatedOutcome::Complete(outcome) => {
             let evidence = state.evidence();

@@ -23,10 +23,29 @@
 //!
 //! An unknown cardinality is not a zero one. Returning `Option` lets the
 //! planner distinguish "the provider measured nothing" from "the provider
-//! measured empty": the former falls back to the producer's declared row bound
-//! (except where that bound is genuinely unbounded — see
-//! [`PlanError::StatisticsUnavailable`](crate::PlanError::StatisticsUnavailable)),
-//! the latter caps the stratum at zero.
+//! measured empty": the former falls back to the producer's declared row bound —
+//! at the deepest depth a read can be taken to, where that bound is larger than a
+//! read can reach or is the genuinely unbounded `u64::MAX` — while the latter
+//! narrows the stratum as far as a statistic is allowed to narrow
+//! anything, which is to one row and no further.
+//!
+//! So a provider that measures nothing is never why a plan is refused. It leaves
+//! the declaration standing, and a declaration past the read range is recorded at
+//! the ceiling with the probe row one past it, so the read's own ending names the
+//! planned depth as the stopper — see [`plan`](crate::plan).
+//!
+//! # A statistic narrows a read; it never eliminates one
+//!
+//! Every bound derived here is floored at one. A measurement of zero — a
+//! cardinality of zero, a selectivity of zero, or both — is an honest report and
+//! is taken as one, but what follows from it is the shallowest read there is,
+//! not the absence of a read. A depth of zero would compile to `LIMIT 0`, invoke
+//! no relation at all, and then report the stratum exhausted with no rows, which
+//! is the strongest completeness claim this layer can make and would have been
+//! minted from an estimate rather than from data. Emptiness is the producer's to
+//! report, in the receipt fusion verifies against the rows it actually pulled,
+//! so the planner's job is to ask the shallowest honest question and let the
+//! producer answer it.
 //!
 //! # Why selectivity is an integer, in parts per million
 //!
@@ -94,6 +113,20 @@ pub trait Statistics {
     /// The bound is applied the way a cardinality is — it lowers a depth, never
     /// raises one — and it is rounded **up**, so a bound derived from a ratio
     /// can never fall below the row count the ratio describes.
+    ///
+    /// Zero is where that rounding stops helping, so the derived depth is also
+    /// floored at one. Reporting zero is not a provider fault: it is the correct
+    /// answer for a provider that measured no matching rows, and the plan records
+    /// the value verbatim in its snapshot. What the planner declines to do is
+    /// turn it into a depth of zero, because that depth compiles to `LIMIT 0`,
+    /// which hands back no row whatever the index holds, and then reports the
+    /// stratum exhausted having emitted nothing — an emptiness claim the
+    /// provider's estimate would have made on the producer's behalf. The
+    /// relation is still opened; what it is never allowed to do is answer. So the
+    /// exhaustion is the bound's claim rather than the data's, and it is
+    /// indistinguishable in every trailer field from an honestly empty answer.
+    /// Floored at one, the relation is asked, and its answer is the thing that
+    /// says whether anything was there.
     ///
     /// A provider is free to report under a request predicate instead, or as
     /// well; a plan records every selectivity it was told, whatever the subject

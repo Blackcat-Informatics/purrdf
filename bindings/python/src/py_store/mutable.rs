@@ -7,10 +7,12 @@
 //! This adapter keeps Python on that COW surface; query / update run on the native
 //! `NativeSparqlEngine` over a frozen snapshot ( — no oxigraph).
 
+use std::sync::Arc;
+
 use purrdf_core::ir::{MutableDataset, QuadValues};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::io::{
     PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss, parse_quads,
@@ -750,6 +752,58 @@ impl PyMutableDataset {
             .map(values_to_rdf_quad)
             .collect();
         Py::new(py, PyQuadIter { quads, pos: 0 })
+    }
+
+    /// Internal protocol: a capsule exposing a frozen `Arc<RdfDataset>` snapshot of
+    /// this dataset by address, consumed by `purrdf_shapes.Shapes.validate_store`.
+    /// Do not call from Python directly.
+    ///
+    /// The same capsule `Store` hands out, under the same name and with the same
+    /// pointee type, because it is the same question: validation wants a frozen
+    /// dataset, and this type already holds one behind its copy-on-write overlay.
+    /// `Shapes.validate_store` reaches its argument through this method by name,
+    /// so a type that owns a dataset and cannot answer it is a type validation
+    /// cannot see — a shape library would have to serialise this dataset to
+    /// N-Triples and parse it back to say anything about it, which is a full copy
+    /// and a round-trip through a syntax, to reach a dataset that was already
+    /// sitting here.
+    ///
+    /// The capsule's destructor owns the `Arc<RdfDataset>`, so the dataset lives
+    /// exactly as long as the capsule. The snapshot is taken now and is immutable,
+    /// so a later `add`/`remove`/`update` on this dataset leaves a consumer's
+    /// snapshot — and any report already produced from it — untouched.
+    ///
+    /// The leading underscore belongs to the PYTHON name and not the Rust one, for
+    /// the reason `Store`'s own capsule method spells out: it is a cross-package
+    /// protocol called by string, and Python spells "internal" with an underscore,
+    /// while an underscore-prefixed Rust item means "deliberately unused".
+    #[pyo3(name = "_store_capsule")]
+    fn store_capsule<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyCapsule>> {
+        let py = slf.py();
+        let guard = slf.borrow();
+        let inner = &guard.inner;
+        // The COW freeze can be a real copy on a mutated dataset — run it detached.
+        let snapshot: Arc<RdfDataset> = py.detach(|| {
+            inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("dataset snapshot failed: {e}")))
+        })?;
+        drop(guard);
+        // Heap-box the Arc so its address is stable; the destructor reclaims the box
+        // (dropping the held Arc) when the capsule is collected.
+        let boxed: Box<Arc<RdfDataset>> = Box::new(snapshot);
+        let addr = (&raw const *boxed) as usize;
+        let keepalive = boxed;
+        // SAFETY: `addr` is the address of the `Arc<RdfDataset>` owned by `keepalive`,
+        // moved into the destructor closure; it stays live and at a stable address for
+        // the capsule's entire lifetime. The consumer reads the `Arc<RdfDataset>` at
+        // that address (cloning it to extend the lifetime as needed).
+        PyCapsule::new_with_value_and_destructor(
+            py,
+            addr,
+            c"purrdf-validation-dataset",
+            move |_addr, _ctx| drop(keepalive),
+        )
     }
 }
 

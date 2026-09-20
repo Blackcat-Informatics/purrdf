@@ -745,7 +745,35 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
         })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match outcome {
-        InternedGoverned::Complete { value, .. } => value,
+        InternedGoverned::Complete {
+            value, relations, ..
+        } => {
+            // The governed lane RECORDS a relation that declared its index was not
+            // whole, instead of refusing it at the seam the way the ungoverned lane
+            // does, because its receipt has a slot to report it on — and this is where
+            // that receipt is read. A conformance verdict computed over an index that
+            // was not whole is not a verdict, for exactly the reason the truncated arm
+            // below is not one, so the incompleteness is refused here by name rather
+            // than discarded along with the receipt it rode in on.
+            let incomplete: Vec<String> = relations
+                .witness
+                .iter()
+                .flat_map(|(iri, attested)| {
+                    attested
+                        .incompleteness
+                        .iter()
+                        .map(move |reason| format!("<{iri}>: {reason}"))
+                })
+                .collect();
+            if !incomplete.is_empty() {
+                return Err(format!(
+                    "a relation this query invoked declares its index was not whole ({}); a \
+                     conformance verdict cannot be computed over an index that was not whole",
+                    incomplete.join("; ")
+                ));
+            }
+            value
+        }
         InternedGoverned::BudgetExhausted(exhausted) => Err(format!(
             "validation budget exhausted: {}; a conformance verdict cannot be computed \
              from a truncated solution bag",

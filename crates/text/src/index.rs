@@ -201,6 +201,91 @@ impl TextIndexConfig {
 }
 
 // ---------------------------------------------------------------------------
+// What the configuration found
+// ---------------------------------------------------------------------------
+
+/// Which of a configuration's predicates the dataset carried a statement for.
+///
+/// [`TextIndex::from_dataset`] reads a configured predicate the dataset carries
+/// no statement for as **no rows** rather than as a refusal, because the limiting
+/// case decides it: a dataset holding nothing carries a statement for nothing, so
+/// a refusal would mean no index could exist before the documents it will hold.
+/// This type pays that relaxation's cost. Without it a mistyped predicate IRI is
+/// a corpus quietly one predicate short; with it the shortfall is a value a host
+/// can read, off the index it already holds ([`TextIndex::source_coverage`]) or
+/// off the dataset in hand ([`verify_binding`](crate::verify_binding)).
+///
+/// # The two empty states are distinguishable, and that is the whole design
+///
+/// * The dataset holds **no statement at all**. Every configured predicate is
+///   unrepresented, for the single reason that nothing has landed yet. This is the
+///   index-standing-ready state the relaxation exists for, so
+///   [`Self::shortfall`] is `None` and nothing anywhere complains.
+/// * The dataset **holds statements** and a configured predicate carries none of
+///   them in the configured graph scope. [`Self::shortfall`] names that
+///   predicate. A mistyped predicate IRI lands here; so does a
+///   [`GraphSelector::Named`] graph the dataset does not hold, which leaves every
+///   configured predicate with nothing in scope and therefore names all of them.
+///
+/// # What counts as represented
+///
+/// A **statement** carrying the predicate, in either RDF 1.2 layer, inside the
+/// configured graph scope — not a literal row, and not the predicate IRI merely
+/// being interned somewhere. Those two weaker tests are why the refusal this
+/// replaced was never a sound detector: an interned-anywhere check passes for an
+/// IRI that appears only as a subject or an object, and a literal-row check fails
+/// for a correctly spelled predicate whose objects are all IRIs — which carries no
+/// text, has never been an error, and is not a wiring mistake.
+///
+/// # What it cannot distinguish, and why it reports rather than refuses
+///
+/// A predicate that legitimately has nothing under it yet — a host loading one
+/// predicate's data before another's — is the *same observation* as a typo: a
+/// configured predicate with no statement, in a dataset that holds other things.
+/// Nothing in the data separates them, so this is a report and never a refusal at
+/// construction. The index builds, answers, and attests its generation either way;
+/// a host that means it reads the shortfall and moves on, and a host that does not
+/// mean it has the one signal a typo ever gives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceCoverage {
+    /// Whether the dataset held a single statement in any of its layers.
+    dataset_holds_statements: bool,
+    /// The configured predicates no in-scope statement carried, in configuration
+    /// order.
+    unrepresented: Vec<TermValue>,
+}
+
+impl SourceCoverage {
+    /// Whether the dataset held a statement at all, in any layer and any graph.
+    ///
+    /// `false` is the index-before-its-documents state: every configured
+    /// predicate is unrepresented and none of them can be a mistake yet.
+    pub const fn dataset_holds_statements(&self) -> bool {
+        self.dataset_holds_statements
+    }
+
+    /// Every configured predicate no in-scope statement carried, in
+    /// configuration order — the raw observation, including the case where the
+    /// dataset holds nothing and so carried nothing for anything.
+    pub fn unrepresented_predicates(&self) -> &[TermValue] {
+        &self.unrepresented
+    }
+
+    /// The configured predicates whose absence is a fact about the *data* rather
+    /// than about an empty dataset, or `None` when there is no such fact.
+    ///
+    /// This is the judgement [`Self::unrepresented_predicates`] is the evidence
+    /// for: it is `None` both when every configured predicate was found and when
+    /// the dataset holds no statement at all, and `Some` non-empty otherwise.
+    pub fn shortfall(&self) -> Option<&[TermValue]> {
+        if !self.dataset_holds_statements || self.unrepresented.is_empty() {
+            return None;
+        }
+        Some(&self.unrepresented)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Partitions and documents
 // ---------------------------------------------------------------------------
 
@@ -275,6 +360,11 @@ impl PartitionStats {
     /// quotient can be zero. BM25 divides by this value, and the guarantee is
     /// what makes that division safe without a special case that would have to
     /// invent a score.
+    ///
+    /// The guarantee is over *retained* partitions, and that is the whole of it:
+    /// an index holding no documents holds no partitions either, so there is no
+    /// `PartitionStats` to read a zero out of. An empty corpus cannot reach this
+    /// divisor rather than reaching it with a zero.
     pub const fn average_document_length(&self) -> Fixed {
         self.average_document_length
     }
@@ -375,6 +465,30 @@ struct TermEntry {
 /// denominator. Excluding them is what makes
 /// [`PartitionStats::average_document_length`] non-zero for every retained
 /// partition, which is a property later stages are entitled to rely on.
+///
+/// # The empty index
+///
+/// An index holding no documents is well formed and needs no special case
+/// anywhere. It holds zero documents, zero terms and **zero partitions** — a
+/// partition is a `(graph, language)` pair carrying at least one document, so
+/// there is no such thing as an empty partition and nothing divides by an average
+/// document length that does not exist. It still attests a generation:
+/// [`Self::fingerprint`] digests the configuration, the ranking law and the
+/// analyzer's Unicode versions before it digests any content, so two empty
+/// indexes under different configurations are distinguishable and the value
+/// changes the moment the first document lands.
+///
+/// This is reachable rather than hypothetical. An empty dataset has interned no
+/// term, so every configured predicate is absent from it, and
+/// [`Self::from_dataset`] reads an absent predicate as no rows rather than as a
+/// refusal — an index built before the documents it will hold have landed is an
+/// ordinary operating state. A query against such an index returns zero rows
+/// through exactly the path a needle that matches nothing takes.
+///
+/// An index that is empty because a configured predicate was *misspelled* is a
+/// different state and reads as one: the dataset holds statements while the
+/// configuration found none of them, which is a
+/// [`SourceCoverage::shortfall`] rather than a corpus that has not landed yet.
 #[derive(Clone, Debug)]
 pub struct TextIndex {
     /// The configuration this index was built under.
@@ -408,6 +522,16 @@ pub struct TextIndex {
     fingerprint: [u8; FINGERPRINT_BYTES],
     /// The digest of the source rows walked.
     source_fingerprint: [u8; FINGERPRINT_BYTES],
+    /// Which configured predicates the build's walk found a statement for.
+    ///
+    /// Part of **neither** fingerprint, and deliberately: this says nothing about
+    /// what the index answers. Two datasets whose literal rows agree answer alike
+    /// whether or not one of them also holds a non-literal statement under a
+    /// configured predicate, so folding this into either digest would make two
+    /// indexes that give identical answers claim different identities. It is an
+    /// observation about the source the walk saw, kept so a host holding only the
+    /// index can still read it.
+    coverage: SourceCoverage,
 }
 
 impl TextIndex {
@@ -421,39 +545,53 @@ impl TextIndex {
     ///
     /// # Errors
     ///
-    /// [`TextError::Data`] if a configured predicate, or a
-    /// [`GraphSelector::Named`] graph, is not interned in `dataset` at all; if a
-    /// term nests triple terms past the encoder's depth bound; or if the
-    /// dataset yields more than `u32::MAX` documents or a document longer than
-    /// `u32::MAX` tokens. [`TextError::Overflow`] if a partition's average
-    /// document length does not fit in [`Fixed`].
+    /// [`TextError::Data`] if a term nests triple terms past the encoder's depth
+    /// bound, or if the dataset yields more than `u32::MAX` documents or a
+    /// document longer than `u32::MAX` tokens. [`TextError::Overflow`] if a
+    /// partition's average document length does not fit in [`Fixed`].
     ///
-    /// ## Why an absent predicate is refused rather than ignored
+    /// ## An absent predicate contributes no rows rather than refusing
     ///
-    /// The workspace has both postures in it, and they answer different
-    /// questions. `DatasetView::term_id_by_value` documents an absent id as "an
-    /// empty match, never an error", but that governs a *structural walk* keyed
-    /// on an incidental IRI — `rdf_list` looking for `rdf:first` in a dataset
-    /// that holds no lists has genuinely found no lists, and saying so is the
-    /// right answer. `MemoryRelation::from_graph` takes the other posture for a
-    /// list head, on the grounds that "a head naming a list that does not exist
-    /// is a configuration pointing at nothing, not an empty relation".
+    /// A configured predicate the dataset has not interned, and a
+    /// [`GraphSelector::Named`] graph the dataset has not interned, each
+    /// contribute nothing to the walk. Neither is an error, for a reason the
+    /// limiting case makes plain: a dataset holding no quads has interned no term
+    /// at all, so refusing an absent predicate would mean **no index can be built
+    /// over an empty dataset** — and an index that exists before the documents it
+    /// will hold have landed is an ordinary operating state, not a fault. It would
+    /// also make the recommended single-partition configuration
+    /// ([`GraphSelector::Named`] over one graph) the hardest one to start from,
+    /// because the graph IRI is interned only once something is in the graph.
     ///
-    /// A configured predicate is the second kind. It is not something the index
-    /// stumbled across; it is the caller's entire specification of which text
-    /// exists, asserted in advance. A single mistyped character in one of five
-    /// predicate IRIs would silently remove a fifth of the corpus, and nothing
-    /// downstream could tell that apart from those documents genuinely having no
-    /// text — retrieval's failure mode is silence, which is precisely where a
-    /// hard failure earns its cost. This crate's own [`TextError::Data`]
-    /// documentation already named this case ("a predicate the configuration
-    /// names that the dataset does not carry") before the walk existed, so the
-    /// posture is the one the error channel was designed around.
+    /// So the index over an empty corpus builds, holds zero documents and zero
+    /// partitions, still attests a generation (see [`Self::fingerprint`]), and
+    /// answers every query with zero rows. Emptiness travels as the answer to a
+    /// query rather than as a verdict at construction, which is the only form a
+    /// consumer can read: it arrives with the generation it was computed against,
+    /// and that generation moves the moment the first document lands.
+    ///
+    /// The cost is real and paid rather than named: a mistyped predicate IRI
+    /// removes that predicate's share of the corpus, and without a detector it
+    /// would do so quietly. The detector is not the presence check this replaced,
+    /// which was never sound — it accepted any IRI the dataset interned *anywhere*,
+    /// as a subject, as an object, in another predicate's statement, and it
+    /// condemned a correctly spelled predicate whose objects are all IRIs, which
+    /// carries no text and has never been an error. It is
+    /// [`Self::source_coverage`], built out of the walk itself: every configured
+    /// predicate no in-scope statement carried, together with whether the dataset
+    /// held any statement at all. Those two facts separate the state this
+    /// relaxation exists for from the mistake it would otherwise hide — a dataset
+    /// holding nothing is an index waiting for its documents, and a dataset holding
+    /// statements with none under a configured predicate is a
+    /// [`SourceCoverage::shortfall`]. A host that needs to know it is holding the
+    /// intended data asks [`verify_binding`](crate::verify_binding), which checks
+    /// both the digest of the rows walked and that shortfall against the dataset in
+    /// hand.
     pub fn from_dataset<D: DatasetView>(
         dataset: &D,
         config: &TextIndexConfig,
     ) -> Result<Self, TextError> {
-        let rows = collect_rows(dataset, config)?;
+        let (rows, coverage) = collect_rows(dataset, config)?;
         let source_fingerprint = digest_rows(&rows)?;
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
@@ -461,6 +599,7 @@ impl TextIndex {
             &documents,
             &dictionary,
             source_fingerprint,
+            coverage,
             RankingProfile::single_field(),
         )
     }
@@ -478,7 +617,7 @@ impl TextIndex {
         for predicate in config.predicates() {
             profile.field_for(predicate)?;
         }
-        let rows = collect_rows(dataset, config)?;
+        let (rows, coverage) = collect_rows(dataset, config)?;
         let source_fingerprint = digest_rows(&rows)?;
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
@@ -486,6 +625,7 @@ impl TextIndex {
             &documents,
             &dictionary,
             source_fingerprint,
+            coverage,
             profile,
         )
     }
@@ -817,6 +957,13 @@ impl TextIndex {
     /// the same content agree on it, and any change that would move a ranked
     /// answer moves it.
     ///
+    /// An index holding nothing still has one, and it is not a placeholder: the
+    /// configuration, the ranking law and the Unicode versions are digested before
+    /// any content, so an empty index attests a generation that distinguishes it
+    /// from an empty index under another configuration, and that moves as soon as
+    /// the first document lands. Emptiness is a state of the index, never an
+    /// absence of its identity.
+    ///
     /// See this module's documentation for the one caveat: blank-node labels are
     /// terms here, so two isomorphic datasets with different labels disagree.
     pub const fn fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
@@ -836,6 +983,23 @@ impl TextIndex {
     /// exactly that.
     pub const fn source_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
         self.source_fingerprint
+    }
+
+    /// Which configured predicates the build's walk found a statement for.
+    ///
+    /// [`Self::source_fingerprint`] identifies the data under this index; this says
+    /// whether the configuration found all of it. A configured predicate with no
+    /// in-scope statement is not an error at construction (see
+    /// [`Self::from_dataset`]), so this is where a mistyped predicate IRI becomes
+    /// visible: [`SourceCoverage::shortfall`] names it, and names nothing for an
+    /// index built over a dataset that simply holds nothing yet.
+    ///
+    /// This is the build's observation, so it answers without the dataset in hand
+    /// and without re-walking a corpus. To ask the same question of the dataset a
+    /// query is about to run against — which is a different question, because the
+    /// dataset may have moved — use [`verify_binding`](crate::verify_binding).
+    pub const fn source_coverage(&self) -> &SourceCoverage {
+        &self.coverage
     }
 
     /// The index of `partition` in [`Self::partitions`], if the index holds it.
@@ -872,6 +1036,7 @@ impl TextIndex {
         documents: &[AnalyzedDocument],
         dictionary: &[String],
         source_fingerprint: [u8; FINGERPRINT_BYTES],
+        coverage: SourceCoverage,
         ranking: RankingProfile,
     ) -> Result<Self, TextError> {
         if u32::try_from(documents.len()).is_err() {
@@ -910,6 +1075,7 @@ impl TextIndex {
             terms,
             fingerprint: [0; FINGERPRINT_BYTES],
             source_fingerprint,
+            coverage,
         };
         index.rebuild_field_statistics()?;
         index.fingerprint = index.compute_fingerprint()?;
@@ -1087,29 +1253,59 @@ struct AnalyzedDocument {
     predicate_lengths: Vec<(u32, u64)>,
 }
 
-/// Read every configured predicate's literal rows out of both RDF 1.2 layers.
+/// Read every configured predicate's literal rows out of both RDF 1.2 layers,
+/// and report which configured predicates the walk found a statement for.
+///
+/// A configured predicate the dataset has not interned contributes **no rows**
+/// rather than raising: the dataset holds no statement with that predicate, so
+/// there is no text under it, and that is an answer rather than a fault. The
+/// limiting case is the one that decides it — an empty dataset has interned no
+/// term at all, so a refusal here would make an index over an empty dataset
+/// impossible, and an index that exists before its documents land is an ordinary
+/// operating state. The same holds for a [`GraphSelector::Named`] graph the
+/// dataset has not interned: nothing is in a graph that is not there, so the walk
+/// yields nothing.
+///
+/// The relaxation is not silent, which is what the returned [`SourceCoverage`] is
+/// for. A predicate is recorded as represented when an in-scope **statement**
+/// carries it — before the literal filter, so a predicate whose objects are all
+/// IRIs is represented and carries no text, which is data rather than a mistake —
+/// and the coverage separates "this dataset holds nothing yet" from "this dataset
+/// holds things, and has none of these".
 fn collect_rows<D: DatasetView>(
     dataset: &D,
     config: &TextIndexConfig,
-) -> Result<Vec<SourceRow>, TextError> {
-    let graph = resolve_graph(dataset, config.graph())?;
-    let mut predicate_ids: Vec<(D::Id, &TermValue)> = Vec::with_capacity(config.predicates().len());
-    for predicate in config.predicates() {
-        let Some(id) = dataset.term_id_by_value(predicate) else {
-            return Err(TextError::data(format!(
-                "indexed predicate {predicate:?} is not present in the dataset; a configured \
-                 predicate is an assertion about what the data holds, not a filter over what it \
-                 happens to hold"
-            )));
-        };
-        predicate_ids.push((id, predicate));
+) -> Result<(Vec<SourceRow>, SourceCoverage), TextError> {
+    let Some(graph) = resolve_graph(dataset, config.graph()) else {
+        return Ok((
+            Vec::new(),
+            SourceCoverage::nothing_in_scope(dataset, config),
+        ));
+    };
+    let mut predicate_ids: Vec<(D::Id, &TermValue, usize)> =
+        Vec::with_capacity(config.predicates().len());
+    for (ordinal, predicate) in config.predicates().iter().enumerate() {
+        if let Some(id) = dataset.term_id_by_value(predicate) {
+            predicate_ids.push((id, predicate, ordinal));
+        }
+    }
+    if predicate_ids.is_empty() {
+        // No configured predicate is interned, so no statement in either layer
+        // can carry one. Returning here rather than sweeping the annotation side
+        // table to match every row against an empty id set.
+        return Ok((
+            Vec::new(),
+            SourceCoverage::nothing_in_scope(dataset, config),
+        ));
     }
 
     let mut rows = Vec::new();
+    let mut represented = vec![false; config.predicates().len()];
 
     // Layer one: the asserted triple table.
-    for &(predicate_id, predicate) in &predicate_ids {
+    for &(predicate_id, predicate, ordinal) in &predicate_ids {
         for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
+            represented[ordinal] = true;
             push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
         }
     }
@@ -1120,14 +1316,74 @@ fn collect_rows<D: DatasetView>(
         if !graph.matches(quad.g) {
             continue;
         }
-        let Some(&(_, predicate)) = predicate_ids.iter().find(|&&(id, _)| id == quad.p) else {
+        let Some(&(_, predicate, ordinal)) = predicate_ids.iter().find(|&&(id, _, _)| id == quad.p)
+        else {
             continue;
         };
+        represented[ordinal] = true;
         push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
     }
 
     rows.sort();
-    Ok(rows)
+    let coverage = SourceCoverage::of_walk(dataset, config, &represented);
+    Ok((rows, coverage))
+}
+
+impl SourceCoverage {
+    /// The coverage of a walk that recorded `represented[ordinal]` for each of
+    /// `config`'s predicates.
+    ///
+    /// The dataset is probed for a single statement only when something came up
+    /// unrepresented, because that probe exists solely to tell the two
+    /// unrepresented cases apart: where every configured predicate was found there
+    /// is nothing to tell apart, and a configuration holds at least one predicate,
+    /// so finding them all is itself proof the dataset holds statements.
+    fn of_walk<D: DatasetView>(
+        dataset: &D,
+        config: &TextIndexConfig,
+        represented: &[bool],
+    ) -> Self {
+        let unrepresented: Vec<TermValue> = config
+            .predicates()
+            .iter()
+            .zip(represented)
+            .filter(|&(_, &seen)| !seen)
+            .map(|(predicate, _)| predicate.clone())
+            .collect();
+        let dataset_holds_statements = unrepresented.is_empty() || holds_a_statement(dataset);
+        Self {
+            dataset_holds_statements,
+            unrepresented,
+        }
+    }
+
+    /// The coverage of a walk that could not begin: no configured predicate is
+    /// interned, or the configured named graph is not a term of this dataset. No
+    /// in-scope statement carries any configured predicate, because there is no
+    /// in-scope statement to carry one.
+    fn nothing_in_scope<D: DatasetView>(dataset: &D, config: &TextIndexConfig) -> Self {
+        Self {
+            dataset_holds_statements: holds_a_statement(dataset),
+            unrepresented: config.predicates().to_vec(),
+        }
+    }
+}
+
+/// Whether `dataset` holds a single statement, in any layer and any graph.
+///
+/// All three layers are asked because each is invisible to the others:
+/// [`DatasetView::quads`] exposes the asserted triple table alone, and the RDF 1.2
+/// reifier and annotation side tables are separate, capability-gated iterators. A
+/// dataset whose only content is an annotation holds content, and answering "this
+/// dataset is empty" for it would call a mistyped predicate an index waiting for
+/// its documents.
+///
+/// Each probe stops at the first row, so this costs one step of up to three lazy
+/// iterators rather than a scan.
+fn holds_a_statement<D: DatasetView>(dataset: &D) -> bool {
+    dataset.quads().next().is_some()
+        || dataset.reifier_quads().next().is_some()
+        || dataset.annotation_quads().next().is_some()
 }
 
 /// Resolve one row's terms and append it, unless its object is not a literal.
@@ -1167,22 +1423,23 @@ fn push_row<D: DatasetView>(
     Ok(())
 }
 
-/// Resolve `selector` against `dataset`'s own id space.
+/// Resolve `selector` against `dataset`'s own id space, or `None` when no quad
+/// of this dataset can possibly match it.
+///
+/// `None` arises for exactly one reason: a [`GraphSelector::Named`] graph whose
+/// IRI the dataset has not interned. There is then no id a quad's graph could
+/// equal, so the match is empty rather than unrepresentable — `GraphMatch` holds
+/// dataset-local ids and has no id that names an absent term, so the emptiness is
+/// carried here instead of being encoded as one. `Any` and `Default` name no term
+/// and so always resolve.
 fn resolve_graph<D: DatasetView>(
     dataset: &D,
     selector: &GraphSelector,
-) -> Result<GraphMatch<D::Id>, TextError> {
-    Ok(match selector {
+) -> Option<GraphMatch<D::Id>> {
+    Some(match selector {
         GraphSelector::Any => GraphMatch::Any,
         GraphSelector::Default => GraphMatch::Default,
-        GraphSelector::Named(name) => {
-            let Some(id) = dataset.term_id_by_value(name) else {
-                return Err(TextError::data(format!(
-                    "the configured named graph {name:?} is not present in the dataset"
-                )));
-            };
-            GraphMatch::Named(id)
-        }
+        GraphSelector::Named(name) => GraphMatch::Named(dataset.term_id_by_value(name)?),
     })
 }
 
@@ -1492,23 +1749,29 @@ fn build_terms(
 // Digests
 // ---------------------------------------------------------------------------
 
-/// The source digest `dataset` yields under `config` — the value
-/// [`TextIndex::source_fingerprint`] holds for an index built from that pairing.
+/// The source digest and the coverage `dataset` yields under `config` — the two
+/// values an index built from that pairing holds
+/// ([`TextIndex::source_fingerprint`] and [`TextIndex::source_coverage`]).
 ///
-/// Exposed to the crate so [`crate::verify_binding`] can ask "is this the data
-/// under that index?" without building a second index: the digest is over the
-/// rows alone, so it needs the walk but not the analysis.
+/// Exposed to the crate so [`crate::verify_binding`] can ask both of its
+/// questions — "is this the data under that index?" and "did this configuration
+/// find all of it?" — without building a second index: both come off the walk,
+/// which needs no analysis.
 ///
 /// # Errors
 ///
-/// Whatever the walk raises — [`TextError::Data`] for a configured predicate or
-/// named graph the dataset does not carry, or for a term the encoder cannot
-/// represent.
+/// Whatever the walk raises — [`TextError::Data`] for a term the encoder cannot
+/// represent. A configured predicate, or a named graph, the dataset does not
+/// carry contributes no rows rather than raising, so an empty dataset digests to
+/// the digest of an empty row set: the value an index built over it holds. The
+/// coverage beside it is what distinguishes that dataset from one holding
+/// statements under everything but a configured predicate.
 pub(crate) fn source_digest<D: DatasetView>(
     dataset: &D,
     config: &TextIndexConfig,
-) -> Result<[u8; FINGERPRINT_BYTES], TextError> {
-    digest_rows(&collect_rows(dataset, config)?)
+) -> Result<([u8; FINGERPRINT_BYTES], SourceCoverage), TextError> {
+    let (rows, coverage) = collect_rows(dataset, config)?;
+    Ok((digest_rows(&rows)?, coverage))
 }
 
 /// Digest the source rows: what the index actually walked, and nothing else.

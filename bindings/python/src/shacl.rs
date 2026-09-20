@@ -204,18 +204,38 @@ impl PyShapes {
 
     /// Validate a borrowed native dataset against these parsed shapes.
     ///
-    /// `data` must be an object (typically `purrdf_validate.ValidationStore`) that
-    /// exposes an internal `_store_capsule()` method returning a capsule borrowing a
-    /// frozen `Arc<RdfDataset>` snapshot. This avoids serialising the store to
-    /// N-Triples for each validation phase.
+    /// `data` is any object exposing the internal snapshot protocol — a
+    /// `_store_capsule()` method returning a capsule that carries a frozen
+    /// `Arc<RdfDataset>` — which on the Python surface is `purrdf.Store`,
+    /// `purrdf.MutableDataset` and `purrdf_validate.ValidationStore`. Validating
+    /// through the capsule is what avoids serialising the data to N-Triples and
+    /// parsing it back for each validation phase.
     ///
     /// # Errors
     ///
-    /// Returns `AttributeError` if `data` has no `_store_capsule` method, and
-    /// `ValueError` if the capsule cannot be read.
+    /// Returns `TypeError` naming the argument's type if it does not implement that
+    /// protocol: a missing private attribute is not a diagnosis, so the refusal says
+    /// what the protocol is and which types satisfy it rather than letting an
+    /// `AttributeError` about `_store_capsule` escape to a caller who never wrote
+    /// that name. Returns `ValueError` if the capsule is present but cannot be read.
     fn validate_store(&self, data: &Bound<'_, PyAny>) -> PyResult<PyValidationReport> {
+        if !data.hasattr("_store_capsule")? {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "validate_store: a {} exposes no `_store_capsule()`, the internal protocol this \
+                 call reads a frozen dataset snapshot through, so there is no data graph here to \
+                 validate. Pass a purrdf.Store or a purrdf.MutableDataset — both hand the snapshot \
+                 over directly, with no serialization — or, for a document you hold as text, call \
+                 validate_nt with its N-Triples",
+                data.get_type().name()?
+            )));
+        }
         let capsule = data.call_method0("_store_capsule")?;
-        let capsule = capsule.cast::<PyCapsule>()?;
+        let capsule = capsule.cast::<PyCapsule>().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "validate_store: `_store_capsule()` returned something other than a capsule, so \
+                 the snapshot protocol was not honoured and no dataset can be read from it",
+            )
+        })?;
         let ptr = capsule
             .pointer_checked(Some(c"purrdf-validation-dataset"))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;

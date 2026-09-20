@@ -133,6 +133,9 @@ mod substitute;
 mod template;
 pub mod update;
 pub mod user_fn;
+// The per-query record of what the relations a query invoked attested about the
+// indexes behind them — which generation answered, and whether it was whole.
+pub mod witness;
 
 // The custom-aggregate seam: the fold-algebra trait a host implements, the
 // accumulator trait its `init` hands out, and the registry `AGG(<iri>, …)`
@@ -195,9 +198,10 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // relation into the engine without naming the module path.
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
 pub use property_fn::{
-    AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PfArgs, PfArity, PfCursor,
-    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration,
-    RequestFacet, TermKind, TermPattern, TermPlacement,
+    AcceptedTerm, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy, IndexGeneration,
+    MemoryRelation, PfArgs, PfArity, PfAttestation, PfCursor, PfDescriptor, PfMode, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, ServiceLevel,
+    TermKind, TermPattern, TermPlacement, generation_contained, service_level_contained,
 };
 // The property-function registry's CONTENT-only identity. It lives in the private
 // planning module beside the instance-bearing fingerprint, which renders it rather
@@ -240,6 +244,10 @@ pub use user_fn::{
     Arity, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody, NativeFunction, NodeKind,
     TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
+// The evidence channel the relation seam feeds: what each invoked relation attested,
+// carried out on the governed receipt's `RelationIdentity`. Re-exported beside the
+// receipt itself, because a field a caller cannot name is a field it cannot read.
+pub use witness::{RelationAttestations, RelationWitness};
 
 /// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).
 ///

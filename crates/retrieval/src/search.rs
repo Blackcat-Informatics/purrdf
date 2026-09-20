@@ -21,7 +21,7 @@
 //! Every stage's semantics live in its own module: the planner is pure, admission
 //! is the narrow waist, execution isolates a stratum's failure, and fusion is the
 //! verified fixed-point law. `search` adds no policy of its own. The value it
-//! contributes is the **bridge** from the executor's `(rank, candidate)` rows to
+//! contributes is the **bridge** from the executor's `(rank, candidate, block)` rows to
 //! the fusion protocol: a ranked stream must carry the profile's reciprocal-rank
 //! contribution, and the profile is deliberately not a planning input, so the
 //! contribution is attached here — from the exact profile in force, never
@@ -72,17 +72,45 @@
 //! anywhere between the plan and the trailer and the search fails instead of
 //! filing its rows under a plan that did not produce them.
 //!
+//! # And so does what each index attested about itself
+//!
+//! The third thing that can only be known where the rows are is what the index
+//! behind them attested: which generation answered, and whether it admitted to
+//! being short. [`execute`] reads it off the governed receipt of the very run
+//! that produced the rows and tags the stream with it; the bridge below carries
+//! it into [`RankedStream::attestation`]; and
+//! [`FusionStream`](crate::FusionStream) reads it **before pulling a row** and
+//! derives the trailer's [`FusionTrailer::attestations`],
+//! [`FusionTrailer::exactness`] and [`FusionTrailer::evidence_id`] from it.
+//!
+//! Losing it on this path would not be a missing field, it would be a wrong
+//! claim: with no stratum attesting an incomplete index the trailer says every
+//! fused score is [`ScoreExactness::Exact`](crate::ScoreExactness), and a score
+//! that is really a lower bound would be published as the whole number. So
+//! `search` attaches it rather than letting the adapter's honest default stand
+//! in for a producer that did say something.
+//!
+//! [`SearchResult::evidence_id`] is read back off the trailer for the reason
+//! [`SearchResult::plan_id`] is: the value of the evidence is that it is the id
+//! the answer actually carries, and one recomputed here from the same
+//! attestations would be true of this function rather than of that answer.
+//!
 //! # So does each producer's declared stream contract
 //!
 //! The same route carries a second thing the fusion stage is the consumer of:
-//! the rank ordering and duplicate handling each producer declared where it was
-//! registered. [`compile`] reads them off the registry it admits against,
-//! [`execute`] tags every stream with them, the bridge below reports them, and
-//! [`FusionStream`](crate::FusionStream) reads them before it pulls a row — so a
-//! producer that declared its repeats are the consumer's to remove is
-//! de-duplicated, and one that promised there are none is believed and charged
-//! nothing for the promise. `search` chooses neither; it only refuses to lose
-//! the declaration on the way.
+//! the duplicate handling and the candidate domains each producer declared
+//! where it was registered. [`compile`] reads them off the registry it admits
+//! against, [`execute`] tags every stream with them, the bridge below reports
+//! them, and [`FusionStream`](crate::FusionStream) reads them before it pulls a
+//! row — so a producer that declared its repeats are the consumer's to remove
+//! is de-duplicated, one that promised there are none is believed and charged
+//! nothing for the promise, and one that named the blocks of the candidate
+//! universe it draws from lets the fusion stop reading it the moment it can no
+//! longer change the answer. `search` chooses none of them; it only refuses to
+//! lose the declarations on the way, and the trailer it returns reports the
+//! domains that were in force
+//! ([`FusionTrailer::domains`](crate::FusionTrailer::domains)) so an answer can
+//! be audited against them.
 //!
 //! # A term that reached no producer is in the answer too
 //!
@@ -156,7 +184,7 @@
 use std::collections::BTreeMap;
 
 use purrdf_core::DatasetView;
-use purrdf_sparql_eval::PropertyFunctionRegistry;
+use purrdf_sparql_eval::{PfAttestation, PropertyFunctionRegistry};
 use purrdf_text::Fixed;
 
 use crate::admission::{AdmissionEnvironment, AdmissionError};
@@ -166,11 +194,13 @@ use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute}
 use crate::fuse::{TopK, fuse};
 use crate::fusion_profile::{DecayRule, FusionProfile};
 use crate::fusion_stream::{FusedRow, FusionTrailer};
-use crate::id::{FusionProfileId, PlanId};
+use crate::id::{EvidenceId, FusionProfileId, PlanId};
 use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+use crate::ranked_stream::{
+    ProducerReceipt, ProtocolError, RankedRow, RankedStream, StreamContract,
+};
 use crate::reciprocal_rank::contribution_under;
 use crate::request::RetrievalRequest;
 use crate::statistics::Statistics;
@@ -227,6 +257,19 @@ pub struct SearchResult {
     /// ([`FusionError::PlanIdMismatch`]) rather than an answer filed under a
     /// plan that did not produce it.
     pub plan_id: PlanId,
+    /// The identity of the evidence this answer carries: a digest of exactly
+    /// the per-stratum attestations in [`Self::trailer`].
+    ///
+    /// Read back off [`FusionTrailer::evidence_id`], never recomputed here.
+    /// Two answers that name the same plan, the same profile and the same
+    /// evidence id were assembled from the same indexes in the same state; two
+    /// that differ only here were not, and that difference is invisible in every
+    /// other field — the dataset snapshot, the query text and the registry
+    /// fingerprint are all unchanged by an index rebuild. Recomputing the digest
+    /// from the same attestations would produce the same bytes and prove
+    /// nothing, because it would be a fact about this function rather than about
+    /// the answer in the caller's hand.
+    pub evidence_id: EvidenceId,
     /// What each stratum's **planned** depth was going to cost in rank
     /// resolution under this profile, exactly as the admission waist recorded
     /// it, keyed by stratum.
@@ -313,16 +356,25 @@ pub enum SearchError {
 /// 2. [`compile(&plan, env)`](crate::compile) — semantic admission and emission;
 /// 3. [`execute(&compiled, registry, dataset)`](crate::execute) — one run per
 ///    stratum, against the caller's data;
-/// 4. [`fuse(streams, profile, top_k)`](crate::fuse) — the verified fixed-point
-///    fusion, bounded by the caller's `top_k`.
+/// 4. [`fuse(streams, profile, bound)`](crate::fuse) — the verified fixed-point
+///    fusion, bounded by exactly the bound the request stated.
 ///
-/// The parameters read request → data → policy → bound: what is being asked,
-/// what it is asked of, the law the answer is composed under, and how much of
-/// the answer is wanted. `top_k` is required rather than defaulted because fused
-/// enumeration is top-k by construction; see [`TopK`] and §7 of the design
-/// record.
+/// The parameters read request → data → policy: what is being asked, what it is
+/// asked of, and the law the answer is composed under. How much of the answer is
+/// wanted is **in the request** ([`ReadBound`](crate::ReadBound)), not beside it,
+/// because it is a planning input: the planner derives each stratum's depth from
+/// it, so a bound passed here as a second argument could disagree with the depths
+/// the plan already recorded. It is still required rather than defaulted — fused
+/// enumeration is top-k by construction, see [`TopK`] and §7 of the design record
+/// — and a caller that wants the whole of every stratum says so with
+/// [`ReadBound::Complete`](crate::ReadBound::Complete).
 ///
-/// The executor's `(rank, candidate)` streams are bridged to the fusion protocol
+/// [`fuse`] remains the lower-level entry and still takes a bound, because a
+/// caller assembling its own streams has no request to read one from. That entry
+/// refuses a bound the streams were not planned for
+/// ([`FusionError::ReadBoundMismatch`]), so the two cannot drift.
+///
+/// The executor's `(rank, candidate, block)` streams are bridged to the fusion protocol
 /// by [`RankedStreamAdapter`], which attaches each row's reciprocal-rank
 /// contribution computed from exactly the profile in force. Nothing else is
 /// added: `search` is the composition and nothing more.
@@ -363,7 +415,6 @@ pub async fn search<S, D>(
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
-    top_k: TopK,
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
@@ -405,6 +456,8 @@ where
     for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
         let plan_id = stratum_stream.plan_id;
+        let fused_bound = stratum_stream.fused_bound;
+        let attestation = stratum_stream.attestation.clone();
         // The contract travels with the stream, exactly as the plan identity
         // does: it is the producer's own declaration, read at the admission
         // waist and carried, so the promise fusion holds this stream to is the
@@ -420,8 +473,17 @@ where
         };
         // The stream carries the plan it was compiled from into the fusion, so
         // the identity the answer reports is the one that travelled with the
-        // rows rather than one read back off the plan at the end.
-        streams.push((stratum, adapter.with_plan_id(plan_id)));
+        // rows rather than one read back off the plan at the end — and it
+        // carries what the index behind those rows attested for the same
+        // reason. Fusion reads the attestation before it pulls a row, which is
+        // why it is attached here rather than collected after.
+        streams.push((
+            stratum,
+            adapter
+                .with_plan_id(plan_id)
+                .with_fused_bound(fused_bound)
+                .with_attestation(attestation),
+        ));
     }
     // `execute` yields its streams in the compiler's stratum order, but the
     // report is sorted rather than inherited: it is part of the answer, and an
@@ -439,9 +501,14 @@ where
         }
     }
 
-    // 5. Fuse. `Term` is the item type: the executor's candidate terms.
+    // 5. Fuse, at exactly the bound the request stated and the plan recorded its
+    //    depths under. `search` takes no bound of its own: the one it would take
+    //    is the one already in the request, and a second copy could disagree with
+    //    the depths that were derived from the first. Every stream carries the
+    //    bundle's bound, so `fuse` re-checks this call against it rather than
+    //    taking it on trust.
     let fused_strata = streams.len();
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, top_k)
+    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
         .await
         .map_err(SearchError::FusionError)?;
 
@@ -473,12 +540,18 @@ where
     //    They are applicable producers that could not contribute, and §6 says
     //    the answer carries them beside the ones that did.
     let trailer = fused.trailer.completed_with(statuses);
+    // 6b. Read the evidence identity back off the answer, exactly as the plan
+    //     identity was read back off it above. Completing the report cannot move
+    //     it: a stratum that never became a stream opened no index, so it has no
+    //     attestation to digest and gets no entry.
+    let evidence_id = trailer.evidence_id;
 
     Ok(SearchResult {
         rows: fused.rows,
         trailer,
         unserved_terms: plan.unserved_evidence(),
         plan_id,
+        evidence_id,
         // 7. Carry the waist's own resolution evidence onto the answer. It is
         //    moved, not recomputed: recomputing it here from the profile and
         //    the plan would be a second derivation of what the admission waist
@@ -490,7 +563,7 @@ where
     })
 }
 
-/// The bridge from [`execute`]'s `(rank, candidate)` stream to the ranked fusion
+/// The bridge from [`execute`]'s `(rank, candidate, block)` stream to the ranked fusion
 /// protocol: the one piece a caller resuming at `execute` would otherwise have
 /// to write itself.
 ///
@@ -499,7 +572,8 @@ where
 /// deliberately not a planning input, and keeping the executor profile-free is
 /// what lets the unfused rung be consumed with no fusion law in the path.
 /// [`fuse`] nonetheless
-/// requires `(rank, contribution, item)`. This adapter is that conversion, and
+/// requires a [`RankedRow`], which carries the contribution beside them. This
+/// adapter is that conversion, and
 /// it is the *only* place the crate performs it.
 ///
 /// It is public because §4 of the design record makes every stage boundary a
@@ -531,6 +605,11 @@ pub struct RankedStreamAdapter {
     decay: DecayRule,
     /// The pinned plan these rows descend from, when the caller named one.
     plan_id: Option<PlanId>,
+    /// The row bound these rows' depth was derived for, when the caller named
+    /// one.
+    fused_bound: Option<TopK>,
+    /// What the index behind these rows attested, when the caller named it.
+    attestation: PfAttestation,
 }
 
 impl RankedStreamAdapter {
@@ -569,7 +648,29 @@ impl RankedStreamAdapter {
             weight: profile.weight(stratum)?,
             decay: profile.decay(),
             plan_id: None,
+            fused_bound: None,
+            attestation: PfAttestation::UNDECLARED,
         })
+    }
+
+    /// Name the row bound these rows' depth was derived for.
+    ///
+    /// [`execute`] tags every stream it returns with the bound the bundle was
+    /// compiled for ([`StratumStream::fused_bound`](crate::StratumStream)), and
+    /// this is how that tag continues into the fusion: [`fuse`] reads it back
+    /// through [`RankedStream::fused_bound`] and refuses a `top_k` that disagrees
+    /// with it, so a read taken for one bound is never served as an answer to
+    /// another.
+    ///
+    /// It is a builder step rather than a parameter of [`new`](Self::new) for the
+    /// reason [`with_plan_id`](Self::with_plan_id) is: the rows and their
+    /// provenance arrive as separate fields of one `StratumStream`, and a stream
+    /// whose depth no plan bounded attaches nothing and fuses at whatever bound
+    /// its caller names.
+    #[must_use]
+    pub const fn with_fused_bound(mut self, fused_bound: TopK) -> Self {
+        self.fused_bound = Some(fused_bound);
+        self
     }
 
     /// Name the pinned plan these rows descend from.
@@ -590,13 +691,37 @@ impl RankedStreamAdapter {
         self.plan_id = Some(plan_id);
         self
     }
+
+    /// Name what the index behind these rows attested.
+    ///
+    /// [`execute`] reads this off the governed receipt of the run that produced
+    /// the rows and tags the stream with it
+    /// ([`StratumStream::attestation`](crate::StratumStream)); this is how that
+    /// tag continues into the fusion, which reads it through
+    /// [`RankedStream::attestation`] before pulling a row and derives the
+    /// trailer's attestation map, its
+    /// [`ScoreExactness`](crate::ScoreExactness) and its
+    /// [`EvidenceId`] from it.
+    ///
+    /// It is a builder step rather than a parameter of [`new`](Self::new) for
+    /// the reason [`with_plan_id`](Self::with_plan_id) is: the rows and their
+    /// provenance arrive as separate fields of one `StratumStream`, and a stream
+    /// that descends from no index at all attaches nothing and fuses anyway.
+    /// Attaching nothing is honest here in a way it never is for a contract —
+    /// see [`RankedStream::attestation`], which defaults for exactly that
+    /// reason.
+    #[must_use]
+    pub fn with_attestation(mut self, attestation: PfAttestation) -> Self {
+        self.attestation = attestation;
+        self
+    }
 }
 
 impl RankedStream for RankedStreamAdapter {
     type Item = Term;
 
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
-        let Some((rank, item)) = self.inner.next().await? else {
+    async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
+        let Some((rank, item, block)) = self.inner.next().await? else {
             return Ok(None);
         };
         // Ranks are 1-based, and a contribution at rank zero is undefined rather
@@ -625,7 +750,12 @@ impl RankedStream for RankedStreamAdapter {
                 reason: error.to_string(),
             }
         })?;
-        Ok(Some((rank, value, item)))
+        // The block travels through untouched. It is the producer's claim about
+        // where this candidate came from, and this bridge adds the contribution
+        // and nothing else: a block derived, defaulted or widened here would be
+        // this adapter answering a question only the producer can — the same rule
+        // that keeps it from inventing a contract.
+        Ok(Some(RankedRow::new(rank, value, item, block)))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -633,10 +763,18 @@ impl RankedStream for RankedStreamAdapter {
     }
 
     fn contract(&self) -> StreamContract {
-        self.contract
+        self.contract.clone()
     }
 
     fn plan_id(&self) -> Option<PlanId> {
         self.plan_id
+    }
+
+    fn fused_bound(&self) -> Option<TopK> {
+        self.fused_bound
+    }
+
+    fn attestation(&self) -> PfAttestation {
+        self.attestation.clone()
     }
 }

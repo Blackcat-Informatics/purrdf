@@ -1741,7 +1741,12 @@ fn the_ranked_declaration_places_the_seed_and_binds_k_as_the_depth() {
         purrdf_core::parse_iri("https://example.org/stratum/knn").expect("fixture stratum");
     let integer = "http://www.w3.org/2001/XMLSchema#integer".to_owned();
 
-    let declaration = relation.ranked_declaration(stratum.clone(), TermKind::Iri, integer.clone());
+    let declaration = relation.ranked_declaration(
+        stratum.clone(),
+        TermKind::Iri,
+        integer.clone(),
+        CandidateDomains::Unrestricted,
+    );
 
     assert_eq!(declaration.stratum, stratum, "the stratum is the caller's");
     assert_eq!(
@@ -1789,6 +1794,7 @@ fn the_ranked_declaration_places_the_seed_and_binds_k_as_the_depth() {
                 purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
                 TermKind::Literal,
                 "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                CandidateDomains::Unrestricted,
             )
             .accepted_terms[0]
             .pattern,
@@ -1809,6 +1815,7 @@ fn the_declared_depth_placement_yields_an_invocation_the_relation_answers() {
         purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
         TermKind::Iri,
         "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+        CandidateDomains::Unrestricted,
     );
     let depth = declaration.depth_placement.expect("a depth placement");
 

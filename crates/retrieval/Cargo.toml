@@ -36,12 +36,26 @@ purrdf-core.workspace = true
 # The property-function seam: `RegistryId` is the instance identity a plan
 # records, and the producer-capability declarations are consumed from here.
 purrdf-sparql-eval.workspace = true
+# The SPARQL front end the evaluator above parses with, used at exactly one seam:
+# `StratumUnit::new` reads a caller-supplied query text through it, so a text that
+# is not a query (or not a `SELECT`) is refused at construction, and the two clauses
+# the wrapping `SELECT` has no place for — the prologue and the dataset clause — are
+# found and moved onto the wrapper that bounds it. Nothing else in this crate looks
+# at SPARQL as anything but a string.
+purrdf-sparql-algebra.workspace = true
 # The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
 # so a plan never carries a float where exactness is the whole point.
 purrdf-text.workspace = true
 # Fixed-output-length hashing for the plan identity. Deterministic and keyless,
 # so the same canonical bytes yield the same digest on every target.
 blake3.workspace = true
+# The workspace's fixed-key, seed-free hasher, for the fusion engine's
+# emitted-candidate lookup table. Fixed-key rather than `RandomState` because
+# this crate must build and behave identically on `wasm32-unknown-unknown`,
+# where there is no random source to seed one from. The table is consulted and
+# never iterated, so no hash order can reach an answer — see the determinism
+# argument on `FusionStream`'s `emitted` field.
+ahash.workspace = true
 # Serialization of the plan as a plain document. `derive` builds the impls.
 serde.workspace = true
 # Error types carry structured context; `derive` builds the impls.

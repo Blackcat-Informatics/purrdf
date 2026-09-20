@@ -53,6 +53,12 @@ jobs:
       - name: Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
         run: python3 scripts/check-iri-resolver-singleton.py
 
+      - name: Check the PyO3-extension test-module gate can still fail
+        run: python3 scripts/check-python-binding-tests.py --self-test
+
+      - name: Check no Rust test module hides in the PyO3 extension crate
+        run: python3 scripts/check-python-binding-tests.py
+
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 

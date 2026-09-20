@@ -14,8 +14,9 @@
 ///
 /// The planning variants are refusals with a named dimension — no producer
 /// reaches the request, a request term is malformed, a stratum has no finite
-/// depth, or a registered relation's declaration refused to be read — rather
-/// than a plausible plan built over a fallback.
+/// depth, the request asks for more rows than a read can be planned for, or a
+/// registered relation's declaration refused to be read — rather than a plausible
+/// plan built over a fallback.
 ///
 /// [`Plan`]: crate::Plan
 #[derive(Debug, thiserror::Error)]
@@ -51,17 +52,44 @@ pub enum PlanError {
         reason: String,
     },
 
-    /// A stratum has no finite depth and no statistic supplies one.
+    /// The request's own row bound is a number no read this layer plans can reach.
     ///
-    /// Raised when every selected producer in the stratum declares a genuinely
-    /// unbounded row count ([`u64::MAX`](u64::MAX)) and statistics report no
-    /// cardinality to bound it. Recording `u32::MAX` would claim a bound no
-    /// producer declared, so the plan is refused instead.
-    #[error("no cardinality is available for {predicate}")]
-    StatisticsUnavailable {
-        /// The stratum whose depth could not be bounded. Boxed so recording it
-        /// does not inflate every `Result<_, PlanError>`.
-        predicate: Box<crate::iri::Iri>,
+    /// A [`ReadBound::Bounded`](crate::ReadBound::Bounded) states how many fused
+    /// rows the answer is for, and where the producers' declarations license it
+    /// that number *is* each stratum's depth (see [`plan`](crate::plan)). A depth
+    /// is a 32-bit rank and a unit is emitted one row deeper than its depth, so the
+    /// deepest depth that can be *read* is one shallower than the deepest a plan
+    /// can express. A bound above that names a read no registry could serve.
+    ///
+    /// `ceiling` is therefore the deepest readable depth and not `u32::MAX`, and
+    /// the distinction is the whole of this refusal's honesty: a bound of exactly
+    /// `ceiling` plans, records that depth, and is emitted with the probe row one
+    /// past it, while `u32::MAX` would leave the emitted bound no room for that row
+    /// and the read would be reported exhausted however many rows the producer
+    /// still held. Naming `u32::MAX` here would have stated a ceiling this layer
+    /// cannot actually serve a read at.
+    ///
+    /// Refused at the request rather than where it happens to bind, because the
+    /// alternative is a refusal that depends on which registry the request reaches
+    /// — served silently wherever some declaration was smaller, and refused
+    /// wherever it was not. It is the caller's own number, which is what separates
+    /// it from a *declared* row bound past the same ceiling: that one is a fact
+    /// about a producer's data rather than a request for rows, so it is recorded at
+    /// the ceiling and the read's ending reports that the planned depth stopped it
+    /// (see [`plan`](crate::plan)).
+    #[error(
+        "the request bounds the answer at {requested} fused rows, and no read can be planned that \
+         deep: where the producers' declarations license it that bound is each stratum's own \
+         depth, a depth is a 32-bit rank, and a read is emitted one row deeper than its depth — so \
+         {ceiling} is the largest bound this layer can plan a read for, and a bound of exactly \
+         that is served"
+    )]
+    ReadBoundBeyondDepthRange {
+        /// The bound the request stated.
+        requested: usize,
+        /// The largest bound a read can be planned for: the deepest depth whose
+        /// emitted bound can still carry the probe row.
+        ceiling: u64,
     },
 
     /// A registered relation's declaration could not be read while planning.
@@ -225,6 +253,43 @@ pub enum FusionError {
         /// The plan this stream names, or `None` when a stream that should have
         /// named one named nothing.
         got: Option<crate::id::PlanId>,
+    },
+
+    /// A stream's depth was planned for one row bound and the fusion was run at
+    /// another.
+    ///
+    /// # Why this is a sibling of [`PlanIdMismatch`](Self::PlanIdMismatch) and not
+    /// a case of it
+    ///
+    /// Both are refusals read off the streams before a row is pulled, and both
+    /// exist because a provenance that travels with the rows is the only one worth
+    /// having. They are different facts with different repairs, though.
+    /// `PlanIdMismatch` is a disagreement *among the streams*: two of them descend
+    /// from different plans, and the repair is to stop mixing them. This one is a
+    /// disagreement between the streams — which may agree perfectly — and the
+    /// caller's own `top_k` argument, and the repair is either to pass the bound the
+    /// plan was built for or to plan again at the bound that is wanted. Folding it
+    /// into the other variant would report a provenance conflict for a call whose
+    /// provenance is consistent, and would send a reader to inspect the streams
+    /// instead of the argument.
+    ///
+    /// # Why a smaller bound is refused too
+    ///
+    /// A `top_k` above what was planned cannot be served: under declarations that
+    /// let the planner narrow a depth to the planned bound, the rows past it were
+    /// never read. A `top_k` below it would answer correctly, but out of a read
+    /// deeper than the question needed — and the depths the bundle records, the
+    /// resolution it reports and the identity it carries would all describe a
+    /// different request. One rule, in both directions, keeps the bound the plan
+    /// recorded and the bound the answer was assembled under the same number.
+    #[error(
+        "streams were planned for a bound of {planned} fused rows and the fusion was run at {requested}; a depth derived for one bound does not serve another"
+    )]
+    ReadBoundMismatch {
+        /// The bound the streams' plan was built for.
+        planned: crate::fuse::TopK,
+        /// The bound this fusion was asked to run at.
+        requested: crate::fuse::TopK,
     },
 
     /// A fusion profile's canonical bytes could not be decoded.

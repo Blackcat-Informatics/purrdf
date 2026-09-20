@@ -1587,10 +1587,12 @@ dependencies = [
 name = "purrdf-retrieval"
 version = "2.0.2"
 dependencies = [
+ "ahash",
  "blake3",
  "pretty_assertions",
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-text",
  "serde",

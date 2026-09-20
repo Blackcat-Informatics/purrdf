@@ -1,7 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The typed retrieval request.
+//! The typed retrieval request: what is being asked for, and how much of it.
+//!
+//! A request carries two things. The terms are what is being looked for; the
+//! [`ReadBound`] is how much of the answer is wanted, and it is here rather than
+//! at the last stage because it is the one input that decides how deep the read
+//! has to be. A bound known only at `fuse` is a bound that arrives after every
+//! stratum's depth has already been recorded and emitted.
 //!
 //! The producers this layer composes consume different modalities: a needle for
 //! a BM25 relation, a seed term for a nearest-neighbour relation, a geometry for
@@ -45,6 +51,7 @@
 use purrdf_text::Fixed;
 use serde::{Deserialize, Serialize};
 
+use crate::fuse::TopK;
 use crate::iri::{Iri, Term};
 
 /// The distance metric a vector request is expressed in.
@@ -337,28 +344,88 @@ impl PartialEq for RequestTerm {
 
 impl Eq for RequestTerm {}
 
-/// A request: the ordered list of terms a plan is built for.
+/// How much of the answer a request is for.
+///
+/// This is a **read** bound before it is a row bound, and that is why it belongs
+/// on the request rather than on the last stage. A caller that wants five rows
+/// out of a stratum a producer declares a thousand rows for has told the planner
+/// something the planner cannot otherwise learn: the depth it is about to record
+/// does not have to be the declaration. So the bound arrives with the terms, the
+/// planner derives each stratum's depth from it (see
+/// [`plan`](crate::plan)), and the depth a plan records stays the depth that is
+/// actually read — rather than a number narrowed later, at emission, while the
+/// plan went on recording a read nobody took.
+///
+/// # Why an enum over a bound and a complete case, rather than an optional bound
+///
+/// Both arms are requests. "Give me the top five" and "give me everything these
+/// strata hold" are two things a caller asks for, and neither is the absence of
+/// the other: a caller that stops at the unfused rung — walking one stratum's
+/// rows itself, with no fusion law in the path — is asking for the second, in
+/// full, on purpose. An `Option` would spell that as a missing value and leave
+/// every reader to decide what a missing bound licenses, which is exactly the
+/// decision this type exists to take once.
+///
+/// It is also what keeps the derivation total. [`Self::Complete`] is not "no
+/// narrowing applies"; it is "the narrowing this request licenses is none", and
+/// the planner reads it as a value like any other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ReadBound {
+    /// At most this many fused rows, and therefore no deeper a read than those
+    /// rows can come from.
+    ///
+    /// What the planner may do with it depends on what the producers declared
+    /// about their own candidates, and on nothing else — see [`plan`](crate::plan)
+    /// for the rule and its proof. A bound is never a licence to read *more*: it
+    /// narrows a depth the registry and the statistics already set, or it changes
+    /// nothing.
+    Bounded(TopK),
+    /// Every row the request's strata can yield, to the depth their own
+    /// declarations and the statistics allow.
+    ///
+    /// The honest request of a caller that means to consume a whole stratum: the
+    /// unfused rung, an export, a re-ranker that wants the candidate set rather
+    /// than a prefix of it. It licenses no narrowing, so the depths are exactly
+    /// the ones the registry declared and the statistics bounded.
+    Complete,
+}
+
+/// A request: the ordered list of terms a plan is built for, and how much of the
+/// answer it is for.
 ///
 /// The list order is identity-bearing. It is the order the caller wrote, and
 /// the planner binds request-term indices against it (see
 /// [`ProducerBinding`](crate::ProducerBinding)).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// There is deliberately no `Default`. An empty term list is a coherent value,
+/// but a default [`ReadBound`] is not: both arms are things a caller asks for,
+/// and picking one on the caller's behalf would decide how deep its read goes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetrievalRequest {
     /// The request's terms, in caller order.
     pub terms: Vec<RequestTerm>,
+    /// How much of the answer is wanted, and therefore how much of each stratum
+    /// may have to be read to assemble it.
+    pub bound: ReadBound,
 }
 
 impl RetrievalRequest {
-    /// An empty request.
+    /// Build a request from explicit terms and an explicit bound.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn from_terms(terms: Vec<RequestTerm>, bound: ReadBound) -> Self {
+        Self { terms, bound }
     }
 
-    /// Build a request from explicit terms.
+    /// Build a request for at most `top_k` fused rows.
     #[must_use]
-    pub fn from_terms(terms: Vec<RequestTerm>) -> Self {
-        Self { terms }
+    pub const fn bounded(terms: Vec<RequestTerm>, top_k: TopK) -> Self {
+        Self::from_terms(terms, ReadBound::Bounded(top_k))
+    }
+
+    /// Build a request for everything the request's strata can yield.
+    #[must_use]
+    pub const fn complete(terms: Vec<RequestTerm>) -> Self {
+        Self::from_terms(terms, ReadBound::Complete)
     }
 
     /// The number of terms in the request.

@@ -13,6 +13,7 @@
 //! hard [`ParseError::Unsupported`].
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
@@ -164,6 +165,53 @@ pub struct ParserOptions {
     pub property_fn_iris: Vec<String>,
 }
 
+/// One parse of a query, with the two positions a layer that **re-wraps** the text
+/// needs in order to move the parts the grammar will not let it carry.
+///
+/// A wrapper that puts a caller's query inside a sub-`SELECT` — `SubSelect ::=
+/// SelectClause WhereClause SolutionModifier ValuesClause` — inherits that
+/// production's two omissions. There is no `Prologue` inside a sub-select, and there
+/// is no `DatasetClause` either; both are written once, on a whole query. A text
+/// declaring either therefore cannot be wrapped as it stands, and neither position is
+/// recoverable from the [`Query`] beside them: a prefixed name is resolved away at
+/// parse time, and re-serializing the body would rewrite surface spellings the
+/// caller's next reader depends on. So the positions are reported, the caller splits
+/// its own bytes at them, and both clauses are re-written where the grammar does
+/// accept them — in front of the wrapper, and on the wrapper's own `SELECT`, where
+/// each scopes the whole query and therefore the body inside it, which is what the
+/// caller wrote them to mean.
+///
+/// Everything here is positional. No field says anything the algebra does not already
+/// say; they say *where it was written*.
+///
+/// Deliberately **not** `#[non_exhaustive]`. A wrapper reads every position here
+/// precisely because a clause it fails to move is a clause the wrap destroys, and
+/// `#[non_exhaustive]` would force each of those callers to destructure with `..` — so a
+/// third position added later would be ignored by every one of them, silently, which is
+/// the exact shape of the defect that made this type necessary. Adding a field here is a
+/// breaking change, and it should be: it means there is a new thing a wrapper has to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuerySplit {
+    /// The algebra, exactly as [`SparqlParser::parse_query_with`] returns it.
+    pub query: Query,
+    /// The byte offset the **prologue** ends at: the start of the query form's own
+    /// first token, so `&text[..body_at]` is the `BASE`/`PREFIX`/`VERSION` run (plus
+    /// any comment or whitespace between the directives) and `&text[body_at..]` is
+    /// the form itself.
+    ///
+    /// `0` for a query with no prologue, where the whole text is the form.
+    pub body_at: usize,
+    /// The byte range the query form's `DatasetClause*` run occupies — from the
+    /// first `FROM` keyword to the start of the token after the last clause, so the
+    /// range carries its own trailing whitespace and excising it from the text leaves
+    /// a query that still parses.
+    ///
+    /// `None` for a query that writes no `FROM`/`FROM NAMED`. The range is inside
+    /// `&text[body_at..]`, because a dataset clause follows the query form's head.
+    /// All four query forms carry one, and all four report it here.
+    pub dataset_at: Option<Range<usize>>,
+}
+
 /// A reusable SPARQL query parser.
 ///
 /// Mirrors the prior oxigraph-family `SparqlParser` surface the existing
@@ -251,10 +299,33 @@ impl SparqlParser {
     /// Parse a SPARQL 1.1/1.2 query into the algebra with explicit [`ParserOptions`]
     /// (e.g. an extra extension-function namespace alias).
     pub fn parse_query_with(&self, query: &str, options: &ParserOptions) -> Result<Query> {
+        self.parse_query_split(query, options)
+            .map(|split| split.query)
+    }
+
+    /// [`Self::parse_query_with`], also reporting where the two parts of the text a
+    /// wrapping layer has to *move* are written: see [`QuerySplit`].
+    ///
+    /// Positional only. Both numbers are offsets the one parse below was already
+    /// standing at, so every piece a caller cuts out of the text is the caller's own
+    /// bytes rather than anything re-rendered, and nothing about the algebra returned
+    /// beside them changes.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::parse_query_with`]'s: a [`ParseError`] for an unusable base
+    /// IRI, a tokenizer refusal, a syntax error or trailing tokens after the form.
+    pub fn parse_query_split(&self, query: &str, options: &ParserOptions) -> Result<QuerySplit> {
         let mut p = self.parser_for(query, options)?;
-        let q = p.parse_query()?;
+        p.parse_prologue()?;
+        let body_at = p.span();
+        let q = p.parse_query_form()?;
         p.expect_eof()?;
-        Ok(q)
+        Ok(QuerySplit {
+            query: q,
+            body_at,
+            dataset_at: p.dataset_at,
+        })
     }
 
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra, under
@@ -311,6 +382,7 @@ impl SparqlParser {
             group_pattern_depth: 0,
             pattern_node_budget: 0,
             exists_scope_stack: Vec::new(),
+            dataset_at: None,
             projection_scope_pending: false,
             in_aggregate_argument: false,
             projection_seen_targets: Vec::new(),
@@ -320,6 +392,24 @@ impl SparqlParser {
             options,
         })
     }
+}
+
+/// Which grammar production a `SELECT` is being read under.
+///
+/// The two positions are different productions with different contents, not one
+/// production read in two moods: `Query ::= Prologue ( SelectQuery | … )` reaches
+/// `SelectQuery ::= SelectClause DatasetClause* WhereClause SolutionModifier`, while a
+/// group's `SubSelect ::= SelectClause WhereClause SolutionModifier ValuesClause` has no
+/// `DatasetClause` at all. One function parses both, because everything else about them
+/// is identical and two copies would drift; this says which one it is parsing, so the
+/// clause the sub-select production omits is refused where it is read rather than
+/// dropped where the `Query` is unwrapped.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectPosition {
+    /// A whole query's `SelectQuery`, which carries a dataset clause.
+    Query,
+    /// A group graph pattern's `SubSelect`, which does not.
+    SubSelect,
 }
 
 struct Parser<'a, 'o> {
@@ -406,6 +496,20 @@ struct Parser<'a, 'o> {
     /// reads this field through [`Self::debug_scope_consultations`].
     #[cfg(debug_assertions)]
     scope_consultations: u64,
+    /// Where the query form's `DatasetClause*` run sits in the request text, for
+    /// [`SparqlParser::parse_query_split`] to report — `None` for a query that
+    /// writes no `FROM`/`FROM NAMED` at all.
+    ///
+    /// Written by [`Parser::parse_dataset_clauses`], the one function that reads
+    /// that run, so all four query forms report it the same way with no call site
+    /// repeating the bookkeeping. Written only for a NON-EMPTY run, which is what
+    /// makes "the last writer wins" a non-question: a successfully parsed query has
+    /// at most one non-empty run in it, because the only other place
+    /// [`Parser::parse_select`] is reached from is the sub-`SELECT` site, where a
+    /// non-empty run is refused (`SubSelect` has no `DatasetClause`). A refused one
+    /// may have been recorded a moment earlier, and is never observed: the error
+    /// propagates to the public entry point and this `Parser` is not consulted again.
+    dataset_at: Option<Range<usize>>,
     options: &'o ParserOptions,
 }
 
@@ -502,6 +606,10 @@ impl<'a> Parser<'a, '_> {
             pending_exists_scope_checks: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: self.scope_consultations,
+            // Neither forked production can contain a query form, so neither can
+            // contain a dataset clause: the fork records none, and the position the
+            // outer parse recorded stays the outer parse's, on the outer parser.
+            dataset_at: None,
             options: self.options,
         }
     }
@@ -818,11 +926,14 @@ impl<'a> Parser<'a, '_> {
 
     // ── prologue + query form ────────────────────────────────────────────────
 
-    fn parse_query(&mut self) -> Result<Query> {
-        self.parse_prologue()?;
+    /// The query form alone, with the prologue already read: the half
+    /// [`SparqlParser::parse_query_split`] needs to start after the offset it
+    /// reports. Split out of `parse_query` rather than duplicated, so the two
+    /// entries cannot parse a form differently.
+    fn parse_query_form(&mut self) -> Result<Query> {
         let base_iri = self.base_named_node();
         if self.peek_kw("SELECT") {
-            self.parse_select(base_iri)
+            self.parse_select(base_iri, SelectPosition::Query)
         } else if self.peek_kw("CONSTRUCT") {
             self.parse_construct(base_iri)
         } else if self.peek_kw("ASK") {
@@ -1009,7 +1120,11 @@ impl<'a> Parser<'a, '_> {
 
     // ── query forms ──────────────────────────────────────────────────────────
 
-    fn parse_select(&mut self, base_iri: Option<NamedNode>) -> Result<Query> {
+    fn parse_select(
+        &mut self,
+        base_iri: Option<NamedNode>,
+        position: SelectPosition,
+    ) -> Result<Query> {
         self.expect_kw("SELECT")?;
         let distinct = self.eat_kw("DISTINCT");
         let reduced = !distinct && self.eat_kw("REDUCED");
@@ -1092,8 +1207,26 @@ impl<'a> Parser<'a, '_> {
         // before this window existed.
         self.projection_scope_pending = false;
 
-        // Dataset clause (FROM / FROM NAMED), §13.2.
+        // Dataset clause (FROM / FROM NAMED), §13.2. Taken before the run is read, so
+        // the refusal below points at the caller's own `FROM` keyword rather than at
+        // wherever the parse happened to stop afterwards.
+        let dataset_at = self.span();
         let dataset = self.parse_dataset_clauses()?;
+        // §18 `SubSelect ::= SelectClause WhereClause SolutionModifier ValuesClause`
+        // — there is no `DatasetClause` in it, and a dataset clause scopes a whole
+        // query rather than one group of one. Reading the run here and then dropping
+        // it at the sub-select site is the one outcome that cannot be right: the
+        // clause a caller wrote would decide nothing while the query still answered,
+        // which is a wrong answer under no diagnostic at all.
+        if position == SelectPosition::SubSelect
+            && !(dataset.default.is_empty() && dataset.named.is_empty())
+        {
+            return Err(ParseError::syntax(
+                "a sub-SELECT carries no dataset clause: FROM and FROM NAMED are \
+                 written on a whole query, which is the scope they apply to",
+                dataset_at,
+            ));
+        }
 
         self.eat_kw("WHERE");
         let where_pat = self.parse_group_graph_pattern()?;
@@ -1586,7 +1719,15 @@ impl<'a> Parser<'a, '_> {
 
     /// Zero or more `FROM [NAMED] <iri>` dataset clauses (§13.2). `FROM <iri>` adds to
     /// the active default graph; `FROM NAMED <iri>` adds an addressable named graph.
+    ///
+    /// A non-empty run also records where it was written
+    /// ([`Parser::dataset_at`]), for [`SparqlParser::parse_query_split`] to report.
+    /// The recorded end is the start of the token *after* the run rather than the end
+    /// of its last IRI, so the range carries the whitespace separating the clause from
+    /// the `WHERE` that follows and a caller excising it is left with a text that
+    /// still parses.
     fn parse_dataset_clauses(&mut self) -> Result<QueryDataset> {
+        let at = self.span();
         let mut default = Vec::new();
         let mut named = Vec::new();
         while self.eat_kw("FROM") {
@@ -1595,6 +1736,9 @@ impl<'a> Parser<'a, '_> {
             } else {
                 default.push(self.expect_iri_node()?);
             }
+        }
+        if !(default.is_empty() && named.is_empty()) {
+            self.dataset_at = Some(at..self.span());
         }
         Ok(QueryDataset { default, named })
     }
@@ -2233,10 +2377,41 @@ impl<'a> Parser<'a, '_> {
 
         // A sub-SELECT group: `{ SELECT ... }`.
         if self.peek_kw("SELECT") {
-            let sub = self.parse_select(None)?;
+            let sub = self.parse_select(None, SelectPosition::SubSelect)?;
             self.expect(&Token::RBrace)?;
+            // Destructured field by field rather than through `..`: a sub-select
+            // keeps only the pattern, and the other three have to be accounted for
+            // HERE, where the `Query` is discarded, or a field added to `Query::Select`
+            // later would start being dropped silently. That is not hypothetical — a
+            // `..` here dropped a caller's `FROM` for exactly as long as it stood.
             return match sub {
-                Query::Select { pattern, .. } => Ok(pattern),
+                Query::Select {
+                    pattern,
+                    dataset,
+                    base_iri,
+                    version,
+                } => {
+                    // Refused above, at the clause's own offset, so it is empty here.
+                    debug_assert!(
+                        dataset.default.is_empty() && dataset.named.is_empty(),
+                        "a sub-SELECT's dataset clause is refused by parse_select"
+                    );
+                    // Passed as `None` one line up: `BASE` is prologue, parsed once at
+                    // the top, and a sub-select's algebra carries no base of its own.
+                    debug_assert!(
+                        base_iri.is_none(),
+                        "a sub-SELECT is parsed with no base of its own"
+                    );
+                    // NOT an absence: `VERSION` is prologue too, and every `SELECT`
+                    // this parse builds copies the one the prologue declared. The
+                    // enclosing form carries the same value, so the copy discarded here
+                    // states nothing the whole query does not already state.
+                    debug_assert_eq!(
+                        version, self.version,
+                        "a sub-SELECT copies the request's one prologue VERSION"
+                    );
+                    Ok(pattern)
+                }
                 _ => unreachable!("parse_select yields Query::Select"),
             };
         }
@@ -3719,11 +3894,27 @@ impl<'a> Parser<'a, '_> {
                 m.order_by.push(cond);
             }
         }
-        // LIMIT / OFFSET in either order.
+        // `LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause
+        // LimitClause?` — at most ONE of each, in either order. The loop reads
+        // both orders, and refuses a repeat instead of overwriting the earlier
+        // clause: a caller who wrote `LIMIT 2` and got every row back because a
+        // later `LIMIT 13` overwrote the bound has had their own bound silently
+        // dropped, and the query would mean one thing here and another to a
+        // conforming processor. It is not valid SPARQL, so accepting it is not
+        // leniency anyone can rely on. The offset is captured BEFORE the keyword
+        // is eaten so the diagnostic points at the repeated clause, not at its
+        // integer.
         loop {
+            let at = self.span();
             if self.eat_kw("LIMIT") {
+                if m.limit.is_some() {
+                    return Err(repeated_bound_clause("LIMIT", at));
+                }
                 m.limit = Some(self.expect_integer()?);
             } else if self.eat_kw("OFFSET") {
+                if m.offset.is_some() {
+                    return Err(repeated_bound_clause("OFFSET", at));
+                }
                 m.offset = Some(self.expect_integer()?);
             } else {
                 break;
@@ -5406,6 +5597,20 @@ const MODIFIER_TERMINATOR_WORDS: [&str; 8] = [
     "HAVING", "ORDER", "LIMIT", "OFFSET", "VALUES", "BINDINGS", "TRUE", "FALSE",
 ];
 
+/// The refusal for a second `LIMIT`/`OFFSET` in one solution-modifier list
+/// (`LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause
+/// LimitClause?`). `kw` names the clause that repeated, and `at` is the byte
+/// offset of that repeat's keyword.
+fn repeated_bound_clause(kw: &str, at: usize) -> ParseError {
+    ParseError::syntax(
+        format!(
+            "repeated {kw} clause: LimitOffsetClauses allows at most one LIMIT \
+             and at most one OFFSET, in either order"
+        ),
+        at,
+    )
+}
+
 /// Case-insensitive membership of `w` in [`MODIFIER_TERMINATOR_WORDS`].
 ///
 /// `eq_ignore_ascii_case` against each all-ASCII keyword is the same predicate
@@ -6777,6 +6982,147 @@ mod tests {
         assert!(matches!(*inner, GraphPattern::Distinct { .. }));
     }
 
+    /// `SolutionModifier ::= GroupClause? HavingClause? OrderClause?
+    /// LimitOffsetClauses?` and `ValuesClause ::= ( 'VALUES' DataBlock )?` — no
+    /// clause in the list may repeat, so none of these is a production. Only
+    /// the bound clauses were read by a loop that could overwrite an earlier
+    /// value; each clause here is parsed by a single conditional, so a repeat
+    /// falls out of the modifier list and is refused (by the end-of-query
+    /// guard, or — for `GROUP BY`, whose bare-condition arm consumes the
+    /// repeated keyword as a callee — as an unsupported function name). Pinned
+    /// so the overwrite shape cannot be reintroduced here either.
+    #[test]
+    fn no_other_solution_modifier_may_repeat() {
+        for q in [
+            "SELECT ?a WHERE { ?a ?p ?o } GROUP BY ?a GROUP BY ?p",
+            "SELECT ?a WHERE { ?a ?p ?o } GROUP BY ?a ORDER BY ?a GROUP BY ?p",
+            "SELECT (COUNT(?o) AS ?n) WHERE { ?a ?p ?o } GROUP BY ?a \
+             HAVING (?n > 1) HAVING (?n > 2)",
+            "SELECT ?a WHERE { ?a ?p ?o } ORDER BY ?a ORDER BY ?p",
+            "SELECT ?a WHERE { ?a ?p ?o } VALUES ?a { 1 } VALUES ?a { 2 }",
+        ] {
+            let err = try_parse(q).expect_err("a repeated solution modifier is not a production");
+            assert!(
+                matches!(
+                    &err,
+                    ParseError::Syntax { reason, .. } if reason.starts_with("unexpected trailing token")
+                ) || matches!(&err, ParseError::Unsupported(_)),
+                "`{q}` must be refused, got {err:?}"
+            );
+        }
+    }
+
+    /// The `Slice` (or its absence) for every `LimitOffsetClauses` spelling the
+    /// grammar admits — `LimitClause OffsetClause? | OffsetClause LimitClause?`,
+    /// so BOTH clause orders, either clause alone, and neither. The mirror of
+    /// [`a_repeated_bound_clause_is_refused`]: refusing the second clause must
+    /// not narrow the set the grammar permits, and `LIMIT 0` in particular must
+    /// stay a real zero-row bound rather than being read as "no bound".
+    #[test]
+    fn every_bound_clause_spelling_the_grammar_admits_still_parses() {
+        fn slice_of(q: &str) -> Option<(usize, Option<usize>)> {
+            match select_pattern(q) {
+                GraphPattern::Slice { start, length, .. } => Some((start, length)),
+                other => {
+                    assert!(
+                        matches!(other, GraphPattern::Project { .. }),
+                        "an unbounded query keeps its Project at the top, got {other:?}"
+                    );
+                    None
+                }
+            }
+        }
+        let base = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }}");
+        assert_eq!(
+            slice_of(&base),
+            None,
+            "no bound clause must build no Slice at all"
+        );
+        for (tail, start, length) in [
+            ("LIMIT 5", 0, Some(5)),
+            ("OFFSET 2", 2, None),
+            ("LIMIT 5 OFFSET 2", 2, Some(5)),
+            ("OFFSET 2 LIMIT 5", 2, Some(5)),
+            ("LIMIT 0", 0, Some(0)),
+            ("OFFSET 0", 0, None),
+            ("LIMIT 0 OFFSET 0", 0, Some(0)),
+            ("OFFSET 0 LIMIT 0", 0, Some(0)),
+            // A bound far past any plausible row count is still just a bound —
+            // the value is carried, never clamped. Held below 2^32 so the
+            // assertion means the same thing on a 32-bit/wasm32 target.
+            (
+                "LIMIT 4000000000 OFFSET 4000000000",
+                4_000_000_000,
+                Some(4_000_000_000),
+            ),
+        ] {
+            let q = format!("{base} {tail}");
+            assert_eq!(
+                slice_of(&q),
+                Some((start, length)),
+                "`{tail}` must reach Slice {{ start: {start}, length: {length:?} }}"
+            );
+        }
+    }
+
+    /// `LimitOffsetClauses` admits at most ONE `LIMIT` and at most one
+    /// `OFFSET`. A repeat used to be swallowed by the bound-clause loop, which
+    /// overwrote the earlier value — so `LIMIT 2 LIMIT 13` returned thirteen
+    /// rows and the caller's own bound of two vanished. It is refused, naming
+    /// the clause that repeated and pointing at that repeat's keyword, at every
+    /// query form and on a sub-select.
+    #[test]
+    fn a_repeated_bound_clause_is_refused() {
+        fn expected(clause: &str) -> String {
+            format!(
+                "repeated {clause} clause: LimitOffsetClauses allows at most one LIMIT \
+                 and at most one OFFSET, in either order"
+            )
+        }
+        let base = format!("{GM}SELECT ?a WHERE {{ ?a a purrdf:T }}");
+        for (tail, clause) in [
+            ("LIMIT 2 LIMIT 13", "LIMIT"),
+            ("LIMIT 13 LIMIT 2", "LIMIT"),
+            ("OFFSET 1 OFFSET 4", "OFFSET"),
+            // The interleaved spellings: the repeat is separated from the first
+            // clause by the other one, which the loop read as a fresh pair.
+            ("LIMIT 2 OFFSET 1 LIMIT 13", "LIMIT"),
+            ("OFFSET 1 LIMIT 2 OFFSET 4", "OFFSET"),
+            ("ORDER BY ?a LIMIT 2 LIMIT 13", "LIMIT"),
+        ] {
+            let q = format!("{base} {tail}");
+            let err = try_parse(&q).expect_err("a repeated bound clause is not a production");
+            let ParseError::Syntax { reason, at } = &err else {
+                panic!("`{tail}` must be a Syntax refusal, got {err:?}");
+            };
+            assert_eq!(*reason, expected(clause), "for `{tail}`");
+            assert_eq!(
+                *at,
+                q.rfind(clause)
+                    .expect("the repeated keyword is in the query"),
+                "`{tail}` must report the byte offset of the REPEATED {clause}"
+            );
+        }
+        // The same bound-clause parse backs every query form and the sub-select,
+        // so the refusal is not SELECT-only.
+        for q in [
+            format!("{GM}CONSTRUCT {{ ?a a purrdf:U }} WHERE {{ ?a a purrdf:T }} LIMIT 2 LIMIT 13"),
+            format!("{GM}DESCRIBE ?a WHERE {{ ?a a purrdf:T }} OFFSET 1 OFFSET 4"),
+            format!(
+                "{GM}SELECT ?a WHERE {{ {{ SELECT ?a WHERE {{ ?a a purrdf:T }} LIMIT 2 LIMIT 13 }} }}"
+            ),
+        ] {
+            let err = try_parse(&q).expect_err("a repeated bound clause is not a production");
+            let ParseError::Syntax { reason, .. } = &err else {
+                panic!("`{q}` must be a Syntax refusal, got {err:?}");
+            };
+            assert!(
+                reason.starts_with("repeated "),
+                "`{q}` must reach the repeated-bound-clause refusal, got {reason:?}"
+            );
+        }
+    }
+
     #[test]
     fn select_star_collects_visible_vars() {
         let q = format!("{GM}SELECT * WHERE {{ ?a purrdf:p ?b . }}");
@@ -6807,6 +7153,147 @@ mod tests {
             panic!("expected SELECT");
         };
         assert!(dataset.default.is_empty() && dataset.named.is_empty());
+    }
+
+    /// **A dataset clause inside a sub-`SELECT` is refused, at the clause's own
+    /// offset.**
+    ///
+    /// `SubSelect ::= SelectClause WhereClause SolutionModifier ValuesClause` has no
+    /// `DatasetClause`, so a `FROM` there is not a production. This parser read one
+    /// anyway — one function serves both positions — and the sub-select site then
+    /// unwrapped the `Query` with `..`, which dropped the clause. That is the worst
+    /// available outcome: the text parsed, the query answered, and the graphs the
+    /// caller named decided nothing. A wrapping layer that moved a top-level `FROM`
+    /// inside a sub-select was therefore silently voiding it.
+    ///
+    /// The offset is asserted, not just the refusal, because a diagnostic pointing at
+    /// the enclosing `}` would send its reader to the wrong clause in a query with two
+    /// sub-selects in it.
+    #[test]
+    fn a_sub_select_dataset_clause_is_refused_and_a_top_level_one_is_not() {
+        const REASON: &str = "a sub-SELECT carries no dataset clause: FROM and FROM NAMED are \
+                              written on a whole query, which is the scope they apply to";
+
+        for inner in [
+            "FROM <http://example.org/g>",
+            "FROM NAMED <http://example.org/n>",
+            "FROM <http://example.org/g> FROM NAMED <http://example.org/n>",
+        ] {
+            let q = format!(
+                "{GM}SELECT ?a WHERE {{ {{ SELECT ?a {inner} WHERE {{ ?a a purrdf:T }} }} }}"
+            );
+            let err = try_parse(&q).expect_err("a sub-SELECT dataset clause is not a production");
+            let ParseError::Syntax { reason, at } = &err else {
+                panic!("`{inner}` must be a Syntax refusal, got {err:?}");
+            };
+            assert_eq!(*reason, REASON, "for `{inner}`");
+            assert_eq!(
+                *at,
+                q.find(inner).expect("the clause is in the query"),
+                "`{inner}` must be reported at its own first FROM"
+            );
+        }
+
+        // An `EXISTS` body is reached through the same sub-select site, so the refusal
+        // is not a property of one enclosing shape.
+        let nested = format!(
+            "{GM}SELECT ?a WHERE {{ ?a a purrdf:T \
+             FILTER EXISTS {{ {{ SELECT ?a FROM <http://example.org/g> WHERE {{ ?a a purrdf:U }} }} }} }}"
+        );
+        let err = try_parse(&nested).expect_err("an EXISTS body is a group graph pattern too");
+        let ParseError::Syntax { reason, at } = &err else {
+            panic!("expected a Syntax refusal, got {err:?}");
+        };
+        assert_eq!(*reason, REASON);
+        assert_eq!(
+            *at,
+            nested.find("FROM").expect("the clause is in the query"),
+            "reported at the clause, wherever the sub-select was reached from"
+        );
+
+        // THE NEIGHBOURS THAT MUST STILL PARSE. Every one of these is valid SPARQL and
+        // none of them is what the refusal is about: a sub-select with no dataset
+        // clause, a whole query with one, and a whole query with one that also contains
+        // a sub-select — the shape a wrapping layer emits, and the shape a refusal
+        // reaching one token too far would have closed.
+        for q in [
+            format!("{GM}SELECT ?a WHERE {{ {{ SELECT ?a WHERE {{ ?a a purrdf:T }} }} }}"),
+            format!("{GM}SELECT ?a FROM <http://example.org/g> WHERE {{ ?a a purrdf:T }}"),
+            format!(
+                "{GM}SELECT ?a FROM <http://example.org/g> FROM NAMED <http://example.org/n> \
+                 WHERE {{ {{ SELECT ?a WHERE {{ ?a a purrdf:T }} }} }}"
+            ),
+            format!(
+                "{GM}SELECT ?a FROM NAMED <http://example.org/n> \
+                 WHERE {{ GRAPH ?g {{ {{ SELECT ?a WHERE {{ ?a a purrdf:T }} }} }} }}"
+            ),
+        ] {
+            try_parse(&q).unwrap_or_else(|err| panic!("`{q}` is valid SPARQL, got {err:?}"));
+        }
+    }
+
+    /// **The dataset clause's byte range is reported beside the prologue's offset, and
+    /// excising it leaves a query that still parses.**
+    ///
+    /// This is the position a layer wrapping a supplied query in a sub-`SELECT` has to
+    /// have: the clause cannot stay in the body, because the body becomes a sub-select
+    /// and that production refuses it, and it cannot be re-rendered from the algebra
+    /// without rewriting spellings the caller depends on. So it is moved as text, which
+    /// needs a range.
+    ///
+    /// The range deliberately ends at the token *after* the run rather than at the last
+    /// IRI, so it carries its own trailing whitespace and the two remaining halves
+    /// rejoin without a token collision.
+    #[test]
+    fn the_dataset_clause_range_is_reported_and_excising_it_leaves_a_query() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+
+        let text = "PREFIX ex: <http://example.org/ns#>\nSELECT ?s FROM <http://example.org/g> \
+                    FROM NAMED <http://example.org/n>\nWHERE { ?s ex:p ?o }";
+        let split = parser
+            .parse_query_split(text, &options)
+            .expect("a query with a dataset clause parses");
+        let at = split.dataset_at.clone().expect("the clause is reported");
+        assert_eq!(
+            &text[at.clone()],
+            "FROM <http://example.org/g> FROM NAMED <http://example.org/n>\n",
+            "the whole run, from the first FROM to the token after the last clause"
+        );
+        assert!(
+            at.start >= split.body_at,
+            "a dataset clause follows the query form's head, so it is inside the body"
+        );
+
+        // The excision the wrapping layer performs, executed: the clause comes out, the
+        // rest is untouched, and what is left is still a query.
+        let excised = format!("{}{}", &text[..at.start], &text[at.end..]);
+        assert_eq!(
+            excised, "PREFIX ex: <http://example.org/ns#>\nSELECT ?s WHERE { ?s ex:p ?o }",
+            "nothing but the dataset clause moves"
+        );
+        parser
+            .parse_query_split(&excised, &options)
+            .expect("the body without its dataset clause is still a query");
+
+        // All four query forms carry the clause, and all four report it: the position is
+        // a fact about the text rather than about the one form a caller happens to wrap.
+        for form in [
+            "SELECT ?s FROM <http://example.org/g> WHERE { ?s ?p ?o }",
+            "CONSTRUCT { ?s ?p ?o } FROM <http://example.org/g> WHERE { ?s ?p ?o }",
+            "ASK FROM <http://example.org/g> WHERE { ?s ?p ?o }",
+            "DESCRIBE ?s FROM <http://example.org/g> WHERE { ?s ?p ?o }",
+        ] {
+            let reported = parser
+                .parse_query_split(form, &options)
+                .unwrap_or_else(|err| panic!("`{form}` parses, got {err:?}"))
+                .dataset_at
+                .unwrap_or_else(|| panic!("`{form}` writes a dataset clause"));
+            assert_eq!(
+                &form[reported], "FROM <http://example.org/g> ",
+                "for `{form}`"
+            );
+        }
     }
 
     #[test]
@@ -7844,6 +8331,52 @@ mod tests {
         assert_eq!(*destination, GraphTarget::Default);
     }
 
+    /// The prologue offset is the start of the query form, so the two halves are
+    /// the caller's own bytes and the algebra is the one `parse_query_with` returns.
+    ///
+    /// Both neighbours are asserted: a text with directives splits after the last
+    /// one, and a text without them splits at zero — which is what makes the offset
+    /// a position rather than a guess about where `SELECT` tends to be written.
+    #[test]
+    fn a_prologue_splits_at_the_query_form_and_an_absent_one_splits_at_zero() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+        let prefixed = "BASE <http://example.org/>\nPREFIX ex: <http://example.org/ns#>\n# and a comment\nSELECT ?s WHERE { ?s ex:p ?o }";
+        let split = parser
+            .parse_query_split(prefixed, &options)
+            .expect("a prefixed query parses");
+        assert_eq!(
+            &prefixed[split.body_at..],
+            "SELECT ?s WHERE { ?s ex:p ?o }",
+            "the offset is the start of the query form, comments and all"
+        );
+        assert_eq!(
+            split.query,
+            parser
+                .parse_query_with(prefixed, &options)
+                .expect("the same text parses through the plain entry"),
+            "and the algebra beside the offset is the ordinary one"
+        );
+        assert_eq!(
+            split.dataset_at, None,
+            "this text writes no dataset clause, and an absence is reported as one"
+        );
+
+        let bare = "SELECT ?s WHERE { ?s <http://example.org/ns#p> ?o }";
+        let at = parser
+            .parse_query_split(bare, &options)
+            .expect("a query with no prologue parses")
+            .body_at;
+        assert_eq!(at, 0, "no prologue is a split at the front of the text");
+
+        assert!(
+            parser
+                .parse_query_split("PREFIX ex: <urn:x#>", &options)
+                .is_err(),
+            "a prologue with no query form is still not a query"
+        );
+    }
+
     #[test]
     fn update_sequence_of_operations() {
         let u = parse_update("CREATE GRAPH purrdf:g ; CLEAR DEFAULT ;");
@@ -8187,7 +8720,8 @@ mod tests {
             let mut p = SparqlParser::new()
                 .parser_for(query, &options)
                 .expect("tokenize");
-            p.parse_query().expect("parse");
+            p.parse_prologue().expect("prologue");
+            p.parse_query_form().expect("parse");
             p.expect_eof().expect("a full query consumes every token");
             p.debug_scope_consultations()
         }

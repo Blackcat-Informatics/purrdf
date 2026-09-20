@@ -5,12 +5,17 @@
 //! digest sensitivity, decode round-trip and loud version refusal.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
-    ProducerDecision, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
-    StatisticsSnapshot, Term, UnservedReason, UnservedTerm,
+    ProducerDecision, ReadBound, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
+    StatisticsSnapshot, Term, TopK, UnservedReason, UnservedTerm,
+};
+use purrdf_sparql_eval::{
+    CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
+    RankedDeclaration,
 };
 
 fn iri(text: &str) -> Iri {
@@ -27,6 +32,7 @@ fn baseline() -> Plan {
 
     Plan {
         version: Plan::VERSION,
+        read_bound: ReadBound::Bounded(TopK::new(25)),
         request_terms: vec![
             RequestTerm::Lexical {
                 text: "quick brown".to_owned(),
@@ -183,6 +189,120 @@ fn canonical_bytes_and_decode_round_trip() {
     let decoded = Plan::from_canonical_bytes(&bytes).expect("canonical decode");
     assert_eq!(decoded, plan);
     assert_eq!(decoded.canonical_bytes(), bytes);
+}
+
+/// Every rejection reason survives the canonical round trip under its own
+/// discriminator byte.
+///
+/// A reason is the evidence a caller reads to find out why its answer is
+/// narrower than it asked for, and the byte it is written as lands in the
+/// identity of the plan. A reason that decoded as a *different* reason would be a plan that
+/// reads back as blaming the wrong dimension while still carrying an identity
+/// the caller recognises, so every variant is encoded and decoded here rather
+/// than only the ones a fixture happens to produce.
+#[test]
+fn every_rejection_reason_round_trips_under_its_own_tag() {
+    let reasons = [
+        RejectionReason::NotRanked,
+        RejectionReason::NoAcceptedTerm,
+        RejectionReason::DepthExceeded,
+        RejectionReason::UnsatisfiedConstraint,
+    ];
+    let mut ids = Vec::with_capacity(reasons.len());
+    for reason in reasons {
+        let mut plan = baseline();
+        plan.producer_decisions = vec![ProducerDecision::Rejected {
+            producer: "http://example.org/pf/knn".to_owned(),
+            reason,
+        }];
+        let bytes = plan.canonical_bytes();
+        let decoded = Plan::from_canonical_bytes(&bytes).expect("canonical decode");
+        assert_eq!(
+            decoded.producer_decisions, plan.producer_decisions,
+            "{reason:?} decoded as something else"
+        );
+        assert_eq!(decoded.canonical_bytes(), bytes);
+        ids.push(plan.id());
+    }
+    let distinct: std::collections::BTreeSet<_> = ids.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        ids.len(),
+        "each reason takes its own byte, so each plan takes its own identity"
+    );
+}
+
+/// The plan carrying `reason` as its one rejection decision.
+fn plan_rejecting_with(reason: RejectionReason) -> Plan {
+    let mut plan = baseline();
+    plan.producer_decisions = vec![ProducerDecision::Rejected {
+        producer: "http://example.org/pf/knn".to_owned(),
+        reason,
+    }];
+    plan
+}
+
+/// A rejection-reason byte no variant is written as is refused, not substituted.
+///
+/// The vocabulary is closed and its bytes are dense, so the first byte past the
+/// last variant is the one a plan written by a differently-versioned peer — or by
+/// hand — would carry. Decoding it as *some* reason would hand a caller a verdict
+/// about its own query that nothing in this process ever decided: the point of
+/// the reason is that it is evidence.
+///
+/// The tag's position is located rather than hard-coded, by encoding two plans
+/// that differ in nothing but the reason and taking the one byte that moved.
+#[test]
+fn a_rejection_reason_byte_no_variant_is_written_as_is_refused() {
+    let depth = plan_rejecting_with(RejectionReason::DepthExceeded).canonical_bytes();
+    let mut constraint =
+        plan_rejecting_with(RejectionReason::UnsatisfiedConstraint).canonical_bytes();
+    assert_eq!(
+        depth.len(),
+        constraint.len(),
+        "two reasons are one byte each, so the encodings are the same length"
+    );
+    let moved: Vec<usize> = depth
+        .iter()
+        .zip(&constraint)
+        .enumerate()
+        .filter(|(_, (left, right))| left != right)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        moved.len(),
+        1,
+        "the reason is the only thing that differs, so exactly one byte moved"
+    );
+    let tag = moved[0];
+    assert_eq!(
+        (depth[tag], constraint[tag]),
+        (2, 3),
+        "and the bytes at that position are the two reasons' own dense tags"
+    );
+
+    // One past the last variant: the byte a peer that still wrote a reason this
+    // vocabulary no longer has would put here.
+    constraint[tag] = 4;
+    let error = Plan::from_canonical_bytes(&constraint)
+        .expect_err("an unknown rejection reason is refused");
+    match error {
+        PlanError::InvalidTag { what, tag: byte } => {
+            assert_eq!(what, "rejection reason");
+            assert_eq!(byte, 4);
+        }
+        other => panic!("expected InvalidTag, got {other:?}"),
+    }
+
+    // The neighbour that must still decode: the same bytes with the real tag back
+    // in place. A decoder that refused every reason would pass the assertion
+    // above and be useless.
+    constraint[tag] = 3;
+    let decoded = Plan::from_canonical_bytes(&constraint).expect("the real tag still decodes");
+    assert_eq!(
+        decoded.producer_decisions,
+        plan_rejecting_with(RejectionReason::UnsatisfiedConstraint).producer_decisions
+    );
 }
 
 /// Every interval shape the two new arms admit, so the canonical encoding's new
@@ -642,4 +762,97 @@ fn crate_sources_contain_no_function_pointers() {
             "{name} contains a function pointer; plans and capability declarations must be pure data"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// T6.6. A producer's candidate-domain declaration reaches the plan identity.
+//
+// A plan records the content fingerprint of the registry it was planned
+// against, and the fingerprint folds in every declared field of every ranked
+// declaration. The domain declaration is one of those fields, and it must be:
+// two registries that differ only in what their producers may name FUSE
+// DIFFERENTLY — one licenses a bounded read, the other does not — so a plan
+// admitted against one must not be admissible against the other. The route is
+// registry declaration → content fingerprint → plan bytes → plan id, and this
+// test walks all of it rather than asserting the middle.
+// ---------------------------------------------------------------------------
+
+/// A one-producer registry whose declaration names `domains` and is otherwise
+/// fixed, so the fingerprint difference below can come from nothing else.
+fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        "http://example.org/ns#ranked",
+        Arc::new(MemoryRelation::new(1, 1, Vec::new()).expect("an empty table is uniform")),
+        RankedDeclaration {
+            stratum: purrdf_core::parse_iri("http://example.org/stratum/a").expect("fixture IRI"),
+            accepted_terms: Vec::new(),
+            depth_placement: None,
+            candidate_position: 0,
+            duplicates: DuplicatePolicy::Unique,
+            domains,
+            block_position: None,
+            mandatory: false,
+        },
+    );
+    registry
+}
+
+/// The baseline plan, recording `registry`'s durable content fingerprint.
+fn plan_against(registry: &PropertyFunctionRegistry) -> Plan {
+    Plan {
+        registry_content_fingerprint: registry
+            .content_fingerprint()
+            .expect("the fixture declarations are readable"),
+        ..baseline()
+    }
+}
+
+#[test]
+fn a_declared_candidate_domain_moves_the_plan_identity() {
+    let unrestricted = registry_declaring(CandidateDomains::Unrestricted);
+    let restricted = registry_declaring(CandidateDomains::within([DomainTag::parse(
+        "http://example.org/domain/documents",
+    )
+    .expect("fixture domain tag")]));
+
+    assert_ne!(
+        unrestricted.content_fingerprint().expect("readable"),
+        restricted.content_fingerprint().expect("readable"),
+        "the declaration reaches the registry's durable fingerprint"
+    );
+    assert_ne!(
+        plan_against(&unrestricted).id(),
+        plan_against(&restricted).id(),
+        "and through it the plan's identity, so a plan admitted against one \
+         wiring cannot run against a wiring that fuses differently"
+    );
+
+    // The valid neighbour, and the property that makes the identity usable: two
+    // registries declaring the SAME domains plan to the same identity. An id
+    // that moved between identical wirings would invalidate every cached plan
+    // on every rebuild.
+    let same = registry_declaring(CandidateDomains::within([DomainTag::parse(
+        "http://example.org/domain/documents",
+    )
+    .expect("fixture domain tag")]));
+    assert_eq!(
+        plan_against(&restricted).id(),
+        plan_against(&same).id(),
+        "the identity is a function of what was declared, not of which registry \
+         instance declared it"
+    );
+
+    // And two different restrictions are two different identities: the tags
+    // themselves reach the digest, not merely the fact that a restriction
+    // exists.
+    let other_block = registry_declaring(CandidateDomains::within([DomainTag::parse(
+        "http://example.org/domain/people",
+    )
+    .expect("fixture domain tag")]));
+    assert_ne!(
+        plan_against(&restricted).id(),
+        plan_against(&other_block).id(),
+        "the blocks are part of the declaration, so they are part of the identity"
+    );
 }

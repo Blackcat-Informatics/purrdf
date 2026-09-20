@@ -422,6 +422,10 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
             schema,
             rows: minted,
             certificate,
+            // Taken while the child is still alive, exactly as the rows are: a branch can
+            // contain a property-function call (`is_parallel_safe_pattern` admits a
+            // `Stable` relation), and its attestation belongs to the query's receipt.
+            witness: core::mem::take(&mut child.witness),
         })
     };
 
@@ -433,12 +437,19 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         schema: l_schema,
         rows: l_minted,
         certificate: _,
+        witness: l_witness,
     } = left_branch;
     let UnionBranch {
         schema: r_schema,
         rows: r_minted,
         certificate: _,
+        witness: r_witness,
     } = right_branch;
+    // Both surviving branches' attestations, folded back into the parent now that the
+    // immutable borrow the join held is over. Branch order is irrelevant here (the fold
+    // is commutative — see `RelationWitness::merge`); what matters is that a branch the
+    // rule above emptied contributes nothing, which it now cannot.
+    ctx.absorb_worker_witnesses([l_witness, r_witness]);
 
     let out = l_schema.union(&r_schema);
     let out_len = out.len();
@@ -543,6 +554,12 @@ struct UnionBranch<T> {
     rows: Vec<T>,
     /// The certificate, when a governor stopped the arm short.
     certificate: Option<crate::governor::lift::Certificate>,
+    /// What the relations this arm invoked attested, taken from the branch's own
+    /// forked child before that child dies with the closure. Rides WITH the rows rather
+    /// than being merged inside the closure because the parent context is borrowed
+    /// immutably for the duration of the join — and because the branch-order rule below
+    /// decides whether this arm contributed anything at all.
+    witness: crate::witness::RelationWitness,
 }
 
 /// The `UNION` branch-order truncation rule, applied.
@@ -579,6 +596,14 @@ fn union_branch_order<T>(
         right.rows = Vec::new();
         right.schema = Arc::new(VarSchema::new());
         right.certificate = None;
+        // The attestations of a branch whose rows are discarded go with them, for the
+        // SAME reason the rows do. The sequential body never starts the right branch once
+        // the left has truncated, so no relation in it is ever invoked there; `rayon::join`
+        // starts both, so on the parallel path it may well have been. Keeping the evidence
+        // would make the receipt of a governed query describe work that did not reach the
+        // answer, and describe it only on the parallel path — the schedule dependence the
+        // branch-order rule exists to remove.
+        right.witness = crate::witness::RelationWitness::default();
         return (left, right, Some((0, certificate)));
     }
     let governing = right
@@ -1020,7 +1045,10 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     // A left outer join emits at least one row per left row.
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let rows = if cell_ceiling.is_none() && ctx.may_fork_row_loop(expr) {
-        crate::parallel::par_chunk_try_map_init(
+        // Harvesting, for `crate::expr::eval_filter`'s reason: the join predicate can
+        // reach a property function through an embedded `EXISTS`, and a worker's
+        // attestation must not die with the worker.
+        let (rows, witnesses) = crate::parallel::par_chunk_try_map_init(
             &l.rows,
             || ctx.fork_for_worker(),
             |child, acc, lrow| {
@@ -1054,7 +1082,10 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 }
                 Ok(())
             },
-        )?
+            |child| core::mem::take(&mut child.witness),
+        )?;
+        ctx.absorb_worker_witnesses(witnesses);
+        rows
     } else {
         let mut rows =
             Vec::with_capacity(cell_ceiling.map_or(l.rows.len(), |cap| cap.min(l.rows.len())));
@@ -2362,11 +2393,21 @@ mod tests {
                     cause: purrdf_core::StopCause::Cancelled,
                 },
             )),
+            witness: crate::witness::RelationWitness::default(),
         };
+        // A right branch that DID invoke a relation before the left branch's trip became
+        // known — the evidence the rule must discard along with the rows.
+        let mut right_witness = crate::witness::RelationWitness::default();
+        right_witness.record(
+            "https://example.org/rel/right",
+            crate::property_fn::IndexGeneration::Undeclared,
+            crate::property_fn::ServiceLevel::Undeclared,
+        );
         let complete_right = UnionBranch {
             schema: Arc::new(VarSchema::from_vars([Variable::new("p")])),
             rows: vec!["right-1", "right-2", "right-3"],
             certificate: None,
+            witness: right_witness,
         };
         let (left_branch, right_branch, governing) =
             union_branch_order(truncated_left, complete_right);
@@ -2377,6 +2418,12 @@ mod tests {
              governed result"
         );
         assert!(right_branch.schema.is_empty());
+        assert!(
+            right_branch.witness.is_empty(),
+            "evidence about a branch whose rows were discarded must be discarded too, or \
+             the receipt would describe work the answer never saw — and only on the \
+             parallel path"
+        );
         assert_eq!(
             governing.map(|(ordinal, _)| ordinal),
             Some(0),
@@ -2389,7 +2436,14 @@ mod tests {
             schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec!["left-1"],
             certificate: None,
+            witness: crate::witness::RelationWitness::default(),
         };
+        let mut surviving_witness = crate::witness::RelationWitness::default();
+        surviving_witness.record(
+            "https://example.org/rel/right",
+            crate::property_fn::IndexGeneration::Undeclared,
+            crate::property_fn::ServiceLevel::Undeclared,
+        );
         let truncated_right = UnionBranch {
             schema: Arc::new(VarSchema::from_vars([Variable::new("p")])),
             rows: vec!["right-1"],
@@ -2398,11 +2452,17 @@ mod tests {
                     cause: purrdf_core::StopCause::Cancelled,
                 },
             )),
+            witness: surviving_witness,
         };
         let (left_branch, right_branch, governing) =
             union_branch_order(complete_left, truncated_right);
         assert_eq!(left_branch.rows, vec!["left-1"]);
         assert_eq!(right_branch.rows, vec!["right-1"]);
+        assert!(
+            !right_branch.witness.is_empty(),
+            "a branch whose rows DO reach the answer keeps its evidence — the neighbour \
+             case that proves the discard above is a rule and not a blanket drop"
+        );
         assert_eq!(governing.map(|(ordinal, _)| ordinal), Some(1));
     }
 

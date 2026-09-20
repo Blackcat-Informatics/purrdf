@@ -227,6 +227,16 @@ pub enum InternedOutcome<'a, 'd, D: DatasetView + Sync> {
 /// a materialized [`SparqlResult`](purrdf_core::SparqlResult). The exhausted arm
 /// is unchanged, partial answers included — a trip is a cold, terminal path, and
 /// the certified partial rows are the actionable half of the report.
+///
+/// The width ratio between the arms is the design, not an oversight, which is why
+/// clippy's `large_enum_variant` is scoped off here. The exhausted arm is boxed
+/// because it is cold. The complete arm carries its two receipts inline because it
+/// is the arm the per-focus-node change path takes on every call, and the
+/// `relations` receipt now carries the relation witness — the per-relation ledger
+/// of which index generation answered and whether it was whole — so it is the
+/// wider of the two. Boxing either receipt to please the ratio would put a heap
+/// allocation on the hot arm to save stack width on a cold one.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum InternedGoverned<R> {
     /// The execution completed within budget; `value` is the visitor's return.
@@ -235,7 +245,8 @@ pub enum InternedGoverned<R> {
         value: R,
         /// This execution's resource receipt.
         evidence: purrdf_core::GovernorEvidence,
-        /// The property-function registry identity the plan was admitted under.
+        /// The property-function registry identity the plan was admitted under,
+        /// carrying the witness this execution's relations wrote.
         relations: RelationIdentity,
     },
     /// A governor stopped the execution; the visitor never ran.
