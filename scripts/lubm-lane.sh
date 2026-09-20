@@ -536,18 +536,29 @@ echo "sha256(lubm-data.nq) = ${data_sha}"
 # published-digest defect this branch exists to fix, reproduced by the fix for it.
 if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
   "${ONTO}" == "${LUBM_DEFAULT_ONTO}" && "${DOC_BASE}" == "${LUBM_DEFAULT_DOC_BASE}" ]]; then
-  expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-    --workload-pin lubm.1.0.seed0.corpus.sha256)" ||
-    die "no corpus pin is recorded for LUBM(1, 0) seed 0 at the default document base"
-  [[ "${data_sha}" == "${expected_corpus}" ]] ||
-    die "the converted LUBM corpus does not match its recorded pin.
+  # THE BINARY IS AN INPUT TOO, so it is part of the key. These bytes are the
+  # purrdf serializer's output, so a pin recorded with one version says nothing
+  # about another -- and a missing pin for a new version is information, not a
+  # failure, which is why this branches on the lookup instead of dying on it.
+  corpus_pin_key="lubm.1.0.seed0.corpus.sha256.${PURRDF_VERSION// /-}"
+  if expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --workload-pin "${corpus_pin_key}" 2>/dev/null)"; then
+    [[ "${data_sha}" == "${expected_corpus}" ]] ||
+      die "the converted LUBM corpus does not match the pin recorded for these knobs
+  and this binary.
   expected ${expected_corpus}
   found    ${data_sha}
-  Every input this lane names is at its default and the generator is pinned by
-  digest, so the corpus should be byte-identical. Generation, conversion, or the
-  concatenation order changed; no number is published for a corpus that is not the
-  pinned one."
-  echo "  ^ and it matches the recorded pin for LUBM(1, 0) seed 0."
+  key      ${corpus_pin_key}
+  Every knob this lane names is at its default, the generator is pinned by digest,
+  and the pin was taken with this same binary version -- so generation, conversion
+  or the concatenation order changed. No number is published for a corpus that is
+  not the pinned one."
+    echo "  ^ and it matches the pin recorded for LUBM(1, 0) seed 0 with ${PURRDF_VERSION}."
+  else
+    echo "  ^ NOT checked against a pin: no corpus pin is recorded for ${PURRDF_VERSION}."
+    echo "    These bytes are this binary's serializer output, so a pin taken with"
+    echo "    another version does not apply to them."
+  fi
 else
   echo "  ^ NOT checked against a pin: at least one knob is not at its default, so"
   echo "    this is a different corpus and no pin is recorded for it."

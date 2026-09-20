@@ -333,11 +333,21 @@ WORKLOAD_PINS: dict[str, str] = {
     "watdiv.10M.corpus.sha256": (
         "7cfe0341d578a677d3b5d562eaaf94d67aff8587d9e0ef3d83cc82765b77cddd"
     ),
-    # sha256 over the concatenated LUBM corpus at the default knobs. Deterministic
-    # given LUBM(1, 0) seed 0, the default document base, and the collation the lane
-    # pins -- so it is a constant, and printing a constant instead of checking it is
-    # the missed refusal this file's neighbours are all about.
-    "lubm.1.0.seed0.corpus.sha256": (
+    # sha256 over the concatenated LUBM corpus at the default knobs -- AND FOR A
+    # NAMED BINARY, which is why the version is in the key.
+    #
+    # These bytes are the purrdf serializer's OUTPUT: the lane converts each
+    # generated RDF/XML document with `purrdf convert` and digests the
+    # concatenation. So the binary is an input to this digest exactly as the seed
+    # is, and a pin taken with one version does not apply to another --
+    # `watdiv-lane.sh` already reasons this way about its pack, whose stamp key is
+    # the dataset digest AND the binary version.
+    #
+    # Putting the version in the key rather than in a second condition makes a
+    # version bump a MISSING pin, which the lane reports as "not checked for this
+    # binary", instead of a mismatch that would blame generation or conversion for
+    # a difference the new serializer is entitled to.
+    "lubm.1.0.seed0.corpus.sha256.purrdf-2.0.2": (
         "b3fbfcc822092428fcf6e03757f0ca555e39c2b29304bc8638c9d9d05f875308"
     ),
     # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
