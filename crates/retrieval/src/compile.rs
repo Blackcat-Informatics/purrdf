@@ -92,7 +92,7 @@
 //! No admitted plan carries a depth of zero, so nothing here emits `LIMIT 0`.
 //! That bound reads no rows: whatever the relation holds, the unit hands back
 //! nothing, and the stratum is then reported exhausted having emitted nothing —
-//! the strongest completeness claim this layer makes, made about the bound rather
+//! the one ending that names no stopper, said about the bound rather
 //! than about the data, and indistinguishable in every trailer field from an
 //! honest empty answer. A bound may narrow a read and
 //! must never eliminate one, so the planner floors every derived depth at one,
@@ -137,8 +137,8 @@
 //! depth three and a producer holding exactly three rows read at depth three
 //! both hand back three rows and an empty cursor, so an executor that only ever
 //! saw `depth` rows had to guess — and the guess it used to make was
-//! [`ProducerStatus::Exhausted`](crate::ProducerStatus), which is the strongest
-//! completeness claim this layer can utter, minted for a read the plan itself
+//! [`ProducerStatus::Exhausted`](crate::ProducerStatus), which is the one ending
+//! that names no stopper, minted for a read the plan itself
 //! cut short. That is the zero-depth fault one size larger: a bound on the read
 //! silently becoming a statement about the answer.
 //!
@@ -159,8 +159,8 @@
 //! caller assembling a bundle by hand writes `LIMIT <depth>`, because the depth is the
 //! number this layer reasons about everywhere, and the read then returned `depth` rows
 //! with no slot for the probe. `execute` writes `DepthReached` only when a row arrives
-//! *past* the depth, so that read was reported `Exhausted` — the strongest
-//! completeness claim this layer has — for a text that had cut it. A depth of three
+//! *past* the depth, so that read was reported `Exhausted` — the one ending that
+//! names no stopper — for a text that had cut it. A depth of three
 //! over nine real rows reported `Exhausted { rows_emitted: 3 }`, and the trailer above
 //! it read `Exact`.
 //!
@@ -676,8 +676,8 @@ pub enum UnitError {
 ///
 /// Driving [`execute`](crate::execute) over a text of a caller's own is the point of
 /// [`Self::new`], and it stays open. What such a unit cannot do is yield
-/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — this layer's strongest
-/// completeness claim — because the claim rests on a read this layer bounded one row
+/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — the one ending that names
+/// no stopper — because that ending rests on a read this layer bounded one row
 /// past the depth, and it cannot see what bound a caller's text carries. Its ending
 /// names that text as the stopper instead
 /// ([`StreamEnding::SuppliedQueryEnded`](crate::StreamEnding)), which is the same
@@ -1440,7 +1440,7 @@ fn ranked_declaration<'a>(
 /// argument's type. A saturating `+ 1` at `u32::MAX` emitted a bound *equal* to
 /// the depth: no probe row could arrive, `execute` writes `DepthReached` only when
 /// a row arrives past the depth, and the read was therefore reported `Exhausted`
-/// — the strongest completeness claim this layer has — for a stratum the `LIMIT`
+/// — the one ending that names no stopper — for a stratum the `LIMIT`
 /// may well have cut. That is the fault this whole header is about, surviving at
 /// the one depth where the mitigation was dropped. So the depth arrives as a
 /// [`ProbedDepth`], which the waist mints only for a depth whose probe row fits

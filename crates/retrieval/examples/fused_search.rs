@@ -61,10 +61,12 @@
 //! * **the evidence identity**, a digest of exactly those attestations. Two
 //!   answers assembled from differently-aged indexes carry different ids even
 //!   when the plan, the profile and every row match;
-//! * **what that makes of the scores** — exact, or a lower bound naming the
-//!   strata whose shortfall made it one. A lower bound is still a real order over
-//!   real rows; what it withdraws is the claim that a missing row would have
-//!   stayed missing;
+//! * **what that makes of the scores** — exact, or an estimate naming the strata
+//!   whose shortfall made it one, on both sides. The error runs in two
+//!   directions because this layer scores by rank alone: a stratum that misses a
+//!   row withholds that row's contribution *and* promotes every row behind it.
+//!   An estimate is still a real order over real rows; what it withdraws is the
+//!   claim that a missing row would have stayed missing;
 //! * **the candidate domains in force**, which say what each producer could ever
 //!   have named. Both producers here rank the same four documents and so promise
 //!   nothing narrower than "anything".
@@ -85,8 +87,9 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, parse_iri,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus, RequestTerm,
-    RetrievalRequest, ScoreExactness, SearchResult, Statistics, Term, TopK, search,
+    AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionProfile, Iri, OrderFidelity,
+    ProducerStatus, RankFidelity, RequestTerm, RetrievalRequest, ScoreExactness, ScoreInterval,
+    SearchResult, Statistics, Term, TopK, search,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, EmbeddingKnnRelation, EmbeddingSpace, IndexGeneration, KnnGuard,
@@ -101,7 +104,16 @@ const TEXT_PRODUCER: &str = "https://example.org/pf/note-search";
 /// The IRI this host registers the nearest-neighbour producer under.
 const KNN_PRODUCER: &str = "https://example.org/pf/neighbours";
 /// The stratum the text producer ranks within.
+const SAMPLE_PRODUCER: &str = "https://example.org/pf/archive-search";
 const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
+const SAMPLE_STRATUM: &str = "https://example.org/stratum/archive";
+
+/// What the archive producer below does not promise, in its own words.
+///
+/// A host writes this, not the library: only the host knows how its index
+/// relates to the corpus it means. It is carried into the answer verbatim.
+const SAMPLE_EVIDENCE: &str = "approximate: this index covers the first half of the archive \
+     only; a miss here is not evidence the archive lacks the document";
 /// The stratum the nearest-neighbour producer ranks within.
 const KNN_STRATUM: &str = "https://example.org/stratum/neighbour";
 /// The predicate the host's unserved spatial term names.
@@ -302,6 +314,7 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         .ranked_declaration(
             parse_iri(TEXT_STRATUM).expect("the host's stratum IRI is valid"),
             Some(NOTE.to_owned()),
+            RankFidelity::EXACT,
             // This host's notes and its embedded entities are the same
             // entities — the example's whole point is a candidate both
             // producers name — so neither producer restricts its domain.
@@ -317,12 +330,61 @@ fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
         // requests name.
         TermKind::Iri,
         XSD_INTEGER.to_owned(),
+        // An exhaustive scan over vectors this host knows are its whole corpus.
+        // The first half of that is the relation's own property; the second half
+        // is this host's statement, and the relation refuses to make it on the
+        // host's behalf for the reason the sample producer below exists.
+        RankFidelity::EXACT,
         // As above: one entity space, ranked twice by two laws.
         CandidateDomains::Unrestricted,
     );
     registry.register_ranked(KNN_PRODUCER, Arc::new(knn), knn_declaration);
 
+    // A third producer over a genuinely PARTIAL index, declaring so. BM25 over
+    // the documents this index holds is exhaustive; whether those documents are
+    // the corpus the host means is a fact only the host has, and this is where
+    // it says it. Without the declaration the trailer below would report this
+    // stratum exactly as it reports the two above, and an answer missing half
+    // an archive would read as complete.
+    let sample = TextSearchRelation::new(Arc::new(sample_index()));
+    let sample_declaration = sample
+        .ranked_declaration(
+            parse_iri(SAMPLE_STRATUM).expect("the host's stratum IRI is valid"),
+            Some(NOTE.to_owned()),
+            RankFidelity {
+                completeness: Completeness::Lossy {
+                    evidence: Arc::from(SAMPLE_EVIDENCE),
+                },
+                // The rows it DOES hold are scored and ordered exactly, so a
+                // row's emitted rank is a lower bound on its true rank and the
+                // answer's error stays bounded.
+                order: OrderFidelity::Faithful,
+            },
+            CandidateDomains::Unrestricted,
+        )
+        .expect("a single-partition index declares a ranked order");
+    registry.register_ranked(SAMPLE_PRODUCER, Arc::new(sample), sample_declaration);
+
     registry
+}
+
+/// A BM25 index over the first half of the corpus only.
+///
+/// Built from a dataset that really is short, so the declaration beside it is a
+/// true statement rather than a label: a reader can delete the declaration and
+/// watch the answer start claiming more than it has.
+fn sample_index() -> TextIndex {
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE);
+    for (local, text, _) in &CORPUS[..CORPUS.len() / 2] {
+        let document = builder.intern_iri(&subject(local));
+        let literal = builder.intern_literal(RdfLiteral::simple(*text));
+        builder.push_quad(document, note, literal, None);
+    }
+    let data = builder.freeze().expect("the sample dataset is valid");
+    let config = TextIndexConfig::new(vec![TermValue::iri(NOTE)], GraphSelector::Any)
+        .expect("one IRI predicate is a well-formed configuration");
+    TextIndex::from_dataset(&*data, &config).expect("the sample index builds")
 }
 
 /// The request: a needle for the text producer, a seed for the neighbour
@@ -376,13 +438,14 @@ fn profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
     weights.insert(iri(TEXT_STRATUM), Fixed::ONE);
     weights.insert(iri(KNN_STRATUM), Fixed::ONE);
+    weights.insert(iri(SAMPLE_STRATUM), Fixed::ONE);
     FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
         .expect("the host's profile is valid")
 }
 
 /// A statistics provider that reports nothing.
 ///
-/// Both producers declare a finite row bound measured from their own frozen
+/// Every producer declares a finite row bound measured from its own frozen
 /// data, so there is no unbounded declaration for a cardinality to bound. A
 /// provider that invented one would put a number into the plan that no
 /// measurement supports.
@@ -455,13 +518,31 @@ fn report(result: &SearchResult) {
             .join(", ");
         // `Term` prints as its canonical lexical, which is what a row is about;
         // `{:?}` would print the newtype around it.
+        let error = match &row.interval {
+            ScoreInterval::Bounded { deficit, inflation } => format!(
+                "-{} / +{}",
+                inflation.to_decimal_lexical(),
+                deficit.to_decimal_lexical()
+            ),
+            ScoreInterval::Unbounded { perturbed } => {
+                format!("unbounded ({} stratum/strata)", perturbed.len())
+            }
+        };
         println!(
-            "  {}. {}  score {}  [{provenance}]",
+            "  {}. {}  score {} ({error})  [{provenance}]",
             position + 1,
             row.entity,
             row.score.to_decimal_lexical()
         );
     }
+    // How many of those places hold whatever the degraded strata did or did not
+    // find. Membership, never absence: a row past the prefix is possible, not
+    // excluded.
+    println!(
+        "  {} of {} rows are certain of their places",
+        result.trailer.certain_prefix(&result.rows),
+        result.rows.len()
+    );
 
     println!("\nproducer statuses");
     for (stratum, status) in &result.trailer.statuses {
@@ -493,7 +574,32 @@ fn report(result: &SearchResult) {
             ProducerStatus::ExecutionFailed { reason } => format!("could not run: {reason}"),
             ProducerStatus::TermsRejected => "declined the terms it was handed".to_owned(),
         };
+        // The status and the fidelity are printed on one line because they are
+        // read on one line: a status says how the read ENDED, the fidelity
+        // says whether the rows that ended it were all the rows that were DUE.
+        // `exhausted` beside `lossy` is not a contradiction and not a
+        // completeness claim.
+        let promise = match result.trailer.fidelities.get(stratum) {
+            None => "not asked".to_owned(),
+            Some(fidelity) => {
+                let mut parts = Vec::new();
+                match &fidelity.completeness {
+                    Completeness::Complete => parts.push("complete".to_owned()),
+                    Completeness::Lossy { evidence } => {
+                        parts.push(format!("LOSSY — {evidence}"));
+                    }
+                }
+                match &fidelity.order {
+                    OrderFidelity::Faithful => parts.push("order faithful".to_owned()),
+                    OrderFidelity::Perturbed { evidence } => {
+                        parts.push(format!("order PERTURBED — {evidence}"));
+                    }
+                }
+                parts.join("; ")
+            }
+        };
         println!("  {}: {rendered}", short(stratum));
+        println!("      declared: {promise}");
     }
 
     // What the depths this plan records were going to cost in rank resolution,
@@ -541,21 +647,6 @@ fn report(result: &SearchResult) {
     // not — whatever else about the query matched.
     println!("\nevidence identity {}", result.evidence_id);
 
-    println!("\nwhat that makes of the scores");
-    match &result.trailer.exactness {
-        ScoreExactness::Exact => println!(
-            "  exact: no stratum in this fusion declared itself short, so each score is \
-             the whole sum of the contributions that were due"
-        ),
-        ScoreExactness::LowerBounds { strata } => {
-            let named = strata.iter().map(short).collect::<Vec<_>>().join(", ");
-            println!(
-                "  lower bounds: {named} attested an incomplete index, so every score here \
-                 is at most what the whole index would have produced"
-            );
-        }
-    }
-
     // What each producer promised it could ever name. `Unrestricted` is the
     // widest promise and the one both producers here make, because both rank the
     // same four documents; a `Within` declaration is what lets fusion certify a
@@ -584,6 +675,44 @@ fn report(result: &SearchResult) {
         }
     }
 
+    println!("\nmay these scores be read as values?");
+    match &result.trailer.exactness {
+        ScoreExactness::Exact => {
+            // The narrower true claim, and deliberately not "every index was
+            // whole": a producer attests nothing about wholeness unless it is
+            // short, so silence is what most of them offer, and reading `Exact`
+            // as a certificate would put words in the mouth of every producer
+            // that stayed silent.
+            println!(
+                "  yes: no stratum in this fusion declared itself degraded on either axis, \
+                 so every score is the whole sum of the contributions that were due"
+            );
+        }
+        ScoreExactness::Estimated {
+            deficit,
+            inflation,
+            unbounded,
+        } => {
+            println!("  no — they are estimates, and the error runs both ways:");
+            println!(
+                "    may have withheld (scores too LOW):  {}",
+                deficit.iter().map(short).collect::<Vec<_>>().join(", ")
+            );
+            println!(
+                "    may have over-contributed (too HIGH): {}",
+                inflation.iter().map(short).collect::<Vec<_>>().join(", ")
+            );
+            if unbounded.is_empty() {
+                println!("    no finite bound: (none)");
+            } else {
+                println!(
+                    "    NO FINITE BOUND:                      {}",
+                    unbounded.iter().map(short).collect::<Vec<_>>().join(", ")
+                );
+            }
+        }
+    }
+
     println!("\nfused under profile {}", result.profile_id);
     println!("from plan {}", result.plan_id);
 }
@@ -609,5 +738,91 @@ fn main() {
     ))
     .expect("the host's producers answer");
 
+    verify(&result);
+
     report(&result);
+}
+
+/// What this example claims, checked rather than printed.
+///
+/// An example that only prints is a smoke test: it proves the code runs, and
+/// says nothing about whether the numbers above mean what the prose beside them
+/// says. These are the claims a reader is here to see, so they are asserted —
+/// `cargo run --example fused_search` fails if the demonstration stops
+/// demonstrating.
+fn verify(result: &SearchResult) {
+    let archive = iri(SAMPLE_STRATUM);
+
+    // The declaration reached the answer, verbatim.
+    let Some(Completeness::Lossy { evidence }) = result
+        .trailer
+        .fidelities
+        .get(&archive)
+        .map(|fidelity| fidelity.completeness.clone())
+    else {
+        panic!("the partial index declared a loss and the answer must carry it");
+    };
+    assert_eq!(
+        &*evidence, SAMPLE_EVIDENCE,
+        "the host's own words, not a summary of them"
+    );
+
+    // The two exhaustive producers are NOT swept up with it.
+    for stratum in [iri(TEXT_STRATUM), iri(KNN_STRATUM)] {
+        assert_eq!(
+            result.trailer.fidelities.get(&stratum),
+            Some(&RankFidelity::EXACT),
+            "a stratum that promised everything is reported as promising \
+             everything, not left out for a reader to interpret"
+        );
+    }
+
+    // The verdict names it on both sides, and nothing is unbounded.
+    let ScoreExactness::Estimated {
+        deficit,
+        inflation,
+        unbounded,
+    } = &result.trailer.exactness
+    else {
+        panic!("one stratum is short, so these scores are estimates");
+    };
+    assert!(deficit.contains(&archive) && inflation.contains(&archive));
+    assert_eq!(deficit.len(), 1, "and only that stratum: {deficit:?}");
+    assert!(
+        unbounded.is_empty(),
+        "its order is faithful, so the error stays bounded"
+    );
+
+    // The two directions, on the rows themselves. This is the property a
+    // one-sided reading gets wrong, and the printed table above is where a
+    // reader can see it: a row the short index NAMED may have been promoted by
+    // a row it missed, and a row it never named may be missing that
+    // contribution entirely.
+    let mut named = 0;
+    let mut unnamed = 0;
+    for row in &result.rows {
+        let ScoreInterval::Bounded { deficit, inflation } = &row.interval else {
+            panic!("no stratum here perturbs its order");
+        };
+        if row.contributions.iter().any(|(s, _, _)| *s == archive) {
+            named += 1;
+            assert!(
+                *inflation > Fixed::ZERO,
+                "{}: named by the short index, so its contribution is suspect",
+                row.entity
+            );
+        } else {
+            unnamed += 1;
+            assert!(
+                *deficit > Fixed::ZERO,
+                "{}: the short index could have named it and did not",
+                row.entity
+            );
+        }
+    }
+    assert!(
+        named > 0 && unnamed > 0,
+        "the fixture must show BOTH directions, or it demonstrates half the \
+         point: {named} named, {unnamed} not"
+    );
 }

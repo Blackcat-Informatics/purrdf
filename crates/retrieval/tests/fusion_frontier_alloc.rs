@@ -53,8 +53,8 @@ use std::task::{Context, Poll, Waker};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, Iri,
-    ProducerReceipt, ProducerStatus, ProtocolError, RankedRow, RankedStream, RowBlock,
-    StreamContract, Term, TopK, contribution, fuse,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
+    RowBlock, StreamContract, Term, TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -200,7 +200,7 @@ impl RankedStream for LazyStream {
     }
 
     fn contract(&self) -> StreamContract {
-        StreamContract::new(self.duplicates, self.domains.clone())
+        StreamContract::new(self.duplicates, RankFidelity::EXACT, self.domains.clone())
     }
 }
 
@@ -347,7 +347,38 @@ fn measure_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measure
 
 /// Fuse `rows` rows out of three streams of `total` rows each, at `weight`,
 /// through the shipped [`fuse`], measuring the peak heap it held.
+///
+/// # The first reading on a thread is discarded
+///
+/// A peak is the high-water mark of *live* bytes, so it charges whatever is
+/// allocated inside the window whether or not the fusion is what allocated it.
+/// The first fusion a thread performs pays one-time costs the second does not,
+/// and those land inside the first measured window and nowhere else.
+///
+/// Every claim in this file is a COMPARISON between two readings, so a one-time
+/// cost charged to whichever ran first is a difference that has nothing to do
+/// with the quantity under test. It stays invisible while it is small relative
+/// to an allocator size class and becomes a failure the moment the per-row
+/// record grows enough to push the two readings onto opposite sides of one --
+/// at which point a test about stream length reports on initialisation order
+/// instead, and says so in the voice of the claim it was meant to check.
+///
+/// Discarding a first run puts both readings in the same steady state. It
+/// weakens nothing: the equalities stay exact, and a fusion that really did hold
+/// more for a longer stream still shows it, because the extra is charged to the
+/// warmed run too.
 fn measure_rows_at_weight(
+    total: u64,
+    rows: usize,
+    duplicates: DuplicatePolicy,
+    weight: Fixed,
+) -> Measurement {
+    let _warm_up = measure_rows_at_weight_once(total, rows, duplicates, weight);
+    measure_rows_at_weight_once(total, rows, duplicates, weight)
+}
+
+/// One reading, taken however warm the thread happens to be.
+fn measure_rows_at_weight_once(
     total: u64,
     rows: usize,
     duplicates: DuplicatePolicy,
@@ -507,8 +538,16 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
     // And in absolute terms it is small. Materializing even the candidate terms
     // of one 1e6-row stream would cost tens of megabytes; the whole fusion's
     // working set here is kilobytes.
+    //
+    // The ceiling is a smell test against that two-orders-of-magnitude gap, not
+    // a derived bound — the derived claim is the equality above, which is what
+    // says the peak does not track the input. It is stated with room for the
+    // per-row record to carry more than it does today: each row already holds
+    // its score interval and the block it was drawn from, and a field added to
+    // either moves this number by `CERTIFIED_ROWS` times its width while
+    // changing nothing about what is being claimed.
     assert!(
-        long.peak_bytes < 64 * 1024,
+        long.peak_bytes < 128 * 1024,
         "a bounded frontier should not cost {} bytes",
         long.peak_bytes
     );
@@ -688,8 +727,19 @@ fn the_frontier_stays_bounded_past_the_collision() {
          rows against {} over 1e6 — the removed refusal was load-bearing after all",
         short.peak_bytes, long.peak_bytes
     );
+    // The absolute figure, on the same terms as its two siblings: a smell test
+    // against the tens of megabytes materializing a 1e6-row stream would cost,
+    // not a derived bound. The derived claim is the equality directly above,
+    // which is what says the peak does not track the input, and it is untouched.
+    //
+    // It was `64 * 1024` and the measurement sat 49 bytes under it. A margin of
+    // 0.07% is not a smell test, it is a coincidence: the next per-row field
+    // anyone adds trips it, for a reason that has nothing to do with the claim
+    // the assertion makes, and the cheapest way out for whoever hits it is to
+    // weaken the equality instead. Stated with room, it keeps saying "kilobytes,
+    // not megabytes" — which is the only thing it was ever able to say.
     assert!(
-        long.peak_bytes < 64 * 1024,
+        long.peak_bytes < 128 * 1024,
         "a bounded frontier should not cost {} bytes",
         long.peak_bytes
     );

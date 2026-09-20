@@ -362,9 +362,31 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// How many allocations one prepared-product `admit` costs.
 ///
 /// The same kind of pin as [`BIND_ALLOC_CONST`], over the other once-per-snapshot
-/// seam, and here the figure really is constant: admission makes 282 allocations
+/// seam, and here the figure really is constant: admission makes 284 allocations
 /// with either seam dataset bound.
-const ADMIT_ALLOC_CONST: u64 = 282;
+///
+/// # Why it moved from 282
+///
+/// Because admission's *input* grew, not because admission started doing more
+/// per row. `admit` re-derives the host-binding identity, which folds the
+/// property-function registry's canonical description, and a ranked declaration
+/// now carries a `RankFidelity` — what its producer promises about the rows it
+/// can name. That term is two independent axes, each contributing a framed
+/// discriminant and an explicit present/absent evidence field, so the
+/// description every declaration writes is four fields longer and the string it
+/// is built in reaches its next capacity two allocations sooner.
+///
+/// It has to be in there. The fidelity is part of what a producer declared, so a
+/// fingerprint that omitted it would let two registries differing only in
+/// whether a producer calls itself exhaustive share one identity — and a plan
+/// admitted against the honest one would be admitted against the other. The
+/// retrieval crate pins the consequence directly: two registries differing in
+/// nothing but one producer's fidelity compile to different plan ids.
+///
+/// The property this test is actually about is untouched: the figure is still
+/// the same for both seam datasets, which is the assertion above this one, and
+/// which is what says admission does not read the data.
+const ADMIT_ALLOC_CONST: u64 = 284;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;

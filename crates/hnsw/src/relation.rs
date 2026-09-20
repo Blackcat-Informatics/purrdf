@@ -14,9 +14,9 @@
 //!
 //! # The approximation contract, in the query surface
 //!
-//! The approximation contract declares three governed channels; the first is the guard's
-//! [`IndexLossContract`](purrdf_core::IndexLossContract) and evidence string, checked by
-//! [`crate::guard::load`]. The other two live here:
+//! The approximation contract declares four governed channels; the first is the guard's
+//! [`purrdf_core::IndexLossContract`] and evidence string, checked by
+//! [`crate::guard::load`]. The other three live here:
 //!
 //! * the relation is registered under the caller's predicate IRI, so the query text itself
 //!   names the provider and no namespace is fabricated;
@@ -24,7 +24,15 @@
 //!   relation's cursor can say "here are `k` candidates"; it can never say "no row is
 //!   nearer". `crates/hnsw/tests/oracle_contract.rs` asserts that even when a query misses
 //!   the exact oracle's nearest row, the empty and non-empty answers are ordinary cursor
-//!   results, never a completeness claim.
+//!   results, never a completeness claim;
+//! * **the composed answer.** The three channels above all speak to a caller reading this
+//!   relation directly, and none of them survives composition: fuse these rows with an
+//!   exhaustive producer's and the result reports one terminal status per stratum, with
+//!   nothing to say that this one offered candidates while the other returned everything
+//!   it had. So the promise is declared where a consumer of composed rows reads it, through
+//!   [`HnswRelation::ranked_declaration`], and carried verbatim into the fused answer.
+//!   A relation registered *without* that declaration is not silently fused; it forms no
+//!   stratum at all, and the request reports the term as unserved.
 //!
 //! # The call shape
 //!
@@ -53,11 +61,14 @@ use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{
-    EmbeddingView, TargetId, TargetSetId, TargetSetView, TermValue, VectorSpaceId, verify_embedding,
+    ContentDigest, EmbeddingView, IndexLossContract, Iri, TargetId, TargetSetId, TargetSetView,
+    TermValue, VectorSpaceId, verify_embedding,
 };
 use purrdf_sparql_eval::{
-    EvalError, Kernel, KnnGuard, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, Ranked, Volatility,
+    AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
+    IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, RankFidelity, Ranked, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 use crate::{HnswIndex, profile};
@@ -100,6 +111,8 @@ pub struct HnswSpace {
     guard: KnnGuard,
     /// The approximation evidence the profile publishes.
     evidence: String,
+    /// The content identity of everything that decides this space's answers.
+    generation: Arc<str>,
 }
 
 impl HnswSpace {
@@ -125,12 +138,18 @@ impl HnswSpace {
         check_distinct_terms(&terms)?;
         let mut rows_by_term: Vec<usize> = (0..terms.len()).collect();
         rows_by_term.sort_unstable_by(|&left, &right| terms[left].cmp(&terms[right]));
+        // Derived once, here, so BOTH constructors carry it: `from_artifact`
+        // delegates to this function, and a field present on one construction
+        // path and absent on the other is precisely the modal optionality this
+        // workspace refuses.
+        let generation = space_generation(&index, &terms);
         Ok(Self {
             index: Arc::new(index),
             terms,
             rows_by_term,
             guard,
             evidence: profile::LOSS_EVIDENCE.to_owned(),
+            generation,
         })
     }
 
@@ -257,6 +276,46 @@ impl HnswSpace {
         &self.evidence
     }
 
+    /// The beam width one search may explore: `ef_search`, as the artifact
+    /// declared it.
+    ///
+    /// A real ceiling on the rows an invocation can return, not a tuning hint —
+    /// the beam is never widened to fit a request — so it is declared through
+    /// [`HnswRelation::rows_per_invocation`] beside the guard's own bound.
+    #[must_use]
+    pub fn beam_width(&self) -> u64 {
+        self.index.params().ef_search() as u64
+    }
+
+    /// The generation of this space: a content digest of everything that decides
+    /// which rows a search can return and in what order.
+    ///
+    /// Declared through [`PfCursor::generation`] so a fused answer can say which
+    /// version of this index answered it, and so two answers drawn from two
+    /// different graphs are distinguishable even when every other identity
+    /// matches.
+    ///
+    /// # What it folds, and the one thing that differs from the exact kNN space
+    ///
+    /// Three parts, each framed: the graph's canonical byte image, the guard's
+    /// parameter block, and the bound terms in canonical row order. The first
+    /// and third are the exact space's own reasoning — an image that moves when
+    /// the graph moves, and terms because two spaces built from byte-identical
+    /// artifacts under different bindings return different terms at position
+    /// zero of every row.
+    ///
+    /// The **parameters** are the difference, and it is a real contract
+    /// distinction rather than an oversight copied across. The exact relation
+    /// excludes its bound on work, because that bound decides how hard a search
+    /// tries and never which rows exist or how they rank. Here `ef_search` does
+    /// decide: the beam is never widened, so a narrower beam finds different
+    /// rows and ranks them differently. A parameter that changes the answer
+    /// belongs in the identity of the thing that answered.
+    #[must_use]
+    pub fn generation(&self) -> &str {
+        &self.generation
+    }
+
     /// The decoded index every invocation searches.
     #[must_use]
     pub fn index(&self) -> &HnswIndex {
@@ -362,6 +421,149 @@ impl HnswRelation {
         }
     }
 
+    /// The `?neighbour` position: the retrieved term, and the ranked candidate.
+    pub const NEIGHBOUR: usize = HNSW_NEIGHBOUR;
+    /// The `?query` position: the term whose vector seeds the search.
+    pub const QUERY: usize = HNSW_QUERY;
+    /// The `k` position: how many neighbours to retrieve.
+    pub const COUNT: usize = HNSW_COUNT;
+    /// The `?distance` position: the retrieved term's distance from the query.
+    pub const DISTANCE: usize = HNSW_DISTANCE;
+
+    /// What this relation promises a consumer about the rows it emits.
+    ///
+    /// Lossy on the completeness axis, always: an HNSW search offers the
+    /// candidates its beam reached and never certifies that nothing else
+    /// matched. The evidence is the string this space carries, verbatim — the
+    /// one the guard checked at bind time, not a re-wording of it.
+    ///
+    /// The order axis is **computed from a loss contract** by
+    /// [`order_fidelity`] rather than typed as a literal here, so a profile
+    /// that begins quantizing vectors reports a perturbed order without anyone
+    /// remembering to come back and retype it.
+    ///
+    /// The contract it is computed from is this build's
+    /// [`profile::loss_contract`], not one decoded out of the artifact, and
+    /// that is equivalent rather than merely convenient: a loaded artifact
+    /// whose guard publishes a different evidence revision or a different loss
+    /// contract is REFUSED at bind time by
+    /// [`crate::guard::validate_guard`], so an artifact this space could have
+    /// been built from cannot disagree with the constant. The equivalence is
+    /// enforced, and the enforcement is what this reads through.
+    ///
+    /// It has to be the compiled-in one for the other constructor in any case:
+    /// [`HnswSpace::from_index`] is handed a graph this process built and there
+    /// is no artifact to decode a contract out of. A field derived one way on
+    /// one construction path and another way on the other is the modal
+    /// optionality this workspace refuses.
+    ///
+    /// # What `vector_order` is, and why it is the only thing the host supplies
+    ///
+    /// The derivation above reads *this index's* loss contract, which describes
+    /// what the HNSW build did to the vectors it was handed. It says nothing
+    /// about what happened to them **before** that: a host that quantized,
+    /// sketched or otherwise approximated its vectors and then called
+    /// [`HnswIndex::build`] over the result has an order-perturbed producer, and
+    /// no contract reachable from here records it. That fact has exactly one
+    /// holder, so it is a parameter — and it is spelled at every call site
+    /// rather than defaulted, because [`OrderFidelity::Faithful`] is the top of
+    /// that axis and a default there would put the stronger claim into the mouth
+    /// of a host that never spoke.
+    ///
+    /// The two are combined by [`composed_order_fidelity`], which only ever
+    /// degrades: a host cannot declare its way back to `Faithful` over a profile
+    /// that transforms vectors.
+    ///
+    /// # Why the host supplies nothing on the completeness axis
+    ///
+    /// Because this relation already declares the weaker claim there, from a
+    /// fact it genuinely holds: a beam search offers the candidates it reached
+    /// and never certifies that nothing else matched, so the completeness axis
+    /// is [`Completeness::Lossy`] over every space, on every request, whatever
+    /// corpus it covers. A consumer therefore already charges this stratum a
+    /// deficit, an inflation and a rank-one contribution it never named — the
+    /// failure that makes an undeclared approximation invisible *cannot* occur
+    /// here, because there is no silence to read as completeness.
+    ///
+    /// A host with something further to say about its corpus would also have to
+    /// displace the profile's own evidence, which is the one string the
+    /// approximation contract requires to reach a consumer byte for byte. So the
+    /// axis stays the relation's. A host that wants both disclosures edits the
+    /// returned [`RankedDeclaration`] — every field of it is public — and owns
+    /// the wording of the merged evidence itself.
+    #[must_use]
+    pub fn fidelity(&self, vector_order: OrderFidelity) -> RankFidelity {
+        let evidence: Arc<str> = Arc::from(self.space.evidence());
+        RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::clone(&evidence),
+            },
+            order: composed_order_fidelity(
+                order_fidelity(&profile::loss_contract(), &evidence),
+                vector_order,
+            ),
+        }
+    }
+
+    /// The ranked declaration this relation registers under.
+    ///
+    /// Mirrors the exact kNN relation's shape, because the call shape is
+    /// identical — same four positions, same `xsd:integer` neighbour count,
+    /// same `xsd:double` distance — and differs in exactly the fact that
+    /// matters: what it promises about the rows.
+    ///
+    /// `domains` is the caller's, never inferred: which blocks of its candidate
+    /// universe this space draws from is a fact about the host's corpus and
+    /// nothing here can know it.
+    ///
+    /// `vector_order` is the caller's for the same kind of reason: whether the
+    /// vectors handed to [`HnswIndex::build`] were already approximations of the
+    /// values the caller meant is a fact about the host's pipeline, upstream of
+    /// anything this space can read. See [`Self::fidelity`] for how it composes
+    /// with the axis derived here, and for why the completeness axis is not a
+    /// parameter beside it.
+    #[must_use]
+    pub fn ranked_declaration(
+        &self,
+        stratum: Iri,
+        seed: TermKind,
+        depth_datatype: String,
+        vector_order: OrderFidelity,
+        domains: CandidateDomains,
+    ) -> RankedDeclaration {
+        RankedDeclaration {
+            stratum,
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(seed),
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: Self::QUERY,
+                    datatype: None,
+                }],
+            }],
+            depth_placement: Some(DepthPlacement {
+                position: Self::COUNT,
+                datatype: depth_datatype,
+            }),
+            candidate_position: Self::NEIGHBOUR,
+            // The space enforces distinct terms at construction, and one search
+            // visits a node at most once, so a row cannot repeat within an
+            // invocation.
+            duplicates: DuplicatePolicy::Unique,
+            fidelity: self.fidelity(vector_order),
+            domains,
+            // This relation projects a neighbour and a distance; it knows
+            // nothing of a host's partition, so it has no position to read a
+            // per-row block out of and says so — the same answer its exact
+            // sibling gives, for the same reason. A host whose vector index
+            // spans several blocks declares one producer per block, or declares
+            // `CandidateDomains::Unrestricted`; see
+            // `RankedDeclaration::block_position`.
+            block_position: None,
+            mandatory: false,
+        }
+    }
+
     /// The space this relation searches.
     #[must_use]
     pub fn space(&self) -> &HnswSpace {
@@ -385,17 +587,37 @@ impl PropertyFunction for HnswRelation {
     /// The declared upper bound on the number of rows one invocation may emit under `mode`.
     ///
     /// Mirrors the exact kNN relation's positional bound — `min(1, rows)` when
-    /// `?neighbour` is bound, `min(max_neighbours, rows)` otherwise — but unlike the exact
-    /// path this bound is an upper bound **only**, never a promise that a call attains it:
-    /// [`HnswIndex::search_rows`] may return fewer than `k` rows when the beam does not
-    /// reach the query's exact neighbourhood, which is the approximation this relation
-    /// exists to offer.
+    /// `?neighbour` is bound — and otherwise takes the **smallest** of the three
+    /// ceilings that really apply: the rows the space holds, the guard's
+    /// `max_neighbours`, and the beam width `ef_search`.
+    ///
+    /// # Why `ef_search` belongs in this bound
+    ///
+    /// Because it is the ceiling that actually stops the read most often, and
+    /// leaving it out makes a consumer's status wrong. `ef_search` is part of
+    /// the declared artifact identity and is never widened to fit a request, so
+    /// a `k` larger than the beam is answered with fewer than `k` rows
+    /// ([`HnswIndex::search_rows`]). A consumer planning a read from this
+    /// declaration would then ask for a depth the beam cannot reach, never
+    /// see its limit met, and be told the stream was `Exhausted` — a
+    /// completeness-flavoured ending for a read the *parameters* cut short.
+    ///
+    /// Declaring the beam does not refuse anything a caller could otherwise
+    /// have had: no search ever returned those rows. It stops the plan asking
+    /// for them, so the ending it gets back is the true one.
+    ///
+    /// Unlike the exact path this is still an upper bound **only**, never a
+    /// promise that a call attains it: the beam may miss the query's exact
+    /// neighbourhood even within its width, which is the approximation this
+    /// relation exists to offer and which it now also declares through
+    /// [`Self::ranked_declaration`].
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
         let rows = self.space.row_count() as u64;
         if mode.is_bound(HNSW_NEIGHBOUR) {
             rows.min(1)
         } else {
             rows.min(self.space.guard().max_neighbours())
+                .min(self.space.beam_width())
         }
     }
 
@@ -569,6 +791,18 @@ impl HnswCursor {
 }
 
 impl PfCursor for HnswCursor {
+    /// The generation of the space that answered.
+    ///
+    /// The space is immutable once built, so the reading taken here is true for
+    /// every row this cursor goes on to emit.
+    ///
+    /// The `Arc` is cloned rather than the string: the space already holds the
+    /// one encoding of what it attested, and handing back a pointer to it is
+    /// what keeps a per-invocation allocation off this path.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Declared(Arc::clone(&self.space.generation))
+    }
+
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         if self.remaining == Some(0) {
             return Ok(None);
@@ -600,10 +834,191 @@ impl PfCursor for HnswCursor {
     }
 }
 
+/// The order fidelity an index with this loss contract can promise.
+///
+/// A pure function of the contract, and a function rather than an inline
+/// expression on purpose: written as a literal at its one call site the
+/// [`OrderFidelity::Perturbed`] branch would never execute, and the branch that
+/// never executes is the one carrying the claim that no finite score bound
+/// exists. Here both branches are reachable and both are tested — directly, from
+/// a contract a test writes, because this build's
+/// [`profile::loss_contract`] is a constant with `transforms_vectors: false` and
+/// reaches only the first of them.
+///
+/// **This is half of the answer, not the whole of it.** It describes what the
+/// HNSW build did to the vectors it was given, and a host may have approximated
+/// them before handing them over. [`composed_order_fidelity`] combines the two,
+/// and it is that value — never this one alone — that reaches a declaration.
+///
+/// # Why `transforms_vectors` is the right discriminator
+///
+/// Because it is exactly the question "were the values this index compared the
+/// values the caller meant?". A graph over untransformed vectors computes exact
+/// distances for every candidate it visits, so the rows it returns are in true
+/// relative order and it fails only to *visit* — lossy, but faithful, and a
+/// named row's true rank is at least its emitted rank. Quantize the vectors and
+/// that stops holding: a row can be ranked better than it was due, because the
+/// distance that ranked it was an approximation of the real one, and no finite
+/// bound on the error survives.
+#[must_use]
+pub fn order_fidelity(contract: &IndexLossContract, evidence: &Arc<str>) -> OrderFidelity {
+    if contract.transforms_vectors {
+        OrderFidelity::Perturbed {
+            evidence: Arc::clone(evidence),
+        }
+    } else {
+        OrderFidelity::Faithful
+    }
+}
+
+/// The order fidelity of a search whose index may perturb the order **and**
+/// whose vectors the host may already have perturbed before the index saw them.
+///
+/// The meet of the two on a two-element lattice: the result is
+/// [`OrderFidelity::Perturbed`] when either input is, and
+/// [`OrderFidelity::Faithful`] only when both are. It degrades and never
+/// upgrades, which is the property that matters — a host passing `Faithful`
+/// says "I did nothing to the vectors", not "the index is faithful", and cannot
+/// talk a transforming profile back up to the top of the axis.
+///
+/// # Which evidence survives, and why nothing is lost
+///
+/// When both inputs are perturbed the host's evidence is the one carried, and
+/// the derived string is **not** concatenated onto it, re-worded, or summarized:
+/// an axis holds one disclosure and a consumer reads those bytes rather than a
+/// composition of them.
+///
+/// That costs the reader nothing, because the derived string is not the
+/// profile's disclosure to a consumer — it is a *second copy* of it.
+/// [`HnswRelation::fidelity`] derives both axes from one string, the space's
+/// own [`HnswSpace::evidence`], and publishes it on the completeness axis, which
+/// is [`Completeness::Lossy`] unconditionally and so always carries it. So the
+/// profile's evidence reaches a declaration, a stream contract and a fused
+/// trailer byte for byte on every path through this function, and the host's
+/// words reach them beside it instead of displacing them.
+///
+/// The host's is the one that must win the axis: it is the only one of the two a
+/// reader could otherwise never obtain, and A16 of the producer contract is
+/// exactly the rule that a consumer either receives such a fact from the
+/// producer or never has it.
+#[must_use]
+pub fn composed_order_fidelity(derived: OrderFidelity, host: OrderFidelity) -> OrderFidelity {
+    match host {
+        OrderFidelity::Perturbed { evidence } => OrderFidelity::Perturbed { evidence },
+        OrderFidelity::Faithful => derived,
+    }
+}
+
+/// The content identity of a space over `index` bound to `terms`.
+///
+/// Framed part by part so no concatenation of one part can be read as another,
+/// using the same `<tag><len><bytes>` discipline the registry fingerprints use.
+/// Nothing here reads a clock, a counter or an RNG: two spaces built from the
+/// same graph, parameters and terms digest identically on every target.
+fn space_generation(index: &HnswIndex, terms: &[TermValue]) -> Arc<str> {
+    let mut bytes = Vec::new();
+    append_framed(&mut bytes, b"domain", SPACE_GENERATION_DOMAIN.as_bytes());
+    append_framed(&mut bytes, b"image", &index.canonical_image());
+    append_framed(
+        &mut bytes,
+        b"parameters",
+        &profile::parameters(index.params()),
+    );
+    append_framed(
+        &mut bytes,
+        b"row-count",
+        &(terms.len() as u64).to_be_bytes(),
+    );
+    let mut term_bytes = Vec::new();
+    for term in terms {
+        term_bytes.clear();
+        term.canonical_bytes(&mut term_bytes);
+        append_framed(&mut bytes, b"term", &term_bytes);
+    }
+    Arc::from(ContentDigest::of(&bytes).to_hex().as_str())
+}
+
+/// Append `value` to `out` under `tag`, both length-framed.
+fn append_framed(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
+    out.extend_from_slice(&(tag.len() as u64).to_be_bytes());
+    out.extend_from_slice(tag);
+    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    out.extend_from_slice(value);
+}
+
+/// The domain separator every HNSW space generation opens with, so this digest
+/// can never equal a digest of the same bytes taken for another purpose.
+const SPACE_GENERATION_DOMAIN: &str = "purrdf-hnsw/space-generation-v1";
+
+/// Everything [`HnswRelation::ranked_declaration`] cannot derive: the five facts
+/// a host states about its own corpus and pipeline when it registers a space as
+/// a ranked producer.
+///
+/// Carried as one value because that is what they are — one host's statement,
+/// made at one moment, about one space — and because a registration function
+/// taking them loose would be eight positional arguments of which five are the
+/// same argument. Every field is public and none is optional: a bare-field
+/// struct with no builder and no `Default` is what makes an omitted disclosure a
+/// compile error rather than a silent top-of-lattice claim, which is the same
+/// discipline [`RankedDeclaration`] itself follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankedHnswRegistration {
+    /// The caller's stratum IRI: the label rows from this space are ranked and
+    /// fused under.
+    pub stratum: Iri,
+    /// Which RDF term kind the host's requests seed a search with.
+    pub seed: TermKind,
+    /// The caller's datatype IRI for the rendered neighbour count.
+    pub depth_datatype: String,
+    /// What the host did to its vectors **before** [`HnswIndex::build`] saw
+    /// them. See [`HnswRelation::fidelity`].
+    pub vector_order: OrderFidelity,
+    /// Which blocks of the candidate universe this space may name.
+    pub domains: CandidateDomains,
+}
+
 /// Register `space` as a relation under the caller's predicate `iri`.
 ///
 /// PurRDF supplies no IRI: the caller's predicate is what a query text names the provider
 /// by, which is the second of the three approximation channels the contract requires.
+pub fn register_ranked_hnsw_relation(
+    registry: &mut PropertyFunctionRegistry,
+    iri: impl Into<String>,
+    space: Arc<HnswSpace>,
+    declared: RankedHnswRegistration,
+) {
+    let RankedHnswRegistration {
+        stratum,
+        seed,
+        depth_datatype,
+        vector_order,
+        domains,
+    } = declared;
+    let relation = HnswRelation::new(space);
+    let declaration =
+        relation.ranked_declaration(stratum, seed, depth_datatype, vector_order, domains);
+    registry.register_ranked(iri, Arc::new(relation), declaration);
+}
+
+/// Register `space` as a plain relation under the caller's predicate `iri`.
+///
+/// PurRDF supplies no IRI: the caller's predicate is what a query text names the
+/// provider by, which is the second of the approximation contract's governed
+/// channels.
+///
+/// # This relation is invisible to the retrieval ladder, on purpose
+///
+/// A relation registered here declares no ranked contract, so it forms no
+/// stratum, produces no trailer entry, and a retrieval request that wanted it
+/// reports the term as unserved rather than fusing a stream that never
+/// declared what it promises. That is a loud refusal and never a quiet false
+/// claim — which is why this function can safely stay: the failure mode of
+/// reaching for it by mistake is a planner that says so.
+///
+/// A host composing this space into a fused answer wants
+/// [`register_ranked_hnsw_relation`] instead, which needs the stratum, seed
+/// kind, depth datatype, vector-order disclosure and domain declaration a
+/// plain-SPARQL host has no reason to invent.
 pub fn register_hnsw_relation(
     registry: &mut PropertyFunctionRegistry,
     iri: impl Into<String>,

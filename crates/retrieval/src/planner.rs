@@ -530,8 +530,9 @@ pub fn plan(
         // filtered here. Its declaration says its data is empty right now, which
         // is an ordinary state and not a contradiction, and the honest answer to
         // it is to invoke the producer at the floored depth of one and let it
-        // report `Exhausted { rows_emitted: 0 }` — a completeness claim it earned
-        // by reading. Dropping it instead bound it nowhere, and where it was the
+        // report `Exhausted { rows_emitted: 0 }` — an ending it earned by reading,
+        // rather than one a bound asserted for it. Dropping it instead bound it
+        // nowhere, and where it was the
         // registry's only producer the plan then failed with
         // `NoApplicableProducers`, a message that denies the very acceptance the
         // matching pass had just recorded.
@@ -958,8 +959,8 @@ fn consult(
 /// it actually pulled — so nothing upstream of the producer may be the thing
 /// that decides a stratum is empty. A bound of zero would be exactly that: it
 /// compiles to `LIMIT 0`, which hands back no row whatever the relation holds,
-/// and the stratum is then reported exhausted with no rows — the strongest
-/// completeness claim this layer has, minted from a number nobody checked against
+/// and the stratum is then reported exhausted with no rows — the one ending that
+/// names no stopper, minted from a number nobody checked against
 /// the data and indistinguishable afterwards from an honest empty answer.
 ///
 /// A tiny non-zero selectivity already lands on one row through `div_ceil`;
@@ -977,7 +978,9 @@ fn consult(
 /// perfectly well by returning nothing. Reading one row from it asks the question
 /// its declaration cannot answer on the registry's behalf: is that still true?
 /// The producer answers with [`crate::ProducerStatus::Exhausted`] and a row count of
-/// zero, which is a true completeness claim, because it really did read. So
+/// zero -- its OWN report, from a read that really happened, rather than an
+/// emptiness the bound asserted on its behalf. What that ending does and does not
+/// license is then the stratum's declared fidelity to say, not this floor. So
 /// admission admits a depth of one against a declared zero, and the
 /// compiler's `emitted_limit` never writes a `LIMIT 0`; the floor and those two
 /// are one rule in three places.

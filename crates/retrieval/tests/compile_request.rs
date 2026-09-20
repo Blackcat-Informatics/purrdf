@@ -24,9 +24,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, ExecutionError, Iri, Metric, Plan,
-    PlanError, ProducerStatus, RankedStreamImpl, ReadBound, RejectionReason, RequestTerm,
-    RetrievalRequest, Statistics, StratumUnit, Term, TopK, UnservedReason, UnservedTerm, compile,
-    execute, plan,
+    PlanError, ProducerStatus, RankFidelity, RankedStreamImpl, ReadBound, RejectionReason,
+    RequestTerm, RetrievalRequest, Statistics, StratumUnit, Term, TopK, UnservedReason,
+    UnservedTerm, compile, execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
@@ -324,6 +324,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 depth_placement: spec.depth,
                 candidate_position: spec.candidate,
                 duplicates: spec.duplicates,
+                fidelity: RankFidelity::EXACT,
                 domains: spec.domains,
                 block_position: None,
                 mandatory: spec.mandatory,
@@ -708,8 +709,8 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
 /// A provider that measured an empty stratum is reporting honestly, and the
 /// plan still asks. The old behaviour scaled the declared bound to zero,
 /// compiled `LIMIT 0`, took no row from the relation whatever its index held, and
-/// reported the stratum exhausted having emitted nothing — the strongest
-/// completeness claim this layer makes, minted from an estimate. Both halves are
+/// reported the stratum exhausted having emitted nothing — the one ending that
+/// names no stopper, minted from an estimate. Both halves are
 /// asserted here: the depth is one, and the emptiness that comes back is the
 /// *producer's*, because the producer was allowed to answer.
 #[test]
@@ -1243,7 +1244,7 @@ fn a_declared_zero_is_read_past_rather_than_obeyed_and_a_wrong_one_is_refused() 
     // empty producer report its own emptiness; it is not a licence to hold a row. This
     // read came back inside its floored depth, so the breach was invisible to a
     // comparison made only about the row PAST the depth, and the answer was the
-    // strongest completeness claim in the vocabulary —
+    // one ending that names no stopper —
     // `Exhausted { rows_emitted: 1 }` — over a producer that had already contradicted
     // its own registration. The declaration is now compared against the rows pulled
     // whether or not the depth was reached.
@@ -1645,8 +1646,8 @@ fn with_the_branch_bound_lowered(text: &str, probe: u32, depth: u32) -> String {
 /// of it — a caller's query still runs, still yields its rows in rank order, still
 /// reports `DepthReached` when a row past the depth really did arrive, and still trips
 /// [`ExecutionError::RowBoundBreached`](purrdf_retrieval::ExecutionError) when the
-/// producer beats its own declaration. The one thing it cannot do is carry this
-/// layer's strongest completeness claim, because that claim rests on a bound this
+/// producer beats its own declaration. The one thing it cannot do is report the
+/// one ending that names no stopper, because that ending rests on a bound this
 /// layer wrote and can see.
 #[test]
 fn a_bound_lowered_in_a_caller_supplied_text_reports_that_text_and_never_an_exhaustion() {

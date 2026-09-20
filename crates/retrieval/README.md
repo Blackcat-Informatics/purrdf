@@ -140,8 +140,12 @@ plainly that no test covers it. Read it before writing a `RankedDeclaration`.
 ## What a read ending says, and what the index attested
 
 A producer's terminal status says **who stopped the read**, and there are six
-spellings. `Exhausted` is the only completeness claim in the vocabulary — the
-producer emitted every row it had. `DepthReached` is the planned depth stopping a
+spellings. `Exhausted` is the one ending that names no stopper — the producer
+emitted every row *its search produced*. That is not, on its own, a claim that
+everything matching was returned: a producer whose search does not find every
+row that was due still runs out of the rows it found, and reports exactly this.
+What the status has to be read beside is the stratum's declared fidelity, below.
+`DepthReached` is the planned depth stopping a
 producer that had more to give, stated in rank space. `RowBoundReached` is the
 producer's own declared row bound stopping it: a producer that takes its depth as
 an argument, read to the number it registered, so the row past it could not be
@@ -162,15 +166,56 @@ reports both.
 That axis reaches the answer three ways. `FusionTrailer::attestations` carries it
 verbatim, per stratum: which generation answered, and the verbatim reason if that
 index declared itself short. `FusionTrailer::exactness` says how to read a fused
-score — `Exact` when no handed stream declared itself short, or `LowerBounds`
-naming exactly the strata that did, because a stratum serving from a short index
-omits whatever its missing shard held and a candidate that shard would have named
-is summed one contribution light. And `EvidenceId` digests the attestation map
+score — `Exact` when no handed stream was degraded, or `Estimated` naming the
+responsible strata on each side. Both sides, because a stratum serving from a
+short index omits whatever its missing shard held *and*, since this layer scores
+by rank alone, promotes every row behind the missing one into a rank it did not
+earn: the candidate it missed is summed too low, the ones it named too high.
+`FusedRow::interval` carries the size of each error for one row. And `EvidenceId`
+digests the attestation map
 into the third identity an answer carries: `PlanId` names the question,
 `FusionProfileId` names the law, `EvidenceId` names the index generations that
 answered. The third exists because the first two are derived from configuration,
 and configuration is exactly what does not change when an index is rebuilt
 underneath a running system. Two answers are comparable iff all three agree.
+
+## What the producer declared about its own search
+
+A third axis, and the one a status is most often mistaken for. An attestation is
+about the **index** — which generation answered, and whether that generation was
+whole. A `RankFidelity` is about the **search over it**, and a producer declares
+its own on two axes that fail independently:
+
+* `Completeness` — whether the search names every row that was due. A sampled,
+  partitioned or stale index is `Lossy`, carrying the producer's own words for
+  what it does not promise, verbatim.
+* `OrderFidelity` — whether a row it *does* name arrives at a rank no better than
+  it earned. Only a producer comparing approximated values is `Perturbed`, and
+  that is the axis that breaks every score bound, because every bound here rests
+  on the inequality a perturbed order violates.
+
+`FusionTrailer::fidelities` reports it per stratum, populated before a row is
+pulled, so a stratum is distinguishable as approximate without consulting the
+registry. It is declared rather than observed because a consumer cannot tell the
+difference: a stream that ran out of rows and a stream whose search merely
+stopped finding them both simply stop yielding. There is no default — `EXACT` is
+the top of the lattice, and defaulting to it would put the strongest claim in the
+mouth of a producer that said nothing.
+
+Read `fidelities` **with** `statuses`, never instead of them. `Exhausted` beside a
+`Lossy` declaration is neither a contradiction nor a completeness claim: the
+producer emitted every row its search produced, and the declaration says that
+search does not produce every row there was. `FusionTrailer::certain_prefix` is
+what a caller with a completeness obligation can still act on — how many leading
+rows keep their places whatever the degraded strata did or did not find. It
+claims membership and never absence.
+
+That claim needs a term no row carries, because the candidate that could take an
+emitted row's place is the one a lossy search never named — and it is therefore
+not among the rows to compare against. `FusionTrailer::unemitted_ceiling` is that
+term: the highest score anything outside the answer could have, over both the
+candidates no stream named and the ones a bounded read left uncertified. A row is
+certain of its place only when its own floor clears it.
 
 Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no

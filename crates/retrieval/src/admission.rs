@@ -34,8 +34,8 @@
 //!   deeper than the depth so the executor can tell a read the bound cut from a
 //!   read that ran out; at [`u32::MAX`] that row is not expressible in the
 //!   `LIMIT` the compiler writes, and the read would be reported
-//!   [`Exhausted`](crate::ProducerStatus::Exhausted) — this layer's strongest
-//!   completeness claim — for a stratum whose ending nobody was able to observe.
+//!   [`Exhausted`](crate::ProducerStatus::Exhausted) — the one ending that names
+//!   no stopper — for a stratum whose ending nobody was able to observe.
 //!   A depth whose ending cannot be verified is refused rather than certified,
 //!   and [`ProbedDepth`] is the type that carries the proof to the compiler;
 //! * every bound producer can actually be *invoked* for the request terms the
@@ -348,8 +348,8 @@ pub enum AdmissionError {
     /// verifies against the rows it pulled. A zero here is therefore a plan that
     /// was hand-built or edited, and admitting it would compile a `LIMIT 0`,
     /// take no row from the relation whatever its index holds, and then report
-    /// the stratum exhausted with no rows — the strongest completeness claim this
-    /// layer has, made about a read that was never allowed to answer.
+    /// the stratum exhausted with no rows — the one ending that names no stopper,
+    /// made about a read that was never allowed to answer.
     ///
     /// Distinct from [`Self::DepthBoundViolation`], and in the opposite
     /// direction: that one refuses a depth *above* what the registry declared,

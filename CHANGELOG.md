@@ -162,7 +162,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   public APIs and the keystone fixture corpus, so a release can demonstrate that
   a constrained deployment class still fits its pinned ceilings. Pass criteria
   are completion and memory; wall time is recorded evidence, never a gate.
-||||||| 45ad8bb7
 - **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
   approximate nearest-neighbour index over a PURREMB embedding matrix, registered
   on the evaluator's property-function seam under a caller-supplied predicate IRI.
@@ -192,8 +191,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   into the other. Fusion checks `rank` against the rows it actually pulled and
   refuses a disagreement as `ProtocolError::ForgedReceipt`, exactly as it checks
   an exhaustion count: the depth is a licence to stop reading, never a licence to
-  misreport. `Exhausted` is now the only completeness claim in the vocabulary,
-  and every other ending names the stopper.
+  misreport. `Exhausted` is now the only ending that names no stopper, and every
+  other ending names one. That is a fact about the read rather than about what
+  exists: a producer emitted every row its search produced, which is why a
+  status is read beside the stratum's declared fidelity and never instead of it.
 - **retrieval:** `FusionTrailer::attestations`, a per-stratum record of what the
   index behind each stream attested -- which generation answered, and the
   verbatim reason if that index declared itself short. It is read from
@@ -211,15 +212,112 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   index omits whatever its missing shard held, so a candidate that shard would
   have named is summed one contribution light; labelling that "exact" would be a
   bound on the read presented as a value. `Exact` says the narrower true thing --
-  no handed stream declared itself short -- and is never a certificate that every
-  index was whole, because most producers attest nothing and there is no variant
-  with which to attest wholeness. `LowerBounds` names exactly the strata that did
-  declare a shortfall, so a caller knows which indexes to rebuild and reads each
-  one's reason under the same key in `attestations`. The answer is per fusion
-  rather than per row because the per-row question is not computable: knowing
-  which particular candidates lost a contribution would mean knowing what the
-  missing shard held. It is derived from the attestations alone, so it does not
-  move as a caller certifies further rows.
+  no handed stream declared itself degraded -- and is never a certificate that
+  every index was whole and every search exhaustive, because most producers
+  attest nothing and there is no variant with which to attest wholeness.
+  `Estimated` carries the error in BOTH directions, because this layer scores by
+  rank and nothing else: a stratum that fails to name a row does not merely
+  withhold that row's contribution, it moves every row behind the missing one up
+  a rank and hands it a larger contribution than it earned. `deficit` names the
+  strata that could have added to a candidate, `inflation` the strata that could
+  have over-contributed to one, and `unbounded` the strata whose declared ORDER
+  is perturbed, for which no finite bound exists at all -- every bound here rests
+  on a named row's true rank being no better than its emitted rank, and a
+  producer comparing approximated values breaks exactly that. Each stratum's
+  verbatim reason is under the same key in `fidelities` or `attestations`. It is
+  derived from the declarations and attestations alone, so it does not move as a
+  caller certifies further rows.
+- **retrieval:** `RankFidelity`, with `Completeness` and `OrderFidelity`, and
+  `StreamContract::fidelity` carrying it through the ladder. What a producer
+  declares about its own search, on two axes that fail independently: whether it
+  names every row that was due, and whether a row it does name arrives at a rank
+  no better than it earned. It is declared rather than observed because a
+  consumer cannot tell the difference -- a stream that ran out of rows and a
+  stream whose search merely stopped finding them both simply stop yielding, and
+  the ranks are contiguous either way. There is no `Default`: `RankFidelity::EXACT`
+  is the top of the lattice, so defaulting to it would put the strongest claim in
+  the mouth of a producer that said nothing, which is the one direction a default
+  must never go. `RankedDeclaration` therefore carries `fidelity` as a required
+  field, and `StreamContract::new` takes it as its second argument.
+- **retrieval:** `FusionTrailer::fidelities`, a per-stratum record of what each
+  producer declared, populated in `FusionStream::new` before a row is pulled, so
+  a fused answer distinguishes an approximate stratum from an exact one without
+  consulting the registry. The producer's own evidence string reaches it
+  verbatim: the same `Arc<str>` the producer published, never parsed and never
+  re-worded. A stratum whose stream never opened is absent rather than reported
+  exact, so the map is three-valued where it needs to be and a consumer never
+  reads a missing key as a claim.
+- **retrieval:** `FusedRow::interval` and `ScoreInterval`, bounding each row's own
+  error rather than the answer's. `Bounded` carries `deficit` and `inflation` in
+  the profile's fixed-point space, narrowed per candidate by the same `Dom(x)`
+  reasoning the certification bound uses: a stream whose declared domains cannot
+  reach a candidate withheld nothing from it and is not charged. `Unbounded`
+  names the perturbed strata instead of reporting a number, because there is no
+  number and reporting one would be the fabrication this channel exists to
+  prevent.
+- **retrieval:** `FusionTrailer::certain_prefix`, how many leading rows keep
+  their places whatever the degraded strata did or did not find. It is what a
+  caller with a completeness obligation can still act on, since the alternative
+  is to downgrade a whole answer over one degraded stratum. It claims membership
+  and never absence: a row past the prefix is possible rather than excluded.
+- **retrieval:** `FusionTrailer::unemitted_ceiling`, the bound the prefix above
+  rests on: the most any candidate OUTSIDE the answer could be worth. It counts
+  two populations, and both are needed for the prefix to be a claim about the
+  answer rather than about the ranking -- the candidates no stream ever named,
+  charged each degraded stratum's rank-one contribution because a row such a
+  stratum missed could have been due at any rank, and the candidates a bounded
+  read named and abandoned, which a degraded stratum could still owe a
+  contribution on top of what they had already accumulated. It is `None` where a
+  stratum declared a perturbed order: that breaks the one inequality every bound
+  here rests on, so no finite ceiling exists and `certain_prefix` is zero. It
+  speaks for the reads this trailer describes; a producer stopped at its plan
+  depth, or one that declined its terms, states that shortfall in `statuses`.
+- **hnsw:** `HnswRelation` declares its own `RankFidelity`, so the workspace's
+  one approximate producer states what it is to a consumer of composed rows
+  instead of being indistinguishable from an exhaustive one. The evidence is the
+  profile's `IndexLossContract` loss evidence, carried verbatim rather than
+  re-worded here.
+- **text:** `TextSearchRelation::ranked_declaration` takes the fidelity the host
+  declares. BM25 over the index this relation holds is exhaustive and ranks by
+  exact scores; whether that index covers what the host means by its corpus is a
+  fact the relation cannot see, so the term is the host's to supply for the same
+  reason `domains` is.
+- **sparql-eval:** `EmbeddingKnnRelation::ranked_declaration` takes that same
+  fidelity term, in the same position, for the same reason. The relation is the
+  exact oracle -- it scans every row of its space, prunes nothing and exits early
+  nowhere -- so `RankFidelity::EXACT` is a true statement about its *search* and
+  it used to assert exactly that. It is not a statement about whether the vectors
+  it searched are the whole of a host's corpus, and a host that embedded a sample
+  had nowhere to say so: the answer certified that every stratum was exhaustive
+  and whole while a document the whole space would have ranked was silently
+  absent. Breaking, in the same way and at the same seam as the text relation
+  above.
+- **hnsw:** `HnswRelation::ranked_declaration` and `HnswRelation::fidelity` take
+  an `OrderFidelity` describing what the
+  host did to its vectors **before** `HnswIndex::build` saw them. A host that
+  quantizes its embeddings and then builds a graph over the codes has an
+  order-perturbed producer, and no loss contract reachable from the index records
+  it -- the profile's contract describes what the build did, not what reached it.
+  The new term composes with the derived axis through `composed_order_fidelity`,
+  which takes the worse of the two, so a host can degrade the axis and never
+  upgrade it. The completeness axis stays the relation's: it is `Lossy` over
+  every space on every request, so no silence there can be read as completeness,
+  and the profile's own evidence keeps the axis and keeps reaching a consumer
+  byte for byte. Breaking.
+- **hnsw:** `register_ranked_hnsw_relation` takes the five facts a host states
+  about its own corpus and pipeline as one `RankedHnswRegistration` rather than
+  loose: they are one statement made at one moment about one space, and the new
+  disclosure would otherwise have made the call eight positional arguments of
+  which five were the same argument. A bare-field struct with no builder and no
+  `Default`, like every other declaration in this workspace. Breaking.
+- **python:** A `text_producers` value may carry a sixth `(completeness, order)`
+  position, each member a `str` or `None`, shaped like the attestation position
+  beside it and read on the same terms -- `None` is silence on that axis, a
+  string is that axis declared degraded with the host's own words carried
+  verbatim. `search` reports `"fidelities"`, `"certain_prefix"`,
+  `"unemitted_ceiling"` and a per-row
+  `"interval"` beside the existing keys, and `"exactness"` gains `"deficit"`,
+  `"inflation"` and `"unbounded"` in place of `"lower_bounds_for"`.
 - **retrieval:** `EvidenceId`, the third identity a fused answer carries, on both
   `FusionTrailer` and `SearchResult`. `PlanId` names the question that was asked
   and `FusionProfileId` names the law the rows were fused under, and neither moves
@@ -353,8 +451,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `"attestations"` maps a stratum to `{"generation": str | None, "incomplete":
   str | None}`, with the two axes independently absent because a silent producer
   is making no claim in either direction; `"exactness"` is `{"exact": bool,
-  "lower_bounds_for": list[str]}`, naming the strata whose declarations make every
-  score a lower bound rather than an exact sum; `"domains"` reports the
+  "deficit": list[str], "inflation": list[str], "unbounded": list[str]}`, naming
+  the strata whose declarations make every score an estimate rather than an exact
+  sum, on each side the error runs; `"domains"` reports the
   candidate-domain declaration each stream fused under, so an answer can be
   audited against its own inputs; and `"evidence_id"` sits beside `"plan_id"` and
   `"profile_id"` in the same 64-character lowercase hex spelling, so one
@@ -363,8 +462,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `(generation, incompleteness)` position -- each member a string or `None`, recorded
   verbatim -- declaring what the host knows about the index behind that producer. A
   declared incompleteness is reported under
-  `answer["attestations"][stratum]["incomplete"]` and makes `answer["exactness"]`
-  report `{"exact": False, "lower_bounds_for": [stratum, ...]}`, which was previously
+  `answer["attestations"][stratum]["incomplete"]` and names that stratum under both
+  `answer["exactness"]["deficit"]` and `["inflation"]`, which was previously
   unreachable from Python: no shipped producer can know what was missing from the
   document it was handed, so the surface was structurally present and could never
   carry a value. A declared generation is reported and is not a shortfall; it
@@ -733,8 +832,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   also holds a non-literal statement under a configured predicate.
 
 - **retrieval:** A stratum whose planned depth already equalled its producer's
-  declared row bound was reported `ProducerStatus::Exhausted` -- the strongest
-  completeness claim this layer has -- for a read that bound had cut, with
+  declared row bound was reported `ProducerStatus::Exhausted` -- the one ending
+  that names no stopper -- for a read that bound had cut, with
   nothing anywhere saying so. The depth probe is the row that tells a read which
   ran out from a read which was stopped, and it was emitted at
   `min(depth + 1, declared)`: at that one depth the `min` selected the
@@ -790,8 +889,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   again and `ProducerStatus::Exhausted` was minted from a bounded read. The emitted
   bound is the depth plus one row, and the addition saturated -- so at a depth of
   `u32::MAX` the emitted `LIMIT` *equalled* the depth, no row could ever arrive
-  past it, and every such read was reported with the strongest completeness claim
-  this layer has however many rows the relation still held. That is the fault the
+  past it, and every such read was reported with the one ending that names no
+  stopper however many rows the relation still held. That is the fault the
   probe row exists to close, surviving at the one depth where the mitigation was
   dropped: a saturating operator looked like arithmetic hygiene and was a silent
   completeness claim.
@@ -860,7 +959,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `ProducerReceipt::RowBoundReached`, `ProducerStatus::RowBoundReached` and
   `StreamEnding::RowBoundReached`, all carrying the rank the read stopped at, spelled
   `"row_bound_reached"` in the Python answer's `"statuses"` beside its `"rank"`.
-  `Exhausted` remains the only completeness claim in the vocabulary, and a consumer
+  `Exhausted` remains the only ending that names no stopper, and a consumer
   that wants this read taken further has one honest move, different from either
   neighbour's: raise the producer's declared row bound.
 
@@ -900,8 +999,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   number this layer reasons about everywhere. That text leaves no slot for the probe
   row, `execute` writes `DepthReached` only when a row arrives *past* the depth, so an
   evaluator-bounded `Unique` producer holding nine real rows read at depth three
-  reported `Exhausted { rows_emitted: 3 }` -- the strongest completeness claim this
-  layer has, for a read with six rows behind it. Nothing downstream could catch it
+  reported `Exhausted { rows_emitted: 3 }` -- the one ending that names no stopper,
+  for a read with six rows behind it. Nothing downstream could catch it
   either: the rows emitted equalled the rows pulled, so the fused trailer above it read
   `Exact`.
 
@@ -943,8 +1042,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `StreamEnding::SuppliedQueryEnded`, surfaced as `ProducerReceipt::SuppliedQueryEnded`
   and `ProducerStatus::SuppliedQueryEnded`, which names the caller's own text as the
   stopper and claims nothing about what lies below the rank it reached. `Exhausted`
-  remains the only completeness claim in the vocabulary, which now has seven spellings
-  rather than six.
+  remains the only ending that names no stopper, in a vocabulary that now has seven
+  spellings rather than six.
 
   The refusal is exactly as narrow as the observation. A caller's query still runs,
   still yields its rows in rank order, still reports `DepthReached` when a row past the
@@ -1373,8 +1472,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   read; it never eliminates one. A provider reporting a selectivity of zero parts
   per million, or a cardinality of zero, scaled a stratum's depth to zero: the
   compiled unit read nothing and the trailer still reported exhaustion with zero
-  rows, which is the strongest completeness claim the vocabulary has, minted for a
-  query that was never run. A tiny non-zero selectivity was already safe through
+  rows, which is the one ending that names no stopper, minted for a query that
+  was never run. A tiny non-zero selectivity was already safe through
   ceiling division; zero was the one input that escaped it, and it arrives by three
   roads -- an honest `selectivity_ppm` of zero, a measured cardinality of zero,
   which lands in the bound before the ratio is applied, and a producer whose every
