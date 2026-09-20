@@ -290,6 +290,21 @@ WATDIV_DATASET_ROWS: dict[str, int] = {"10M": 10_916_457}
 # A lane compares one of these ONLY when the knobs it depends on are at their
 # defaults, and says so when they are not. A different seed or scale is a different
 # workload, and asserting a default's value against it would be an over-refusal.
+#
+# WHAT A SELF-DERIVED PIN DOES AND DOES NOT BUY, stated because the difference is
+# easy to overstate. The two DIGESTS below were produced by running the code they
+# now pin, so they catch CHANGE and not CORRECTNESS: they will fail the day
+# generation, conversion, normalisation or instantiation alters its output, which is
+# the regression worth catching, and they would not have caught a value that was
+# wrong from the start. What makes them trustworthy is not this file -- it is that
+# each is a deterministic function of an artifact pinned by digest against its
+# publisher, so the inputs are certain even though the recorded output is our own
+# measurement of them.
+#
+# The two ROW COUNTS are different in kind and stronger: `rows.Q1` and `rows.Q14`
+# are LUBM's OWN PUBLISHED ANSWERS for LUBM(1, 0), corroborated by the paper rather
+# than by this tree, so those two are an independent oracle and not self-derived at
+# all. They are the only external check either lane has.
 WORKLOAD_PINS: dict[str, str] = {
     # sha256 over the normalised LUBM query set, at the default ontology namespace.
     "lubm.queries.sha256": (
