@@ -638,6 +638,14 @@ fn the_frontier_stays_bounded_past_the_collision() {
     // A thousand raw units is `10^-9`, not the number one thousand: at this
     // weight ranks one and two already share a contribution.
     let colliding = Fixed::from_raw(1_000);
+    // Warm the lazy one-time allocations outside the measured window, at this
+    // weight, exactly as the other measurements in this file do. Without it the
+    // first window on this thread can be the one that pays a one-time initialization
+    // — which window that is depends on how the test threads interleave, so the two
+    // peaks below differed by one small allocation on some schedules and on none of
+    // the others, and an equality that holds on most schedules is not a bound.
+    let warm = measure_at_weight(1_000, DuplicatePolicy::Unique, colliding);
+    assert!(warm.pulls > 0);
     let short = measure_at_weight(1_000, DuplicatePolicy::Unique, colliding);
     let long = measure_at_weight(1_000_000, DuplicatePolicy::Unique, colliding);
 
