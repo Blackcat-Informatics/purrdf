@@ -111,9 +111,12 @@ WHAT THIS SCRIPT GUARANTEES
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple
@@ -296,31 +299,34 @@ def quarantine(path: Path, actual: str) -> Path:
     download. It is renamed to ``<name>.rejected-<digest prefix>`` so the next
     run sees a cache miss rather than the same bad bytes, while the bad bytes
     remain on disk for an operator to inspect. The digest is part of the name so
-    two different failures do not overwrite each other. A ``.part`` suffix is
-    dropped first, so a failed download is quarantined under the name it was
-    trying to become.
+    two different failures do not overwrite each other. A ``.part.<pid>`` suffix
+    is dropped first, so a failed download is quarantined under the name it was
+    trying to become rather than under the scratch name it happened to have — and
+    two processes quarantining the same bad bytes converge on one file instead of
+    leaving a pid-tagged copy each.
     """
-    stem = path.name[: -len(".part")] if path.name.endswith(".part") else path.name
+    stem = re.sub(r"\.part(?:\.\d+)?$", "", path.name)
     held = path.with_name(f"{stem}.rejected-{actual[:16]}")
     os.replace(path, held)
     return held
 
 
-def _install_verified_bytes(data: bytes, dest: Path, artifact: Artifact) -> None:
-    """Install *data* at *dest* only if every pinned identity matches.
+def _scratch_for(dest: Path) -> Path:
+    """The scratch name a download writes before it has earned *dest*'s name."""
+    return dest.with_name(f"{dest.name}.part.{os.getpid()}")
 
-    The bytes are written to a sibling ``.part`` file and ``os.replace``d into
-    place — atomic within a filesystem — only after size, SHA-256, and (where
-    upstream publishes one) MD5 all agree with the pin. A truncated response, a
-    proxy error page, or an interrupted transfer therefore never appears at
-    *dest* under the artifact's real name; it is quarantined instead, and the
-    process exits non-zero.
+
+def _verify_and_install(tmp: Path, dest: Path, artifact: Artifact) -> None:
+    """Promote *tmp* to *dest* only if every pinned identity matches.
+
+    *tmp* has already been written. It is ``os.replace``d into place — atomic
+    within a filesystem — only after size, SHA-256, and (where upstream publishes
+    one) MD5 all agree with the pin. A truncated response, a proxy error page, or
+    an interrupted transfer therefore never appears at *dest* under the
+    artifact's real name; it is quarantined instead, and the process exits
+    non-zero.
     """
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".part")
     try:
-        tmp.write_bytes(data)
-
         actual_size = tmp.stat().st_size
         if actual_size != artifact.size:
             held = quarantine(tmp, sha256_of(tmp))
@@ -363,12 +369,70 @@ def _install_verified_bytes(data: bytes, dest: Path, artifact: Artifact) -> None
         tmp.unlink(missing_ok=True)
 
 
+def _install_verified_bytes(data: bytes, dest: Path, artifact: Artifact) -> None:
+    """Install *data* at *dest* only if every pinned identity matches."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # The scratch name carries this process's pid. The cache is a fixed directory
+    # under ``target/`` shared by every lane regardless of which arena each one
+    # was given, so two concurrent acquisitions — two lanes, or one lane run twice
+    # with different ``*_OUT`` — raced on a single ``.part``: both wrote it, and
+    # whichever lost ``os.replace`` got a bare ``FileNotFoundError``, or one
+    # process hashed the other's partial bytes and quarantined a download that was
+    # never corrupt. Separating arenas does not separate the cache, so the cache
+    # has to be safe on its own terms. ``os.replace`` onto *dest* stays atomic and
+    # every candidate is verified before it, so a unique scratch name is the whole
+    # fix.
+    tmp = _scratch_for(dest)
+    tmp.write_bytes(data)
+    _verify_and_install(tmp, dest, artifact)
+
+
+# A stalled connection with no timeout blocks a lane FOREVER, with the last thing
+# printed being "fetching <url>" and no diagnostic ever following it. Python's
+# default socket timeout is None, so this has to be stated. The retry is small and
+# its backoff is fixed rather than jittered: a transient reset partway through a
+# large transfer should not discard the run, and this repository does not
+# introduce nondeterminism it does not need.
+_FETCH_TIMEOUT_SECONDS = 60
+_FETCH_ATTEMPTS = 3
+_FETCH_BACKOFF_SECONDS = 2
+
+
 def _download_verified(artifact: Artifact, dest: Path) -> None:
-    """Fetch *artifact* over the network and install it only if it verifies."""
+    """Fetch *artifact* over the network and install it only if it verifies.
+
+    The response is streamed to the scratch file rather than read into memory:
+    the pinned WatDiv dataset is tens of megabytes today and this file documents
+    how to pin the 1000M one, at which point buffering the whole body would make
+    acquisition the memory peak of a lane that otherwise streams everything.
+    """
     print(f"  fetching {artifact.url}")
-    with urllib.request.urlopen(artifact.url) as response:  # noqa: S310 - pinned https URL
-        data = response.read()
-    _install_verified_bytes(data, dest, artifact)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _scratch_for(dest)
+    for attempt in range(1, _FETCH_ATTEMPTS + 1):
+        try:
+            with (
+                urllib.request.urlopen(  # noqa: S310 - pinned https URL
+                    artifact.url, timeout=_FETCH_TIMEOUT_SECONDS
+                ) as response,
+                tmp.open("wb") as handle,
+            ):
+                for chunk in iter(lambda: response.read(1 << 22), b""):  # noqa: B023
+                    handle.write(chunk)
+            break
+        except (urllib.error.URLError, OSError) as error:
+            tmp.unlink(missing_ok=True)
+            if attempt == _FETCH_ATTEMPTS:
+                sys.exit(
+                    f"FAIL: could not fetch {artifact.filename} after "
+                    f"{_FETCH_ATTEMPTS} attempt(s)\n"
+                    f"  url    {artifact.url}\n"
+                    f"  error  {error}\n"
+                    "  nothing was installed into the cache"
+                )
+            print(f"  attempt {attempt} failed ({error}); retrying")
+            time.sleep(_FETCH_BACKOFF_SECONDS * attempt)
+    _verify_and_install(tmp, dest, artifact)
 
 
 Fetcher = Callable[[Artifact, Path], None]
@@ -428,16 +492,37 @@ def _offending_status_lines(status_text: str, top: str) -> list[str]:
     return hits
 
 
+def _licence_posture_sentence() -> str:
+    """Describe the pinned set's licensing posture, counted from ARTIFACTS.
+
+    Restating these counts in prose is how a licensing diagnostic goes stale: the
+    sentence this replaced still described four artifacts, and named one as GPL,
+    after a second GPL artifact and two more pins had been added.
+    """
+    gpl = sum(1 for a in ARTIFACTS if a.licence.startswith("GPL"))
+    ungranted = sum(1 for a in ARTIFACTS if a.licence.startswith("unlicensed"))
+    citation = sum(1 for a in ARTIFACTS if a.licence.startswith("citation"))
+    parts = []
+    if gpl:
+        parts.append(f"{gpl} of these artifacts {'is' if gpl == 1 else 'are'} GPL-2.0-or-later")
+    if ungranted:
+        parts.append(f"{ungranted} carry no licence grant at all")
+    if citation:
+        parts.append(f"{citation} are citation-ware with no redistribution grant")
+    return ", ".join(parts)
+
+
 def assert_cache_invisible_to_git(cache_dir: Path) -> None:
     """Prove the cache cannot be committed, using the REPOSITORY's own rules.
 
     The operator's personal ignore file is disabled for this check on purpose.
     An artifact that is only invisible because of a personal ``core.excludesFile``
     is visible in every clone that lacks it, and these artifacts are exactly the
-    ones that must never be committed: one is GPL, two carry no licence grant at
-    all, and the fourth is redistributable only by its publisher. Only lines that
-    name the cache tree are inspected, so unrelated untracked files an operator
-    ignores personally do not make this fail.
+    ones that must never be committed — the posture counts in the diagnostic are
+    derived from ARTIFACTS rather than restated, so adding a pin cannot leave a
+    licensing sentence describing the set it used to be. Only lines that name the
+    cache tree are inspected, so unrelated untracked files an operator ignores
+    personally do not make this fail.
     """
     top = cache_dir.relative_to(REPO_ROOT).parts[0]
     result = subprocess.run(
@@ -471,8 +556,8 @@ def assert_cache_invisible_to_git(cache_dir: Path) -> None:
             f"{listed}\n"
             f"  The repository's own .gitignore must cover '{top}'. It currently does not\n"
             "  (a personal core.excludesFile does not count: a fresh clone has no such file).\n"
-            "  One of these artifacts is GPL-2.0-or-later and two carry no licence grant at\n"
-            "  all, so committing them is a licensing incident, not an untidy tree.\n"
+            f"  {_licence_posture_sentence()}, so committing them is a licensing\n"
+            "  incident, not an untidy tree.\n"
             "  Fix .gitignore before running this again. Nothing was fetched."
         )
     print(f"OK: '{top}/' is ignored by the repository's own rules; the cache cannot be committed")
@@ -483,9 +568,11 @@ def select_artifacts(names: list[str] | None) -> tuple[Artifact, ...]:
 
     An unknown name is a HARD FAILURE that names the bad value and lists every valid
     one — never a silent no-op (fetch nothing) and never a silent fallback (fetch
-    everything). This is what lets `scripts/lubm-lane.sh` ask for only its four
-    artifacts and `scripts/watdiv-lane.sh` ask for only its two, instead of every
-    lane paying for every pinned artifact regardless of which one it uses.
+    everything). This is what lets each lane ask for only the artifacts it
+    actually consumes, instead of every lane paying for every pinned artifact
+    regardless of which one it uses. ``GeneratorLinuxFix.zip`` is the reason that
+    distinction is worth having: it is pinned here so the licensing analysis is on
+    the record, and no lane fetches it, because no lane uses it.
 
     Order follows ``ARTIFACTS``, not *names*, and a name repeated in *names* is
     fetched once: this selects a subset, it does not resequence or multiply it.
@@ -673,7 +760,7 @@ def self_test() -> int:
         if target.exists():
             print("SELF-TEST FAIL: unverified fetched bytes were installed at the real name")
             ok = False
-        elif (fetch_dir / (fixture.filename + ".part")).exists():
+        elif list(fetch_dir.glob(fixture.filename + ".part*")):
             print("SELF-TEST FAIL: a .part file was left behind after a rejected fetch")
             ok = False
         else:
@@ -687,6 +774,25 @@ def self_test() -> int:
             "right size with wrong content still fails the digest",
             ["sha256 mismatch", good_sha],
         )
+
+        # 7b. The md5 refusal, which is the one branch that was covered only on
+        #     its VALID side: every case above carries a fixture whose md5 is
+        #     right, so nothing ever proved the refusal fires, or that its
+        #     message says what it is for. It is the only check that can fail
+        #     with the sha256 pin already matching, which means the PIN is wrong
+        #     rather than the download — and that sentence had never been
+        #     executed.
+        mismatched_md5 = fixture._replace(md5="0" * 32)
+        ok &= _expect_exit(
+            lambda: _install_verified_bytes(good, fetch_dir / "md5.bin", mismatched_md5),
+            "bytes matching sha256 but not the publisher's md5 are refused",
+            ["md5 disagrees with the publisher's own checksum", "the PIN is what is wrong here"],
+        )
+        if (fetch_dir / "md5.bin").exists():
+            print("SELF-TEST FAIL: bytes failing the md5 cross-check were installed anyway")
+            ok = False
+        else:
+            print("OK: self-test — an md5 mismatch is refused and nothing is installed")
 
     # 8. The git-visibility matcher flags the cache tree and nothing adjacent.
     flagged = _offending_status_lines(
@@ -806,12 +912,14 @@ def acquire(artifacts: tuple[Artifact, ...]) -> int:
             fetched += 1
         verify_digest(CACHE / artifact.filename, artifact.sha256, artifact.filename)
         if artifact.md5 is not None:
-            actual_md5 = md5_of(CACHE / artifact.filename)
-            if actual_md5 != artifact.md5:
-                sys.exit(
-                    f"FAIL: {artifact.filename} md5 mismatch\n"
-                    f"  expected {artifact.md5}\n  actual   {actual_md5}"
-                )
+            # The md5 is NOT re-checked here. `_verify_and_install` checks it
+            # before any byte reaches the cached name, and `ensure_cached` proves
+            # a pre-existing entry still matches its sha256 — so a third check
+            # would be a second implementation of one rule, with a weaker message
+            # (no quarantine, no url, and none of the "the PIN is what is wrong
+            # here" guidance the real one carries). Two copies of a rule are two
+            # rules, which is the drift this file's own design notes argue
+            # against, and it also read the artifact a third time per run.
             print(f"OK: {artifact.filename} md5 {artifact.md5} (publisher-published)")
         print(f"     {status}  {artifact.licence}")
 

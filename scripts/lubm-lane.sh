@@ -284,8 +284,15 @@ now_ms() {
 # ── 1. Artifacts ────────────────────────────────────────────────────────────────
 
 step "1/7 artifacts (pinned, fetched by digest, never vendored)"
+# `GeneratorLinuxFix.zip` is deliberately NOT among these. It is pinned in
+# benchmark-acquire.py because the licensing analysis needs it on the record --
+# it is a modified copy of the GPL UBA source and carries the same header -- but
+# this lane fixes the output after generation rather than patching
+# Generator.java, precisely so that a JRE is enough and no copyleft source is
+# compiled. Nothing here has ever unzipped it, so fetching it was a network
+# round-trip for a GPL artifact with no consumer.
 python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-  --only uba1.7.zip GeneratorLinuxFix.zip queries-sparql.txt univ-bench.owl ||
+  --only uba1.7.zip queries-sparql.txt univ-bench.owl ||
   die "artifact acquisition failed -- nothing downstream can be trusted, stopping"
 
 for required in uba1.7.zip univ-bench.owl queries-sparql.txt; do
