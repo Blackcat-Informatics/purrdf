@@ -2427,3 +2427,191 @@ fn a_measured_zero_and_a_silent_subject_differ_in_a_byte_and_in_identity() {
         assert_eq!(decoded.id(), plan.id());
     }
 }
+
+// ---------------------------------------------------------------------------
+// The derivations section does not remember how it was filled
+// ---------------------------------------------------------------------------
+
+/// How many strata the insertion-order fixture carries.
+const ORDERED_STRATA: usize = 5;
+
+/// The `index`-th permutation of `0..ORDERED_STRATA`, in factorial-base order.
+///
+/// Written out rather than drawn at random: a random order is unreproducible, so
+/// a failure could not be re-run, and randomness is not what this test needs
+/// anyway. It needs EVERY order, which is what enumerating them gives.
+fn permutation(mut index: usize) -> Vec<usize> {
+    let mut pool: Vec<usize> = (0..ORDERED_STRATA).collect();
+    let mut order = Vec::with_capacity(ORDERED_STRATA);
+    let mut block: usize = (1..=ORDERED_STRATA).product();
+    for remaining in (1..=ORDERED_STRATA).rev() {
+        block /= remaining;
+        order.push(pool.remove(index / block));
+        index %= block;
+    }
+    order
+}
+
+/// A plan over [`ORDERED_STRATA`] strata whose derivations, depths and snapshot
+/// rows were all inserted in `order`.
+///
+/// Each stratum declares its own row count, so the encoded section differs
+/// position by position: an encoder that emitted the entries in the order they
+/// arrived would write different bytes for different orders rather than the same
+/// bytes in a different arrangement.
+fn plan_filled_in(order: &[usize]) -> Plan {
+    let mut plan = baseline();
+    plan.stratum_depths.clear();
+    plan.stratum_derivations.clear();
+    let mut rows: Vec<StatisticsEntry> = Vec::new();
+    for &index in order {
+        let stratum = iri(&format!("http://example.org/stratum/{index}"));
+        // Distinct declarations AND distinct measurements, so every field of
+        // every record is that stratum's own.
+        let declared = 100 + index as u64;
+        let cardinality = 40 + index as u64;
+        plan.stratum_derivations.insert(
+            stratum.clone(),
+            DepthInputs {
+                declared,
+                cardinality: Some(cardinality),
+                selectivity_ppm: None,
+                selectivity_terms: Vec::new(),
+                licensed_prefix: Some(25),
+            },
+        );
+        plan.stratum_depths.insert(
+            stratum.clone(),
+            u32::try_from(cardinality.min(25)).expect("the fixture depths fit a rank"),
+        );
+        rows.push(StatisticsEntry {
+            subject: stratum.as_str().to_owned(),
+            cardinality: Some(cardinality),
+            selectivity_ppm: None,
+            selectivity_terms: Vec::new(),
+        });
+    }
+    edit_rows(&mut plan, |existing| *existing = rows);
+    plan
+}
+
+/// The derivations section is a function of the derivations, not of the order
+/// they were inserted in.
+///
+/// # Why one construction would prove nothing
+///
+/// The sibling section next door is a `HashMap`, and the argument that its
+/// encoding is order-independent is a sort the encoder performs; the argument
+/// here is that a [`BTreeMap`](std::collections::BTreeMap) has no insertion
+/// order to leak. Both are arguments from the type, and this test exists
+/// because an argument from the type is not an executed case — the section was
+/// added with that reasoning and no adversarial run behind it.
+///
+/// A single pair of constructions could not close that. Rust seeds each
+/// `HashMap` from a per-thread counter, so iteration order varies between maps
+/// but is FIXED within one: two plans built once might happen to agree, and the
+/// test would be green on a coincidence it could not detect. So every order is
+/// enumerated — all one hundred and twenty of them — and the whole enumeration
+/// is repeated fifty times, which is six thousand freshly seeded structures
+/// rather than two.
+///
+/// The oracle is the bytes, the identity and the value, all three. Bytes alone
+/// would pass for a digest that read a prefix; identity alone would pass for an
+/// encoder that moved a field the digest ignores; equality alone is the
+/// `BTreeMap`'s own, which is the thing under suspicion.
+#[test]
+fn plans_differing_only_in_derivation_insertion_order_are_one_plan() {
+    let orders: usize = (1..=ORDERED_STRATA).product();
+    let reference = plan_filled_in(&permutation(0));
+    reference
+        .certify()
+        .expect("every recorded depth follows from the inputs beside it");
+    let expected_bytes = reference.canonical_bytes();
+    let expected_id = reference.id();
+    assert_eq!(
+        reference.stratum_derivations.len(),
+        ORDERED_STRATA,
+        "the fixture really carries every stratum, so the section under test is \
+         not empty"
+    );
+
+    let mut rebuilds = 0_usize;
+    for round in 0..50 {
+        for index in 0..orders {
+            let order = permutation(index);
+            let plan = plan_filled_in(&order);
+            rebuilds += 1;
+            assert_eq!(
+                plan.canonical_bytes(),
+                expected_bytes,
+                "round {round}, order {order:?}: the derivations section \
+                 remembered how it was filled"
+            );
+            assert_eq!(plan.id(), expected_id, "round {round}, order {order:?}");
+            assert_eq!(plan, reference, "round {round}, order {order:?}");
+            plan.certify().expect("and each rebuild is still coherent");
+        }
+    }
+    assert_eq!(
+        rebuilds, 6_000,
+        "six thousand freshly seeded structures, not two"
+    );
+
+    // The control: the section is not order-independent because it is constant.
+    // Change one stratum's declaration and the bytes, the identity and the value
+    // all move — so the equalities above are observations and not vacuities.
+    let mut moved = plan_filled_in(&permutation(0));
+    let stratum = iri("http://example.org/stratum/3");
+    moved
+        .stratum_derivations
+        .get_mut(&stratum)
+        .expect("the fixture carries this stratum")
+        .declared += 1;
+    assert_ne!(moved.canonical_bytes(), expected_bytes);
+    assert_ne!(moved.id(), expected_id);
+    assert_ne!(moved, reference);
+}
+
+/// Every order the fixture enumerates is a distinct permutation, and together
+/// they are all of them.
+///
+/// The enumeration is the test above's whole coverage claim, so it is checked
+/// rather than assumed: an off-by-one in the factorial-base decode would quietly
+/// repeat one order a hundred and twenty times and leave the adversarial case
+/// unrun while every assertion still passed.
+#[test]
+fn the_insertion_orders_enumerated_are_every_permutation_exactly_once() {
+    let orders: usize = (1..=ORDERED_STRATA).product();
+    let mut seen: std::collections::BTreeSet<Vec<usize>> = std::collections::BTreeSet::new();
+    for index in 0..orders {
+        let order = permutation(index);
+        assert_eq!(
+            order.len(),
+            ORDERED_STRATA,
+            "order {index} is not a whole permutation: {order:?}"
+        );
+        assert_eq!(
+            order
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0..ORDERED_STRATA).collect::<std::collections::BTreeSet<_>>(),
+            "order {index} names a stratum twice or not at all: {order:?}"
+        );
+        assert!(
+            seen.insert(order.clone()),
+            "order {index} repeats {order:?}"
+        );
+    }
+    assert_eq!(seen.len(), orders, "all {orders} orders, each once");
+    assert_eq!(
+        permutation(0),
+        vec![0, 1, 2, 3, 4],
+        "the first is ascending"
+    );
+    assert_eq!(
+        permutation(orders - 1),
+        vec![4, 3, 2, 1, 0],
+        "and the last is descending, which is the adversarial one"
+    );
+}
