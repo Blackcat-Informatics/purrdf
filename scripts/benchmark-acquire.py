@@ -257,6 +257,11 @@ ARTIFACTS: tuple[Artifact, ...] = (
 # no digest at all -- it turns a download into an unchecked download that prints
 # "OK". `scripts/watdiv-lane.sh` refuses an unpinned scale by name and points
 # here rather than quietly falling back to 10M.
+# Every scale upstream publishes. Which of them this repository has actually
+# PINNED is derived from ARTIFACTS rather than restated here, so the two cannot
+# disagree: `pinned_watdiv_scales` reads the pins and `unpinned_watdiv_scales` is
+# the difference. Both are printed by `--list`, and `scripts/watdiv-lane.sh`
+# points an operator at that output instead of carrying its own copy of the list.
 WATDIV_SCALES: tuple[str, ...] = ("10M", "100M", "1000M")
 
 
@@ -591,6 +596,21 @@ def select_artifacts(names: list[str] | None) -> tuple[Artifact, ...]:
     return tuple(artifact for artifact in ARTIFACTS if artifact.filename in wanted)
 
 
+def pinned_watdiv_scales() -> tuple[str, ...]:
+    """The WatDiv scales that are actually pinned, read from ARTIFACTS."""
+    return tuple(
+        name.removeprefix("watdiv.").removesuffix(".tar.bz2")
+        for name in (a.filename for a in ARTIFACTS)
+        if name.startswith("watdiv.") and name.endswith(".tar.bz2")
+    )
+
+
+def unpinned_watdiv_scales() -> tuple[str, ...]:
+    """The scales upstream publishes that this repository has NOT pinned."""
+    pinned = set(pinned_watdiv_scales())
+    return tuple(scale for scale in WATDIV_SCALES if scale not in pinned)
+
+
 def list_artifacts() -> int:
     """Print every pinned artifact with its licence posture and exit 0."""
     print(f"cache: {CACHE}")
@@ -610,6 +630,13 @@ def list_artifacts() -> int:
         print(f"  licence  {artifact.licence}")
         for index, line in enumerate(_wrap(artifact.posture, 74)):
             print(f"  posture  {line}" if index == 0 else f"           {line}")
+    print()
+    print(f"WatDiv scales pinned here:  {', '.join(pinned_watdiv_scales())}")
+    print(f"published upstream, NOT pinned: {', '.join(unpinned_watdiv_scales())}")
+    print(
+        "  An unpinned scale is refused by name rather than silently substituted.\n"
+        "  To use one, fetch it, hash it yourself, and add it to ARTIFACTS."
+    )
     return 0
 
 

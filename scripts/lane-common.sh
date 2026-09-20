@@ -193,6 +193,18 @@ print(digest.hexdigest())
 ' "${path}"
 }
 
+# A DIAGNOSTIC MUST SURVIVE THE RECORD IT TRAVELS IN. A lane's result rows are
+# tab-separated, so a multi-line engine message cannot be dropped into one
+# verbatim -- and the answer to that was `head -1`, which silently discarded
+# everything after the first line while the report told the reader the message
+# was printed verbatim. Several of this engine's errors carry the part that
+# matters on a later line: a witness, or the head and cell of a malformed list.
+# Flatten, so the whole message survives in a field that can hold it.
+lane_flatten_detail() {
+  printf '%s' "$1" | tr '\t' ' ' |
+    awk 'NF { lines[n++] = $0 } END { for (i = 0; i < n; i++) printf "%s%s", (i ? " | " : ""), lines[i] }'
+}
+
 # ── The query set: counted, certified, and re-checked while it is being read ────
 #
 # These three laws were written for one lane and left out of its sibling, which is

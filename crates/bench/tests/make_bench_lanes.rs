@@ -249,7 +249,7 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
 // EACH LANE CERTIFIED AN ARTIFACT ITS BINARY NEVER PRODUCED.
 //
 // With a `LUBM_BIN` that exits 0 and writes nothing, `scripts/lubm-lane.sh` printed
-// `data:     0 rows, 0 bytes, converted in 56 ms` as a SUCCESS line, published
+// `data:     0 rows, 0 bytes` as a SUCCESS line, published
 // `sha256(lubm-data.nq) = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` —
 // THE SHA-256 OF THE EMPTY STRING — as the dataset's provenance digest, passed its own
 // `converted == owl_count` guard 15 of 15, ran on through step 6, and EXITED 0 with a full

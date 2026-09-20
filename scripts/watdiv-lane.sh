@@ -140,6 +140,12 @@ require_uint() {
 }
 
 require_uint WATDIV_SEED "${SEED}"
+# Normalise now that it is known to be digits. `require_uint` accepts leading
+# zeros, so WATDIV_SEED=007 printed "seed 007" in the summary while the
+# instantiator's Python int recorded "seed 7" in provenance.txt -- one run, two
+# recorded seeds, in the two files whose whole job is to make a number
+# attributable to the conditions that produced it.
+SEED=$((10#${SEED}))
 
 # Only the 10M dataset is pinned. A larger scale is a one-line addition to
 # scripts/benchmark-acquire.py -- but only by whoever fetches and hashes it
@@ -147,8 +153,10 @@ require_uint WATDIV_SEED "${SEED}"
 # the wrong corpus under the right name, so the request is REFUSED by name.
 [[ "${SCALE}" == "10M" ]] ||
   die "WATDIV_SCALE='${SCALE}' is not pinned; only 10M is.
-  Upstream also publishes watdiv.100M.tar.bz2 and watdiv.1000M.tar.bz2. To use one,
-  fetch it, hash it YOURSELF, and add it to ARTIFACTS in scripts/benchmark-acquire.py.
+  Run 'python3 scripts/benchmark-acquire.py --list' for which scales are pinned and
+  which upstream publishes without a pin here -- that list is derived from the pins
+  themselves rather than restated, so it cannot drift out of step with them. To use
+  an unpinned scale, fetch it, hash it YOURSELF, and add it to ARTIFACTS.
   This lane will not invent a digest and will not silently run a different corpus."
 
 TARBALL="watdiv.${SCALE}.tar.bz2"
@@ -360,7 +368,7 @@ tar xf "${CACHE}/watdiv_v06.tar" -C "${ARENA}" --strip-components=1 \
 # among them; they are removed so nothing downstream can accidentally count them.
 rm -rf "${TESTSUITE}/linear_incremental" "${TESTSUITE}/linear_mixed"
 
-template_count=$(find "${TESTSUITE}" -maxdepth 1 -name '*.txt' | wc -l)
+template_count=$(find "${TESTSUITE}" -maxdepth 1 -type f -name '*.txt' | wc -l)
 ((template_count == 20)) ||
   die "expected 20 basic templates in ${TESTSUITE}, found ${template_count}"
 [[ -f "${MODEL}" ]] || die "watdiv_v06.tar did not contain model/wsdbm-data-model.txt"
@@ -500,17 +508,27 @@ else:
 # reports rather than a reason to abandon the run and print nothing.
 run_query() {
   local query_text="$1"
-  local start stop out rc
+  # STDERR IS NOT RESULTS. Merging the two meant a binary that exits 0 while
+  # writing anything at all to stderr prepended non-JSON to well-formed output,
+  # the parse failed, and the lane reported that the results were unparseable
+  # when they were fine -- a cause it had not established, blamed on the binary
+  # under test. The open-cost probe hit it first and died claiming it "could not
+  # run against the pack", which was equally untrue.
+  local start stop out rc errfile
+  errfile="${LANE_TMP}/query.err"
   start="$(now_ms)"
   set +e
-  out="$("${BIN}" query --data "${PACK}" --results-format json "${query_text}" 2>&1)"
+  out="$("${BIN}" query --data "${PACK}" --results-format json "${query_text}" 2>"${errfile}")"
   rc=$?
   set -e
   stop="$(now_ms)"
 
+  local said
+  said="$(lane_flatten_detail "$(cat "${errfile}")")"
+
   if ((rc != 0)); then
     printf 'CANNOT-EXECUTE\t-\t%s\t%s\n' "$((stop - start))" \
-      "$(printf '%s' "${out}" | head -1)"
+      "${said:-the binary exited ${rc} without saying anything}"
     return
   fi
 
@@ -518,7 +536,7 @@ run_query() {
   count="$(printf '%s' "${out}" | rows_of_json 2>/dev/null)" || count=""
   if [[ -z "${count}" ]]; then
     printf 'BAD-RESULTS\t-\t%s\t%s\n' "$((stop - start))" \
-      "the engine exited 0 but its results were not parseable SPARQL JSON"
+      "the engine exited 0 but its stdout was not parseable SPARQL JSON${said:+; it also wrote: ${said}}"
     return
   fi
   printf 'OK\t%s\t%s\t-\n' "${count}" "$((stop - start))"

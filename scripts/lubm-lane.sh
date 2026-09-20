@@ -607,17 +607,27 @@ run_query() {
   local -a flags=(--data "${dataset}" --results-format json)
   [[ "${regime}" == "-" ]] || flags+=(--entailment "${regime}")
 
-  local start stop out rc
+  # STDERR IS NOT RESULTS. Merging the two meant a binary that exits 0 while
+  # writing anything at all to stderr -- a notice, a warning, a future governor
+  # line -- prepended non-JSON to well-formed output, the parse failed, and the
+  # lane reported "its results were not parseable SPARQL JSON". The results were
+  # fine. That is a diagnosis the lane had not established, about the binary
+  # under test, which is the misdiagnosis class the lane tests exist to stop.
+  local start stop out rc errfile
+  errfile="${LANE_TMP}/query.err"
   start="$(now_ms)"
   set +e
-  out="$("${BIN}" query "${flags[@]}" "$(cat "${query_file}")" 2>&1)"
+  out="$("${BIN}" query "${flags[@]}" "$(cat "${query_file}")" 2>"${errfile}")"
   rc=$?
   set -e
   stop="$(now_ms)"
 
+  local said
+  said="$(lane_flatten_detail "$(cat "${errfile}")")"
+
   if ((rc != 0)); then
     printf 'CANNOT-EXECUTE\t-\t%s\t%s\n' "$((stop - start))" \
-      "$(printf '%s' "${out}" | head -1)"
+      "${said:-the binary exited ${rc} without saying anything}"
     return
   fi
 
@@ -638,7 +648,7 @@ else:
 
   if [[ -z "${count}" ]]; then
     printf 'BAD-RESULTS\t-\t%s\t%s\n' "$((stop - start))" \
-      "the engine exited 0 but its results were not parseable SPARQL JSON"
+      "the engine exited 0 but its stdout was not parseable SPARQL JSON${said:+; it also wrote: ${said}}"
     return
   fi
   printf 'OK\t%s\t%s\t-\n' "${count}" "$((stop - start))"
@@ -791,6 +801,7 @@ fi
 
 cat <<REPORT
 SUMMARY
+  binary             ${BIN} (${PURRDF_VERSION})
   dataset            LUBM(${UNIVERSITIES}, ${INDEX}) seed=${SEED}
   generated          ${owl_count} RDF/XML file(s), ${owl_bytes} bytes, ${gen_ms} ms
   converted          ${data_rows} rows, ${data_bytes} bytes, ${conv_ms} ms
@@ -812,10 +823,13 @@ HOW TO READ THIS
   say the regime WORKS and what it costs; they are not comparable against a number
   published for LUBM(${UNIVERSITIES}, ${INDEX}). Only 'full' rows are.
 
-  A rung below 'full' appears when materializing that regime's closure passes a
-  FIXED internal ceiling that no command-line flag raises. The probe lines above
-  print the observed and permitted counts verbatim, so the limit is visible rather
-  than inferred from a missing row.
+  A rung below 'full' appears when the 'full' attempt did not succeed. The usual
+  cause is materializing that regime's closure passing a FIXED internal ceiling
+  that no command-line flag raises, and the probe lines above carry whatever the
+  engine said in full -- including the observed and permitted counts when that is
+  the cause -- so the reason is read rather than inferred from a missing row. Any
+  non-zero exit demotes the rung, so read the probe line rather than assuming the
+  ceiling.
 
   This lane is report-only. Nothing here is a gate and no number here is asserted.
 
