@@ -16,9 +16,11 @@ use crate::dataset_view::{DatasetView, FallibleDatasetView, GraphMatch, ViewOper
 use crate::governor::{ResourceDimension, ResourceVector, StopCause};
 use crate::ir::{GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 
+use super::admission::{self, PageAdmission};
+use super::summary::{PageStream, PageSummary};
 use super::{
     PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagedDataset,
-    map_quad_to_global, translate_pattern,
+    map_quad_to_global, summary_drift_message,
 };
 
 /// Exact resource ceilings for one [`PagedQueryView`].
@@ -541,6 +543,33 @@ impl<'dataset> PagedQueryView<'dataset> {
                 });
             }
         }
+        // UNCONDITIONAL certification, in every build profile: recompute the page's
+        // O(1) summary digest from the freshly materialized content and compare it to
+        // the digest sealed for this slot. The checks above compare totals and term
+        // VALUES, which leaves the per-term and per-graph row SPLIT unexamined — and
+        // that split is what the pruning law reads when it authorizes skipping a page
+        // without materializing it. A page now carrying more rows for a term or a
+        // graph than its summary claims therefore digests differently and is refused
+        // here. That reaches every page this operation READS; it cannot reach a page
+        // the pruning law skipped, which is never materialized and so is observed by
+        // nothing on this path — an under-reporting summary there still yields a short
+        // answer under a Ready status, and only the cold `verify_parts` pass can find
+        // it (clause G10). Typed, and latched sticky by the caller, exactly like every
+        // other refusal above: the content is provider-supplied and must never abort
+        // the process.
+        let digest = PageSummary::digest_of(&materialization.dataset).map_err(|defect| {
+            PagedQueryError::InvalidData {
+                page: id,
+                message: defect.to_string(),
+            }
+        })?;
+        let sealed = slot.translation.summary();
+        if digest != sealed.digest() {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: summary_drift_message(sealed, digest, &materialization.dataset),
+            });
+        }
         Ok(())
     }
 }
@@ -615,16 +644,27 @@ impl DatasetView for PagedQueryView<'_> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        self.dataset.pages.iter().flat_map(move |slot| {
-            translate_pattern(&slot.translation, s, p, o, g)
-                .into_iter()
-                .flat_map(move |(local_s, local_p, local_o, local_g)| {
+        // Narrow the candidate page set from the graph axis first (zero allocation),
+        // then apply the full per-axis admission law before `self.page` — the only
+        // materialization, and the only thing that can charge this operation's page/byte
+        // budget or advance its evidence — runs for a candidate.
+        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
+        admission::candidate_pages(self.dataset.graph_index(), page_count, g).flat_map(
+            move |page_id| {
+                let index = usize::try_from(page_id.0).expect("page id fits usize");
+                let slot = &self.dataset.pages[index];
+                let admitted = match admission::admit_pattern(&slot.translation, s, p, o, g) {
+                    PageAdmission::Skip(_) => None,
+                    PageAdmission::Admit(local) => Some(local),
+                };
+                admitted.into_iter().flat_map(move |local| {
                     self.page(slot.id).into_iter().flat_map(move |page| {
-                        page.quads_for_pattern_indexed(local_s, local_p, local_o, local_g)
+                        page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
                             .map(move |quad| map_quad_to_global(&slot.translation, quad))
                     })
                 })
-        })
+            },
+        )
     }
 
     fn term_id_by_value(&self, value: &TermValue) -> Option<GlobalTermId> {
@@ -666,25 +706,37 @@ impl DatasetView for PagedQueryView<'_> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> usize {
+        // Candidate narrowing mirrors `quads_for_pattern`. The estimate is read
+        // ENTIRELY from sealed `PageSummary` metadata via
+        // `admission::estimate_admitted_page` — deliberately NOT from this
+        // operation's page cache (`self.pages[index].materialization`), so the
+        // result never depends on whether this operation has already admitted the
+        // page. A residency-dependent estimate would let plan choice — and hence
+        // the `requested_pages` sequence a G-clause treats as evidence of what a
+        // query actually touched — depend on incidental cache warmth rather than on
+        // the snapshot and the pattern alone, so two runs of the identical query
+        // against the identical snapshot could pick different plans (and the SAME
+        // operation could see its own plan choice shift mid-evaluation as pages
+        // warm up). Planning therefore still never materializes a page or spends
+        // this operation's page/byte budget: the sealed `quad_count` fallback (no
+        // axis bound) and the per-axis `PageSummary` counts (one or more axes
+        // bound) are both seal-time metadata, never a fresh materialization. For a
+        // pattern with exactly one bound axis the per-page contribution is EXACT.
+        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
         let mut total = 0_usize;
-        for slot in &self.dataset.pages {
-            let Some((local_s, local_p, local_o, local_g)) =
-                translate_pattern(&slot.translation, s, p, o, g)
+        for page_id in admission::candidate_pages(self.dataset.graph_index(), page_count, g) {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.dataset.pages[index];
+            let PageAdmission::Admit(local) =
+                admission::admit_pattern(&slot.translation, s, p, o, g)
             else {
                 continue;
             };
-            let index = usize::try_from(slot.id.0).expect("page id fits usize");
-            let estimate = self.pages[index]
-                .materialization
-                .get()
-                .and_then(|result| result.as_ref().ok())
-                .map_or(slot.quad_count, |page| {
-                    page.cardinality_estimate(local_s, local_p, local_o, local_g)
-                });
-            // Planning must not materialize provider pages: doing so would consume
-            // operation budgets and make requested-page evidence depend on whether
-            // the evaluator's BGP-order cache is warm. The sealed quad count is a
-            // valid upper bound until this operation has already admitted the page.
+            let estimate = admission::estimate_admitted_page(
+                slot.translation.summary(),
+                local,
+                slot.quad_count,
+            );
             total = total.saturating_add(estimate);
         }
         total
@@ -715,14 +767,18 @@ impl DatasetView for PagedQueryView<'_> {
         reifier: GlobalTermId,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         // Per-page narrowing, shaped exactly like `annotations_of_with_graph` below: a
-        // page whose translation lacks the reifier owns no row for it and is skipped
-        // before the page is requested; a page that has it addresses its contiguous run
-        // in `O(log n)` (`RdfDataset::reifier_quads_of`). Page order and within-page
+        // page is skipped BEFORE it is requested unless its sealed `PageSummary`
+        // proves it owns at least one REIFIER row for this term
+        // (`reifier_rows(local) > 0`) — role-agnostic term-table presence (`to_local`
+        // alone) is not enough, since a page can mention a term only in its base-quad
+        // table. A page that clears the check addresses its contiguous run in
+        // `O(log n)` (`RdfDataset::reifier_quads_of`). Page order and within-page
         // frozen order are unchanged, so the row stream is identical to the trait
         // default's filter over `reifier_quads`.
         self.dataset.pages.iter().flat_map(move |slot| {
             slot.translation
                 .to_local(reifier)
+                .filter(|&local| slot.translation.summary().reifier_rows(local) > 0)
                 .into_iter()
                 .flat_map(move |local_reifier| {
                     self.page(slot.id).into_iter().flat_map(move |page| {
@@ -746,9 +802,14 @@ impl DatasetView for PagedQueryView<'_> {
         &self,
         reifier: GlobalTermId,
     ) -> impl Iterator<Item = (GlobalTermId, GlobalTermId, Option<GlobalTermId>)> + '_ {
+        // A page is skipped BEFORE it is requested unless its sealed `PageSummary`
+        // proves it owns at least one ANNOTATION row for this term
+        // (`annotation_rows(local) > 0`) — see `reifier_quads_of` above for why mere
+        // `to_local` presence is not enough.
         self.dataset.pages.iter().flat_map(move |slot| {
             slot.translation
                 .to_local(reifier)
+                .filter(|&local| slot.translation.summary().annotation_rows(local) > 0)
                 .into_iter()
                 .flat_map(move |local_reifier| {
                     self.page(slot.id).into_iter().flat_map(move |page| {
@@ -764,6 +825,112 @@ impl DatasetView for PagedQueryView<'_> {
                     })
                 })
         })
+    }
+
+    /// Narrows the candidate page set to the REIFIER stream's graph postings before
+    /// any page is requested — see [`DatasetView::reifier_quads_in_graph`] for the
+    /// contract this satisfies. Goes through `self.page`, so the sticky-failure gate
+    /// and the page/byte budget still charge for every page this actually visits.
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // An override, not a new obligation (see the trait's doc comment): narrows the
+        // candidate page set to the REIFIER stream's graph postings before any page is
+        // requested, exactly as `quads_for_pattern` narrows on the base-quad postings.
+        // Soundness: a page absent from `g`'s reifier posting list has zero reifier
+        // rows in that graph (per `GraphPageIndex::derive`), so it can contribute
+        // nothing. A listed page may also hold reifier rows in OTHER graphs, so the
+        // per-row `g.matches` filter still runs after materialization — narrowing
+        // chooses pages, it does not replace the row predicate. Goes through
+        // `self.page`, so the sticky failure gate and the page/byte budget charging
+        // still apply.
+        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
+        admission::candidate_pages_for_stream(
+            self.dataset.graph_index(),
+            page_count,
+            g,
+            PageStream::Reifier,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.dataset.pages[index];
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                page.reifier_quads()
+                    .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    .filter(move |quad| g.matches(quad.g))
+            })
+        })
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: same
+    /// narrowing and the same sticky-gate/budget discipline, over the ANNOTATION
+    /// stream's graph postings instead.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // See `reifier_quads_in_graph` above: same narrowing and the same sticky-gate/
+        // budget-charging discipline (via `self.page`), over the ANNOTATION stream's
+        // graph postings instead.
+        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
+        admission::candidate_pages_for_stream(
+            self.dataset.graph_index(),
+            page_count,
+            g,
+            PageStream::Annotation,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.dataset.pages[index];
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                page.annotation_quads()
+                    .map(move |quad| map_quad_to_global(&slot.translation, quad))
+                    .filter(move |quad| g.matches(quad.g))
+            })
+        })
+    }
+
+    /// Every named graph any page declares, including ones a page leaves empty or
+    /// names only from a reifier/annotation row — see [`DatasetView::named_graphs`]
+    /// for why this membership widening over the trait default matters for `GRAPH
+    /// ?g`. On a healthy view this costs an O(1) charge and materializes no page: the
+    /// answer is folded from each page's sealed `PageSummary` alone. The sticky-
+    /// failure gate still applies on a view already carrying a fault.
+    fn named_graphs(&self) -> impl Iterator<Item = GlobalTermId> + '_ {
+        // O(1) charge, no page materialized on a healthy view: `GraphPageIndex::keys`
+        // is already every named graph any page knows about (declared-empty graphs
+        // included), ascending by `GlobalTermId` and deduplicated, folded from each
+        // page's sealed `PageSummary` alone.
+        //
+        // Order: ascending `GlobalTermId`, which is INTERN order — page-arrival order,
+        // then within-page local order — not canonical `TermValue` order. The two
+        // coincide only after `compact()` (clause G2). This matches what the trait
+        // default already produced here (it collected the same ids into a
+        // `BTreeSet<Self::Id>`), so this override changes MEMBERSHIP, not order.
+        //
+        // Membership is a deliberate fix, not a side effect: SPARQL 1.1 §8.3 and §18.6
+        // range `GRAPH ?g` over every named graph in the active dataset, including ones
+        // with no matching triples. The default derives graphs only from `quads()`, so
+        // it misses a graph a page declares but leaves empty, or one named only by a
+        // reifier or annotation side-table row. Each page's own
+        // `RdfDataset::named_graphs()` already unions declared graphs with the graph
+        // slots of quads, reifiers, and annotations; this override brings the composed
+        // paged surface into line with that per-page answer, and with
+        // `RdfDataset`/`CompositeDatasetView`.
+        //
+        // The sticky-failure gate still applies: every other egress on this type funnels
+        // through `PagedQueryView::page`, which yields nothing once `self.failed()` is
+        // true, so a terminal operational error must not let this metadata-only path
+        // keep yielding graph ids. `graph_index()` reads no page and cannot itself fail,
+        // so the gate is applied explicitly here rather than by `page`.
+        let live = !self.failed();
+        self.dataset
+            .graph_index()
+            .keys()
+            .iter()
+            .copied()
+            .take(if live { usize::MAX } else { 0 })
     }
 }
 

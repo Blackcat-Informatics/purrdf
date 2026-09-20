@@ -784,6 +784,39 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.0.annotation_quads().filter(|q| self.keeps(q.g))
     }
+
+    /// Hands `g` to the wrapped view's own [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph)
+    /// — so a paged carrier underneath still skips whole pages for `g` — then
+    /// re-applies `keeps` to every row the narrowed stream yields. Taking the trait
+    /// default here would silently reinstate a whole-table scan for every wrapped
+    /// carrier.
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // The residue is a ROW filter, so it composes with the graph seam instead of
+        // erasing it: hand `g` to the wrapped view — which may be able to skip whole
+        // storage units for it, as a paged carrier does — and re-apply `keeps` to
+        // every row the narrowed stream yields. Two commuting filters over one
+        // stream, so this is the same multiset in the same order as
+        // `reifier_quads().filter(|q| g.matches(q.g))`; only the number of units the
+        // wrapped view had to visit differs. Taking the trait default here would
+        // silently reinstate a whole-table scan for every wrapped carrier.
+        self.0.reifier_quads_in_graph(g).filter(|q| self.keeps(q.g))
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same composition, over the ANNOTATION stream.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // See `reifier_quads_in_graph` above: the same composition over the
+        // ANNOTATION stream.
+        self.0
+            .annotation_quads_in_graph(g)
+            .filter(|q| self.keeps(q.g))
+    }
 }
 
 /// The pipeline carrier: the frozen hot graph plus its out-of-band material and a
@@ -2554,5 +2587,281 @@ mod core_tests {
             "the pre-accumulate clone must answer for its own content"
         );
         assert_eq!(snapshot.digest(), bundle(base()).digest());
+    }
+}
+
+/// The residue leaf wraps an ARBITRARY [`DatasetView`], so it is the seam through
+/// which a paged carrier's graph-narrowed side-table reads either survive or quietly
+/// become whole-table scans.
+///
+/// Correctness never distinguishes the two: the trait default for
+/// [`DatasetView::reifier_quads_in_graph`] IS the post-filter, so a residue that took
+/// the default would still yield exactly the right rows — after materializing every
+/// page. These tests therefore pin BOTH halves: the rows (against the filtered
+/// unkeyed stream, which is the law) and the pages the provider was asked to rebuild
+/// (which is the guarantee).
+#[cfg(test)]
+mod residue_graph_seam_tests {
+    use super::*;
+    use crate::ir::paged::{CountingDemandProvider, PageProvider, PagedDataset};
+    use crate::ir::{GlobalTermId, QuadIds, RdfDatasetBuilder};
+    use crate::{BlankScope, TermValue};
+
+    const BLANK_GRAPH: &str = "residue-graph";
+    const CONFIDENCE: &str = "http://example.org/confidence";
+    const HIGH: &str = "http://example.org/high";
+
+    /// One page whose base quad, reifier declaration and annotation all sit in
+    /// `graph` — an RDF 1.2 statement-layer page, self-contained so the page it is
+    /// sealed into is the only one that can answer for that graph.
+    fn side_table_page(tag: &str, graph: Option<&TermValue>) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(&format!("http://example.org/{tag}-s"));
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri(&format!("http://example.org/{tag}-o"));
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_iri(&format!("http://example.org/{tag}-r"));
+        let confidence = b.intern_iri(CONFIDENCE);
+        let high = b.intern_iri(HIGH);
+        let g = graph.map(|value| match value {
+            TermValue::Iri(value) => b.intern_iri(value),
+            TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
+            _ => unreachable!("a graph name is an IRI or a blank node"),
+        });
+        b.push_quad(s, p, o, g);
+        b.push_reifier_in_graph(r, triple, g);
+        b.push_annotation_in_graph(r, confidence, high, g);
+        b.freeze().expect("statement-layer page freezes")
+    }
+
+    /// The blank-named graph fixture shared by [`residue_pages`]: distinct from the
+    /// IRI-named graph the residue drops, so the two graph-name flavours the residue
+    /// has to tell apart never collide on this test's fixed label.
+    fn blank_graph() -> TermValue {
+        TermValue::Blank {
+            label: BLANK_GRAPH.into(),
+            scope: BlankScope::DEFAULT,
+        }
+    }
+
+    /// Three pages, one per graph flavour the residue has to tell apart: an
+    /// IRI-named graph (the residue DROPS it), a blank-named graph and the default
+    /// graph (the residue KEEPS both).
+    fn residue_pages() -> Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Sync>> {
+        vec![
+            Box::new(|| side_table_page("iri", Some(&TermValue::iri("http://example.org/named")))),
+            Box::new(|| side_table_page("blank", Some(&blank_graph()))),
+            Box::new(|| side_table_page("default", None)),
+        ]
+    }
+
+    /// Run one read through a residue over a FRESHLY sealed three-page carrier and
+    /// report both the rows and the pages the provider had to rebuild for it.
+    ///
+    /// The seal pass pulls each page once and keeps nothing, so every hit after the
+    /// baseline is a page this read alone demanded. The carrier is rebuilt per
+    /// measurement because a page, once materialized, is cached.
+    fn measure(
+        read: impl Fn(&ResidueView<'_, PagedDataset>, &PagedDataset) -> Vec<QuadIds<GlobalTermId>>,
+    ) -> (Vec<QuadIds<GlobalTermId>>, usize) {
+        let provider = Arc::new(CountingDemandProvider::new(residue_pages()));
+        let paged = PagedDataset::from_provider(Arc::clone(&provider) as Arc<dyn PageProvider>)
+            .expect("three statement-layer pages seal");
+        let sealed = provider.hits();
+        let residue = ResidueView(&paged);
+        let rows = read(&residue, &paged);
+        (rows, provider.hits() - sealed)
+    }
+
+    /// Resolves a fixture's graph `TermValue` to the `GlobalTermId` the SEALED carrier
+    /// interned it under, so a test can name a `GraphMatch::Named` target without
+    /// hard-coding an id that would drift if page-arrival order changed.
+    fn graph_id(paged: &PagedDataset, value: &TermValue) -> GlobalTermId {
+        paged
+            .term_id_by_value(value)
+            .expect("the graph name is interned by the sealed pages")
+    }
+
+    /// The point of the seam: reading the residue's reifier rows for ONE graph must
+    /// visit only the page that can hold them. The trait default would rebuild all
+    /// three pages and yield the same rows, so the row assertion alone proves nothing
+    /// — the page count is what separates the two.
+    #[test]
+    fn residue_reifier_rows_for_one_graph_rebuild_only_the_page_that_holds_them() {
+        let (narrowed, narrowed_pages) = measure(|residue, paged| {
+            let g = GraphMatch::Named(graph_id(paged, &blank_graph()));
+            residue.reifier_quads_in_graph(g).collect()
+        });
+        let (scanned, scanned_pages) = measure(|residue, paged| {
+            let g = GraphMatch::Named(graph_id(paged, &blank_graph()));
+            residue.reifier_quads().filter(|q| g.matches(q.g)).collect()
+        });
+
+        assert_eq!(
+            narrowed, scanned,
+            "the narrowed stream must be the filtered unkeyed stream, row for row"
+        );
+        assert_eq!(
+            narrowed.len(),
+            1,
+            "the fixture is not degenerate: the blank-named graph owns one reifier row"
+        );
+        assert_eq!(
+            scanned_pages, 3,
+            "the post-filter the trait default performs rebuilds every page"
+        );
+        assert_eq!(
+            narrowed_pages, 1,
+            "the residue must pass the graph through to the paged carrier, which \
+             rebuilds only the page its graph postings name"
+        );
+    }
+
+    /// The annotation stream's twin of the reifier page-touch test above.
+    #[test]
+    fn residue_annotation_rows_for_one_graph_rebuild_only_the_page_that_holds_them() {
+        let (narrowed, narrowed_pages) = measure(|residue, paged| {
+            let g = GraphMatch::Named(graph_id(paged, &blank_graph()));
+            residue.annotation_quads_in_graph(g).collect()
+        });
+        let (scanned, scanned_pages) = measure(|residue, paged| {
+            let g = GraphMatch::Named(graph_id(paged, &blank_graph()));
+            residue
+                .annotation_quads()
+                .filter(|q| g.matches(q.g))
+                .collect()
+        });
+
+        assert_eq!(
+            narrowed, scanned,
+            "the narrowed stream must be the filtered unkeyed stream"
+        );
+        assert_eq!(
+            narrowed.len(),
+            1,
+            "the blank-named graph owns one annotation row"
+        );
+        assert_eq!(scanned_pages, 3, "the post-filter rebuilds every page");
+        assert_eq!(
+            narrowed_pages, 1,
+            "only the page whose annotation postings name the graph is rebuilt"
+        );
+    }
+
+    /// `GraphMatch::Default` flows through the same path and must narrow too: the
+    /// default graph is a first-class member of the residue, not a fallback.
+    #[test]
+    fn residue_default_graph_rows_rebuild_only_the_default_graph_page() {
+        let (narrowed, narrowed_pages) = measure(|residue, _| {
+            residue
+                .reifier_quads_in_graph(GraphMatch::Default)
+                .chain(residue.annotation_quads_in_graph(GraphMatch::Default))
+                .collect()
+        });
+        let (scanned, scanned_pages) = measure(|residue, _| {
+            residue
+                .reifier_quads()
+                .filter(|q| q.g.is_none())
+                .chain(residue.annotation_quads().filter(|q| q.g.is_none()))
+                .collect()
+        });
+
+        assert_eq!(
+            narrowed, scanned,
+            "the narrowed stream must be the filtered unkeyed stream"
+        );
+        assert_eq!(
+            narrowed.len(),
+            2,
+            "the default-graph page owns one reifier row and one annotation row"
+        );
+        assert_eq!(scanned_pages, 3, "the post-filter rebuilds every page");
+        assert_eq!(
+            narrowed_pages, 1,
+            "only the default graph's own page is rebuilt"
+        );
+    }
+
+    /// An IRI-named graph is outside the residue entirely, so the narrowed read must
+    /// come back EMPTY — and the neighbouring blank-named graph, whose rows the
+    /// residue does keep, must still come back full. Narrowing chooses pages; it
+    /// never stands in for the residue's own row predicate.
+    #[test]
+    fn residue_drops_an_iri_named_graph_and_keeps_the_neighbouring_blank_named_one() {
+        let (dropped, _) = measure(|residue, paged| {
+            let g = GraphMatch::Named(graph_id(paged, &TermValue::iri("http://example.org/named")));
+            residue
+                .reifier_quads_in_graph(g)
+                .chain(residue.annotation_quads_in_graph(g))
+                .collect()
+        });
+        assert!(
+            dropped.is_empty(),
+            "an IRI-named graph is addressable by an IRI-named leaf, so the residue \
+             holds none of its rows"
+        );
+        let (kept, _) = measure(|residue, paged| {
+            let g = GraphMatch::Named(graph_id(paged, &blank_graph()));
+            residue
+                .reifier_quads_in_graph(g)
+                .chain(residue.annotation_quads_in_graph(g))
+                .collect()
+        });
+        assert_eq!(
+            kept.len(),
+            2,
+            "the blank-named graph's reifier and annotation rows are residue rows"
+        );
+    }
+
+    /// The law over a NON-paged carrier, where every graph flavour lives in one
+    /// table: whatever the wrapped view does, the residue's narrowed stream is its
+    /// unkeyed stream filtered — same multiset, same order.
+    #[test]
+    fn residue_graph_seam_matches_the_filtered_stream_on_a_flat_carrier() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_iri("http://example.org/r");
+        let confidence = b.intern_iri(CONFIDENCE);
+        let high = b.intern_iri(HIGH);
+        let named = b.intern_iri("http://example.org/named");
+        let blank = b.intern_blank(BLANK_GRAPH, BlankScope::DEFAULT);
+        for graph in [None, Some(named), Some(blank)] {
+            b.push_quad(s, p, o, graph);
+            b.push_reifier_in_graph(r, triple, graph);
+            b.push_annotation_in_graph(r, confidence, high, graph);
+        }
+        let dataset = b.freeze().expect("flat statement-layer fixture freezes");
+        let residue = ResidueView(&*dataset);
+
+        let mut kept = 0_usize;
+        let probes = [
+            GraphMatch::Any,
+            GraphMatch::Default,
+            GraphMatch::Named(named),
+            GraphMatch::Named(blank),
+            // A term that exists but never occupies a graph slot.
+            GraphMatch::Named(p),
+        ];
+        for g in probes {
+            let narrowed: Vec<_> = residue.reifier_quads_in_graph(g).collect();
+            let filtered: Vec<_> = residue.reifier_quads().filter(|q| g.matches(q.g)).collect();
+            assert_eq!(narrowed, filtered, "reifier seam disagrees for {g:?}");
+            let annotated: Vec<_> = residue.annotation_quads_in_graph(g).collect();
+            let expected: Vec<_> = residue
+                .annotation_quads()
+                .filter(|q| g.matches(q.g))
+                .collect();
+            assert_eq!(annotated, expected, "annotation seam disagrees for {g:?}");
+            kept += narrowed.len() + annotated.len();
+        }
+        assert_eq!(
+            kept, 8,
+            "four rows under `Any`, two in the default graph and two in the blank-named \
+             graph — the IRI-named graph's rows are dropped by the residue"
+        );
     }
 }

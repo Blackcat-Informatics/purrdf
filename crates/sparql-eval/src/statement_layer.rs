@@ -39,9 +39,17 @@
 //!   IRI/blank/literal, can match no reifier row, and scanning for it would be pure cost.
 //! * BOTH side-tables index straight to a bound subject's run, because the subject IS the
 //!   reifier key and hence each table's primary sort key
-//!   ([`DatasetView::reifier_quads_of`] / [`DatasetView::annotations_of_with_graph`]). Only
-//!   an unbound subject scans the whole table. This matters because the BGP matcher probes
-//!   once per row: a full scan here would make a join quadratic in the reifier count.
+//!   ([`DatasetView::reifier_quads_of`] / [`DatasetView::annotations_of_with_graph`]).
+//! * An UNBOUND subject instead narrows by the known GRAPH scope up front
+//!   ([`DatasetView::reifier_quads_in_graph`] / [`DatasetView::annotation_quads_in_graph`])
+//!   rather than scanning the whole table and filtering the graph out afterwards. A
+//!   backend that can name, without materializing anything, which of its own storage
+//!   units could possibly hold a row in that graph (a paged dataset's per-page graph
+//!   postings, for instance) visits only those; a backend with no such index falls back
+//!   to the same whole-table-then-filter behavior this walk always had. Either way the
+//!   graph scope is applied ONCE — inside the narrowed walk, not a second time in the
+//!   residual below — so an unbound-subject probe never forces every storage unit to be
+//!   read just to throw most of it away.
 //!
 //! A dataset with no statement layer costs nothing: both side-tables are empty, and the
 //! trait's capability-gated defaults yield nothing for a backend that has no such layer.
@@ -95,24 +103,38 @@ pub(crate) fn visit_quads<D: DatasetView>(
         scan_reifier_rows,
     } = probe;
 
-    // The residual both walks share verbatim: the graph scope plus the predicate/object
-    // id-equality `quads_for_pattern` applies. The side-table walks are not pre-narrowed
-    // by the probe the way an indexed quad read is, so whatever a walk was not narrowed
-    // by is filtered here.
-    let residual = move |quad: &QuadIds<D::Id>| {
+    // The KEYED walks (`reifier_quads_of`/`annotations_of_with_graph`) are narrowed by
+    // REIFIER (Part A: skipped per-page unless the page's sealed summary proves it owns
+    // a row for that exact reifier), never by graph, so the graph scope is still applied
+    // here alongside the predicate/object id-equality `quads_for_pattern` applies.
+    let keyed_residual = move |quad: &QuadIds<D::Id>| {
         graph.matches(quad.g) && p.is_none_or(|id| quad.p == id) && o.is_none_or(|id| quad.o == id)
+    };
+
+    // The UNKEYED walks (`reifier_quads_in_graph`/`annotation_quads_in_graph`) are
+    // narrowed by the SAME `graph` scope before the residual runs — a `GraphMatch`-aware
+    // backend (e.g. a paged dataset) visits only the storage units its own graph-postings
+    // index names for that stream, then still applies the per-row `graph.matches` check
+    // inside each visited unit (a unit named by the index may also hold rows in OTHER
+    // graphs). So the walk itself already enforces the graph scope; only the
+    // predicate/object id-equality remains here.
+    let unkeyed_residual = move |quad: &QuadIds<D::Id>| {
+        p.is_none_or(|id| quad.p == id) && o.is_none_or(|id| quad.o == id)
     };
 
     // ── reifier rows: (reifier, rdf:reifies, <<triple>>) ────────────────────
     if scan_reifier_rows {
         match s {
             Some(reifier) => {
-                for quad in dataset.reifier_quads_of(reifier).filter(residual) {
+                for quad in dataset.reifier_quads_of(reifier).filter(keyed_residual) {
                     emit(quad);
                 }
             }
             None => {
-                for quad in dataset.reifier_quads().filter(residual) {
+                for quad in dataset
+                    .reifier_quads_in_graph(graph)
+                    .filter(unkeyed_residual)
+                {
                     emit(quad);
                 }
             }
@@ -130,13 +152,16 @@ pub(crate) fn visit_quads<D: DatasetView>(
                     o: obj,
                     g,
                 })
-                .filter(residual)
+                .filter(keyed_residual)
             {
                 emit(quad);
             }
         }
         None => {
-            for quad in dataset.annotation_quads().filter(residual) {
+            for quad in dataset
+                .annotation_quads_in_graph(graph)
+                .filter(unkeyed_residual)
+            {
                 emit(quad);
             }
         }

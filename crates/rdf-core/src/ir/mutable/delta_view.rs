@@ -505,12 +505,23 @@ impl DeltaDatasetView {
             s: map(s)?,
             p: map(p)?,
             o: map(o)?,
-            g: match g {
-                GraphMatch::Any => GraphMatch::Any,
-                GraphMatch::Default => GraphMatch::Default,
-                GraphMatch::Named(id) => GraphMatch::Named(self.local_id(id, layer)?),
-            },
+            g: self.local_graph(g, layer)?,
         })
+    }
+
+    /// One graph constraint translated into `layer`'s own handle space, or `None`
+    /// when that layer's dictionary does not hold the named graph at all.
+    ///
+    /// `None` is a proof of emptiness, not an error: every row a layer yields carries
+    /// a graph slot drawn from that layer's dictionary, so a graph the dictionary
+    /// never interned cannot appear in any of its rows. A caller may therefore skip
+    /// the whole layer instead of scanning it.
+    fn local_graph(&self, g: GraphMatch<DeltaViewId>, layer: Layer) -> Option<GraphMatch> {
+        match g {
+            GraphMatch::Any => Some(GraphMatch::Any),
+            GraphMatch::Default => Some(GraphMatch::Default),
+            GraphMatch::Named(id) => self.local_id(id, layer).map(GraphMatch::Named),
+        }
     }
 }
 
@@ -708,6 +719,38 @@ impl DatasetView for DeltaDatasetView {
             )
     }
 
+    /// Narrows each layer through its OWN [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph)
+    /// before the overlay's masks (`suppressed` on the base, `duplicate_reifiers` on
+    /// the delta) are applied, so a layer that can skip storage units for `g` still
+    /// does; a layer whose dictionary cannot name `g` drops that whole arm via
+    /// `local_graph`. The trait default would scan both layers' whole reifier tables.
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // The overlay is a per-row mask, so it composes with the graph seam rather
+        // than erasing it: narrow each layer through its OWN `reifier_quads_in_graph`
+        // — so a layer that can skip storage units for `g` still does — and keep the
+        // unkeyed override's masks (`suppressed` on the base, `duplicate_reifiers` on
+        // the delta) on top, unchanged. A layer whose dictionary cannot name `g` at
+        // all holds no row in `g`, so `local_graph` returning `None` drops that whole
+        // arm. Chain order, and the order within each arm, are the unkeyed
+        // override's, so this is the same multiset in the same order as
+        // `reifier_quads().filter(|q| g.matches(q.g))`.
+        self.local_graph(g, Layer::Base)
+            .into_iter()
+            .flat_map(move |graph| self.base.reifier_quads_in_graph(graph))
+            .filter(|q| !self.suppressed.contains(q))
+            .map(|q| map_quad(q, DeltaViewId::Base))
+            .chain(
+                self.local_graph(g, Layer::Delta)
+                    .into_iter()
+                    .flat_map(move |graph| self.delta.reifier_quads_in_graph(graph))
+                    .filter(|q| !self.duplicate_reifiers.contains(q))
+                    .map(|q| self.map_delta(q)),
+            )
+    }
+
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.base
             .annotation_quads()
@@ -723,6 +766,44 @@ impl DatasetView for DeltaDatasetView {
             .chain(
                 self.delta
                     .annotation_quads()
+                    .filter(|q| !self.duplicate_annotations.contains(q))
+                    .map(|q| self.map_delta(q)),
+            )
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same layer-local narrowing and masks, over the ANNOTATION stream — including the
+    /// middle arm for base quads promoted to annotations by a delta-added reifier.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // See `reifier_quads_in_graph` above: the same layer-local narrowing and the
+        // same masks, over the ANNOTATION stream. The middle arm — base quads PROMOTED
+        // to annotations because the delta added a reifier for them — reads the base's
+        // ordinary table, which carries no graph seam of its own, so it keeps the
+        // definitional row filter; `local_graph` still drops the whole base arm when
+        // the base cannot name `g`.
+        self.local_graph(g, Layer::Base)
+            .into_iter()
+            .flat_map(move |graph| {
+                self.base
+                    .annotation_quads_in_graph(graph)
+                    .filter(|q| self.base_annotation_is_retained(*q))
+                    .chain(
+                        self.has_added_reifiers
+                            .then_some(self.base.as_ref())
+                            .into_iter()
+                            .flat_map(RdfDataset::quads)
+                            .filter(move |q| graph.matches(q.g))
+                            .filter(|q| self.base_quad_is_annotation(*q)),
+                    )
+            })
+            .map(|q| map_quad(q, DeltaViewId::Base))
+            .chain(
+                self.local_graph(g, Layer::Delta)
+                    .into_iter()
+                    .flat_map(move |graph| self.delta.annotation_quads_in_graph(graph))
                     .filter(|q| !self.duplicate_annotations.contains(q))
                     .map(|q| self.map_delta(q)),
             )
