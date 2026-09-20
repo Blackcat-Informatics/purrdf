@@ -2353,7 +2353,10 @@ class retrieval:
     # "selectivity_ppm", "selectivity_terms" and "licensed_prefix", plus a
     # "cause" naming which of them bound the number ("declaration",
     # "cardinality", "selectivity", "licensed_prefix", "floor", "unbounded" or
-    # "read_ceiling"). The depth is recomputable from those inputs, which is
+    # "read_ceiling"). Those seven are the whole vocabulary: the classification
+    # is a closed enum rendered by an exhaustive match, so a cause this list does
+    # not name is a compile error in the binding rather than a word handed to a
+    # caller. The depth is recomputable from those inputs, which is
     # what makes it a checkable claim rather than an asserted one; `plan`
     # recomputes it before returning and raises if this build disagrees with
     # itself. `"statistics"["entries"]` names EVERY subject planning consulted —

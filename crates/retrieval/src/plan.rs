@@ -360,8 +360,27 @@ pub struct DepthInputs {
 /// [`depth_from`](crate::depth_from) in the order that function applies them, so
 /// the answer names the constraint that actually bound the number rather than
 /// the first one that could have.
+///
+/// # The classification is closed, deliberately
+///
+/// Closed rather than `#[non_exhaustive]`, for the reason
+/// [`RequestTerm`](crate::RequestTerm) and
+/// [`EmbeddingError`](crate::EmbeddingError) are: what a caller gets when a
+/// variant is added later is an exhaustive `match` that stops compiling, which
+/// is exactly the signal a caller rendering these to its own vocabulary wants.
+/// `#[non_exhaustive]` would replace that compile error with a wildcard arm, and
+/// a wildcard arm over a *classification* has nothing honest to return — the
+/// Python binding's had to invent the word `"unknown"`, which is a vocabulary
+/// term naming no leg of any derivation, handed to a caller at the one surface
+/// that exists to let it check the depth for itself.
+///
+/// The argument for openness is weaker here than anywhere else in this crate,
+/// because these variants are not a list of things that happen to exist. They
+/// are the legs of one fixed arithmetic, plus its floor and its ceiling, and
+/// `depth_from` takes nothing but a [`DepthInputs`] — so a new cause can only
+/// arrive with a new field there, which is a breaking change to a serialized
+/// plan already.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum DepthCause {
     /// The registry's declared row bound was the narrowest input.
     Declaration,

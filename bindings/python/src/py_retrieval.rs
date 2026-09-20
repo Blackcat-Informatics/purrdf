@@ -1453,7 +1453,9 @@ const fn unserved_reason(reason: UnservedReason) -> &'static str {
 ///
 /// Spelled here rather than derived from `Debug`, so the Python surface's
 /// vocabulary is a decision this file makes and not a rename away from changing.
-fn depth_cause_name(cause: DepthCause) -> &'static str {
+/// Exhaustive, like the two renderings above it: a cause this match does not
+/// name is a compile error rather than a word this function invented.
+const fn depth_cause_name(cause: DepthCause) -> &'static str {
     match cause {
         DepthCause::Declaration => "declaration",
         DepthCause::Cardinality => "cardinality",
@@ -1462,7 +1464,6 @@ fn depth_cause_name(cause: DepthCause) -> &'static str {
         DepthCause::Floor => "floor",
         DepthCause::Unbounded => "unbounded",
         DepthCause::ReadCeiling => "read_ceiling",
-        _ => "unknown",
     }
 }
 
