@@ -76,6 +76,64 @@ a namespace class carries an underscore-prefixed module-level name (`_PreparedSh
 `purrdf.shapes.PreparedShapes`), so the pyclass name `P` resolves to `class P:` if the
 stub has one and `class _P:` otherwise.
 
+# A `create_exception!`'s PINNED NAMES are checked too, and DERIVED the same way
+
+A member's EXISTENCE is not the only thing the stub is the only declaration of. The
+retrieval surface raises `PlanDocumentError` carrying a pinned kebab-case `.refusal`
+name, and both the runtime class and the stub class enumerate the names a caller may
+branch on. Two descriptions of one contract drift, and this one did: the stub named
+fifteen of nineteen, the four it omitted were the four the last two engine fixes added,
+and a member-existence check stayed green through all of it because `refusal: str`
+existed the whole time. A caller's type checker reads the stub, so the omitted four did
+not exist for anybody reading the declaration.
+
+So the names are checked, and the set is DERIVED at both ends:
+
+* the UNIVERSE is `PlanError::refusal()` in `crates/retrieval/src/error.rs`, whose match
+  is exhaustive over a `#[non_exhaustive]` enum — a variant added without a name is a
+  compile error there, so the arms' string literals are the whole set by construction;
+* the REQUIRED set is whatever the extension's own `create_exception!` docstring names,
+  because that docstring is the runtime `__doc__` a caller reads with `help()`.
+
+Nothing here lists a refusal. A pinned list in this script would be a THIRD description
+of the same contract, free to drift from the two it is checking.
+
+WHICH `create_exception!` is subject to it is derived from the RAISE SITE, not from the
+prose: the boundary is the class built by a function that calls `PlanError::refusal`.
+`ShapesProductError` carries a different enum's `dimension_label()` and is left alone
+because its raise site says so. Selecting on the docstring instead would have caught it
+on the word `truncated`, which both vocabularies happen to contain, and then demanded
+twenty `.dimension` labels of a stub that documents none — an over-refusal the
+`_ACCEPTED` arm caught while this was being written.
+
+Four ways it fails, each by NAME:
+
+* the runtime docstring names a refusal the stub does not — the live defect;
+* the stub names one the runtime docstring does not — the mirror, where a caller is
+  told to branch on something that boundary cannot raise;
+* either ENUMERATES a hyphenated name in backticks that `refusal()` cannot return — a
+  refusal renamed in the engine while the prose still promises the old word, which is
+  also what stops this arm going quietly vacuous when a name moves;
+* the stub declares no class for the boundary at all, so the whole vocabulary is
+  declared nowhere a type checker reads.
+
+The third is SCOPED, and its scope is the rule a writer of these two docstrings needs: a
+backticked hyphenated word is read as a promised name only where it is ENUMERATED —
+where the backticked token immediately beside it is itself one of the engine's names.
+An enumeration is a run of names written next to each other, and that is exactly the
+span this arm may read as promises.
+
+Everything outside a run is prose, backticks and all. `plan-document`,
+`content-addressed` and `length-framed` are code terms about this very boundary, and
+they may be backticked anywhere a run of refusal names does not surround them. Reading
+the WHOLE block refused all three, which is worse than having no arm: the message told a
+reader their ordinary Markdown was a broken promise, and the only way to satisfy it was
+to edit this gate. Both ends of both docstrings are pinned in `_ACCEPTED`. Locality is
+also what keeps the arm's purpose — a renamed refusal sits in the middle of the run it
+was part of, with a surviving name beside it, so the rename mutation still fires at BOTH
+docstrings. One span from the first known name to the last would have missed a rename of
+whichever name a docstring enumerates LAST, which is where the newest refusal is written.
+
 # What this gate CANNOT see — the stated boundary
 
 * **Parameter lists.** This checks that a member is DECLARED, not that it is declared
@@ -87,6 +145,12 @@ stub has one and `class _P:` otherwise.
 * **Module-level `#[pyfunction]`s.** This gate is about pyclass MEMBERS. A free function
   and its registration are what `check-entailment-surface.py` reads, for the surface it
   names.
+* **A refusal documented in NEITHER description.** The name arm compares the two
+  descriptions of the contract and holds both to `refusal()`'s vocabulary; a new
+  document-side refusal that nobody wrote down anywhere passes it. Which variants can
+  cross which boundary is a call-graph question and is not decidable from this script's
+  text. What it does decide is that the two written descriptions cannot disagree, which
+  is the way this contract actually broke.
 * **Members added at runtime by the Python shim** (`python/src/purrdf/__init__.py`),
   which are not `#[pymethods]` and are out of this gate's derivation.
 * **A name the stub cannot resolve.** Whether `CapsuleType` is imported is a type
@@ -135,6 +199,12 @@ _REPO = Path(__file__).resolve().parent.parent
 _BINDING_ROOT = Path("bindings/python/src")
 _STUB = Path("bindings/python/python/src/purrdf/__init__.pyi")
 
+# Where the pinned `.refusal` vocabulary is defined. `PlanError::refusal` is an
+# exhaustive match over a `#[non_exhaustive]` enum, so its arms' string literals ARE the
+# set of names — a variant added without one does not compile.
+_ENGINE_ERRORS = Path("crates/retrieval/src/error.rs")
+_REFUSAL_SIGNATURE = "pub fn refusal(&self) -> &'static str"
+
 # Dunders `object` already declares. See the module docstring: omitting one cannot make a
 # valid call fail to type check, so requiring it would print rows that hide nothing.
 _OBJECT_INHERITED = frozenset({"__repr__", "__str__", "__eq__", "__ne__", "__hash__"})
@@ -154,6 +224,21 @@ _METHOD_DECLARATION_RE = re.compile(
 _VARIANT_RE = re.compile(r"^    ([A-Za-z_]\w*)\s*(?:[,({]|$)")
 # `#[getter]`, `#[getter(x)]`, `#[getter(name = "x")]` — and the same three for setters.
 _ACCESSOR_RE = re.compile(r"^#\[(getter|setter)(?:\((.*)\))?\]$")
+
+# A `create_exception!(module, Name, Base, "doc")` invocation, and the arms of
+# `PlanError::refusal`. A refusal name is lowercase ASCII with hyphens — `version` has
+# none and `non-ascending-keys` has two, and both are names.
+_CREATE_EXCEPTION_ATTRIBUTE = "create_exception!("
+_CREATE_EXCEPTION_RE = re.compile(r"create_exception!\(\s*\w+\s*,\s*(\w+)\s*,")
+_REFUSAL_LITERAL_RE = re.compile(r'"([a-z][a-z0-9]*(?:-[a-z0-9]+)*)"')
+# A free function of the binding, and the exception one raises. Which exception carries
+# `PlanError::refusal` is read off the CODE that raises it — see `refusal_boundaries`.
+_FUNCTION_DECLARATION_RE = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?fn\s+\w+")
+_NEW_ERR_RE = re.compile(r"\b(\w+)::new_err\s*\(")
+_REFUSAL_CALL = ".refusal()"
+# Anything in backticks, on one line, and the shape a refusal name is SPELLED in prose.
+_BACKTICKED_RE = re.compile(r"`([^`\n]+)`")
+_HYPHENATED_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$")
 
 
 class Member:
@@ -580,6 +665,225 @@ def _declared_members(body: list[str]) -> set[str]:
     return found
 
 
+# ── the pinned refusal vocabulary, at both ends of the same contract ───────────────────
+
+
+def refusal_names() -> frozenset[str]:
+    """Every pinned name `PlanError::refusal` can return, read out of the engine.
+
+    The match is exhaustive over a `#[non_exhaustive]` enum, so a variant added without a
+    name is a compile error in that file and the arms' string literals are the whole
+    vocabulary. Deriving it here is the point: a list in this script would be a third
+    description of the contract, free to drift from the two it is checking.
+    """
+    lines = _read(_ENGINE_ERRORS).splitlines()
+    for index, line in enumerate(lines):
+        if _REFUSAL_SIGNATURE in line:
+            names = frozenset(
+                _REFUSAL_LITERAL_RE.findall("\n".join(_braced_body(lines, index)))
+            )
+            if len(names) < 2:
+                raise SystemExit(
+                    f"check-python-stub-parity: `{_REFUSAL_SIGNATURE}` in "
+                    f"{_ENGINE_ERRORS} yields {len(names)} name(s); its arms no longer "
+                    "read as string literals — update this gate rather than leaving it "
+                    "checking an empty vocabulary"
+                )
+            return names
+    raise SystemExit(
+        f"check-python-stub-parity: {_ENGINE_ERRORS} declares no "
+        f"`{_REFUSAL_SIGNATURE}`; the engine's refusal vocabulary moved — update this "
+        "gate rather than leaving it vacuous"
+    )
+
+
+def _paren_block(lines: list[str], index: int, where: str) -> str:
+    """The paren-balanced invocation whose first line is at `index`, as one string."""
+    depth = 0
+    collected: list[str] = []
+    for cursor in range(index, len(lines)):
+        line = lines[cursor]
+        opened = depth
+        depth += line.count("(") - line.count(")")
+        collected.append(line)
+        if opened > 0 and depth <= 0:
+            return "\n".join(collected)
+    raise SystemExit(
+        f"check-python-stub-parity: the invocation at {where} never closes its "
+        "parentheses; the file's layout moved — update this gate rather than leaving "
+        "it vacuous"
+    )
+
+
+def exception_classes() -> dict[str, tuple[str, str]]:
+    """Every `create_exception!` of the binding: its Python name, where, and its text."""
+    found: dict[str, tuple[str, str]] = {}
+    for source in binding_sources():
+        lines = _read(source).splitlines()
+        for index, line in enumerate(lines):
+            if not line.startswith(_CREATE_EXCEPTION_ATTRIBUTE):
+                continue
+            where = f"{source}:{index + 1}"
+            block = _paren_block(lines, index, where)
+            named = _CREATE_EXCEPTION_RE.search(block)
+            if named is None:
+                raise SystemExit(
+                    f"check-python-stub-parity: the `create_exception!` at {where} does "
+                    "not read as `create_exception!(module, Name, Base, …)`; the macro's "
+                    "spelling moved — update this gate rather than leaving it vacuous"
+                )
+            if named.group(1) in found:
+                raise SystemExit(
+                    f"check-python-stub-parity: `{named.group(1)}` is created twice "
+                    f"({found[named.group(1)][0]} and {where}); this gate keys a "
+                    "boundary by its Python name and cannot tell them apart"
+                )
+            found[named.group(1)] = (where, block)
+    if not found:
+        raise SystemExit(
+            "check-python-stub-parity: found no `create_exception!` under "
+            f"{_BINDING_ROOT} — the crate layout moved; update this gate rather than "
+            "leaving it silently vacuous"
+        )
+    return found
+
+
+def _backticked(text: str) -> set[str]:
+    """Every backticked token of `text`, exactly as prose spells a pinned name."""
+    return set(_BACKTICKED_RE.findall(text))
+
+
+def _promised_names(text: str, names: frozenset[str]) -> set[str]:
+    """Every hyphenated token `text` backticks INSIDE its enumeration of pinned names.
+
+    A docstring that enumerates a vocabulary is still mostly prose, and backticking a
+    code term is ordinary Markdown: `plan-document`, `content-addressed` and
+    `length-framed` are all words these two docstrings may legitimately acquire. Reading
+    every backticked hyphenated token of the whole block as a promised refusal name made
+    this arm refuse that — an over-refusal, and one a reader could not satisfy without
+    editing this gate, because the message told them a word `refusal()` cannot return is
+    a broken promise rather than telling them where the promise is being read from.
+
+    So the scan is scoped to the ENUMERATING REGION, and the region is defined locally
+    rather than as one span of the block: a hyphenated token counts as promised when the
+    backticked token immediately before or after it is one of the engine's own names.
+    That is what an enumeration is — a run of names written next to each other — and
+    locality is what keeps the arm's real purpose. A refusal renamed in the engine sits
+    in the middle of the run it was part of, with a surviving name on at least one side
+    of it, so it is still read as the stale promise it is. One span from the first known
+    name to the last would have missed a rename of whichever name the docstring
+    enumerates LAST, which is where the stub's run ends and where a reader adding the
+    newest refusal writes.
+
+    Prose outside a run is free: a term whose backticked neighbours are not names, or
+    which has no backticked neighbour at all, is a code term and not a promise.
+    """
+    tokens = _BACKTICKED_RE.findall(text)
+
+    def beside_a_name(index: int) -> bool:
+        before = tokens[max(index - 1, 0) : index]
+        after = tokens[index + 1 : index + 2]
+        return any(neighbour in names for neighbour in before + after)
+
+    return {
+        token
+        for index, token in enumerate(tokens)
+        if token not in names and _HYPHENATED_RE.match(token) and beside_a_name(index)
+    }
+
+
+def refusal_boundaries() -> dict[str, str]:
+    """Every `create_exception!` class the binding raises carrying `PlanError::refusal`.
+
+    Read off the CODE that raises it — a free function whose body both calls `.refusal()`
+    and constructs that exception — and never off the docstring. Which vocabulary a
+    boundary carries is a fact about the raise site: `ShapesProductError` is built from a
+    different enum's `dimension_label()` and is outside this arm because its raise site
+    says so, not because a table here excludes it. Reading the docstring instead would
+    have caught `ShapesProductError` on the word `truncated`, which both vocabularies
+    happen to contain, and demanded twenty labels of a stub that documents none.
+    """
+    raised: dict[str, str] = {}
+    for source in binding_sources():
+        lines = _read(source).splitlines()
+        for index, line in enumerate(lines):
+            if not _FUNCTION_DECLARATION_RE.match(line):
+                continue
+            body = "\n".join(_braced_body(lines, index))
+            if _REFUSAL_CALL not in body:
+                continue
+            for exception in _NEW_ERR_RE.findall(body):
+                raised.setdefault(exception, f"{source}:{index + 1}")
+    boundaries = {
+        exception: where
+        for exception, where in raised.items()
+        if exception in exception_classes()
+    }
+    if not boundaries:
+        raise SystemExit(
+            f"check-python-stub-parity: no function under {_BINDING_ROOT} raises a "
+            f"`create_exception!` class carrying `{_REFUSAL_CALL}`; the retrieval "
+            "binding's refusal boundary moved — update this gate rather than leaving "
+            "the name arm checking nothing"
+        )
+    return boundaries
+
+
+def refusal_parity_problems(stubs: dict[str, list[str]]) -> list[str]:
+    """Every way the two descriptions of the `.refusal` vocabulary disagree."""
+    names = refusal_names()
+    blocks = exception_classes()
+    problems: list[str] = []
+    for class_name, raise_site in sorted(refusal_boundaries().items()):
+        where, block = blocks[class_name]
+        runtime = _backticked(block) & names
+        if not runtime:
+            raise SystemExit(
+                f"check-python-stub-parity: `{class_name}` is raised at {raise_site} "
+                f"carrying `{_REFUSAL_CALL}`, and its docstring ({where}) names none of "
+                f"the names `{_REFUSAL_SIGNATURE}` returns — the vocabulary or the way "
+                "it is written down moved; update this gate rather than leaving the "
+                "name arm silently comparing two empty sets"
+            )
+        resolved = _resolves_to(class_name, stubs)
+        if resolved is None:
+            problems.append(
+                f"  • {class_name} ({where}): the extension creates this exception and "
+                f"{_STUB} declares NEITHER `class {class_name}:` nor "
+                f"`class _{class_name}:`, so the pinned names it documents are declared "
+                "nowhere a type checker reads."
+            )
+            continue
+        stub_name, body = resolved
+        declared = _backticked("\n".join(body))
+        for missing in sorted(runtime - (declared & names)):
+            problems.append(
+                f"  • {class_name}.refusal `{missing}`: the extension's own docstring "
+                f"({where}) names it and `class {stub_name}:` in {_STUB} does not. The "
+                "package ships `py.typed`, so that docstring is what `help()` shows and "
+                "the stub's is what a caller's type checker and IDE show — a name only "
+                "one of them carries does not exist for whoever reads the other."
+            )
+        for phantom in sorted((declared & names) - runtime):
+            problems.append(
+                f"  • {class_name}.refusal `{phantom}`: `class {stub_name}:` in {_STUB} "
+                f"names it and the extension's own docstring ({where}) does not, so a "
+                "caller is told to branch on a refusal this boundary does not raise."
+            )
+        for text, site in ((block, where), ("\n".join(body), f"{_STUB} `{stub_name}`")):
+            for unknown in sorted(_promised_names(text, names)):
+                problems.append(
+                    f"  • {class_name}.refusal `{unknown}`: enumerated at {site} beside "
+                    f"the pinned names, and `{_REFUSAL_SIGNATURE}` in {_ENGINE_ERRORS} "
+                    "cannot return it. Either the engine renamed the refusal and the "
+                    "prose still promises the old word, or it is an ordinary code term "
+                    "that happens to sit in the run of names — move it into a sentence "
+                    "whose backticked neighbours are not refusal names, where a "
+                    "hyphenated term is read as prose and promises nothing."
+                )
+    return problems
+
+
 def gate_problems() -> list[str]:
     """Every member the extension exposes and the stub does not declare.
 
@@ -625,6 +929,7 @@ def gate_problems() -> list[str]:
                     f"{_STUB} does not declare it. Add a `def {member.name}(` (or an "
                     "annotation) to that class body."
                 )
+    problems.extend(refusal_parity_problems(stubs))
     return problems
 
 
@@ -636,6 +941,9 @@ def gate_problems() -> list[str]:
 # section exists to make impossible.
 _SPECIMEN_SOURCE = "bindings/python/src/shacl.rs"
 _SPECIMEN_CLASS = "ChangeValidation"
+
+# The name arm's specimen: where `PlanDocumentError` is created and documented.
+_REFUSAL_SPECIMEN_SOURCE = "bindings/python/src/py_retrieval.rs"
 
 
 def _cut(text: str, needle: str) -> str:
@@ -775,6 +1083,49 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
             "#[pymethods]\nconst ADRIFT: bool = true;\nimpl PyChangeValidation {",
         ),
     ),
+    # ── the pinned `.refusal` vocabulary, at both ends ──
+    #
+    # The live defect this arm was written for: the stub named fifteen of nineteen, and
+    # the four it omitted were reachable from Python against that very build. The first
+    # mutation is that defect, reconstructed — a name the extension documents, taken out
+    # of the stub and left as prose so nothing else about the docstring changes.
+    (
+        "a refusal the extension documents is dropped from the stub's docstring",
+        str(_STUB),
+        lambda text: _swap(
+            text,
+            "`unconsulted-statistics-subject`. Branch on it",
+            "that last one. Branch on it",
+        ),
+    ),
+    (
+        "the stub documents a refusal the extension's own docstring does not",
+        _REFUSAL_SPECIMEN_SOURCE,
+        lambda text: _swap(text, "`unconsulted-statistics-subject`", "that last one"),
+    ),
+    (
+        "the engine renames a refusal and both docstrings promise the old word",
+        str(_ENGINE_ERRORS),
+        lambda text: _swap(
+            text, '"unconsulted-statistics-subject"', '"unconsulted-statistics-row"'
+        ),
+    ),
+    (
+        "the stub's class for the refusal boundary is renamed out from under it",
+        str(_STUB),
+        lambda text: _swap(
+            text,
+            "class _PlanDocumentError(ValueError):",
+            "class _PlanDocumentErrorLegacy(ValueError):",
+        ),
+    ),
+    (
+        "the engine's refusal accessor is renamed, leaving the vocabulary underivable",
+        str(_ENGINE_ERRORS),
+        lambda text: _swap(
+            text, _REFUSAL_SIGNATURE, "pub fn refusal_name(&self) -> &'static str"
+        ),
+    ),
 )
 
 
@@ -796,6 +1147,84 @@ _ACCEPTED: tuple[tuple[str, str, Callable[[str], str]], ...] = (
             "    fn to_sarif(&self, py: Python<'_>) -> String {",
             '    #[pyo3(signature = (name = "report", pretty = false))]\n'
             "    fn to_sarif(&self, py: Python<'_>, name: &str, pretty: bool) -> String {",
+        ),
+    ),
+    # The name arm's own over-refusal, and the one it actually committed once: a
+    # `create_exception!` that carries some OTHER enum's pinned labels. Its docstring
+    # already shares the word `truncated` with `PlanError`'s vocabulary, so a gate
+    # selecting on prose demands this stub document twenty `.dimension` labels it
+    # deliberately summarizes. A label added there must change nothing here.
+    (
+        "a pinned label of a boundary that carries no `PlanError::refusal`",
+        _SPECIMEN_SOURCE,
+        lambda text: _swap(
+            text, "`depth-limit`, `malformed`", "`depth-limit`, `malformed`, `newly-added`"
+        ),
+    ),
+    # Presence, not sequence: the stub is free to group and order the names however it
+    # reads best, and a gate comparing two lists positionally would refuse this.
+    (
+        "the stub names the same refusals in another order",
+        str(_STUB),
+        lambda text: _swap(
+            text, "`truncated`, `trailing-bytes`", "`trailing-bytes`, `truncated`"
+        ),
+    ),
+    # Prose hyphenation is prose. Only a BACKTICKED hyphenated word is read as a name,
+    # which is what makes the unknown-name arm above safe to run over prose at all.
+    (
+        "a hyphenated word in the stub's prose, unbackticked",
+        str(_STUB),
+        lambda text: _swap(
+            text,
+            "Branch on it, never on `str(exc)`.",
+            "Branch on it at the plan-document boundary, never on `str(exc)`.",
+        ),
+    ),
+    # Backticking a code term is ordinary Markdown, and these are the two docstrings
+    # most likely to acquire one: `plan-document`, `content-addressed`, `length-framed`
+    # are all words about this very boundary. The unknown-name arm once read ANY
+    # backticked hyphenated token of either block as a promised refusal name and refused
+    # all four spellings below — a gate a reader could not satisfy without editing the
+    # gate. Both ENDS of both docstrings are held here, because the enumeration has two
+    # of them and prose sits on each side.
+    (
+        "a backticked code term in the stub's prose, before the enumeration",
+        str(_STUB),
+        lambda text: _swap(
+            text,
+            "A refusal from the plan-document boundary: `certify_plan`, `explain_depth`.",
+            "A refusal from the `content-addressed` plan-document boundary:\n"
+            "    `certify_plan`, `explain_depth`.",
+        ),
+    ),
+    (
+        "a backticked code term in the stub's prose, after the enumeration",
+        str(_STUB),
+        lambda text: _swap(
+            text,
+            "`unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.",
+            "`unconsulted-statistics-subject`. Branch on it, never on `str(exc)`. The\n"
+            "    bytes it refused are `length-framed`.",
+        ),
+    ),
+    (
+        "a backticked code term in the `create_exception!` prose, before the enumeration",
+        _REFUSAL_SPECIMEN_SOURCE,
+        lambda text: _swap(
+            text,
+            "A refusal from the plan-document boundary —",
+            "A refusal from the `content-addressed` plan-document boundary —",
+        ),
+    ),
+    (
+        "a backticked code term in the `create_exception!` prose, after the enumeration",
+        _REFUSAL_SPECIMEN_SOURCE,
+        lambda text: _swap(
+            text,
+            '`ValueError` keeps working."',
+            "`ValueError` keeps working.\\n\\\n      \\n\\\n"
+            '      The bytes it refused are `length-framed`."',
         ),
     ),
 )
@@ -914,10 +1343,17 @@ def main(argv: list[str]) -> int:
 
     classes = exposed_classes()
     members = sum(len(exposed.members) for exposed in classes.values())
+    blocks = exception_classes()
+    boundaries = refusal_boundaries()
+    documented = sum(
+        len(_backticked(blocks[name][1]) & refusal_names()) for name in boundaries
+    )
     print(
         f"OK: all {members} Python-visible member(s) of {len(classes)} `#[pyclass]`(es) "
-        f"are declared in {_STUB}; all {len(_MUTATIONS)} mutations of that tree fail this "
-        f"gate; and all {len(_ACCEPTED)} valid spelling(s) of it pass."
+        f"are declared in {_STUB}, as are all {documented} pinned `.refusal` name(s) of "
+        f"{len(boundaries)} `create_exception!` boundary(ies); all {len(_MUTATIONS)} "
+        f"mutations of that tree fail this gate; and all {len(_ACCEPTED)} valid "
+        "spelling(s) of it pass."
     )
     return 0
 

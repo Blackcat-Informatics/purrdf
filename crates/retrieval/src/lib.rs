@@ -405,7 +405,7 @@ pub mod producer_contract {}
 pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
 pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, UnitError, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
-pub use error::{FusionError, PlanError};
+pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
 pub use execute::{
     ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, StreamEnding, execute,
 };
@@ -422,10 +422,10 @@ pub use id::{
 };
 pub use iri::{Iri, Term};
 pub use plan::{
-    Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
-    StatisticsSnapshot, UnservedReason, UnservedTerm,
+    DepthCause, DepthInputs, Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason,
+    StatisticsEntries, StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
-pub use planner::plan;
+pub use planner::{depth_cause, depth_from, plan};
 pub use ranked_stream::{
     ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract,
 };

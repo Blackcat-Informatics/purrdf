@@ -19,7 +19,39 @@ use core::fmt;
 /// version refuses with [`PlanError::VersionMismatch`](crate::PlanError::VersionMismatch)
 /// rather than reinterpret the bytes under a layout they were not written for.
 ///
-/// # Why this is 3
+/// # Why this is 4
+///
+/// Version 4 records, per stratum, **every input that stratum's depth was
+/// derived from** — the registry's declared row bound, the reported cardinality,
+/// the selectivity that was actually applied together with the request terms it
+/// aggregates over, and whether the request's row bound was licensed to bound
+/// this stratum at all. A version-3 plan recorded the depth and roughly half of
+/// what produced it, so the number could be read but not checked; version 4
+/// makes it recomputable, which is what
+/// [`Plan::certify`](crate::Plan::certify) does.
+///
+/// That completes the argument version 3 began rather than opening a new one.
+/// Version 3 appended the [`ReadBound`](crate::ReadBound) because a plan that did
+/// not record it "recorded depths whose derivation could not be reconstructed" —
+/// but the bound is what the caller *asked for*, and whether it was allowed to
+/// bound a given stratum is decided separately, from the shape of the surviving
+/// declarations. Two plans could therefore agree on every recorded field and
+/// still have derived their depths from different numbers. They cannot now.
+///
+/// Version 4 also makes a statistics entry's cardinality optional, under the
+/// same presence discriminator its selectivity already used, so a provider that
+/// reported only a selectivity is recorded rather than dropped. Dropping it was
+/// the same defect one level down: the depth moved and the evidence did not.
+///
+/// This is **not** the append-only change a new discriminator byte is. The
+/// derivations sit *inside* the layout, between the depths and the statistics,
+/// and the new presence tag sits inside each statistics entry — so a version-3
+/// document's remaining bytes lie at different offsets, and a decoder reading
+/// them under this layout would take a cardinality's high bytes for a presence
+/// tag and answer with a plan nobody wrote. Version 4 refuses it by name instead
+/// — `VersionMismatch { found: 3, expected: 4 }`.
+///
+/// # Why version 3 was not 2
 ///
 /// Version 3 appends the request's [`ReadBound`](crate::ReadBound) after the
 /// per-term unserved evidence. That bound is what every stratum depth is derived
@@ -50,7 +82,7 @@ use core::fmt;
 /// a plan nobody wrote. The version was therefore bumped so the decoder refuses
 /// the old layout by name rather than mis-reading it, which is the same reason it
 /// moved again above.
-pub const PLAN_VERSION: u16 = 3;
+pub const PLAN_VERSION: u16 = 4;
 
 /// The domain-separation prefix mixed into every [`PlanId`].
 ///

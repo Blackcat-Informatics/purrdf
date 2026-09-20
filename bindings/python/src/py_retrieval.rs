@@ -336,16 +336,17 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
+use pyo3::create_exception;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 
 use crate::attestation::Attestation;
 use crate::retrieval::{
-    AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
-    Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason,
-    RequestTerm, RetrievalRequest, ScoreExactness, ScoreInterval, SearchResult, Statistics, Term,
-    ToleratedDepth, TopK, UnservedReason,
+    AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, DepthCause, Fixed,
+    FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution, ProducerDecision,
+    ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, ScoreExactness, ScoreInterval,
+    SearchResult, Statistics, Term, ToleratedDepth, TopK, UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
@@ -1449,11 +1450,104 @@ const fn unserved_reason(reason: UnservedReason) -> &'static str {
     }
 }
 
+/// The stable lowercase name of a depth's binding cause.
+///
+/// Spelled here rather than derived from `Debug`, so the Python surface's
+/// vocabulary is a decision this file makes and not a rename away from changing.
+/// Exhaustive, like the two renderings above it: a cause this match does not
+/// name is a compile error rather than a word this function invented.
+const fn depth_cause_name(cause: DepthCause) -> &'static str {
+    match cause {
+        DepthCause::Declaration => "declaration",
+        DepthCause::Cardinality => "cardinality",
+        DepthCause::Selectivity => "selectivity",
+        DepthCause::LicensedPrefix => "licensed_prefix",
+        DepthCause::Floor => "floor",
+        DepthCause::Unbounded => "unbounded",
+        DepthCause::ReadCeiling => "read_ceiling",
+    }
+}
+
+// ── the plan-document boundary ───────────────────────────────────────────────
+
+create_exception!(
+    retrieval,
+    PlanDocumentError,
+    PyValueError,
+    "A refusal from the plan-document boundary — `retrieval.certify_plan` and \
+     `retrieval.explain_depth`, the two entry points that read a plan document this \
+     process did not produce.\n\
+     \n\
+     Carries a `.refusal` attribute: one of the engine's pinned kebab-case names for \
+     the refusal. The decode-side names are `version` (the document was written under \
+     a plan layout this build does not write), `truncated`, `trailing-bytes`, \
+     `invalid-tag`, `invalid-utf8`, `invalid-iri`, `non-ascending-keys` (a keyed \
+     section did not arrive strictly ascending, so the bytes are not an encoding of \
+     any plan), `non-ascending-selectivity-terms` (a record's run of contributing \
+     request-term indices did not ascend either, which is the same fact one nesting \
+     level in), `duplicate-stratum-depth`, `duplicate-stratum-derivation`, \
+     `duplicate-statistics-subject` (one subject answered twice, with nothing saying \
+     which answer the plan was planned against) and `duplicate-selectivity-term` (one \
+     term counted twice into a sum the arithmetic reached once). The \
+     certificate-side names are `depth-not-derivable` (a recorded depth is not the \
+     depth its own recorded inputs derive), `depth-without-derivation`, \
+     `derivation-without-depth`, `derivation-without-statistics-entry` (a depth was \
+     derived for a stratum the snapshot names nowhere), \
+     `statistics-entry-contradicts-derivation` (the plan's two records of one \
+     stratum's statistics disagree), `selectivity-term-out-of-range` (a recorded \
+     selectivity domain indexes a term the plan's own request does not carry) and \
+     `unconsulted-statistics-subject` (the snapshot names a subject that is neither a \
+     stratum nor a predicate of any of the plan's request terms, so it is evidence \
+     about a consultation that did not happen).\n\
+     \n\
+     Branch on `.refusal`, never on `str(exc)`: the name is the pinned contract and \
+     the message is prose that may be reworded. A `version` refusal means the \
+     document came from another build and cannot be reinterpreted under this one; \
+     every other name means the document in hand says something it cannot also \
+     mean, and no repair is offered because a plan whose depth and evidence \
+     disagree has no reading under which one of them is the truth.\n\
+     \n\
+     Subclasses `ValueError`, so code that already catches this module's \
+     `ValueError` keeps working."
+);
+
+/// Raise a plan-document refusal as [`PlanDocumentError`], with `.refusal`
+/// always present.
+///
+/// The name comes from the engine's own `PlanError::refusal`, never from a match
+/// written here: `PlanError` is `#[non_exhaustive]`, so a match in this crate
+/// would need a wildcard arm, and a wildcard arm over a refusal's *name* has
+/// nothing honest to put there — it would hand a caller an invented word at the
+/// one moment the caller is asking which refusal it got.
+fn plan_document_error(py: Python<'_>, refusal: &PlanError) -> PyErr {
+    let error = PlanDocumentError::new_err(refusal.to_string());
+    // A failure to set the attribute would mean the exception object refused an
+    // ordinary `setattr`, which cannot happen for a Python-level exception class;
+    // it is ignored rather than replacing a precise refusal with a vaguer one.
+    let _ = error.value(py).setattr("refusal", refusal.refusal());
+    error
+}
+
+/// Decode a plan document, refusing it by name.
+fn decode_plan(py: Python<'_>, document: &[u8]) -> PyResult<Plan> {
+    Plan::from_canonical_bytes(document).map_err(|refusal| plan_document_error(py, &refusal))
+}
+
 /// Render one plan as a dict.
 fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
-    out.set_item("plan_id", planned.id().to_hex())?;
+    // Encoded once and read twice: the identity is the digest of exactly these
+    // bytes, so deriving the hex from the same buffer the caller is handed makes
+    // "this document's id" a property of the code rather than of two calls that
+    // happen to agree.
+    let canonical = planned.canonical_bytes();
+    out.set_item("plan_id", PlanId::from_canonical(&canonical).to_hex())?;
     out.set_item("version", planned.version)?;
+    // The plan's canonical, length-framed encoding: what a host stores, sends, or
+    // hands back to `retrieval.certify_plan`. It is the plan's identity in the
+    // literal sense — `"plan_id"` is its digest — so a plan can leave this
+    // process and be checked on the way back in.
+    out.set_item("canonical_bytes", PyBytes::new(py, &canonical))?;
 
     let bindings = PyList::empty(py);
     for binding in &planned.producer_bindings {
@@ -1504,12 +1598,64 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
     for entry in &planned.statistics_snapshot.entries {
         let rendered = PyDict::new(py);
         rendered.set_item("subject", &entry.subject)?;
+        // An absent cardinality renders as `None`, never as `0`. Zero is a
+        // measurement and absence is not, and collapsing them at the binding
+        // boundary would undo the distinction the record is built on.
         rendered.set_item("cardinality", entry.cardinality)?;
         rendered.set_item("selectivity_ppm", entry.selectivity_ppm)?;
+        rendered.set_item("selectivity_terms", entry.selectivity_terms.clone())?;
         entries.append(rendered)?;
     }
     snapshot.set_item("entries", entries)?;
     out.set_item("statistics", snapshot)?;
+
+    // What each recorded depth was derived from, so a host can recompute the
+    // number rather than take the plan's word for it.
+    let derivations = PyDict::new(py);
+    for (stratum, inputs) in &planned.stratum_derivations {
+        let rendered = PyDict::new(py);
+        rendered.set_item("declared", inputs.declared)?;
+        rendered.set_item("cardinality", inputs.cardinality)?;
+        rendered.set_item("selectivity_ppm", inputs.selectivity_ppm)?;
+        rendered.set_item("selectivity_terms", inputs.selectivity_terms.clone())?;
+        rendered.set_item("licensed_prefix", inputs.licensed_prefix)?;
+        // Asked of the PLAN, through the method the engine offers for exactly
+        // this question, rather than computed beside it from the inputs this
+        // loop happens to be holding. The two spellings would answer the same
+        // question today and would be one edit away from not doing so, and the
+        // one a caller of the Rust surface reads is the method — so a divergence
+        // would show up first as the binding quietly disagreeing with
+        // `Plan::explain_depth` about a plan they both hold.
+        let Some(cause) = planned.explain_depth(stratum) else {
+            // Unreachable: `stratum` is a key of `stratum_derivations`, which is
+            // the map `explain_depth` reads, so it answers `None` only for a
+            // stratum this loop is not iterating. Reported rather than unwrapped
+            // because a panic here would cross the FFI boundary, and reported as
+            // a disagreement inside this build rather than as anything the
+            // caller did.
+            return Err(PyValueError::new_err(format!(
+                "plan records a depth derivation for stratum {} that it then \
+                 reports no depth cause for; this build disagrees with itself",
+                stratum.as_str()
+            )));
+        };
+        rendered.set_item("cause", depth_cause_name(cause))?;
+        derivations.set_item(stratum.as_str(), rendered)?;
+    }
+    out.set_item("stratum_derivations", derivations)?;
+
+    // Nothing is certified here. This renders a plan and adds no semantics to
+    // it, and certifying would add one: `plan` and `compile` both reach this
+    // function, so every Python `compile` would be able to raise a refusal
+    // `purrdf_retrieval::plan` never raises — a surface that answers a
+    // different question from the engine underneath it.
+    //
+    // It would also be the wrong place to pay for the answer. Certifying is a
+    // per-stratum re-derivation of numbers planning computed a moment earlier,
+    // and it is documented as the COLD path for exactly that reason; admission
+    // deliberately does not call it either. The check is not absent, it is
+    // `retrieval.certify_plan`, asked once by whoever received a document
+    // rather than on every call by whoever produced one.
 
     out.set_item(
         "registry_content_fingerprint",
@@ -2011,6 +2157,93 @@ fn plan<'py>(
         .detach(|| run_plan(&call).map(|(_, _, planned)| planned))
         .map_err(PyValueError::new_err)?;
     plan_dict(py, &planned)
+}
+
+/// Decode a plan document and check that every depth it records follows from the
+/// inputs it records beside them.
+///
+/// This is the other half of `plan`'s `"canonical_bytes"`: a plan can leave this
+/// process — stored, logged, sent to another host — and the check runs on the way
+/// back in. `plan_bytes` is exactly what `"canonical_bytes"` handed out, and the
+/// answer is the decoded plan rendered as `plan` renders it, so a host reads the
+/// document it received rather than the one it believes it sent.
+///
+/// A plan is untrusted input: it can be edited and it can be forged, and its
+/// depths are the numbers that decide how deep each stratum is actually read. The
+/// plan records every input those depths were derived from, so this recomputes
+/// each one with the engine's own arithmetic and refuses a plan the two disagree
+/// about — the depth is a checkable claim rather than an asserted one.
+///
+/// It is the COLD path, and deliberately on no hot one. [`plan`], [`compile`]
+/// and [`search`] do not run it, and neither does admission: planning just built
+/// the plan those stages return, so certifying it there would re-derive, once
+/// per stratum and on every call, a number this build had computed a moment
+/// earlier. The question this answers — is this document internally coherent at
+/// all — is a property of the bytes alone and has nothing to do with the
+/// registry or the statistics in force now, which is why it is asked once, here,
+/// by the party that received them.
+///
+/// Every refusal raises `retrieval.PlanDocumentError` carrying a pinned
+/// `.refusal` name; branch on that, never on the message. A version this build
+/// does not write is `version`; a keyed section out of order is
+/// `non-ascending-keys`, and a record's run of contributing request-term indices
+/// out of order is `non-ascending-selectivity-terms`; one stratum recorded twice
+/// is `duplicate-stratum-depth` or `duplicate-stratum-derivation`, and one term
+/// counted twice into one selectivity is `duplicate-selectivity-term`; a depth
+/// that does not follow from its inputs is `depth-not-derivable`; a stratum the
+/// snapshot does not name is `derivation-without-statistics-entry`, and a
+/// snapshot row for a subject nothing consulted is
+/// `unconsulted-statistics-subject`; a snapshot row saying something else than
+/// the derivation beside it is `statistics-entry-contradicts-derivation`; and a
+/// recorded selectivity domain indexing a term the plan's own request does not
+/// carry is `selectivity-term-out-of-range`. The class lists them all.
+#[pyfunction]
+#[pyo3(signature = (plan_bytes))]
+fn certify_plan<'py>(py: Python<'py>, plan_bytes: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    // Decoding and certifying run detached (GIL released): both are pure
+    // functions of a buffer whose length is the sender's choice, and the
+    // rendering is built after the GIL is reacquired.
+    let decoded = py.detach(|| {
+        let decoded = Plan::from_canonical_bytes(plan_bytes)?;
+        decoded.certify()?;
+        Ok::<Plan, PlanError>(decoded)
+    });
+    let planned = decoded.map_err(|refusal| plan_document_error(py, &refusal))?;
+    plan_dict(py, &planned)
+}
+
+/// Which recorded input bound `stratum`'s depth in the plan document
+/// `plan_bytes`, or `None` when that plan records no derivation for it.
+///
+/// A depth of one is the motivating case. It arrives by four different roads — a
+/// declaration of zero or one row, a measured cardinality, a selectivity that
+/// scaled the bound to nothing, or the floor that stops any of them reaching zero
+/// — and a caller looking at the number alone cannot tell which, though the four
+/// have completely different remedies. The answer is one of `"declaration"`,
+/// `"cardinality"`, `"selectivity"`, `"licensed_prefix"`, `"floor"`,
+/// `"unbounded"` or `"read_ceiling"`: the same closed vocabulary `plan` renders
+/// under each derivation's `"cause"`, from the same engine call.
+///
+/// This reads the derivation the document records and does **not** certify it.
+/// The two are different questions — "which leg bound this number" and "does this
+/// number follow from those legs" — and answering the first says nothing about
+/// the second, which is `certify_plan`'s to answer over the whole plan at once. A
+/// host that has not certified a document it received is reading an explanation
+/// of a depth that may not follow from it.
+///
+/// Raises `retrieval.PlanDocumentError` for every way the document itself is
+/// refused, with the same pinned `.refusal` names `certify_plan` raises, plus
+/// `invalid-iri` when `stratum` is not an IRI.
+#[pyfunction]
+#[pyo3(signature = (plan_bytes, stratum))]
+fn explain_depth(
+    py: Python<'_>,
+    plan_bytes: &[u8],
+    stratum: &str,
+) -> PyResult<Option<&'static str>> {
+    let planned = decode_plan(py, plan_bytes)?;
+    let stratum = Iri::parse(stratum).map_err(|refusal| plan_document_error(py, &refusal))?;
+    Ok(planned.explain_depth(&stratum).map(depth_cause_name))
 }
 
 /// Plan, admit and emit: the per-stratum SPARQL the request compiles to.
@@ -2589,7 +2822,10 @@ fn deepest_rank_within_width(
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SCALE_DIGITS", SCALE_DIGITS)?;
     m.add("SCALE", SCALE)?;
+    m.add("PlanDocumentError", m.py().get_type::<PlanDocumentError>())?;
     m.add_function(wrap_pyfunction!(plan, m)?)?;
+    m.add_function(wrap_pyfunction!(certify_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_depth, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(search, m)?)?;
     m.add_function(wrap_pyfunction!(weight_for_depth, m)?)?;

@@ -279,8 +279,9 @@
 //! becomes a value: an estimate may narrow a read, and a declaration may bound
 //! it, but only the producer can report that there was nothing to read, through
 //! a receipt fusion checks against the rows it pulled. So the derived depth is
-//! floored at one — see [`capped`] — and a stratum planned at depth one is a
-//! stratum whose relation is still invoked and still asked.
+//! floored at one — see [`derived_bound`], which applies that floor to the whole
+//! derivation before [`depth_from`] clamps it — and a stratum planned at depth one
+//! is a stratum whose relation is still invoked and still asked.
 //!
 //! That floor covers the registry's own zero as well as the provider's. A
 //! producer whose every declared access mode promises zero rows per invocation
@@ -347,8 +348,8 @@ use crate::error::PlanError;
 use crate::iri::Iri;
 use crate::matching::{carries_content, pattern_matches, place};
 use crate::plan::{
-    Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
-    StatisticsSnapshot, UnservedReason, UnservedTerm,
+    DepthCause, DepthInputs, Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason,
+    StatisticsEntries, StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
 use crate::request::{ReadBound, RequestTerm, RetrievalRequest};
 use crate::statistics::Statistics;
@@ -570,12 +571,25 @@ pub fn plan(
         // the depth derived from this number is the depth that waist holds to it.
         // Read at the widest mode instead, a plan recorded a depth the invoked mode
         // had declared it could not serve.
-        selected.push((
-            stratum.clone(),
-            declared_row_bound(descriptor, Some(invocation.mode))
-                .rows()
-                .unwrap_or(0),
-        ));
+        //
+        // The absence is refused rather than defaulted. `place` above admits an
+        // invocation only when some declared mode subsumes it, and the bound is read
+        // by filtering the SAME `descriptor.modes` — read once at step 2 and
+        // immutable since — on that same predicate, so the placement that just
+        // succeeded has already proved this is `Some`. Defaulting it anyway would
+        // pick a number the depth is then derived from: zero floors the read to one
+        // probing row, and `u64::MAX` declares an unbounded relation. Neither is a
+        // thing the registry said. The unreachability argument, and why this ends
+        // the plan where a placement failure only rejects a producer, are recorded
+        // on `PlanError::UndeclaredRowBound` itself.
+        let Some(declared_rows) = declared_row_bound(descriptor, Some(invocation.mode)).rows()
+        else {
+            return Err(PlanError::UndeclaredRowBound {
+                stratum: stratum.as_str().to_owned(),
+                producer: candidate.producer.clone(),
+            });
+        };
+        selected.push((stratum.clone(), declared_rows));
         surviving_declarations.insert(
             stratum.clone(),
             (&declaration.domains, declaration.duplicates),
@@ -623,40 +637,33 @@ pub fn plan(
     // holds, `None` when it does not and the registry's own bound stands. Decided
     // once, from the shape of the declarations, with no caller hint in it.
     let prefix = licensed_prefix(request.bound, &surviving_declarations);
-    let strata: BTreeSet<Iri> = declared_bounds.keys().cloned().collect();
-    let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(strata.len());
-    for stratum in &strata {
-        let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
+    // Walked as pairs, not as a key set that is then looked up. A lookup has a
+    // miss to answer for, and every answer available to it is a lie about a
+    // number the depth is derived from — which is why the *other* reading of
+    // this same field, at step 4 above, is `PlanError::UndeclaredRowBound`
+    // rather than a default. Here the declaration arrives with its stratum and
+    // no default is expressible, so the refusal has nothing to guard. The map is
+    // a `BTreeMap`, so the walk is ascending by stratum and two plans of one
+    // request visit the strata in one order.
+    let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(declared_bounds.len());
+    let mut stratum_derivations: BTreeMap<Iri, DepthInputs> = BTreeMap::new();
+    for (stratum, &declared) in &declared_bounds {
         let reached = terms_at(&request.terms, reaching.get(stratum));
-        let bound = capped(declared, stratum, &reached, statistics, prefix);
-        // Recorded at the deepest depth a read can be taken to wherever the
-        // declared bound is deeper than that — including the genuinely unbounded
-        // `u64::MAX`, which is the same fact about the read: more rows than a read
-        // can reach. This used to be `PlanError::StatisticsUnavailable`, and what
-        // made that refusal obsolete is the line below. It refused `u64::MAX` and
-        // served `u64::MAX - 1`, two declarations of an index larger than any read,
-        // at the identical depth and with the identical ending — so the refusal
-        // separated a declaration from its own neighbour and bought nothing the
-        // ending does not already report. The old truncation to `u32::MAX` was
-        // wrong for two reasons and only one of them was the number: it recorded a
-        // depth **below** the bound it was derived to serve with nothing anywhere
-        // reporting the difference, and `u32::MAX` was also the one depth whose
-        // probe row the compiler cannot express, so the read was then reported
-        // exhausted whatever the relation held. `MAX_READ_DEPTH` fixes the second
-        // outright — the probe row fits — and the probe is what reports the first:
-        // a read this ceiling cuts arrives with a row past the depth and ends as
-        // `DepthReached`, which names the planned depth as the stopper. Refusing
-        // instead would refuse an honest declaration of a large index for a read the
-        // caller asked one page of; see this module's header.
-        let depth = u32::try_from(bound)
-            .unwrap_or(MAX_READ_DEPTH)
-            .min(MAX_READ_DEPTH);
+        // Consult once, record what was consulted, then derive from the record.
+        // The depth and the evidence beside it are therefore the same numbers
+        // rather than two readings of one oracle that have to agree.
+        let inputs = consult(declared, stratum, &reached, statistics, prefix);
+        let depth = depth_from(&inputs);
+        stratum_derivations.insert(stratum.clone(), inputs);
         stratum_depths.insert(stratum.clone(), depth);
     }
 
-    // 6. Capture the statistics the planner actually consulted: the strata it
-    //    placed and the predicates the request named.
-    let statistics_snapshot = capture_statistics(request, &strata, &reaching, statistics);
+    // 6. Capture the snapshot of every subject planning consulted: the strata a
+    //    depth was derived for, projected out of the derivations built above, and
+    //    the predicates the request named. The derivations keep the per-depth
+    //    binding; this names, in one place, every subject an answer to this plan
+    //    depended on a provider for.
+    let statistics_snapshot = capture_statistics(request, statistics, &stratum_derivations)?;
 
     // 7. Record both registry identities.
     Ok(Plan {
@@ -667,6 +674,7 @@ pub fn plan(
         producer_decisions: decisions,
         unserved_terms,
         stratum_depths,
+        stratum_derivations,
         statistics_snapshot,
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: content_fingerprint,
@@ -726,15 +734,35 @@ enum Outcome<'a> {
 /// An index the request does not carry is skipped rather than refused: this is
 /// a lookup used to narrow a bound, and a bound is narrowed by the terms that
 /// exist. A plan whose recorded indices address no term of its own request is a
-/// separate, typed refusal at the admission waist, where untrusted plans are
-/// checked.
-fn terms_at<'a>(terms: &'a [RequestTerm], indices: Option<&BTreeSet<u32>>) -> Vec<&'a RequestTerm> {
+/// separate, typed refusal, raised wherever untrusted plans are checked: by
+/// [`Plan::certify`](crate::Plan::certify) for the indices a derivation and a
+/// snapshot row record, as
+/// [`PlanError::SelectivityTermOutOfRange`](crate::PlanError::SelectivityTermOutOfRange),
+/// and at the admission waist for the ones a binding and the per-term unserved
+/// evidence record.
+fn terms_at<'a>(
+    terms: &'a [RequestTerm],
+    indices: Option<&BTreeSet<u32>>,
+) -> Vec<(u32, &'a RequestTerm)> {
     indices.map_or_else(Vec::new, |indices| {
         indices
             .iter()
-            .filter_map(|index| terms.get(*index as usize))
+            .filter_map(|index| terms.get(*index as usize).map(|term| (*index, term)))
             .collect()
     })
+}
+
+/// Every request term, paired with its own index, in the caller's order.
+///
+/// The counterpart to [`terms_at`] for a subject no binding reaches — a request
+/// predicate, which no depth is derived for and which is therefore asked about
+/// across the whole request rather than across the terms some stratum carries.
+fn all_indexed_terms(terms: &[RequestTerm]) -> Vec<(u32, &RequestTerm)> {
+    terms
+        .iter()
+        .enumerate()
+        .map(|(index, term)| (index as u32, term))
+        .collect()
 }
 
 /// Every request term no binding carries, ascending, with the reason it went
@@ -888,15 +916,56 @@ fn licensed_prefix(
     Some(top_k.get() as u64)
 }
 
+/// Consult the provider for one stratum and record exactly what it was asked
+/// and what it answered.
+///
+/// This is the **only** place the oracle is read for a depth. It returns the
+/// argument list [`depth_from`] consumes, so the record a plan carries and the
+/// numbers the arithmetic ran on are the same values rather than two
+/// independently-derived descriptions that have to agree by convention. They
+/// used to be two, and a statistic that reached the depth but not the record was
+/// the consequence.
+///
+/// The selectivity is asked for **only** when the bound is not the genuinely
+/// unbounded declaration, mirroring the early return in [`depth_from`]: a
+/// fraction of an unmeasured total is not a measurement, and recording a
+/// selectivity the derivation never applied would describe a derivation that did
+/// not happen.
+fn consult(
+    declared: u64,
+    stratum: &Iri,
+    terms: &[(u32, &RequestTerm)],
+    statistics: &impl Statistics,
+    prefix: Option<u64>,
+) -> DepthInputs {
+    let cardinality = statistics.cardinality(stratum);
+    let bound = match cardinality {
+        Some(cardinality) => declared.min(cardinality),
+        None => declared,
+    };
+    let (selectivity_ppm, selectivity_terms) = if bound == u64::MAX {
+        (None, Vec::new())
+    } else {
+        combined_selectivity_ppm(stratum, terms, statistics)
+    };
+    DepthInputs {
+        declared,
+        cardinality,
+        selectivity_ppm,
+        selectivity_terms,
+        licensed_prefix: prefix,
+    }
+}
+
 /// A declared row bound, lowered (never raised) by what the provider measured,
 /// and never lowered past the first row — nor read as zero when the declaration
 /// itself was zero.
 ///
 /// Two independent statistics narrow one number. A measured cardinality says
 /// how many rows the stratum holds at all; a measured selectivity says what
-/// fraction of them `terms` can match, and a term matching a tenth of a
-/// stratum cannot be read a stratum-deep. Each is applied as a `min`, so the
-/// result never exceeds the registry's own declaration and a provider that
+/// fraction of them the consulted terms can match, and a term matching a tenth
+/// of a stratum cannot be read a stratum-deep. Each is applied as a `min`, so
+/// the result never exceeds the registry's own declaration and a provider that
 /// measured nothing changes nothing.
 ///
 /// # The finite bound is floored at one
@@ -928,7 +997,7 @@ fn licensed_prefix(
 /// zero -- its OWN report, from a read that really happened, rather than an
 /// emptiness the bound asserted on its behalf. What that ending does and does not
 /// license is then the stratum's declared fidelity to say, not this floor. So
-/// [`crate::admission`] admits a depth of one against a declared zero, and the
+/// admission admits a depth of one against a declared zero, and the
 /// compiler's `emitted_limit` never writes a `LIMIT 0`; the floor and those two
 /// are one rule in three places.
 ///
@@ -938,19 +1007,34 @@ fn licensed_prefix(
 ///
 /// The genuinely unbounded case returns before the floor and keeps returning
 /// [`u64::MAX`]: flooring it would be flooring an absent bound rather than a
-/// derived one, and the caller records it at the deepest depth a read can be taken
-/// to, exactly as it records any other declaration larger than a read can reach.
-fn capped(
-    declared: u64,
-    stratum: &Iri,
-    terms: &[&RequestTerm],
-    statistics: &impl Statistics,
-    prefix: Option<u64>,
-) -> u64 {
-    let bound = match statistics.cardinality(stratum) {
-        Some(cardinality) => declared.min(cardinality),
-        None => declared,
-    };
+/// derived one, and it is recorded at the deepest depth a read can be taken to,
+/// exactly as any other declaration larger than a read can reach is.
+///
+/// # This is the one arithmetic path
+///
+/// Pure: it consults no oracle and reads no registry. Everything it needs is in
+/// `inputs`, which is exactly why a plan that records `inputs` records a depth a
+/// reader can recompute — see [`Plan::certify`](crate::Plan::certify). **An input
+/// that is not a field of [`DepthInputs`] cannot reach this arithmetic at all**,
+/// which is what keeps the record complete as the derivation grows.
+///
+/// The `MAX_READ_DEPTH` clamp is applied **here** rather than at the call site,
+/// because a checker that recomputed the bound and omitted the clamp would
+/// disagree with the planner at the ceiling and refuse an honest plan.
+#[must_use]
+pub fn depth_from(inputs: &DepthInputs) -> u32 {
+    clamp_depth(derived_bound(inputs))
+}
+
+/// The derivation with every step applied and the read ceiling not yet imposed:
+/// exactly the number [`depth_from`] hands its clamp.
+///
+/// Named rather than written inline so the clamp has an argument something else
+/// can hold. [`depth_cause`] needs to know whether the ceiling is what fixed the
+/// recorded depth, and the only honest way to ask that is to run the same
+/// derivation and then the same clamp — see [`bound_by_ceiling`].
+fn derived_bound(inputs: &DepthInputs) -> u64 {
+    let bound = measured_bound(inputs);
     // An unbounded stratum has no row count for a ratio to be a fraction of, so
     // the selectivity step is skipped rather than applied: a fraction of an
     // unmeasured total is not a measurement, and the caller is about to record this
@@ -961,34 +1045,172 @@ fn capped(
     // an answer that provably cannot use more than `k` of them, is a read of `k`
     // rows and not an unbounded read.
     if bound == u64::MAX {
-        return prefix.map_or(u64::MAX, |rows| rows.max(1));
+        return inputs.licensed_prefix.map_or(u64::MAX, |rows| rows.max(1));
     }
-    let narrowed = match combined_selectivity_ppm(stratum, terms, statistics) {
-        // Rounded up, in an intermediate wide enough that the product cannot
-        // wrap: a bound derived from a ratio must never fall below the rows the
-        // ratio describes, because a depth below a stratum's real answer
-        // truncates its ranked list with nothing anywhere saying so.
+    prefixed(narrowed(bound, inputs), inputs).max(1)
+}
+
+/// The declaration lowered by the reported cardinality: the first step of
+/// [`depth_from`], shared with [`depth_cause`] so the number the depth came from
+/// and the number the explanation names cannot drift apart.
+fn measured_bound(inputs: &DepthInputs) -> u64 {
+    match inputs.cardinality {
+        Some(cardinality) => inputs.declared.min(cardinality),
+        None => inputs.declared,
+    }
+}
+
+/// `bound` scaled by the applied selectivity: the second step of [`depth_from`].
+///
+/// Rounded up, in an intermediate wide enough that the product cannot wrap: a
+/// bound derived from a ratio must never fall below the rows the ratio
+/// describes, because a depth below a stratum's real answer truncates its ranked
+/// list with nothing anywhere saying so.
+fn narrowed(bound: u64, inputs: &DepthInputs) -> u64 {
+    match inputs.selectivity_ppm {
         Some(ppm) => {
             let scaled = (u128::from(bound) * u128::from(ppm)).div_ceil(u128::from(PPM_UNIT));
             u64::try_from(scaled).unwrap_or(bound).min(bound)
         }
         None => bound,
-    };
-    // The request's bound is applied last, and the order is load-bearing. A
-    // selectivity is a fraction of the rows the *stratum* holds, so scaling a
-    // bound that has already been narrowed to `k` would ask for a fraction of `k`
-    // — a depth below the rows the ratio describes, which is the silent truncation
-    // this whole function is arranged to avoid. Narrowed here it is one more `min`
-    // over a bound both the registry and the provider already set.
-    let bounded = match prefix {
+    }
+}
+
+/// `narrowed` lowered by the request's licensed prefix: the third step of
+/// [`depth_from`].
+///
+/// The request's bound is applied last, and the order is load-bearing. A
+/// selectivity is a fraction of the rows the *stratum* holds, so scaling a bound
+/// that has already been narrowed to `k` would ask for a fraction of `k` — a
+/// depth below the rows the ratio describes, which is the silent truncation this
+/// whole derivation is arranged to avoid. Narrowed here it is one more `min` over
+/// a bound both the registry and the provider already set.
+fn prefixed(narrowed: u64, inputs: &DepthInputs) -> u64 {
+    match inputs.licensed_prefix {
         Some(rows) => narrowed.min(rows),
         None => narrowed,
-    };
-    bounded.max(1)
+    }
+}
+
+/// Which recorded input bound the depth [`depth_from`] derives from `inputs`.
+///
+/// Built from the **same** functions `depth_from` applies, in the same order, so
+/// the explanation is a reading of that derivation rather than a second
+/// derivation that happens to agree with it. Every leg below is a call into that
+/// derivation's own pieces — `measured_bound`, `narrowed`, `prefixed`, and
+/// for the ceiling `bound_by_ceiling`, which runs `clamp_depth` itself. A
+/// caller looking at a depth of one cannot otherwise tell a floored zero from a
+/// declaration of one row, and the two call for completely different action.
+///
+/// The ceiling leg used to be the exception and it was wrong for it. It asked
+/// whether the derived bound fitted in a `u32`, which is a restatement of where
+/// the ceiling is rather than a reading of it — and it restated it one row too
+/// wide, because `MAX_READ_DEPTH` is `u32::MAX - 1`. A bound of exactly
+/// `u32::MAX` therefore converted cleanly, skipped this arm, and was reported as
+/// the declaration (or the cardinality, or the selectivity) that named it, while
+/// the depth beside it had been cut to the ceiling with nothing saying so. It is
+/// decided by the clamp now, so the two cannot part company again.
+#[must_use]
+pub fn depth_cause(inputs: &DepthInputs) -> DepthCause {
+    let derived = derived_bound(inputs);
+    let bound = measured_bound(inputs);
+    if bound == u64::MAX {
+        // An unbounded declaration reaches its depth by four different roads and
+        // they are four different facts. Nothing narrowed it — no prefix, or a
+        // prefix that is itself the unbounded sentinel and so bounds nothing —
+        // and the depth stands in for "more rows than a read can reach". Or a
+        // prefix did narrow it, and then it is the number recorded, unless the
+        // floor lifted it or the ceiling cut it, in which case that is.
+        if derived == u64::MAX {
+            return DepthCause::Unbounded;
+        }
+        // The `max(1)` in the derivation, read the same way the finite branch
+        // reads its own floor: a request licensing fewer rows than the
+        // derivation returned is a request the floor overrode, and the one row
+        // recorded is the probe rather than the caller's bound.
+        if inputs.licensed_prefix.is_some_and(|rows| rows < derived) {
+            return DepthCause::Floor;
+        }
+        return if bound_by_ceiling(derived) {
+            DepthCause::ReadCeiling
+        } else {
+            DepthCause::LicensedPrefix
+        };
+    }
+    if bound_by_ceiling(derived) {
+        return DepthCause::ReadCeiling;
+    }
+    let narrowed = narrowed(bound, inputs);
+    let bounded = prefixed(narrowed, inputs);
+    if bounded == 0 {
+        return DepthCause::Floor;
+    }
+    if inputs.licensed_prefix.is_some_and(|rows| rows < narrowed) {
+        return DepthCause::LicensedPrefix;
+    }
+    if narrowed < bound {
+        return DepthCause::Selectivity;
+    }
+    if inputs
+        .cardinality
+        .is_some_and(|cardinality| cardinality < inputs.declared)
+    {
+        return DepthCause::Cardinality;
+    }
+    DepthCause::Declaration
+}
+
+/// Whether the read ceiling is what fixed the depth [`depth_from`] records for a
+/// derivation that reached `derived`.
+///
+/// This is the whole test, and it is deliberately not a comparison against
+/// [`MAX_READ_DEPTH`]: it hands the number to the clamp `depth_from` hands it to
+/// and asks whether the clamp gave it back. A bound at or below the ceiling
+/// survives the round trip unchanged; a bound above it comes back at the
+/// ceiling, which is a different number. So where the ceiling is, and what
+/// counts as being cut by it, are stated once — in [`clamp_depth`] — and read
+/// here rather than repeated.
+fn bound_by_ceiling(derived: u64) -> bool {
+    u64::from(clamp_depth(derived)) != derived
+}
+
+/// Record a derived bound at the deepest depth a read can be taken to.
+///
+/// Recorded at `MAX_READ_DEPTH` wherever the derived bound is deeper than
+/// that — including the genuinely unbounded [`u64::MAX`], which is the same fact
+/// about the read: more rows than a read can reach. This used to be
+/// `PlanError::StatisticsUnavailable`, and what made that refusal obsolete is
+/// this line. It refused `u64::MAX` and served `u64::MAX - 1`, two declarations
+/// of an index larger than any read, at the identical depth and with the
+/// identical ending — so the refusal separated a declaration from its own
+/// neighbour and bought nothing the ending does not already report.
+///
+/// The old truncation to `u32::MAX` was wrong for two reasons and only one of
+/// them was the number: it recorded a depth **below** the bound it was derived to
+/// serve with nothing anywhere reporting the difference, and `u32::MAX` was also
+/// the one depth whose probe row the compiler cannot express, so the read was
+/// then reported exhausted whatever the relation held. [`MAX_READ_DEPTH`] fixes
+/// the second outright — the probe row fits — and the probe is what reports the
+/// first: a read this ceiling cuts arrives with a row past the depth and ends as
+/// `DepthReached`, which names the planned depth as the stopper. Refusing instead
+/// would refuse an honest declaration of a large index for a read the caller
+/// asked one page of; see this module's header.
+fn clamp_depth(bound: u64) -> u32 {
+    u32::try_from(bound)
+        .unwrap_or(MAX_READ_DEPTH)
+        .min(MAX_READ_DEPTH)
 }
 
 /// The selectivity the provider reports for `subject` across `terms`, in parts
-/// per million, or `None` when it reports none for any of them.
+/// per million, or `None` when it reports none for any of them — together with
+/// the ascending indices of the terms that contributed to it.
+///
+/// The domain is returned rather than left implicit because the aggregate is a
+/// sum: the total alone does not say which terms it came from, so a provider
+/// that moved a selectivity between terms without changing the total would leave
+/// an identical record of a different measurement. `terms` is the *candidate*
+/// set; the returned indices are the subset the provider actually answered for,
+/// which is the narrower and more useful fact.
 ///
 /// The terms are **summed** rather than minimised, and the sum saturates at
 /// unity. Minimising would assume every producer conjoins the terms it is
@@ -1005,11 +1227,12 @@ fn capped(
 /// lookup a lookup.
 fn combined_selectivity_ppm(
     subject: &Iri,
-    terms: &[&RequestTerm],
+    terms: &[(u32, &RequestTerm)],
     statistics: &impl Statistics,
-) -> Option<u64> {
+) -> (Option<u64>, Vec<u32>) {
     let mut total: Option<u64> = None;
-    for term in terms {
+    let mut contributing = Vec::new();
+    for (index, term) in terms {
         let Some(ppm) = statistics.selectivity_ppm(subject, term) else {
             continue;
         };
@@ -1019,8 +1242,12 @@ fn combined_selectivity_ppm(
                 .saturating_add(ppm.min(PPM_UNIT))
                 .min(PPM_UNIT),
         );
+        contributing.push(*index);
     }
-    total
+    // Ascending because `terms` arrives ascending — from a `BTreeSet` for a
+    // stratum, from `enumerate` for a request predicate — and the encoding
+    // records the order it is handed.
+    (total, contributing)
 }
 
 /// Refuse a request term that cannot name anything.
@@ -1029,9 +1256,9 @@ fn combined_selectivity_ppm(
 /// unusable: it constrains nothing (neither endpoint), or it can match nothing
 /// (a lower endpoint above its upper). The second is checked for a numeric range
 /// and not for a temporal one, and the asymmetry is the point rather than an
-/// omission: a numeric endpoint is an exact [`Fixed`] this layer can order, while
-/// a temporal endpoint is the caller's own lexical form, which this layer does
-/// not parse and therefore cannot order — comparing two calendar lexicals as
+/// omission: a numeric endpoint is an exact [`Fixed`](purrdf_text::Fixed) this layer
+/// can order, while a temporal endpoint is the caller's own lexical form, which this
+/// layer does not parse and therefore cannot order — comparing two calendar lexicals as
 /// strings would refuse legitimate intervals whose encoding is not
 /// lexicographically ordered. A degenerate range whose endpoints are equal is a
 /// single point and is admitted.
@@ -1100,7 +1327,7 @@ fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
 /// probe row past that depth is not a number an emitted bound can hold, so
 /// admitting it here would have named a ceiling the layer cannot serve a read at.
 /// A bound of zero is admitted too, and floored to the single probing row by
-/// [`capped`]: a bound may narrow a read and may never eliminate one.
+/// [`derived_bound`]: a bound may narrow a read and may never eliminate one.
 ///
 /// A *declared* row bound past the same ceiling is not refused anywhere — it is
 /// recorded at the ceiling, for the reason in this module's header. The asymmetry
@@ -1124,7 +1351,13 @@ fn validate_bound(bound: ReadBound) -> Result<(), PlanError> {
 }
 
 /// The predicate a request term names, when it names one.
-fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
+///
+/// Read by [`capture_statistics`], which records a row for each of them, and by
+/// [`Plan::certify`](crate::Plan::certify), which refuses a row for anything
+/// else. One function rather than two readings of one rule: a checker with its
+/// own idea of which terms name a predicate would refuse rows the planner
+/// itself writes the moment the two drifted.
+pub(crate) fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
     match term {
         RequestTerm::Lexical { predicate, .. } => predicate.as_ref(),
         RequestTerm::Spatial { predicate, .. }
@@ -1134,50 +1367,100 @@ fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
     }
 }
 
-/// Record the statistics the planner consulted, in a deterministic order.
+/// Record what the provider says about **every subject planning consulted** —
+/// each stratum a depth was derived for, and each predicate the request names —
+/// ascending by subject.
 ///
-/// Only facts the provider actually reports are recorded: a subject with no
-/// cardinality is omitted rather than recorded as zero, because zero is a
+/// Every fact the provider is asked for is recorded, whether or not it answered:
+/// a subject with no cardinality is named with an absent one rather than dropped,
+/// because a plan that omits a subject it consulted cannot detect that the
+/// provider's answer for that subject moved. Absent is still not zero; zero is a
 /// measurement and absence is not.
 ///
-/// The recorded selectivity is the same aggregate the depth was derived from,
-/// over the same terms: for a stratum, the terms `reaching` says were bound to
-/// it; for a request predicate, which no depth is derived for, the whole
-/// request. So the snapshot explains the depth beside it rather than reporting
-/// a second, differently-computed number that happens to sit next to it.
+/// # A stratum's row is a projection, never a second consultation
+///
+/// The strata are also recorded in
+/// [`Plan::stratum_derivations`](crate::Plan::stratum_derivations), beside the
+/// depth they explain, and that record is what this one is built from: the row
+/// here copies `cardinality`, `selectivity_ppm` and `selectivity_terms` straight
+/// out of the [`DepthInputs`] the planner already derived.
+///
+/// Re-asking the provider would be wrong rather than merely wasteful. [`consult`]
+/// deliberately does not ask for a selectivity when the bound is [`u64::MAX`] —
+/// an unbounded stratum has no row count for a ratio to be a fraction of — so a
+/// provider willing to report one for such a stratum would have its value land
+/// here describing a derivation that did not happen. What a projection records is
+/// what was consulted, which for that stratum is no selectivity at all.
+///
+/// # One row per subject
+///
+/// A subject that is both a stratum and a request-term predicate gets the
+/// **stratum's** row, because that is the consultation that actually bound a
+/// depth. The aggregate a request predicate would carry is a different number
+/// over a different term set, and the row that explains a depth is the one a
+/// reader checking the depth needs to see.
+///
+/// The predicates that are *not* strata derive no depth, so their recorded
+/// selectivity aggregates over the **whole request** rather than over the terms
+/// some binding carried — there is no binding to consult, and the provider
+/// decides which `(subject, term)` pairs it can answer.
+/// # Errors
+///
+/// [`PlanError::DuplicateStatisticsSubject`] if the rows below ever named one
+/// subject twice. They are keyed by subject, so they cannot — and the snapshot
+/// is built through [`StatisticsEntries::new`] anyway rather than around it,
+/// because a constructor the planner is exempt from is a law the planner's own
+/// output is not held to.
 fn capture_statistics(
     request: &RetrievalRequest,
-    strata: &BTreeSet<Iri>,
-    reaching: &BTreeMap<Iri, BTreeSet<u32>>,
     statistics: &impl Statistics,
-) -> StatisticsSnapshot {
-    let mut subjects: BTreeSet<Iri> = strata.clone();
-    for term in &request.terms {
-        if let Some(predicate) = term_predicate(term) {
-            subjects.insert(predicate.clone());
-        }
-    }
-    let all_terms: Vec<&RequestTerm> = request.terms.iter().collect();
+    derivations: &BTreeMap<Iri, DepthInputs>,
+) -> Result<StatisticsSnapshot, PlanError> {
+    // Keyed rather than pushed, so "one row per subject" is the container's law
+    // instead of a rule this function has to remember, and the ascending order
+    // the snapshot promises falls out of the key type.
+    let mut rows: BTreeMap<&Iri, StatisticsEntry> = BTreeMap::new();
 
-    let mut entries = Vec::new();
-    for subject in subjects {
-        let Some(cardinality) = statistics.cardinality(&subject) else {
+    // The strata first, so the projection is what a predicate sharing an IRI
+    // with one finds already recorded and leaves standing.
+    for (stratum, inputs) in derivations {
+        rows.insert(
+            stratum,
+            StatisticsEntry {
+                subject: stratum.as_str().to_owned(),
+                cardinality: inputs.cardinality,
+                selectivity_ppm: inputs.selectivity_ppm,
+                selectivity_terms: inputs.selectivity_terms.clone(),
+            },
+        );
+    }
+
+    let all_terms = all_indexed_terms(&request.terms);
+    for term in &request.terms {
+        let Some(predicate) = term_predicate(term) else {
             continue;
         };
-        let consulted = match reaching.get(&subject) {
-            Some(indices) => terms_at(&request.terms, Some(indices)),
-            None => all_terms.clone(),
-        };
-        entries.push(StatisticsEntry {
-            subject: subject.as_str().to_owned(),
-            cardinality,
-            selectivity_ppm: combined_selectivity_ppm(&subject, &consulted, statistics),
-        });
+        if rows.contains_key(predicate) {
+            // Either a stratum's projection, which wins, or a predicate two
+            // terms name, whose row already aggregates across the whole request.
+            continue;
+        }
+        let (selectivity_ppm, selectivity_terms) =
+            combined_selectivity_ppm(predicate, &all_terms, statistics);
+        rows.insert(
+            predicate,
+            StatisticsEntry {
+                subject: predicate.as_str().to_owned(),
+                cardinality: statistics.cardinality(predicate),
+                selectivity_ppm,
+                selectivity_terms,
+            },
+        );
     }
 
-    StatisticsSnapshot {
+    Ok(StatisticsSnapshot {
         source: statistics.source().to_owned(),
         revision: statistics.revision().to_owned(),
-        entries,
-    }
+        entries: StatisticsEntries::new(rows.into_values().collect())?,
+    })
 }

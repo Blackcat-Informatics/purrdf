@@ -52,7 +52,7 @@ precise cost several of these declarations exist to avoid.
 | [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound) | Declare the honest unfiltered worst case for the row bound | producer |
 | [A10](#a10--the-engine-pushed-ceiling-is-honoured-for-efficiency-only) | The engine-pushed ceiling is honoured for efficiency only | engine withholds, producer honours |
 | [A11](#a11--volatility-must-be-true-of-the-snapshot-held) | Volatility must be true of the snapshot held, and the snapshot is pinned for the query | producer |
-| [A12](#a12--bounds-narrow-they-never-zero) | Bounds narrow; they never zero | layer, three times |
+| [A12](#a12--bounds-narrow-they-never-zero) | Bounds narrow; they never zero | layer, three times; recorded once |
 | [A13](#a13--attest-the-generation-of-the-snapshot-that-answered) | Attest the generation of the snapshot that answered | producer declares, layer carries |
 | [A14](#a14--declare-incompleteness-rather-than-refusing-or-faking-exhaustion) | Declare incompleteness rather than refusing or faking exhaustion | producer declares, layer refuses an unrecordable one |
 | [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, name each row's block, and never name a candidate outside them | both, per row |
@@ -518,7 +518,7 @@ stopped before anything stopped it.
 Raising the argument to go looking is not available and is not an oversight: it is
 precisely the request a conforming relation must refuse. If you want that read taken
 further, raise your declared row bound — re-planning deeper cannot help, because
-`capped` bounds every derived depth by the declaration.
+the planner's `derived_bound` derives every depth downward from the declaration.
 Pinned by
 `the_probe_separates_a_cut_read_from_an_exhausted_one` and
 `an_under_declared_row_bound_is_refused_and_an_honest_one_is_not` in
@@ -700,6 +700,14 @@ rather than a number. The same holds for a registry's own
 `rows_per_invocation`: a declaration of zero rows reports what the producer holds
 right now, and it too is read rather than obeyed.
 
+**A provider's revision is a promise.** Admission decides whether a plan's
+evidence is still in force by comparing the provider-minted `revision` string it
+recorded against the one the environment reports now. That comparison is the only
+thing standing between a stored plan and a silent replan, so a provider **must**
+advance its revision whenever any answer it would give changes. A provider whose
+numbers move under an unchanged revision is admitted, and the plan then reads at a
+depth the current data does not support — with nothing anywhere reporting it.
+
 **The failure it prevents.** A depth of zero compiles to `LIMIT 0`, which hands
 back no row whatever the relation holds, and the trailer still reports the stratum
 exhausted with zero rows — the one ending that names no stopper, made about the
@@ -757,6 +765,26 @@ shipped `TextSearchRelation` by
 `tests/real_producers.rs`, with
 `the_sole_text_producer_over_one_document_still_returns_that_document` as its
 valid neighbour.
+
+**And the option travels into the record.** The three places above are one rule
+about what a bound may *do*; this is the same distinction about what a plan
+*says*. A plan records every input each depth was derived from — the declaration,
+the cardinality, the applied selectivity with the request terms it aggregates
+over, and the licensed prefix — and each statistic is absent there exactly where
+the provider reported none. An unknown cardinality is not a zero one at the
+provider boundary, and it is not a zero one in the record either: writing one
+would put a measurement nobody took beside a depth, where
+[`Plan::certify`] would then recompute the depth
+from it and agree. The same holds for the declaration, for the reason the
+paragraph above gives — inventing a zero for a producer that declared nothing
+would refuse a plan the registry never spoke against — so the layer refuses that
+state by name rather than defaulting it. Pinned by
+`a_selectivity_only_stratum_is_recorded_and_narrows_the_depth`,
+`a_consulted_but_silent_stratum_records_both_statistics_absent` and
+`an_undeclared_row_bound_is_not_a_declaration_of_zero_rows`, with
+`a_subject_the_provider_reports_but_nothing_consults_is_absent` as the valid
+neighbour that keeps the recording from widening into everything the provider
+knows.
 
 ## A13 — Attest the generation of the snapshot that answered
 

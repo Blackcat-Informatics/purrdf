@@ -226,6 +226,38 @@ def _emitted_limit(sparql: str) -> int:
     return int(found.group(1))
 
 
+def _emitted_limits(sparql: str) -> list[int]:
+    """EVERY row bound a compiled unit's text carries, in the order it writes them.
+
+    A unit bounds itself twice: the inner ``SELECT`` around the producer call
+    carries the planned depth, and the outer one carries it again. Only the
+    second is ``_emitted_limit``, and a test that reads only the second cannot
+    see the first go missing or go wrong — which is the bound that actually stops
+    the producer's read.
+
+    The two are the same number by construction, and that is exactly why the
+    substring they share is not a check: ``"LIMIT 2" in sparql`` stays true when
+    the inner one is dropped, because the outer one still spells it. Reading them
+    as a LIST makes their count and their positions observable, so an inner bound
+    that vanished, doubled or drifted is a different value and not a matching
+    substring.
+    """
+    return [int(found) for found in re.findall(r"LIMIT (\d+)", sparql)]
+
+
+def _producer_call(sparql: str) -> tuple[str, str]:
+    """The producer a compiled unit calls, and the argument list it hands it.
+
+    Read as a pair rather than asserted as two substrings, because a needle that
+    appears SOMEWHERE in the text is not a needle the producer was handed: a
+    build that rendered a request term into the wrong argument list, or into no
+    argument list at all, leaves every substring of the text where it was.
+    """
+    found = re.search(r"<([^<>]+)> \( ([^()]*) \)", sparql)
+    assert found is not None, f"a compiled unit calls one producer: {sparql!r}"
+    return found.group(1), found.group(2)
+
+
 def _ranking(answer: dict[str, Any]) -> list[tuple[str, str, tuple[Any, ...]]]:
     """An answer's rows, scores and provenance, as one comparable value."""
     return [
@@ -1419,11 +1451,179 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
         <= unbounded["stratum_depths"][NOTE_STRATUM]
     )
     # The plan records what it assumed, so a replay against moved statistics is
-    # a detectable condition rather than a silent replan.
-    assert unbounded["statistics"]["entries"] == []
+    # a detectable condition rather than a silent replan. The stratum a depth is
+    # derived for is recorded beside that depth, with everything it came from.
+    assert unbounded["stratum_derivations"][NOTE_STRATUM]["cardinality"] is None, (
+        "a provider that reported nothing is recorded as having reported nothing, "
+        "not omitted: a subject the plan does not name is one a replay cannot check"
+    )
+    assert bounded["stratum_derivations"][NOTE_STRATUM]["cardinality"] == 1
+    assert bounded["stratum_derivations"][NOTE_STRATUM]["cause"] == "cardinality"
+    assert unbounded["stratum_derivations"][NOTE_STRATUM]["cause"] == "declaration"
+
+    # The snapshot names every subject planning consulted: the request predicate,
+    # which derives no depth and about which this host says nothing, AND the
+    # stratum, whose row is the projection of the derivation above. The two rows
+    # differ in the cardinality, so a swap of the two -- the mis-mapping this
+    # assertion exists to catch -- fails on the number.
     assert bounded["statistics"]["entries"] == [
-        {"subject": NOTE_STRATUM, "cardinality": 1, "selectivity_ppm": None}
+        {
+            "subject": NOTE,
+            "cardinality": None,
+            "selectivity_ppm": None,
+            "selectivity_terms": [],
+        },
+        {
+            "subject": NOTE_STRATUM,
+            "cardinality": 1,
+            "selectivity_ppm": None,
+            "selectivity_terms": [],
+        },
     ]
+
+
+def test_a_selectivity_only_statistic_is_recorded_on_the_plan() -> None:
+    """A selectivity with no cardinality narrows the depth, so the plan records it.
+
+    This is the whole of the defect it pins: the depth moved and the evidence did
+    not, so a replay against moved statistics could derive a different depth with
+    nothing in the plan to compare against. All three facts are asserted
+    together, because each alone passes over a different bug -- the depth is what
+    a plan already got right, and the record alone would pass for a build that
+    recorded a statistic it never applied.
+    """
+    request = [_lexical("quick fox", NOTE)]
+    selectivity_only = {**STATISTICS, "selectivity": {(NOTE_STRATUM, 0): 0}}
+
+    planned = retrieval.plan(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=selectivity_only,
+        top_k=PLAN_TOP_K,
+    )
+    assert planned["stratum_depths"][NOTE_STRATUM] == 1, (
+        "a selectivity of zero narrows the read, floored at one probing row so "
+        "the producer is the thing that reports the emptiness"
+    )
+
+    derivation = planned["stratum_derivations"][NOTE_STRATUM]
+    assert derivation["selectivity_ppm"] == 0, (
+        "the statistic that narrowed the depth is the statistic recorded"
+    )
+    assert derivation["cardinality"] is None, (
+        "absent is not zero; the provider reported no cardinality at all"
+    )
+    assert derivation["selectivity_terms"] == [0]
+    assert derivation["cause"] == "floor"
+
+    # And the plan's own snapshot names that stratum, so a caller asking which
+    # statistics this was planned against is told about it without having to
+    # know that a depth happened to be derived for it. The cardinality is `None`
+    # -- absence, not the zero the selectivity beside it really is.
+    entries = {entry["subject"]: entry for entry in planned["statistics"]["entries"]}
+    assert entries[NOTE_STRATUM] == {
+        "subject": NOTE_STRATUM,
+        "cardinality": None,
+        "selectivity_ppm": 0,
+        "selectivity_terms": [0],
+    }, (
+        "a stratum consulted for a selectivity alone is named on the snapshot, "
+        "with the measurement it gave and the absence it did not"
+    )
+    assert entries[NOTE_STRATUM]["cardinality"] is None, (
+        "`None` and `0` are different facts, and this row carries one of each: "
+        "the host measured a selectivity of zero and no cardinality at all"
+    )
+    # The neighbour, in the same snapshot: the request predicate the host is
+    # equally silent about carries no selectivity either, so the `0` above is the
+    # stratum's own measurement rather than a value smeared across every row.
+    assert entries[NOTE] == {
+        "subject": NOTE,
+        "cardinality": None,
+        "selectivity_ppm": None,
+        "selectivity_terms": [],
+    }
+
+    compiled = retrieval.compile(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=selectivity_only,
+        top_k=PLAN_TOP_K,
+    )
+    unit = compiled["units"][0]
+    assert unit["depth"] == 1
+    # THE DEPTH-BEARING BOUNDS, both of them, read as values rather than as a
+    # substring. The unit writes its bound twice -- once around the producer call
+    # and once around the whole SELECT -- and the two are the same number by
+    # construction: the compiler derives each from the same depth, so no fixture
+    # can make them differ, and a host that reads a depth as an argument gets no
+    # inner LIMIT at all rather than a different one. That is precisely why
+    # `"LIMIT 2" in sparql` guarded nothing here: it is satisfied by the outer
+    # bound alone, so the INNER one -- the bound that stops the producer's read,
+    # which is the whole subject of this test -- could go missing under it.
+    assert _emitted_limits(unit["sparql"]) == [2, 2], (
+        "the planned depth of one, plus the one probe row, at BOTH bounds the "
+        f"unit writes: {unit['sparql']}"
+    )
+    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+        "one row past the planned depth, so a read this bound cuts is reported "
+        f"as such rather than as an exhausted stratum: {unit['sparql']}"
+    )
+
+    # THE CONTROL, and the reason the numbers above are an observation. A
+    # selectivity of half narrows the same three declared rows to two rather than
+    # to one, so the same producer over the same corpus emits a DIFFERENT pair of
+    # bounds. A build that had baked in a constant, or that emitted the
+    # declaration instead of the planned depth, agrees with one of these two rows
+    # and fails on the other.
+    narrowed = retrieval.compile(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "selectivity": {(NOTE_STRATUM, 0): 500_000}},
+        top_k=PLAN_TOP_K,
+    )["units"][0]
+    assert narrowed["depth"] == 2, (
+        "half of the three rows this producer declares, rounded up, is two"
+    )
+    assert narrowed["declared_rows"] == 3, (
+        "the declaration did not move between the two rows; the statistic did"
+    )
+    assert _emitted_limits(narrowed["sparql"]) == [3, 3], (
+        f"a different planned depth is a different emitted bound: {narrowed['sparql']}"
+    )
+
+
+def test_a_subject_the_host_reports_but_planning_never_consults_is_absent() -> None:
+    """A cardinality for a subject no depth is derived for stays out of the plan.
+
+    The control has an oracle: the host is willing to speak about the unconsulted
+    subject, so a build that recorded every subject it could reach rather than
+    every subject it asked about would name it. The consulted subject is asserted
+    present in the same test with a different value, so this cannot pass for a
+    plan that recorded nothing.
+    """
+    unconsulted = f"{EX}stratum/nobody-asks"
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={
+            **STATISTICS,
+            "cardinality": {NOTE_STRATUM: 3, unconsulted: 9999},
+        },
+        top_k=PLAN_TOP_K,
+    )
+
+    assert planned["stratum_derivations"][NOTE_STRATUM]["cardinality"] == 3, (
+        "the consulted subject carries its own value, not the other one"
+    )
+    assert unconsulted not in planned["stratum_derivations"]
+    assert all(
+        entry["subject"] != unconsulted for entry in planned["statistics"]["entries"]
+    ), "a subject planning never consulted is named nowhere"
 
 
 def test_compile_emits_the_sparql_each_stratum_runs() -> None:
@@ -1446,16 +1646,24 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
     units = compiled["units"]
     assert len(units) == 1
     assert units[0]["stratum"] == NOTE_STRATUM
-    assert '"quick fox"' in units[0]["sparql"], "the needle is a rendered constant"
-    assert f"<{NOTE_PRODUCER}>" in units[0]["sparql"], "the unit calls the bound producer"
+    # Read as a call rather than as two substrings: a needle that appears
+    # somewhere in the text is not a needle the producer was handed, and a term
+    # rendered into no argument list at all would leave both substrings where
+    # they were.
+    producer, arguments = _producer_call(units[0]["sparql"])
+    assert producer == NOTE_PRODUCER, "the unit calls the bound producer"
+    assert '"quick fox"' in arguments, (
+        f"the needle is rendered into that producer's own arguments: {arguments!r}"
+    )
     depth = units[0]["depth"]
     assert isinstance(depth, int) and depth >= 1, (
         "the reportable bound travels with the text it bounds"
     )
-    assert _emitted_limit(units[0]["sparql"]) == depth + 1, (
-        "the emitted bound is the depth plus the one probe row, at every depth: a "
-        "text bounded at exactly the depth could not tell an exhausted producer "
-        "from a read the depth cut short"
+    assert _emitted_limits(units[0]["sparql"]) == [depth + 1, depth + 1], (
+        "the emitted bound is the depth plus the one probe row, at every depth "
+        "and at BOTH bounds the unit writes: a text bounded at exactly the depth "
+        "could not tell an exhausted producer from a read the depth cut short, "
+        "and an inner bound nothing reads is an inner bound nothing checks"
     )
     assert compiled["plan_id"] == compiled["plan"]["plan_id"]
     assert compiled["planned_resolution"] == {}, (
@@ -1492,9 +1700,10 @@ def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> No
         "the room the probe row needs, read off the declaration the unit carries: "
         f"declared {unit['declared_rows']}, depth {unit['depth']}"
     )
-    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+    assert _emitted_limits(unit["sparql"]) == [unit["depth"] + 1, unit["depth"] + 1], (
         "the extra row is the probe, and a host that runs this text reports "
-        "only the first `depth` rows"
+        "only the first `depth` rows -- at both bounds, since the inner one is "
+        "what actually stops the producer's read"
     )
 
 
@@ -1546,9 +1755,10 @@ def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> N
         "the producer's whole declared row bound and there is no room under it — "
         f"declared {unit['declared_rows']}, depth {unit['depth']}"
     )
-    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+    assert _emitted_limits(unit["sparql"]) == [unit["depth"] + 1, unit["depth"] + 1], (
         "the probe slot exists even on the declaration, so exhaustion is checked "
-        "rather than assumed"
+        "rather than assumed -- and it exists at the inner bound too, which is "
+        "the one a producer's read actually runs into"
     )
 
 
@@ -1579,7 +1789,11 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         planned["separates_to"] >= planned["requested_depth"]
     )
     # The units are still the units: asking what the plan costs did not run it.
-    assert f"<{NOTE_PRODUCER}>" in compiled["units"][0]["sparql"]
+    called, handed = _producer_call(compiled["units"][0]["sparql"])
+    assert called == NOTE_PRODUCER
+    assert '"quick fox"' in handed, (
+        f"and the request term is still in the call's own arguments: {handed!r}"
+    )
 
     # The neighbouring case that is NOT fully separated, derived rather than
     # guessed: `weight_for_depth` reports the TRUE minimum weight that still
@@ -3168,3 +3382,669 @@ def test_a_several_block_declaration_is_refused_where_it_is_registered() -> None
     )
     assert unrestricted["domains"] == {NOTE_STRATUM: None}
     assert _ranking(unrestricted) == _ranking(restricted)
+
+
+# ── the plan document: a plan that leaves the process and comes back ─────────
+#
+# `plan(...)["canonical_bytes"]` is the plan's canonical, length-framed encoding
+# — the bytes `"plan_id"` is the digest of — and `retrieval.certify_plan` is what
+# reads one back in. The pair is what makes a recorded depth a CHECKABLE claim
+# rather than an asserted one: the plan records every input its depths were
+# derived from, so a document that arrives from somewhere a host does not control
+# can have its arithmetic re-run against its own evidence.
+#
+# The tests below tamper with real documents. That is the only way to exercise
+# the check at all: a freshly planned plan derives its own depths by
+# construction, so certifying one re-proves a tautology and would pass over a
+# `certify` that did nothing.
+
+# The measured cardinality every plan-document fixture is planned under.
+#
+# It is load-bearing, not decoration. It makes each stratum's recorded DEPTH (2)
+# differ from its recorded DECLARATION (3), and those two numbers sit in adjacent
+# sections of the encoding under the same stratum key. Planned without it the
+# two are equal, the four-byte depth and the low half of the eight-byte
+# declaration read the same, and a splice aiming at one would be editing whichever
+# came first. `_splice` asserts the target is unique rather than trusting this
+# note.
+PLAN_DOCUMENT_STATISTICS: dict[str, Any] = {
+    **STATISTICS,
+    "cardinality": {NOTE_STRATUM: 2},
+}
+
+
+def _framed(text: str) -> bytes:
+    """One length-framed UTF-8 string, as the canonical writer writes it."""
+    encoded = text.encode()
+    return len(encoded).to_bytes(8, "little") + encoded
+
+
+def _splice(document: bytes, old: bytes, new: bytes, what: str) -> bytes:
+    """``document`` with its one occurrence of ``old`` replaced by ``new``.
+
+    The uniqueness assertion is the test's own oracle. These splices address a
+    field by the bytes around it rather than by a computed offset, so a fixture
+    that made the pattern ambiguous -- or an encoding change that moved it --
+    fails here, naming the field, instead of quietly editing a neighbouring one
+    and asserting a refusal that came from the wrong place.
+    """
+    found = document.count(old)
+    assert found == 1, (
+        f"the {what} must appear exactly once in the document for this splice to "
+        f"be addressing it, and it appears {found} time(s)"
+    )
+    return document.replace(old, new)
+
+
+def _depth_entry(stratum: str, depth: int) -> bytes:
+    """One entry of the per-stratum depths section: the key, then its 32-bit depth."""
+    return _framed(stratum) + depth.to_bytes(4, "little")
+
+
+def _snapshot_row(subject: str, cardinality: int) -> bytes:
+    """One statistics-snapshot row: a measured cardinality, no selectivity.
+
+    The shape the fixtures below produce: a present cardinality, an absent
+    selectivity, and an empty term domain. Absence is a discriminant byte rather
+    than a sentinel, because every ``u64`` is a legal measurement.
+    """
+    return (
+        _framed(subject)
+        + b"\x01"
+        + cardinality.to_bytes(8, "little")
+        + b"\x00"
+        + (0).to_bytes(8, "little")
+    )
+
+
+def _one_stratum_document() -> tuple[dict[str, Any], bytes]:
+    """A planned one-stratum plan and its canonical bytes."""
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=PLAN_DOCUMENT_STATISTICS,
+        top_k=PLAN_TOP_K,
+    )
+    assert planned["stratum_depths"] == {NOTE_STRATUM: 2}
+    assert planned["stratum_derivations"][NOTE_STRATUM]["declared"] == 3, (
+        "the depth and the declaration must differ, or the splices below cannot "
+        "tell which of the two they are addressing"
+    )
+    return planned, planned["canonical_bytes"]
+
+
+def _two_stratum_document() -> tuple[dict[str, Any], bytes]:
+    """A planned two-stratum plan and its canonical bytes.
+
+    Two strata are what makes an ORDER exist to break. The keyed sections of the
+    encoding carry one entry each here, and a single-entry section is ascending
+    however it is written.
+    """
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
+        text_producers=BOTH,
+        statistics=PLAN_DOCUMENT_STATISTICS,
+        top_k=PLAN_TOP_K,
+    )
+    assert planned["stratum_depths"] == {NOTE_STRATUM: 2, TITLE_STRATUM: 3}
+    return planned, planned["canonical_bytes"]
+
+
+def _depths_section(planned: dict[str, Any]) -> bytes:
+    """The whole two-entry depths section: the count, then both entries ascending."""
+    return (
+        (2).to_bytes(8, "little")
+        + _depth_entry(NOTE_STRATUM, planned["stratum_depths"][NOTE_STRATUM])
+        + _depth_entry(TITLE_STRATUM, planned["stratum_depths"][TITLE_STRATUM])
+    )
+
+
+def test_a_planned_plan_round_trips_through_its_canonical_bytes() -> None:
+    """The valid neighbour every refusal below is measured against.
+
+    A document this surface produced decodes, certifies, and renders EQUAL to the
+    plan it came from -- identity, depths, derivations, snapshot and all. Without
+    this the refusals prove nothing: a `certify_plan` that refused every document
+    would pass every one of them, and a round trip that lost a field would make
+    the refusals look like strictness rather than breakage.
+    """
+    planned, document = _one_stratum_document()
+    assert isinstance(document, bytes)
+
+    received = retrieval.certify_plan(document)
+    assert received == planned, (
+        "the decoded plan renders exactly as the plan it was encoded from; a "
+        "field that did not survive the round trip would show up here"
+    )
+    assert received["canonical_bytes"] == document, (
+        "and re-encoding the decoded plan reproduces the document byte for byte, "
+        "which is what makes `plan_id` the digest of the bytes in hand"
+    )
+    assert received["plan_id"] == planned["plan_id"]
+
+
+def test_a_tampered_depth_is_refused_as_not_derivable() -> None:
+    """A depth edited away from its own recorded inputs is refused BY NAME.
+
+    This is what the record exists for. The document's recorded inputs derive a
+    depth of 2; the splice rewrites the recorded depth to 3 and changes nothing
+    else, so the plan now claims a read one row deeper than its own evidence
+    licenses. Nothing about the document is malformed -- it decodes -- and the
+    refusal comes from re-running the planner's arithmetic over the plan's own
+    numbers.
+
+    The control is the untampered document, which certifies in the test above and
+    is asserted to differ from this one here, so a splice that silently did
+    nothing could not pass.
+    """
+    _planned, document = _one_stratum_document()
+    forged = _splice(
+        document,
+        _depth_entry(NOTE_STRATUM, 2),
+        _depth_entry(NOTE_STRATUM, 3),
+        "recorded depth",
+    )
+    assert forged != document, "the splice must actually have edited the document"
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(forged)
+    assert refused.value.refusal == "depth-not-derivable"
+    assert "records depth 3" in str(refused.value)
+    assert "derive depth 2" in str(refused.value)
+
+    # And the neighbour that must still be admitted: the same document, unedited.
+    assert retrieval.certify_plan(document)["stratum_depths"] == {NOTE_STRATUM: 2}
+
+
+def test_a_document_written_under_another_layout_is_refused_by_version() -> None:
+    """A version this build does not write is refused rather than reinterpreted."""
+    _planned, document = _one_stratum_document()
+    assert document[:2] == (4).to_bytes(2, "little"), (
+        "the fixture's own header, read rather than assumed: the splice below "
+        "moves it to a version this build does not write"
+    )
+    older = (3).to_bytes(2, "little") + document[2:]
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(older)
+    assert refused.value.refusal == "version"
+    assert "version 3" in str(refused.value)
+
+    # The neighbour: the same bytes under the header this build does write.
+    assert retrieval.certify_plan(document)["version"] == 4
+
+
+def test_a_snapshot_row_contradicting_its_derivation_is_refused() -> None:
+    """A stratum's two records of one measurement must agree.
+
+    The snapshot row is written as a projection of the derivation, so they agree
+    in any plan this surface emitted. The splice moves the SNAPSHOT's cardinality
+    and leaves the derivation alone, which is why the depth still derives: the
+    document is refused for the disagreement itself and not for an arithmetic
+    that stopped working.
+    """
+    _planned, document = _one_stratum_document()
+    forged = _splice(
+        document,
+        _snapshot_row(NOTE_STRATUM, 2),
+        _snapshot_row(NOTE_STRATUM, 7),
+        "snapshot row for the stratum",
+    )
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(forged)
+    assert refused.value.refusal == "statistics-entry-contradicts-derivation"
+    assert "cardinality 7" in str(refused.value)
+
+    # The neighbour: the untouched row, whose two records say the same number.
+    entries = {
+        entry["subject"]: entry
+        for entry in retrieval.certify_plan(document)["statistics"]["entries"]
+    }
+    assert entries[NOTE_STRATUM]["cardinality"] == 2
+
+
+def test_a_derivation_the_snapshot_does_not_name_is_refused() -> None:
+    """A depth derived for a stratum the snapshot omits is refused.
+
+    The splice renames the snapshot's row for the stratum to a subject of the same
+    length that still sorts after the request predicate beside it -- so the
+    document remains ascending and decodes, and the only thing wrong with it is
+    that the stratum a depth was derived for is now named nowhere in the evidence.
+    """
+    _planned, document = _one_stratum_document()
+    renamed = f"{EX}stratum/zote"
+    assert len(renamed) == len(NOTE_STRATUM) and renamed > NOTE, (
+        "the replacement subject keeps the snapshot ascending, so this document "
+        "is refused for the missing stratum rather than for an unordered section"
+    )
+    forged = _splice(
+        document,
+        _snapshot_row(NOTE_STRATUM, 2),
+        _snapshot_row(renamed, 2),
+        "snapshot row for the stratum",
+    )
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(forged)
+    assert refused.value.refusal == "derivation-without-statistics-entry"
+    assert NOTE_STRATUM in str(refused.value)
+
+    # The neighbour: the same document with the stratum named, which certifies.
+    assert any(
+        entry["subject"] == NOTE_STRATUM
+        for entry in retrieval.certify_plan(document)["statistics"]["entries"]
+    )
+
+
+def _silent_snapshot_row(subject: str) -> bytes:
+    """One snapshot row for a subject the provider said nothing about.
+
+    Both measurements absent and an empty term domain -- the shape a request
+    predicate gets from a host that reports only about strata.
+    """
+    return _framed(subject) + b"\x00" + b"\x00" + (0).to_bytes(8, "little")
+
+
+def test_a_snapshot_row_for_a_subject_nothing_consulted_is_refused() -> None:
+    """A snapshot names the subjects planning consulted, and no others.
+
+    The mirror of the test above, and the direction a forger would use: a row can
+    be ADDED as easily as removed, and the plan then reads back as evidence about
+    a consultation that never happened. The splice renames the request
+    predicate's row to a subject of the same length that still sorts before the
+    stratum beside it -- so the document remains ascending and decodes, and the
+    only thing wrong with it is that nothing in this plan ever asked about the
+    subject it now names.
+
+    The over-refusal guard runs on a wider fixture: two strata and two request
+    predicates, four rows of both legitimate kinds, all of which certify. A rule
+    tighter than "every stratum, plus every request-term predicate" would reject
+    rows the planner itself writes.
+    """
+    _planned, document = _one_stratum_document()
+    renamed = f"{EX}aote"
+    assert len(renamed) == len(NOTE) and renamed < NOTE_STRATUM, (
+        "the replacement subject keeps the snapshot ascending, so this document "
+        "is refused for the unconsulted subject rather than for an unordered section"
+    )
+    forged = _splice(
+        document,
+        _silent_snapshot_row(NOTE),
+        _silent_snapshot_row(renamed),
+        "snapshot row for the request predicate",
+    )
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(forged)
+    assert refused.value.refusal == "unconsulted-statistics-subject"
+    assert renamed in str(refused.value)
+
+    # The neighbour, on the same document: the row under the predicate this
+    # request actually names, which certifies.
+    subjects = [
+        entry["subject"]
+        for entry in retrieval.certify_plan(document)["statistics"]["entries"]
+    ]
+    assert subjects == [NOTE, NOTE_STRATUM], (
+        "one row for the request's predicate and one for the stratum a depth was "
+        "derived for -- one of each kind of consultation"
+    )
+
+    # The wider neighbour: two strata and two predicates, every one of them a
+    # legitimate row, certified together.
+    _wider, two_terms = _two_term_selectivity_document()
+    assert sorted(
+        entry["subject"]
+        for entry in retrieval.certify_plan(two_terms)["statistics"]["entries"]
+    ) == sorted([NOTE, NOTE_STRATUM, TITLE, TITLE_STRATUM])
+
+
+def test_a_section_that_does_not_ascend_is_refused() -> None:
+    """A keyed section out of order is not an encoding of any plan.
+
+    The two depth entries are swapped and nothing else is touched, so the
+    document describes exactly the plan it did before -- which is the point. A
+    decoder that accepted it would admit as many distinct encodings of one plan
+    as the section has permutations, each digesting to that plan's single id.
+    """
+    planned, document = _two_stratum_document()
+    section = _depths_section(planned)
+    descending = (
+        (2).to_bytes(8, "little")
+        + _depth_entry(TITLE_STRATUM, planned["stratum_depths"][TITLE_STRATUM])
+        + _depth_entry(NOTE_STRATUM, planned["stratum_depths"][NOTE_STRATUM])
+    )
+    forged = _splice(document, section, descending, "per-stratum depths section")
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(forged)
+    assert refused.value.refusal == "non-ascending-keys"
+    assert "stratum depth" in str(refused.value)
+
+    # The neighbour: the ascending original, which carries the same two depths.
+    assert retrieval.certify_plan(document)["stratum_depths"] == {
+        NOTE_STRATUM: 2,
+        TITLE_STRATUM: 3,
+    }
+
+
+def _selectivity_run(terms: list[int]) -> bytes:
+    """One length-framed run of 32-bit request-term indices."""
+    return len(terms).to_bytes(8, "little") + b"".join(
+        term.to_bytes(4, "little") for term in terms
+    )
+
+
+def _derivation_head(
+    stratum: str, declared: int, selectivity_ppm: int, terms: list[int]
+) -> bytes:
+    """A derivation record up to and including its selectivity-term run.
+
+    Stops at the run rather than spanning the whole record, so the splices below
+    do not have to spell the licensed prefix that follows it. It still begins
+    with the stratum key and the declaration, which is what tells it apart from
+    the snapshot row for the same stratum -- the row carries no declaration.
+    """
+    return (
+        _framed(stratum)
+        + declared.to_bytes(8, "little")
+        + b"\x00"
+        + b"\x01"
+        + selectivity_ppm.to_bytes(8, "little")
+        + _selectivity_run(terms)
+    )
+
+
+def _selective_snapshot_row(
+    subject: str, selectivity_ppm: int, terms: list[int]
+) -> bytes:
+    """One snapshot row: no cardinality, a measured selectivity, and its domain."""
+    return (
+        _framed(subject)
+        + b"\x00"
+        + b"\x01"
+        + selectivity_ppm.to_bytes(8, "little")
+        + _selectivity_run(terms)
+    )
+
+
+def _selective_one_stratum_document() -> tuple[dict[str, Any], bytes]:
+    """A one-term plan whose stratum records a selectivity over term 0.
+
+    One request term, so index 0 is the ONLY index that addresses this request --
+    which is what makes the forge below a term that names nothing rather than a
+    term that names another one.
+    """
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "selectivity": {(NOTE_STRATUM, 0): 500_000}},
+        top_k=PLAN_TOP_K,
+    )
+    assert [binding["request_terms"] for binding in planned["producer_bindings"]] == [
+        [0]
+    ], "one term, so index 0 is the only index this request has"
+    assert planned["stratum_derivations"][NOTE_STRATUM]["selectivity_terms"] == [0]
+    return planned, planned["canonical_bytes"]
+
+
+def _two_term_selectivity_document() -> tuple[dict[str, Any], bytes]:
+    """A two-term plan whose request predicate aggregates over BOTH terms.
+
+    A run of two indices is what makes an ORDER exist to break: a run of one is
+    ascending however it is written. The row is the note PREDICATE's, which
+    derives no depth -- so a forge of its run is refused for the run itself
+    rather than for disagreeing with a derivation it does not have.
+    """
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
+        text_producers=BOTH,
+        statistics={**STATISTICS, "selectivity": {(NOTE, 0): 100_000, (NOTE, 1): 200_000}},
+        top_k=PLAN_TOP_K,
+    )
+    assert sorted(
+        binding["request_terms"] for binding in planned["producer_bindings"]
+    ) == [[0], [1]], "two terms, so indices 0 and 1 address this request and 2 does not"
+    entries = {entry["subject"]: entry for entry in planned["statistics"]["entries"]}
+    assert entries[NOTE]["selectivity_terms"] == [0, 1]
+    assert entries[NOTE]["selectivity_ppm"] == 300_000, (
+        "the aggregate is the SUM of the two terms the host answered for, which "
+        "is the number the run beside it is the domain of"
+    )
+    return planned, planned["canonical_bytes"]
+
+
+def test_a_selectivity_domain_that_addresses_no_request_term_is_refused() -> None:
+    """A recorded selectivity domain indexes the plan's OWN request, or nothing.
+
+    The run says which request terms a selectivity aggregate was summed over. An
+    index past the end of the request names no term at all, so the aggregate's
+    domain becomes unreadable and the record that exists to make the sum
+    checkable stops being one. The forge moves the index in BOTH of the plan's
+    records of it, so the document is refused for the index rather than for the
+    two records disagreeing.
+
+    The over-refusal guard is the boundary: this request carries one term, so 0
+    addresses it and 1 does not, and both are executed. The empty run -- what a
+    subject nothing contributed a selectivity to records -- is asserted legal in
+    the same test, because a rule that refused a run field rather than an
+    unaddressable index would take every plan the planner writes with it.
+    """
+    planned, document = _selective_one_stratum_document()
+    declared = planned["stratum_derivations"][NOTE_STRATUM]["declared"]
+
+    for forged_index in (1, 99):
+        forged = _splice(
+            document,
+            _derivation_head(NOTE_STRATUM, declared, 500_000, [0]),
+            _derivation_head(NOTE_STRATUM, declared, 500_000, [forged_index]),
+            "derivation's selectivity-term run",
+        )
+        forged = _splice(
+            forged,
+            _selective_snapshot_row(NOTE_STRATUM, 500_000, [0]),
+            _selective_snapshot_row(NOTE_STRATUM, 500_000, [forged_index]),
+            "snapshot row's selectivity-term run",
+        )
+        assert forged != document, "the splices must actually have edited the document"
+
+        with pytest.raises(retrieval.PlanDocumentError) as refused:
+            retrieval.certify_plan(forged)
+        assert refused.value.refusal == "selectivity-term-out-of-range"
+        assert f"selectivity term {forged_index}" in str(refused.value)
+        assert "carries 1 request term(s)" in str(refused.value)
+
+    # The neighbour: the same document with the one index that DOES address this
+    # request, which certifies and arrives with its domain intact.
+    received = retrieval.certify_plan(document)
+    assert received["stratum_derivations"][NOTE_STRATUM]["selectivity_terms"] == [0]
+    entries = {entry["subject"]: entry for entry in received["statistics"]["entries"]}
+    assert entries[NOTE_STRATUM]["selectivity_terms"] == [0]
+
+    # And the empty run, which is what a subject no selectivity was reported for
+    # records. This document's every run is empty and it certifies untouched, so
+    # the refusals above are about the index and not about the field.
+    _empty, without_selectivity = _one_stratum_document()
+    certified = retrieval.certify_plan(without_selectivity)
+    assert all(
+        entry["selectivity_terms"] == []
+        for entry in certified["statistics"]["entries"]
+    )
+    assert certified["stratum_derivations"][NOTE_STRATUM]["selectivity_terms"] == []
+
+
+def test_a_selectivity_domain_out_of_order_or_repeated_is_refused() -> None:
+    """A selectivity domain is a SET, so its encoding ascends and never repeats.
+
+    The run is the domain of a sum, so `[1, 0]` states exactly what `[0, 1]`
+    states -- which is precisely why the order has to be required rather than
+    tolerated. Accepting both would give one plan two encodings, each digesting
+    to that plan's single id, and the identity a host compares would stop being a
+    function of the content. A repeat is the other clause: one term counted twice
+    into a total the arithmetic reached once.
+
+    Three forges and two neighbours over ONE fixture. The neighbours are a run
+    that is genuinely different from the control -- a single index, not the pair
+    -- so a decoder that had silently sorted or emptied the run could not pass
+    them.
+    """
+    planned, document = _two_term_selectivity_document()
+    honest = _selective_snapshot_row(NOTE, 300_000, [0, 1])
+
+    for run, refusal, fragment in (
+        ([1, 0], "non-ascending-selectivity-terms", "selectivity term 0 after 1"),
+        ([1, 1], "duplicate-selectivity-term", "selectivity term 1 twice"),
+        ([0, 2], "selectivity-term-out-of-range", "carries 2 request term(s)"),
+    ):
+        forged = _splice(
+            document,
+            honest,
+            _selective_snapshot_row(NOTE, 300_000, run),
+            "snapshot row's selectivity-term run",
+        )
+        with pytest.raises(retrieval.PlanDocumentError) as refused:
+            retrieval.certify_plan(forged)
+        assert refused.value.refusal == refusal, f"the run {run} is refused by name"
+        assert fragment in str(refused.value)
+        assert NOTE in str(refused.value), (
+            "and the refusal names the record that carries the run, since a plan "
+            "holds one per stratum and one per snapshot row"
+        )
+
+    # The neighbours, both over the same fixture. The first is a DIFFERENT run
+    # from the control -- ascending, distinct, and in range -- so it proves the
+    # decoder reads the run rather than waving a known pattern through.
+    narrowed = _splice(
+        document,
+        honest,
+        _selective_snapshot_row(NOTE, 300_000, [1]),
+        "snapshot row's selectivity-term run",
+    )
+    entries = {
+        entry["subject"]: entry
+        for entry in retrieval.certify_plan(narrowed)["statistics"]["entries"]
+    }
+    assert entries[NOTE]["selectivity_terms"] == [1], (
+        "an ascending, addressable run arrives exactly as it was written"
+    )
+
+    # The second is the untouched document, whose run is the pair.
+    received = retrieval.certify_plan(document)
+    assert received == planned
+    entries = {entry["subject"]: entry for entry in received["statistics"]["entries"]}
+    assert entries[NOTE]["selectivity_terms"] == [0, 1]
+
+
+def test_a_stratum_recorded_twice_in_the_depths_is_refused() -> None:
+    """Two depths for one stratum are two answers to one question.
+
+    Refused rather than resolved: the map this section fills would silently keep
+    whichever arrived last, which is exactly how a forged document would choose
+    its own depth. The splice writes the note stratum's entry twice in place of
+    the ascending pair, so the count the section declares still matches what it
+    carries and the only thing wrong with it is the repeat.
+    """
+    planned, document = _two_stratum_document()
+    entry = _depth_entry(NOTE_STRATUM, planned["stratum_depths"][NOTE_STRATUM])
+    forged = _splice(
+        document,
+        _depths_section(planned),
+        (2).to_bytes(8, "little") + entry + entry,
+        "per-stratum depths section",
+    )
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(forged)
+    assert refused.value.refusal == "duplicate-stratum-depth"
+    assert NOTE_STRATUM in str(refused.value)
+
+    # The neighbour: the section naming each stratum once, which certifies.
+    assert sorted(retrieval.certify_plan(document)["stratum_depths"]) == sorted(
+        [NOTE_STRATUM, TITLE_STRATUM]
+    )
+
+
+def test_explain_depth_names_the_leg_that_bound_a_received_depth() -> None:
+    """A host can ask which input bound a stratum's depth on a plan it received.
+
+    The answer is read off the DOCUMENT rather than off the dict that produced it,
+    which is the whole question: a host holding bytes someone else sent has no
+    dict. It is the same closed vocabulary the plan renders under `"cause"`, from
+    the same engine call, so the two are asserted to agree -- and the fixture
+    makes them a real measurement by planning a cardinality that is narrower than
+    the declaration, so a build that answered `"declaration"` for everything would
+    fail here.
+    """
+    planned, document = _one_stratum_document()
+    assert retrieval.explain_depth(document, NOTE_STRATUM) == "cardinality"
+    assert (
+        retrieval.explain_depth(document, NOTE_STRATUM)
+        == planned["stratum_derivations"][NOTE_STRATUM]["cause"]
+    )
+
+    # A stratum this plan derives no depth for has no explanation, and says so
+    # rather than naming a leg of a derivation that never ran.
+    assert retrieval.explain_depth(document, f"{EX}stratum/nobody-asks") is None
+
+    # The control that makes the first assertion an observation rather than a
+    # constant: the same corpus planned with no cardinality at all derives its
+    # depth from the declaration, and the answer moves with it.
+    unmeasured = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+        top_k=PLAN_TOP_K,
+    )
+    assert (
+        retrieval.explain_depth(unmeasured["canonical_bytes"], NOTE_STRATUM)
+        == "declaration"
+    )
+
+
+def test_explain_depth_refuses_a_stratum_that_is_not_an_iri() -> None:
+    """The label is parsed, not trusted, and the refusal says which dimension failed."""
+    _planned, document = _one_stratum_document()
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.explain_depth(document, "not an iri")
+    assert refused.value.refusal == "invalid-iri"
+
+    # The neighbour: a well-formed IRI on the same document still answers.
+    assert retrieval.explain_depth(document, NOTE_STRATUM) == "cardinality"
+
+
+def test_a_compiled_plans_document_is_the_document_of_the_admitted_plan() -> None:
+    """`compile` hands out the same plan document, for the plan it admitted.
+
+    A host that compiled can store or certify the document without planning
+    again, and the document it stores is the one the emitted units were compiled
+    from. Both identities are asserted, because either alone would pass for a
+    stage that rendered someone else's plan under the right digest: `"plan_id"`
+    on the answer is the ADMITTED plan's, and the document must digest to it.
+
+    The identities are compared within one call. Two calls plan against two
+    registries, and the registry a plan was planned against is part of what a
+    plan IS -- two registries that declare byte-identical contents can still
+    register one IRI to two implementations that answer differently -- so two
+    documents from two calls are not expected to be the same document.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=PLAN_DOCUMENT_STATISTICS,
+        top_k=PLAN_TOP_K,
+    )
+    document = compiled["plan"]["canonical_bytes"]
+    assert compiled["plan"]["plan_id"] == compiled["plan_id"]
+
+    received = retrieval.certify_plan(document)
+    assert received == compiled["plan"]
+    # The oracle that keeps this from passing over an empty document: the depth
+    # the certified plan records is the depth the compiled unit was keyed to.
+    assert received["stratum_depths"][NOTE_STRATUM] == compiled["units"][0]["depth"]

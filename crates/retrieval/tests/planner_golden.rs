@@ -13,8 +13,9 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Iri, Metric, Plan, PlanError, RankFidelity, RegistryId, RejectionReason, RequestTerm,
-    RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, plan,
+    DepthCause, DepthInputs, Iri, Metric, Plan, PlanError, RankFidelity, RegistryId,
+    RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, TopK, UnservedReason,
+    UnservedTerm, depth_cause, depth_from, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -239,6 +240,89 @@ fn mixed_registry() -> PropertyFunctionRegistry {
     registry
 }
 
+/// Four strata whose statistics land in four different cells of the recording
+/// law, plus the request's own predicate.
+///
+/// `mixed_registry` cannot express this: a selectivity bounds a stratum only
+/// where that stratum's producer actually **receives** the term, so the two
+/// strata a selectivity is asserted over here declare placing patterns, while
+/// the two it must not reach are catch-alls that receive nothing.
+///
+/// Declared row counts are distinct and are chosen so the four derived depths
+/// are distinct too (25, 30, 100, 50). A test that mis-maps one stratum's record
+/// onto another therefore fails on the number rather than passing on a
+/// coincidence.
+fn transcript_registry() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    let literal_pattern = TermPattern {
+        kind: TermKind::Literal,
+        datatype: None,
+        language: Some("en".to_owned()),
+        predicate: Some(ex("body")),
+    };
+    for (name, stratum, patterns, rows) in [
+        // Receives the lexical term, so a selectivity reported for it applies.
+        (
+            ex("pf/t-selective"),
+            ex("transcript/selectivity-only"),
+            vec![literal_pattern],
+            100_u64,
+        ),
+        // Receives the seed term, so a selectivity reported for it applies.
+        (
+            ex("pf/t-both"),
+            ex("transcript/both"),
+            vec![TermPattern::of_kind(TermKind::Iri)],
+            200,
+        ),
+        // Catch-alls: matched by everything, receiving nothing, so no
+        // selectivity can bound them and only a cardinality can.
+        (
+            ex("pf/t-counted"),
+            ex("transcript/cardinality-only"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            500,
+        ),
+        (
+            ex("pf/t-silent"),
+            ex("transcript/silent"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            50,
+        ),
+    ] {
+        registry.register_ranked(name, relation(rows), ranked(&stratum, patterns, false));
+    }
+    registry
+}
+
+/// The provider for [`transcript_registry`], reporting a different combination
+/// for each stratum — and one cardinality for a subject nothing consults.
+///
+/// That last row is the control. `never/consulted` is neither a stratum nor a
+/// request predicate, so the provider is *willing* to speak about it and the
+/// plan must still not name it. Without a subject the provider answers for, a
+/// test asserting absence cannot tell "correctly not consulted" from "recorded
+/// nothing at all".
+fn transcript_statistics() -> MockStatistics {
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&ex("transcript/cardinality-only")), 100);
+    cardinalities.insert(iri(&ex("transcript/both")), 100);
+    cardinalities.insert(iri(&ex("never/consulted")), 9_999);
+    MockStatistics {
+        source: "transcript-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+        selectivities: vec![
+            (
+                iri(&ex("transcript/selectivity-only")),
+                lexical_term(),
+                250_000,
+            ),
+            (iri(&ex("transcript/both")), seed_term(), 300_000),
+        ],
+    }
+}
+
 /// The mock statistics: cardinalities for the strata and the request predicate,
 /// and one reported selectivity.
 fn fixture_statistics() -> MockStatistics {
@@ -395,12 +479,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "42c4b236c3a0a0b5c3e81f34865a0d47925477aa85ef9b0205cb47469c7bf6a2";
+    "a208c3b5fa55e6a374a2530c1368a652aa1d64edadedbb95c2caab8d9e37312b";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "332e0510f4a7fc446a9b51c9a51f21c43ef2cb509f0cda5cc84a30d53b5fbf70";
+    "ae44005737dd7d7cbfc1c70b4c8df081d04e4247c9442f2078515c3f12e9b7ac";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -427,6 +511,32 @@ fn depths_of(plan: &Plan) -> BTreeMap<String, u32> {
     plan.stratum_depths
         .iter()
         .map(|(stratum, depth)| (stratum.as_str().to_owned(), *depth))
+        .collect()
+}
+
+/// One statistics-snapshot row as plain data: the subject, the reported
+/// cardinality, the aggregate selectivity in parts per million, and the request
+/// terms that aggregate came from.
+type SnapshotRow = (String, Option<u64>, Option<u64>, Vec<u32>);
+
+/// A plan's statistics snapshot as plain tuples, in the recorded order.
+///
+/// Compared whole rather than key by key, for the reason [`depths_of`] is: an
+/// *extra* row is a subject the plan claims to have consulted and did not, and a
+/// per-key assertion would never see it. The tuple carries every field a row has,
+/// so a value mapped onto the wrong subject fails on the number.
+fn entries_of(plan: &Plan) -> Vec<SnapshotRow> {
+    plan.statistics_snapshot
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.subject.clone(),
+                entry.cardinality,
+                entry.selectivity_ppm,
+                entry.selectivity_terms.clone(),
+            )
+        })
         .collect()
 }
 
@@ -1075,7 +1185,8 @@ fn an_interval_predicate_reaches_the_statistics_snapshot() {
             .iter()
             .find(|entry| entry.subject == ex("body"))
             .map(|entry| entry.cardinality),
-        Some(500)
+        Some(Some(500)),
+        "the predicate is named, and the provider's cardinality for it is recorded"
     );
 }
 
@@ -1178,12 +1289,10 @@ fn depths_come_from_the_registry_row_bound_capped_by_statistics() {
         (ex("stratum/graph"), 50),
     ] {
         assert_eq!(
-            plan.statistics_snapshot
-                .entries
-                .iter()
-                .find(|entry| entry.subject == stratum)
-                .map(|entry| entry.cardinality),
-            Some(cardinality),
+            plan.stratum_derivations
+                .get(&iri(&stratum))
+                .map(|inputs| inputs.cardinality),
+            Some(Some(cardinality)),
             "the recorded cardinality is the statistic planning consulted"
         );
     }
@@ -1295,7 +1404,7 @@ fn the_snapshot_records_the_consulted_selectivity() {
         .iter()
         .find(|entry| entry.subject == ex("body"))
         .expect("the request predicate is recorded");
-    assert_eq!(body.cardinality, 500);
+    assert_eq!(body.cardinality, Some(500));
     assert_eq!(body.selectivity_ppm, Some(500_000));
     assert_eq!(plan.statistics_snapshot.source, "example-statistics");
     assert_eq!(plan.statistics_snapshot.revision, "r1");
@@ -1343,17 +1452,32 @@ fn a_reported_stratum_selectivity_bounds_that_stratum_and_only_that_stratum() {
         "a provider that measured no selectivity narrows nothing"
     );
 
-    // The snapshot explains the depth rather than reporting a second number:
-    // the value that narrowed the stratum is the value recorded beside it.
+    // The record explains the depth rather than reporting a second number: the
+    // value that narrowed the stratum is the value recorded beside it, and the
+    // depth is recomputable from it.
+    let inputs = narrowed
+        .stratum_derivations
+        .get(&iri(&ex("stratum/text")))
+        .expect("the narrowed stratum records its derivation");
+    assert_eq!(inputs.selectivity_ppm, Some(250_000));
     assert_eq!(
-        narrowed
-            .statistics_snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.subject == ex("stratum/text"))
-            .and_then(|entry| entry.selectivity_ppm),
-        Some(250_000)
+        inputs.selectivity_terms,
+        vec![0],
+        "the aggregate names the one term it came from"
     );
+    narrowed.certify().expect("the plan derives its own depths");
+
+    // The stratum the provider said nothing about records the silence rather
+    // than a number, and still certifies.
+    let untouched_inputs = narrowed
+        .stratum_derivations
+        .get(&iri(&ex("stratum/universal")))
+        .expect("the untouched stratum records its derivation too");
+    assert_eq!(untouched_inputs.selectivity_ppm, None);
+    assert_eq!(untouched_inputs.selectivity_terms, [] as [u32; 0]);
+    untouched
+        .certify()
+        .expect("the plan derives its own depths");
 }
 
 /// The bound is rounded up and clamped at unity, because the failure mode of
@@ -1399,18 +1523,27 @@ fn a_selectivity_rounds_up_and_never_raises_a_declared_depth() {
         1
     );
 
-    // The snapshot still records what the provider actually said. The floor is
-    // the planner's decision about the depth, not an edit of the measurement.
+    // The record still holds what the provider actually said. The floor is the
+    // planner's decision about the depth, not an edit of the measurement — so a
+    // recorded zero beside a depth of one is the honest pair, and `certify`
+    // agrees because the floor is part of the one arithmetic path.
+    let floored = plan(&lexical_request(), &mixed_registry(), &none).expect("plans");
     assert_eq!(
-        plan(&lexical_request(), &mixed_registry(), &none)
-            .expect("plans")
-            .statistics_snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.subject == ex("stratum/text"))
-            .and_then(|entry| entry.selectivity_ppm),
+        floored
+            .stratum_derivations
+            .get(&iri(&ex("stratum/text")))
+            .and_then(|inputs| inputs.selectivity_ppm),
         Some(0),
         "the provider reported zero and the plan says so"
+    );
+    floored
+        .certify()
+        .expect("a floored depth is still derivable from its own inputs");
+    assert_eq!(
+        floored.explain_depth(&iri(&ex("stratum/text"))),
+        Some(DepthCause::Floor),
+        "a depth of one that came from the floor says so, rather than looking like \
+         a declaration of one row"
     );
 }
 
@@ -1435,16 +1568,24 @@ fn selectivities_across_the_terms_one_stratum_receives_are_summed() {
         140,
         "seven tenths of the 200-row bound, not the three tenths the most selective term names"
     );
+    let inputs = planned
+        .stratum_derivations
+        .get(&iri(&ex("stratum/pair")))
+        .expect("the summed stratum records its derivation");
     assert_eq!(
-        planned
-            .statistics_snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.subject == ex("stratum/pair"))
-            .and_then(|entry| entry.selectivity_ppm),
+        inputs.selectivity_ppm,
         Some(700_000),
         "the recorded aggregate is the one the depth was derived from"
     );
+    // A sum does not say which terms it came from, so the domain is recorded
+    // beside it: without this, a provider that moved the same total onto other
+    // terms would leave a byte-identical plan describing a different measurement.
+    assert_eq!(
+        inputs.selectivity_terms,
+        vec![0, 1],
+        "both terms contributed, and the record names both"
+    );
+    planned.certify().expect("the plan derives its own depths");
 }
 
 #[test]
@@ -1495,4 +1636,1284 @@ fn the_planner_redeclares_no_seam_declaration_and_reads_no_ambient_state() {
             "planner.rs reaches for ambient state (`{ambient}`); planning must be pure"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 9. The derivation record: every consulted statistic, and only those
+// ---------------------------------------------------------------------------
+
+/// The request both transcript tests plan: one lexical term and one seed, so
+/// the two placing producers each receive exactly one of them.
+fn transcript_request() -> RetrievalRequest {
+    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
+}
+
+/// A provider that reports a selectivity and no cardinality narrows the depth,
+/// so the plan must record the statistic it was narrowed by.
+///
+/// This is the whole of the defect: the depth moved and the evidence did not.
+/// Both halves are asserted together, because either alone passes over a
+/// different bug — the depth alone is what a plan already got right, and the
+/// record alone would pass for a build that recorded a statistic it never
+/// applied.
+#[test]
+fn a_selectivity_only_stratum_is_recorded_and_narrows_the_depth() {
+    let stratum = iri(&ex("transcript/selectivity-only"));
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    assert_eq!(
+        planned.stratum_depths[&stratum], 25,
+        "a quarter of the declared 100 rows; the selectivity narrowed the read"
+    );
+    let inputs = planned
+        .stratum_derivations
+        .get(&stratum)
+        .expect("a consulted stratum records its derivation");
+    assert_eq!(
+        inputs.cardinality, None,
+        "the provider reported no cardinality, and absent is not zero"
+    );
+    assert_eq!(
+        inputs.selectivity_ppm,
+        Some(250_000),
+        "the statistic that narrowed the depth is the statistic recorded"
+    );
+    assert_eq!(
+        inputs.selectivity_terms,
+        vec![0],
+        "the lexical term is term 0"
+    );
+    assert_eq!(inputs.declared, 100);
+    planned
+        .certify()
+        .expect("the depth follows from the inputs recorded beside it");
+    assert_eq!(
+        planned.explain_depth(&stratum),
+        Some(DepthCause::Selectivity)
+    );
+
+    // The same stratum is named on the plan's own snapshot, with the cardinality
+    // absent rather than zero. The neighbour in the same assertion is a stratum
+    // the provider DID count, so "everything is None" cannot pass for this.
+    let row = |subject: &str| {
+        entries_of(&planned)
+            .into_iter()
+            .find(|(recorded, ..)| recorded == subject)
+    };
+    assert_eq!(
+        row(&ex("transcript/selectivity-only")),
+        Some((
+            ex("transcript/selectivity-only"),
+            None,
+            Some(250_000),
+            vec![0]
+        )),
+        "a stratum consulted for a selectivity alone is named, with the \
+         cardinality recorded as the absence it was"
+    );
+    assert_eq!(
+        row(&ex("transcript/cardinality-only")),
+        Some((ex("transcript/cardinality-only"), Some(100), None, vec![])),
+        "and the stratum the provider counted carries its count, so `None` above \
+         is a measurement of silence rather than a snapshot that records nothing"
+    );
+}
+
+/// A stratum the planner consulted and the provider said nothing about is named
+/// with both inputs absent.
+///
+/// Absent from the record and "recorded as absent" are different facts: the
+/// first cannot distinguish a subject never asked about from one that answered
+/// nothing, and a replay against a provider that later speaks would not notice.
+#[test]
+fn a_consulted_but_silent_stratum_records_both_statistics_absent() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+    let inputs = planned
+        .stratum_derivations
+        .get(&iri(&ex("transcript/silent")))
+        .expect("a consulted stratum is recorded even when the provider is silent");
+
+    assert_eq!(inputs.cardinality, None);
+    assert_eq!(inputs.selectivity_ppm, None);
+    assert_eq!(inputs.selectivity_terms, [] as [u32; 0]);
+    assert_eq!(
+        inputs.declared, 50,
+        "the declaration is recorded whether or not the provider spoke"
+    );
+    assert_eq!(
+        planned.stratum_depths[&iri(&ex("transcript/silent"))],
+        50,
+        "a provider that measured nothing narrows nothing"
+    );
+    assert_eq!(
+        planned.explain_depth(&iri(&ex("transcript/silent"))),
+        Some(DepthCause::Declaration)
+    );
+}
+
+/// A subject the provider reports and the planner never consults stays out of
+/// the plan.
+///
+/// The control has a real oracle: `never/consulted` carries a cardinality of
+/// 9999, so the provider is willing to speak about it. A build that recorded
+/// every subject it could reach rather than every subject it asked about would
+/// name it here. The other four are asserted present in the same test, so this
+/// cannot pass by recording nothing.
+#[test]
+fn a_subject_the_provider_reports_but_nothing_consults_is_absent() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    let never = ex("never/consulted");
+    assert!(
+        !planned
+            .stratum_derivations
+            .keys()
+            .any(|stratum| stratum.as_str() == never),
+        "an unconsulted subject is not a derivation"
+    );
+    assert!(
+        !planned
+            .statistics_snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.subject == never),
+        "nor an ancillary entry"
+    );
+
+    for stratum in [
+        "transcript/selectivity-only",
+        "transcript/both",
+        "transcript/cardinality-only",
+        "transcript/silent",
+    ] {
+        assert!(
+            planned.stratum_derivations.contains_key(&iri(&ex(stratum))),
+            "{stratum} was consulted, so it is recorded; \
+             without this the absence above would pass for a plan recording nothing"
+        );
+    }
+}
+
+/// The recorded subjects are exactly the ones planning consulted: every stratum
+/// it derived a depth for, and every predicate the request named.
+///
+/// Both expectations are built from the request and the registry rather than
+/// read back out of the plan, so the test states the law instead of restating
+/// the output.
+#[test]
+fn the_record_names_exactly_the_consulted_subjects() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    let derived: Vec<&str> = planned
+        .stratum_derivations
+        .keys()
+        .map(Iri::as_str)
+        .collect();
+    let depths: BTreeMap<&str, u32> = planned
+        .stratum_depths
+        .iter()
+        .map(|(stratum, depth)| (stratum.as_str(), *depth))
+        .collect();
+    assert_eq!(
+        derived,
+        depths.keys().copied().collect::<Vec<&str>>(),
+        "a derivation for every depth and a depth for every derivation"
+    );
+
+    // The snapshot names every subject either statistic was consulted for: the
+    // four strata, and the one predicate the request named — the lexical term
+    // names `body`, the seed term names none.
+    let mut expected: Vec<String> = derived
+        .iter()
+        .map(|stratum| (*stratum).to_owned())
+        .collect();
+    expected.push(ex("body"));
+    expected.sort();
+    assert_eq!(
+        planned
+            .statistics_snapshot
+            .entries
+            .iter()
+            .map(|entry| entry.subject.clone())
+            .collect::<Vec<String>>(),
+        expected,
+        "every stratum a depth was derived for, and every request predicate"
+    );
+    planned.certify().expect("every depth derives");
+}
+
+/// Every stratum a depth was derived for is named on the plan's own snapshot,
+/// carrying the statistics its derivation was built from.
+///
+/// The whole list is asserted, and the five rows differ in every field that can
+/// differ: a cardinality with no selectivity, a selectivity with no cardinality,
+/// both, neither, and the request predicate the provider is silent about. A
+/// build that mapped one stratum's statistics onto another, or dropped a row,
+/// fails on the number rather than on a shape.
+#[test]
+fn the_snapshot_names_every_stratum_a_depth_was_derived_for() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            // The request's predicate. This provider says nothing about it.
+            (ex("body"), None, None, vec![]),
+            // A stratum the provider answered both questions for.
+            (ex("transcript/both"), Some(100), Some(300_000), vec![1]),
+            // A catch-all: it receives no term, so no selectivity can bound it
+            // and none was consulted.
+            (ex("transcript/cardinality-only"), Some(100), None, vec![]),
+            // The defect's own case: a selectivity narrowed the depth and the
+            // provider reported no cardinality at all.
+            (
+                ex("transcript/selectivity-only"),
+                None,
+                Some(250_000),
+                vec![0]
+            ),
+            (ex("transcript/silent"), None, None, vec![]),
+        ],
+        "the snapshot names every consulted subject, with what was consulted for it"
+    );
+}
+
+/// An unbounded stratum never reaches the selectivity step, so a selectivity
+/// reported for it must not be recorded as though it had applied.
+///
+/// A fraction of an unmeasured total is not a measurement, which is why
+/// `depth_from` returns before consulting it. Recording one anyway would be a
+/// plan stating a derivation that did not happen — the same defect this work
+/// closes, pointing the other way.
+#[test]
+fn an_unbounded_stratum_records_no_applied_selectivity() {
+    let mut registry = PropertyFunctionRegistry::new();
+    let literal_pattern = TermPattern {
+        kind: TermKind::Literal,
+        datatype: None,
+        language: Some("en".to_owned()),
+        predicate: Some(ex("body")),
+    };
+    registry.register_ranked(
+        ex("pf/unbounded"),
+        relation(u64::MAX),
+        ranked(&ex("transcript/unbounded"), vec![literal_pattern], false),
+    );
+
+    let stratum = iri(&ex("transcript/unbounded"));
+    let statistics = MockStatistics {
+        source: "transcript-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        // No cardinality, so the bound stays the unbounded declaration.
+        cardinalities: BTreeMap::new(),
+        // A selectivity the provider is perfectly willing to report.
+        selectivities: vec![(stratum.clone(), lexical_term(), 250_000)],
+    };
+
+    let planned = plan(&lexical_request(), &registry, &statistics).expect("plans");
+    let inputs = planned
+        .stratum_derivations
+        .get(&stratum)
+        .expect("the stratum is consulted");
+
+    assert_eq!(inputs.declared, u64::MAX);
+    assert_eq!(inputs.cardinality, None);
+    assert_eq!(
+        inputs.selectivity_ppm, None,
+        "the derivation returned before the selectivity step, so none was applied"
+    );
+    assert_eq!(
+        inputs.selectivity_terms,
+        [] as [u32; 0],
+        "and no term contributed to a value that was never taken"
+    );
+    planned
+        .certify()
+        .expect("the recorded depth follows from the recorded inputs");
+    assert_eq!(
+        planned.explain_depth(&stratum),
+        Some(DepthCause::Unbounded),
+        "an unbounded declaration with no licensed prefix reads at the ceiling"
+    );
+
+    // And the snapshot row for that stratum is a PROJECTION of the derivation,
+    // not a second consultation. The oracle is real: this provider answers
+    // 250000 for exactly this `(stratum, term)` pair, so a build that re-asked
+    // it would record that number here and the plan would state a derivation
+    // that did not happen.
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            // The request predicate, which this provider says nothing about.
+            (ex("body"), None, None, vec![]),
+            (ex("transcript/unbounded"), None, None, vec![]),
+        ],
+        "the entry records what was consulted, which here is no selectivity at all"
+    );
+}
+
+/// A subject that is both a stratum and a request-term predicate is recorded
+/// once, as the derivation's own consultation.
+///
+/// The stratum's row wins because that is the consultation that actually bound a
+/// depth: a reader checking the depth needs the selectivity the depth came from,
+/// not a wider aggregate nothing was derived from.
+///
+/// The two candidates are made to differ so the assertion can tell which was
+/// recorded. `pf/shared` receives only the lexical term, so its derivation
+/// aggregates 200000 over term 0; the request-predicate rule aggregates over the
+/// whole request, which under this provider is 500000 over terms 0 and 1. The
+/// control stratum beside it carries a third, different pair.
+#[test]
+fn a_subject_that_is_both_a_stratum_and_a_request_predicate_records_the_derivation() {
+    let shared = ex("body");
+    let mut registry = PropertyFunctionRegistry::new();
+    // Its stratum IRI *is* the lexical term's predicate IRI.
+    registry.register_ranked(
+        ex("pf/shared"),
+        relation(1_000),
+        ranked(
+            &shared,
+            vec![TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: Some("en".to_owned()),
+                predicate: Some(ex("body")),
+            }],
+            false,
+        ),
+    );
+    // The control: a stratum that is nobody's predicate, with its own distinct
+    // numbers, so a row copied onto the wrong subject fails on the value.
+    registry.register_ranked(
+        ex("pf/other"),
+        relation(50),
+        ranked(
+            &ex("stratum/other"),
+            vec![TermPattern::of_kind(TermKind::Iri)],
+            false,
+        ),
+    );
+
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&shared), 400);
+    let statistics = MockStatistics {
+        source: "shared-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+        selectivities: vec![
+            // Reached by the stratum, because `pf/shared` receives term 0.
+            (iri(&shared), lexical_term(), 200_000),
+            // Reached only by the request-predicate rule, which aggregates over
+            // every term: `pf/shared` does not receive the seed.
+            (iri(&shared), seed_term(), 300_000),
+            (iri(&ex("stratum/other")), seed_term(), 600_000),
+        ],
+    };
+
+    let planned =
+        plan(&lexical_and_seed_request(), &registry, &statistics).expect("the request plans");
+
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            (shared.clone(), Some(400), Some(200_000), vec![0]),
+            (ex("stratum/other"), None, Some(600_000), vec![1]),
+        ],
+        "one row for the shared subject, and it is the derivation's"
+    );
+    assert_ne!(
+        entries_of(&planned)[0],
+        (shared.clone(), Some(400), Some(500_000), vec![0, 1]),
+        "the request-predicate aggregate over the whole request is the value that \
+         must NOT have been recorded"
+    );
+
+    // The row is the derivation's because the derivation says the same thing,
+    // and the depths differ per stratum so neither row can be the other's.
+    let derivation = planned
+        .stratum_derivations
+        .get(&iri(&shared))
+        .expect("the shared subject is a stratum");
+    assert_eq!(derivation.cardinality, Some(400));
+    assert_eq!(derivation.selectivity_ppm, Some(200_000));
+    assert_eq!(derivation.selectivity_terms, vec![0]);
+    assert_eq!(
+        depths_of(&planned),
+        BTreeMap::from([(shared, 80), (ex("stratum/other"), 30)]),
+        "a fifth of 400 rows, and three fifths of 50"
+    );
+    planned.certify().expect("the two records agree");
+}
+
+/// Every plan the golden corpus pins derives its own depths, and those depths
+/// are the ones version 3 recorded.
+///
+/// The second half is the no-semantic-drift check. The literals are the depths
+/// transcribed from the committed version-3 fixtures before they were
+/// regenerated, so this compares the new arithmetic against the old behaviour
+/// rather than against its own output.
+#[test]
+fn every_golden_plan_certifies_at_the_depths_version_three_recorded() {
+    for (request, registry, expected) in [
+        (
+            mixed_request(),
+            mixed_registry(),
+            vec![
+                (ex("stratum/graph"), 50_u32),
+                (ex("stratum/text"), 100),
+                (ex("stratum/universal"), 200),
+            ],
+        ),
+        (
+            lexical_request(),
+            mixed_registry(),
+            vec![(ex("stratum/text"), 100), (ex("stratum/universal"), 200)],
+        ),
+    ] {
+        let planned = plan(&request, &registry, &fixture_statistics()).expect("plans");
+        planned
+            .certify()
+            .expect("a golden plan derives its own depths");
+        let recorded: Vec<(String, u32)> = expected
+            .iter()
+            .map(|(stratum, _)| (stratum.clone(), planned.stratum_depths[&iri(stratum)]))
+            .collect();
+        assert_eq!(
+            recorded, expected,
+            "the depths are the ones version 3 recorded; the record grew, the plan did not move"
+        );
+    }
+}
+
+/// Every value a version-3 plan recorded is still recorded, in the place
+/// version 3 recorded it.
+///
+/// The expected literals are transcribed from the committed version-3 golden:
+/// `body` 500/500000 as a request predicate, and the three strata's
+/// cardinalities on the snapshot. The derivation record was *added* beside them;
+/// nothing moved out of the snapshot to make room for it, because a reader who
+/// asks a plan which subjects it consulted must still be told all of them.
+#[test]
+fn a_cardinality_carrying_plan_records_every_value_version_three_did() {
+    let planned = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
+
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            (ex("body"), Some(500), Some(500_000), vec![0]),
+            (ex("stratum/graph"), Some(50), None, vec![]),
+            (ex("stratum/text"), Some(100), None, vec![]),
+            (ex("stratum/universal"), Some(1000), None, vec![]),
+        ],
+        "the four rows version 3's snapshot carried, with the four values it carried"
+    );
+
+    for (stratum, cardinality) in [
+        (ex("stratum/graph"), 50_u64),
+        (ex("stratum/text"), 100),
+        (ex("stratum/universal"), 1000),
+    ] {
+        let inputs = planned
+            .stratum_derivations
+            .get(&iri(&stratum))
+            .expect("every stratum records its derivation");
+        assert_eq!(
+            inputs.cardinality,
+            Some(cardinality),
+            "{stratum}'s cardinality is the one version 3 recorded"
+        );
+        assert_eq!(
+            inputs.selectivity_ppm, None,
+            "{stratum} carried no selectivity in version 3 either"
+        );
+    }
+}
+
+/// A missing row declaration is never defaulted into a measurement.
+///
+/// What runs here is the **placement** guard, and that is the point: it is the
+/// guard that makes the derivation's own guard unreachable. `place` admits an
+/// invocation only where some declared mode subsumes it, and
+/// `declared_row_bound` reads the declaration by filtering the same
+/// `descriptor.modes` on the same predicate — one snapshot, read once — so a
+/// placement that succeeded has already proved the bound exists.
+/// `PlanError::UndeclaredRowBound` is therefore not constructible from outside
+/// and **no test reaches it**; the argument that it cannot be reached is
+/// recorded on the variant itself, where a change to `place` that broke it would
+/// be read. The refusal asserted below is `PlanError::NoApplicableProducers`,
+/// raised by that placement pass.
+///
+/// The value matters because it is an input every depth is derived from. A
+/// default of zero floors the read to one probing row — a plan quietly asking a
+/// producer for a single row — while `u64::MAX` declares an unbounded relation.
+/// Neither is a thing the registry said.
+///
+/// Both halves run, because a refusal is a claim too: the producer whose
+/// declared mode subsumes nothing is refused by name, and its neighbour — the
+/// same registry with a mode that does subsume the invocation — plans, and
+/// records the declaration it really made rather than `declared: 0` at
+/// `depth: 1`.
+#[test]
+fn an_undeclared_row_bound_is_not_a_declaration_of_zero_rows() {
+    let stratum = ex("transcript/undeclared");
+    let plan_with = |mode: BindingPattern| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            ex("pf/mode"),
+            Arc::new(MockProducer {
+                arity: PfArity::new(1, 1),
+                mode,
+                rows: 10,
+            }),
+            ranked(&stratum, vec![TermPattern::of_kind(TermKind::Any)], false),
+        );
+        plan(&lexical_request(), &registry, &transcript_statistics())
+    };
+
+    // The `Any` pattern declares no placement, so the invocation leaves every
+    // argument free. A producer declaring only the fully-bound mode subsumes it
+    // nowhere.
+    let refused = plan_with(BindingPattern::from_bools([true, true]));
+    assert!(
+        matches!(refused, Err(PlanError::NoApplicableProducers)),
+        "placement refuses before a row bound is ever read, which is what makes \
+         an absent declaration unreachable at the derivation: {refused:?}"
+    );
+
+    // The neighbour: a producer whose all-free mode does subsume that same
+    // invocation plans, and its declaration reaches the record intact.
+    let planned = plan_with(PfArity::new(1, 1).all_free_mode()).expect("the neighbour plans");
+    let inputs = planned
+        .stratum_derivations
+        .get(&iri(&stratum))
+        .expect("the stratum records its derivation");
+    assert_eq!(
+        inputs.declared, 10,
+        "the declaration the registry made is the one recorded"
+    );
+    assert_ne!(
+        (inputs.declared, planned.stratum_depths[&iri(&stratum)]),
+        (0, 1),
+        "a missing declaration defaulted to zero would floor this read to one row"
+    );
+    assert_eq!(planned.stratum_depths[&iri(&stratum)], 10);
+    planned
+        .certify()
+        .expect("the depth derives from the declaration");
+}
+
+// ---------------------------------------------------------------------------
+// The read ceiling names itself
+// ---------------------------------------------------------------------------
+
+/// The deepest depth a read can be taken to.
+///
+/// `MAX_READ_DEPTH` is crate-private, so this restates it — which is the point:
+/// a test that imported the planner's own constant could not observe the
+/// planner and the ceiling disagreeing about where it is. It is one row
+/// shallower than a `u32` holds, because the compiler reads one row PAST the
+/// depth to tell an exhausted stratum from a truncated one, and at `u32::MAX`
+/// that probe row is not a number a `LIMIT` can express.
+const CEILING: u32 = u32::MAX - 1;
+
+/// Inputs with nothing set: each case below turns on exactly the legs it names.
+fn depth_inputs(declared: u64) -> DepthInputs {
+    DepthInputs {
+        declared,
+        cardinality: None,
+        selectivity_ppm: None,
+        selectivity_terms: Vec::new(),
+        licensed_prefix: None,
+    }
+}
+
+/// A depth the read ceiling cut is explained as the ceiling, not as the input
+/// that named the uncut number.
+///
+/// The ceiling sits at `u32::MAX - 1`, so a cause decided by whether the derived
+/// bound *fits a `u32`* reads it one row too wide: at exactly `u32::MAX` the
+/// conversion succeeds, the ceiling arm is skipped, and the explanation names
+/// the declaration — or the cardinality, or the selectivity, or the prefix —
+/// while the depth beside it has been clamped with nothing saying so. That is a
+/// second derivation disagreeing with the first, which is exactly what a
+/// recorded derivation exists to rule out.
+///
+/// Both halves run for every finite leg, because over-attribution is the mirror
+/// of the silent drop. The row ABOVE the ceiling must say `ReadCeiling`; its
+/// neighbour AT the ceiling must still say which input really bound it, and a
+/// fix that answered `ReadCeiling` for the neighbour would be a failed fix. The
+/// oracle is the pair of numbers, not the variant alone: the over-ceiling row's
+/// derived bound is strictly deeper than the depth recorded for it, and the
+/// neighbour's is that depth exactly, so a case that mapped one input onto the
+/// other's would fail on arithmetic before it reached the cause.
+#[test]
+fn a_depth_the_ceiling_cut_is_explained_as_the_ceiling() {
+    // The declaration alone. `u32::MAX` rows declared is one row deeper than a
+    // read can go; `u32::MAX - 1` is a declaration served whole.
+    let over = depth_inputs(u64::from(u32::MAX));
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(
+        depth_cause(&over),
+        DepthCause::ReadCeiling,
+        "the declaration named {} rows and the read stops one short of it, so the \
+         ceiling is what fixed this depth",
+        u32::MAX
+    );
+    let at = depth_inputs(u64::from(CEILING));
+    assert_eq!(
+        depth_from(&at),
+        CEILING,
+        "the deepest declaration a read can serve whole is served whole"
+    );
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::Declaration,
+        "and nothing cut it, so the declaration is still the cause"
+    );
+
+    // The cardinality leg, under an unbounded declaration so the measurement is
+    // unambiguously the narrower input.
+    let over = DepthInputs {
+        cardinality: Some(u64::from(u32::MAX)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+    let at = DepthInputs {
+        cardinality: Some(u64::from(CEILING)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::Cardinality,
+        "a measurement exactly at the ceiling is served whole, and it is the \
+         measurement that bound the read"
+    );
+
+    // The selectivity leg: half of twice the boundary lands on the boundary.
+    let over = DepthInputs {
+        selectivity_ppm: Some(500_000),
+        selectivity_terms: vec![0],
+        ..depth_inputs(2 * u64::from(u32::MAX))
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+    let at = DepthInputs {
+        selectivity_ppm: Some(500_000),
+        selectivity_terms: vec![0],
+        ..depth_inputs(2 * u64::from(CEILING))
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::Selectivity,
+        "the ratio halved the declaration onto the boundary, so the ratio is the cause"
+    );
+
+    // The licensed prefix, against a finite declaration deeper than any read.
+    let over = DepthInputs {
+        licensed_prefix: Some(u64::from(u32::MAX)),
+        ..depth_inputs(u64::MAX - 1)
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+    let at = DepthInputs {
+        licensed_prefix: Some(u64::from(CEILING)),
+        ..depth_inputs(u64::MAX - 1)
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::LicensedPrefix,
+        "a prefix exactly at the ceiling is the number recorded, so it is the cause"
+    );
+
+    // And the control, nowhere near the boundary: a small declaration is served
+    // at its own number and explained as itself. Its depth differs from every
+    // row above, so a rendering that answered `ReadCeiling` for everything would
+    // fail here on the variant and everywhere above on nothing.
+    let small = depth_inputs(10);
+    assert_eq!(depth_from(&small), 10);
+    assert_eq!(depth_cause(&small), DepthCause::Declaration);
+}
+
+/// An unbounded declaration reaches the ceiling by three roads, and the
+/// explanation tells them apart.
+///
+/// The prefix branch is the one that used to lie: a request bound deeper than a
+/// read can go was reported as `LicensedPrefix`, crediting the request with a
+/// narrowing to a number the plan does not record. Its valid neighbour is a
+/// prefix exactly at the ceiling, which really is the recorded depth and really
+/// is the cause — the two differ by one row, and the pair is here so a fix that
+/// collapsed them would show.
+#[test]
+fn an_unbounded_declaration_names_which_road_reached_the_ceiling() {
+    // No prefix: the declaration promised more rows than a read can reach and
+    // nothing narrowed it.
+    let unbounded = depth_inputs(u64::MAX);
+    assert_eq!(depth_from(&unbounded), CEILING);
+    assert_eq!(depth_cause(&unbounded), DepthCause::Unbounded);
+
+    // A prefix that is itself the unbounded sentinel narrows nothing, so the
+    // fact is still "more rows than a read can reach" rather than a request
+    // bound this plan was cut to.
+    let vacuous = DepthInputs {
+        licensed_prefix: Some(u64::MAX),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&vacuous), CEILING);
+    assert_eq!(depth_cause(&vacuous), DepthCause::Unbounded);
+
+    // A prefix one row past the ceiling: the depth recorded is NOT the prefix,
+    // so the prefix is not the cause.
+    let over = DepthInputs {
+        licensed_prefix: Some(u64::from(u32::MAX)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+
+    // The neighbour: a prefix exactly at the ceiling IS the depth recorded.
+    let at = DepthInputs {
+        licensed_prefix: Some(u64::from(CEILING)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(depth_cause(&at), DepthCause::LicensedPrefix);
+
+    // And a prefix far below it, so the control's depth differs from every row
+    // above: a case that read the prefix and a case that ignored it cannot both
+    // pass here.
+    let narrow = DepthInputs {
+        licensed_prefix: Some(7),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&narrow), 7);
+    assert_eq!(depth_cause(&narrow), DepthCause::LicensedPrefix);
+}
+
+/// A licensed prefix of zero rows under an unbounded declaration is the floor,
+/// not the prefix.
+///
+/// Both cases record a depth of one, which is exactly why the cause has to tell
+/// them apart: a request that licensed one row got the row it asked for, and a
+/// request that licensed none got a probing row the plan added over its head so
+/// the producer — not the plan — is what reports the stratum empty. Crediting
+/// the second to the prefix would say the caller asked for the row it is about
+/// to be handed.
+#[test]
+fn a_prefix_of_no_rows_is_the_floor_rather_than_the_prefix() {
+    let none = DepthInputs {
+        licensed_prefix: Some(0),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&none), 1, "the floor lifts it to a probing row");
+    assert_eq!(depth_cause(&none), DepthCause::Floor);
+
+    // The neighbour that must NOT move: one licensed row is one row the caller
+    // really asked for.
+    let one = DepthInputs {
+        licensed_prefix: Some(1),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&one), 1);
+    assert_eq!(depth_cause(&one), DepthCause::LicensedPrefix);
+
+    // And the finite branch already agreed, which is the consistency at issue:
+    // the same zero against a declaration of ten reads the same way.
+    let finite = DepthInputs {
+        licensed_prefix: Some(0),
+        ..depth_inputs(10)
+    };
+    assert_eq!(depth_from(&finite), 1);
+    assert_eq!(depth_cause(&finite), DepthCause::Floor);
+}
+
+/// A cause that names an input names an input whose value IS the recorded depth.
+///
+/// This is the property the ceiling bug broke, stated without restating the
+/// arithmetic: a plan declaring `u32::MAX` rows records a depth of
+/// `u32::MAX - 1`, so "the declaration bound it" is a claim the two numbers
+/// falsify. The check needs no second derivation — it reads the depth the
+/// planner recorded and the input the planner blamed and asks whether they are
+/// the same number — which is why it can sit over a sweep of every boundary the
+/// derivation has on every leg without becoming the reimplementation it exists
+/// to rule out.
+///
+/// The three causes that name no input are pinned to the number they mean
+/// instead: the floor is one row, and the ceiling and the unbounded declaration
+/// are the deepest a read can be taken to.
+#[test]
+fn a_named_cause_names_the_number_recorded() {
+    let boundaries = [
+        0_u64,
+        1,
+        2,
+        u64::from(CEILING) - 1,
+        u64::from(CEILING),
+        u64::from(u32::MAX),
+        u64::from(u32::MAX) + 1,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+    let cardinalities = [
+        None,
+        Some(0),
+        Some(1),
+        Some(u64::from(CEILING)),
+        Some(u64::from(u32::MAX)),
+        Some(u64::MAX),
+    ];
+    let selectivities = [None, Some(0), Some(1), Some(500_000), Some(1_000_000)];
+    let prefixes = [
+        None,
+        Some(0),
+        Some(1),
+        Some(u64::from(CEILING)),
+        Some(u64::from(u32::MAX)),
+        Some(u64::MAX),
+    ];
+    let mut seen: Vec<DepthCause> = Vec::new();
+    for declared in boundaries {
+        for cardinality in cardinalities {
+            for selectivity_ppm in selectivities {
+                for licensed_prefix in prefixes {
+                    let inputs = DepthInputs {
+                        declared,
+                        cardinality,
+                        selectivity_ppm,
+                        selectivity_terms: if selectivity_ppm.is_some() {
+                            vec![0]
+                        } else {
+                            Vec::new()
+                        },
+                        licensed_prefix,
+                    };
+                    let depth = u64::from(depth_from(&inputs));
+                    let cause = depth_cause(&inputs);
+                    if !seen.contains(&cause) {
+                        seen.push(cause);
+                    }
+                    // `min` is not the derivation under test: it is the
+                    // definition of "the narrower of the two declarations", and
+                    // the selectivity leg is checked against it rather than
+                    // recomputed.
+                    let measured = cardinality.map_or(declared, |rows| declared.min(rows));
+                    // Independent checks rather than one `match`: every cause
+                    // the classification has is pinned below, and the tally at
+                    // the end refuses a run that reached an eighth.
+                    if cause == DepthCause::Declaration {
+                        assert_eq!(
+                            declared, depth,
+                            "the declaration was blamed for a depth it does not equal: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::Cardinality {
+                        assert_eq!(
+                            cardinality,
+                            Some(depth),
+                            "the measurement was blamed for a depth it does not equal: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::LicensedPrefix {
+                        assert_eq!(
+                            licensed_prefix,
+                            Some(depth),
+                            "the request's bound was blamed for a depth it does not equal: \
+                             {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::Selectivity {
+                        assert!(
+                            depth < measured,
+                            "a ratio that narrowed nothing was blamed: {inputs:?}"
+                        );
+                        assert!(
+                            licensed_prefix.is_none_or(|rows| rows >= depth),
+                            "the request's bound was at least as narrow, so the ratio is not \
+                             what bound this: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::Floor {
+                        assert_eq!(
+                            depth, 1,
+                            "the floor means one probing row and nothing else: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::ReadCeiling || cause == DepthCause::Unbounded {
+                        assert_eq!(
+                            depth,
+                            u64::from(CEILING),
+                            "a read that went as deep as a read can go is the only thing either \
+                             of these means: {inputs:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // The sweep is worth what it covers: every cause the classification has must
+    // have been reached, or the assertions above ran over a hole.
+    seen.sort_by_key(|cause| format!("{cause:?}"));
+    assert_eq!(
+        seen,
+        vec![
+            DepthCause::Cardinality,
+            DepthCause::Declaration,
+            DepthCause::Floor,
+            DepthCause::LicensedPrefix,
+            DepthCause::ReadCeiling,
+            DepthCause::Selectivity,
+            DepthCause::Unbounded,
+        ],
+        "the sweep reaches every cause"
+    );
+}
+
+/// Every stratum's derivation carries the row bound ITS OWN producer declared.
+///
+/// The declaration reaches `DepthInputs.declared` from a map keyed by stratum,
+/// and this is the witness that the key and the value travel together. Four
+/// surviving strata declare four different row counts, the provider narrows none
+/// of them, and no request bound licenses a prefix — so each depth IS that
+/// stratum's declaration and no two of them are the same number. A build that
+/// read one stratum's bound under another's key lands on the wrong depth for at
+/// least two of the four, and a build that defaulted a bound it could not find
+/// records `declared: 0` and a floored depth of one, which is neither of the
+/// four numbers below.
+#[test]
+fn every_stratum_records_the_row_bound_its_own_producer_declared() {
+    let planned = plan(
+        &mixed_request(),
+        &mixed_registry(),
+        // Reports the request predicate and nothing about any stratum, so
+        // nothing lowers a declaration and the depth is the declaration.
+        &no_stratum_cardinality(),
+    )
+    .expect("plans");
+
+    for (stratum, declared) in [
+        (ex("stratum/universal"), 200_u64),
+        (ex("stratum/text"), 100),
+        (ex("stratum/graph"), 50),
+    ] {
+        let inputs = planned
+            .stratum_derivations
+            .get(&iri(&stratum))
+            .unwrap_or_else(|| panic!("{stratum} records a derivation"));
+        assert_eq!(
+            inputs.declared, declared,
+            "{stratum} records the bound its own producer declared"
+        );
+        assert_eq!(
+            inputs.cardinality, None,
+            "{stratum} was not measured, so nothing narrowed the declaration"
+        );
+        assert_eq!(
+            planned.stratum_depths[&iri(&stratum)],
+            u32::try_from(declared).expect("the fixture bounds fit a read depth"),
+            "{stratum} reads exactly as deep as it declared"
+        );
+    }
+    assert_eq!(
+        planned.stratum_derivations.len(),
+        3,
+        "three strata survived — the quoted one's producer accepts no term this \
+         request carries — and a fourth would mean a bound arrived from nowhere"
+    );
+    planned
+        .certify()
+        .expect("each depth follows from the inputs recorded beside it");
+}
+
+// ---------------------------------------------------------------------------
+// The request's licensed prefix, through the planner
+// ---------------------------------------------------------------------------
+
+/// The stratum the licensed-prefix fixtures below plan over.
+const PREFIX_STRATUM: &str = "stratum/prefix";
+
+/// A registry of one producer at [`PREFIX_STRATUM`], declaring `declared` rows
+/// per invocation under `duplicates`.
+///
+/// One stratum, so the disjointness premise the merge argument needs is vacuous
+/// and the duplicate policy alone decides whether the request's bound licenses a
+/// prefix. That makes the policy the fixture's single switch: `Unique` licenses
+/// it, `Allowed` does not, and nothing else about the declaration changes
+/// between the two.
+///
+/// The accepted pattern is the placing one rather than the catch-all, because a
+/// selectivity bounds a stratum only where that stratum's producer actually
+/// **receives** the term — a producer matched by `TermKind::Any` declares no
+/// placement and so is handed nothing, which would leave the selectivity leg of
+/// the derivation out of the fixture entirely.
+fn prefix_registry(declared: u64, duplicates: DuplicatePolicy) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/prefix"),
+        relation(declared),
+        RankedDeclaration {
+            duplicates,
+            ..ranked(
+                &ex(PREFIX_STRATUM),
+                vec![TermPattern {
+                    kind: TermKind::Literal,
+                    datatype: None,
+                    language: Some("en".to_owned()),
+                    predicate: Some(ex("body")),
+                }],
+                false,
+            )
+        },
+    );
+    registry
+}
+
+/// A provider reporting `cardinality` rows for [`PREFIX_STRATUM`] and a
+/// selectivity of `ppm` for the lexical term over it.
+fn prefix_statistics(cardinality: u64, ppm: u64) -> MockStatistics {
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&ex(PREFIX_STRATUM)), cardinality);
+    MockStatistics {
+        source: "prefix-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+        selectivities: vec![(iri(&ex(PREFIX_STRATUM)), lexical_term(), ppm)],
+    }
+}
+
+/// A plan the real entry point produced for a request at `bound` over that
+/// fixture, with its depth, its recorded prefix and its cause read off it.
+fn prefix_plan(bound: Option<u32>, duplicates: DuplicatePolicy) -> (u32, Option<u64>, DepthCause) {
+    let terms = vec![lexical_term()];
+    let request = match bound {
+        Some(rows) => RetrievalRequest::bounded(terms, TopK::new(rows as usize)),
+        None => RetrievalRequest::complete(terms),
+    };
+    // Declared 100, measured 50, half of two-fifths of that: every leg of the
+    // derivation lands on its own number.
+    let planned = plan(
+        &request,
+        &prefix_registry(100, duplicates),
+        &prefix_statistics(50, 400_000),
+    )
+    .expect("the fixture plans");
+    planned
+        .certify()
+        .expect("the recorded depth follows from the recorded inputs");
+    let stratum = iri(&ex(PREFIX_STRATUM));
+    let inputs = planned
+        .stratum_derivations
+        .get(&stratum)
+        .expect("the stratum records its derivation");
+    assert_eq!(
+        inputs.declared, 100,
+        "the registry's declaration reaches the record intact"
+    );
+    assert_eq!(
+        inputs.cardinality,
+        Some(50),
+        "and so does the provider's measurement"
+    );
+    assert_eq!(inputs.selectivity_ppm, Some(400_000));
+    assert_eq!(inputs.selectivity_terms, vec![0]);
+    (
+        planned.stratum_depths[&stratum],
+        inputs.licensed_prefix,
+        planned
+            .explain_depth(&stratum)
+            .expect("the stratum records a derivation to explain"),
+    )
+}
+
+/// A bounded request's licensed prefix reaches a plan the PLANNER produced, is
+/// recorded there, and is named as the leg that bound the depth.
+///
+/// # Why this is a planner test and not another `depth_from` case
+///
+/// The arithmetic was already covered, by cases that hand-build a `DepthInputs`
+/// and call [`depth_cause`] on it. What was not covered is the road to it: no
+/// plan this crate's planner had ever produced recorded a licensed prefix at
+/// all — every golden carries a null one — so the leg the recorded derivation
+/// exists to explain had never executed end to end. An engine proved correct
+/// behind a production path nothing exercises is the same silence as a depth
+/// nothing checks.
+///
+/// # The numbers are mutually distinguishable, on purpose
+///
+/// Four legs, four different numbers: the registry declares **100** rows, the
+/// provider measures **50**, the selectivity of 400_000 parts per million
+/// narrows that to **20**, and the request licenses **7**. So a planner that
+/// dropped the prefix records 20 and fails on the number; one that read the
+/// prefix where the cardinality goes records 7 as a measurement and fails on
+/// that; one that applied the prefix before the selectivity would scale 7 down
+/// to 3 and fail on both.
+#[test]
+fn a_bounded_request_records_its_licensed_prefix_and_names_it_as_the_cause() {
+    let (depth, prefix, cause) = prefix_plan(Some(7), DuplicatePolicy::Unique);
+    assert_eq!(
+        prefix,
+        Some(7),
+        "the request's bound is licensed by the declaration and is recorded as such"
+    );
+    assert_eq!(
+        depth, 7,
+        "and it is the narrowest input, so it is the depth — not the 20 the \
+         selectivity allowed, nor the 50 the provider measured, nor the 100 the \
+         registry declared"
+    );
+    assert_eq!(cause, DepthCause::LicensedPrefix);
+
+    // THE CONTROL, same registry and same statistics: a request that licenses
+    // nothing reads exactly as deep as the selectivity allows. A planner that
+    // ignored the prefix would record this row's numbers for the row above.
+    let (complete_depth, complete_prefix, complete_cause) =
+        prefix_plan(None, DuplicatePolicy::Unique);
+    assert_eq!(
+        complete_prefix, None,
+        "a complete request licenses no narrowing, so there is no prefix to record"
+    );
+    assert_eq!(complete_depth, 20, "the selectivity's own number");
+    assert_eq!(complete_cause, DepthCause::Selectivity);
+
+    // A prefix WIDER than the derivation is still recorded, and still is not the
+    // cause. The record is of what the request licensed, never of what happened
+    // to bind — a plan recording only the binding input could not be replayed
+    // against a provider whose statistics had moved.
+    let (wide_depth, wide_prefix, wide_cause) = prefix_plan(Some(30), DuplicatePolicy::Unique);
+    assert_eq!(
+        wide_prefix,
+        Some(30),
+        "recorded because the request licensed it, not because it bound anything"
+    );
+    assert_eq!(
+        wide_depth, 20,
+        "the selectivity is still the narrowest input"
+    );
+    assert_eq!(wide_cause, DepthCause::Selectivity);
+
+    // And the case where the declaration does NOT license the bound: a producer
+    // that may repeat a candidate makes a count of ranks something other than a
+    // count of candidates, so the request's bound narrows nothing and the plan
+    // records no prefix at all. Same request, same statistics, one changed
+    // declaration — so `Some(7)` above is the declaration's licence and not an
+    // unconditional echo of the request.
+    let (repeating_depth, repeating_prefix, repeating_cause) =
+        prefix_plan(Some(7), DuplicatePolicy::Allowed);
+    assert_eq!(
+        repeating_prefix, None,
+        "the bound was asked for and not licensed, which is an absence and not a 7"
+    );
+    assert_eq!(repeating_depth, 20);
+    assert_eq!(repeating_cause, DepthCause::Selectivity);
+}
+
+/// A depth the read ceiling cut is reachable from a request, and the plan the
+/// planner produced names the ceiling as its cause.
+///
+/// The ceiling arrives through the DECLARATION here, and that is the only road a
+/// request has to it: the licensed prefix cannot reach it, because a bound above
+/// the ceiling is refused at the boundary by name
+/// ([`PlanError::ReadBoundBeyondDepthRange`]) rather than being planned and then
+/// clamped. The neighbour below proves that refusal is exactly one row wide — a
+/// bound AT the ceiling plans, and is named as the prefix it is.
+#[test]
+fn a_declaration_deeper_than_a_read_can_reach_is_explained_as_the_ceiling() {
+    let ceiling = u32::MAX - 1;
+    let planned_at = |declared: u64| {
+        let planned = plan(
+            &lexical_request(),
+            &prefix_registry(declared, DuplicatePolicy::Unique),
+            &no_stratum_cardinality(),
+        )
+        .expect("a declaration larger than a read can reach is planned, not refused");
+        planned.certify().expect("and it certifies");
+        let stratum = iri(&ex(PREFIX_STRATUM));
+        (
+            planned.stratum_depths[&stratum],
+            planned
+                .explain_depth(&stratum)
+                .expect("the stratum records a derivation"),
+        )
+    };
+
+    // One row past the deepest a read can go.
+    assert_eq!(
+        planned_at(u64::from(u32::MAX)),
+        (ceiling, DepthCause::ReadCeiling),
+        "the declaration named one row more than the read can reach, so the \
+         ceiling is what fixed the depth"
+    );
+    // The valid neighbour: the deepest declaration a read serves whole is served
+    // whole, and the declaration is still what bound it. A fix that answered
+    // `ReadCeiling` here would be over-attribution, which is the mirror of the
+    // silence this test exists for.
+    assert_eq!(
+        planned_at(u64::from(ceiling)),
+        (ceiling, DepthCause::Declaration),
+        "nothing cut this one, so the declaration is the cause even though the \
+         depth is the same number"
+    );
+
+    // The prefix leg cannot reach the ceiling, because the bound that would is
+    // refused at the boundary. Both sides of that refusal, one row apart.
+    let bounded_at = |rows: usize| {
+        plan(
+            &RetrievalRequest::bounded(vec![lexical_term()], TopK::new(rows)),
+            &prefix_registry(u64::MAX, DuplicatePolicy::Unique),
+            &no_stratum_cardinality(),
+        )
+    };
+    match bounded_at(ceiling as usize + 1) {
+        Err(PlanError::ReadBoundBeyondDepthRange {
+            requested,
+            ceiling: reported,
+        }) => {
+            assert_eq!(requested, ceiling as usize + 1);
+            assert_eq!(reported, u64::from(ceiling));
+        }
+        other => panic!("a bound past the ceiling is refused by name: {other:?}"),
+    }
+    let at_ceiling = bounded_at(ceiling as usize).expect("a bound AT the ceiling plans");
+    at_ceiling.certify().expect("and certifies");
+    let stratum = iri(&ex(PREFIX_STRATUM));
+    assert_eq!(
+        at_ceiling.stratum_derivations[&stratum].licensed_prefix,
+        Some(u64::from(ceiling)),
+        "the deepest bound a request can ask for is licensed and recorded"
+    );
+    assert_eq!(at_ceiling.stratum_depths[&stratum], ceiling);
+    assert_eq!(
+        at_ceiling.explain_depth(&stratum),
+        Some(DepthCause::LicensedPrefix),
+        "an unbounded declaration cut to the deepest readable depth by the \
+         REQUEST is the request's narrowing, not the ceiling's"
+    );
 }
