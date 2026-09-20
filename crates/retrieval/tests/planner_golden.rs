@@ -13,8 +13,9 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    DepthCause, Iri, Metric, Plan, PlanError, RankFidelity, RegistryId, RejectionReason,
-    RequestTerm, RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, plan,
+    DepthCause, DepthInputs, Iri, Metric, Plan, PlanError, RankFidelity, RegistryId,
+    RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm,
+    depth_cause, depth_from, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -2218,4 +2219,373 @@ fn an_undeclared_row_bound_is_not_a_declaration_of_zero_rows() {
     planned
         .certify()
         .expect("the depth derives from the declaration");
+}
+
+// ---------------------------------------------------------------------------
+// The read ceiling names itself
+// ---------------------------------------------------------------------------
+
+/// The deepest depth a read can be taken to.
+///
+/// `MAX_READ_DEPTH` is crate-private, so this restates it — which is the point:
+/// a test that imported the planner's own constant could not observe the
+/// planner and the ceiling disagreeing about where it is. It is one row
+/// shallower than a `u32` holds, because the compiler reads one row PAST the
+/// depth to tell an exhausted stratum from a truncated one, and at `u32::MAX`
+/// that probe row is not a number a `LIMIT` can express.
+const CEILING: u32 = u32::MAX - 1;
+
+/// Inputs with nothing set: each case below turns on exactly the legs it names.
+fn depth_inputs(declared: u64) -> DepthInputs {
+    DepthInputs {
+        declared,
+        cardinality: None,
+        selectivity_ppm: None,
+        selectivity_terms: Vec::new(),
+        licensed_prefix: None,
+    }
+}
+
+/// A depth the read ceiling cut is explained as the ceiling, not as the input
+/// that named the uncut number.
+///
+/// The ceiling sits at `u32::MAX - 1`, so a cause decided by whether the derived
+/// bound *fits a `u32`* reads it one row too wide: at exactly `u32::MAX` the
+/// conversion succeeds, the ceiling arm is skipped, and the explanation names
+/// the declaration — or the cardinality, or the selectivity, or the prefix —
+/// while the depth beside it has been clamped with nothing saying so. That is a
+/// second derivation disagreeing with the first, which is exactly what a
+/// recorded derivation exists to rule out.
+///
+/// Both halves run for every finite leg, because over-attribution is the mirror
+/// of the silent drop. The row ABOVE the ceiling must say `ReadCeiling`; its
+/// neighbour AT the ceiling must still say which input really bound it, and a
+/// fix that answered `ReadCeiling` for the neighbour would be a failed fix. The
+/// oracle is the pair of numbers, not the variant alone: the over-ceiling row's
+/// derived bound is strictly deeper than the depth recorded for it, and the
+/// neighbour's is that depth exactly, so a case that mapped one input onto the
+/// other's would fail on arithmetic before it reached the cause.
+#[test]
+fn a_depth_the_ceiling_cut_is_explained_as_the_ceiling() {
+    // The declaration alone. `u32::MAX` rows declared is one row deeper than a
+    // read can go; `u32::MAX - 1` is a declaration served whole.
+    let over = depth_inputs(u64::from(u32::MAX));
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(
+        depth_cause(&over),
+        DepthCause::ReadCeiling,
+        "the declaration named {} rows and the read stops one short of it, so the \
+         ceiling is what fixed this depth",
+        u32::MAX
+    );
+    let at = depth_inputs(u64::from(CEILING));
+    assert_eq!(
+        depth_from(&at),
+        CEILING,
+        "the deepest declaration a read can serve whole is served whole"
+    );
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::Declaration,
+        "and nothing cut it, so the declaration is still the cause"
+    );
+
+    // The cardinality leg, under an unbounded declaration so the measurement is
+    // unambiguously the narrower input.
+    let over = DepthInputs {
+        cardinality: Some(u64::from(u32::MAX)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+    let at = DepthInputs {
+        cardinality: Some(u64::from(CEILING)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::Cardinality,
+        "a measurement exactly at the ceiling is served whole, and it is the \
+         measurement that bound the read"
+    );
+
+    // The selectivity leg: half of twice the boundary lands on the boundary.
+    let over = DepthInputs {
+        selectivity_ppm: Some(500_000),
+        selectivity_terms: vec![0],
+        ..depth_inputs(2 * u64::from(u32::MAX))
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+    let at = DepthInputs {
+        selectivity_ppm: Some(500_000),
+        selectivity_terms: vec![0],
+        ..depth_inputs(2 * u64::from(CEILING))
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::Selectivity,
+        "the ratio halved the declaration onto the boundary, so the ratio is the cause"
+    );
+
+    // The licensed prefix, against a finite declaration deeper than any read.
+    let over = DepthInputs {
+        licensed_prefix: Some(u64::from(u32::MAX)),
+        ..depth_inputs(u64::MAX - 1)
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+    let at = DepthInputs {
+        licensed_prefix: Some(u64::from(CEILING)),
+        ..depth_inputs(u64::MAX - 1)
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(
+        depth_cause(&at),
+        DepthCause::LicensedPrefix,
+        "a prefix exactly at the ceiling is the number recorded, so it is the cause"
+    );
+
+    // And the control, nowhere near the boundary: a small declaration is served
+    // at its own number and explained as itself. Its depth differs from every
+    // row above, so a rendering that answered `ReadCeiling` for everything would
+    // fail here on the variant and everywhere above on nothing.
+    let small = depth_inputs(10);
+    assert_eq!(depth_from(&small), 10);
+    assert_eq!(depth_cause(&small), DepthCause::Declaration);
+}
+
+/// An unbounded declaration reaches the ceiling by three roads, and the
+/// explanation tells them apart.
+///
+/// The prefix branch is the one that used to lie: a request bound deeper than a
+/// read can go was reported as `LicensedPrefix`, crediting the request with a
+/// narrowing to a number the plan does not record. Its valid neighbour is a
+/// prefix exactly at the ceiling, which really is the recorded depth and really
+/// is the cause — the two differ by one row, and the pair is here so a fix that
+/// collapsed them would show.
+#[test]
+fn an_unbounded_declaration_names_which_road_reached_the_ceiling() {
+    // No prefix: the declaration promised more rows than a read can reach and
+    // nothing narrowed it.
+    let unbounded = depth_inputs(u64::MAX);
+    assert_eq!(depth_from(&unbounded), CEILING);
+    assert_eq!(depth_cause(&unbounded), DepthCause::Unbounded);
+
+    // A prefix that is itself the unbounded sentinel narrows nothing, so the
+    // fact is still "more rows than a read can reach" rather than a request
+    // bound this plan was cut to.
+    let vacuous = DepthInputs {
+        licensed_prefix: Some(u64::MAX),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&vacuous), CEILING);
+    assert_eq!(depth_cause(&vacuous), DepthCause::Unbounded);
+
+    // A prefix one row past the ceiling: the depth recorded is NOT the prefix,
+    // so the prefix is not the cause.
+    let over = DepthInputs {
+        licensed_prefix: Some(u64::from(u32::MAX)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&over), CEILING);
+    assert_eq!(depth_cause(&over), DepthCause::ReadCeiling);
+
+    // The neighbour: a prefix exactly at the ceiling IS the depth recorded.
+    let at = DepthInputs {
+        licensed_prefix: Some(u64::from(CEILING)),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&at), CEILING);
+    assert_eq!(depth_cause(&at), DepthCause::LicensedPrefix);
+
+    // And a prefix far below it, so the control's depth differs from every row
+    // above: a case that read the prefix and a case that ignored it cannot both
+    // pass here.
+    let narrow = DepthInputs {
+        licensed_prefix: Some(7),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&narrow), 7);
+    assert_eq!(depth_cause(&narrow), DepthCause::LicensedPrefix);
+}
+
+/// A licensed prefix of zero rows under an unbounded declaration is the floor,
+/// not the prefix.
+///
+/// Both cases record a depth of one, which is exactly why the cause has to tell
+/// them apart: a request that licensed one row got the row it asked for, and a
+/// request that licensed none got a probing row the plan added over its head so
+/// the producer — not the plan — is what reports the stratum empty. Crediting
+/// the second to the prefix would say the caller asked for the row it is about
+/// to be handed.
+#[test]
+fn a_prefix_of_no_rows_is_the_floor_rather_than_the_prefix() {
+    let none = DepthInputs {
+        licensed_prefix: Some(0),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&none), 1, "the floor lifts it to a probing row");
+    assert_eq!(depth_cause(&none), DepthCause::Floor);
+
+    // The neighbour that must NOT move: one licensed row is one row the caller
+    // really asked for.
+    let one = DepthInputs {
+        licensed_prefix: Some(1),
+        ..depth_inputs(u64::MAX)
+    };
+    assert_eq!(depth_from(&one), 1);
+    assert_eq!(depth_cause(&one), DepthCause::LicensedPrefix);
+
+    // And the finite branch already agreed, which is the consistency at issue:
+    // the same zero against a declaration of ten reads the same way.
+    let finite = DepthInputs {
+        licensed_prefix: Some(0),
+        ..depth_inputs(10)
+    };
+    assert_eq!(depth_from(&finite), 1);
+    assert_eq!(depth_cause(&finite), DepthCause::Floor);
+}
+
+/// A cause that names an input names an input whose value IS the recorded depth.
+///
+/// This is the property the ceiling bug broke, stated without restating the
+/// arithmetic: a plan declaring `u32::MAX` rows records a depth of
+/// `u32::MAX - 1`, so "the declaration bound it" is a claim the two numbers
+/// falsify. The check needs no second derivation — it reads the depth the
+/// planner recorded and the input the planner blamed and asks whether they are
+/// the same number — which is why it can sit over a sweep of every boundary the
+/// derivation has on every leg without becoming the reimplementation it exists
+/// to rule out.
+///
+/// The three causes that name no input are pinned to the number they mean
+/// instead: the floor is one row, and the ceiling and the unbounded declaration
+/// are the deepest a read can be taken to.
+#[test]
+fn a_named_cause_names_the_number_recorded() {
+    let boundaries = [
+        0_u64,
+        1,
+        2,
+        u64::from(CEILING) - 1,
+        u64::from(CEILING),
+        u64::from(u32::MAX),
+        u64::from(u32::MAX) + 1,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+    let cardinalities = [
+        None,
+        Some(0),
+        Some(1),
+        Some(u64::from(CEILING)),
+        Some(u64::from(u32::MAX)),
+        Some(u64::MAX),
+    ];
+    let selectivities = [None, Some(0), Some(1), Some(500_000), Some(1_000_000)];
+    let prefixes = [
+        None,
+        Some(0),
+        Some(1),
+        Some(u64::from(CEILING)),
+        Some(u64::from(u32::MAX)),
+        Some(u64::MAX),
+    ];
+    let mut seen: Vec<DepthCause> = Vec::new();
+    for declared in boundaries {
+        for cardinality in cardinalities {
+            for selectivity_ppm in selectivities {
+                for licensed_prefix in prefixes {
+                    let inputs = DepthInputs {
+                        declared,
+                        cardinality,
+                        selectivity_ppm,
+                        selectivity_terms: if selectivity_ppm.is_some() {
+                            vec![0]
+                        } else {
+                            Vec::new()
+                        },
+                        licensed_prefix,
+                    };
+                    let depth = u64::from(depth_from(&inputs));
+                    let cause = depth_cause(&inputs);
+                    if !seen.contains(&cause) {
+                        seen.push(cause);
+                    }
+                    // `min` is not the derivation under test: it is the
+                    // definition of "the narrower of the two declarations", and
+                    // the selectivity leg is checked against it rather than
+                    // recomputed.
+                    let measured = cardinality.map_or(declared, |rows| declared.min(rows));
+                    // Independent checks rather than one `match`: every cause
+                    // the classification has is pinned below, and the tally at
+                    // the end refuses a run that reached an eighth.
+                    if cause == DepthCause::Declaration {
+                        assert_eq!(
+                            declared, depth,
+                            "the declaration was blamed for a depth it does not equal: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::Cardinality {
+                        assert_eq!(
+                            cardinality,
+                            Some(depth),
+                            "the measurement was blamed for a depth it does not equal: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::LicensedPrefix {
+                        assert_eq!(
+                            licensed_prefix,
+                            Some(depth),
+                            "the request's bound was blamed for a depth it does not equal: \
+                             {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::Selectivity {
+                        assert!(
+                            depth < measured,
+                            "a ratio that narrowed nothing was blamed: {inputs:?}"
+                        );
+                        assert!(
+                            licensed_prefix.is_none_or(|rows| rows >= depth),
+                            "the request's bound was at least as narrow, so the ratio is not \
+                             what bound this: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::Floor {
+                        assert_eq!(
+                            depth, 1,
+                            "the floor means one probing row and nothing else: {inputs:?}"
+                        );
+                    }
+                    if cause == DepthCause::ReadCeiling || cause == DepthCause::Unbounded {
+                        assert_eq!(
+                            depth,
+                            u64::from(CEILING),
+                            "a read that went as deep as a read can go is the only thing either \
+                             of these means: {inputs:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // The sweep is worth what it covers: every cause the classification has must
+    // have been reached, or the assertions above ran over a hole.
+    seen.sort_by_key(|cause| format!("{cause:?}"));
+    assert_eq!(
+        seen,
+        vec![
+            DepthCause::Cardinality,
+            DepthCause::Declaration,
+            DepthCause::Floor,
+            DepthCause::LicensedPrefix,
+            DepthCause::ReadCeiling,
+            DepthCause::Selectivity,
+            DepthCause::Unbounded,
+        ],
+        "the sweep reaches every cause"
+    );
 }

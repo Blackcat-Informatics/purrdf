@@ -375,12 +375,31 @@ pub enum DepthCause {
     /// Every other input reached zero and the floor lifted the read to a single
     /// probing row, so that emptiness is reported by the producer rather than
     /// claimed by the plan.
+    ///
+    /// Zero arrives by every road the derivation has — a declaration, a
+    /// measurement, a selectivity that scaled the bound to nothing, or a request
+    /// licensing no rows — and the last of those is reported here even under an
+    /// unbounded declaration, where it is the only input the derivation had.
+    /// The alternative would credit the request's bound with a depth of one that
+    /// the request asked zero of.
     Floor,
     /// The declaration promised more rows than a read can reach and no licensed
     /// prefix narrowed it, so the depth is the deepest a read can be taken to.
+    ///
+    /// A prefix that is itself [`u64::MAX`] narrows nothing, so it lands here
+    /// rather than under [`Self::LicensedPrefix`]: the recorded depth would be
+    /// the same number with the prefix absent, and naming it as the cause would
+    /// credit the request's bound with a narrowing the request did not make.
     Unbounded,
     /// The derived bound was finite but deeper than a plan can record, so it sits
     /// at the read ceiling.
+    ///
+    /// Decided by the clamp itself rather than by a comparison beside it, so the
+    /// depth and this cause cannot disagree about where the ceiling is — the
+    /// full argument is on
+    /// [`depth_cause`](crate::depth_cause). It reaches this variant from either
+    /// branch of the derivation: a finite declaration whose narrowed bound is
+    /// deeper than the ceiling, and an unbounded one whose licensed prefix is.
     ReadCeiling,
 }
 

@@ -1009,6 +1009,17 @@ fn consult(
 /// disagree with the planner at the ceiling and refuse an honest plan.
 #[must_use]
 pub fn depth_from(inputs: &DepthInputs) -> u32 {
+    clamp_depth(derived_bound(inputs))
+}
+
+/// The derivation with every step applied and the read ceiling not yet imposed:
+/// exactly the number [`depth_from`] hands its clamp.
+///
+/// Named rather than written inline so the clamp has an argument something else
+/// can hold. [`depth_cause`] needs to know whether the ceiling is what fixed the
+/// recorded depth, and the only honest way to ask that is to run the same
+/// derivation and then the same clamp — see [`bound_by_ceiling`].
+fn derived_bound(inputs: &DepthInputs) -> u64 {
     let bound = measured_bound(inputs);
     // An unbounded stratum has no row count for a ratio to be a fraction of, so
     // the selectivity step is skipped rather than applied: a fraction of an
@@ -1020,9 +1031,9 @@ pub fn depth_from(inputs: &DepthInputs) -> u32 {
     // an answer that provably cannot use more than `k` of them, is a read of `k`
     // rows and not an unbounded read.
     if bound == u64::MAX {
-        return clamp_depth(inputs.licensed_prefix.map_or(u64::MAX, |rows| rows.max(1)));
+        return inputs.licensed_prefix.map_or(u64::MAX, |rows| rows.max(1));
     }
-    clamp_depth(prefixed(narrowed(bound, inputs), inputs).max(1))
+    prefixed(narrowed(bound, inputs), inputs).max(1)
 }
 
 /// The declaration lowered by the reported cardinality: the first step of
@@ -1069,27 +1080,56 @@ fn prefixed(narrowed: u64, inputs: &DepthInputs) -> u64 {
 
 /// Which recorded input bound the depth [`depth_from`] derives from `inputs`.
 ///
-/// Built from the **same** three steps `depth_from` applies, in the same order,
-/// so the explanation is a reading of that derivation rather than a second
-/// derivation that happens to agree with it. A caller looking at a depth of one
-/// cannot otherwise tell a floored zero from a declaration of one row, and the
-/// two call for completely different action.
+/// Built from the **same** functions `depth_from` applies, in the same order, so
+/// the explanation is a reading of that derivation rather than a second
+/// derivation that happens to agree with it. Every leg below is a call into that
+/// derivation's own pieces — [`measured_bound`], [`narrowed`], [`prefixed`], and
+/// for the ceiling [`bound_by_ceiling`], which runs [`clamp_depth`] itself. A
+/// caller looking at a depth of one cannot otherwise tell a floored zero from a
+/// declaration of one row, and the two call for completely different action.
+///
+/// The ceiling leg used to be the exception and it was wrong for it. It asked
+/// whether the derived bound fitted in a `u32`, which is a restatement of where
+/// the ceiling is rather than a reading of it — and it restated it one row too
+/// wide, because [`MAX_READ_DEPTH`] is `u32::MAX - 1`. A bound of exactly
+/// `u32::MAX` therefore converted cleanly, skipped this arm, and was reported as
+/// the declaration (or the cardinality, or the selectivity) that named it, while
+/// the depth beside it had been cut to the ceiling with nothing saying so. It is
+/// decided by the clamp now, so the two cannot part company again.
 #[must_use]
 pub fn depth_cause(inputs: &DepthInputs) -> DepthCause {
+    let derived = derived_bound(inputs);
     let bound = measured_bound(inputs);
     if bound == u64::MAX {
-        return match inputs.licensed_prefix {
-            Some(_) => DepthCause::LicensedPrefix,
-            None => DepthCause::Unbounded,
+        // An unbounded declaration reaches its depth by four different roads and
+        // they are four different facts. Nothing narrowed it — no prefix, or a
+        // prefix that is itself the unbounded sentinel and so bounds nothing —
+        // and the depth stands in for "more rows than a read can reach". Or a
+        // prefix did narrow it, and then it is the number recorded, unless the
+        // floor lifted it or the ceiling cut it, in which case that is.
+        if derived == u64::MAX {
+            return DepthCause::Unbounded;
+        }
+        // The `max(1)` in the derivation, read the same way the finite branch
+        // reads its own floor: a request licensing fewer rows than the
+        // derivation returned is a request the floor overrode, and the one row
+        // recorded is the probe rather than the caller's bound.
+        if inputs.licensed_prefix.is_some_and(|rows| rows < derived) {
+            return DepthCause::Floor;
+        }
+        return if bound_by_ceiling(derived) {
+            DepthCause::ReadCeiling
+        } else {
+            DepthCause::LicensedPrefix
         };
+    }
+    if bound_by_ceiling(derived) {
+        return DepthCause::ReadCeiling;
     }
     let narrowed = narrowed(bound, inputs);
     let bounded = prefixed(narrowed, inputs);
     if bounded == 0 {
         return DepthCause::Floor;
-    }
-    if u32::try_from(bounded).is_err() {
-        return DepthCause::ReadCeiling;
     }
     if inputs.licensed_prefix.is_some_and(|rows| rows < narrowed) {
         return DepthCause::LicensedPrefix;
@@ -1104,6 +1144,20 @@ pub fn depth_cause(inputs: &DepthInputs) -> DepthCause {
         return DepthCause::Cardinality;
     }
     DepthCause::Declaration
+}
+
+/// Whether the read ceiling is what fixed the depth [`depth_from`] records for a
+/// derivation that reached `derived`.
+///
+/// This is the whole test, and it is deliberately not a comparison against
+/// [`MAX_READ_DEPTH`]: it hands the number to the clamp `depth_from` hands it to
+/// and asks whether the clamp gave it back. A bound at or below the ceiling
+/// survives the round trip unchanged; a bound above it comes back at the
+/// ceiling, which is a different number. So where the ceiling is, and what
+/// counts as being cut by it, are stated once — in [`clamp_depth`] — and read
+/// here rather than repeated.
+fn bound_by_ceiling(derived: u64) -> bool {
+    u64::from(clamp_depth(derived)) != derived
 }
 
 /// Record a derived bound at the deepest depth a read can be taken to.
