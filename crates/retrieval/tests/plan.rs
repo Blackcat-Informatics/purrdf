@@ -2193,3 +2193,237 @@ fn the_pinned_literal_begins_with_this_builds_plan_version() {
     );
     assert_eq!(PLAN_VERSION, 4);
 }
+
+// ---------------------------------------------------------------------------
+// The presence tag, on its own
+// ---------------------------------------------------------------------------
+
+/// A plan carrying nothing but a two-row statistics snapshot: one subject the
+/// provider answered for with `measured`, one it was silent about.
+///
+/// Every other section is empty, deliberately. The snapshot is what this pair of
+/// tests is about, and emptying everything ahead of it puts the section at an
+/// offset a reader can verify by adding up six numbers rather than by trusting a
+/// search.
+fn statistics_only_plan(measured: Option<u64>) -> Plan {
+    Plan {
+        version: Plan::VERSION,
+        request_terms: Vec::new(),
+        read_bound: ReadBound::Complete,
+        producer_bindings: Vec::new(),
+        producer_decisions: Vec::new(),
+        unserved_terms: Vec::new(),
+        stratum_depths: HashMap::new(),
+        stratum_derivations: BTreeMap::new(),
+        statistics_snapshot: StatisticsSnapshot {
+            source: "host".to_owned(),
+            revision: "r1".to_owned(),
+            entries: StatisticsEntries::new(vec![
+                StatisticsEntry {
+                    subject: "http://example.org/m".to_owned(),
+                    cardinality: measured,
+                    selectivity_ppm: None,
+                    selectivity_terms: Vec::new(),
+                },
+                StatisticsEntry {
+                    subject: "http://example.org/s".to_owned(),
+                    cardinality: None,
+                    selectivity_ppm: None,
+                    selectivity_terms: Vec::new(),
+                },
+            ])
+            .expect("the fixture names each subject once"),
+        },
+        registry_instance_id: RegistryId::from_raw(7),
+        registry_content_fingerprint: "f".to_owned(),
+        origin: PlanOrigin::SameProcess,
+    }
+}
+
+/// Where [`statistics_only_plan`]'s snapshot begins in its canonical bytes.
+///
+/// Two bytes of version, then five empty length-framed sections — request terms,
+/// producer bindings, producer decisions, stratum depths, stratum derivations —
+/// each of which writes its eight-byte count of zero and nothing else. So
+/// `2 + 5 * 8`, and bytes `0..42` are the version followed by forty zeroes, which
+/// the test below asserts rather than assumes.
+const STATISTICS_SECTION_OFFSET: usize = 42;
+
+/// Where the measured subject's cardinality presence tag sits.
+///
+/// [`STATISTICS_SECTION_OFFSET`], then the framed source (`8 + 4`), the framed
+/// revision (`8 + 2`), the entry count (`8`) and the first subject (`8 + 20`):
+/// `42 + 12 + 10 + 8 + 28`.
+const MEASURED_CARDINALITY_OFFSET: usize = 100;
+
+/// The statistics section of `statistics_only_plan(Some(42))`, byte for byte,
+/// written by hand.
+///
+/// Hand-written for the reason the whole-plan literal above is, and separate
+/// from it for a narrower one: this is the section the layout version moved for,
+/// and a reader who wants to see what "absent is not zero" costs in bytes should
+/// not have to find it inside four hundred and seventy-six of them.
+const PINNED_STATISTICS_SECTION: &[u8] = &[
+    0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // source length: 4
+    0x68, 0x6f, 0x73, 0x74, // "host"
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // revision length: 2
+    0x72, 0x31, // "r1"
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 2 entries, ascending
+    // --- the subject the provider answered for ---
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // subject length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x6d, // "/m"
+    0x01, // cardinality: PRESENT  <- MEASURED_CARDINALITY_OFFSET
+    0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // cardinality: 42, u64 LE
+    0x00, // selectivity: ABSENT
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // selectivity terms: 0 indices
+    // --- the subject the provider was silent about ---
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // subject length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x73, // "/s"
+    0x00, // cardinality: ABSENT — and no value follows it
+    0x00, // selectivity: ABSENT
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // selectivity terms: 0 indices
+];
+
+/// The nine bytes a measured cardinality of zero occupies.
+const MEASURED_ZERO: &[u8] = &[
+    0x01, // PRESENT
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // the measurement: 0, u64 LE
+];
+
+/// The one byte an unmeasured cardinality occupies.
+const MEASURED_NOTHING: &[u8] = &[
+    0x00, // ABSENT — the value is not written at all
+];
+
+/// A measured cardinality and a silent one are spelled out, side by side, in the
+/// section the layout version moved for.
+#[test]
+fn the_statistics_section_spells_a_measured_cardinality_beside_a_silent_one() {
+    let plan = statistics_only_plan(Some(42));
+    plan.certify()
+        .expect("a plan deriving no depth has no depth to contradict");
+    let encoded = plan.canonical_bytes();
+
+    // The offset, verified rather than trusted: the version, then five empty
+    // sections' worth of zeroed counts.
+    assert_eq!(&encoded[..2], &PLAN_VERSION.to_le_bytes());
+    assert_eq!(
+        &encoded[2..STATISTICS_SECTION_OFFSET],
+        &[0u8; STATISTICS_SECTION_OFFSET - 2],
+        "five empty sections precede the snapshot, each an eight-byte count of zero"
+    );
+
+    let section = &encoded[STATISTICS_SECTION_OFFSET..][..PINNED_STATISTICS_SECTION.len()];
+    for (index, (written, pinned)) in section.iter().zip(PINNED_STATISTICS_SECTION).enumerate() {
+        assert_eq!(
+            written,
+            pinned,
+            "byte {} of the plan (byte {index} of the statistics section): the \
+             encoder wrote {written:#04x} where the pinned literal spells {pinned:#04x}",
+            STATISTICS_SECTION_OFFSET + index
+        );
+    }
+    assert_eq!(section, PINNED_STATISTICS_SECTION);
+
+    // And the section really is the whole of what follows it up to the registry
+    // identities, so the literal above is not pinning a prefix of a longer one.
+    assert_eq!(
+        encoded.len(),
+        STATISTICS_SECTION_OFFSET + PINNED_STATISTICS_SECTION.len() + 8 + 9 + 8 + 1,
+        "the snapshot is followed by the instance counter, the framed \
+         one-character fingerprint, an empty unserved list and the complete bound"
+    );
+}
+
+/// "The provider measured zero" and "the provider measured nothing" are one byte
+/// apart, and that byte reaches the plan's identity.
+///
+/// This is the distinction the whole record exists for, and the one a sentinel
+/// encoding would have destroyed: every `u64` is a legal measurement, so a
+/// spelling that reserved one of them for absence would make the reserved
+/// measurement unrepresentable — and zero, the value a provider reports when it
+/// counted and found no rows, is exactly the measurement such a scheme would
+/// most likely reserve.
+///
+/// The oracle is the byte AND the identity. Bytes alone would pass for an
+/// encoding that distinguished the two and a digest that did not read the
+/// distinguishing byte; identity alone would pass for an encoder that moved
+/// something else entirely.
+#[test]
+fn a_measured_zero_and_a_silent_subject_differ_in_a_byte_and_in_identity() {
+    let measured_zero = statistics_only_plan(Some(0));
+    let silent = statistics_only_plan(None);
+
+    let zero_bytes = measured_zero.canonical_bytes();
+    let silent_bytes = silent.canonical_bytes();
+
+    // The one byte: the presence tag. It is `01` for the measurement of zero and
+    // `00` for the silence, at the same offset, and the eight bytes of the
+    // measurement itself follow only the first.
+    assert_eq!(
+        &zero_bytes[MEASURED_CARDINALITY_OFFSET..][..MEASURED_ZERO.len()],
+        MEASURED_ZERO,
+        "a measured zero is a present tag followed by eight zero bytes"
+    );
+    assert_eq!(
+        &silent_bytes[MEASURED_CARDINALITY_OFFSET..][..MEASURED_NOTHING.len()],
+        MEASURED_NOTHING,
+        "and a silence is the absent tag, with no measurement after it"
+    );
+    assert_eq!(
+        zero_bytes
+            .iter()
+            .zip(&silent_bytes)
+            .position(|(left, right)| left != right),
+        Some(MEASURED_CARDINALITY_OFFSET),
+        "the two encodings agree up to the presence tag and part company there"
+    );
+    assert_eq!(
+        zero_bytes.len() - silent_bytes.len(),
+        8,
+        "the measurement's own eight bytes are written only when there is one"
+    );
+
+    assert_ne!(zero_bytes, silent_bytes);
+    assert_ne!(
+        measured_zero.id(),
+        silent.id(),
+        "a plan planned against a counted zero and one planned against a silence \
+         must not share an identity, or a caller comparing identities would be \
+         told two different measurements were one"
+    );
+    assert_ne!(measured_zero, silent);
+
+    // The control: the difference above is the cardinality's and nothing else's.
+    // Two independent builds of the same measurement agree byte for byte, so a
+    // fixture that varied in some other way could not have produced it.
+    assert_eq!(
+        statistics_only_plan(Some(0)).canonical_bytes(),
+        zero_bytes,
+        "the encoding is a pure function of the plan"
+    );
+    assert_eq!(statistics_only_plan(Some(0)).id(), measured_zero.id());
+
+    // The valid neighbours: zero is an ordinary measurement, not a special one.
+    // It is as distinct from one as it is from silence, and its round trip
+    // reads back as a measurement rather than as an absence.
+    for other in [Some(1), Some(42)] {
+        let neighbour = statistics_only_plan(other);
+        assert_ne!(neighbour.id(), measured_zero.id(), "{other:?} is not zero");
+        assert_ne!(neighbour.id(), silent.id(), "{other:?} is not silence");
+    }
+    for measured in [Some(0), Some(1), Some(42), None] {
+        let plan = statistics_only_plan(measured);
+        let decoded =
+            Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical decode");
+        assert_eq!(
+            decoded.statistics_snapshot.entries[0].cardinality, measured,
+            "a decoded {measured:?} is the value that was written, never the other one"
+        );
+        assert_eq!(decoded.id(), plan.id());
+    }
+}
