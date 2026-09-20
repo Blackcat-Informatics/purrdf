@@ -141,7 +141,7 @@ fn mask_for_width(width: u32) -> u64 {
 /// Use [`bits_for`] to choose `width` from the maximum value the vector will ever
 /// hold. This is the builder; [`to_bytes`](Self::to_bytes) serializes it and
 /// [`IntVectorRef`] reads it back without allocating.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntVector {
     /// Bits per stored value, `0..=64`.
     width: u32,

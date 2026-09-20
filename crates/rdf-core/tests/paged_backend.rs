@@ -17,12 +17,14 @@
 //!    distribution equals the independently-computed per-page sum.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_core::{
-    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageFault,
-    PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset,
-    PagedFreezeError, PagedQuadTable, RdfDataset, RdfDatasetBuilder, RdfLiteral, StopCause, TermId,
-    TermRef, TermValue, render_canonical_turtle,
+    CountingDemandProvider, DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
+    PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider,
+    PagedDataset, PagedFreezeError, PagedQuadTable, PagedQueryError, PagedQueryLimits, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, StopCause, TermId, TermRef, TermValue, ViewOperationStatus,
+    render_canonical_turtle,
 };
 
 // The standard RDF Collection vocabulary (crate-internal constants are not public;
@@ -395,6 +397,178 @@ fn cross_page_cost_model_is_per_page_sum() {
     );
     // Falsifiability: the sum spans multiple pages (not a single-page constant).
     assert!(expected >= 7, "skewed corpus totals at least 5 + 1 + 1");
+}
+
+/// Beyond the seal pass's one unavoidable pull per page, `cardinality_estimate`
+/// must charge zero additional materializations on both surfaces that offer it —
+/// `PagedDataset` (planning before any query view exists) and `PagedQueryView`
+/// (planning inside one fallible operation) — and must leave the view's
+/// operational status untouched.
+#[test]
+fn cardinality_estimate_materializes_no_page() {
+    // Two pages, both carrying predicate `p`: the estimate must read only sealed
+    // `PageSummary` metadata, on BOTH `cardinality_estimate` surfaces — `PagedDataset`
+    // (planning before any query view exists) and `PagedQueryView` (planning inside
+    // one fallible operation).
+    let p = iri("p");
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(|| build_page(&[(iri("a0"), iri("p"), iri("o0"))])),
+        Box::new(|| build_page(&[(iri("a1"), iri("p"), iri("o1"))])),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let p_id = paged.term_id_by_value(&p).expect("p interned");
+
+    // The seal pass materialized each page exactly once; that is the only charge the
+    // whole test should ever record.
+    let hits_after_seal = provider.hits();
+    assert_eq!(
+        hits_after_seal,
+        paged.page_count(),
+        "seal pass pulls each page once"
+    );
+
+    // Surface 1: `PagedDataset::cardinality_estimate` — used by planning before any
+    // query view is constructed.
+    let dataset_estimate = paged.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(dataset_estimate, 2, "one matching row per page");
+    assert_eq!(
+        provider.hits(),
+        hits_after_seal,
+        "PagedDataset::cardinality_estimate must materialize no page"
+    );
+
+    // Surface 2: `PagedQueryView::cardinality_estimate` — used by planning inside a
+    // fallible operation, before any pattern has been read through that operation.
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let view_estimate = view.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(view_estimate, 2, "one matching row per page");
+    assert_eq!(
+        provider.hits(),
+        hits_after_seal,
+        "PagedQueryView::cardinality_estimate must materialize no page"
+    );
+    assert!(
+        matches!(view.operation_status(), ViewOperationStatus::Ready { .. }),
+        "estimating must not touch operational state"
+    );
+}
+
+/// `cardinality_estimate` must return the identical number whether it is asked
+/// before or after the same pattern has been read for real — cold against warm,
+/// on both `PagedDataset`'s per-page cache and `PagedQueryView`'s per-operation
+/// cache — and the two surfaces must agree with each other on the cold answer.
+#[test]
+fn cardinality_estimate_is_residency_independent() {
+    // Page 0 carries two `p` rows, page 1 carries one — both pages are candidates for
+    // (?, p, ?, Any).
+    let p = iri("p");
+    let page0 = build_page(&[
+        (iri("a0"), p.clone(), iri("o0")),
+        (iri("a1"), p.clone(), iri("o1")),
+    ]);
+    let page1 = build_page(&[(iri("b0"), p.clone(), iri("o2"))]);
+    let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    let p_id = paged.term_id_by_value(&p).expect("p interned");
+
+    // Surface 1: `PagedDataset` — its own per-page `OnceLock` cache starts cold.
+    let cold_dataset_estimate = paged.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    // Force both pages resident through a real pattern read.
+    let row_count = paged
+        .quads_for_pattern(None, Some(p_id), None, GraphMatch::Any)
+        .count();
+    assert_eq!(row_count, 3, "sanity: three rows across both pages");
+    let warm_dataset_estimate = paged.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(
+        cold_dataset_estimate, warm_dataset_estimate,
+        "PagedDataset::cardinality_estimate must not depend on page residency"
+    );
+
+    // Surface 2: `PagedQueryView` — its per-OPERATION cache starts cold.
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let cold_view_estimate = view.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    let view_row_count = view
+        .quads_for_pattern(None, Some(p_id), None, GraphMatch::Any)
+        .count();
+    assert_eq!(view_row_count, 3, "sanity: three rows across both pages");
+    let warm_view_estimate = view.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(
+        cold_view_estimate, warm_view_estimate,
+        "PagedQueryView::cardinality_estimate must not depend on operation-cache residency"
+    );
+    assert_eq!(
+        cold_dataset_estimate, cold_view_estimate,
+        "both surfaces apply the identical rule"
+    );
+}
+
+/// `pages_for_pattern`'s predicted candidate set must equal the pages a real
+/// `quads_for_pattern` scan actually consumes: over four pages, only the two that
+/// admit on BOTH the predicate and the graph axis may be named — a page owning a
+/// row on just one axis (wrong predicate in the right graph, or the right
+/// predicate in a different graph) must be excluded by either the summary check
+/// or the graph-index posting list itself.
+#[test]
+fn pages_for_pattern_predicts_actual_consumption() {
+    // Four pages. Only pages 0 and 3 can possibly match `(?, p, ?, Named(g))`:
+    // - page 0: `p` in graph `g` — admits on both axes.
+    // - page 1: `q` (not `p`) in graph `g` — the graph axis owns a row, but the
+    //   predicate axis proves it cannot match.
+    // - page 2: `p` in a DIFFERENT graph `h` — the predicate axis owns a row, but the
+    //   graph axis proves it cannot match (and the graph-index posting list for `g`
+    //   never lists it as a candidate at all).
+    // - page 3: `p` in graph `g` — admits on both axes.
+    let g = "http://example.org/g";
+    let h = "http://example.org/h";
+    let build_named = |subject: &str, predicate: &str, object: &str, graph: &str| {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(&format!("http://example.org/{subject}"));
+        let p = b.intern_iri(&format!("http://example.org/{predicate}"));
+        let o = b.intern_iri(&format!("http://example.org/{object}"));
+        let graph = b.intern_iri(graph);
+        b.push_quad(s, p, o, Some(graph));
+        b.freeze().expect("page freeze")
+    };
+    let pages = vec![
+        build_named("a0", "p", "o0", g),
+        build_named("b0", "q", "o1", g),
+        build_named("c0", "p", "o2", h),
+        build_named("d0", "p", "o3", g),
+    ];
+
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    let p_id = paged.term_id_by_value(&iri("p")).expect("p interned");
+    let g_id = paged.term_id_by_value(&iri("g")).expect("g interned");
+
+    let predicted = paged.pages_for_pattern(None, Some(p_id), None, GraphMatch::Named(g_id));
+    assert_eq!(
+        predicted,
+        vec![PageId(0), PageId(3)],
+        "only the pages genuinely admitting both axes are predicted"
+    );
+
+    // The actual consumption: the same pattern, run through a fresh fallible
+    // operation under an UNBOUNDED budget, read to exhaustion.
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let row_count = view
+        .quads_for_pattern(None, Some(p_id), None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(
+        row_count, 2,
+        "sanity: pages 0 and 3 each contribute one row"
+    );
+    let evidence = match view.operation_status() {
+        ViewOperationStatus::Ready { evidence } => evidence,
+        ViewOperationStatus::Failed { error, .. } => {
+            panic!("expected a ready operation, got: {error}")
+        }
+    };
+    assert_eq!(
+        evidence.requested_pages, predicted,
+        "pages_for_pattern predicts exactly the pages the query actually consumed"
+    );
 }
 
 #[test]
@@ -786,6 +960,364 @@ fn from_parts_reconstitutes_without_materializing_pages() {
     );
 }
 
+// ── verify_parts: certifying a warm-restart index against summary drift ─────────
+
+/// A single-page fixture with two variants sharing everything the CHEAP admission
+/// checks compare — term count, quad count, the deterministic reference byte
+/// charge, and capabilities — but disagreeing on which named graph one quad lands
+/// in:
+///
+/// - `honest`: `alice knows bob` AND `bob knows carol` both in graph `g1`;
+///   `g2` is declared but carries zero rows.
+/// - `drifted`: `alice knows bob` stays in `g1`; `bob knows carol` moves to `g2`.
+///
+/// Both variants intern the identical six terms (`alice`, `bob`, `carol`, `knows`,
+/// `g1`, `g2`) and carry two base quads, so `term_count`, `quad_count`, the
+/// logical byte charge (a pure function of the term table and total row counts),
+/// and `capabilities` (`named_graphs: true` either way) are all identical between
+/// them — the existing O(1)/O(term_count) admission checks cannot tell them apart.
+/// Only the PER-GRAPH row split differs: `g1`/`g2` base rows are `(2, 0)` honest
+/// versus `(1, 1)` drifted, which is exactly the shape `PageSummary` tracks and the
+/// graph-pruning index is built from.
+fn graph_drift_fixture() -> (Arc<RdfDataset>, Arc<RdfDataset>, TermValue, TermValue) {
+    let g1 = iri("g1");
+    let g2 = iri("g2");
+
+    let honest = {
+        let mut b = RdfDatasetBuilder::new();
+        let alice = b.intern_iri("http://example.org/alice");
+        let bob = b.intern_iri("http://example.org/bob");
+        let carol = b.intern_iri("http://example.org/carol");
+        let knows = b.intern_iri("http://example.org/knows");
+        let g1_id = intern_value(&mut b, &g1);
+        let g2_id = intern_value(&mut b, &g2);
+        b.push_quad(alice, knows, bob, Some(g1_id));
+        b.push_quad(bob, knows, carol, Some(g1_id));
+        b.declare_named_graph(g2_id);
+        b.freeze().expect("honest page freeze")
+    };
+
+    let drifted = {
+        let mut b = RdfDatasetBuilder::new();
+        let alice = b.intern_iri("http://example.org/alice");
+        let bob = b.intern_iri("http://example.org/bob");
+        let carol = b.intern_iri("http://example.org/carol");
+        let knows = b.intern_iri("http://example.org/knows");
+        let g1_id = intern_value(&mut b, &g1);
+        let g2_id = intern_value(&mut b, &g2);
+        b.push_quad(alice, knows, bob, Some(g1_id));
+        // Moved from g1 (honest) to g2: same terms, same quad, different graph.
+        b.push_quad(bob, knows, carol, Some(g2_id));
+        b.freeze().expect("drifted page freeze")
+    };
+
+    (honest, drifted, g1, g2)
+}
+
+/// Materializes the HONEST fixture content on the first call and the DRIFTED
+/// content on every later call — modeling a persisted backend whose stored bytes
+/// were correct when a warm-restart index was originally sealed, but have since
+/// drifted underneath it. Used to certify [`PagedDataset::verify_parts`], which is
+/// the only thing that re-materializes a page regardless of what pruning would
+/// have decided.
+struct GraphDriftProvider {
+    honest: Arc<RdfDataset>,
+    drifted: Arc<RdfDataset>,
+    generation: PageGeneration,
+    calls: AtomicUsize,
+}
+
+impl PageProvider for GraphDriftProvider {
+    /// Always one page — the fixture only needs a single page to drift underneath.
+    fn page_count(&self) -> usize {
+        1
+    }
+
+    /// The fixed generation stamped at construction; drifting the CONTENT a
+    /// generation claims to back is exactly the scenario this provider exists to
+    /// simulate, so the generation itself never changes across calls.
+    fn generation(&self) -> PageGeneration {
+        self.generation
+    }
+
+    /// Returns the honest content on the first call and the drifted content on
+    /// every call after that, tracked by `calls` — modeling a warm-restart provider
+    /// whose backing bytes changed after the index that trusts them was sealed.
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
+        if page != PageId(0) {
+            return Err(PageFault::provider(page, "page out of range"));
+        }
+        let call = self.calls.fetch_add(1, Ordering::Relaxed);
+        let dataset = if call == 0 {
+            self.honest.clone()
+        } else {
+            self.drifted.clone()
+        };
+        // The deterministic reference charge is a pure function of the term table
+        // and total row counts, both identical between the two variants, so this
+        // never itself trips the cheap byte-charge check.
+        Ok(PageMaterialization::in_memory(dataset, self.generation))
+    }
+}
+
+/// `to_parts` → `from_parts` → `verify_parts()` over an HONEST provider (content
+/// never drifts) must certify cleanly: this is the ordinary warm-restart case
+/// `verify_parts` exists to let a caller prove, once, out of band.
+#[test]
+fn verify_parts_accepts_an_honest_warm_restart() {
+    let (honest, _drifted, _g1, _g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(InMemoryPageProvider::with_generation(
+        vec![honest],
+        generation,
+    ));
+    let eager = PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>)
+        .expect("seal honest page");
+    let (dictionary, sealed_generation, parts) = eager.to_parts();
+
+    let warm = PagedDataset::from_parts(
+        dictionary,
+        provider as Arc<dyn PageProvider>,
+        sealed_generation,
+        parts,
+    )
+    .expect("matching warm snapshot");
+
+    warm.verify_parts()
+        .expect("an honest warm restart must certify cleanly");
+}
+
+/// `to_parts` → `from_parts` → `verify_parts()` over the drifting provider must
+/// name the exact page whose materialized content no longer matches the summary
+/// it was sealed with. This is the failure mode no admission-time check can ever
+/// observe: `PagedDataset::from_provider`'s own seal pass reads the page ONCE (the
+/// honest content, call 0) to build the summary the warm-restart metadata then
+/// carries forward unchanged, and ordinary reads only re-materialize pages the
+/// pruning law actually admits — `verify_parts` is the only path that reads every
+/// page unconditionally and can therefore witness the drift.
+#[test]
+fn verify_parts_rejects_a_summary_that_disagrees_with_page_content() {
+    let (honest, drifted, _g1, _g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(GraphDriftProvider {
+        honest,
+        drifted,
+        generation,
+        calls: AtomicUsize::new(0),
+    });
+    let eager = PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>)
+        .expect("seal honest page (call 0)");
+    let (dictionary, sealed_generation, parts) = eager.to_parts();
+
+    let warm = PagedDataset::from_parts(
+        dictionary,
+        provider as Arc<dyn PageProvider>,
+        sealed_generation,
+        parts,
+    )
+    .expect("matching warm snapshot");
+
+    let error = warm
+        .verify_parts()
+        .expect_err("drifted content must not certify");
+    match error {
+        PagedFreezeError::SummaryDrift {
+            page: PageId(0), ..
+        } => {}
+        other => panic!("expected a typed summary-drift error naming page 0, got: {other}"),
+    }
+}
+
+/// The neighbouring valid case the repo's over-refusal rule requires: the SAME
+/// fixture, served HONESTLY (content never drifts), must still complete ordinary
+/// reads and return exactly the right rows — the sealed-digest certification on the
+/// hot admission path (`PagedDataset::page`) must never refuse, nor alter the result
+/// of, a legitimate page.
+#[test]
+fn graph_drift_fixture_with_an_honest_provider_still_returns_the_right_rows() {
+    let (honest, _drifted, g1, g2) = graph_drift_fixture();
+    let provider = Arc::new(InMemoryPageProvider::new(vec![honest]));
+    let paged = PagedDataset::from_provider(provider).expect("seal honest page");
+
+    let g1_id = paged.term_id_by_value(&g1).expect("g1 interned");
+    let g2_id = paged.term_id_by_value(&g2).expect("g2 interned");
+
+    let mut g1_rows: Vec<_> = paged
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+        .map(|q| (to_value(&paged, q.s), to_value(&paged, q.o)))
+        .collect();
+    g1_rows.sort_by_key(row_key_pair);
+    assert_eq!(
+        g1_rows,
+        vec![(iri("alice"), iri("bob")), (iri("bob"), iri("carol")),],
+        "g1 genuinely owns both base rows"
+    );
+
+    assert!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g2_id))
+            .next()
+            .is_none(),
+        "g2 is declared but owns no base rows"
+    );
+
+    paged
+        .verify_parts()
+        .expect("an honest, undecomposed dataset must also certify cleanly");
+}
+
+/// A deterministic sort key for a `(TermValue, TermValue)` pair (mirrors `row_key`
+/// for the single-value case).
+fn row_key_pair(pair: &(TermValue, TermValue)) -> String {
+    format!("{pair:?}")
+}
+
+/// Seal the graph-drift fixture through `provider`, round-trip it through
+/// `to_parts`/`from_parts` (the warm-restart path a consumer takes when it reloads a
+/// persisted index), and hand back the reconstituted snapshot. Neither `to_parts` nor
+/// `from_parts` materializes anything, so the provider has served exactly its first
+/// page materialization when this returns.
+fn warm_restart(provider: Arc<dyn PageProvider>) -> PagedDataset {
+    let eager = PagedDataset::from_provider(Arc::clone(&provider)).expect("seal honest page");
+    let (dictionary, sealed_generation, parts) = eager.to_parts();
+    PagedDataset::from_parts(dictionary, provider, sealed_generation, parts)
+        .expect("matching warm snapshot")
+}
+
+/// An ordinary QUERY — not `verify_parts` — over a warm-restart snapshot whose
+/// provider has drifted underneath it must refuse with a TYPED invalid-data error,
+/// stay refused, and never panic.
+///
+/// The sealed summary says `g1` owns both base rows, so this pattern ADMITS page 0 and
+/// the drifted content really is materialized and read. Every cheap admission check
+/// passes on it — same term count, same term values in the same local order, same quad
+/// count, same byte charge, same capabilities — and only the per-graph row split
+/// disagrees, which is precisely the direction that authorizes skipping rows a page
+/// actually holds. The sealed `PageSummary` digest is compared in every build profile,
+/// so the refusal does not depend on `debug_assertions` and is a `PagedQueryError`
+/// rather than an abort: the content is provider-supplied.
+#[test]
+fn a_query_over_a_drifted_warm_restart_refuses_with_typed_sticky_invalid_data() {
+    let (honest, drifted, g1, _g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(GraphDriftProvider {
+        honest,
+        drifted,
+        generation,
+        calls: AtomicUsize::new(0),
+    });
+    let warm = warm_restart(provider.clone() as Arc<dyn PageProvider>);
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        1,
+        "the honest content (call 0) is what the warm metadata was sealed from"
+    );
+
+    let g1_id = warm.term_id_by_value(&g1).expect("g1 interned");
+    let view = warm.query_view(PagedQueryLimits::UNBOUNDED);
+
+    assert_eq!(
+        view.quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+            .count(),
+        0,
+        "a refused page yields no row"
+    );
+    let first_status = view.operation_status();
+    let (error, evidence) = match first_status.clone() {
+        ViewOperationStatus::Ready { evidence } => {
+            panic!("drifted content must not certify as complete; got ready evidence: {evidence:?}")
+        }
+        ViewOperationStatus::Failed { error, evidence } => (error, evidence),
+    };
+    match &error {
+        PagedQueryError::InvalidData {
+            page: PageId(0),
+            message,
+        } => assert!(
+            message.contains("no longer matches the summary it was sealed with"),
+            "the refusal must say what drifted, got: {message}"
+        ),
+        other => panic!("expected a typed invalid-data refusal naming page 0, got: {other}"),
+    }
+    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+    assert_eq!(
+        evidence.consumed_pages, 0,
+        "a page refused at validation is never charged"
+    );
+    assert_eq!(evidence.consumed_bytes, 0);
+
+    // The terminal error latches: every later read stops at it with the same root
+    // cause rather than retrying the provider.
+    assert_eq!(
+        view.quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+            .count(),
+        0,
+        "the sticky failure stops every later read"
+    );
+    assert_eq!(
+        view.operation_status(),
+        first_status,
+        "root cause stays stable"
+    );
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        2,
+        "one seal call and one refused operation call; no retry after failure"
+    );
+}
+
+/// The neighbouring VALID case the repo's over-refusal rule requires: the SAME query
+/// shape, over the SAME fixture content, served by an honest provider through the SAME
+/// warm-restart path, must COMPLETE and return exactly the rows `g1` holds.
+///
+/// Certifying the sealed summary digest on every admission is a refusal added to the
+/// hot path, so it is proven in both directions — a check that rejected this query
+/// would be the mirror bug of the silent short answer, and it would look like correct
+/// strictness while doing it.
+#[test]
+fn the_same_query_over_an_honest_warm_restart_still_completes() {
+    let (honest, _drifted, g1, g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(InMemoryPageProvider::with_generation(
+        vec![honest],
+        generation,
+    ));
+    let warm = warm_restart(provider as Arc<dyn PageProvider>);
+
+    let g1_id = warm.term_id_by_value(&g1).expect("g1 interned");
+    let g2_id = warm.term_id_by_value(&g2).expect("g2 interned");
+    let view = warm.query_view(PagedQueryLimits::UNBOUNDED);
+
+    let mut rows: Vec<_> = view
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+        .map(|q| (to_value(&view, q.s), to_value(&view, q.o)))
+        .collect();
+    rows.sort_by_key(row_key_pair);
+    assert_eq!(
+        rows,
+        vec![(iri("alice"), iri("bob")), (iri("bob"), iri("carol"))],
+        "an honest page must still return both of g1's rows"
+    );
+    assert!(
+        view.quads_for_pattern(None, None, None, GraphMatch::Named(g2_id))
+            .next()
+            .is_none(),
+        "g2 is declared but owns no base rows"
+    );
+
+    match view.operation_status() {
+        ViewOperationStatus::Ready { evidence } => {
+            assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+            assert_eq!(evidence.consumed_pages, 1);
+        }
+        ViewOperationStatus::Failed { error, .. } => {
+            panic!("an honest warm restart must certify as complete, got: {error}")
+        }
+    }
+    warm.verify_parts()
+        .expect("and the explicitly-paid pass agrees");
+}
+
 struct MismatchedGenerationProvider {
     page: Arc<RdfDataset>,
     current: PageGeneration,
@@ -965,4 +1497,974 @@ fn paged_dataset_is_send_sync() {
     assert_send_sync::<Arc<dyn PageProvider>>();
     assert_send_sync::<CountingDemandProvider>();
     assert_send_sync::<InMemoryPageProvider>();
+}
+
+/// Build a 3-page `PagedDataset` whose named-graph membership can ONLY be recovered
+/// completely by consulting each page's declared-graph list and side tables, not just
+/// its base quads:
+/// * page 0 — a base quad in named graph `gA`.
+/// * page 1 — graph `gEmpty` declared but carrying no rows at all (a page-local
+///   `RdfDatasetBuilder::declare_named_graph` with no quad/reifier/annotation in it).
+/// * page 2 — graph `gReifierOnly` named ONLY by a reifier side-table row's graph slot
+///   (no base quad ever names it).
+fn named_graphs_fixture() -> (Vec<Arc<RdfDataset>>, TermValue, TermValue, TermValue) {
+    let ga = iri("gA");
+    let g_empty = iri("gEmpty");
+    let g_reifier_only = iri("gReifierOnly");
+
+    let page0 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s0");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o0");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_quad(s, p, o, Some(ga_id));
+        b.freeze().expect("page0 freeze")
+    };
+    let page1 = {
+        let mut b = RdfDatasetBuilder::new();
+        let g_empty_id = intern_value(&mut b, &g_empty);
+        b.declare_named_graph(g_empty_id);
+        b.freeze().expect("page1 freeze")
+    };
+    let page2 = {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        let g_reifier_only_id = intern_value(&mut b, &g_reifier_only);
+        b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id));
+        b.freeze().expect("page2 freeze")
+    };
+
+    (vec![page0, page1, page2], ga, g_empty, g_reifier_only)
+}
+
+/// `DatasetView::named_graphs` on a `PagedQueryView` charges ZERO pages: the answer
+/// comes entirely from `GraphPageIndex::keys`, which is folded from each page's
+/// already-sealed `PageSummary`, never from a materialized page. The set it returns
+/// must also be COMPLETE — it must include a declared-empty graph and a graph named
+/// only by a reifier row, not just graphs with base quads.
+#[test]
+fn named_graphs_costs_no_pages() {
+    let (pages, ga, g_empty, g_reifier_only) = named_graphs_fixture();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    // A zero/zero budget: any real page materialization would fail immediately.
+    let view = paged.query_view(PagedQueryLimits::new(0, 0));
+
+    let ids: Vec<_> = DatasetView::named_graphs(&view).collect();
+    assert!(
+        ids.is_sorted(),
+        "named_graphs must yield ascending GlobalTermId order"
+    );
+    let values: std::collections::BTreeSet<String> = ids
+        .iter()
+        .map(|&id| format!("{:?}", to_value(&view, id)))
+        .collect();
+    assert_eq!(
+        values,
+        std::collections::BTreeSet::from([
+            format!("{ga:?}"),
+            format!("{g_empty:?}"),
+            format!("{g_reifier_only:?}"),
+        ]),
+        "named_graphs must include the declared-empty graph and the reifier-only graph"
+    );
+
+    match view.operation_status() {
+        ViewOperationStatus::Ready { evidence } => {
+            assert_eq!(
+                evidence.requested_pages,
+                Vec::new(),
+                "reading graph metadata must request no page"
+            );
+            assert_eq!(
+                evidence.consumed_pages, 0,
+                "reading graph metadata must consume no page"
+            );
+        }
+        ViewOperationStatus::Failed { error, .. } => {
+            panic!("named_graphs must not fail a zero-budget view: {error}")
+        }
+    }
+}
+
+/// The paged `named_graphs()` set, resolved to `TermValue`s, must equal the
+/// `named_graphs()` set of a single merged `RdfDataset` built from the SAME content
+/// (declared-empty graph and reifier-only graph included) — the parity this override
+/// exists to restore between the paged surfaces and `RdfDataset`.
+#[test]
+fn paged_named_graphs_match_a_single_merged_dataset() {
+    let (pages, ga, g_empty, g_reifier_only) = named_graphs_fixture();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    let paged_values: std::collections::BTreeSet<String> = paged
+        .named_graphs()
+        .map(|id| format!("{:?}", to_value(&paged, id)))
+        .collect();
+
+    // The single merged reference dataset: same quad, same declared-empty graph, same
+    // reifier-only graph, built directly (not derived from the pages).
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/s0");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o0");
+    let ga_id = intern_value(&mut b, &ga);
+    b.push_quad(s, p, o, Some(ga_id));
+    let g_empty_id = intern_value(&mut b, &g_empty);
+    b.declare_named_graph(g_empty_id);
+    let a = b.intern_iri("http://example.org/a");
+    let bb = b.intern_iri("http://example.org/b");
+    let c = b.intern_iri("http://example.org/c");
+    let triple = b.intern_triple(a, bb, c);
+    let r = b.intern_iri("http://example.org/r");
+    let g_reifier_only_id = intern_value(&mut b, &g_reifier_only);
+    b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id));
+    let single = b.freeze().expect("single dataset freeze");
+
+    let single_values: std::collections::BTreeSet<String> = single
+        .named_graphs()
+        .map(|id| format!("{:?}", to_value(&*single, id)))
+        .collect();
+
+    assert_eq!(
+        paged_values, single_values,
+        "paged named_graphs() must match a single merged RdfDataset's named_graphs()"
+    );
+    assert_eq!(
+        paged_values,
+        std::collections::BTreeSet::from([
+            format!("{ga:?}"),
+            format!("{g_empty:?}"),
+            format!("{g_reifier_only:?}"),
+        ]),
+        "sanity: the expected three graphs are present"
+    );
+}
+
+// ── `reifier_quads_in_graph` / `annotation_quads_in_graph` narrowing ──
+
+/// Populate `b` with page A's content: a reifier row + an annotation row in a named
+/// graph `g_owns` that genuinely owns rows, a SECOND reifier row + annotation row in
+/// the DEFAULT graph, and a named graph `g_none` declared but carrying nothing.
+fn populate_graph_narrow_page_a(b: &mut RdfDatasetBuilder, g_owns: &TermValue, g_none: &TermValue) {
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    b.push_quad(s, p, o, None);
+
+    let triple1 = b.intern_triple(s, p, o);
+    let r1 = b.intern_iri("http://example.org/r1");
+    let g_owns_id = intern_value(b, g_owns);
+    b.push_reifier_in_graph(r1, triple1, Some(g_owns_id));
+    let conf = b.intern_iri("http://example.org/confidence");
+    let high = b.intern_iri("http://example.org/high");
+    b.push_annotation_in_graph(r1, conf, high, Some(g_owns_id));
+
+    let triple2 = b.intern_triple(o, p, s);
+    let r2 = b.intern_iri("http://example.org/r2");
+    b.push_reifier_in_graph(r2, triple2, None);
+    let source = b.intern_iri("http://example.org/source");
+    let doc = b.intern_iri("http://example.org/doc");
+    b.push_annotation_in_graph(r2, source, doc, None);
+
+    let g_none_id = intern_value(b, g_none);
+    b.declare_named_graph(g_none_id);
+}
+
+/// Populate `b` with page B's content: a reifier row + an annotation row in a
+/// DIFFERENT named graph `g_other`, so `g_owns`'s postings must not pick this page up,
+/// while `GraphMatch::Any` still must.
+fn populate_graph_narrow_page_b(b: &mut RdfDatasetBuilder, g_other: &TermValue) {
+    let a = b.intern_iri("http://example.org/a");
+    let bb = b.intern_iri("http://example.org/b");
+    let c = b.intern_iri("http://example.org/c");
+    let triple3 = b.intern_triple(a, bb, c);
+    let r3 = b.intern_iri("http://example.org/r3");
+    let g_other_id = intern_value(b, g_other);
+    b.push_reifier_in_graph(r3, triple3, Some(g_other_id));
+    let p3 = b.intern_iri("http://example.org/p3");
+    let o3 = b.intern_iri("http://example.org/o3");
+    b.push_annotation_in_graph(r3, p3, o3, Some(g_other_id));
+}
+
+/// Assert, for every graph constraint in `graphs`, that
+/// `reifier_quads_in_graph(g)`/`annotation_quads_in_graph(g)` yield EXACTLY
+/// `reifier_quads()`/`annotation_quads()` filtered by `g.matches(q.g)`, in the same
+/// order — the equivalence [`DatasetView::reifier_quads_in_graph`] and
+/// [`DatasetView::annotation_quads_in_graph`] document as their contract.
+fn assert_graph_narrow_matches_filter<V: DatasetView>(view: &V, graphs: &[GraphMatch<V::Id>]) {
+    for &g in graphs {
+        let expected_reifier: Vec<_> = view.reifier_quads().filter(|q| g.matches(q.g)).collect();
+        let actual_reifier: Vec<_> = view.reifier_quads_in_graph(g).collect();
+        assert_eq!(
+            actual_reifier, expected_reifier,
+            "reifier_quads_in_graph({g:?}) must equal reifier_quads().filter(|q| g.matches(q.g))"
+        );
+
+        let expected_annotation: Vec<_> =
+            view.annotation_quads().filter(|q| g.matches(q.g)).collect();
+        let actual_annotation: Vec<_> = view.annotation_quads_in_graph(g).collect();
+        assert_eq!(
+            actual_annotation, expected_annotation,
+            "annotation_quads_in_graph({g:?}) must equal \
+             annotation_quads().filter(|q| g.matches(q.g))"
+        );
+    }
+}
+
+/// Differential test: on a `PagedDataset`, a `PagedQueryView` over the SAME dataset,
+/// and a plain `RdfDataset` holding the same content merged into one builder,
+/// `reifier_quads_in_graph`/`annotation_quads_in_graph` must equal the corresponding
+/// whole-table stream filtered by `GraphMatch::matches`, for `Any`, `Default`, a graph
+/// that owns rows, and a graph that owns none — row order included, not just the set.
+#[test]
+fn reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every_backend() {
+    let g_owns = iri("gOwns");
+    let g_none = iri("gNone");
+    let g_other = iri("gOther");
+
+    let page_a = {
+        let mut b = RdfDatasetBuilder::new();
+        populate_graph_narrow_page_a(&mut b, &g_owns, &g_none);
+        b.freeze().expect("page a freeze")
+    };
+    let page_b = {
+        let mut b = RdfDatasetBuilder::new();
+        populate_graph_narrow_page_b(&mut b, &g_other);
+        b.freeze().expect("page b freeze")
+    };
+
+    let provider = Arc::new(InMemoryPageProvider::new(vec![page_a, page_b]));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    let query_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+    let g_owns_paged = paged.term_id_by_value(&g_owns).expect("gOwns interned");
+    let g_none_paged = paged.term_id_by_value(&g_none).expect("gNone interned");
+    let paged_graphs = [
+        GraphMatch::Any,
+        GraphMatch::Default,
+        GraphMatch::Named(g_owns_paged),
+        GraphMatch::Named(g_none_paged),
+    ];
+    assert_graph_narrow_matches_filter(&paged, &paged_graphs);
+    assert_graph_narrow_matches_filter(&query_view, &paged_graphs);
+
+    let single = {
+        let mut b = RdfDatasetBuilder::new();
+        populate_graph_narrow_page_a(&mut b, &g_owns, &g_none);
+        populate_graph_narrow_page_b(&mut b, &g_other);
+        b.freeze().expect("single freeze")
+    };
+    let g_owns_single = single.term_id_by_value(&g_owns).expect("gOwns interned");
+    let g_none_single = single.term_id_by_value(&g_none).expect("gNone interned");
+    let single_graphs = [
+        GraphMatch::Any,
+        GraphMatch::Default,
+        GraphMatch::Named(g_owns_single),
+        GraphMatch::Named(g_none_single),
+    ];
+    assert_graph_narrow_matches_filter(&*single, &single_graphs);
+
+    // Sanity: the fixture is not degenerate — `g_owns` genuinely owns rows and
+    // `g_none` genuinely owns none, on every backend.
+    assert_eq!(
+        paged
+            .reifier_quads_in_graph(GraphMatch::Named(g_owns_paged))
+            .count(),
+        1
+    );
+    assert_eq!(
+        paged
+            .reifier_quads_in_graph(GraphMatch::Named(g_none_paged))
+            .count(),
+        0
+    );
+    assert_eq!(
+        paged
+            .annotation_quads_in_graph(GraphMatch::Named(g_owns_paged))
+            .count(),
+        1
+    );
+    assert_eq!(
+        paged
+            .annotation_quads_in_graph(GraphMatch::Named(g_none_paged))
+            .count(),
+        0
+    );
+}
+
+/// Part A: a page that mentions a reifier term ONLY in its base-quad table
+/// (role-agnostic term-table presence via `PageTranslation::to_local` alone would pass
+/// it) must be skipped by `reifier_quads_of` — never materialized — while a page that
+/// genuinely owns a reifier row for the same term is admitted and still yields it.
+#[test]
+fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owning_page() {
+    /// The trap fixture: `r` occurs on this page ONLY as a base-quad subject, so a
+    /// role-agnostic term-table presence check (`PageTranslation::to_local` alone)
+    /// would wrongly pass it as a reifier candidate. It owns no reifier row at all
+    /// and must be skipped by `reifier_quads_of` without ever being materialized.
+    fn mentions_only_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri("http://example.org/r");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        // `r` occurs here ONLY as a base-quad subject — no reifier row names it.
+        b.push_quad(r, p, o, None);
+        b.freeze().expect("mentions-only page freeze")
+    }
+    /// The neighbouring valid fixture: an unrelated triple reified under the SAME
+    /// term `r` the trap page merely mentions, so `reifier_quads_of(r)` must admit
+    /// this page and yield its genuine reifier row.
+    fn owning_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        b.push_reifier(r, triple);
+        b.freeze().expect("owning page freeze")
+    }
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(mentions_only_page),
+        Box::new(owning_page),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let r_global = paged.term_id_by_value(&iri("r")).expect("r interned");
+    let rows: Vec<_> = paged.reifier_quads_of(r_global).collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the owning page's genuine reifier row is yielded"
+    );
+    assert_eq!(
+        to_value(&paged, rows[0].o),
+        TermValue::Triple {
+            s: Box::new(iri("a")),
+            p: Box::new(iri("b")),
+            o: Box::new(iri("c")),
+        },
+        "the yielded row is the owning page's reifier binding"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the mentions-only page (term-table presence, no reifier row) must never be \
+         materialized; only the owning page is"
+    );
+}
+
+/// The `annotation` row's mirror of `reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owning_page`
+/// above: a page that mentions a reifier term ONLY in the REIFIER side table's own
+/// reifier column (role-agnostic term-table presence via `PageTranslation::to_local`
+/// alone would pass it) must be skipped by `annotations_of_with_graph` — never
+/// materialized — while a page that genuinely owns an ANNOTATION row for the same
+/// term is admitted and still yields it.
+#[test]
+fn annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_reifier_table_and_admits_the_owning_page()
+ {
+    /// The trap fixture: `r` occurs on this page ONLY in the reifier side-table's own
+    /// reifier column, so a role-agnostic term-table presence check would wrongly
+    /// pass it as an annotation candidate. It owns no annotation row at all and must
+    /// be skipped by `annotations_of_with_graph` without ever being materialized.
+    fn reifier_only_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        // `r` occurs here ONLY as the reifier table's reifier column — no annotation
+        // row names it.
+        b.push_reifier(r, triple);
+        b.freeze().expect("reifier-only page freeze")
+    }
+    /// The neighbouring valid fixture: a genuine annotation declared under the SAME
+    /// term `r` the trap page merely mentions, so `annotations_of_with_graph(r)` must
+    /// admit this page and yield its real annotation row.
+    fn owning_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri("http://example.org/r");
+        let conf = b.intern_iri("http://example.org/confidence");
+        let high = b.intern_iri("http://example.org/high");
+        b.push_annotation(r, conf, high);
+        b.freeze().expect("owning page freeze")
+    }
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(reifier_only_page),
+        Box::new(owning_page),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let r_global = paged.term_id_by_value(&iri("r")).expect("r interned");
+    let rows: Vec<_> = paged.annotations_of_with_graph(r_global).collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the owning page's genuine annotation row is yielded"
+    );
+    assert_eq!(
+        (to_value(&paged, rows[0].0), to_value(&paged, rows[0].1)),
+        (iri("confidence"), iri("high")),
+        "the yielded row is the owning page's annotation"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the reifier-only page (term-table presence via the reifier column, no \
+         annotation row) must never be materialized; only the owning page is"
+    );
+}
+
+// ── `Named(g)` — cross-page ──────────────────────────────────────────────────────
+
+/// The cross-page half of the `Named(g)` refusal row: a page that DECLARES `<g>`
+/// empty must be skipped for `<g>` (never materialized), while a DIFFERENT page that
+/// genuinely owns base rows in `<g>` is admitted and its rows are still yielded — the
+/// admission law is applied per page, so one page's empty declaration must never
+/// suppress another page's real content.
+#[test]
+fn named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_that_owns_rows_elsewhere()
+ {
+    let g = iri("g");
+    let declares_empty_page = {
+        let mut b = RdfDatasetBuilder::new();
+        let g_id = intern_value(&mut b, &g);
+        b.declare_named_graph(g_id);
+        b.freeze().expect("declares-empty page freeze")
+    };
+    let owns_rows_page = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let g_id = intern_value(&mut b, &g);
+        b.push_quad(s, p, o, Some(g_id));
+        b.freeze().expect("owns-rows page freeze")
+    };
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(move || declares_empty_page.clone()),
+        Box::new(move || owns_rows_page.clone()),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let g_id = paged.term_id_by_value(&g).expect("g interned");
+    let predicted = paged.pages_for_pattern(None, None, None, GraphMatch::Named(g_id));
+    assert_eq!(
+        predicted,
+        vec![PageId(1)],
+        "only the page that genuinely owns rows in g is predicted"
+    );
+
+    let row_count = paged
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "the owning page's one row is yielded");
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the page that only DECLARES g empty must never be materialized; only the \
+         owning page is"
+    );
+}
+
+// ── `Named(g)` side table ─────────────────────────────────────────────────────────
+
+/// The side-table half of the `Named(g)` refusal row: a page whose ONLY content in
+/// graph `<g>` is a reifier row (no base quad ever names `<g>`) must be skipped by
+/// `quads_for_pattern` on that graph — the admission law checks the BASE-quad graph
+/// count, not the reifier one. The neighbouring valid case: that same reifier row is
+/// STILL yielded by `reifier_quads()`, which is never graph-pruned at all.
+#[test]
+fn named_graph_side_table_only_content_is_skipped_by_quads_for_pattern_but_still_yielded_by_reifier_quads()
+ {
+    let mut b = RdfDatasetBuilder::new();
+    let a = b.intern_iri("http://example.org/a");
+    let bb = b.intern_iri("http://example.org/b");
+    let c = b.intern_iri("http://example.org/c");
+    let triple = b.intern_triple(a, bb, c);
+    let r = b.intern_iri("http://example.org/r");
+    let g = b.intern_iri("http://example.org/gReifierOnly");
+    b.push_reifier_in_graph(r, triple, Some(g));
+    let page = b.freeze().expect("page freeze");
+
+    let provider = Arc::new(InMemoryPageProvider::new(vec![page]));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&iri("gReifierOnly"))
+        .expect("g interned");
+
+    assert_eq!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "no base quad exists in gReifierOnly: quads_for_pattern must yield nothing"
+    );
+
+    let reifier_rows: Vec<_> = paged.reifier_quads().collect();
+    assert_eq!(
+        reifier_rows.len(),
+        1,
+        "reifier_quads() is never graph-pruned: the reifier row still surfaces"
+    );
+    assert_eq!(
+        reifier_rows[0].g,
+        Some(g_id),
+        "the surfaced reifier row's graph slot is gReifierOnly"
+    );
+}
+
+// ── cross-stream graph narrowing: each walk reads ITS OWN stream's postings ───────
+
+/// The cross-stream trap for the REIFIER walk, as a refusal pair.
+///
+/// Invalid case: a page whose only content in `<g>` is a BASE quad owns zero reifier
+/// rows there, so `reifier_quads_in_graph(Named(g))` must skip it — never materialize
+/// it. Neighbouring valid case: a page with ZERO base quads in `<g>` but a genuine
+/// reifier row in `<g>` must still be visited and must still yield that row.
+///
+/// The second half is what makes this more than a duplicate of the base-quad law: a
+/// narrowing that consulted the BASE postings for a REIFIER walk would pass the first
+/// assertion and silently drop the second page's row.
+#[test]
+fn reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_only_row_in_g_is_a_reifier_row()
+ {
+    let g = iri("g");
+
+    // Page 0: a base quad in `<g>` and nothing else — zero reifier rows anywhere.
+    let base_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let g_id = intern_value(&mut b, &g);
+        b.push_quad(s, p, o, Some(g_id));
+        b.freeze().expect("base-only page freeze")
+    };
+    // Page 1: its base quad sits in the DEFAULT graph, so it owns zero base rows in
+    // `<g>`; its one reifier row is in `<g>`.
+    let reifier_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let x = b.intern_iri("http://example.org/x");
+        let p = b.intern_iri("http://example.org/p");
+        let y = b.intern_iri("http://example.org/y");
+        b.push_quad(x, p, y, None);
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        let g_id = intern_value(&mut b, &g);
+        b.push_reifier_in_graph(r, triple, Some(g_id));
+        b.freeze().expect("reifier-in-g page freeze")
+    };
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(move || base_only_in_g.clone()),
+        Box::new(move || reifier_only_in_g.clone()),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let g_id = paged.term_id_by_value(&g).expect("g interned");
+
+    let rows: Vec<_> = paged
+        .reifier_quads_in_graph(GraphMatch::Named(g_id))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the page whose only row in g is a REIFIER row must still yield it"
+    );
+    assert_eq!(
+        to_value(&paged, rows[0].s),
+        iri("r"),
+        "the yielded row is page 1's reifier binding"
+    );
+    assert_eq!(rows[0].g, Some(g_id), "and it carries g's graph slot");
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the base-only page owns zero REIFIER rows in g and must never be materialized"
+    );
+
+    // The base-only page is not a page with nothing in g — it genuinely owns g's one
+    // base quad. The reifier walk skipping it is a stream verdict, not a graph one.
+    assert_eq!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        1,
+        "the skipped page's own base row in g is still reachable on the base surface"
+    );
+}
+
+/// The annotation twin of
+/// `reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_only_row_in_g_is_a_reifier_row`.
+///
+/// Invalid case: a page whose only content in `<g>` is a REIFIER row owns zero
+/// annotation rows there, so `annotation_quads_in_graph(Named(g))` must skip it.
+/// Neighbouring valid case: a page with zero base AND zero reifier rows in `<g>`, but
+/// a genuine annotation row in `<g>`, must still yield it.
+#[test]
+fn annotation_quads_in_graph_skips_a_reifier_only_page_and_still_yields_a_page_whose_only_row_in_g_is_an_annotation_row()
+ {
+    let g = iri("g");
+
+    // Page 0: one reifier row in `<g>`, no annotation row anywhere.
+    let reifier_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        let g_id = intern_value(&mut b, &g);
+        b.push_reifier_in_graph(r, triple, Some(g_id));
+        b.freeze().expect("reifier-in-g page freeze")
+    };
+    // Page 1: one annotation row in `<g>`; its reifier row sits in the DEFAULT graph,
+    // so it owns zero base and zero reifier rows in `<g>`.
+    let annotation_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let x = b.intern_iri("http://example.org/x");
+        let p = b.intern_iri("http://example.org/p");
+        let y = b.intern_iri("http://example.org/y");
+        let triple = b.intern_triple(x, p, y);
+        let r2 = b.intern_iri("http://example.org/r2");
+        b.push_reifier_in_graph(r2, triple, None);
+        let conf = b.intern_iri("http://example.org/confidence");
+        let high = b.intern_iri("http://example.org/high");
+        let g_id = intern_value(&mut b, &g);
+        b.push_annotation_in_graph(r2, conf, high, Some(g_id));
+        b.freeze().expect("annotation-in-g page freeze")
+    };
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(move || reifier_only_in_g.clone()),
+        Box::new(move || annotation_only_in_g.clone()),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let g_id = paged.term_id_by_value(&g).expect("g interned");
+
+    let rows: Vec<_> = paged
+        .annotation_quads_in_graph(GraphMatch::Named(g_id))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the page whose only row in g is an ANNOTATION row must still yield it"
+    );
+    assert_eq!(
+        (to_value(&paged, rows[0].p), to_value(&paged, rows[0].o)),
+        (iri("confidence"), iri("high")),
+        "the yielded row is page 1's annotation"
+    );
+    assert_eq!(rows[0].g, Some(g_id), "and it carries g's graph slot");
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the reifier-only page owns zero ANNOTATION rows in g and must never be \
+         materialized"
+    );
+
+    // Neighbouring valid case on the other stream: the skipped page's reifier row in
+    // g is still reachable on the reifier surface.
+    assert_eq!(
+        paged
+            .reifier_quads_in_graph(GraphMatch::Named(g_id))
+            .count(),
+        1,
+        "the skipped page's own reifier row in g is still reachable"
+    );
+}
+
+// ── `pages_for_graph` and the graph-scoped eviction it informs ────────────────────
+
+/// A five-page fixture exercising every way a page can relate to a named graph:
+/// base rows, side-table-only rows, an unrelated graph, and a declared-empty graph.
+///
+/// * page 0 — one base quad in `gA`.
+/// * page 1 — one base quad in `gB` plus a REIFIER row in `gA` (zero base rows in `gA`).
+/// * page 2 — an ANNOTATION row in `gA` (zero base and zero reifier rows in `gA`).
+/// * page 3 — one base quad in `gB` only; nothing at all in `gA`.
+/// * page 4 — declares `gEmpty`, and `gA`, with no row in either.
+fn multi_graph_page_thunks() -> Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Sync>> {
+    let ga = iri("gA");
+    let gb = iri("gB");
+    let g_empty = iri("gEmpty");
+
+    let page0 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s0");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o0");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_quad(s, p, o, Some(ga_id));
+        b.freeze().expect("page 0 freeze")
+    };
+    let page1 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s1");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o1");
+        let gb_id = intern_value(&mut b, &gb);
+        b.push_quad(s, p, o, Some(gb_id));
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_iri("http://example.org/r1");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_reifier_in_graph(r, triple, Some(ga_id));
+        b.freeze().expect("page 1 freeze")
+    };
+    let page2 = {
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri("http://example.org/r2");
+        let conf = b.intern_iri("http://example.org/confidence");
+        let high = b.intern_iri("http://example.org/high");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_annotation_in_graph(r, conf, high, Some(ga_id));
+        b.freeze().expect("page 2 freeze")
+    };
+    let page3 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s3");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o3");
+        let gb_id = intern_value(&mut b, &gb);
+        b.push_quad(s, p, o, Some(gb_id));
+        b.freeze().expect("page 3 freeze")
+    };
+    let page4 = {
+        let mut b = RdfDatasetBuilder::new();
+        let g_empty_id = intern_value(&mut b, &g_empty);
+        b.declare_named_graph(g_empty_id);
+        let ga_id = intern_value(&mut b, &ga);
+        b.declare_named_graph(ga_id);
+        b.freeze().expect("page 4 freeze")
+    };
+
+    vec![
+        Box::new(move || page0.clone()),
+        Box::new(move || page1.clone()),
+        Box::new(move || page2.clone()),
+        Box::new(move || page3.clone()),
+        Box::new(move || page4.clone()),
+    ]
+}
+
+/// `pages_for_graph(g)` is exactly `pages_for_pattern(None, None, None, Named(g))`
+/// for EVERY graph the dataset knows — including a declared-empty graph and a graph
+/// named only by a side-table row, the two cases where "the dataset knows this graph"
+/// and "a page owns a base quad in it" come apart.
+#[test]
+fn pages_for_graph_equals_the_graph_only_pattern_for_every_known_graph() {
+    let provider = Arc::new(CountingDemandProvider::new(multi_graph_page_thunks()));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let graphs: Vec<_> = paged.named_graphs().collect();
+    assert_eq!(
+        graphs.len(),
+        3,
+        "sanity: the fixture knows gA, gB and the declared-empty gEmpty"
+    );
+    for g in graphs {
+        assert_eq!(
+            paged.pages_for_graph(g),
+            paged.pages_for_pattern(None, None, None, GraphMatch::Named(g)),
+            "pages_for_graph({:?}) must equal the graph-only pattern",
+            to_value(&paged, g)
+        );
+    }
+
+    // The declared-empty graph and the annotation-only graph slot both answer "no
+    // base-quad page", which is the honest answer and not an empty-by-accident one.
+    let g_empty = paged
+        .term_id_by_value(&iri("gEmpty"))
+        .expect("gEmpty known");
+    assert!(
+        paged.pages_for_graph(g_empty).is_empty(),
+        "a declared-empty graph owns no base-quad page"
+    );
+    let ga = paged.term_id_by_value(&iri("gA")).expect("gA known");
+    assert_eq!(
+        paged.pages_for_graph(ga),
+        vec![PageId(0)],
+        "only page 0 owns a BASE quad in gA"
+    );
+
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction,
+        "every page-set prediction reads sealed metadata only"
+    );
+}
+
+/// `retain_graph(g)` evicts exactly the pages that hold nothing in `g` in ANY stream,
+/// keeps every page that does, materializes no page, and leaves every read scoped to
+/// `g` answering identically.
+#[test]
+fn retain_graph_keeps_every_page_carrying_the_graph_in_any_stream_and_materializes_none() {
+    let provider = Arc::new(CountingDemandProvider::new(multi_graph_page_thunks()));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+
+    let ga = paged.term_id_by_value(&iri("gA")).expect("gA known");
+    let gb = paged.term_id_by_value(&iri("gB")).expect("gB known");
+
+    // The answers gA must still give after eviction, taken BEFORE it.
+    let base_before: Vec<_> = paged
+        .quads_for_pattern(None, None, None, GraphMatch::Named(ga))
+        .collect();
+    let reifier_before: Vec<_> = paged
+        .reifier_quads_in_graph(GraphMatch::Named(ga))
+        .collect();
+    let annotation_before: Vec<_> = paged
+        .annotation_quads_in_graph(GraphMatch::Named(ga))
+        .collect();
+    assert_eq!(base_before.len(), 1, "sanity: gA owns one base quad");
+    assert_eq!(reifier_before.len(), 1, "sanity: gA owns one reifier row");
+    assert_eq!(
+        annotation_before.len(),
+        1,
+        "sanity: gA owns one annotation row"
+    );
+
+    let hits_before_eviction = provider.hits();
+    let retained = paged.retain_graph(ga);
+    assert_eq!(
+        retained.page_count(),
+        3,
+        "pages 0 (base), 1 (reifier) and 2 (annotation) all carry gA; pages 3 and 4 \
+         hold nothing in it"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_before_eviction,
+        "retain_graph selects pages from sealed metadata and materializes none"
+    );
+
+    // The surviving pages keep the original dictionary, so the retained dataset's row
+    // ids are directly comparable with the pre-eviction ones.
+    assert_eq!(
+        retained
+            .quads_for_pattern(None, None, None, GraphMatch::Named(ga))
+            .collect::<Vec<_>>(),
+        base_before,
+        "eviction must not change gA's base answer"
+    );
+    assert_eq!(
+        retained
+            .reifier_quads_in_graph(GraphMatch::Named(ga))
+            .collect::<Vec<_>>(),
+        reifier_before,
+        "eviction must not drop gA's reifier row (page 1 owns no base quad in gA)"
+    );
+    assert_eq!(
+        retained
+            .annotation_quads_in_graph(GraphMatch::Named(ga))
+            .collect::<Vec<_>>(),
+        annotation_before,
+        "eviction must not drop gA's annotation row (page 2 owns nothing else in gA)"
+    );
+
+    // The neighbouring graph: gB's carriers are pages 1 and 3, a different set — so
+    // the selection is a real per-graph decision, not a constant.
+    let retained_b = paged.retain_graph(gb);
+    assert_eq!(retained_b.page_count(), 2, "pages 1 and 3 carry gB");
+    assert_eq!(
+        retained_b
+            .quads_for_pattern(None, None, None, GraphMatch::Named(gb))
+            .collect::<Vec<_>>(),
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(gb))
+            .collect::<Vec<_>>(),
+        "eviction must not change gB's base answer"
+    );
+
+    // A term that is interned but names no graph carries nothing anywhere.
+    let not_a_graph = paged
+        .term_id_by_value(&iri("s0"))
+        .expect("s0 is interned as a subject");
+    assert_eq!(
+        paged.retain_graph(not_a_graph).page_count(),
+        0,
+        "a term that names no graph is carried by no page"
+    );
+}
+
+/// Retaining a DECLARED-EMPTY graph must keep the graph. A graph declared empty is a
+/// key with no stream postings, so a keep-set built only from "which pages hold rows
+/// in `g`" is empty for it — which would evict every page and delete the graph the
+/// call was asked to retain, the silent-drop direction. The retained dataset must
+/// still enumerate `g`, because `named_graphs()` includes declared-empty graphs and
+/// `GRAPH ?g` binds them.
+#[test]
+fn retain_graph_keeps_a_declared_empty_graph_that_owns_no_row_anywhere() {
+    let provider = Arc::new(CountingDemandProvider::new(multi_graph_page_thunks()));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+
+    let g_empty = paged
+        .term_id_by_value(&iri("gEmpty"))
+        .expect("gEmpty is a declared graph of the whole dataset");
+    assert!(
+        paged.named_graphs().any(|g| g == g_empty),
+        "the whole dataset enumerates the declared-empty graph"
+    );
+    assert!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_empty))
+            .next()
+            .is_none(),
+        "gEmpty owns no base row — this is precisely why the stream postings are empty"
+    );
+
+    let hits_before = provider.hits();
+    let retained = paged.retain_graph(g_empty);
+
+    // The invalid case the old keep-set produced: zero pages, and the graph gone.
+    assert_eq!(
+        retained.page_count(),
+        1,
+        "the page that DECLARES gEmpty is retained, so the graph survives eviction"
+    );
+    assert!(
+        retained.named_graphs().any(|g| g == g_empty),
+        "retaining a graph must not erase it: the retained dataset still enumerates gEmpty"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_before,
+        "retention reads sealed metadata only and materializes no page"
+    );
+
+    // The neighbouring valid case: retention is still a real decision, not "keep all".
+    let gb = paged.term_id_by_value(&iri("gB")).expect("gB known");
+    assert!(
+        paged.retain_graph(gb).page_count() < paged.page_count(),
+        "a graph that only some pages know still evicts the pages that do not"
+    );
 }
