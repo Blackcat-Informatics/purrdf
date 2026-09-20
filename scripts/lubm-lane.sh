@@ -57,7 +57,13 @@
 # ==============================================
 #
 # UBA takes `-index` and `-seed`, and the same pair reproduces the datasets used in
-# the LUBM papers. The conversion needed one fix to inherit that: every generated
+# the LUBM papers. THAT IS CHECKED, not assumed: the pinned `Generator.class`
+# references `java.util.ArrayList` and `java.util.Random` and no hash-ordered
+# collection at all, so its output carries no iteration-order dependence -- and
+# `java.util.Random` is specified, not implementation-defined. Together with JEP 400
+# fixing `file.encoding` to UTF-8 from JDK 18 (and LUBM content being ASCII either
+# way), that makes generation independent of the JDK it runs on, which is why the
+# JDK is NOT among the inputs the corpus digest names. The conversion needed one fix to inherit that: every generated
 # file opens with `<owl:Ontology rdf:about="">`, an EMPTY RELATIVE IRI, which
 # resolves against the document base. Left to default, that base is the input file's
 # own `file://` path -- so the converted N-Quads embedded the scratch directory and
