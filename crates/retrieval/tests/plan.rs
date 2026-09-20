@@ -1369,6 +1369,28 @@ fn a_canonical_document_repeating_or_reordering_a_derivation_is_refused() {
     match Plan::from_canonical_bytes(&forge_stratum_derivations(&plan, &repeated))
         .expect_err("two derivations of one stratum are refused")
     {
+        PlanError::DuplicateStratumDerivation { stratum } => {
+            assert_eq!(stratum, ordered[0].0.as_str());
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The dimensions are told apart. The same stratum repeated in the SNAPSHOT
+    // is refused as a repeated subject, and only there — so a reader is sent to
+    // the record that is actually doubled rather than to the plan's other record
+    // of the same stratum, which is fine in both documents.
+    let rows = plan.statistics_snapshot.entries.to_vec();
+    let stratum_row = rows
+        .iter()
+        .find(|row| row.subject == ordered[0].0.as_str())
+        .expect("the snapshot names the stratum a depth was derived for")
+        .clone();
+    match Plan::from_canonical_bytes(&forge_statistics_entries(
+        &plan,
+        &[stratum_row.clone(), stratum_row],
+    ))
+    .expect_err("two snapshot rows for one subject are refused")
+    {
         PlanError::DuplicateStatisticsSubject { subject } => {
             assert_eq!(subject, ordered[0].0.as_str());
         }

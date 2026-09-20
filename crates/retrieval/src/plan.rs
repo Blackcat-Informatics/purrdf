@@ -1592,7 +1592,10 @@ fn write_derivations(writer: &mut Writer, derivations: &BTreeMap<Iri, DepthInput
 /// A repeated stratum is refused rather than collapsed by the map: two
 /// derivations for one stratum are two explanations of one depth, and silently
 /// keeping the last would let a forged plan carry an explanation the encoder
-/// never wrote.
+/// never wrote. It is refused as a repeated **derivation**, because that is the
+/// record this decoder reads — a statistics subject is a different dimension of
+/// the same plan, and naming it here would send a reader to inspect the snapshot
+/// over a document whose snapshot is fine.
 fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs>, PlanError> {
     let count = reader.count()?;
     let mut derivations = BTreeMap::new();
@@ -1603,7 +1606,7 @@ fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs
             CanonicalSection::StratumDerivations,
             previous.as_ref().map(Iri::as_str),
             stratum.as_str(),
-            |subject| PlanError::DuplicateStatisticsSubject { subject },
+            |stratum| PlanError::DuplicateStratumDerivation { stratum },
         )?;
         let inputs = DepthInputs {
             declared: reader.u64()?,

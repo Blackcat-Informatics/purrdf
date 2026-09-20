@@ -181,6 +181,27 @@ pub enum PlanError {
         subject: String,
     },
 
+    /// A canonical encoding recorded two derivations for one stratum.
+    ///
+    /// A derivation is the argument list a depth was computed from, so two of
+    /// them are two explanations of one number — and the plan carries only one
+    /// of those numbers, so at most one of the explanations can be the one it
+    /// was derived by. Refused rather than resolved by the map that reads them,
+    /// which would keep whichever arrived last and let a forged document carry
+    /// an explanation the encoder never wrote.
+    ///
+    /// This is the derivation record's own refusal and not
+    /// [`DuplicateStatisticsSubject`](Self::DuplicateStatisticsSubject). The two
+    /// name different dimensions of one plan: a snapshot subject is something a
+    /// provider was *asked about*, a stratum derivation is something a depth was
+    /// *computed from*, and a reader repairing a document needs to know which of
+    /// the plan's two records of a stratum it is holding.
+    #[error("plan canonical encoding records a derivation for stratum {stratum} more than once")]
+    DuplicateStratumDerivation {
+        /// The repeated stratum, as its recorded IRI text.
+        stratum: String,
+    },
+
     /// A canonical encoding recorded two depths for one stratum.
     ///
     /// A depth decides how deep that stratum is actually read, so two of them
