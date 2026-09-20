@@ -180,12 +180,15 @@ a scratch name unique per process, with the atomic rename doing the rest.
 
 ## Some guards are past the point a test can reach
 
-A lane validates its knobs before step 1, so those refusals are testable offline and
-are tested. The guards that decide whether to compare a digest against its pin sit at
-step 5, past generation and conversion — and every test that drives a lane points the
-arena somewhere uncreatable precisely so the run stops before the network and the JDK.
-Such a test therefore cannot observe a step-5 guard at all, and asserting that its
-failure message is absent is trivially true.
+A lane validates its knobs and proves its binary before step 1, so those refusals are
+testable offline and are tested. The guards that decide whether to compare a digest
+against its pin sit at step 5, past generation and conversion — and every test that
+drives a lane stops it before step 1, either at the binary probe or at a knob
+validator, so that no test needs the network or a JDK. (Some point the arena somewhere
+uncreatable; most do not need to, because the binary probe comes first.) Such a test
+therefore cannot observe a step-5 guard at all, and asserting that its failure message
+is absent is trivially true — which is why the step-5 laws are proved against the
+shared helpers directly instead, in `crates/bench/tests/lane_common_laws.rs`.
 
 That is worth writing down because it was got wrong twice in this file's own subject
 matter. Both directions of the corpus-pin guard are established by RUNNING the lane:

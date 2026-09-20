@@ -432,3 +432,194 @@ fn sourcing_the_shared_laws_pins_collation_whatever_the_caller_had() {
          order is an input to every digest a lane publishes; output:\n{combined}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// THE LAWS THAT LIVE PAST STEP 1, PROVED WHERE THEY LIVE.
+//
+// `make_bench_lanes.rs` stops every lane before step 1, so it cannot observe these at all — it
+// carries nine negative assertions about step-5 messages that are trivially true for the runs
+// they are made about. These call the helpers directly instead, which is the only harness that
+// reaches them.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn a_file_whose_magic_is_wrong_is_refused_and_a_correct_one_is_not() {
+    let root = scratch("magic");
+    let good = root.join("good.pack");
+    let bad = root.join("bad.pack");
+    write(&good, b"PURRPCK1and then some payload bytes");
+    // Eight bytes of something else passed an emptiness test, got stamped as a pack,
+    // and was queried by every later run. That is the defect this law exists for.
+    write(&bad, b"NOTAPACKand then some payload bytes");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_magic '{}' 'the pack' 'PURRPCK1' 'a purrdf pack' && echo ACCEPTED",
+        good.display()
+    ));
+    assert_eq!(
+        code, 0,
+        "a file with the right magic must be accepted; output:\n{out}"
+    );
+    assert!(out.contains("ACCEPTED"), "output:\n{out}");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_magic '{}' 'the pack' 'PURRPCK1' 'a purrdf pack'",
+        bad.display()
+    ));
+    assert_ne!(code, 0, "wrong magic must be refused; output:\n{out}");
+    assert!(
+        out.contains("is not a purrdf pack"),
+        "the refusal must name the format it is not — this message is assembled from the \
+         helper's `format` argument, which is why it reads as one sentence; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_certificate_does_not_outlive_the_run_that_wrote_it() {
+    // THE ORDERING NOTHING ELSE OBSERVES. A stamp is what a LATER run consults instead
+    // of redoing the work, so one left behind by a run that failed certifies output
+    // that was never finished. `make_bench_lanes.rs` has an assertion named for this
+    // and cannot reach it: the run it makes that assertion about dies 288 lines before
+    // the stamp is written.
+    let root = scratch("certify");
+    let stamp = root.join(".pack-stamp");
+
+    // A run that FAILS must leave no stamp, and must say that it removed it.
+    let (code, out) = in_lane_common(&format!(
+        "printf 'key\\n' > '{}'\nlane_certify '{}' 'the pack stamp'\ndie 'the load failed'",
+        stamp.display(),
+        stamp.display()
+    ));
+    assert_ne!(code, 0, "the probe deliberately fails; output:\n{out}");
+    assert!(
+        !stamp.exists(),
+        "a certificate must not survive the run that wrote it failing — a later run \
+         consults it INSTEAD of loading, so it would certify a pack nothing finished \
+         certifying; output:\n{out}"
+    );
+    assert!(
+        out.contains("removed the pack stamp"),
+        "the removal must be announced: a certificate vanishing silently is its own \
+         puzzle; output:\n{out}"
+    );
+
+    // THE VALID NEIGHBOUR: a run that SUCCEEDS must keep it. A trap that deleted
+    // certificates unconditionally would satisfy the half above and destroy every
+    // reuse path in every lane.
+    let kept = root.join(".kept-stamp");
+    let (code, out) = in_lane_common(&format!(
+        "printf 'key\\n' > '{}'\nlane_certify '{}' 'the pack stamp'\nexit 0",
+        kept.display(),
+        kept.display()
+    ));
+    assert_eq!(code, 0, "output:\n{out}");
+    assert!(
+        kept.exists(),
+        "a certificate written by a run that SUCCEEDED must survive it, or no lane could \
+         ever reuse anything; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_query_set_tripwire_fires_when_the_set_changes_under_it() {
+    // The law `make_bench_lanes.rs` cannot reach, and the one whose absence from the
+    // LUBM lane's most expensive phase went unnoticed: a concurrent run rewriting the
+    // arena mid-flight.
+    let root = scratch("tripwire");
+    let queries = root.join("queries");
+    std::fs::create_dir_all(&queries).expect("create the query directory");
+    write(&queries.join("q1.rq"), b"SELECT * WHERE { ?s ?p ?o }\n");
+
+    let (code, out) = in_lane_common(&format!(
+        "sha=\"$(lane_query_set_digest '{q}')\"\n\
+         lane_verify_query_set '{q}' \"${{sha}}\" 'unchanged' \"PROBE_OUT='x'\" && echo UNCHANGED\n\
+         printf 'SELECT ?x WHERE {{ ?x ?p ?o }}\\n' > '{q}/q1.rq'\n\
+         lane_verify_query_set '{q}' \"${{sha}}\" 'after a rewrite' \"PROBE_OUT='x'\"",
+        q = queries.display()
+    ));
+    assert!(
+        out.contains("UNCHANGED"),
+        "an unchanged set must verify, or the tripwire would fire on every run; \
+         output:\n{out}"
+    );
+    assert_ne!(code, 0, "a rewritten set must be refused; output:\n{out}");
+    assert!(
+        out.contains("CHANGED") && out.contains("PROBE_OUT"),
+        "the refusal must say the set changed and name the arena knob, because a \
+         concurrent run sharing the arena is the overwhelmingly likely cause; \
+         output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_short_query_set_is_refused_and_a_complete_one_is_not() {
+    let root = scratch("count");
+    let queries = root.join("queries");
+    std::fs::create_dir_all(&queries).expect("create the query directory");
+    for n in 1..=3 {
+        write(&queries.join(format!("q{n}.rq")), b"SELECT 1\n");
+    }
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_query_count '{}' 3 \"PROBE_OUT='x'\" && echo COMPLETE",
+        queries.display()
+    ));
+    assert_eq!(
+        code, 0,
+        "the expected count must be accepted; output:\n{out}"
+    );
+    assert!(out.contains("COMPLETE"), "output:\n{out}");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_query_count '{}' 4 \"PROBE_OUT='x'\"",
+        queries.display()
+    ));
+    assert_ne!(code, 0, "a short set must be refused; output:\n{out}");
+    assert!(
+        out.contains("not 4"),
+        "the refusal must name the count the workload is defined to have — no digest is \
+         published for a set that is not the whole set; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_empty_artifact_is_refused_and_a_non_empty_one_is_not() {
+    let root = scratch("nonempty");
+    let empty = root.join("empty.nq");
+    let full = root.join("full.nq");
+    write(&empty, b"");
+    write(
+        &full,
+        b"<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+    );
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_nonempty_file '{}' 'the corpus' && echo ACCEPTED",
+        full.display()
+    ));
+    assert_eq!(code, 0, "output:\n{out}");
+    assert!(out.contains("ACCEPTED"), "output:\n{out}");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_nonempty_file '{}' 'the corpus'",
+        empty.display()
+    ));
+    assert_ne!(code, 0, "an empty artifact must be refused; output:\n{out}");
+    assert!(out.contains("EMPTY"), "output:\n{out}");
+    assert!(
+        !out.contains("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        "the SHA-256 of the empty string must be DESCRIBED and never emitted — an \
+         operator grepping a log for it would otherwise hit the message saying it was \
+         refused; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

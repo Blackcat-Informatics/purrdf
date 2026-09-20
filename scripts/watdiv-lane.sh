@@ -307,14 +307,24 @@ mkdir_checked "${ARENA}"
 extract_start="$(now_ms)"
 stamp_matches=0
 if [[ -f "${DATA_STAMP}" && -s "${DATASET}" && -s "${CENSUS}" ]]; then
-  stamped_tarball="$(awk 'NR==1 {print $1}' "${DATA_STAMP}")"
-  stamped_dataset="$(awk 'NR==2 {print $1}' "${DATA_STAMP}")"
-  if [[ "${stamped_tarball}" == "${TARBALL_SHA}" && -n "${stamped_dataset}" ]]; then
-    if [[ "$(lane_sha256_file "${DATASET}")" == "${stamped_dataset}" ]]; then
+  stamped_tarball="$(sed -n '1p' "${DATA_STAMP}")"
+  stamped_dataset="$(sed -n '2p' "${DATA_STAMP}")"
+  # LINE 3 IS READ, because it is written. It recorded the census digest under a
+  # comment saying a later run re-derives it, and no later run did: only lines 1 and
+  # 2 were ever consulted. `saved.txt` is the only independent check on the candidate
+  # scrape that exists, and it is an input to the query-set digest -- so a census
+  # edited in the arena was reused with its recorded digest unexamined, and at any
+  # non-default seed there is no query-set pin downstream to catch it. A certificate
+  # field nothing reads is not a certificate; it is a comment that looks like one.
+  stamped_census="$(sed -n '3p' "${DATA_STAMP}")"
+  if [[ "${stamped_tarball}" == "${TARBALL_SHA}" && -n "${stamped_dataset}" &&
+    -n "${stamped_census}" ]]; then
+    if [[ "$(lane_sha256_file "${DATASET}")" == "${stamped_dataset}" &&
+      "$(lane_sha256_file "${CENSUS}")" == "${stamped_census}" ]]; then
       stamp_matches=1
     else
-      echo "dataset: the extracted corpus no longer digests to what this arena's" \
-        "stamp recorded; re-extracting rather than reporting numbers about it" >&2
+      echo "dataset: the extracted corpus or its census no longer digests to what this" \
+        "arena's stamp recorded; re-extracting rather than reporting numbers about it" >&2
     fi
   fi
 fi
@@ -468,13 +478,38 @@ step "5/7 load the dataset through the purrdf CLI into a native pack"
 # store does. Handing 20 queries the raw N-Triples file would re-parse well over a
 # gigabyte twenty times and measure the parser, not the planner. The pack is
 # written by the same CLI under test, so nothing external is doing the loading.
-PACK_KEY="${TARBALL_SHA} ${PURRDF_VERSION}"
+# THE PACK STAMP CERTIFIES THE PACK, NOT ITS CONTAINER. It used to be
+# `${TARBALL_SHA} ${PURRDF_VERSION}` -- the digest of the TARBALL the dataset came
+# out of, which is the container twice removed from the artifact a later run reads.
+# The same law this lane applies to the dataset stamp: a reuse stamp keyed on a
+# container says only that something was once built here from those bytes, and the
+# reuse branch then read `-s` plus an 8-byte magic, so a pack modified past byte 8
+# in the arena was reused, queried, and its twenty row counts printed beside a pinned
+# corpus digest and a pinned query-set digest -- a provenance claim the bytes
+# measured did not have. That is verbatim the defect this branch exists to close,
+# left un-applied to the sibling stamp in the same file.
+#
+# Line 1 is the corpus digest and the binary version: the two things that determine
+# what the pack should BE. Line 2 is the digest of the pack itself, re-derived on
+# every reuse. Cost is not an objection -- this lane already digests the 1.5 GB
+# dataset every run, and the pack is a twelfth of that.
+PACK_KEY="${expected_corpus} ${PURRDF_VERSION}"
 load_start="$(now_ms)"
-# `-s` rather than `-f`: a zero-byte pack beside a matching stamp would be reused
-# by every subsequent run, and the stamp is written below only after the pack has
-# been checked for being one. Same law as the dataset stamp above.
-if [[ -f "${PACK_STAMP}" && "$(cat "${PACK_STAMP}")" == "${PACK_KEY}" && -s "${PACK}" ]]; then
-  echo "pack: reusing the one already stamped with this dataset digest and this binary"
+pack_reusable=0
+if [[ -f "${PACK_STAMP}" && -s "${PACK}" ]]; then
+  stamped_pack_key="$(sed -n '1p' "${PACK_STAMP}")"
+  stamped_pack_digest="$(sed -n '2p' "${PACK_STAMP}")"
+  if [[ "${stamped_pack_key}" == "${PACK_KEY}" && -n "${stamped_pack_digest}" ]]; then
+    if [[ "$(lane_sha256_file "${PACK}")" == "${stamped_pack_digest}" ]]; then
+      pack_reusable=1
+    else
+      echo "pack: the pack in this arena no longer digests to what its stamp recorded;" \
+        "rebuilding rather than querying it" >&2
+    fi
+  fi
+fi
+if ((pack_reusable == 1)); then
+  echo "pack: reusing the one already stamped with this corpus digest and this binary"
   loaded="reused"
 else
   rm -f "${PACK}" "${PACK_STAMP}"
@@ -496,7 +531,8 @@ else
   # followed, and were reused by every later run as this dataset's pack.
   lane_require_magic "${PACK}" "the pack the CLI reported it had written" \
     "${PACK_MAGIC}" "a purrdf pack"
-  write_checked "${PACK_STAMP}" "the pack stamp" printf '%s\n' "${PACK_KEY}"
+  write_checked "${PACK_STAMP}" "the pack stamp" \
+    printf '%s\n%s\n' "${PACK_KEY}" "$(lane_sha256_file "${PACK}")"
   # And the stamp does not survive this run failing: every later run consults it
   # INSTEAD of loading, so a stamp left behind by a run that did not finish is a
   # certificate for a pack nothing ever finished certifying.

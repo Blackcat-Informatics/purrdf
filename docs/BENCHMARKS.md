@@ -1081,15 +1081,30 @@ documentation domain and this repository's fixture convention, standing in for
 the publication IRI a locally generated corpus does not have. An operator who
 publishes a corpus sets it to where that corpus actually lives.
 
-There is a fifth input, and it is not a knob: **collation**. The lane
-concatenates its converted files in `find | sort` order, and `sort` obeys
-`LC_COLLATE` — under a UTF-8 collation `University0_10.owl` sorts *before*
-`University0_1.owl`, which changes the concatenation order, the published digest,
-and which file becomes the smallest entailment rung. So the lanes pin `LC_ALL=C`
-themselves rather than trusting the caller's environment; see
-[the lane laws](design/purrdf-bench-lane-laws.md). A digest is only as good as
-the enumeration behind it, and this one was missing from the list until it was
-found by comparing two hosts that differed in nothing else.
+The published corpus digest has **seven** inputs, and the list took three
+corrections to complete — which is the point of stating it.
+
+Five are knobs: `LUBM_UNIVERSITIES`, `LUBM_INDEX`, `LUBM_SEED`, `LUBM_ONTO` and
+`LUBM_DOC_BASE`. `LUBM_ONTO` belongs there because the generator stamps it into
+every document it writes, so it reaches every type and property IRI of the corpus.
+
+The sixth is **collation**, and it is not a knob. The lane concatenates its
+converted files in `find | sort` order, and `sort` obeys `LC_COLLATE` — under a
+UTF-8 collation `University0_10.owl` sorts *before* `University0_1.owl`, which
+changes the concatenation order, the digest, and which file becomes the smallest
+entailment rung. The lanes pin `LC_ALL=C` themselves rather than trusting the
+caller's environment.
+
+The seventh is the **`purrdf` binary**. Those bytes are its serializer's output, so a
+digest recorded with one version says nothing about another; the version is part of
+the pin key, and a bump reports "no pin recorded for this binary" rather than
+failing as though conversion had changed. See
+[the lane laws](design/purrdf-bench-lane-laws.md).
+
+The JDK is deliberately *not* on the list: the pinned generator references
+`java.util.ArrayList` and `java.util.Random` and no hash-ordered collection, so its
+output carries no iteration-order dependence, and `java.util.Random` is specified
+rather than implementation-defined.
 
 ### Entailment regimes are part of the query, not metadata about it
 

@@ -569,10 +569,12 @@ else
   echo "  ^ NOT checked against a pin: at least one knob is not at its default, so"
   echo "    this is a different corpus and no pin is recorded for it."
 fi
-echo "  ^ this digest is the determinism check: the same LUBM_UNIVERSITIES/INDEX/SEED,"
-echo "    the same LUBM_ONTO (the generator stamps it into every document) and the same"
-echo "    LUBM_DOC_BASE must reproduce it byte for byte. Collation is the sixth input"
-echo "    and is pinned to LC_ALL=C by the lane, not by the caller."
+echo "  ^ this digest is the determinism check, and it has SEVEN inputs. Five are knobs:"
+echo "    LUBM_UNIVERSITIES, LUBM_INDEX, LUBM_SEED, LUBM_ONTO (the generator stamps it"
+echo "    into every document) and LUBM_DOC_BASE. The sixth is collation, pinned to"
+echo "    LC_ALL=C by the lane rather than by the caller. The seventh is the BINARY:"
+echo "    these bytes are its serializer's output, so ${PURRDF_VERSION} is part of the"
+echo "    pin key. Any input a lane does not name is a free variable."
 
 # ── 6. Normalise the queries ────────────────────────────────────────────────────
 
@@ -811,6 +813,17 @@ nonempty=0
 comparable=0
 declare -a NOTES=()
 declare -A ANSWERED=()
+
+# THE THIRD CALL SITE, which the sibling had and this lane did not. The shared law is
+# that the query set is re-verified BEFORE the first query, on a missing file, and
+# after the last; this lane had only the last two, and the unguarded window is its
+# most expensive phase -- three ladder rungs built by `cat` over the whole corpus and
+# a probe query per regime, including an owl-rl closure over a hundred thousand
+# triples. A concurrent run sharing LUBM_OUT rewrites all fourteen `.rq` files in that
+# window, so every file is PRESENT, the per-file guard passes, and the substituted set
+# is measured and printed row by row -- with the mismatch surfacing only after the
+# table. A law that holds in one lane and not its sibling is not a law.
+verify_query_set "between normalisation and the first query"
 
 while IFS=$'\t' read -r id regime cli file; do
   [[ "${id}" != "id" ]] || continue

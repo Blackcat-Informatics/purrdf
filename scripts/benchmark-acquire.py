@@ -956,6 +956,85 @@ def self_test() -> int:
     else:
         print(f"OK: self-test — the licensing posture sentence is derived from the pins ({posture})")
 
+    # 7d. THE PINS THIS FILE EXISTS TO HOLD, which had no check of their own. The
+    #     artifact pins were covered and the workload pins were not -- and one of them
+    #     carries a binary version in its key, so a version bump silently makes it
+    #     unreachable unless something asserts that every recorded key is one a lane can
+    #     actually construct.
+    seen_keys = sorted(WORKLOAD_PINS)
+    if len(seen_keys) != len(set(seen_keys)):
+        print("SELF-TEST FAIL: a workload pin name is recorded twice")
+        ok = False
+    elif any(not key or key != key.strip() for key in seen_keys):
+        print("SELF-TEST FAIL: a workload pin name is empty or carries stray whitespace")
+        ok = False
+    else:
+        print(f"OK: self-test — {len(seen_keys)} workload pin name(s) are well formed and unique")
+
+    digests = {k: v for k, v in WORKLOAD_PINS.items() if k.endswith(".sha256") or ".sha256." in k}
+    malformed = {
+        key: value
+        for key, value in digests.items()
+        if len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+    }
+    if malformed:
+        print(f"SELF-TEST FAIL: workload pin(s) are not 64 lowercase hex characters: {malformed}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(digests)} digest pin(s) are 64 lowercase hex characters")
+
+    counts = {k: v for k, v in WORKLOAD_PINS.items() if ".rows." in k}
+    if not counts or any(not v.isdigit() or int(v) <= 0 for v in counts.values()):
+        print(f"SELF-TEST FAIL: a published-answer pin is not a positive integer: {counts}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(counts)} published-answer pin(s) are positive integers")
+
+    # The binary-keyed pin must name the version this workspace builds, or the lane it
+    # serves will report "no pin recorded" for the binary it just built -- a pin that
+    # is recorded and unreachable, which is worse than one that is absent.
+    version_keyed = [k for k in WORKLOAD_PINS if ".purrdf-" in k]
+    workspace_version = None
+    cargo_toml = REPO_ROOT / "Cargo.toml"
+    if cargo_toml.exists():
+        for line in cargo_toml.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("version = "):
+                workspace_version = stripped.split('"')[1]
+                break
+    if not version_keyed:
+        print("SELF-TEST FAIL: no version-keyed pin is recorded, so nothing pins the serializer")
+        ok = False
+    elif workspace_version is None:
+        print("SELF-TEST FAIL: could not read the workspace version to check the pin key")
+        ok = False
+    elif not all(key.endswith(f".purrdf-{workspace_version}") for key in version_keyed):
+        print(
+            f"SELF-TEST FAIL: version-keyed pin(s) {version_keyed} do not name the workspace "
+            f"version {workspace_version}, so the lane will report no pin for the binary it built"
+        )
+        ok = False
+    else:
+        print(
+            f"OK: self-test — every version-keyed pin names the workspace version "
+            f"({workspace_version})"
+        )
+
+    if WATDIV_BASIC_TEMPLATES <= 0 or not WATDIV_DATASET_ROWS:
+        print("SELF-TEST FAIL: the template count or the dataset row pins are empty")
+        ok = False
+    elif any(rows <= 0 for rows in WATDIV_DATASET_ROWS.values()):
+        print(f"SELF-TEST FAIL: a pinned dataset row count is not positive: {WATDIV_DATASET_ROWS}")
+        ok = False
+    elif set(WATDIV_DATASET_ROWS) - set(pinned_watdiv_scales()):
+        print(
+            "SELF-TEST FAIL: a row count is pinned for a scale whose artifact is not: "
+            f"{sorted(set(WATDIV_DATASET_ROWS) - set(pinned_watdiv_scales()))}"
+        )
+        ok = False
+    else:
+        print("OK: self-test — the template count and every dataset row pin are positive and pinned")
+
     # 8. The git-visibility matcher flags the cache tree and nothing adjacent.
     flagged = _offending_status_lines(
         "?? target\n"

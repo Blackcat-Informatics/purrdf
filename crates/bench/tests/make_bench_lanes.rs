@@ -99,6 +99,29 @@ fn run_make(args: &[&str]) -> (i32, String, String) {
     )
 }
 
+// WHAT THE NEGATIVE ASSERTIONS BELOW CAN AND CANNOT CATCH.
+//
+// Every test in this file stops the lane before step 1 — at the binary probe or at a
+// knob validator — so a `!contains("<a step-5 message>")` assertion is TRIVIALLY TRUE
+// for the run it is made about. Nine such assertions live here. They are not controls
+// for the behaviour their surrounding test is named for, and an earlier audit of this
+// file wrongly reported that there was one.
+//
+// They are kept, with a narrower purpose stated: each guards against its message
+// MOVING EARLIER. If a future edit blamed the corpus, published a digest, or wrote a
+// stamp before the binary was proved to work, that assertion fires. That is a real
+// regression guard and a small one; it is not evidence about step 5, and no test in
+// this file can be.
+//
+// One assertion was worse than trivially true: it named a string
+// (`could not load the WatDiv dataset`) that appears nowhere in `scripts/` and is
+// never assembled at runtime, so it could not fail for any input at all. It now names
+// the message the lane really emits. The pack-magic refusal reads similarly and is
+// NOT inert: `lane_require_magic` assembles it from its `format` argument at runtime.
+//
+// The step-5 laws themselves are proved in `lane_common_laws.rs`, which calls the
+// shared helpers directly instead of driving a lane.
+
 /// The two lanes that share these laws: the `make` target, the knob that names the binary, and
 /// the arena knob, so each test runs in a private arena and never touches `target/lubm` or
 /// `target/watdiv`.
@@ -210,7 +233,7 @@ fn every_lane_refuses_a_binary_that_cannot_run_without_blaming_the_corpus() {
              output:\n{combined}"
         );
         assert!(
-            !combined.contains("could not load the WatDiv dataset"),
+            !combined.contains("loading the WatDiv dataset into a pack"),
             "make {lane} must NOT blame the dataset for a binary that never ran; \
              output:\n{combined}"
         );
