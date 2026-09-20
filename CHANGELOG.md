@@ -1008,6 +1008,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   one tag names one block and still registers, and single-tag declarations are
   untouched -- including the shorter read they buy.
 
+- **python:** `MutableDataset._store_capsule` is declared in the type stub. The method
+  went live so `Shapes.validate_store` could reach a mutable dataset's frozen snapshot
+  by name, and the stub never said so — a member the stub omits is one a checked
+  caller cannot see at all, including to see that it is private. The stub-parity
+  gate is what caught it.
+
 - **python:** Two `text_producers` entries claiming one stratum are refused with a
   `ValueError` naming both producers and the stratum. The registry underneath
   enforces one-stratum-one-producer with a panic, which is the right shape for Rust
