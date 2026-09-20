@@ -1111,6 +1111,58 @@ def test_an_empty_domain_declaration_is_refused_and_its_neighbours_are_not() -> 
         )
 
 
+def test_two_producers_under_one_stratum_are_refused_by_name_and_two_strata_are_not() -> None:
+    """One stratum carries one producer, and the refusal is a ``ValueError``.
+
+    The registry underneath enforces this with a panic, which is the right shape
+    for Rust code assembling a registry and the wrong one at this boundary: a
+    panic arrives in Python as ``PanicException``, which derives from
+    ``BaseException`` and slips past a host's ``except Exception``. Every other
+    misconfiguration on this surface raises ``ValueError`` where it is supplied,
+    naming what to fix, and so does this one — before the registry is touched.
+
+    The neighbour is the configuration a host actually wants: the same two
+    producers under two strata, which fuse.
+    """
+    common: dict[str, Any] = {
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    request = [_lexical("quick", NOTE), _lexical("quick", TITLE)]
+
+    # Written title-first so the names reported are visibly a function of the
+    # declarations rather than of the dict's insertion order.
+    with pytest.raises(ValueError) as refused:
+        retrieval.search(
+            DATA,
+            request,
+            text_producers=_producers(
+                (TITLE_PRODUCER, NOTE_STRATUM, TITLE),
+                (NOTE_PRODUCER, NOTE_STRATUM, NOTE),
+            ),
+            **common,
+        )
+    message = str(refused.value)
+    assert f"<{NOTE_PRODUCER}> and <{TITLE_PRODUCER}>" in message, message
+    assert f"claim stratum <{NOTE_STRATUM}>" in message, message
+    assert "ONE producer" in message and "two strata" in message, message
+
+    fused = retrieval.search(
+        DATA,
+        request,
+        text_producers=_producers(
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE),
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE),
+        ),
+        **common,
+    )
+    assert fused["rows"], "two producers under two strata is the configuration that fuses"
+    assert set(fused["statuses"]) == {NOTE_STRATUM, TITLE_STRATUM}
+
+
 def test_a_false_domain_declaration_is_refused_and_names_who_collided() -> None:
     """A declaration is a promise, and the rows are checked against it.
 

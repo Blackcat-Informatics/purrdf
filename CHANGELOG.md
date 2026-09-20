@@ -974,6 +974,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   one tag names one block and still registers, and single-tag declarations are
   untouched -- including the shorter read they buy.
 
+- **python:** Two `text_producers` entries claiming one stratum are refused with a
+  `ValueError` naming both producers and the stratum. The registry underneath
+  enforces one-stratum-one-producer with a panic, which is the right shape for Rust
+  code assembling a registry and the wrong one at this boundary: it crossed into
+  Python as `PanicException`, which derives from `BaseException` and slipped past a
+  host's `except Exception`, taking the process down with a thread dump on stderr
+  where every neighbouring misconfiguration on the same surface raises by name. The
+  scan runs after the declarations are sorted, so the two names reported are a
+  function of what was declared and not of the dict's insertion order, and the
+  message carries the same guidance the registry's own refusal does: shards whose
+  scores are comparable belong inside one producer, producers scoring by different
+  laws belong in two strata. The same two producers under two strata fuse as before.
+
 - **python:** A host that ran a compiled retrieval unit's SPARQL itself had no way
   to learn how many of its rows it was allowed to report. The compile stage emits
   the text at most one row deeper than the plan reads, and that last row is a

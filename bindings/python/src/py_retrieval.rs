@@ -1061,7 +1061,8 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
 /// `TypeError` naming the accepted shapes when the value is not a sequence of
 /// three, four or five positions, or when the fifth is not a two-member sequence;
 /// `TypeError` naming the field when an attestation member is neither `str` nor
-/// `None`, or when a mandatory position is not a string.
+/// `None`, or when a mandatory position is not a string; `ValueError` naming both
+/// producers and the stratum when two entries claim one stratum.
 fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer>> {
     let mut declared = Vec::with_capacity(producers.len());
     for (key, value) in producers {
@@ -1137,6 +1138,31 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
     // of the declarations, so the registry's content fingerprint — which the
     // plan records — cannot depend on how the dict was written.
     declared.sort_by(|left, right| left.producer.cmp(&right.producer));
+    // One stratum carries one producer, and the registry enforces that with a
+    // panic — the right shape for a Rust caller assembling a registry in code, and
+    // the wrong one here: a panic crosses the boundary as `PanicException`, which
+    // derives from `BaseException` and slips past a host's `except Exception`.
+    // Every other misconfiguration on this surface raises `ValueError` by name, so
+    // this one does too, before the registry is touched. Scanned after the sort,
+    // so the two names reported are a function of the declarations and not of the
+    // order the host wrote the dict in.
+    for (index, later) in declared.iter().enumerate().skip(1) {
+        if let Some(earlier) = declared[..index]
+            .iter()
+            .find(|earlier| earlier.stratum == later.stratum)
+        {
+            return Err(PyValueError::new_err(format!(
+                "text producers <{}> and <{}> both claim stratum <{}>: one stratum carries one \
+                 producer, because a rank is meaningful only inside the list that assigned it \
+                 and two lists concatenated rank the second producer's best row below every row \
+                 of the first. Shards or segments whose scores are already comparable belong \
+                 inside ONE producer that merges them by score; producers that score by \
+                 different laws belong in two strata, where the weighted sum across strata is \
+                 the point of the fusion",
+                earlier.producer, later.producer, later.stratum
+            )));
+        }
+    }
     Ok(declared)
 }
 
