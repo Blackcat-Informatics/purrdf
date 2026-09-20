@@ -498,19 +498,11 @@ def scrape_candidates(
                 by_type[prefixed].append(iri)
             break
 
-    problems = []
-    for prefixed, expected in sorted(declared.items()):
-        actual = len(by_type[prefixed])
-        if actual != expected:
-            problems.append(f"    {prefixed}: scraped {actual}, census declares {expected}")
-    if problems:
-        sys.exit(
-            "FAIL: the candidate scrape disagrees with the dataset's own entity census.\n"
-            + "\n".join(problems)
-            + "\n  Either the entity naming rule or the frozen dataset is not what this program\n"
-            "  believes. Instantiating from a candidate set that may be incomplete would bias\n"
-            "  every query built from it, so nothing is written."
-        )
+    check_against_census(
+        declared,
+        {prefixed: tuple(values) for prefixed, values in by_type.items()},
+        "This is a FRESH scrape, so the disagreement is with the dataset itself.",
+    )
 
     # Canonical order, by UTF-8 bytes. The selection must not depend on the order
     # the file happened to mention a term in.
@@ -529,6 +521,32 @@ def write_candidates(candidates: Candidates, path: Path) -> None:
         for iri in candidates.by_type[prefixed]:
             lines.append(f"{prefixed}\t{iri}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def check_against_census(
+    declared: dict[str, int], by_type: dict[str, tuple[str, ...]], remedy: str
+) -> None:
+    """Refuse unless every declared type's candidate count matches the census.
+
+    ONE implementation, called from both the fresh scrape and the cache-hit path.
+    They were two, with two messages that had already drifted apart, and two
+    copies of a rule are two rules -- the drift this lane's shared law file was
+    created to end. *remedy* is the only thing that genuinely differs: what the
+    operator should do about it, which is not the same advice in both places.
+    """
+    problems = [
+        f"    {prefixed}: have {len(by_type.get(prefixed, ()))}, census declares {expected}"
+        for prefixed, expected in sorted(declared.items())
+        if len(by_type.get(prefixed, ())) != expected
+    ]
+    if problems:
+        sys.exit(
+            "FAIL: the candidate sets do not agree with the dataset's own entity census.\n"
+            + "\n".join(problems)
+            + "\n  Either the entity naming rule or the frozen dataset is not what this program\n"
+            "  believes. Instantiating from a candidate set that may be incomplete would bias\n"
+            f"  every query built from it, so nothing is written.\n  {remedy}"
+        )
 
 
 def read_candidates(path: Path, dataset_sha256: str) -> Candidates | None:
@@ -1428,17 +1446,11 @@ def main() -> int:
     # edited; re-checking it costs a dictionary comparison and means the counts
     # behind the queries were verified on THIS run rather than on some earlier
     # one whose result we are trusting by reputation.
-    problems = []
-    for prefixed, expected in sorted(declared.items()):
-        actual = len(candidates.by_type.get(prefixed, ()))
-        if actual != expected:
-            problems.append(f"    {prefixed}: have {actual}, census declares {expected}")
-    if problems:
-        sys.exit(
-            "FAIL: the candidate sets do not agree with the dataset's own entity census.\n"
-            + "\n".join(problems)
-            + f"\n  Delete {args.candidates} to force a fresh scrape."
-        )
+    check_against_census(
+        declared,
+        candidates.by_type,
+        f"Delete {args.candidates} to force a fresh scrape.",
+    )
 
     queries = build(templates, args.seed, candidates, namespaces)
     if args.out:
