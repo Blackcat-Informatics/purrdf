@@ -110,6 +110,7 @@ import argparse
 import hashlib
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -840,6 +841,150 @@ def _fixture_candidates(namespaces: dict[str, str]) -> Candidates:
     return Candidates("0" * 64, by_type)
 
 
+# ── The offline half of the self-test ───────────────────────────────────────────
+#
+# `self_test()` needs the fetched toolkit tarball, so it runs only inside
+# `make watdiv`, after a download. That left the arithmetic every published
+# WatDiv number depends on -- splitmix64, the stream derivation, the rejection
+# sampler, and instantiation itself -- outside every gate in this repository,
+# which is how a change to `_RETRY_STRIDE`, `TAG_MAPPING` or `stream_of` could
+# have altered every query set at one seed with all checks still green.
+#
+# Everything below is synthetic and runs offline, so it can live in `make check`.
+
+_PINNED_FIXTURE_SEED_0 = "c96709dc5bf68fb6dedbed67917dff05a7ffa6e96098d45f5fd107d8331b0a38"
+
+_FIXTURE_NAMESPACES = {
+    "wsdbm": "http://db.uwaterloo.ca/~galuc/wsdbm/",
+    "sorg": "http://schema.org/",
+}
+
+
+def _fixture_templates() -> list[Template]:
+    """Three synthetic templates: one mapping, two mappings, and none at all.
+
+    The no-mapping case is the control. It must be seed-INDEPENDENT, so a change
+    that moved something it should not have is distinguishable from a change that
+    moved a mapping.
+    """
+    return [
+        Template(
+            "X1",
+            (Mapping("v1", "wsdbm:User", "uniform"),),
+            "SELECT ?v0 WHERE {\n  %v1% wsdbm:likes ?v0 .\n}",
+        ),
+        Template(
+            "X2",
+            (Mapping("v1", "wsdbm:City", "uniform"), Mapping("v2", "wsdbm:User", "uniform")),
+            "SELECT ?v0 WHERE {\n  ?v0 sorg:name %v1% .\n  %v2% wsdbm:friendOf ?v0 .\n}",
+        ),
+        Template("X3", (), "SELECT ?v0 WHERE {\n  ?v0 wsdbm:likes ?v1 .\n}"),
+    ]
+
+
+def _fixture_pool() -> Candidates:
+    """Two pools of deliberately different sizes, canonically ordered."""
+    by_type = {}
+    for prefixed, size in (("wsdbm:User", 100), ("wsdbm:City", 7)):
+        base = expand(prefixed, _FIXTURE_NAMESPACES)
+        local = prefixed.partition(":")[2]
+        by_type[prefixed] = tuple(
+            sorted((f"{base}{local}{n}" for n in range(size)), key=lambda iri: iri.encode("utf-8"))
+        )
+    return Candidates("fixture", by_type)
+
+
+def _fixture_digest(seed: int) -> str:
+    """Digest the query set built from the fixtures at *seed*, name and text."""
+    digest = hashlib.sha256()
+    for query in build(_fixture_templates(), seed, _fixture_pool(), _FIXTURE_NAMESPACES):
+        digest.update(query.name.encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(query.text.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def offline_self_test() -> int:
+    """The tarball-free checks, so the instantiator's arithmetic is gated."""
+    ok = True
+
+    def check(condition: bool, label: str) -> None:
+        nonlocal ok
+        print(f"{'OK' if condition else 'SELF-TEST FAIL'}: {label}")
+        ok = ok and condition
+
+    check(
+        splitmix64(0) == 0xE220_A839_7B1D_CDAF,
+        "splitmix64 matches its published reference vector for 0",
+    )
+
+    # THE REPRODUCIBILITY CLAIM, PINNED. The lane prints a query-set digest and
+    # calls it the reproducibility check, but nothing compared it to a recorded
+    # value -- `verify_query_set` compares it only to itself, as a concurrency
+    # tripwire. So an edit to the mixing constants, the stream tag, the retry
+    # stride or the prefix emission changed every query set at one seed while
+    # every gate stayed green. This is that missing comparison, over fixtures
+    # rather than over a multi-gigabyte corpus, which is what lets it run here.
+    actual = _fixture_digest(0)
+    check(
+        actual == _PINNED_FIXTURE_SEED_0,
+        f"the fixture query set at seed 0 reproduces its pinned digest ({actual[:16]}…)",
+    )
+    check(_fixture_digest(0) == actual, "two builds at one seed agree byte for byte")
+    check(
+        _fixture_digest(7) != actual,
+        "a different seed is a different workload, not the same one",
+    )
+
+    # The control: a template with no mapping has nothing to draw, so the seed
+    # must not reach it. Without this, "the seed changed the output" cannot be
+    # told apart from "the seed changed something it had no business touching".
+    unmapped = [t for t in _fixture_templates() if not t.mappings]
+    at_zero = build(unmapped, 0, _fixture_pool(), _FIXTURE_NAMESPACES)
+    at_seven = build(unmapped, 7, _fixture_pool(), _FIXTURE_NAMESPACES)
+    check(
+        [q.text for q in at_zero] == [q.text for q in at_seven],
+        "a template with no mapping is seed-independent",
+    )
+
+    # `uniform_index` is exercised directly, because the digest above only pins
+    # what REACHES a query: one draw per mapping. A sweep shows the selector
+    # spans its pool rather than favouring an index, which is the property the
+    # digest cannot see.
+    #
+    # The retry branch is deliberately NOT claimed as covered. Rejection fires
+    # when a draw lands in a window `2**64 % count` wide out of 2**64 -- below
+    # one part in 2^44 at these counts -- so `_RETRY_STRIDE` is unreachable in
+    # practice and mutating it does not change any query set. Saying it is
+    # pinned here would be a coverage claim this fixture does not support.
+    reachable = {uniform_index(0, stream, 7)[0] for stream in range(4000)}
+    check(
+        reachable == set(range(7)),
+        f"every index of a 7-candidate pool is reachable (saw {len(reachable)}/7)",
+    )
+
+    # Candidate order read back from a cache must be re-canonicalised, not
+    # trusted: order IS the workload, and a cache written in another order has
+    # the same digest and the same counts.
+    with tempfile.TemporaryDirectory() as raw:
+        scratch = Path(raw) / "candidates.tsv"
+        pool = _fixture_pool()
+        write_candidates(pool, scratch)
+        shuffled = scratch.read_text(encoding="utf-8").splitlines()
+        body = shuffled[2:]
+        scratch.write_text(
+            "\n".join([*shuffled[:2], *reversed(body)]) + "\n", encoding="utf-8"
+        )
+        reloaded = read_candidates(scratch, pool.dataset_sha256)
+        check(
+            reloaded is not None and reloaded.by_type == pool.by_type,
+            "a candidates cache written in another order reloads canonically",
+        )
+
+    print("OFFLINE SELF-TEST PASS" if ok else "OFFLINE SELF-TEST FAIL")
+    return 0 if ok else 1
+
+
 def self_test() -> int:
     """Assert the rules' SCOPE, not merely that instantiation ran."""
     ok = True
@@ -1036,7 +1181,6 @@ def self_test() -> int:
     # 12. THE SCRAPE AND ITS CENSUS CROSS-CHECK, run for real against tiny
     #     fixture datasets. Both arms are needed: a cross-check that rejected
     #     every scrape would pass a test that only ever fed it a bad one.
-    import tempfile
 
     wsdbm = namespaces["wsdbm"]
     triples = [
@@ -1159,7 +1303,15 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="directory to write .rq files into")
     parser.add_argument("--provenance", action="store_true", help="print the full record")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--offline-self-test",
+        action="store_true",
+        help="the tarball-free checks, suitable for a gate",
+    )
     args = parser.parse_args()
+
+    if args.offline_self_test:
+        return offline_self_test()
 
     if args.self_test:
         return self_test()
