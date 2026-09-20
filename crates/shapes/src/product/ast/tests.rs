@@ -1745,7 +1745,7 @@ fn the_decoded_shape_index_is_one_shared_handle() {
     let bytes = encode_ast_derived(&shapes).expect("encodes");
     let parts = decode_ast(&bytes).expect("decodes");
 
-    let mut handles: Vec<&Arc<OnceLock<::purrdf::FastMap<String, Shape>>>> = Vec::new();
+    let mut handles: Vec<&Arc<OnceLock<::purrdf::FastMap<Term, Shape>>>> = Vec::new();
     for constraint in &parts.node_shapes[0].constraints {
         match constraint {
             Constraint::NodeByExpression { shapes, .. } => handles.push(shapes),

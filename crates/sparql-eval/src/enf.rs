@@ -88,6 +88,17 @@
 //!      `VALUES` table can supply (see `crate::expr::substitute_term_pattern`'s
 //!      doc).
 //!
+//!   Where the two walks do AGREE is at a `Bgp`/`Path` leaf. `apply_substitutions`
+//!   pushes a pre-bound constant into the leaf's term positions so the bound
+//!   position is an index probe rather than a scan the seed join filters afterwards,
+//!   and it restores the column the rewrite consumed with exactly this module's
+//!   Values-Insertion device — a single-row `VALUES` joined onto the rewritten leaf.
+//!   That pushdown descends only the operators for which restricting an operand
+//!   restricts the node's output the same way, which is why it stops at an
+//!   `OPTIONAL`'s or a `MINUS`'s right arm; `crate::substitute::push_probe_constants`
+//!   states the argument and `engine`'s `prebinding_is_not_pushed_into_*` tests pin
+//!   it.
+//!
 //! # Existential Normal Form itself (Part A)
 //!
 //! Exactly one bit per row is observed under [`Expression::Exists`][exists]: whether

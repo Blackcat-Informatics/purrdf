@@ -452,6 +452,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **sparql-eval, shapes:** The borrowed governed lane — the per-focus-node entry SHACL
+  validation drives — carries the relation witness, and a validation over an index
+  that declared itself not whole is refused. Two governed egresses build their own
+  context and resolve their own verdict, and only one of them armed witnessing and
+  moved the witness onto its receipt; the other handed back a receipt whose ledger
+  said nothing about the relations the run had invoked. Both now share one context
+  builder and one resolution, so the witness is filled in one place for both. That
+  makes the borrowed lane RECORD a relation declaring a shortfall rather than refuse
+  it at the seam the way the ungoverned lane does -- and SHACL validation reads only
+  the rows out of that lane, so the record was where a shortfall would have been
+  silently dropped: "this focus node has no violating solution" over an index that
+  was not whole reads exactly like the same sentence over the whole index. The
+  validation now reads the receipt and refuses by name, quoting the relation and its
+  own reason, exactly as it refuses a truncated solution bag; the same relation
+  declaring nothing validates to a report.
+
 - **retrieval:** The declared row bound is read at the mode the producer is actually
   invoked in. `rows_per_invocation` is a function of the mode, and the layer had been
   taking the maximum across every mode a producer declared -- so a depth was admitted

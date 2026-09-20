@@ -130,9 +130,10 @@ executes that example against the generated shared library and committed header.
   because two entry points for one job is the duplication this library exists to
   avoid.
   `0.7.0` → `0.8.0` carries no break at all: it adds eight prepared-shapes-product
-  entry points and appends one status discriminant, touching no existing prototype
+  entry points plus `purrdf_shacl_validate_changes_to_sarif` (the SHACL change
+  path) and appends one status discriminant, touching no existing prototype
   and renumbering nothing. It bumps because `0.7.0` is the ABI of the released
-  `2.0.x` libraries, which export eight fewer symbols — leaving the triple still
+  `2.0.x` libraries, which export nine fewer symbols — leaving the triple still
   would have two shippable libraries answering `purrdf_abi_version` identically
   while offering different surfaces, and telling a host they agree right before it
   fails to resolve a symbol is the one thing this number exists to prevent.

@@ -30,7 +30,8 @@ use crate::data_view::ShaclRead;
 
 use std::cmp::Ordering;
 
-use ::purrdf::{RdfLiteral, TermRef};
+use ::purrdf::blank_label::ESCAPE_MARKER;
+use ::purrdf::{BlankScope, RdfLiteral, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
 use smallvec::SmallVec;
 
@@ -223,56 +224,156 @@ pub enum Term {
     Triple(Box<Triple>),
 }
 
+/// Resolve an interned id to its borrowed IR payload.
+///
+/// Object-safe on purpose. [`CanonicalBytes`] has to stream a dataset term
+/// WITHOUT materializing it, which means holding the dataset it resolves
+/// against; making the cursor generic over the dataset would infect
+/// [`canonical_cmp`] — which resolves nothing — and every one of its callers
+/// with a type parameter that has no value to supply. One `&dyn` pointer, read
+/// only on the id path, keeps the owned-term cursor exactly what it was.
+pub(crate) trait TermResolve {
+    /// The borrowed IR payload of `id` in this dataset.
+    fn resolve_id(&self, id: TermId) -> TermRef<'_>;
+}
+
+impl<D: ShaclRead + ?Sized> TermResolve for D {
+    #[inline]
+    fn resolve_id(&self, id: TermId) -> TermRef<'_> {
+        ::purrdf::DatasetView::resolve(self, id)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum CanonicalPart<'a> {
     Raw(&'a [u8]),
     Escaped(&'a [u8]),
     Term(&'a Term),
+    /// An interned term, expanded through the cursor's resolver.
+    Id(TermId),
+    /// The decimal scope digits of the blank-node envelope being written.
+    ScopeDigits,
+    /// The encoded body of the blank-node envelope being written.
+    EnvelopeBody,
 }
 
-/// Allocation-free iterator over the canonical display bytes of a valid IR term.
+/// Allocation-free iterator over the canonical display bytes of a valid IR term,
+/// held either as an owned [`Term`] or as an interned [`TermId`].
 ///
 /// The IR limits quoted-triple nesting to 16 levels. The inline stack therefore
 /// covers every dataset term without spilling; manually-constructed terms beyond
 /// that bound remain correct and may spill to the `SmallVec` backing allocation.
+///
+/// # One envelope at a time
+///
+/// A blank node whose `(label, scope)` pair does not spell itself is written as
+/// the [`BlankScope::qualify_label`] envelope, whose scope digits and encoded
+/// body are generated here rather than into an owned `String`. The two cursors
+/// for that live on the struct rather than inside the part, because parts are
+/// expanded only when they reach the TOP of the stack and a part is popped only
+/// once it is exhausted — so at most one envelope is ever mid-flight, even
+/// inside a quoted triple whose subject and object are both scoped blanks.
 struct CanonicalBytes<'a> {
+    /// The dataset behind [`CanonicalPart::Id`], absent for an owned-term cursor.
+    resolver: Option<&'a dyn TermResolve>,
     parts: SmallVec<[CanonicalPart<'a>; 96]>,
-    pending_escape: [u8; 6],
+    /// `\uXXXX` (6) and the envelope's `_` plus six hex digits (7) are the two
+    /// widest replacements a single input character expands to.
+    pending_escape: [u8; 7],
     pending_len: u8,
     pending_pos: u8,
+    /// The scope digits of the envelope being written.
+    digits: [u8; 10],
+    digits_len: u8,
+    digits_pos: u8,
+    /// The unwritten characters of the envelope body being written.
+    body: std::str::Chars<'a>,
 }
 
 impl<'a> CanonicalBytes<'a> {
-    fn new(term: &'a Term) -> Self {
-        let mut bytes = Self {
+    /// A cursor over nothing: no parts, no resolver, every escape and envelope
+    /// cursor at rest.
+    ///
+    /// Shared by both constructors so the two differ only in what they push. The
+    /// absent resolver is the interesting half: it is what makes an owned-term
+    /// cursor structurally unable to meet a [`CanonicalPart::Id`], which is safe
+    /// exactly because the owned constructor never pushes one and never gains a
+    /// way to.
+    fn empty() -> Self {
+        Self {
+            resolver: None,
             parts: SmallVec::new(),
-            pending_escape: [0; 6],
+            pending_escape: [0; 7],
             pending_len: 0,
             pending_pos: 0,
-        };
+            digits: [0; 10],
+            digits_len: 0,
+            digits_pos: 0,
+            body: "".chars(),
+        }
+    }
+
+    /// A cursor over the canonical bytes of an owned term, borrowing it for the
+    /// cursor's whole life.
+    ///
+    /// The owned-side twin of [`CanonicalBytes::of_id`], and the reference
+    /// implementation that one is checked against: the id cursor is correct
+    /// insofar as it agrees with this, byte for byte.
+    fn new(term: &'a Term) -> Self {
+        let mut bytes = Self::empty();
         bytes.parts.push(CanonicalPart::Term(term));
+        bytes
+    }
+
+    /// A cursor over the canonical bytes of `id` as `dataset` interns it.
+    ///
+    /// Byte-for-byte what [`CanonicalBytes::new`] yields for
+    /// `term_id_to_native(dataset, id)`, which is the equivalence
+    /// `canonical_bytes_of_an_id_match_the_materialized_term` executes over
+    /// every term of a dataset holding every term kind.
+    fn of_id(dataset: &'a dyn TermResolve, id: TermId) -> Self {
+        let mut bytes = Self::empty();
+        bytes.resolver = Some(dataset);
+        bytes.parts.push(CanonicalPart::Id(id));
         bytes
     }
 
     #[inline]
     fn queue_escape(&mut self, replacement: &[u8]) {
         self.pending_escape[..replacement.len()].copy_from_slice(replacement);
-        self.pending_len = u8::try_from(replacement.len()).expect("escape fits in six bytes");
+        self.pending_len = u8::try_from(replacement.len()).expect("escape fits in seven bytes");
         self.pending_pos = 0;
     }
 
     #[inline]
     fn queue_control_escape(&mut self, byte: u8) {
-        const HEX: &[u8; 16] = b"0123456789ABCDEF";
         self.pending_escape = [
             b'\\',
             b'u',
             b'0',
             b'0',
-            HEX[usize::from(byte >> 4)],
-            HEX[usize::from(byte & 0x0f)],
+            hex_digit(u32::from(byte) >> 4),
+            hex_digit(u32::from(byte) & 0x0f),
+            0,
         ];
         self.pending_len = 6;
+        self.pending_pos = 0;
+    }
+
+    /// Queue `_` plus the six uppercase hex digits of `scalar` — the envelope
+    /// body's encoding of a character that is not an ASCII letter or digit.
+    #[inline]
+    fn queue_envelope_escape(&mut self, scalar: u32) {
+        self.pending_escape = [
+            b'_',
+            hex_digit(scalar >> 20),
+            hex_digit((scalar >> 16) & 0xf),
+            hex_digit((scalar >> 12) & 0xf),
+            hex_digit((scalar >> 8) & 0xf),
+            hex_digit((scalar >> 4) & 0xf),
+            hex_digit(scalar & 0xf),
+        ];
+        self.pending_len = 7;
         self.pending_pos = 0;
     }
 
@@ -288,26 +389,12 @@ impl<'a> CanonicalBytes<'a> {
                 self.parts.push(CanonicalPart::Raw(b"_:"));
             }
             Term::Literal(literal) => {
-                if let Some(language) = &literal.language {
-                    if let Some(direction) = literal.direction {
-                        self.parts.push(CanonicalPart::Raw(match direction {
-                            RdfTextDirection::Ltr => b"--ltr",
-                            RdfTextDirection::Rtl => b"--rtl",
-                        }));
-                    }
-                    self.parts.push(CanonicalPart::Raw(language.as_bytes()));
-                    self.parts.push(CanonicalPart::Raw(b"\"@"));
-                } else if literal.datatype == XSD_STRING || literal.datatype == RDF_LANG_STRING {
-                    self.parts.push(CanonicalPart::Raw(b"\""));
-                } else {
-                    self.parts.push(CanonicalPart::Raw(b">"));
-                    self.parts
-                        .push(CanonicalPart::Raw(literal.datatype.as_bytes()));
-                    self.parts.push(CanonicalPart::Raw(b"\"^^<"));
-                }
-                self.parts
-                    .push(CanonicalPart::Escaped(literal.lexical.as_bytes()));
-                self.parts.push(CanonicalPart::Raw(b"\""));
+                self.push_literal(
+                    literal.lexical.as_bytes(),
+                    &literal.datatype,
+                    literal.language.as_deref(),
+                    literal.direction,
+                );
             }
             Term::Triple(triple) => {
                 self.parts.push(CanonicalPart::Raw(b" )>>"));
@@ -321,6 +408,125 @@ impl<'a> CanonicalBytes<'a> {
             }
         }
     }
+
+    /// Expand an interned term, mirroring [`term_ref_to_native`] arm for arm so
+    /// the two produce the same bytes for the same id.
+    fn expand_id(&mut self, id: TermId) {
+        let dataset = self
+            .resolver
+            .expect("an id part is only ever pushed by an id cursor");
+        match dataset.resolve_id(id) {
+            TermRef::Iri(iri) => {
+                self.parts.push(CanonicalPart::Raw(b">"));
+                self.parts.push(CanonicalPart::Raw(iri.as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b"<"));
+            }
+            TermRef::Blank { label, scope } => {
+                self.push_blank(label, scope);
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype_iri = match dataset.resolve_id(datatype) {
+                    TermRef::Iri(iri) => iri,
+                    other => {
+                        unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
+                    }
+                };
+                self.push_literal(lexical.as_bytes(), datatype_iri, language, direction);
+            }
+            TermRef::Triple { s, p, o } => {
+                let predicate = match dataset.resolve_id(p) {
+                    TermRef::Iri(iri) => iri,
+                    other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
+                };
+                self.parts.push(CanonicalPart::Raw(b" )>>"));
+                self.parts.push(CanonicalPart::Id(o));
+                self.parts.push(CanonicalPart::Raw(b"> "));
+                self.parts.push(CanonicalPart::Raw(predicate.as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b" <"));
+                self.parts.push(CanonicalPart::Id(s));
+                self.parts.push(CanonicalPart::Raw(b"<<( "));
+            }
+        }
+    }
+
+    /// `_:` followed by the bytes [`BlankScope::qualify_label`] would have
+    /// written, generated rather than allocated.
+    fn push_blank(&mut self, label: &'a str, scope: BlankScope) {
+        if scope == BlankScope::DEFAULT && !label.starts_with(ESCAPE_MARKER) {
+            // The owned-model alphabet is unconstrained, so this is the whole of
+            // the encoder's verbatim rule: the label spells itself.
+            self.parts.push(CanonicalPart::Raw(label.as_bytes()));
+            self.parts.push(CanonicalPart::Raw(b"_:"));
+            return;
+        }
+        debug_assert!(
+            self.body.as_str().is_empty() && self.digits_pos >= self.digits_len,
+            "an envelope is written to completion before the next one begins"
+        );
+        self.body = label.chars();
+        self.digits_len = 0;
+        self.digits_pos = 0;
+        if scope != BlankScope::DEFAULT {
+            // Canonical decimal, never zero-padded, exactly as the encoder writes
+            // it; `u32::MAX` is ten digits, so the buffer always fits.
+            let mut ordinal = scope.ordinal();
+            let mut written = 0usize;
+            while ordinal > 0 {
+                self.digits[written] = b'0' + u8::try_from(ordinal % 10).expect("a decimal digit");
+                ordinal /= 10;
+                written += 1;
+            }
+            self.digits[..written].reverse();
+            self.digits_len = u8::try_from(written).expect("ten digits at most");
+        }
+        self.parts.push(CanonicalPart::EnvelopeBody);
+        self.parts.push(CanonicalPart::Raw(b"_"));
+        self.parts.push(CanonicalPart::ScopeDigits);
+        self.parts
+            .push(CanonicalPart::Raw(ESCAPE_MARKER.as_bytes()));
+        self.parts.push(CanonicalPart::Raw(b"_:"));
+    }
+
+    /// The literal rendering rule [`render_literal`] states, shared by the owned
+    /// and interned arms so they cannot drift.
+    fn push_literal(
+        &mut self,
+        lexical: &'a [u8],
+        datatype: &'a str,
+        language: Option<&'a str>,
+        direction: Option<RdfTextDirection>,
+    ) {
+        if let Some(language) = language {
+            if let Some(direction) = direction {
+                self.parts.push(CanonicalPart::Raw(match direction {
+                    RdfTextDirection::Ltr => b"--ltr",
+                    RdfTextDirection::Rtl => b"--rtl",
+                }));
+            }
+            self.parts.push(CanonicalPart::Raw(language.as_bytes()));
+            self.parts.push(CanonicalPart::Raw(b"\"@"));
+        } else if datatype == XSD_STRING || datatype == RDF_LANG_STRING {
+            self.parts.push(CanonicalPart::Raw(b"\""));
+        } else {
+            self.parts.push(CanonicalPart::Raw(b">"));
+            self.parts.push(CanonicalPart::Raw(datatype.as_bytes()));
+            self.parts.push(CanonicalPart::Raw(b"\"^^<"));
+        }
+        self.parts.push(CanonicalPart::Escaped(lexical));
+        self.parts.push(CanonicalPart::Raw(b"\""));
+    }
+}
+
+/// One uppercase hex digit of `nibble`'s low four bits.
+#[inline]
+fn hex_digit(nibble: u32) -> u8 {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    HEX[(nibble & 0xf) as usize]
 }
 
 impl Iterator for CanonicalBytes<'_> {
@@ -365,7 +571,119 @@ impl Iterator for CanonicalBytes<'_> {
                     self.parts.pop();
                     self.expand_term(term);
                 }
+                CanonicalPart::Id(id) => {
+                    let id = *id;
+                    self.parts.pop();
+                    self.expand_id(id);
+                }
+                CanonicalPart::ScopeDigits => {
+                    if self.digits_pos >= self.digits_len {
+                        self.parts.pop();
+                        continue;
+                    }
+                    let byte = self.digits[usize::from(self.digits_pos)];
+                    self.digits_pos += 1;
+                    return Some(byte);
+                }
+                CanonicalPart::EnvelopeBody => {
+                    let Some(character) = self.body.next() else {
+                        self.parts.pop();
+                        continue;
+                    };
+                    if character.is_ascii_alphanumeric() {
+                        return Some(character as u8);
+                    }
+                    self.queue_envelope_escape(character as u32);
+                }
             }
+        }
+    }
+}
+
+/// Order two IRIs by their `<iri>` renderings, from the IRI bytes alone.
+///
+/// `None` means the answer is not decidable from the IRIs: the shorter one is a
+/// prefix of the longer and the next byte of the longer is the closing `>`, which
+/// a valid IRI cannot contain but an unchecked hand-built term can. The caller
+/// falls back to streaming both renderings, preserving exact behaviour there.
+#[inline]
+fn cmp_rendered_iri(left: &[u8], right: &[u8]) -> Option<Ordering> {
+    let shared = left.len().min(right.len());
+    match left[..shared].cmp(&right[..shared]) {
+        Ordering::Equal if left.len() == right.len() => Some(Ordering::Equal),
+        Ordering::Equal if left.len() < right.len() => match b'>'.cmp(&right[shared]) {
+            Ordering::Equal => None,
+            order => Some(order),
+        },
+        Ordering::Equal => match left[shared].cmp(&b'>') {
+            Ordering::Equal => None,
+            order => Some(order),
+        },
+        order => Some(order),
+    }
+}
+
+/// The rendering's LEADING byte, which alone settles every cross-kind order.
+///
+/// `"` (0x22) for a literal, `<` (0x3C) for an IRI, `<` again for a quoted triple
+/// and `_` (0x5F) for a blank node — so literal < IRI ≍ triple < blank, and only
+/// the IRI/triple pair needs more than this.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderKind {
+    Literal,
+    Iri,
+    Triple,
+    Blank,
+}
+
+impl RenderKind {
+    /// The kind an owned term renders as.
+    ///
+    /// Paired with [`RenderKind::of_ref`], and the pair has one obligation: a
+    /// comparison may have an owned term on one side and an interned id on the
+    /// other, so the two classifications must agree for terms that render
+    /// identically. Disagreeing would not produce a wrong byte — it would produce
+    /// a cross-kind order that depends on which representation the caller
+    /// happened to hold.
+    #[inline]
+    fn of_term(term: &Term) -> Self {
+        match term {
+            Term::Literal(_) => Self::Literal,
+            Term::NamedNode(_) => Self::Iri,
+            Term::Triple(_) => Self::Triple,
+            Term::BlankNode(_) => Self::Blank,
+        }
+    }
+
+    /// The kind a borrowed IR payload renders as — the interned-side twin of
+    /// [`RenderKind::of_term`], which it must agree with.
+    #[inline]
+    fn of_ref(term: &TermRef<'_>) -> Self {
+        match term {
+            TermRef::Literal { .. } => Self::Literal,
+            TermRef::Iri(_) => Self::Iri,
+            TermRef::Triple { .. } => Self::Triple,
+            TermRef::Blank { .. } => Self::Blank,
+        }
+    }
+
+    /// The order the leading byte establishes, or `None` when both sides render
+    /// the same leading byte and the answer needs the full streams.
+    #[inline]
+    fn cross_cmp(self, other: Self) -> Option<Ordering> {
+        if self == other {
+            return None;
+        }
+        let rank = |kind: Self| match kind {
+            Self::Literal => 0u8,
+            // An IRI and a quoted triple both open with `<`, so they are ranked
+            // equal here and settled by streaming.
+            Self::Iri | Self::Triple => 1,
+            Self::Blank => 2,
+        };
+        match rank(self).cmp(&rank(other)) {
+            Ordering::Equal => None,
+            order => Some(order),
         }
     }
 }
@@ -378,40 +696,69 @@ pub(crate) fn canonical_cmp(left: &Term, right: &Term) -> Ordering {
         // avoid constructing even the inline rendering cursor.
         (Term::BlankNode(left), Term::BlankNode(right)) => left.cmp(right),
         (Term::NamedNode(left_node), Term::NamedNode(right_node)) => {
-            let left_iri = left_node.0.as_bytes();
-            let right_iri = right_node.0.as_bytes();
-            let shared = left_iri.len().min(right_iri.len());
-            match left_iri[..shared].cmp(&right_iri[..shared]) {
-                Ordering::Equal if left_iri.len() == right_iri.len() => Ordering::Equal,
-                Ordering::Equal if left_iri.len() < right_iri.len() => {
-                    match b'>'.cmp(&right_iri[shared]) {
-                        // `>` is forbidden inside a valid IRI. Preserve exact behavior
-                        // for manually-constructed unchecked terms nonetheless.
-                        Ordering::Equal => {
-                            CanonicalBytes::new(left).cmp(CanonicalBytes::new(right))
-                        }
-                        order => order,
-                    }
-                }
-                Ordering::Equal => match left_iri[shared].cmp(&b'>') {
-                    Ordering::Equal => CanonicalBytes::new(left).cmp(CanonicalBytes::new(right)),
-                    order => order,
-                },
-                order => order,
-            }
+            cmp_rendered_iri(left_node.0.as_bytes(), right_node.0.as_bytes())
+                .unwrap_or_else(|| CanonicalBytes::new(left).cmp(CanonicalBytes::new(right)))
         }
-        (Term::Literal(_), Term::Literal(_)) => {
-            CanonicalBytes::new(left).cmp(CanonicalBytes::new(right))
-        }
-        // The leading rendering byte establishes these cross-kind orders.
-        (Term::Literal(_), _) => Ordering::Less,
-        (_, Term::Literal(_)) => Ordering::Greater,
-        (Term::BlankNode(_), _) => Ordering::Greater,
-        (_, Term::BlankNode(_)) => Ordering::Less,
-        // IRI-vs-triple and same-kind compound values share a leading byte, so
-        // stream their complete canonical renderings.
-        _ => CanonicalBytes::new(left).cmp(CanonicalBytes::new(right)),
+        _ => RenderKind::of_term(left)
+            .cross_cmp(RenderKind::of_term(right))
+            .unwrap_or_else(|| CanonicalBytes::new(left).cmp(CanonicalBytes::new(right))),
     }
+}
+
+/// [`canonical_cmp`] between two terms `dataset` interns, from their ids.
+///
+/// **The ids themselves are never compared.** A `TermId` is an INSERTION-order
+/// handle: the interner mints them as terms arrive, so id order and canonical
+/// order are unrelated, and a comparator that took the integer shortcut for the
+/// interned/interned pair would sort every all-interned focus set wrongly while
+/// agreeing with the owned comparator on every all-foreign one. The key is
+/// derived from what the id DENOTES — its term kind, then the interner's bytes —
+/// exactly as it is for an owned term, and
+/// `canonical_order_is_insertion_order_independent` pins that over a dataset
+/// interned in deliberately anti-canonical order.
+pub(crate) fn canonical_cmp_ids(dataset: &impl ShaclRead, left: TermId, right: TermId) -> Ordering {
+    if left == right {
+        return Ordering::Equal;
+    }
+    let resolver: &dyn TermResolve = dataset;
+    let (left_ref, right_ref) = (resolver.resolve_id(left), resolver.resolve_id(right));
+    match (&left_ref, &right_ref) {
+        (TermRef::Blank { .. }, TermRef::Blank { .. }) => {
+            // Both render as `_:` plus the qualified label, and the shared prefix
+            // cancels — but the qualification is not always the label itself, so
+            // the comparison is over the ENVELOPE bytes, streamed.
+            stream_cmp_ids(resolver, left, right)
+        }
+        (TermRef::Iri(left_iri), TermRef::Iri(right_iri)) => {
+            cmp_rendered_iri(left_iri.as_bytes(), right_iri.as_bytes())
+                .unwrap_or_else(|| stream_cmp_ids(resolver, left, right))
+        }
+        _ => RenderKind::of_ref(&left_ref)
+            .cross_cmp(RenderKind::of_ref(&right_ref))
+            .unwrap_or_else(|| stream_cmp_ids(resolver, left, right)),
+    }
+}
+
+/// [`canonical_cmp`] between an interned term and an owned one.
+pub(crate) fn canonical_cmp_id_term(
+    dataset: &impl ShaclRead,
+    left: TermId,
+    right: &Term,
+) -> Ordering {
+    let resolver: &dyn TermResolve = dataset;
+    let left_ref = resolver.resolve_id(left);
+    match (&left_ref, right) {
+        (TermRef::Iri(left_iri), Term::NamedNode(right_node)) => {
+            cmp_rendered_iri(left_iri.as_bytes(), right_node.0.as_bytes())
+        }
+        _ => RenderKind::of_ref(&left_ref).cross_cmp(RenderKind::of_term(right)),
+    }
+    .unwrap_or_else(|| CanonicalBytes::of_id(resolver, left).cmp(CanonicalBytes::new(right)))
+}
+
+/// Compare two interned terms by streaming both canonical renderings.
+fn stream_cmp_ids(resolver: &dyn TermResolve, left: TermId, right: TermId) -> Ordering {
+    CanonicalBytes::of_id(resolver, left).cmp(CanonicalBytes::of_id(resolver, right))
 }
 
 impl Term {
@@ -513,6 +860,33 @@ impl Term {
     /// is a raw label rather than a qualified one. Whenever the two spellings
     /// differ, the verbatim DEFAULT-scope key is offered as a fallback and the
     /// caller tries each until one resolves.
+    ///
+    /// # Deprecated: use [`PreparedValidator::term_id`] instead
+    ///
+    /// This hands out *lookup keys* and leaves the caller to run the search, try
+    /// the fallback in the right order, and decide what a miss means. Nothing in
+    /// this workspace does that any more — the engine resolves a [`Term`] to its
+    /// interned identity internally, and the supported public route is
+    /// [`PreparedValidator::term_id`], which answers the identity itself against
+    /// the binding whose term table the answer indexes. That matters beyond
+    /// convenience: a [`TermId`] is meaningful only relative to one
+    /// dataset, and a key-returning helper cannot enforce that pairing while an
+    /// accessor on the binding cannot avoid it.
+    ///
+    /// Deprecated rather than removed because removal is a breaking change and
+    /// this release is not one; it is additive today and the attribute is how an
+    /// out-of-tree caller finds out before the next major. There is no
+    /// functionality here that the supported route does not cover, so nothing is
+    /// waiting on a replacement.
+    ///
+    /// [`PreparedValidator::term_id`]: crate::engine::PreparedValidator::term_id
+    // No `since`: the version this deprecation first ships in is not knowable from
+    // inside the commit that writes it, and a wrong `since` is a claim about a
+    // release rather than a pointer to the supported route.
+    #[deprecated(
+        note = "resolve a Term through PreparedValidator::term_id, which answers the interned \
+                identity against the binding it indexes, instead of handing back lookup keys"
+    )]
     pub fn lookup_term_values(&self) -> Vec<TermValue> {
         match self {
             Self::BlankNode(b) => {
@@ -593,7 +967,7 @@ fn escape_literal(s: &str) -> String {
 /// components via the dataset's [`resolve`](::purrdf::RdfDataset::resolve).
 ///
 /// Blank labels are scope-qualified so two same-label blanks from different
-/// [`BlankScope`](::purrdf::BlankScope)s never conflate (C0.2); a DEFAULT-scope
+/// [`BlankScope`]s never conflate (C0.2); a DEFAULT-scope
 /// label outside the reserved marker namespace stays bare so single-scope data
 /// is byte-unchanged.
 pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
@@ -793,5 +1167,143 @@ mod tests {
         let mut actual = terms;
         sort_terms_canonical(&mut actual);
         assert_eq!(actual, expected);
+    }
+
+    /// A dataset holding every term kind, interned in DELIBERATELY ANTI-CANONICAL
+    /// order.
+    ///
+    /// The ids therefore ascend as the terms DESCEND in rendered byte order (for
+    /// the IRIs, which are the bulk of it), so any comparator that reached for an
+    /// id's number instead of what the id denotes produces a visibly reversed
+    /// answer rather than a plausible one. A dataset built in the natural order
+    /// would let that mistake pass.
+    fn anti_canonical_dataset() -> std::sync::Arc<::purrdf::RdfDataset> {
+        use ::purrdf::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+
+        let mut builder = RdfDatasetBuilder::new();
+        // Descending IRIs, so id order is the reverse of canonical order.
+        for local in ["z", "y", "x", "c", "b", "a"] {
+            builder.intern_iri(&format!("http://example.org/{local}"));
+        }
+        // Blank nodes, also descending, including a NON-DEFAULT scope whose
+        // rendered label is the `purrdfesc` envelope rather than the raw label.
+        builder.intern_blank("zeta", BlankScope::DEFAULT);
+        builder.intern_blank("alpha", BlankScope::DEFAULT);
+        builder.intern_blank("scoped", BlankScope(7));
+        builder.intern_blank("purrdfesc_looks_like_an_envelope", BlankScope::DEFAULT);
+        builder.intern_blank("needs. escaping/é", BlankScope(2));
+        // Literals of every rendered shape.
+        builder.intern_literal(RdfLiteral::simple("zzz"));
+        builder.intern_literal(RdfLiteral::simple(""));
+        builder.intern_literal(RdfLiteral::simple("a\"b\\c\n\r\t\u{0000}\u{001f}"));
+        builder.intern_literal(RdfLiteral::simple("é🐈"));
+        builder.intern_literal(RdfLiteral::typed(
+            "42",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        builder.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
+        builder.intern_literal(RdfLiteral::language_tagged("hello", "en"));
+        // A quoted triple, and a triple nesting it.
+        let s = builder.intern_iri("http://example.org/a");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_literal(RdfLiteral::simple("quoted\nvalue"));
+        let inner = builder.intern_triple(s, p, o);
+        // RDF 1.2 nests a triple term only in the OBJECT position, so the outer
+        // triple wraps the inner one there.
+        let p2 = builder.intern_iri("http://example.org/p2");
+        let nested_subject = builder.intern_blank("nested", BlankScope(3));
+        builder.intern_triple(nested_subject, p2, inner);
+        builder.push_quad(s, p, o, None);
+        builder.freeze().expect("the fixture dataset freezes")
+    }
+
+    /// **The bytes a cursor streams from an id are the bytes the materialized
+    /// term renders — for every term in a dataset holding every kind.**
+    ///
+    /// This is the equivalence the whole id-native comparator rests on, stated
+    /// directly rather than inferred from an ordering that happened to agree. If
+    /// it holds, `canonical_cmp_ids` and `canonical_cmp` cannot disagree, because
+    /// they are comparing the same byte sequences.
+    #[test]
+    fn canonical_bytes_of_an_id_match_the_materialized_term() {
+        use ::purrdf::TermId;
+
+        let dataset = anti_canonical_dataset();
+        assert!(dataset.term_count() > 20, "the fixture must be non-trivial");
+        let resolver: &dyn TermResolve = dataset.as_ref();
+        let mut kinds = [false; 4];
+        for index in 0..dataset.term_count() {
+            let id = TermId::from_index(u32::try_from(index).expect("fixture fits in u32"));
+            kinds[match ::purrdf::DatasetView::resolve(dataset.as_ref(), id) {
+                TermRef::Iri(_) => 0,
+                TermRef::Blank { .. } => 1,
+                TermRef::Literal { .. } => 2,
+                TermRef::Triple { .. } => 3,
+            }] = true;
+            let streamed: Vec<u8> = CanonicalBytes::of_id(resolver, id).collect();
+            let rendered = term_id_to_native(dataset.as_ref(), id).to_string();
+            assert_eq!(
+                String::from_utf8(streamed).as_deref(),
+                Ok(rendered.as_str()),
+                "the id cursor drifted from the rendered term at id {index}"
+            );
+        }
+        assert!(
+            kinds.iter().all(|seen| *seen),
+            "the fixture must hold an IRI, a blank node, a literal and a quoted triple, or the \
+             equivalence is only pinned for the kinds it happens to contain"
+        );
+    }
+
+    /// **Comparing two ids orders them canonically, not by insertion.**
+    ///
+    /// Over a dataset whose interning order is the reverse of its canonical
+    /// order, so a comparator that shortcut to the ids' numbers would be exactly
+    /// backwards on the IRIs rather than subtly off.
+    #[test]
+    fn id_comparison_is_canonical_and_not_insertion_order() {
+        use ::purrdf::TermId;
+
+        let dataset = anti_canonical_dataset();
+        let ids: Vec<TermId> = (0..dataset.term_count())
+            .map(|index| TermId::from_index(u32::try_from(index).expect("fixture fits in u32")))
+            .collect();
+        for &left in &ids {
+            for &right in &ids {
+                let rendered = term_id_to_native(dataset.as_ref(), left)
+                    .to_string()
+                    .cmp(&term_id_to_native(dataset.as_ref(), right).to_string());
+                assert_eq!(
+                    canonical_cmp_ids(dataset.as_ref(), left, right),
+                    rendered,
+                    "id comparison drifted at {}/{}",
+                    left.index(),
+                    right.index()
+                );
+                assert_eq!(
+                    canonical_cmp_id_term(
+                        dataset.as_ref(),
+                        left,
+                        &term_id_to_native(dataset.as_ref(), right)
+                    ),
+                    rendered,
+                    "mixed id/term comparison drifted at {}/{}",
+                    left.index(),
+                    right.index()
+                );
+            }
+        }
+
+        // And the fixture really is anti-canonical: ordering the ids by their
+        // NUMBERS must not be ordering them canonically, or this test would pass
+        // against a comparator that never looked at the terms at all.
+        let canonical_agrees_with_id_order = ids
+            .windows(2)
+            .all(|pair| canonical_cmp_ids(dataset.as_ref(), pair[0], pair[1]) != Ordering::Greater);
+        assert!(
+            !canonical_agrees_with_id_order,
+            "the fixture must be interned out of canonical order, or comparing ids by number \
+             would look correct"
+        );
     }
 }

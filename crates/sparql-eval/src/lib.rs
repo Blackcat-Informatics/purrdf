@@ -100,6 +100,7 @@ mod expr;
 mod fallible;
 mod governed;
 pub mod governor;
+pub mod interned;
 /// Nearest-neighbour retrieval over a PURREMB embedding space, reachable from SPARQL
 /// through the property-function seam under caller-supplied IRIs.
 pub mod knn;
@@ -163,6 +164,12 @@ pub use governor::{
     GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernorState,
     ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity, QueryExplanation,
     QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
+};
+// The interned query egress: a result visited inside its own evaluation, so a
+// caller that reads two columns of a wide row does not pay for the other twenty.
+// Additive beside `SparqlResult`, never a replacement for it.
+pub use interned::{
+    InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
 };
 pub use plan_cache::{CacheLimits, CacheStats};
 pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};

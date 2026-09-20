@@ -5,6 +5,7 @@
 resolver = "2"
 members = [
     "bindings/python",
+    "crates/alloc-probe",
     "crates/bench",
     "crates/cdt",
     "crates/cli",
@@ -64,6 +65,14 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 [workspace.dependencies]
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
 purrdf = { path = "crates/purrdf", version = "2.0.2" }
+# DEV-ONLY instrument (`publish = false`): the shared counting allocator and its
+# two measurement windows. Declared PATH-ONLY, with NO `version` key, and that
+# omission is load-bearing: cargo strips a versionless path dev-dependency from
+# the manifest it uploads, so a published crate can depend on this unpublished
+# one without `cargo publish`'s verification step trying — and failing — to
+# resolve it from the registry. Never a normal dependency of anything, so the
+# wasm32 lane (which builds `--lib`) never sees it.
+purrdf-alloc-probe = { path = "crates/alloc-probe" }
 purrdf-cdt = { path = "crates/cdt", version = "2.0.2" }
 purrdf-columnar = { path = "crates/columnar", version = "2.0.2" }
 purrdf-core = { path = "crates/rdf-core", version = "2.0.2" }

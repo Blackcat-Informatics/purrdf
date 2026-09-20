@@ -223,6 +223,15 @@ ownership, and all limits. Complete examples are in
   relative reference throws rather than being mis-parsed (`dataNt` needs no
   counterpart — N-Triples admits no relative IRI by grammar). `Dataset.parse`
   takes the same optional third argument.
+- `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?)`
+  — validates a CHANGE to `dataNt` rather than the whole graph: hand it the rows
+  joining and the rows leaving, and the engine re-validates only the focus nodes
+  that change can move. Returns a `ShaclChangeValidation`; read `bounded` before
+  the log, because it decides what the log MEANS. `true` and an empty log means
+  *this change introduced no violation*; `false` means the shapes graph reads
+  through SPARQL query text, no bounded footprint exists for it, the call fell
+  back to a FULL validation, and an empty log means *the graph conforms*. Call
+  `free()` when done.
 - `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
   `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning

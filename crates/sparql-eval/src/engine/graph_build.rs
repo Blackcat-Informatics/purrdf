@@ -214,11 +214,12 @@ impl NativeSparqlEngine {
             Cow::Owned(match options.prebinding {
                 ShaclPrebinding::Applied => crate::substitute::apply_shacl_prebinding(
                     prepared.query.clone(),
-                    substitutions,
+                    crate::substitute::Prebindings::Owned(substitutions),
                 )?,
-                ShaclPrebinding::None => {
-                    crate::substitute::apply_substitutions(prepared.query.clone(), substitutions)?
-                }
+                ShaclPrebinding::None => crate::substitute::apply_substitutions(
+                    prepared.query.clone(),
+                    crate::substitute::Prebindings::Owned(substitutions),
+                )?,
             })
         };
         let mut ctx = apply_query_options(self.eval_ctx(dataset), options)?;

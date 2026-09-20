@@ -61,12 +61,20 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// recompiled once for all of them; splitting would have broken the same consumer four
 /// times for one reason.
 ///
-/// # `0.7.0` → `0.8.0`: eight added symbols and an appended status
+/// # `0.7.0` → `0.8.0`: nine added symbols and an appended status
 ///
 /// The prepared-shapes-product surface exports eight new entry points —
 /// `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
 /// `_rebuild_expecting`, `_certify` and `_error_dimension` — and APPENDS
-/// `PurrdfStatus::ShapesProductError = 11`.
+/// `PurrdfStatus::ShapesProductError = 11`. The SHACL change path exports a ninth,
+/// `purrdf_shacl_validate_changes_to_sarif`, with its own `PurrdfShaclChangeScopeKind`
+/// discriminant.
+///
+/// The ninth rides this SAME unreleased bump rather than a tenth one, exactly as the
+/// `0.6.0` → `0.7.0` breaks were bundled: `0.8.0` has shipped in nothing, so there is
+/// no library answering it that exports a different surface, and splitting would make a
+/// consumer recompile twice for one reason. A symbol added AFTER `0.8.0` ships is a
+/// different question, and the paragraph below is the answer to it.
 ///
 /// Every one of those is additive: no existing prototype was retyped, reordered,
 /// removed or given a parameter, and no discriminant was renumbered. A host built
@@ -75,7 +83,7 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 ///
 /// It bumps anyway, and the reason is the sentence at the top of this comment rather
 /// than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
-/// `2.0.0`, `2.0.1` and `2.0.2` libraries, which export eight fewer symbols than this
+/// `2.0.0`, `2.0.1` and `2.0.2` libraries, which export nine fewer symbols than this
 /// one does. Leaving the triple still would mean two different shippable libraries
 /// answering `purrdf_abi_version` identically while exporting different surfaces, so a
 /// host that compiled against this header and loaded the older library would be told

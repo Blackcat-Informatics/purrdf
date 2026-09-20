@@ -21,28 +21,30 @@
 //! For each phase it reports two DISTINCT numbers, on purpose:
 //!
 //! * **`peak_allocated_bytes`** — the high-water mark of live bytes requested
-//!   through the global allocator while the rows were being fused. This is
-//!   the fusion's own working set: the frontier, the per-stream duplicate sets
-//!   and whatever transient each pull makes.
+//!   through the global allocator while the rows were being fused, read from a
+//!   whole-process window of the workspace's shared instrument. This is the
+//!   fusion's own working set: the frontier, the per-stream duplicate sets and
+//!   whatever transient each pull makes.
 //! * **`rss_delta_kb`** — the change in the process resident set
 //!   (`/proc/self/statm`) across the same window, which includes pages the
-//!   allocator never handed back to the system. Conflating the two would hide
-//!   exactly the difference this bench exists to show: a fusion can hold a small
-//!   frontier and still have grown the process.
+//!   allocator never handed back to the system and which no allocator ledger can
+//!   supply. Conflating the two would hide exactly the difference this bench
+//!   exists to show: a fusion can hold a small frontier and still have grown the
+//!   process.
 //!
 //! The fixture is multi-stratum with genuine cross-stratum disagreement. A
 //! single-stratum fusion has no frontier to measure — nothing is ever held
 //! awaiting confirmation — so it would report the same bytes whether the
 //! frontier were bounded or not.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::hint::black_box;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
+use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, FusionStream,
     Iri, ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract, Term,
@@ -53,77 +55,8 @@ use purrdf_retrieval::{
 // The tracking allocator
 // ---------------------------------------------------------------------------
 
-static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
-static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-
-fn to_i64(size: usize) -> i64 {
-    i64::try_from(size).unwrap_or(i64::MAX)
-}
-
-fn record_allocation(size: usize) {
-    let size = to_i64(size);
-    let live = LIVE_BYTES
-        .fetch_add(size, Ordering::Relaxed)
-        .saturating_add(size);
-    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(observed) => peak = observed,
-        }
-    }
-}
-
-fn record_deallocation(size: usize) {
-    LIVE_BYTES.fetch_sub(to_i64(size), Ordering::Relaxed);
-}
-
-struct CountingAllocator;
-
-// SAFETY: every operation delegates to `System` with the exact incoming pointer
-// and layout; the atomic accounting does not affect allocator ownership.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact layout.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        record_deallocation(layout.size());
-        // SAFETY: delegated with the caller's exact pointer/layout.
-        unsafe { System.dealloc(pointer, layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact pointer/layout and size.
-        let resized = unsafe { System.realloc(pointer, layout, new_size) };
-        if !resized.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        resized
-    }
-}
-
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
-
-/// Set the peak high-water mark to the current live bytes, returning that
-/// baseline.
-fn reset_peak() -> i64 {
-    let live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_BYTES.store(live, Ordering::Relaxed);
-    live
-}
-
-/// Peak allocated bytes since `baseline` (the value [`reset_peak`] returned).
-fn peak_since(baseline: i64) -> i64 {
-    PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(baseline)
-}
 
 /// The process resident set size in KiB, read from `/proc/self/statm` (field 2
 /// is the resident page count). Linux-only; on any other platform this reports
@@ -363,7 +296,7 @@ fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
     let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
-    let baseline = reset_peak();
+    let window = WholeProcessWindow::open();
     let mut fused = 0usize;
     let mut contributions = 0usize;
     while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
@@ -373,7 +306,7 @@ fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
         contributions += row.contributions.len();
         fused += 1;
     }
-    let peak = peak_since(baseline);
+    let peak = window.close().peak_working_bytes;
     let rss_after = rss_kb();
     let pulled = pulls.load(Ordering::Relaxed);
     drop(fusion);
@@ -442,7 +375,7 @@ fn disjoint_phase(label: &str, total: u64, rows: usize) {
     let mut fusion = FusionStream::new(streams, profile);
 
     let rss_before = rss_kb();
-    let baseline = reset_peak();
+    let window = WholeProcessWindow::open();
     let mut fused = 0usize;
     let mut contributions = 0usize;
     while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
@@ -452,7 +385,7 @@ fn disjoint_phase(label: &str, total: u64, rows: usize) {
         contributions += row.contributions.len();
         fused += 1;
     }
-    let peak = peak_since(baseline);
+    let peak = window.close().peak_working_bytes;
     let rss_after = rss_kb();
     let pulled = pulls.load(Ordering::Relaxed);
     drop(fusion);

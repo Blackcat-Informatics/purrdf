@@ -111,6 +111,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	bash scripts/bootstrap-crates-io.sh --self-test
 	python3 scripts/check-wasm-js-exports.py
 	python3 scripts/check-entailment-surface.py
+	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
 	python3 crates/text/tests/reference/bm25f.py --check
 	cargo test --workspace --locked

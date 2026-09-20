@@ -1018,16 +1018,34 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// surfaced alongside a SELECT/ASK result. The common empty-buffer case yields an
     /// empty (but valid) dataset.
     pub(crate) fn constructed_dataset(&self, rows: &[Vec<Option<TermValue>>]) -> Arc<RdfDataset> {
-        let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        for (s, p, o) in self.reachable_constructed(rows) {
-            let s = builder.intern_value(&s);
-            let p = builder.intern_value(&p);
-            let o = builder.intern_value(&o);
-            builder.push_quad(s, p, o, None);
+        freeze_constructed(&self.reachable_constructed(rows))
+    }
+
+    /// [`Self::constructed_dataset`], seeded from an interned solution bag rather
+    /// than from materialized rows — the same auxiliary graph, for the egress that
+    /// never builds the owned rows.
+    ///
+    /// The two are the same graph by construction, not by coincidence: the walk is
+    /// seeded with the terms bound in the surviving rows either way, the interned
+    /// bag's rows ARE the rows [`materialize_solutions`] would copy, and they are
+    /// visited in the same row-major order, so the forest walk pops in the same
+    /// order and emits the same cells. Only the copy is skipped.
+    ///
+    /// The constructed buffer is consulted FIRST. A query that invented no cells —
+    /// which is every query with no list constructor in it, the SHACL egress
+    /// included — resolves not one cell out of the id space and yields the empty
+    /// dataset, so the borrowed door is never charged a row walk for a graph that
+    /// has no quads in it.
+    pub(crate) fn constructed_dataset_of(&self, seq: &SolutionSeq<D::Id>) -> Arc<RdfDataset> {
+        if self.constructed.is_empty() {
+            return freeze_constructed(&[]);
         }
-        builder
-            .freeze()
-            .expect("constructed list cells are positionally valid by construction")
+        let seed = seq
+            .rows
+            .iter()
+            .flat_map(|row| row.iter().copied().flatten())
+            .map(|term| self.scratch.value_of(self.dataset, term));
+        freeze_constructed(&self.reachable_from(seed))
     }
 
     /// The constructed cells (see [`Self::constructed`]) reachable, via
@@ -1046,7 +1064,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return Vec::new();
         }
         // Seed the walk with every term bound in a surviving row.
-        let mut worklist: Vec<TermValue> = rows.iter().flatten().filter_map(Clone::clone).collect();
+        self.reachable_from(rows.iter().flatten().filter_map(Clone::clone))
+    }
+
+    /// [`Self::reachable_constructed`]'s forest walk, over an explicit seed
+    /// sequence — the shared body of the owned and interned auxiliary-graph doors,
+    /// which differ only in how a surviving row's bound terms are spelled.
+    fn reachable_from(
+        &self,
+        seed: impl Iterator<Item = TermValue>,
+    ) -> Vec<(TermValue, TermValue, TermValue)> {
+        let mut worklist: Vec<TermValue> = seed.collect();
         let mut visited: Vec<TermValue> = Vec::new();
         let mut out: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
         while let Some(node) = worklist.pop() {
@@ -3086,6 +3114,25 @@ pub fn evaluate_query<D: DatasetView + Sync>(
             certificate.describe()
         ))),
     }
+}
+
+/// Freeze constructed `(s, p, o)` cells into a standalone dataset.
+///
+/// The one place the auxiliary graph is built, so the owned and interned doors
+/// cannot differ in how they spell it. An empty slice — the common case, and the
+/// only case for a query with no list constructor in it — yields an empty but
+/// positionally valid dataset rather than an error or an absent graph.
+fn freeze_constructed(cells: &[(TermValue, TermValue, TermValue)]) -> Arc<RdfDataset> {
+    let mut builder = purrdf_core::RdfDatasetBuilder::new();
+    for (s, p, o) in cells {
+        let s = builder.intern_value(s);
+        let p = builder.intern_value(p);
+        let o = builder.intern_value(o);
+        builder.push_quad(s, p, o, None);
+    }
+    builder
+        .freeze()
+        .expect("constructed list cells are positionally valid by construction")
 }
 
 /// Materialize a [`SolutionSeq`] into dataset-independent egress form: the

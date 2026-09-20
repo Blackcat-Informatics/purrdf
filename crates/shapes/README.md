@@ -93,11 +93,133 @@ places the shapes graph under its caller-provided name. Independently parsed
 documents must establish their separate blank scopes before shape preparation;
 retaining raw local IDs across datasets is never an identity rule.
 
-This reuse does not authorize skipping targets after a data change. Paths,
-SPARQL and custom expressions can depend on nodes beyond the changed triples;
-call `validate()` for a complete report unless the caller has established the
-complete affected focus set. Target sets and validation answers belong to the
-exact bound snapshot.
+### The change path after a data change
+
+Paths, SPARQL and custom expressions can depend on nodes well beyond the changed
+triples, so the focus nodes a change can move are not the subjects of that
+change. Deriving them is `PreparedValidator::affected_focus_node_ids`'s job, not
+the caller's: it walks the dependency footprint the shapes-lowering walk emits —
+inverse paths, sequence prefixes, `sh:zeroOrMorePath`/`sh:oneOrMorePath`
+closures, `sh:targetSubjectsOf`/`sh:targetObjectsOf`, `sh:node` recursion,
+property-pair comparands and the `rdfs:subClassOf*` hierarchy — and returns a
+superset of the focus nodes whose verdict the change can alter, in either
+direction. Feed that answer to `validate_focus_node_ids` (or
+`validate_focus_nodes` for owned terms); use `term_id` to turn a `Term` into an
+id in the binding's own space.
+
+`engine::validate_change(&validator, &delta)` is that loop as one call, and
+`engine::validate_change_with_governors` is its governed twin — the same
+one-per-validation budget `validate_with_governors` installs, over the same scope
+guard. Both return the report beside a `ChangeScope`, because a report alone
+cannot say which question it answered, and both honour the `Everything` answer
+rather than leaving that to each caller. Every surface below drives one of those
+two functions; the halves are public for a caller that needs to interleave work
+between them.
+
+Those ids are `FocusId` values, and the type is the guard. A `TermId` is an
+index into one binding's term table: an index from another binding is very
+probably in range, so it resolves to a different term and validates the wrong
+node without any lookup failing — and two live id spaces is the designed
+situation the moment a delta binding sits beside a base one. A `FocusId` carries
+the binding that minted it, and `validate_focus_node_ids` refuses one that names
+a different binding, so the expand-then-validate loop is provenance-safe by type
+rather than by documentation.
+
+#### Reaching the change path without writing Rust
+
+The loop is wired on the shipped surfaces, so it is not a Rust-only API.
+
+On the **command line**, `purrdf validate --changes FILE` (and its retract half
+`--changes-removed FILE`) branches the data graph into a copy-on-write mutation,
+applies the change, and runs exactly the expand-then-validate loop above. Which
+arm it took is written to stderr as `shacl change-expansion bounded N` or
+`shacl change-expansion everything <reason>`, because the bounded report
+describes the affected focus nodes and the fallback report describes the whole
+graph, and a verdict whose scope has to be inferred is a verdict nobody can act
+on.
+
+In **Python**, a `Store` already holds a change: mutation edits its
+copy-on-write delta. `Store.checkpoint()` folds everything so far into the base
+so the delta is the mutation you are asking about, and
+`PreparedShapes.validate_store_changes(store)` runs the same loop, returning a
+`ChangeValidation` that carries the report beside the scope it describes
+(`bounded`, `focus_nodes`, `reason`).
+
+Over the **C ABI**, `purrdf_shacl_validate_changes_to_sarif` takes the data graph
+and both halves of the change as N-Triples and writes the SARIF 2.1.0 log to one
+buffer, the scope to `*out_scope` as a `PurrdfShaclChangeScopeKind`, the bounded
+focus-node count to `*out_focus_nodes`, and — only on the fallback — the reason
+to a second buffer. Branch on the kind, never on the count.
+
+In **JavaScript/WebAssembly**, `shaclValidateChangesToSarif(shapesTtl, dataNt,
+addedNt?, removedNt?, shapesBase?)` returns a `ShaclChangeValidation` whose
+`sarif`, `bounded`, `focusNodes` and `reason` getters carry the same four facts.
+
+All four are one implementation. A surface that wired only the bounded arm would
+pass every happy-path test and silently under-validate exactly the shapes graphs
+too complex to analyze, so the arm that cannot be bounded is not each caller's to
+remember.
+
+**API note.** `validate_focus_node_ids` shipped taking `&[TermId]` and now takes
+`&[FocusId]`. That is a deliberate signature break with no deprecated `&[TermId]`
+door left open beside it: the old door is the unguarded one. Callers holding a
+`TermId` re-mint it with `term_id`, which is the lookup they were already
+entitled to make. `FocusId::term_id` reads the dataset-local id back out for
+logging or for a lower-level view.
+
+Two obligations stay with the caller and both are visible rather than implied:
+bind through `bind_delta_with_shapes_graph` and hand the expansion the same
+mutation snapshot, and honour a `FocusExpansion::Everything` answer by calling
+`validate()` instead. A shapes graph that reads through query text the walk does
+not interpret — `sh:sparql`, a SPARQL target, a component's `sh:ask`/`sh:select`
+validator, a `sh:SPARQLFunction` call, a SPARQL node expression — has no
+footprint anyone can bound from the shapes graph alone, and that is reported
+rather than silently under-approximated. Target sets and validation answers
+belong to the exact bound snapshot.
+
+**Validating a conforming focus set through that path allocates a bounded
+amount, independent of the focus-node count — for every constraint kind and path
+form whose evaluation stays inside this crate.** Cost is proportional to the
+violations found, not to the focus nodes examined: a focus node is carried as its
+interned identity and materialized as an owned term only where a result is built.
+The bind in front of it is likewise independent of the data graph's size beyond
+the class catalog. `bind_dataset` is the deliberate exception — it projects the
+graph into an owned snapshot first, so it is linear in the graph by construction.
+The guarantee is executed in `tests/change_path_alloc.rs` as an equality between
+two conforming validations differing only in focus count, with a companion test
+that fails if validation ever gets cheaper by producing fewer results.
+
+### The SPARQL-bearing surfaces carry a per-focus-node term
+
+The qualification above is not a third party's cost; it is this crate's own. A
+shape that reads through query text — a `sh:sparql` constraint, a custom
+component's `sh:ask`/`sh:select` validator, a SHACL-AF `sh:expression` function
+call — runs one SPARQL query **per focus node** (per value node for an `ASK`
+validator, per argument tuple for an expression call), and a query evaluation is
+not allocation-free. Those surfaces therefore satisfy a closed form rather than
+zero growth:
+
+```text
+allocations(N) == CHANGE_PATH_CONSTANT + per_focus_node * N
+```
+
+`CHANGE_PATH_CONSTANT` is the same entry cost the zero-growth cases pin.
+`per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, in
+`tests/sparql_path_alloc.rs`: **96** for a `sh:sparql` SELECT constraint, **214**
+for a custom `sh:ask` component over a two-valued path, **116** for a custom
+`sh:select` component, and **194** for a `sh:expression` function call over two
+argument tuples.
+
+Two properties of that term are worth separating from its size. It is **flat in
+the data graph** — a fixed focus count costs the same over 768 quads and over
+24,576 — so it is the price of executing a query, not of scanning a graph; the
+scan that used to be there is gone. And it splits, by measurement, into the
+SPARQL evaluator's per-execution setup (the larger share on three of the four
+surfaces) and the per-focus-node pre-binding rewrite, in which
+`purrdf_sparql_eval` clones the prepared algebra and rebuilds it and every
+pre-bound term crosses the boundary as an owned `TermValue` whose IRI is a fresh
+`String`. Neither share is currently zero, and this crate does not claim
+otherwise.
 
 ## Ontology-complete developer schemas
 

@@ -193,10 +193,23 @@ fn join_order_eviction_replans_without_reusing_answers() {
         bytes: 1000,
     });
     let dataset = fixture();
-    let a = engine.prepare_query(A, None).unwrap();
+    // TWO-pattern BGPs, deliberately. A one-pattern BGP has exactly one join
+    // order, so the evaluator answers it without consulting the order cache at
+    // all — there is nothing to plan and nothing worth remembering, and going to
+    // the cache anyway would evict a live entry to store an answer that is already
+    // known. This test is about what the cache does under an entry ceiling, so it
+    // has to issue queries the cache actually serves.
+    let a = engine
+        .prepare_query(
+            "SELECT ?s WHERE { ?s <http://example.org/p> ?o . ?s <http://example.org/p> ?o2 } \
+             ORDER BY ?s",
+            None,
+        )
+        .unwrap();
     let other = engine
         .prepare_query(
-            "SELECT ?o WHERE { <http://example.org/a> <http://example.org/p> ?o }",
+            "SELECT ?o WHERE { <http://example.org/a> <http://example.org/p> ?o . \
+             <http://example.org/a> <http://example.org/p> ?o2 }",
             None,
         )
         .unwrap();

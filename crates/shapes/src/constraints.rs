@@ -8,18 +8,21 @@
 
 use crate::data_view::ShaclRead;
 
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, IdSet, TermId, TermRef};
 use smallvec::SmallVec;
 
-use crate::data::{GraphFilter, ShaclData, native_quads, resolve_id};
-use crate::engine::ValidationPlan;
+use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
+use crate::engine::FocusNode;
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
+use crate::plan::{PlannedConstraint, PropertyPlan, RangeBound, ShapePlan};
 use crate::report::ValidationResult;
-use crate::shapes::{ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape};
-use crate::term::{NamedNode, Term, Triple, term_id_to_native};
+use crate::shapes::{ComponentValidator, NodeKindValue, Path, PropertyShape, Shape};
+use crate::term::{NamedNode, Term, Triple, canonical_cmp_ids, term_id_to_native};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -50,6 +53,44 @@ impl ValueNode {
         match self {
             Self::Interned(id) => term_id_to_native(ds, *id),
             Self::Foreign(term) => term.clone(),
+        }
+    }
+
+    /// This value node as a focus node, for the constraints that recurse into a
+    /// shape at it.
+    ///
+    /// Free for the interned arm, which is the arm the change path produces:
+    /// the recursion focus is the id, and nothing is materialized. The foreign
+    /// arm clones the term it already owns — the same clone the owned-term
+    /// recursion boundary used to make for EVERY value node, interned or not.
+    fn as_focus(&self, ds: &impl ShaclRead) -> FocusNode {
+        match self {
+            Self::Interned(id) => FocusNode::Interned(*id),
+            Self::Foreign(term) => FocusNode::resolve(ds, term),
+        }
+    }
+
+    /// The single value node a NODE-level constraint sees: the focus node itself.
+    fn of_focus(focus: &FocusNode) -> Self {
+        match focus {
+            FocusNode::Interned(id) => Self::Interned(*id),
+            FocusNode::Foreign(term) => Self::Foreign(term.clone()),
+        }
+    }
+
+    /// The id this value node ALREADY carries, without consulting `ds`.
+    ///
+    /// Deliberately narrower than [`Self::as_id`], which also resolves a foreign
+    /// term. A caller that will go on to describe this value node in identity
+    /// space needs the arm, not just an id: a `Foreign` term that happens to be
+    /// interned still reports itself verbatim at the report boundary, so treating
+    /// it as interned would substitute the interner's rendering for the term the
+    /// expression produced.
+    #[inline]
+    const fn interned(&self) -> Option<TermId> {
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(_) => None,
         }
     }
 
@@ -107,24 +148,71 @@ impl ValueNode {
 
     /// Borrow `(lexical, datatype IRI)` for a literal value node.
     fn literal_parts<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<(&'a str, &'a str)> {
+        let view = self.literal_view(ds)?;
+        Some((view.lexical, view.datatype))
+    }
+
+    /// Borrow the whole comparison surface of a literal value node.
+    ///
+    /// This is the one derivation of "what a literal looks like to the value
+    /// comparisons": [`Self::literal_parts`] and the property-pair order
+    /// constraints both read it, so the interned and foreign spellings of a
+    /// literal are transcribed once rather than once per caller.
+    fn literal_view<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<LiteralView<'a>> {
         match self {
-            Self::Interned(id) => {
-                let TermRef::Literal {
-                    lexical, datatype, ..
-                } = ds.resolve(*id)
-                else {
-                    return None;
-                };
-                let TermRef::Iri(datatype) = ds.resolve(datatype) else {
-                    return None;
-                };
-                Some((lexical, datatype))
-            }
-            Self::Foreign(Term::Literal(literal)) => {
-                Some((literal.value(), literal.datatype_str()))
-            }
-            Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+            Self::Interned(id) => literal_view_of_id(ds, *id),
+            Self::Foreign(term) => literal_view_of_term(term),
         }
+    }
+}
+
+/// A literal's comparison surface, BORROWED rather than materialized.
+///
+/// Every value comparison SHACL defines over literals — the range facets and the
+/// property-pair order constraints — reads exactly these three fields. Carrying
+/// them as borrows is what lets a conforming focus node be compared without an
+/// owned [`Term`] ever existing: an interned literal's lexical form, datatype IRI
+/// and language tag all live in the dataset's interner already.
+#[derive(Clone, Copy, Debug)]
+struct LiteralView<'a> {
+    /// The literal's lexical form.
+    lexical: &'a str,
+    /// The literal's datatype IRI.
+    datatype: &'a str,
+    /// The literal's language tag, if it carries one.
+    language: Option<&'a str>,
+}
+
+/// The comparison surface of an INTERNED term, or `None` when it is not a literal.
+fn literal_view_of_id(ds: &impl ShaclRead, id: TermId) -> Option<LiteralView<'_>> {
+    let TermRef::Literal {
+        lexical,
+        datatype,
+        language,
+        ..
+    } = ds.resolve(id)
+    else {
+        return None;
+    };
+    let TermRef::Iri(datatype) = ds.resolve(datatype) else {
+        return None;
+    };
+    Some(LiteralView {
+        lexical,
+        datatype,
+        language,
+    })
+}
+
+/// The comparison surface of an owned term, or `None` when it is not a literal.
+fn literal_view_of_term(term: &Term) -> Option<LiteralView<'_>> {
+    match term {
+        Term::Literal(literal) => Some(LiteralView {
+            lexical: literal.value(),
+            datatype: literal.datatype_str(),
+            language: literal.language(),
+        }),
+        Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_) => None,
     }
 }
 
@@ -173,11 +261,421 @@ impl<'a> From<&'a Shape> for ConstraintSource<'a> {
 
 /// Immutable state shared by recursive constraint and property evaluation.
 #[derive(Clone, Copy)]
-struct ValidationContext<'a> {
+struct ValidationContext<'a, 'memo> {
     store: &'a ShaclData,
     box_role_vocab: Option<&'a BoxRoleVocab>,
-    plan: &'a ValidationPlan,
+    /// The shape being evaluated, with every derivation that does not depend on
+    /// this focus node already made.
+    plan: ShapePlan<'a>,
     depth: u32,
+    /// The `(value node, shape)` conformance answers this run already computed.
+    memo: &'memo ConformanceMemo<'a>,
+}
+
+impl<'a> ValidationContext<'a, '_> {
+    /// This context re-aimed at a shape reached through a constraint.
+    ///
+    /// The box-role vocabulary is deliberately dropped. A recursive conformance
+    /// check REPORTS nothing, and a box role only ever drives result
+    /// attribution, so carrying one would make every `sh:or` member scan the data
+    /// graph for its path's roles and then discard the answer. This reproduces
+    /// what the recursive entry point has always passed.
+    #[inline]
+    fn inner(self, plan: ShapePlan<'a>) -> Self {
+        Self {
+            box_role_vocab: None,
+            plan,
+            ..self
+        }
+    }
+}
+
+// ── The result sink ────────────────────────────────────────────────────────────
+
+/// What a [`ResultSink`] tells the traversal to do once it has been handed a
+/// violation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Flow {
+    /// Keep going: this sink wants every violation the focus node produces.
+    Continue,
+    /// Unwind: this sink has learned everything this focus node can tell it.
+    Stop,
+}
+
+impl Flow {
+    /// Whether the sink has asked this traversal to unwind.
+    ///
+    /// Every place that hands a violation onward tests the flow it got back and
+    /// returns early on [`Flow::Stop`], so the test is spelled once here rather
+    /// than as a `match` repeated at each of those sites. A site that forgets it
+    /// is not a wrong answer — it is a conformance probe that keeps evaluating
+    /// constraints whose verdict the first violation already settled.
+    #[inline]
+    const fn stopped(self) -> bool {
+        matches!(self, Self::Stop)
+    }
+}
+
+/// Where one traversal of a shape sends the violations it finds.
+///
+/// **The evaluator is polymorphic in its sink, and in nothing else.** There is
+/// one traversal, one set of constraint arms and one definition of what
+/// conformance means; the sink decides only what happens to a violation once the
+/// traversal has found it. That is the whole point of stating it this way. A
+/// `fast: bool` parameter, or a separate "just tell me whether it conforms"
+/// entry point, would give a future reader two code paths that can — and
+/// eventually do — disagree about conformance, and the disagreement would show
+/// up as a report that contradicts its own `sh:conforms` flag.
+///
+/// The cheap half is [`ResultSink::RECORDS_RESULTS`]. A recursive constraint
+/// (`sh:node`, `sh:and`, `sh:or`, `sh:xone`, `sh:not`,
+/// `sh:qualifiedValueShape`) asks only whether the inner shape holds, and the
+/// answer is one bit; building a full [`ValidationResult`] for it — cloning the
+/// focus term, the result path, the path structure, the source shape, the
+/// severity and the message — and then dropping the vector is pure waste, paid
+/// once per member per value node per focus node. A sink that does not record
+/// results never runs the builder at all.
+trait ResultSink {
+    /// Whether this sink consumes the result VALUE, or only the fact that a
+    /// violation happened.
+    ///
+    /// It is an associated constant rather than a method so that the branch on
+    /// it is resolved when the traversal is monomorphized: the result builder of
+    /// a conformance-only traversal is not merely skipped at run time, it is not
+    /// compiled into that traversal.
+    const RECORDS_RESULTS: bool;
+
+    /// Record one violation.
+    ///
+    /// `build` produces the result this violation would be REPORTED as. It is
+    /// invoked if and only if [`Self::RECORDS_RESULTS`], so a caller may put
+    /// arbitrary reporting work inside it.
+    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow;
+}
+
+/// The reporting sink: every result is kept, and the traversal always runs to
+/// completion because a SHACL report names every violation, not the first.
+#[derive(Default)]
+struct Collect {
+    results: Vec<ValidationResult>,
+}
+
+impl ResultSink for Collect {
+    const RECORDS_RESULTS: bool = true;
+
+    #[inline]
+    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+        self.results.push(build());
+        Flow::Continue
+    }
+}
+
+/// The conformance sink: records THAT a violation exists and stops the traversal.
+///
+/// SHACL conformance is "produces no results", so the first violation settles it
+/// and everything after it is work whose answer is already known.
+#[derive(Default)]
+struct AnyViolation {
+    seen: bool,
+}
+
+impl AnyViolation {
+    /// The conformance verdict this probe reached.
+    #[inline]
+    const fn conforms(&self) -> bool {
+        !self.seen
+    }
+}
+
+impl ResultSink for AnyViolation {
+    const RECORDS_RESULTS: bool = false;
+
+    #[inline]
+    fn violation(&mut self, _build: impl FnOnce() -> ValidationResult) -> Flow {
+        self.seen = true;
+        Flow::Stop
+    }
+}
+
+/// A sink that stamps a node shape's graph-box roles onto each result on its way
+/// to the enclosing sink.
+///
+/// Every `eval_constraint` arm returns results with all three role vectors
+/// empty, so stamping a ROLELESS shape onto them is the identity; the emptiness
+/// test is kept here rather than at each call site so the traversal has one
+/// shape whatever the vocabulary configuration is.
+struct NodeRoles<'a, S> {
+    inner: &'a mut S,
+    roles: &'a [NamedNode],
+}
+
+impl<S: ResultSink> ResultSink for NodeRoles<'_, S> {
+    const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
+
+    #[inline]
+    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+        let roles = self.roles;
+        self.inner.violation(move || {
+            let mut result = build();
+            if !roles.is_empty() {
+                result.apply_box_roles(roles, &[]);
+            }
+            result
+        })
+    }
+}
+
+/// The report-only metadata a property shape stamps onto every result its
+/// constraints produce.
+///
+/// All four are LAZY, because a conforming focus node needs none of them: it
+/// never allocates a native path term, never clones a complex path structure,
+/// never merges the source graph-box roles and never scans the graph for the
+/// path's roles.
+#[derive(Default)]
+struct PropertyLazies {
+    path_term: OnceLock<Term>,
+    path_structure: OnceLock<Option<Path>>,
+    source_roles: OnceLock<Vec<NamedNode>>,
+    path_roles: OnceLock<Vec<NamedNode>>,
+}
+
+/// The borrowed inputs those lazies are derived from, plus the focus node each
+/// result is re-homed onto.
+#[derive(Clone, Copy)]
+struct PropertyStamp<'a> {
+    store: &'a ShaclData,
+    box_role_vocab: Option<&'a BoxRoleVocab>,
+    focus: &'a FocusNode,
+    ps: &'a PropertyShape,
+    parent_box_roles: &'a [NamedNode],
+    lazy: &'a PropertyLazies,
+}
+
+impl PropertyStamp<'_> {
+    /// This property shape's source roles, merged with its parent's on first use.
+    fn source_roles(&self) -> &[NamedNode] {
+        self.lazy
+            .source_roles
+            .get_or_init(|| merge_box_roles(self.parent_box_roles, &self.ps.box_roles))
+    }
+
+    /// The graph-box roles of this property shape's path, resolved on first use.
+    fn path_roles(&self) -> &[NamedNode] {
+        self.lazy
+            .path_roles
+            .get_or_init(|| path_box_roles(self.store, &self.ps.path, self.box_role_vocab))
+    }
+
+    /// Stamp the property shape's path, focus node and roles onto one result.
+    ///
+    /// A path the CONSTRAINT itself bound is preserved: a `sh:sparql` query may
+    /// project `?path` (SHACL-AF §3.4.2.2), which is more specific than the
+    /// shape's declared path and must not be clobbered.
+    fn apply(&self, result: &mut ValidationResult) {
+        if result.result_path.is_none() {
+            result.result_path = Some(
+                self.lazy
+                    .path_term
+                    .get_or_init(|| path::path_to_term(&self.ps.path))
+                    .clone(),
+            );
+            result
+                .path_structure
+                .clone_from(self.lazy.path_structure.get_or_init(|| {
+                    if matches!(self.ps.path, Path::Predicate(_)) {
+                        None
+                    } else {
+                        Some(self.ps.path.clone())
+                    }
+                }));
+        }
+        // THE materialization boundary for the focus node on the property path:
+        // a result is being built, so the owned term is finally needed.
+        result.focus_node = self.focus.to_term(self.store.core_view());
+        result.apply_box_roles(self.source_roles(), self.path_roles());
+    }
+}
+
+/// A sink that applies a [`PropertyStamp`] to each result on its way to the
+/// enclosing sink.
+struct Stamped<'a, S> {
+    inner: &'a mut S,
+    stamp: PropertyStamp<'a>,
+}
+
+impl<S: ResultSink> ResultSink for Stamped<'_, S> {
+    const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
+
+    #[inline]
+    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+        let stamp = self.stamp;
+        self.inner.violation(move || {
+            let mut result = build();
+            stamp.apply(&mut result);
+            result
+        })
+    }
+}
+
+// ── The per-run conformance memo ───────────────────────────────────────────────
+
+/// One `(value node, shape, depth)` conformance question.
+///
+/// Field ORDER is the comparison order a derived `PartialEq` uses, and the
+/// cheapest discriminator is first: within one value node's member loop the
+/// `node` matches and the `shape` is what differs, but across value nodes — the
+/// far commoner miss — the `node` settles it without touching the IRI.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct MemoKey<'a> {
+    /// The value node's INTERNED identity. A non-interned value node has none
+    /// and never reaches this type — see [`ConformanceMemo`].
+    node: TermId,
+    /// The ambient `sh:filterShape` / `sh:exists` re-entry depth. It is part of
+    /// the key because the depth ceiling is what turns a cyclic shapes graph
+    /// into a hard error instead of a stack overflow: an answer reached with
+    /// depth to spare is not an answer to a deeper ask.
+    depth: u32,
+    /// The shape's IRI, borrowed out of the shapes graph.
+    ///
+    /// The IRI and not the lowering's address, because a shape reached through
+    /// a constraint is stored INLINE at each constraint site
+    /// (`Constraint::Node(Box<Shape>)`): `sh:node ex:T` written at two sites is
+    /// two `Shape` values at two addresses, and an address key would refuse to
+    /// connect them — which is precisely the overlap this memo exists to
+    /// collapse. In the SHACL data model a shape IS its node in the shapes
+    /// graph, so two constraint sites naming the same IRI name the same shape
+    /// and must reach the same verdict.
+    ///
+    /// Only IRI-identified shapes are keyed. A blank-node-identified shape is
+    /// anonymous and belongs to exactly one constraint site, so it has no
+    /// second site to share an answer with, and excluding it keeps the key clear
+    /// of every question about whether a parser might reuse a blank label
+    /// between a shape and something derived from it.
+    shape: &'a str,
+}
+
+/// The conformance answers one validation run has already computed.
+///
+/// `sh:and`, `sh:or`, `sh:xone`, `sh:node` and `sh:qualifiedValueShape` all ask
+/// "does this node conform to that shape?", and overlapping value sets make them
+/// ask the SAME question more than once inside a single focus node's validation.
+/// The answer is a pure function of the data graph, the node and the shape, so
+/// every ask after the first is waste.
+///
+/// Two properties are load-bearing rather than incidental.
+///
+/// * **Keyed on the interned id alone.** A value node the data graph never
+///   interned has no identity to key on, and "not interned" is not an identity:
+///   two non-interned terms can be equal, which is exactly why `sh:hasValue` and
+///   `sh:in` fall back to term comparison for them (see
+///   `tests/foreign_value_nodes.rs`). Foreign value nodes therefore skip the
+///   memo entirely and are recomputed every time — correct, and costing nothing
+///   that the un-memoized evaluator did not already pay.
+/// * **Scoped to one call.** [`crate::parallel`] shares one `&Shape` across rayon
+///   workers, so a memo owned by a `PreparedValidator` would be contended
+///   mutable state on the one path this crate parallelizes. This one is created
+///   per top-level validation and dropped with it, which makes it worker-local
+///   by construction.
+#[derive(Default)]
+struct ConformanceMemo<'a> {
+    answers: RefCell<MemoTable<'a>>,
+}
+
+/// How many answers the memo keeps inline before it hashes.
+///
+/// This constant is the whole reason the memo is not itself a per-focus-node
+/// allocation. A `FastMap` allocates its table on the FIRST insert, and the
+/// shapes that ask only a handful of conformance questions per focus node — one
+/// `sh:node`, a two-member `sh:and`, a `sh:qualifiedValueShape` over a short
+/// value set — ask too few for a cache to ever pay that back. Measured: giving
+/// those shapes a map cost exactly one extra allocation per focus node and
+/// returned nothing, which is the growth term this whole exercise exists to
+/// remove, reintroduced by the optimization meant to remove it.
+///
+/// Inline, the same shapes allocate nothing and answer a repeated question with
+/// a linear scan over at most eight `Copy` keys. Past eight the shape is asking
+/// enough questions that one allocation is noise beside the traversals a hashed
+/// lookup saves, so the overflow goes to a `FastMap` and lookup stays O(1).
+const MEMO_INLINE: usize = 8;
+
+/// The memo's storage, small-first.
+///
+/// The two halves are held side by side rather than as an either/or, so filling
+/// the inline block never copies it into the map: the first [`MEMO_INLINE`]
+/// answers stay where they are and only the overflow is hashed. `spilled` is an
+/// empty `FastMap` until that overflow happens, and an empty map has not
+/// allocated — which is the property the whole small-first arrangement exists
+/// to preserve.
+#[derive(Default)]
+struct MemoTable<'a> {
+    /// The first [`MEMO_INLINE`] answers, scanned linearly.
+    inline: SmallVec<[(MemoKey<'a>, bool); MEMO_INLINE]>,
+    /// Every answer past the inline block.
+    spilled: FastMap<MemoKey<'a>, bool>,
+}
+
+impl<'a> ConformanceMemo<'a> {
+    /// The recorded verdict for `key`, if this run has already reached one.
+    fn get(&self, key: MemoKey<'a>) -> Option<bool> {
+        let table = self.answers.borrow();
+        if let Some(&(_, verdict)) = table.inline.iter().find(|(recorded, _)| *recorded == key) {
+            return Some(verdict);
+        }
+        // Probing an empty map would hash the key for nothing, and for the shapes
+        // this memo is cheapest on the map is ALWAYS empty.
+        if table.spilled.is_empty() {
+            return None;
+        }
+        table.spilled.get(&key).copied()
+    }
+
+    /// Record the verdict for `key`.
+    fn insert(&self, key: MemoKey<'a>, verdict: bool) {
+        let mut table = self.answers.borrow_mut();
+        if table.inline.len() < MEMO_INLINE {
+            table.inline.push((key, verdict));
+        } else {
+            table.spilled.insert(key, verdict);
+        }
+    }
+}
+
+/// Does `focus` conform to `plan`'s shape, reusing `context`'s per-run memo?
+///
+/// This is the recursive entry every logical and shape-valued constraint arm
+/// goes through. It runs the SAME traversal a report-producing validation runs,
+/// with [`AnyViolation`] in place of [`Collect`]: the traversal cannot disagree
+/// with the report about conformance, because it is the same traversal.
+fn conforms_memoized<'a>(
+    context: ValidationContext<'a, '_>,
+    plan: ShapePlan<'a>,
+    focus: &FocusNode,
+) -> Result<bool, String> {
+    // Both halves of the key must be present for this question to be memoizable:
+    // a non-interned value node has no identity to key on (two non-interned terms
+    // can be equal), and a blank-node-identified shape has no second site to share
+    // an answer with. Either missing simply means the question is recomputed.
+    let key = match (focus.id(), &plan.shape().id) {
+        (Some(node), Term::NamedNode(iri)) => Some(MemoKey {
+            node,
+            depth: context.depth,
+            shape: iri.as_str(),
+        }),
+        _ => None,
+    };
+    if let Some(key) = key
+        && let Some(recorded) = context.memo.get(key)
+    {
+        return Ok(recorded);
+    }
+    let mut probe = AnyViolation::default();
+    walk_shape(context.inner(plan), focus, &mut probe)?;
+    let verdict = probe.conforms();
+    if let Some(key) = key {
+        context.memo.insert(key, verdict);
+    }
+    Ok(verdict)
 }
 
 // ── Public surface ─────────────────────────────────────────────────────────────
@@ -221,30 +719,76 @@ pub fn validate_shape_with(
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Result<Vec<ValidationResult>, String> {
-    let plan = ValidationPlan::for_shape(store.core_view(), shape);
-    validate_shape_with_plan(store, focus, shape, box_role_vocab, &plan)
-}
-
-pub(crate) fn validate_shape_with_plan(
-    store: &ShaclData,
-    focus: &Term,
-    shape: &Shape,
-    box_role_vocab: Option<&BoxRoleVocab>,
-    plan: &ValidationPlan,
-) -> Result<Vec<ValidationResult>, String> {
-    let focus_id = resolve_id(store.core_view(), focus);
-    validate_shape_with_plan_at(store, focus, focus_id, shape, box_role_vocab, plan)
+    // A caller holding only a parsed shape has no preparation to reuse, so the
+    // lowering is derived here for this one call. A caller validating MANY focus
+    // nodes should hold a `PreparedShapes`, which memoizes it.
+    let lowering = OneShotLowering::of(store, shape);
+    let focus = FocusNode::resolve(store.core_view(), focus);
+    validate_shape_with_plan_at(store, &focus, box_role_vocab, lowering.plan()?)
 }
 
 pub(crate) fn validate_shape_with_plan_at(
     store: &ShaclData,
-    focus: &Term,
-    focus_id: Option<TermId>,
-    shape: &Shape,
+    focus: &FocusNode,
     box_role_vocab: Option<&BoxRoleVocab>,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
 ) -> Result<Vec<ValidationResult>, String> {
-    validate_shape_with_depth(store, focus, focus_id, shape, box_role_vocab, plan, 0)
+    validate_shape_with_depth(store, focus, box_role_vocab, plan, 0)
+}
+
+/// A shape lowering built for ONE call, for the entry points that are handed a
+/// bare [`Shape`] and have no preparation to memoize against.
+///
+/// It exists so those entry points can own the three values a [`ShapePlan`]
+/// borrows — the lowering, the catalog it produced and the dataset binding — for
+/// the duration of the call. Every repeated-validation surface goes through
+/// `PreparedShapes` instead, where the lowering is derived once per shapes graph
+/// rather than once per call.
+struct OneShotLowering<'a> {
+    lowered: crate::plan::LoweredShapes,
+    binding: crate::plan::DatasetBinding,
+    shape: &'a Shape,
+}
+
+impl<'a> OneShotLowering<'a> {
+    /// Lower `shape` and bind it to `store`, paying the whole of stage 0 for one
+    /// call.
+    ///
+    /// This is precisely the work `PreparedShapes` exists to amortize — the
+    /// shapes walk, the class analysis and the resolution of every identity the
+    /// shape names all run here, again, per call. Only the entry points that are
+    /// handed a bare [`Shape`] and have nothing to memoize against should reach
+    /// it.
+    fn of(store: &ShaclData, shape: &'a Shape) -> Self {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+        let binding = lowered.bind(store.core_view(), lowered.classes());
+        Self {
+            lowered,
+            binding,
+            shape,
+        }
+    }
+
+    /// The plan for the single lowered shape, borrowing everything this holder
+    /// owns — so the holder has to outlive the plan and therefore the call.
+    ///
+    /// Position 0 and an empty target set are not simplifications: the lowering
+    /// holds exactly one shape, and these entry points are HANDED their focus
+    /// node rather than discovering it from targets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lowering and the shape it lowered disagree,
+    /// which is a defect in this crate rather than in any input.
+    fn plan(&self) -> Result<ShapePlan<'_>, String> {
+        self.lowered.plan(
+            self.shape,
+            0,
+            &self.binding,
+            self.lowered.classes(),
+            self.lowered.no_targets(),
+        )
+    }
 }
 
 /// [`validate_shape_with`] carrying the ambient `sh:filterShape` / `sh:exists`
@@ -254,62 +798,95 @@ pub(crate) fn validate_shape_with_plan_at(
 /// native stack.
 fn validate_shape_with_depth(
     store: &ShaclData,
-    focus: &Term,
-    focus_id: Option<TermId>,
-    shape: &Shape,
+    focus: &FocusNode,
     box_role_vocab: Option<&BoxRoleVocab>,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
     depth: u32,
 ) -> Result<Vec<ValidationResult>, String> {
-    if depth > crate::expression::MAX_RECURSION_DEPTH {
-        return Err(format!(
-            "SHACL validation recursion depth exceeded ({} > {}) at shape {}: a cyclic sh:filterShape / sh:exists reference",
-            depth,
-            crate::expression::MAX_RECURSION_DEPTH,
-            shape.id
-        ));
-    }
-    if shape.deactivated {
-        return Ok(vec![]);
-    }
-
+    let memo = ConformanceMemo::default();
     let context = ValidationContext {
         store,
         box_role_vocab,
         plan,
         depth,
+        memo: &memo,
     };
-    let mut results: Vec<ValidationResult> = Vec::new();
+    collect_shape(context, focus)
+}
+
+/// [`walk_shape`] with the reporting sink: every result the focus node produces,
+/// in traversal order.
+fn collect_shape(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+) -> Result<Vec<ValidationResult>, String> {
+    let mut sink = Collect::default();
+    walk_shape(context, focus, &mut sink)?;
+    Ok(sink.results)
+}
+
+/// **The one traversal.**
+///
+/// Evaluates `context.plan`'s shape at one focus node and hands every violation
+/// to `sink`. A report and a conformance check differ only in which
+/// [`ResultSink`] is passed here — never in what is evaluated — so the two can
+/// no more disagree about conformance than a function can disagree with itself.
+///
+/// A depth past [`crate::expression::MAX_RECURSION_DEPTH`] is a hard error: a
+/// mutually recursive filter/exists cycle fails closed here rather than
+/// overflowing the native stack.
+fn walk_shape<S: ResultSink>(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+    sink: &mut S,
+) -> Result<Flow, String> {
+    let plan = context.plan;
+    let shape = plan.shape();
+    if context.depth > crate::expression::MAX_RECURSION_DEPTH {
+        return Err(format!(
+            "SHACL validation recursion depth exceeded ({} > {}) at shape {}: a cyclic sh:filterShape / sh:exists reference",
+            context.depth,
+            crate::expression::MAX_RECURSION_DEPTH,
+            shape.id
+        ));
+    }
+    if shape.deactivated {
+        return Ok(Flow::Continue);
+    }
 
     // --- Node-level constraints (value nodes = [focus], no path) ---
     // The single value node IS the focus term. Keep an interned focus id-native;
     // only a genuinely foreign SHACL-AF term needs an owned clone.
-    let node_value_nodes =
-        [focus_id.map_or_else(|| ValueNode::Foreign(focus.clone()), ValueNode::Interned)];
-    for constraint in &shape.constraints {
-        let mut rs = eval_constraint(
-            context,
-            focus,
-            &node_value_nodes,
-            constraint,
-            None,
-            ConstraintSource::from(shape),
-        )?;
-        for r in &mut rs {
-            r.apply_box_roles(&shape.box_roles, &[]);
+    let node_value_nodes = [ValueNode::of_focus(focus)];
+    {
+        // A node-level result carries the shape's roles and no path roles.
+        let mut node_sink = NodeRoles {
+            inner: &mut *sink,
+            roles: &shape.box_roles,
+        };
+        for (constraint, lowered) in plan.constraints()? {
+            if eval_constraint(
+                context,
+                focus,
+                &node_value_nodes,
+                plan.planned(constraint, lowered)?,
+                None,
+                ConstraintSource::from(shape),
+                &mut node_sink,
+            )?
+            .stopped()
+            {
+                return Ok(Flow::Stop);
+            }
         }
-        results.extend(rs);
     }
 
     // --- Property shapes ---
-    for ps in &shape.property_shapes {
-        results.extend(eval_property_shape(
-            context,
-            focus,
-            focus_id,
-            ps,
-            &shape.box_roles,
-        )?);
+    for (ps, property_plan) in plan.properties()? {
+        if eval_property_shape(context, focus, ps, property_plan, &shape.box_roles, sink)?.stopped()
+        {
+            return Ok(Flow::Stop);
+        }
     }
 
     // --- sh:closed (node-shape-level; needs the sibling property shapes) ---
@@ -317,13 +894,15 @@ fn validate_shape_with_depth(
     // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
     // same predicate attribution that property-shape results do — violations
     // must not drop their predicate role.
-    for constraint in &shape.constraints {
-        if let Constraint::Closed { ignored } = constraint {
-            results.extend(eval_closed(store, focus, shape, ignored, box_role_vocab));
+    for (constraint, lowered) in plan.constraints()? {
+        if let PlannedConstraint::Closed { permitted } = plan.planned(constraint, lowered)?
+            && eval_closed(context, focus, shape, permitted, sink).stopped()
+        {
+            return Ok(Flow::Stop);
         }
     }
 
-    Ok(results)
+    Ok(Flow::Continue)
 }
 
 /// Evaluate `sh:closed` against a focus node (SHACL §4.8.1).
@@ -341,191 +920,257 @@ fn validate_shape_with_depth(
 /// (`core/node/closed-002` does exactly that).
 ///
 /// One result per focus-node outgoing triple whose predicate is not permitted.
-fn eval_closed(
-    store: &ShaclData,
-    focus: &Term,
+///
+/// Both halves of this are id-native, and neither was:
+///
+/// * `permitted` is the stage-0 union resolved at BIND — see
+///   [`crate::plan::LoweredConstraint::Closed`]. It used to be rebuilt, as a set
+///   of borrowed IRI strings, once per focus node, even though it is a function
+///   of the shapes graph alone.
+/// * the outgoing quads are walked in id space. The previous `native_quads` call
+///   materialized an owned `(Term, NamedNode, Term)` for EVERY outgoing quad of
+///   every focus node, only to throw all three away again for the permitted ones
+///   — which, on a conforming graph, is all of them. Here the subject is never
+///   materialized (it is the focus node, which the caller already holds), and the
+///   predicate and object are materialized only inside a violation.
+///
+/// The subject-legality guard `native_quads` applied per quad is applied once,
+/// against the focus term, because every quad this probe matches has the focus as
+/// its subject.
+fn eval_closed<S: ResultSink>(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
     shape: &Shape,
-    ignored: &[NamedNode],
-    box_role_vocab: Option<&BoxRoleVocab>,
-) -> Vec<ValidationResult> {
-    // Borrowed keys: the set is only ever `contains`-probed (never iterated or
-    // returned), so it can point into `shape`/`ignored` — no per-predicate
-    // `String` copy per focus node.
-    let mut permitted: FastSet<&str> = FastSet::default();
-    for ps in &shape.property_shapes {
-        if let Path::Predicate(predicate) = &ps.path {
-            permitted.insert(predicate.as_str());
-        }
-    }
-    for ign in ignored {
-        permitted.insert(ign.as_str());
-    }
-
-    let mut results = Vec::new();
-    let quads = native_quads(
-        store.core_view(),
-        Some(focus),
-        None,
-        None,
-        GraphFilter::AnyGraph,
-    );
-    for (_subject, predicate, object) in quads {
-        if permitted.contains(predicate.as_str()) {
+    permitted: &FastSet<TermId>,
+    sink: &mut S,
+) -> Flow {
+    // A focus node this data graph does not intern has no outgoing quads at all,
+    // so a closed shape has nothing to report against it — the same empty answer
+    // the materializing probe gave, reached without a dictionary lookup.
+    let store = context.store;
+    let box_role_vocab = context.box_role_vocab;
+    let ds = store.core_view();
+    let (Some(focus_id), true) = (focus.id(), focus.is_subject(ds)) else {
+        return Flow::Continue;
+    };
+    for quad in quads_for_pattern_ids(ds, Some(focus_id), None, None, GraphFilter::AnyGraph) {
+        if permitted.contains(&quad.p) {
             continue;
         }
-        // Resolve the offending predicate's graph-box roles (the same resolution
-        // property shapes use for their path) so closed-world results are not left
-        // with empty path attribution.
-        let path_roles = path_box_roles(store, &Path::Predicate(predicate.clone()), box_role_vocab);
-        let mut result = ValidationResult {
-            focus_node: focus.clone(),
-            result_path: Some(Term::NamedNode(predicate)),
-            path_structure: None,
-            value: Some(object),
-            source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
-            source_shape: shape.id.clone(),
-            severity: shape.severity.clone(),
-            message: shape.message.clone(),
-            source_box_roles: vec![],
-            path_box_roles: vec![],
-            result_box_roles: vec![],
-            attributions: vec![],
+        // Past the permitted probe this quad IS a violation, so materializing its
+        // predicate is reporting work, not traversal work. It is materialized
+        // ahead of the sink because a term that is not an IRI cannot be a result
+        // path and is skipped rather than reported; everything downstream of that
+        // decision — the object, the predicate's roles and the result itself — is
+        // built inside the sink, so a conformance-only traversal builds none of it.
+        let Term::NamedNode(predicate) = term_id_to_native(ds, quad.p) else {
+            continue;
         };
-        result.apply_box_roles(&shape.box_roles, &path_roles);
-        results.push(result);
+        let flow = sink.violation(|| {
+            // Resolve the offending predicate's graph-box roles (the same
+            // resolution property shapes use for their path) so closed-world
+            // results are not left with empty path attribution.
+            let path_roles =
+                path_box_roles(store, &Path::Predicate(predicate.clone()), box_role_vocab);
+            let mut result = ValidationResult {
+                focus_node: focus.to_term(ds),
+                result_path: Some(Term::NamedNode(predicate)),
+                path_structure: None,
+                value: Some(term_id_to_native(ds, quad.o)),
+                source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
+                source_shape: shape.id.clone(),
+                severity: shape.severity.clone(),
+                message: shape.message.clone(),
+                source_box_roles: vec![],
+                path_box_roles: vec![],
+                result_box_roles: vec![],
+                attributions: vec![],
+            };
+            result.apply_box_roles(&shape.box_roles, &path_roles);
+            result
+        });
+        if flow.stopped() {
+            return Flow::Stop;
+        }
     }
-    results
+    Flow::Continue
 }
 
 /// Returns `true` iff the focus node produces zero validation results against
 /// the shape (i.e., it fully conforms).
+///
+/// This convenience entry point lowers `shape` on every call — the whole
+/// cycle-aware walk, plus one interning probe per constant it names. A caller that
+/// checks MANY focus nodes against the same shape should lower it once instead:
+/// [`PreparedShapes`](crate::engine::PreparedShapes) is the public route, and it
+/// is what `rules` reuses internally for its `sh:condition` checks.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
 pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
-    let plan = ValidationPlan::for_shape(store.core_view(), shape);
+    let lowering = OneShotLowering::of(store, shape);
     conforms_with_id_depth(
         store,
-        focus,
-        resolve_id(store.core_view(), focus),
-        shape,
-        &plan,
+        &FocusNode::resolve(store.core_view(), focus),
+        lowering.plan()?,
         0,
     )
 }
 
-/// [`conforms`] carrying the ambient `sh:filterShape` / `sh:exists` re-entry
-/// depth, so a cyclic filter reference fails closed at
-/// [`crate::expression::MAX_RECURSION_DEPTH`] instead of overflowing the stack.
+/// [`conforms`] against a plan the caller already built.
 ///
-/// `depth` is the number of filter/exists boundaries already crossed to reach
-/// this call. [`crate::expression::eval_node_expr`]'s `Filter` arm increments it
-/// on each re-entry; the ordinary logical constraints (`sh:and`, `sh:or`,
-/// `sh:not`, `sh:node`, …) preserve it unchanged.
+/// `plan` must cover `shape` — i.e. it was built from a shape iterator that
+/// included it — or an `sh:class` / `sh:targetClass` this evaluation reaches will
+/// be absent from the catalog and reported as the plan defect it is.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` when a constraint fails to evaluate (see
-/// [`validate_shape`]) or when the filter/exists depth ceiling is exceeded.
-pub(crate) fn conforms_with_depth(
+/// [`validate_shape`]).
+pub(crate) fn conforms_with_plan(
     store: &ShaclData,
     focus: &Term,
-    shape: &Shape,
-    depth: u32,
+    plan: ShapePlan<'_>,
 ) -> Result<bool, String> {
-    let plan = ValidationPlan::for_shape(store.core_view(), shape);
-    let focus_id = resolve_id(store.core_view(), focus);
-    conforms_with_id_depth(store, focus, focus_id, shape, &plan, depth)
+    conforms_with_id_depth(
+        store,
+        &FocusNode::resolve(store.core_view(), focus),
+        plan,
+        0,
+    )
 }
 
-#[inline]
-fn conforms_with_id_depth(
+/// The conformance entry for a caller OUTSIDE one validation run — `sh:condition`
+/// in `rules`, `sh:filterShape` in the node-expression evaluator, and the two
+/// public wrappers above.
+///
+/// It opens a fresh [`ConformanceMemo`] because it is the start of a run; the
+/// recursive constraint arms go through [`conforms_memoized`] instead, which
+/// reuses the memo their ambient context already carries.
+pub(crate) fn conforms_with_id_depth(
     store: &ShaclData,
-    focus: &Term,
-    focus_id: Option<TermId>,
-    shape: &Shape,
-    plan: &ValidationPlan,
+    focus: &FocusNode,
+    plan: ShapePlan<'_>,
     depth: u32,
 ) -> Result<bool, String> {
-    Ok(validate_shape_with_depth(store, focus, focus_id, shape, None, plan, depth)?.is_empty())
+    let memo = ConformanceMemo::default();
+    let context = ValidationContext {
+        store,
+        box_role_vocab: None,
+        plan,
+        depth,
+        memo: &memo,
+    };
+    let mut probe = AnyViolation::default();
+    walk_shape(context, focus, &mut probe)?;
+    Ok(probe.conforms())
 }
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
 
-fn eval_property_shape(
-    context: ValidationContext<'_>,
-    focus: &Term,
-    focus_id: Option<TermId>,
-    ps: &PropertyShape,
+/// Evaluate one property shape at `focus`, sending what it finds to `sink`.
+///
+/// Sink-polymorphic for the same reason the node-shape walk is: there is ONE
+/// property traversal, and the sink decides only what becomes of a violation
+/// once this has found it. The returned [`Flow`] is the sink's answer propagated
+/// outward, and it is propagated at three separate points — the constraint loop,
+/// the nested `sh:property` loop and the reifier shapes — so a conformance probe
+/// that has already seen a violation stops there rather than finishing a value
+/// set whose verdict is settled.
+///
+/// Nothing needed only for REPORTING is derived before a violation exists. The
+/// value nodes stay in whatever representation the lowered path produced —
+/// interned ids for everything the data graph holds — and the path term, the
+/// focus term and the box roles are rendered inside the result builder, which a
+/// conforming focus node never runs. `parent_box_roles` are the enclosing
+/// shape's roles, carried so that this shape's own path roles can be stamped on
+/// top of them, again only if something is reported.
+///
+/// # Errors
+///
+/// Returns an error when evaluating the path or one of the constraints
+/// hard-fails.
+fn eval_property_shape<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus: &FocusNode,
+    ps: &'a PropertyShape,
+    property_plan: PropertyPlan<'a>,
     parent_box_roles: &[NamedNode],
-) -> Result<Vec<ValidationResult>, String> {
+    sink: &mut S,
+) -> Result<Flow, String> {
     let store = context.store;
     // A deactivated property shape validates nothing (SHACL §2.1.3.3).
     if ps.deactivated {
-        return Ok(vec![]);
+        return Ok(Flow::Continue);
     }
     // Carry the value nodes id-native for the common interned-focus case
     // ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
     // owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
     // without materializing, and only the value nodes a violation records — or a
     // content constraint inspects — are resolved to owned terms.
-    let value_nodes: SmallVec<[ValueNode; 4]> = match focus_id {
-        Some(id) => path::eval_ids_from_id(store.core_view(), id, &ps.path)
-            .into_iter()
-            .map(ValueNode::Interned)
-            .collect(),
-        None => path::eval(store.core_view(), focus, &ps.path)
-            .into_iter()
-            .map(ValueNode::Foreign)
-            .collect(),
+    // The path is the LOWERED one: every predicate step carries the dataset
+    // identity resolved at bind, so a property shape evaluated across a million
+    // focus nodes hashes its predicate IRI zero times.
+    let lowered_path = property_plan.path();
+    let binding = context.plan.binding();
+    let value_nodes: SmallVec<[ValueNode; 4]> = match focus {
+        FocusNode::Interned(id) => {
+            path::eval_planned_ids_from_id(store.core_view(), *id, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Interned)
+                .collect()
+        }
+        FocusNode::Foreign(term) => {
+            path::eval_planned(store.core_view(), term, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Foreign)
+                .collect()
+        }
     };
-    // Report-only path materialization is lazy: conforming focus nodes never
-    // allocate a native path term or clone a complex path structure.
-    let path_term = OnceLock::new();
-    let path_structure = OnceLock::new();
-    let source_roles = merge_box_roles(parent_box_roles, &ps.box_roles);
-    let path_roles = path_box_roles(store, &ps.path, context.box_role_vocab);
+    // Report-only materialization is lazy: a conforming focus node never
+    // allocates a native path term, clones a complex path structure, merges the
+    // source graph-box roles, or scans the graph for the path's roles. All four
+    // exist only to be stamped onto a `ValidationResult`, and a conforming focus
+    // node produces none.
+    let lazy = PropertyLazies::default();
+    let stamp = PropertyStamp {
+        store,
+        box_role_vocab: context.box_role_vocab,
+        focus,
+        ps,
+        parent_box_roles,
+        lazy: &lazy,
+    };
     let constraint_source = ConstraintSource {
         id: &ps.id,
         severity: &ps.severity,
         message: &ps.message,
     };
 
-    let mut results = Vec::new();
-    for constraint in &ps.constraints {
-        let mut rs = eval_constraint(
+    for (constraint, lowered) in property_plan.constraints(ps)? {
+        // The stamp travels with the sink rather than being applied to a returned
+        // vector, so the property shape's path, focus and roles are resolved
+        // inside the result builder — which a conformance-only traversal never
+        // runs.
+        let mut stamped = Stamped {
+            inner: &mut *sink,
+            stamp,
+        };
+        if eval_constraint(
             context,
             focus,
             &value_nodes,
-            constraint,
+            context.plan.planned(constraint, lowered)?,
             Some(&ps.path),
             constraint_source,
-        )?;
-        // Stamp the property-shape path and focus onto every result, but PRESERVE
-        // a path the constraint itself bound — a `sh:sparql` query may project
-        // `?path` (→ result_path, SHACL-AF §3.4.2.2), which is more specific than
-        // the shape's declared path and must not be clobbered.
-        for r in &mut rs {
-            if r.result_path.is_none() {
-                r.result_path = Some(
-                    path_term
-                        .get_or_init(|| path::path_to_term(&ps.path))
-                        .clone(),
-                );
-                r.path_structure.clone_from(path_structure.get_or_init(|| {
-                    if matches!(ps.path, Path::Predicate(_)) {
-                        None
-                    } else {
-                        Some(ps.path.clone())
-                    }
-                }));
-            }
-            r.focus_node = focus.clone();
-            r.apply_box_roles(&source_roles, &path_roles);
+            &mut stamped,
+        )?
+        .stopped()
+        {
+            return Ok(Flow::Stop);
         }
-        results.extend(rs);
     }
 
     // --- Nested property shapes (sh:property on a property shape) ---
@@ -534,181 +1179,354 @@ fn eval_property_shape(
     // node of the nested property shape (W3C core/property/property-001,
     // core/validation-reports/shared — a nested shape reached via two parents
     // fires once per reach, so results are NOT deduplicated here).
-    for nested in &ps.property_shapes {
+    for (nested, nested_plan) in property_plan.properties(ps)? {
         for value in &value_nodes {
-            // A value node becomes the focus of the nested shape: resolve it to an
-            // owned term at the recursion boundary (recursion is not the hot
-            // conforming path).
-            results.extend(eval_property_shape(
+            // A value node becomes the focus of the nested shape, and it becomes
+            // one in whichever representation it already has: an interned value
+            // node recurses as an interned focus node, with nothing materialized.
+            if eval_property_shape(
                 context,
-                &value.to_term(store.core_view()),
-                value.as_id(store.core_view()),
+                &value.as_focus(store.core_view()),
                 nested,
-                &source_roles,
-            )?);
+                nested_plan,
+                stamp.source_roles(),
+                sink,
+            )?
+            .stopped()
+            {
+                return Ok(Flow::Stop);
+            }
         }
     }
 
-    // Reifier shapes need each value node as an owned term (to build the quoted
-    // triple term). Materialize only when there is reifier work to do; a property
-    // shape with no reifier shapes never pays for it.
+    // Reifier shapes ask the RDF 1.2 statement layer about the quoted triple
+    // `<< focus predicate value >>`, which is an identity question end to end: the
+    // focus node, the path predicate and each value node are already carried as
+    // interned ids, and the quoted triple term this data graph holds for them — if
+    // it holds one — is found by an id-native dictionary lookup. So the value
+    // nodes, the focus term and the path term are NOT materialized here; each is
+    // rendered inside a result builder, which a conforming focus node never runs.
     if !ps.reifier_shapes.is_empty() || ps.reification_required {
-        let value_terms: Vec<Term> = value_nodes
-            .iter()
-            .map(|v| v.to_term(store.core_view()))
-            .collect();
-        results.extend(eval_reifier_shapes(ReifierEvalContext {
-            store,
-            focus,
-            value_nodes: &value_terms,
-            ps,
-            source_roles: &source_roles,
-            path_roles: &path_roles,
-            path_term: path_term.get_or_init(|| path::path_to_term(&ps.path)),
-            box_role_vocab: context.box_role_vocab,
-            plan: context.plan,
-            depth: context.depth,
-        })?);
+        return eval_reifier_shapes(
+            ReifierEvalContext {
+                context,
+                focus,
+                value_nodes: &value_nodes,
+                ps,
+                source_roles: stamp.source_roles(),
+                path_roles: stamp.path_roles(),
+                lazy: &lazy,
+                property_plan,
+            },
+            sink,
+        );
     }
-    Ok(results)
+    Ok(Flow::Continue)
 }
 
+/// Everything the reifier-shape evaluation needs from the `eval_property_shape`
+/// frame that invoked it, grouped so the two very different lifetimes stay
+/// visible.
+///
+/// The grouping is what makes the distinction enforceable: the shapes-graph
+/// values live as long as the lowering (`'a`), while the focus node, the value
+/// nodes and the report-only material are derived per call and die with the
+/// frame that built them (`'stamp`). Passed as loose arguments they would be ten
+/// parameters on one signature with nothing keeping a future caller from
+/// promoting a short-lived one. `Copy`, so the per-reifier helpers take it by
+/// value or by reference as they please without any of it being cloned.
 #[derive(Clone, Copy)]
-struct ReifierEvalContext<'a> {
-    store: &'a ShaclData,
-    focus: &'a Term,
-    value_nodes: &'a [Term],
+struct ReifierEvalContext<'a, 'memo, 'stamp> {
+    /// The ambient traversal state, on the shapes-graph lifetime `'a`.
+    context: ValidationContext<'a, 'memo>,
+    /// This property shape and its lowered reifier shapes, likewise `'a`.
     ps: &'a PropertyShape,
-    source_roles: &'a [NamedNode],
-    path_roles: &'a [NamedNode],
-    path_term: &'a Term,
-    box_role_vocab: Option<&'a BoxRoleVocab>,
-    plan: &'a ValidationPlan,
-    depth: u32,
+    property_plan: PropertyPlan<'a>,
+    /// The traversal-currency inputs and the report-only material, both derived
+    /// per call and so living only as long as the `eval_property_shape` frame that
+    /// built them. The focus node and the value nodes arrive in whichever
+    /// representation the path produced — interned for everything the data graph
+    /// holds — and are materialized only inside a result builder.
+    focus: &'stamp FocusNode,
+    value_nodes: &'stamp [ValueNode],
+    source_roles: &'stamp [NamedNode],
+    path_roles: &'stamp [NamedNode],
+    /// The enclosing property shape's deferred report material, shared so that the
+    /// path term is rendered at most once per focus node and not at all for one
+    /// that conforms.
+    lazy: &'stamp PropertyLazies,
 }
 
-fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResult>, String> {
+impl ReifierEvalContext<'_, '_, '_> {
+    /// This property shape's path as the term a result's `sh:resultPath` carries.
+    ///
+    /// Rendering it clones the predicate IRI, so it is deferred to the report
+    /// boundary rather than computed on entry: a focus node whose statements are
+    /// all correctly reified renders no path term at all. The same
+    /// [`PropertyLazies`] cell the property stamp uses backs it, so a focus node
+    /// that produces results across both routes still renders it once.
+    fn path_term(&self) -> &Term {
+        self.lazy
+            .path_term
+            .get_or_init(|| path::path_to_term(&self.ps.path))
+    }
+}
+
+/// Evaluate a property shape's `sh:reifierShape` / `sh:reificationRequired`.
+///
+/// The inner shape's results are an INPUT here rather than discarded output: a
+/// reifier-shape result inherits the inner result's message and source roles. So
+/// a reporting traversal collects them, while a conformance-only traversal —
+/// which needs to know only that a reifier shape failed — probes with
+/// [`AnyViolation`] and stops at the first inner violation instead of building
+/// the rest.
+fn eval_reifier_shapes<S: ResultSink>(
+    ctx: ReifierEvalContext<'_, '_, '_>,
+    sink: &mut S,
+) -> Result<Flow, String> {
     let ReifierEvalContext {
-        store,
+        context,
         focus,
         value_nodes,
         ps,
         source_roles,
         path_roles,
-        path_term,
-        box_role_vocab,
-        plan,
-        depth,
+        lazy: _,
+        property_plan,
     } = ctx;
     if ps.reifier_shapes.is_empty() && !ps.reification_required {
-        return Ok(vec![]);
+        return Ok(Flow::Continue);
     }
     let Path::Predicate(predicate) = &ps.path else {
-        return Ok(vec![]);
+        return Ok(Flow::Continue);
     };
+    let store = context.store;
+    let ds = store.core_view();
 
-    let source_roles = with_cbox_role(source_roles, box_role_vocab);
-    let mut results = Vec::new();
+    // A quoted triple's subject must be an IRI or a blank node — a fact about the
+    // FOCUS node, which every value node reached along this path shares. Settled
+    // once, from the interner, rather than re-derived from a materialized term per
+    // value node.
+    if !focus.is_subject(ds) {
+        return Ok(Flow::Continue);
+    }
+    // The loop-invariant halves of the statement-layer lookup. A focus node this
+    // view does not intern, a path predicate it does not intern, or an
+    // `rdf:reifies` it does not intern each mean the same thing for EVERY value
+    // node: no quoted triple term on this path is interned, or no row could name
+    // one, so nothing is reified. Resolving them here keeps that answer out of the
+    // loop entirely.
+    let focus_id = focus.id();
+    let predicate_id = ds.term_id_by_iri(predicate.as_str());
+    let reifies_id = ds.term_id_by_iri(rdf::REIFIES);
+
+    let source_roles = with_cbox_role(source_roles, context.box_role_vocab);
+    // The reifier identities of ONE value node's statement, in canonical term
+    // order. Inline for the sizes a statement layer actually carries — a handful
+    // of reifiers per statement — so the common case keeps the whole arm free of
+    // heap traffic; a statement with more than four reifiers spills, which is a
+    // cost per REIFIER and not per focus node.
+    let mut reifiers: SmallVec<[TermId; 4]> = SmallVec::new();
     for value in value_nodes {
-        let Some(triple_term) = triple_term(focus, predicate, value) else {
-            continue;
+        // A `None` here is not a skip and not an error: the data graph interns no
+        // quoted triple term for this statement, so the statement HAS no reifier —
+        // which is exactly the answer `sh:reificationRequired` reports a violation
+        // for, and the answer `sh:reifierShape` has no reifier to judge against.
+        let triple_id = match (focus_id, predicate_id, value.as_id(ds)) {
+            (Some(subject), Some(predicate), Some(object)) => {
+                ds.term_id_by_triple(subject, predicate, object)
+            }
+            _ => None,
         };
-        let reifiers = reifiers_for(store, &triple_term);
-        if reifiers.is_empty() && ps.reification_required {
-            let mut result = ValidationResult {
-                focus_node: focus.clone(),
-                result_path: Some(path_term.clone()),
-                path_structure: None,
-                value: Some(triple_term),
-                source_constraint_component: NamedNode::from(
-                    sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
-                ),
-                source_shape: ps.id.clone(),
-                severity: ps.severity.clone(),
-                message: ps.message.clone(),
-                source_box_roles: vec![],
-                path_box_roles: vec![],
-                result_box_roles: vec![],
-                attributions: vec![],
-            };
-            result.apply_box_roles(&source_roles, path_roles);
-            results.push(result);
+        reifiers.clear();
+        let reified = match (triple_id, reifies_id) {
+            (Some(triple), Some(reifies)) => {
+                if ps.reifier_shapes.is_empty() {
+                    // `sh:reificationRequired` alone asks whether a reifier
+                    // EXISTS. No identity is consumed downstream, so none is kept
+                    // and the probe stops at the first row instead of deduplicating
+                    // and canonically ordering a collection nobody reads.
+                    reifier_ids(ds, reifies, triple).next().is_some()
+                } else {
+                    reifiers.extend(reifier_ids(ds, reifies, triple));
+                    // The owned probe this replaced deduplicated through a set and
+                    // then sorted the result canonically. Interned ids are in
+                    // INSERTION order, which is not canonical order, so the order
+                    // is reproduced by comparing the terms the ids denote — which
+                    // `canonical_cmp_ids` does by streaming both renderings, with
+                    // nothing materialized. Equal ids denote one term and so land
+                    // adjacent, which is what makes the dedup after it exact.
+                    reifiers.sort_unstable_by(|left, right| canonical_cmp_ids(ds, *left, *right));
+                    reifiers.dedup();
+                    !reifiers.is_empty()
+                }
+            }
+            _ => false,
+        };
+        if !reified && ps.reification_required {
+            let flow = sink.violation(|| {
+                let mut result = ValidationResult {
+                    focus_node: focus.to_term(ds),
+                    result_path: Some(ctx.path_term().clone()),
+                    path_structure: None,
+                    value: Some(reified_triple_term(ds, focus, predicate, value)),
+                    source_constraint_component: NamedNode::from(
+                        sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
+                    ),
+                    source_shape: ps.id.clone(),
+                    severity: ps.severity.clone(),
+                    message: ps.message.clone(),
+                    source_box_roles: vec![],
+                    path_box_roles: vec![],
+                    result_box_roles: vec![],
+                    attributions: vec![],
+                };
+                result.apply_box_roles(&source_roles, path_roles);
+                result
+            });
+            if flow.stopped() {
+                return Ok(Flow::Stop);
+            }
             continue;
         }
 
-        for reifier in &reifiers {
-            for reifier_shape in &ps.reifier_shapes {
-                let inner_results = validate_shape_with_depth(
-                    store,
-                    reifier,
-                    resolve_id(store.core_view(), reifier),
-                    reifier_shape,
-                    box_role_vocab,
-                    plan,
-                    depth,
-                )?;
-                if inner_results.is_empty() {
+        for &reifier in &reifiers {
+            for (reifier_shape, reifier_plan) in property_plan.reifiers(ps)? {
+                let reifier_context = ValidationContext {
+                    plan: reifier_plan,
+                    ..context
+                };
+                // The reifier came OUT of this view's statement layer, so it is
+                // interned in it by construction: it recurses as its identity, with
+                // no term materialized to resolve back into one.
+                let reifier_focus = FocusNode::Interned(reifier);
+                if !S::RECORDS_RESULTS {
+                    // Conformance only: the inner results exist solely to supply
+                    // this result's message, and this sink keeps no message. Probe
+                    // for the first inner violation and stop there rather than
+                    // collecting the rest.
+                    let mut probe = AnyViolation::default();
+                    walk_shape(reifier_context, &reifier_focus, &mut probe)?;
+                    if probe.conforms() {
+                        continue;
+                    }
+                    let flow = sink.violation(|| {
+                        let message = reifier_shape.message.clone().or_else(|| ps.message.clone());
+                        reifier_result(&ctx, predicate, value, &source_roles, message, &[])
+                    });
+                    if flow.stopped() {
+                        return Ok(Flow::Stop);
+                    }
                     continue;
                 }
-                for inner in inner_results {
-                    let mut result = ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: Some(path_term.clone()),
-                        path_structure: None,
-                        value: Some(triple_term.clone()),
-                        source_constraint_component: NamedNode::from(
-                            sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: ps.id.clone(),
-                        severity: ps.severity.clone(),
-                        message: inner
+                for inner in collect_shape(reifier_context, &reifier_focus)? {
+                    let flow = sink.violation(|| {
+                        let message = inner
                             .message
-                            .clone()
                             .or_else(|| reifier_shape.message.clone())
-                            .or_else(|| ps.message.clone()),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    };
-                    let inner_source_roles =
-                        merge_box_roles(&source_roles, &inner.source_box_roles);
-                    result.apply_box_roles(&inner_source_roles, path_roles);
-                    results.push(result);
+                            .or_else(|| ps.message.clone());
+                        reifier_result(
+                            &ctx,
+                            predicate,
+                            value,
+                            &source_roles,
+                            message,
+                            &inner.source_box_roles,
+                        )
+                    });
+                    if flow.stopped() {
+                        return Ok(Flow::Stop);
+                    }
                 }
             }
         }
     }
-    Ok(results)
+    Ok(Flow::Continue)
 }
 
-fn triple_term(focus: &Term, predicate: &NamedNode, value: &Term) -> Option<Term> {
-    // A quoted triple's subject must be an IRI or blank node.
-    if !focus.is_subject() {
-        return None;
-    }
-    Some(Term::Triple(Box::new(Triple::new(
-        focus.clone(),
+/// One `sh:reifierShape` result: the enclosing property shape's focus node, path
+/// and quoted triple term, carrying `message` and the roles the inner result
+/// contributed.
+fn reifier_result(
+    ctx: &ReifierEvalContext<'_, '_, '_>,
+    predicate: &NamedNode,
+    value: &ValueNode,
+    source_roles: &[NamedNode],
+    message: Option<String>,
+    inner_source_roles: &[NamedNode],
+) -> ValidationResult {
+    let ds = ctx.context.store.core_view();
+    let mut result = ValidationResult {
+        focus_node: ctx.focus.to_term(ds),
+        result_path: Some(ctx.path_term().clone()),
+        path_structure: None,
+        value: Some(reified_triple_term(ds, ctx.focus, predicate, value)),
+        source_constraint_component: NamedNode::from(sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT),
+        source_shape: ctx.ps.id.clone(),
+        severity: ctx.ps.severity.clone(),
+        message,
+        source_box_roles: vec![],
+        path_box_roles: vec![],
+        result_box_roles: vec![],
+        attributions: vec![],
+    };
+    let merged = merge_box_roles(source_roles, inner_source_roles);
+    result.apply_box_roles(&merged, ctx.path_roles);
+    result
+}
+
+/// The quoted triple term `<< focus predicate value >>` as a report value.
+///
+/// **A materialization boundary, and the only one this arm has.** It is called
+/// from inside a result builder and nowhere else, so a statement that is reified
+/// as its shape requires never builds one — which is the whole difference between
+/// this and the owned triple the arm used to construct for every value node before
+/// anything was known about it.
+///
+/// It is built rather than looked up because it must exist even when the data
+/// graph interns no such term: a `sh:reificationRequired` violation REPORTS the
+/// statement that is missing its reifier, and a statement the graph never quoted
+/// is precisely the one most likely to be missing one.
+fn reified_triple_term(
+    ds: &impl ShaclRead,
+    focus: &FocusNode,
+    predicate: &NamedNode,
+    value: &ValueNode,
+) -> Term {
+    Term::Triple(Box::new(Triple::new(
+        focus.to_term(ds),
         predicate.clone(),
-        value.clone(),
-    ))))
+        value.to_term(ds),
+    )))
 }
 
-fn reifiers_for(store: &ShaclData, triple_term: &Term) -> Vec<Term> {
-    let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
-    let reifiers_set: FastSet<Term> = native_quads(
-        store.core_view(),
+/// The reifier resources declared for one quoted triple term, id-native.
+///
+/// Read through the VIEW rather than through whatever carrier sits under it. The
+/// change path binds a projected delta view, whose statement layer is the union of
+/// the base reifier table and the delta's own additions and suppressions; a lookup
+/// aimed at the base dataset would answer about a world the caller no longer has,
+/// making a reifier the delta added invisible and one it suppressed eternal. This
+/// is the same `(?, rdf:reifies, triple)` probe the owned lookup it replaces
+/// issued through the same view — minus the owned rows, the hash set and the
+/// vector.
+///
+/// The subject-legality filter is the one the owned probe applied per row: a term
+/// that cannot occupy a subject position is not a reifier.
+fn reifier_ids<D: ShaclRead>(
+    ds: &D,
+    reifies: TermId,
+    triple: TermId,
+) -> impl Iterator<Item = TermId> + '_ {
+    quads_for_pattern_ids(
+        ds,
         None,
-        Some(&reifies),
-        Some(triple_term),
+        Some(reifies),
+        Some(triple),
         GraphFilter::DefaultGraph,
     )
-    .into_iter()
-    .map(|(subject, _, _)| subject)
-    .collect();
-    let mut reifiers: Vec<Term> = reifiers_set.into_iter().collect();
-    crate::term::sort_terms_canonical(&mut reifiers);
-    reifiers
+    .filter(move |quad| matches!(ds.resolve(quad.s), TermRef::Iri(_) | TermRef::Blank { .. }))
+    .map(|quad| quad.s)
 }
 
 fn path_box_roles(
@@ -746,15 +1564,21 @@ fn path_box_roles(
 }
 
 /// Merge the caller vocabulary's CBox role individual into `source_roles`.
-/// With no vocab configured this is the identity (no role is minted).
-fn with_cbox_role(
-    source_roles: &[NamedNode],
+///
+/// With no vocab configured the box-role feature is INACTIVE and this is the
+/// identity — no role is minted, and the borrowed input is handed straight back
+/// rather than copied, so the inactive case costs nothing at all.
+fn with_cbox_role<'roles>(
+    source_roles: &'roles [NamedNode],
     box_role_vocab: Option<&BoxRoleVocab>,
-) -> Vec<NamedNode> {
+) -> Cow<'roles, [NamedNode]> {
     let Some(vocab) = box_role_vocab else {
-        return source_roles.to_vec();
+        return Cow::Borrowed(source_roles);
     };
-    merge_box_roles(source_roles, &[NamedNode::from(vocab.box_cbox.as_str())])
+    Cow::Owned(merge_box_roles(
+        source_roles,
+        &[NamedNode::from(vocab.box_cbox.as_str())],
+    ))
 }
 
 fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
@@ -763,6 +1587,33 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
     roles.sort_unstable();
     roles.dedup();
     roles
+}
+
+/// The plan for the shape a `sh:nodeByExpression` index resolves the INTERNED
+/// produced node `id` to.
+///
+/// The binding re-keyed every shape node this data graph interns when it was taken
+/// (`DatasetBinding::indexed_node`), so the common answer costs two hash lookups
+/// and builds no term at all — which is the whole point: the lookup happens once
+/// per value node per produced node.
+///
+/// A miss there is NOT yet "no such shape". The binding describes the dataset as it
+/// stood when it was taken, and a produced node whose term the binding never saw
+/// still has to be offered to the index BY TERM before it can be called
+/// unresolvable — otherwise a shape node interned after the bind would be refused
+/// for a shape that is right there in the index. That materialization runs only on
+/// the miss, which is either that case or the error path.
+fn indexed_shape_by_id<'a>(
+    plan: ShapePlan<'a>,
+    index: u32,
+    resolved: &'a FastMap<Term, Shape>,
+    ds: &impl ShaclRead,
+    id: TermId,
+) -> Result<Option<ShapePlan<'a>>, String> {
+    if let Some(node) = plan.binding().indexed_node(index, id)? {
+        return plan.indexed(index, node, resolved);
+    }
+    plan.indexed(index, &term_id_to_native(ds, id), resolved)
 }
 
 // ── Per-constraint evaluator ───────────────────────────────────────────────────
@@ -776,16 +1627,16 @@ fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
 /// (SHACL-AF spec: `$this` = focus node, not value node).
 ///
 /// `path` is `None` for node-level constraints, `Some` for property shapes.
-fn eval_constraint(
-    context: ValidationContext<'_>,
-    focus_node: &Term,
+fn eval_constraint<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus_node: &FocusNode,
     value_nodes: &[ValueNode],
-    constraint: &Constraint,
+    constraint: PlannedConstraint<'a>,
     path: Option<&Path>,
     source: ConstraintSource<'_>,
-) -> Result<Vec<ValidationResult>, String> {
+    sink: &mut S,
+) -> Result<Flow, String> {
     let store = context.store;
-    let plan = context.plan;
     let depth = context.depth;
     let ds = store.core_view();
     let result_path = || path.map(path::path_to_term);
@@ -801,7 +1652,7 @@ fn eval_constraint(
     macro_rules! result {
         ($component:expr, $value:expr) => {
             ValidationResult {
-                focus_node: focus_node.clone(),
+                focus_node: focus_node.to_term(ds),
                 result_path: result_path(),
                 path_structure: path_structure(),
                 value: $value,
@@ -833,30 +1684,72 @@ fn eval_constraint(
         };
     }
 
+    // Hand one violation to the sink, unwinding the traversal if it says to stop.
+    //
+    // The result expression becomes the sink's BUILDER, so it runs only for a
+    // sink that records results. That is what makes a conformance check cheap
+    // without giving it a second definition of conformance: the decision — the
+    // `if` above each of these — is shared, and only the reporting is skipped.
+    macro_rules! emit {
+        ($result:expr) => {
+            if sink.violation(|| $result).stopped() {
+                return Ok(Flow::Stop);
+            }
+        };
+    }
+
+    // The result GENERATOR a constraint folds to when stage 1 decided its verdict
+    // for every value node at once.
+    //
+    // A folded constraint may not collapse to a boolean, and this is the whole
+    // reason the fold is spelled as a generator: `sh:class` against a class this
+    // data graph does not intern violates for every value node, and SHACL reports
+    // ONE RESULT PER VIOLATING VALUE NODE, each stamped with that value node's own
+    // term. Folding to "violates — report once" would leave every allocation
+    // measurement green, every conformance boolean correct, and the report quietly
+    // short by n−1 results. So the constant verdict is expressed as the results it
+    // produces, in value-node order, which is byte-identical to what the unfolded
+    // arm produced.
+    macro_rules! violate_every_value_node {
+        ($component:expr) => {{
+            for value in value_nodes {
+                emit!(result!($component, Some(value.to_term(ds))));
+            }
+            Flow::Continue
+        }};
+    }
+
     Ok(match constraint {
         // ── Count constraints (operate on the SET) ─────────────────────────────
-        Constraint::MinCount(n) => {
+        PlannedConstraint::MinCount(n) => {
             let count = value_nodes.len() as u64;
-            if count < *n {
-                vec![result!(sh::MIN_COUNT_CONSTRAINT_COMPONENT, None)]
-            } else {
-                vec![]
+            if count < n {
+                emit!(result!(sh::MIN_COUNT_CONSTRAINT_COMPONENT, None));
             }
+            Flow::Continue
         }
-        Constraint::MaxCount(n) => {
+        PlannedConstraint::MaxCount(n) => {
             let count = value_nodes.len() as u64;
-            if count > *n {
-                vec![result!(sh::MAX_COUNT_CONSTRAINT_COMPONENT, None)]
-            } else {
-                vec![]
+            if count > n {
+                emit!(result!(sh::MAX_COUNT_CONSTRAINT_COMPONENT, None));
             }
+            Flow::Continue
         }
 
         // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
-        Constraint::Class(class_iri) => {
-            let class_id = plan.class_id(class_iri);
-            let mut results = Vec::new();
-            let focus = focus_node;
+        //
+        // The CONSTANT-FOLDED branch: `None` = the data graph interns no term for
+        // this class, so no value node can be an instance of it and every one of
+        // them violates. That is a real verdict, not a failure to compute one, and
+        // it was decided at BIND — once for the whole validation, not once per
+        // value node of every focus node. The per-value-node arm below still runs
+        // its own `is_none_or` test, so this fold is a shortcut around work whose
+        // answer is already known and not a second statement of the rule.
+        PlannedConstraint::Class(None) => {
+            violate_every_value_node!(sh::CLASS_CONSTRAINT_COMPONENT)
+        }
+        PlannedConstraint::Class(id) => {
+            let class_id = id;
             for vn in value_nodes {
                 // Id-native instance test: an interned value node's class membership
                 // is decided entirely in `TermId` space (literal check + `rdf:type`
@@ -869,156 +1762,121 @@ fn eval_constraint(
                     None => true,
                 };
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(vn.to_term(ds)),
-                        source_constraint_component: NamedNode::from(
-                            sh::CLASS_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::CLASS_CONSTRAINT_COMPONENT,
+                        Some(vn.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Datatype (per value node) ──────────────────────────────────────────
-        Constraint::Datatype(dt_iri) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::Datatype(dt_iri) => {
             for value in value_nodes {
                 if !check_value_datatype(value, ds, dt_iri) {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.to_term(ds)),
-                        source_constraint_component: NamedNode::from(
-                            sh::DATATYPE_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::DATATYPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── NodeKind (per value node) ──────────────────────────────────────────
-        Constraint::NodeKind(kind) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::NodeKind(kind) => {
             for value in value_nodes {
                 // Kind-only check on the borrowed discriminant: the owned term is
                 // built only for a violation, not per conforming value node.
                 if !check_value_kind(value.kind(ds), kind) {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.to_term(ds)),
-                        source_constraint_component: NamedNode::from(
-                            sh::NODE_KIND_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::NODE_KIND_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── In (per value node) ────────────────────────────────────────────────
-        Constraint::In(allowed) => {
-            // Membership is pure identity: resolve the allowed set to ids once, so an
-            // interned value node's check is a `TermId` set lookup with no
-            // materialization. The interner is injective, so an allowed term that is
-            // not interned can never equal an interned value node; a non-interned
-            // value node falls back to term equality.
-            let allowed_ids: FastSet<TermId> =
-                allowed.iter().filter_map(|a| resolve_id(ds, a)).collect();
-            let mut results = Vec::new();
-            let focus = focus_node;
+        //
+        // The CONSTANT-FOLDED branch: `sh:in ()` permits nothing, so every value
+        // node violates whatever the data graph contains. This one is a constant
+        // of the SHAPE rather than of the binding, which is why it is stated on
+        // `allowed` and not on the id set — see the arm below for why an id set
+        // that is empty is NOT the same condition.
+        PlannedConstraint::In { allowed: &[], .. } => {
+            violate_every_value_node!(sh::IN_CONSTRAINT_COMPONENT)
+        }
+        PlannedConstraint::In {
+            allowed,
+            ids: allowed_ids,
+        } => {
+            // Membership is pure identity, and the allowed set was resolved to ids
+            // ONCE, at bind: an interned value node's check is a `TermId` set
+            // lookup with no materialization and no per-focus-node set to build.
+            //
+            // The interner is injective, so an allowed term that is not interned
+            // can never equal an INTERNED value node. That is also why an empty
+            // `allowed_ids` is not a constant verdict: a value node produced by a
+            // SHACL-AF node expression need not be interned either, and two
+            // non-interned terms can perfectly well be equal. Folding "no member
+            // is interned" to "everything violates" would refuse a conforming
+            // graph. What the injectivity DOES buy is the shape of the match
+            // below: only a foreign value node with no identity of its own can
+            // reach the term comparison, so an interned value node is never
+            // materialized to run it.
             for vn in value_nodes {
-                let allowed_here = match vn.as_id(ds) {
-                    Some(id) => allowed_ids.contains(&id),
-                    None => allowed.iter().any(|a| terms_equal(a, &vn.to_term(ds))),
+                let allowed_here = match vn {
+                    ValueNode::Interned(id) => allowed_ids.contains(id),
+                    ValueNode::Foreign(term) => match resolve_id(ds, term) {
+                        Some(id) => allowed_ids.contains(&id),
+                        None => allowed.iter().any(|a| terms_equal(a, term)),
+                    },
                 };
                 if !allowed_here {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(vn.to_term(ds)),
-                        source_constraint_component: NamedNode::from(sh::IN_CONSTRAINT_COMPONENT),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(sh::IN_CONSTRAINT_COMPONENT, Some(vn.to_term(ds))));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── HasValue (on the SET, one result if missing) ───────────────────────
-        Constraint::HasValue(required) => {
+        PlannedConstraint::HasValue { required, id } => {
             // Identity check: if `required` is interned, membership is a `TermId`
             // comparison and no value node is materialized. If it is not interned,
             // no interned value node can equal it, so only the (rare) non-interned
-            // value nodes could match — fall back to term equality.
-            let found = match resolve_id(ds, required) {
+            // value nodes could match — fall back to term equality. Which of the
+            // two it is was decided at bind.
+            let found = match id {
                 Some(req_id) => value_nodes.iter().any(|v| v.as_id(ds) == Some(req_id)),
-                None => value_nodes
-                    .iter()
-                    .any(|v| terms_equal(&v.to_term(ds), required)),
+                // The required term has no identity in this data graph, so by the
+                // interner's injectivity no INTERNED value node can equal it: a
+                // term that is equal to a term the graph does not intern is itself
+                // not interned. Only a genuinely foreign value node — a SHACL-AF
+                // node expression's product — can still match, so the comparison
+                // is restricted to those and no interned value node is
+                // materialized to lose it.
+                //
+                // Note what this deliberately does NOT do: fold to "not found".
+                // Two non-interned terms can be equal, so a shape whose
+                // `sh:hasValue` names a term the data never mentions still
+                // CONFORMS against an expression that produces that very term, and
+                // declaring the whole constraint violated would refuse it.
+                None => value_nodes.iter().any(|v| match v {
+                    ValueNode::Interned(_) => false,
+                    ValueNode::Foreign(term) => terms_equal(term, required),
+                }),
             };
             if !found {
-                let focus = focus_node;
-                vec![ValidationResult {
-                    focus_node: focus.clone(),
-                    result_path: result_path(),
-                    path_structure: path_structure(),
-                    value: None,
-                    source_constraint_component: NamedNode::from(
-                        sh::HAS_VALUE_CONSTRAINT_COMPONENT,
-                    ),
-                    source_shape: source_shape.clone(),
-                    severity: severity.clone(),
-                    message: message.clone(),
-                    source_box_roles: vec![],
-                    path_box_roles: vec![],
-                    result_box_roles: vec![],
-                    attributions: vec![],
-                }]
-            } else {
-                vec![]
+                emit!(result!(sh::HAS_VALUE_CONSTRAINT_COMPONENT, None));
             }
+            Flow::Continue
         }
 
         // ── Pattern (per value node) ───────────────────────────────────────────
-        Constraint::Pattern {
+        PlannedConstraint::Pattern {
             regex,
             flags,
             compiled,
@@ -1026,7 +1884,7 @@ fn eval_constraint(
             // Compile at most once per Constraint instance (across all focus
             // nodes and value nodes) using the OnceLock cache.  Behaviour is
             // identical to the per-call path: Err ⇒ violation on every value.
-            let compiled = compiled.get_or_init(|| build_regex(regex, flags.as_deref()));
+            let compiled = compiled.get_or_init(|| build_regex(regex, flags.map(String::as_str)));
             // SHACL has no shape-error channel on this path, so a pattern that
             // does not compile stays a violation (the W3C suite depends on
             // that). But discarding the compiler's typed error made a BROKEN
@@ -1036,7 +1894,6 @@ fn eval_constraint(
                 format!(
                     "invalid sh:pattern {regex:?}{}: {error}",
                     flags
-                        .as_deref()
                         .map(|f| format!(" with sh:flags {f:?}"))
                         .unwrap_or_default()
                 )
@@ -1046,8 +1903,6 @@ fn eval_constraint(
                 (Some(error), None) => Some(error.clone()),
                 (None, shape_message) => shape_message.clone(),
             };
-            let mut results = Vec::new();
-            let focus = focus_node;
             for value in value_nodes {
                 let violates = match (compiled, value.lexical(ds)) {
                     (Err(_), _) => true,   // bad regex → violation on every value node
@@ -1055,8 +1910,8 @@ fn eval_constraint(
                     (Ok(pattern), Some(lex)) => !pattern.as_regex().is_match(lex),
                 };
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
+                    emit!(ValidationResult {
+                        focus_node: focus_node.to_term(ds),
                         result_path: result_path(),
                         path_structure: path_structure(),
                         value: Some(value.to_term(ds)),
@@ -1073,13 +1928,11 @@ fn eval_constraint(
                     });
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── MinLength (per value node) ─────────────────────────────────────────
-        Constraint::MinLength(n) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::MinLength(n) => {
             for value in value_nodes {
                 // Length from the borrowed lexical surface (`ValueNode::lexical`
                 // agrees with `lexical_length` variant-for-variant): the owned term
@@ -1087,34 +1940,20 @@ fn eval_constraint(
                 let len_opt = value.lexical(ds).map(|s| s.chars().count());
                 let violates = match len_opt {
                     None => true, // blank node
-                    Some(len) => (len as u64) < *n,
+                    Some(len) => (len as u64) < n,
                 };
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.to_term(ds)),
-                        source_constraint_component: NamedNode::from(
-                            sh::MIN_LENGTH_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::MIN_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── MaxLength (per value node) ─────────────────────────────────────────
-        Constraint::MaxLength(n) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::MaxLength(n) => {
             for value in value_nodes {
                 // Length from the borrowed lexical surface (`ValueNode::lexical`
                 // agrees with `lexical_length` variant-for-variant): the owned term
@@ -1122,34 +1961,20 @@ fn eval_constraint(
                 let len_opt = value.lexical(ds).map(|s| s.chars().count());
                 let violates = match len_opt {
                     None => true, // blank node
-                    Some(len) => (len as u64) > *n,
+                    Some(len) => (len as u64) > n,
                 };
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.to_term(ds)),
-                        source_constraint_component: NamedNode::from(
-                            sh::MAX_LENGTH_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::MAX_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── LanguageIn (per value node) ────────────────────────────────────────
-        Constraint::LanguageIn(tags) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::LanguageIn(tags) => {
             for value in value_nodes {
                 // Tag match on the borrowed language (`None` = not a language-tagged
                 // literal, which never matches): the owned term is built only for a
@@ -1158,56 +1983,31 @@ fn eval_constraint(
                     .language(ds)
                     .is_some_and(|lang| language_tag_matches_any(lang, tags));
                 if !matches {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.to_term(ds)),
-                        source_constraint_component: NamedNode::from(
-                            sh::LANGUAGE_IN_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::LANGUAGE_IN_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Not (per value node, recursive) ────────────────────────────────────
-        Constraint::Not(inner_shape) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::Not(inner_shape) => {
             for value in value_nodes {
-                // Preserve interned identity before materializing the recursion
-                // focus; reverse-resolving the owned term would add a hash probe.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The recursion focus IS the value node, in the representation it
+                // already has: no materialization, and no reverse hash probe to
+                // recover an identity the value node was already carrying.
+                let focus = value.as_focus(ds);
                 // Violation iff the value node DOES conform to the negated shape.
-                if conforms_with_id_depth(store, value, value_id, inner_shape, plan, depth)? {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(sh::NOT_CONSTRAINT_COMPONENT),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                if conforms_memoized(context, inner_shape, &focus)? {
+                    emit!(result!(
+                        sh::NOT_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Closed (node-shape-level; evaluated in validate_shape) ─────────────
@@ -1215,30 +2015,45 @@ fn eval_constraint(
         // from the sibling property shapes — data `eval_constraint` does not
         // receive. It is evaluated directly in `validate_shape`; here it is a
         // no-op so the match stays exhaustive.
-        Constraint::Closed { .. } => vec![],
+        PlannedConstraint::Closed { .. } => Flow::Continue,
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
-        Constraint::UniqueLang(true) => {
-            let mut seen_langs: FastMap<String, usize> = FastMap::default();
+        PlannedConstraint::UniqueLang(true) => {
+            // Tallied over BORROWED tags in an inline buffer, and the buffer is
+            // indexed by DISTINCT language rather than by value node — a focus
+            // node carries a handful of languages however many labels it has, so
+            // the scan is over a few entries and the whole tally allocates
+            // nothing. The two things this replaced both cost one allocation per
+            // conforming focus node: the map's table on its first insert, and an
+            // owned lowercased key per value node. Case folding is now a
+            // comparison rather than a new string, which is the same relation
+            // BCP 47 tags are compared under (they are ASCII).
+            let mut seen_langs: SmallVec<[(&str, usize); UNIQUE_LANG_INLINE]> = SmallVec::new();
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
-                if let Term::Literal(lit) = value
-                    && let Some(lang) = lit.language()
-                {
-                    *seen_langs.entry(lang.to_lowercase()).or_insert(0) += 1;
+                // Content arm on the BORROWED language tag: `ValueNode::language`
+                // is `None` for every node that is not a language-tagged literal,
+                // which is exactly the set the owned-term match skipped, so the
+                // counted population is unchanged and no value node is
+                // materialized to be counted.
+                if let Some(lang) = value.language(ds) {
+                    if let Some(entry) = seen_langs
+                        .iter_mut()
+                        .find(|(seen, _)| seen.eq_ignore_ascii_case(lang))
+                    {
+                        entry.1 += 1;
+                    } else {
+                        seen_langs.push((lang, 1));
+                    }
                 }
             }
-            let focus = focus_node;
-            let mut results = Vec::new();
+            // First-seen order, where the map this replaced iterated in hash
+            // order. Both are re-sorted by `finish_report` on the full serialized
+            // result identity, so the report bytes are unchanged — and this one
+            // does not depend on the hasher.
             for (lang, count) in &seen_langs {
                 if *count > 1 {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
+                    emit!(ValidationResult {
+                        focus_node: focus_node.to_term(ds),
                         result_path: result_path(),
                         path_structure: path_structure(),
                         value: None,
@@ -1247,9 +2062,10 @@ fn eval_constraint(
                         ),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
-                        message: message
-                            .clone()
-                            .or_else(|| Some(format!("duplicate language tag: {lang}"))),
+                        message: message.clone().or_else(|| Some(format!(
+                            "duplicate language tag: {}",
+                            lang.to_lowercase()
+                        ))),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
@@ -1257,398 +2073,265 @@ fn eval_constraint(
                     });
                 }
             }
-            results
+            Flow::Continue
         }
-        Constraint::UniqueLang(false) => vec![],
+        PlannedConstraint::UniqueLang(false) => Flow::Continue,
 
         // ── MinInclusive / MaxInclusive (per value node) ───────────────────────
-        Constraint::MinInclusive(bound) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::MinInclusive(bound) => {
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
                 );
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(
-                            sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
-        Constraint::MaxInclusive(bound) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::MaxInclusive(bound) => {
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
                 );
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(
-                            sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── MinExclusive / MaxExclusive (per value node) ───────────────────────
-        Constraint::MinExclusive(bound) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::MinExclusive(bound) => {
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Greater)
                 );
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(
-                            sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
-        Constraint::MaxExclusive(bound) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::MaxExclusive(bound) => {
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
                 let violates = !matches!(
-                    range_facet_cmp(value, bound),
+                    range_facet_cmp(value.literal_parts(ds), bound),
                     Some(std::cmp::Ordering::Less)
                 );
                 if violates {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(
-                            sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT,
-                        ),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── And (per value node, recursive) ───────────────────────────────────
-        Constraint::And(members) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::And(members) => {
             for value in value_nodes {
-                // Resolve identity once even when several member shapes recurse.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // The recursion focus keeps the value node's own representation,
+                // so an interned one is never materialized to be recursed into.
+                let focus = value.as_focus(ds);
                 let mut all_conform = true;
-                for member in members {
-                    if !conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
+                for member in members.iter(context.plan) {
+                    if !conforms_memoized(context, member, &focus)? {
                         all_conform = false;
                         break;
                     }
                 }
                 if !all_conform {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(sh::AND_CONSTRAINT_COMPONENT),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::AND_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Or (per value node, recursive) ────────────────────────────────────
-        Constraint::Or(members) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::Or(members) => {
             for value in value_nodes {
-                // Resolve identity once even when several member shapes recurse.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // As `sh:and`: the recursion focus keeps the value node's own
+                // representation.
+                let focus = value.as_focus(ds);
                 let mut any_conforms = false;
-                for member in members {
-                    if conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
+                for member in members.iter(context.plan) {
+                    if conforms_memoized(context, member, &focus)? {
                         any_conforms = true;
                         break;
                     }
                 }
                 if !any_conforms {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(sh::OR_CONSTRAINT_COMPONENT),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::OR_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Xone (per value node, recursive) ──────────────────────────────────
-        Constraint::Xone(members) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        //
+        // The verdict is a COUNT and not a boolean — "exactly one" is broken by
+        // nought conforming members and by two alike — so, unlike `sh:or`, this
+        // arm cannot stop at the first conforming member. Every member is asked,
+        // each through the same conformance traversal, and the count is compared
+        // against one afterwards.
+        PlannedConstraint::Xone(members) => {
             for value in value_nodes {
-                // Resolve identity once even when several member shapes recurse.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
+                // As `sh:and`: the recursion focus keeps the value node's own
+                // representation.
+                let focus = value.as_focus(ds);
                 let mut count = 0usize;
-                for member in members {
-                    if conforms_with_id_depth(store, value, value_id, member, plan, depth)? {
+                for member in members.iter(context.plan) {
+                    if conforms_memoized(context, member, &focus)? {
                         count += 1;
                     }
                 }
                 if count != 1 {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(sh::XONE_CONSTRAINT_COMPONENT),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                    emit!(result!(
+                        sh::XONE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Node (per value node, recursive) ──────────────────────────────────
-        Constraint::Node(inner_shape) => {
-            let mut results = Vec::new();
-            let focus = focus_node;
+        PlannedConstraint::Node(inner_shape) => {
             for value in value_nodes {
-                // Preserve interned identity before materializing the recursion
-                // focus; reverse-resolving the owned term would add a hash probe.
-                let value_id = value.as_id(ds);
-                let value_term = value.to_term(ds);
-                let value = &value_term;
-                if !conforms_with_id_depth(store, value, value_id, inner_shape, plan, depth)? {
-                    results.push(ValidationResult {
-                        focus_node: focus.clone(),
-                        result_path: result_path(),
-                        path_structure: path_structure(),
-                        value: Some(value.clone()),
-                        source_constraint_component: NamedNode::from(sh::NODE_CONSTRAINT_COMPONENT),
-                        source_shape: source_shape.clone(),
-                        severity: severity.clone(),
-                        message: message.clone(),
-                        source_box_roles: vec![],
-                        path_box_roles: vec![],
-                        result_box_roles: vec![],
-                        attributions: vec![],
-                    });
+                // The recursion focus IS the value node, in the representation it
+                // already has: no materialization, and no reverse hash probe to
+                // recover an identity the value node was already carrying.
+                let focus = value.as_focus(ds);
+                if !conforms_memoized(context, inner_shape, &focus)? {
+                    emit!(result!(
+                        sh::NODE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Property-pair constraints (§4.3): compare the value nodes against
         //    the objects of the given predicate from the SAME focus node. ──────
-        Constraint::Equals(pred) => {
-            let others = pair_values(store, focus_node, pred);
-            // Membership is identity: compare in `TermId` space (the interner is
-            // injective, so an interned value equals a predicate object iff their ids
-            // match). Only offending value nodes are materialized on the conforming
-            // side. `others` come from the data graph and are always interned.
-            let other_ids: FastSet<TermId> =
-                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
-            let value_ids: FastSet<TermId> =
-                value_nodes.iter().filter_map(|v| v.as_id(ds)).collect();
-            let mut offending: Vec<Term> = Vec::new();
+        PlannedConstraint::Equals(pred) => {
+            // Membership is identity, so the comparison stays in `TermId` space
+            // end to end: the comparands are collected as ids and never
+            // materialized, and only an OFFENDING term is ever built.
+            let others = PairComparands::collect(ds, focus_node, pred);
+            // The dedup set is only ever touched by an OFFENDING value node, so a
+            // conforming focus node never allocates it.
             let mut seen: FastSet<Term> = FastSet::default();
             // Value nodes missing from the predicate's objects…
             for v in value_nodes {
-                let present = match v.as_id(ds) {
-                    Some(id) => other_ids.contains(&id),
-                    None => {
-                        let term = v.to_term(ds);
-                        others.iter().any(|o| terms_equal(o, &term))
-                    }
-                };
-                if !present {
+                if !others.contains_value(ds, v) {
                     let term = v.to_term(ds);
                     if seen.insert(term.clone()) {
-                        offending.push(term);
+                        emit!(result!(
+                            sh::EQUALS_CONSTRAINT_COMPONENT,
+                            focus_node.to_term(ds),
+                            Some(term)
+                        ));
                     }
                 }
             }
-            // …and predicate objects missing from the value nodes.
-            for o in &others {
-                let present = match resolve_id(ds, o) {
-                    Some(oid) => value_ids.contains(&oid),
-                    None => value_nodes.iter().any(|v| terms_equal(&v.to_term(ds), o)),
-                };
-                if !present && seen.insert(o.clone()) {
-                    offending.push(o.clone());
+            // …and predicate objects missing from the value nodes. Building the
+            // value-node index is itself gated on there being a comparand to ask
+            // about, so an empty comparand set costs nothing.
+            if !others.is_empty() {
+                let value_ids = ValueNodeIds::of(ds, value_nodes);
+                for oid in others.iter() {
+                    if !value_ids.contains(ds, oid) {
+                        let other = term_id_to_native(ds, oid);
+                        if seen.insert(other.clone()) {
+                            emit!(result!(
+                                sh::EQUALS_CONSTRAINT_COMPONENT,
+                                focus_node.to_term(ds),
+                                Some(other)
+                            ));
+                        }
+                    }
                 }
             }
-            offending
-                .into_iter()
-                .map(|value| {
-                    result!(
-                        sh::EQUALS_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
-                        Some(value)
-                    )
-                })
-                .collect()
+            Flow::Continue
         }
-        Constraint::Disjoint(pred) => {
-            let others = pair_values(store, focus_node, pred);
+        PlannedConstraint::Disjoint(pred) => {
             // Identity check in `TermId` space; only offending value nodes are
             // materialized.
-            let other_ids: FastSet<TermId> =
-                others.iter().filter_map(|o| resolve_id(ds, o)).collect();
-            let mut results = Vec::new();
+            let others = PairComparands::collect(ds, focus_node, pred);
             for v in value_nodes {
-                let violates = match v.as_id(ds) {
-                    Some(id) => other_ids.contains(&id),
-                    None => {
-                        let term = v.to_term(ds);
-                        others.iter().any(|o| terms_equal(o, &term))
-                    }
-                };
-                if violates {
-                    results.push(result!(
+                if others.contains_value(ds, v) {
+                    emit!(result!(
                         sh::DISJOINT_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
+                        focus_node.to_term(ds),
                         Some(v.to_term(ds))
                     ));
                 }
             }
-            results
+            Flow::Continue
         }
-        Constraint::LessThan(pred) => {
-            // Order comparison needs each value node's term (numeric/string/temporal
-            // value space), so materialize the set for the pair walk.
-            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
-            pair_order_offenders(store, focus_node, &value_terms, pred, false)
-                .into_iter()
-                .map(|value| {
-                    result!(
-                        sh::LESS_THAN_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
-                        Some(value)
-                    )
-                })
-                .collect()
+        PlannedConstraint::LessThan(pred) => {
+            // Order comparison reads the numeric/string/temporal value space, but
+            // it reads it through BORROWED lexical forms on both sides, so neither
+            // the value nodes nor the comparands are materialized to compare them.
+            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, false) {
+                emit!(result!(
+                    sh::LESS_THAN_CONSTRAINT_COMPONENT,
+                    focus_node.to_term(ds),
+                    Some(value)
+                ));
+            }
+            Flow::Continue
         }
-        Constraint::LessThanOrEquals(pred) => {
-            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
-            pair_order_offenders(store, focus_node, &value_terms, pred, true)
-                .into_iter()
-                .map(|value| {
-                    result!(
-                        sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
-                        focus_node.clone(),
-                        Some(value)
-                    )
-                })
-                .collect()
+        PlannedConstraint::LessThanOrEquals(pred) => {
+            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, true) {
+                emit!(result!(
+                    sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
+                    focus_node.to_term(ds),
+                    Some(value)
+                ));
+            }
+            Flow::Continue
         }
 
         // ── Qualified value shapes (§4.5.4–4.5.5) ──────────────────────────────
-        Constraint::QualifiedValueShape {
+        PlannedConstraint::QualifiedValueShape {
             shape: qshape,
             siblings,
             min_count,
@@ -1659,18 +2342,17 @@ fn eval_constraint(
             // under sibling disjointness — conforms to NO sibling qualified shape.
             let mut count = 0u64;
             for v in value_nodes {
-                // Each value node is a recursion focus for the qualified shape;
-                // retain its interned identity across every recursive check.
-                let v_id = v.as_id(ds);
-                let v_term = v.to_term(ds);
-                let v = &v_term;
-                if !conforms_with_id_depth(store, v, v_id, qshape, plan, depth)? {
+                // Each value node is a recursion focus for the qualified shape,
+                // in the representation it already has, across every recursive
+                // check.
+                let focus = v.as_focus(ds);
+                if !conforms_memoized(context, qshape, &focus)? {
                     continue;
                 }
                 let mut sibling_conforms = false;
-                if *disjoint {
-                    for sibling in siblings {
-                        if conforms_with_id_depth(store, v, v_id, sibling, plan, depth)? {
+                if disjoint {
+                    for sibling in siblings.iter(context.plan) {
+                        if conforms_memoized(context, sibling, &focus)? {
                             sibling_conforms = true;
                             break;
                         }
@@ -1680,26 +2362,25 @@ fn eval_constraint(
                     count += 1;
                 }
             }
-            let mut results = Vec::new();
             if let Some(min) = min_count
-                && count < *min
+                && count < min
             {
-                results.push(result!(
+                emit!(result!(
                     sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
-                    focus_node.clone(),
+                    focus_node.to_term(ds),
                     None
                 ));
             }
             if let Some(max) = max_count
-                && count > *max
+                && count > max
             {
-                results.push(result!(
+                emit!(result!(
                     sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
-                    focus_node.clone(),
+                    focus_node.to_term(ds),
                     None
                 ));
             }
-            results
+            Flow::Continue
         }
 
         // ── Sparql (SHACL-AF — $this always binds to the focus node, never to a
@@ -1715,7 +2396,7 @@ fn eval_constraint(
         // error rather than a panic.
         // The native SPARQL engine runs the validated query text over the dataset,
         // substituting $this for this focus node (SparqlRequest.substitutions).
-        Constraint::Sparql {
+        PlannedConstraint::Sparql {
             select,
             message: cmsg,
             severity: csev,
@@ -1725,9 +2406,13 @@ fn eval_constraint(
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
-            crate::sparql::eval_sparql_constraint_view(
+            // SHACL-SPARQL binds `$this` as an owned term in a pre-binding, so
+            // this arm materializes the focus node — beside a query evaluation
+            // that dwarfs it, and only for shapes that carry a `sh:sparql`.
+            let focus_term = focus_node.to_term(ds);
+            let produced = crate::sparql::eval_sparql_constraint_view(
                 store.sparql_view(),
-                focus_node,
+                &focus_term,
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 source_shape,
@@ -1736,7 +2421,14 @@ fn eval_constraint(
                 shapes_graph_iri,
                 Some(source_shape),
             )
-            .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?
+            .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?;
+            // A SHACL-SPARQL validator answers in RESULTS rather than in a
+            // per-value-node verdict, so the query runs whatever the sink is;
+            // what the sink decides is only whether they are kept.
+            for produced_result in produced {
+                emit!(produced_result);
+            }
+            Flow::Continue
         }
 
         // ── Expression (SHACL-AF §5.7) ─────────────────────────────────────────
@@ -1746,14 +2438,14 @@ fn eval_constraint(
         // failure is a hard validation error (mirroring sh:sparql). The
         // expression node may carry its own sh:message / sh:severity overriding
         // the shape defaults.
-        Constraint::Expression {
+        PlannedConstraint::Expression {
             expr,
+            lowered,
             message: cmsg,
             severity: csev,
         } => {
             let sev = csev.clone().unwrap_or_else(|| severity.clone());
             let msg = cmsg.clone().or_else(|| message.clone());
-            let mut results = Vec::new();
             // Seed the guard with the ambient filter/exists depth so a
             // `sh:filterShape` re-entry through this expression keeps the
             // cross-shape recursion count monotone (fail-closed at the depth
@@ -1778,25 +2470,29 @@ fn eval_constraint(
                     &value_node,
                     crate::expression::Scope::EMPTY,
                 );
-                let out = crate::expression::eval_node_expr_in_scope(
+                let out = crate::expression::eval_planned_node_expr_in_scope(
                     store,
                     &value_node,
                     expr,
+                    lowered,
+                    context.plan,
                     &mut guard,
                     crate::expression::Scope::bound(&binding),
                 )
                 .map_err(|e| format!("sh:expression constraint on shape {source_shape}: {e}"))?;
                 if !crate::expression::is_true(&out) {
-                    let mut r = result!(
-                        sh::EXPRESSION_CONSTRAINT_COMPONENT,
-                        Some(value_node.clone())
-                    );
-                    r.severity.clone_from(&sev);
-                    r.message.clone_from(&msg);
-                    results.push(r);
+                    emit!({
+                        let mut r = result!(
+                            sh::EXPRESSION_CONSTRAINT_COMPONENT,
+                            Some(value_node.clone())
+                        );
+                        r.severity.clone_from(&sev);
+                        r.message.clone_from(&msg);
+                        r
+                    });
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── NodeByExpression (SHACL 1.2 Node Expressions §7.2) ─────────────────
@@ -1805,9 +2501,11 @@ fn eval_constraint(
         // each shape it produces. Per the spec's own
         // `evalExpr(expr, data graph, v, {})` the value node is the FOCUS NODE and
         // the scope is EMPTY — unlike §7.1, which binds `value`.
-        Constraint::NodeByExpression {
+        PlannedConstraint::NodeByExpression {
             expr,
+            lowered,
             shapes,
+            index,
             message: cmsg,
             severity: csev,
         } => {
@@ -1816,52 +2514,126 @@ fn eval_constraint(
             // The index is filled at the end of the shapes-graph parse; an unfilled
             // one means this constraint escaped that parse, which would silently
             // make every conformance check vacuous. Refuse loudly instead.
-            let index = shapes.get().ok_or_else(|| {
+            let resolved = shapes.get().ok_or_else(|| {
                 format!(
                     "sh:nodeByExpression constraint on shape {source_shape}: the shapes graph's \
                      shape index was never filled"
                 )
             })?;
-            let mut results = Vec::new();
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             let next_depth = depth.saturating_add(1);
             for value_node in value_nodes {
-                let value_node = value_node.to_term(ds);
-                let produced =
-                    crate::expression::eval_node_expr(store, &value_node, expr, &mut guard)
-                        .map_err(|e| {
-                            format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
+                // The conformance re-entry and the report boundary both read the
+                // value node's own representation, so it is resolved ONCE here and
+                // never re-probed: an interned value node recurses as its identity
+                // and is materialized only where a result is built.
+                let judged = value_node.as_focus(ds);
+                // The id-native production: an interned value node whose expression
+                // can name its shape nodes without building a term. The general
+                // evaluator answers everything else, and is handed the owned focus
+                // term it speaks — which is the only place that term is built.
+                let produced = match value_node.interned() {
+                    Some(id) => crate::expression::eval_planned_shape_nodes(
+                        store,
+                        id,
+                        expr,
+                        lowered,
+                        context.plan,
+                    )
+                    .map_err(|e| {
+                        format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
+                    })?,
+                    None => None,
+                };
+                let produced = match produced {
+                    Some(produced) => produced,
+                    None => {
+                        let focus = value_node.to_term(ds);
+                        crate::expression::ShapeNodes::Terms(Cow::Owned(
+                            crate::expression::eval_planned_node_expr(
+                                store,
+                                &focus,
+                                expr,
+                                lowered,
+                                context.plan,
+                                &mut guard,
+                            )
+                            .map_err(|e| {
+                                format!(
+                                    "sh:nodeByExpression constraint on shape {source_shape}: {e}"
+                                )
+                            })?,
+                        ))
+                    }
+                };
+
+                // One produced shape node: resolve it, check the value node against
+                // it, and record the violation the spec asks for.
+                //
+                // A failing conformance check is a FAILURE the spec requires be
+                // produced, so it propagates rather than counting as "does not
+                // conform".
+                //
+                // The AMBIENT lowering is threaded through, exactly as every other
+                // recursive arm does: rebuilding one here would run the whole
+                // cycle-aware shape walk once per value node per produced shape. The
+                // lowering covers the shapes this index resolves to because the walk
+                // ENTERS the index itself.
+                macro_rules! check_against {
+                    ($shape_plan:expr, $shape_node:expr) => {{
+                        let shape_plan = $shape_plan.ok_or_else(|| {
+                            format!(
+                                "sh:nodeByExpression constraint on shape {source_shape}: {} is \
+                                 not a shape of this shapes graph",
+                                $shape_node
+                            )
                         })?;
-                for shape_node in produced {
-                    let shape = index.get(&shape_node.to_string()).ok_or_else(|| {
-                        format!(
-                            "sh:nodeByExpression constraint on shape {source_shape}: \
-                             {shape_node} is not a shape of this shapes graph"
-                        )
-                    })?;
-                    // A failing conformance check is a FAILURE the spec requires be
-                    // produced, so it propagates rather than counting as "does not
-                    // conform".
-                    let conforms = conforms_with_depth(store, &value_node, shape, next_depth)
-                        .map_err(|e| {
-                            format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
-                        })?;
-                    if !conforms {
-                        let mut r = result!(
-                            sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
-                            Some(value_node.clone())
-                        );
-                        r.severity.clone_from(&sev);
-                        r.message.clone_from(&msg);
-                        results.push(r);
+                        let conforms =
+                            conforms_with_id_depth(store, &judged, shape_plan, next_depth)
+                                .map_err(|e| {
+                                    format!(
+                                        "sh:nodeByExpression constraint on shape \
+                                         {source_shape}: {e}"
+                                    )
+                                })?;
+                        if !conforms {
+                            emit!({
+                                let mut r = result!(
+                                    sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
+                                    Some(value_node.to_term(ds))
+                                );
+                                r.severity.clone_from(&sev);
+                                r.message.clone_from(&msg);
+                                r
+                            });
+                        }
+                    }};
+                }
+
+                match &produced {
+                    crate::expression::ShapeNodes::Terms(terms) => {
+                        for shape_node in terms.as_ref() {
+                            check_against!(
+                                context.plan.indexed(index, shape_node, resolved)?,
+                                shape_node
+                            );
+                        }
+                    }
+                    crate::expression::ShapeNodes::Interned(ids) => {
+                        for &shape_id in ids {
+                            check_against!(
+                                indexed_shape_by_id(context.plan, index, resolved, ds, shape_id)?,
+                                term_id_to_native(ds, shape_id)
+                            );
+                        }
                     }
                 }
             }
-            results
+            Flow::Continue
         }
 
         // ── Custom constraint components (SHACL-SPARQL) ─────────────────────────
-        Constraint::Component {
+        PlannedConstraint::Component {
             component,
             source_shape,
             bindings,
@@ -1875,10 +2647,13 @@ fn eval_constraint(
             // The custom-component validators run over the owned term model; resolve
             // the value nodes for the ASK validator's per-value binding.
             let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
-            match validator {
+            // As `sh:sparql`: the validators speak owned terms, so the focus node
+            // is materialized here, once, for a shape that declares one.
+            let focus_term = focus_node.to_term(ds);
+            let produced = match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
                     dataset,
-                    focus_node,
+                    &focus_term,
                     &value_terms,
                     validator,
                     bindings,
@@ -1892,7 +2667,7 @@ fn eval_constraint(
                 ),
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
                     dataset,
-                    focus_node,
+                    &focus_term,
                     validator,
                     bindings,
                     component,
@@ -1904,7 +2679,13 @@ fn eval_constraint(
                     Some(source_shape),
                 ),
             }
-            .map_err(|e| format!("component validator on shape {source_shape}: {e}"))?
+            .map_err(|e| format!("component validator on shape {source_shape}: {e}"))?;
+            // As for `sh:sparql`: a custom component answers in results, so the
+            // validator runs whatever the sink is.
+            for produced_result in produced {
+                emit!(produced_result);
+            }
+            Flow::Continue
         }
     })
 }
@@ -2226,11 +3007,26 @@ fn language_tag_matches_any(lang: &str, tags: &[String]) -> bool {
 }
 
 /// Parse a numeric value (xsd:integer, xsd:decimal, xsd:double) as `f64`.
-fn numeric_value(term: &Term) -> Option<f64> {
-    const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+///
+/// `pub(crate)` for [`crate::plan`], which runs it over a range facet's BOUND at
+/// stage 0 — the bound is a constant of the shape, so this whole test belongs
+/// there and not on the per-value-node path. `None` is an ordinary answer for a
+/// bound, never an error: see the range-facet comparison below for what happens
+/// to a bound that is not numeric.
+pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
     let Term::Literal(lit) = term else {
         return None;
     };
+    numeric_parts(lit.value(), lit.datatype_str())
+}
+
+/// [`numeric_value`] over a literal's BORROWED lexical form and datatype IRI.
+///
+/// The value-node side of every range facet reaches the comparison this way, out
+/// of [`ValueNode::literal_parts`], so a conforming value node is compared without
+/// ever being materialized into an owned [`Term`].
+fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
+    const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
     // The full XSD numeric lattice: the primitives plus EVERY derived integer
     // datatype. The set must match the rest of the engine (see
     // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
@@ -2240,7 +3036,7 @@ fn numeric_value(term: &Term) -> Option<f64> {
     // masked while data round-tripped through oxigraph's NT serializer, which
     // value-space-normalized such literals to `xsd:integer`; the oxigraph-free
     // path is the faithful one and exposes the gap.)
-    let local = lit.datatype_str().strip_prefix(XSD_NS)?;
+    let local = datatype.strip_prefix(XSD_NS)?;
     if matches!(
         local,
         "integer"
@@ -2263,7 +3059,7 @@ fn numeric_value(term: &Term) -> Option<f64> {
         // Every datatype listed above fixes `whiteSpace` = `collapse`, so the
         // lexical form is trimmed with the four code points that names — see
         // [`collapse_trim`].
-        collapse_trim(lit.value()).parse::<f64>().ok()
+        collapse_trim(lexical).parse::<f64>().ok()
     } else {
         None
     }
@@ -2280,30 +3076,74 @@ fn numeric_value(term: &Term) -> Option<f64> {
 ///   overlap is `None`;
 /// - anything else is incomparable → `None`, which every facet treats as a
 ///   violation (per spec, a value that cannot be compared to the bound fails).
-fn range_facet_cmp(value: &Term, bound: &Term) -> Option<std::cmp::Ordering> {
-    if let (Some(v), Some(b)) = (numeric_value(value), numeric_value(bound)) {
+///
+/// The BOUND arrives with its numeric parse already done — it is a constant of
+/// the shape, so [`numeric_value`] ran over it once at stage 0 instead of once
+/// per value node. The three-way structure below is unchanged and deliberately
+/// so: the bound's parse yielding `None` is **not** an error and never was. It
+/// means one of two ordinary things, and both still happen here exactly as they
+/// did when the parse ran inline:
+///
+/// * the bound is an `xsd:dateTime` / `xsd:date` / `xsd:time` literal, so the
+///   fall-through hands it to [`temporal_value_cmp`] and the facet compares in
+///   the XSD temporal value space; or
+/// * the bound is neither numeric nor temporal (including a numeric datatype
+///   whose lexical form does not parse), so the temporal comparison also yields
+///   `None`, the pair is incomparable, and every facet reports the violation the
+///   spec calls for.
+///
+/// Refusing such a shapes graph at preparation time would reject inputs that
+/// validate today — an over-refusal, which is the same defect as a dropped result
+/// wearing the costume of strictness.
+/// The VALUE NODE arrives as [`ValueNode::literal_parts`] — its borrowed lexical
+/// form and datatype IRI — rather than as an owned [`Term`], and `None` is a value
+/// node that is not a literal at all. Both halves of the comparison read exactly
+/// those two strings, so materializing the term to run them allocated a `String`
+/// per value node per facet and threw both away again for every conforming one.
+/// `None` reaches the same verdict it always did: a non-literal is neither numeric
+/// nor temporal, so it is incomparable, so it violates.
+fn range_facet_cmp(
+    value: Option<(&str, &str)>,
+    bound: RangeBound<'_>,
+) -> Option<std::cmp::Ordering> {
+    let (lexical, datatype) = value?;
+    if let (Some(v), Some(b)) = (numeric_parts(lexical, datatype), bound.numeric()) {
         return v.partial_cmp(&b);
     }
-    temporal_value_cmp(value, bound)
+    // The temporal fall-through, preserved verbatim. A bound that is not a literal
+    // is not a temporal one either, and was already `None` from the two-literal
+    // guard this replaces.
+    let Term::Literal(bound_literal) = bound.term() else {
+        return None;
+    };
+    temporal_parts_cmp(
+        lexical,
+        datatype,
+        bound_literal.value(),
+        bound_literal.datatype_str(),
+    )
 }
 
-/// XSD temporal value-space comparison of two literals, `None` when either
-/// term is not an `xsd:dateTime`/`xsd:date`/`xsd:time` literal, when a lexical
-/// form is invalid, or when the XSD partial order is indeterminate.
-fn temporal_value_cmp(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
+/// XSD temporal value-space comparison of two literals, by their borrowed lexical
+/// forms and datatype IRIs. `None` when either side is not an
+/// `xsd:dateTime`/`xsd:date`/`xsd:time` literal, when a lexical form is invalid,
+/// or when the XSD partial order is indeterminate.
+fn temporal_parts_cmp(
+    a_lexical: &str,
+    a_datatype: &str,
+    b_lexical: &str,
+    b_datatype: &str,
+) -> Option<std::cmp::Ordering> {
     const TEMPORAL: [&str; 3] = [
         "http://www.w3.org/2001/XMLSchema#dateTime",
         "http://www.w3.org/2001/XMLSchema#date",
         "http://www.w3.org/2001/XMLSchema#time",
     ];
-    let (Term::Literal(la), Term::Literal(lb)) = (a, b) else {
-        return None;
-    };
-    if !TEMPORAL.contains(&la.datatype_str()) || !TEMPORAL.contains(&lb.datatype_str()) {
+    if !TEMPORAL.contains(&a_datatype) || !TEMPORAL.contains(&b_datatype) {
         return None;
     }
-    let va = purrdf_xsd::parse_by_iri(la.value(), la.datatype_str()).ok()??;
-    let vb = purrdf_xsd::parse_by_iri(lb.value(), lb.datatype_str()).ok()??;
+    let va = purrdf_xsd::parse_by_iri(a_lexical, a_datatype).ok()??;
+    let vb = purrdf_xsd::parse_by_iri(b_lexical, b_datatype).ok()??;
     purrdf_xsd::value_cmp(&va, &vb)
 }
 
@@ -2313,24 +3153,175 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
 }
 
+/// Distinct language tags one `sh:uniqueLang` tally holds before spilling.
+///
+/// The tally is indexed by DISTINCT tag, not by value node, so this is a bound
+/// on how many languages one focus node labels itself in — not on how many
+/// labels it has. A focus node past this bound spills the buffer once and keeps
+/// working; nothing about the verdict or the reported messages changes.
+const UNIQUE_LANG_INLINE: usize = 8;
+
+/// Distinct comparands a [`PairComparands`] holds inline before it allocates.
+///
+/// A property-pair constraint compares against the objects of ONE predicate from
+/// ONE focus node, which in practice is a handful of terms; inline storage is what
+/// makes the conforming change path allocate nothing for the comparand set.
+const PAIR_COMPARANDS_INLINE: usize = 4;
+
+/// Distinct comparands past which [`PairComparands`] builds a membership index.
+///
+/// Below it, dedup and membership are a linear scan over at most this many `u32`s
+/// — cheaper than a hash probe and, crucially, free of allocation. Above it the
+/// scan would be quadratic in the predicate's degree, so the one allocation buys
+/// back O(1) probes.
+const PAIR_COMPARANDS_INDEX_AT: usize = 16;
+
 /// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
-/// order — the "other" side of a property-pair constraint (§4.3).
-fn pair_values(store: &ShaclData, focus: &Term, pred: &NamedNode) -> Vec<Term> {
-    let predicate = Term::NamedNode(pred.clone());
-    let mut out: Vec<Term> = Vec::new();
-    let mut seen: FastSet<Term> = FastSet::default();
-    for (_, _, object) in native_quads(
-        store.core_view(),
-        Some(focus),
-        Some(&predicate),
-        None,
-        GraphFilter::DefaultGraph,
-    ) {
-        if seen.insert(object.clone()) {
-            out.push(object);
+/// order — the "other" side of a property-pair constraint (§4.3) — held as
+/// INTERNED IDS.
+///
+/// Every comparand comes out of the data graph and is therefore interned, and the
+/// interner is injective, so identity between a comparand and an interned value
+/// node is exactly id equality, and order between two comparable literals is
+/// decided from their borrowed lexical forms. Neither needs an owned [`Term`], so
+/// the comparand set is never materialized: on the change path a conforming focus
+/// node used to pay two string allocations per comparand for terms that were only
+/// ever compared and then dropped.
+///
+/// **Interning order is insertion order, which is NOT value order.** The ids are a
+/// comparand's IDENTITY only; `sh:lessThan`/`sh:lessThanOrEquals` resolve each id
+/// back to a borrowed [`LiteralView`] and compare in the value space, exactly as
+/// they did when the terms were owned.
+#[derive(Debug, Default)]
+struct PairComparands {
+    /// The distinct comparands in first-seen order. The report is order-sensitive
+    /// (`sh:equals` emits one result per unmatched comparand), so this is a
+    /// sequence, never a set.
+    ids: SmallVec<[TermId; PAIR_COMPARANDS_INLINE]>,
+    /// Membership index over `ids`, populated only once `ids` grows past
+    /// [`PAIR_COMPARANDS_INDEX_AT`]. Empty means "scan `ids`".
+    index: IdSet,
+}
+
+impl PairComparands {
+    /// Collect the comparands of `(focus, pred, ?)` from the default graph.
+    fn collect(ds: &impl ShaclRead, focus: &FocusNode, pred: Option<TermId>) -> Self {
+        let mut out = Self::default();
+        // The comparand predicate's identity was resolved at BIND. `None` means
+        // this data graph interns no such IRI, so it has no objects at all — an
+        // ordinary empty comparand set, not a failure. A focus node that is not
+        // interned has no outgoing quads for the same reason — and it says so
+        // from the identity it already carries, without a dictionary probe.
+        let (Some(predicate), Some(focus)) = (pred, focus.id()) else {
+            return out;
+        };
+        for quad in quads_for_pattern_ids(
+            ds,
+            Some(focus),
+            Some(predicate),
+            None,
+            GraphFilter::DefaultGraph,
+        ) {
+            out.push(quad.o);
+        }
+        out
+    }
+
+    /// Record one comparand, ignoring a repeat.
+    ///
+    /// Dedup is in id space: every object comes out of the data graph and is
+    /// therefore interned, and the interner is injective, so id equality and term
+    /// equality are the same relation here.
+    fn push(&mut self, id: TermId) {
+        if self.contains_id(id) {
+            return;
+        }
+        self.ids.push(id);
+        if !self.index.is_empty() {
+            self.index.insert(id);
+        } else if self.ids.len() > PAIR_COMPARANDS_INDEX_AT {
+            self.index.extend(self.ids.iter().copied());
         }
     }
-    out
+
+    /// Whether an interned id is one of the comparands.
+    fn contains_id(&self, id: TermId) -> bool {
+        if self.index.is_empty() {
+            self.ids.contains(&id)
+        } else {
+            self.index.contains(&id)
+        }
+    }
+
+    /// Whether a VALUE NODE is one of the comparands.
+    ///
+    /// The id probe is deliberately not the only path. A value node a SHACL-AF
+    /// node expression produced may be [`ValueNode::Foreign`] — a term this
+    /// dataset never interned — and "not interned, therefore cannot match" is
+    /// FALSE: two terms with no shared identity can still be equal. Treating the
+    /// id probe as total would silently drop `sh:equals`/`sh:disjoint` violations
+    /// over foreign values, which is the exact failure `tests/foreign_value_nodes.rs`
+    /// exists to catch. A value node with no id therefore falls back to term
+    /// equality against the materialized comparands — an owned term per comparand,
+    /// paid only on the foreign path, which no interned value node ever takes.
+    fn contains_value(&self, ds: &impl ShaclRead, value: &ValueNode) -> bool {
+        match value.as_id(ds) {
+            Some(id) => self.contains_id(id),
+            None => {
+                let term = value.to_term(ds);
+                self.iter()
+                    .any(|id| terms_equal(&term_id_to_native(ds, id), &term))
+            }
+        }
+    }
+
+    /// Whether there are no comparands at all.
+    fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// The comparands in first-seen order.
+    fn iter(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.ids.iter().copied()
+    }
+}
+
+/// Value nodes past which [`ValueNodeIds`] indexes rather than scans.
+///
+/// Same trade as [`PAIR_COMPARANDS_INDEX_AT`]: the index allocates, and the whole
+/// point of the change path is that a conforming focus node does not.
+const VALUE_NODE_INDEX_AT: usize = 16;
+
+/// Membership over the value nodes' INTERNED ids — the reverse direction of
+/// `sh:equals`, which asks which comparands no value node matches.
+///
+/// A value node with no interned id contributes nothing here, exactly as it did
+/// when this was an eagerly collected `FastSet`: a comparand comes out of the data
+/// graph and is interned, so a non-interned value node cannot BE that comparand.
+/// (That is the opposite direction from [`PairComparands::contains_value`], where
+/// the missing id is the value node's own and term equality really can still hold.)
+struct ValueNodeIds<'a> {
+    /// The value nodes being asked about.
+    nodes: &'a [ValueNode],
+    /// Populated only above [`VALUE_NODE_INDEX_AT`]; otherwise `nodes` is scanned.
+    index: Option<FastSet<TermId>>,
+}
+
+impl<'a> ValueNodeIds<'a> {
+    /// Index `nodes` if there are enough of them to be worth an allocation.
+    fn of(ds: &impl ShaclRead, nodes: &'a [ValueNode]) -> Self {
+        let index = (nodes.len() > VALUE_NODE_INDEX_AT)
+            .then(|| nodes.iter().filter_map(|v| v.as_id(ds)).collect());
+        Self { nodes, index }
+    }
+
+    /// Whether some value node carries this interned id.
+    fn contains(&self, ds: &impl ShaclRead, id: TermId) -> bool {
+        match &self.index {
+            Some(index) => index.contains(&id),
+            None => self.nodes.iter().any(|v| v.as_id(ds) == Some(id)),
+        }
+    }
 }
 
 /// The value nodes violating `sh:lessThan` (`allow_equal = false`) or
@@ -2342,24 +3333,32 @@ fn pair_values(store: &ShaclData, focus: &Term, pred: &NamedNode) -> Vec<Term> {
 /// N comparands yields N results (duplicate tuples — the report is a
 /// multiset, matching the W3C suite's expectations). An incomparable pair
 /// (per SPARQL `<` semantics) is a violation.
+///
+/// Both sides are compared through borrowed [`LiteralView`]s, so a CONFORMING
+/// focus node materializes neither its value nodes nor its comparands: the
+/// returned `Vec` is `Vec::new()` until an offender exists, and `Vec::new()` does
+/// not allocate.
 fn pair_order_offenders(
-    store: &ShaclData,
-    focus: &Term,
-    value_nodes: &[Term],
-    pred: &NamedNode,
+    ds: &impl ShaclRead,
+    focus: &FocusNode,
+    value_nodes: &[ValueNode],
+    pred: Option<TermId>,
     allow_equal: bool,
 ) -> Vec<Term> {
-    let others = pair_values(store, focus, pred);
+    let others = PairComparands::collect(ds, focus, pred);
     let mut offending: Vec<Term> = Vec::new();
     for v in value_nodes {
-        for o in &others {
-            let ok = match compare_terms(v, o) {
+        // Identity is an id here; ORDER is not — interning order is insertion
+        // order. The comparison key is the value space, read back off each id.
+        let left = v.literal_view(ds);
+        for o in others.iter() {
+            let ok = match compare_literal_views(left, literal_view_of_id(ds, o)) {
                 Some(std::cmp::Ordering::Less) => true,
                 Some(std::cmp::Ordering::Equal) => allow_equal,
                 Some(std::cmp::Ordering::Greater) | None => false,
             };
             if !ok {
-                offending.push(v.clone());
+                offending.push(v.to_term(ds));
             }
         }
     }
@@ -2369,7 +3368,7 @@ fn pair_order_offenders(
 /// SPARQL-style `<` comparison of two terms, as used by `sh:lessThan` /
 /// `sh:lessThanOrEquals` (and the same value machinery as the range facets):
 ///
-/// - two numeric literals compare by numeric value ([`numeric_value`] — the
+/// - two numeric literals compare by numeric value ([`numeric_parts`] — the
 ///   full XSD numeric lattice);
 /// - two plain/`xsd:string` literals compare by codepoint order;
 /// - two `xsd:boolean` literals compare with `false < true`;
@@ -2379,7 +3378,13 @@ fn pair_order_offenders(
 /// - anything else (language-tagged literals, IRIs, blank nodes, mixed
 ///   datatypes) is incomparable → `None`, which the pair constraints treat as a
 ///   violation per spec.
-fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
+///
+/// `None` on either side is a NON-LITERAL — an IRI, a blank node or a quoted
+/// triple — which is incomparable by the last rule above.
+fn compare_literal_views(
+    a: Option<LiteralView<'_>>,
+    b: Option<LiteralView<'_>>,
+) -> Option<std::cmp::Ordering> {
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
     const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
     const TEMPORAL: [&str; 3] = [
@@ -2388,19 +3393,22 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
         "http://www.w3.org/2001/XMLSchema#time",
     ];
 
-    if let (Some(x), Some(y)) = (numeric_value(a), numeric_value(b)) {
-        return x.partial_cmp(&y);
-    }
-    let (Term::Literal(la), Term::Literal(lb)) = (a, b) else {
+    let (Some(a), Some(b)) = (a, b) else {
         return None;
     };
+    if let (Some(x), Some(y)) = (
+        numeric_parts(a.lexical, a.datatype),
+        numeric_parts(b.lexical, b.datatype),
+    ) {
+        return x.partial_cmp(&y);
+    }
     // SPARQL `<` is undefined for language-tagged literals.
-    if la.language().is_some() || lb.language().is_some() {
+    if a.language.is_some() || b.language.is_some() {
         return None;
     }
-    let (da, db) = (la.datatype_str(), lb.datatype_str());
+    let (da, db) = (a.datatype, b.datatype);
     if da == XSD_STRING && db == XSD_STRING {
-        return Some(la.value().cmp(lb.value()));
+        return Some(a.lexical.cmp(b.lexical));
     }
     if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
         // `xsd:boolean` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.2),
@@ -2410,10 +3418,10 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
             "false" | "0" => Some(false),
             _ => None,
         };
-        return Some(bool_of(la.value())?.cmp(&bool_of(lb.value())?));
+        return Some(bool_of(a.lexical)?.cmp(&bool_of(b.lexical)?));
     }
     if da == db && TEMPORAL.contains(&da) {
-        return Some(la.value().cmp(lb.value()));
+        return Some(a.lexical.cmp(b.lexical));
     }
     None
 }
@@ -2479,6 +3487,7 @@ mod tests {
 
     use super::*;
     use crate::report::Severity;
+    use crate::shapes::Constraint;
     use crate::term::{Literal, NamedNode};
 
     /// Build a [`ShaclData`] holder over a projected test dataset: Core lookups and
@@ -2756,6 +3765,167 @@ mod tests {
         let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MinCount(1)]);
         let results = validate_shape(&store, &ex("a"), &shape);
         assert!(results.is_empty(), "should pass with 1 value");
+    }
+
+    /// **Two reifiers of one statement are judged in CANONICAL term order, not in
+    /// the order the data graph interned them.**
+    ///
+    /// The reifier lookup is id-native, and interned ids are in INSERTION order —
+    /// which is not canonical order and, for this fixture, is its reverse. A
+    /// lookup that took id order for canonical order would still find both
+    /// reifiers, still judge both, and still report two violations; only their
+    /// SEQUENCE would be wrong, and a SHACL report's result order is observable
+    /// output. So the two reifiers are made distinguishable in the report — each
+    /// breaks a different half of one reifier shape, and the two halves carry
+    /// different messages — because two identical results cannot show which order
+    /// they were produced in.
+    ///
+    /// The fixture is deliberately anti-canonical: `ex:zeta` is declared first and
+    /// so interns first, while `ex:alpha` sorts first canonically. Reading ids as
+    /// if they were canonical yields exactly the reverse of the asserted order,
+    /// which is what makes this assertion able to fail.
+    #[test]
+    fn multiple_reifiers_of_one_statement_are_judged_in_canonical_order() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:zeta rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:zeta ex:source ex:doc .\n\
+             ex:alpha rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:alpha ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = crate::engine::parse_shapes(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix ex: <http://example.org/ns#> .\n\
+             ex:Shape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:knows ; sh:reifierShape ex:ReifierShape ] .\n\
+             ex:ReifierShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:source ; sh:minCount 1 ; sh:message \"no source\" ] ;\n\
+                 sh:property [ sh:path ex:date ; sh:minCount 1 ; sh:message \"no date\" ] .\n",
+            None,
+        )
+        .expect("the reifier shapes graph must parse");
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        let messages: Vec<Option<&str>> = results
+            .iter()
+            .map(|result| result.message.as_deref())
+            .collect();
+        assert_eq!(
+            messages,
+            vec![Some("no source"), Some("no date")],
+            "ex:alpha sorts before ex:zeta canonically and interns after it, so this order is \
+             the canonical one and its reverse is the insertion one"
+        );
+    }
+
+    /// **`sh:nodeByExpression` resolves every shape node its expression can
+    /// produce, in BOTH directions and through all three production routes.**
+    ///
+    /// The constraint resolves its shape nodes per value node against the shapes
+    /// graph's shape index, and there are now three ways a node reaches that
+    /// lookup: as a borrowed constant the expression names, as an interned
+    /// identity a path walk produced out of the data, and as an owned term the
+    /// general node-expression evaluator materialized. A production that resolved
+    /// nothing would report NO violation — a silent pass — and one that resolved
+    /// too little would refuse a shapes graph that is correct. Neither shows up in
+    /// a one-directional test, so both directions run here for every route.
+    ///
+    /// `ex:NotAShape` is interned by the data graph exactly like `ex:KindShape`
+    /// is, so the refusal is reached through the same lookup as the acceptance and
+    /// not through a node the index could never have been asked about.
+    #[test]
+    fn node_by_expression_resolves_the_shapes_it_produces_and_refuses_only_the_rest() {
+        const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n\
+             @prefix ex: <http://example.org/ns#> .\n\
+             ex:Computed a sh:NodeShape ;\n\
+                 sh:nodeByExpression [ shnex:pathValues ex:kind ] .\n\
+             ex:Named a sh:NodeShape ;\n\
+                 sh:nodeByExpression ex:KindShape .\n\
+             ex:Combined a sh:NodeShape ;\n\
+                 sh:nodeByExpression [ sh:union ( [ shnex:pathValues ex:kind ] ) ] .\n\
+             ex:Absent a sh:NodeShape ;\n\
+                 sh:nodeByExpression ex:AbsentShape .\n\
+             ex:KindShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n\
+             ex:AbsentShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             ex:good ex:kind ex:KindShape ; ex:name \"present\" .\n\
+             ex:bad ex:kind ex:KindShape .\n\
+             ex:stray ex:kind ex:NotAShape .\n",
+        );
+        let shapes = crate::engine::parse_shapes(SHAPES, None)
+            .expect("the sh:nodeByExpression shapes graph must parse");
+        let shape_named = |local: &str| {
+            shapes
+                .node_shapes
+                .iter()
+                .find(|shape| shape.id == ex(local))
+                .unwrap_or_else(|| panic!("ex:{local} must be parsed as a node shape"))
+        };
+        let data = shacl_data(&store);
+
+        // Every route: the produced shape IS a shape, so it resolves and JUDGES.
+        // `ex:good` satisfies it and `ex:bad` does not, which is what says the
+        // resolution reached a shape with a constraint in it rather than an empty
+        // one that conforms vacuously.
+        //
+        // `ex:Absent` is the neighbouring-valid case for the identity re-keying
+        // the binding performs: `ex:AbsentShape` is a perfectly good shape of this
+        // shapes graph that the DATA graph never mentions, so it has no dataset
+        // identity to be re-keyed under. It must still resolve — a lookup that
+        // could only answer for shapes the data happens to intern would refuse it.
+        for local in ["Computed", "Named", "Combined", "Absent"] {
+            let shape = shape_named(local);
+            assert!(
+                super::validate_shape(&data, &ex("good"), shape)
+                    .unwrap_or_else(|error| panic!("ex:{local} must validate ex:good: {error}"))
+                    .is_empty(),
+                "ex:{local}: a conforming node must produce no result"
+            );
+            let results = super::validate_shape(&data, &ex("bad"), shape)
+                .unwrap_or_else(|error| panic!("ex:{local} must validate ex:bad: {error}"));
+            assert_eq!(
+                results.len(),
+                1,
+                "ex:{local}: the produced shape must judge ex:bad and report it"
+            );
+            assert!(
+                results[0]
+                    .source_constraint_component
+                    .as_str()
+                    .ends_with("NodeByExpressionConstraintComponent"),
+                "ex:{local}: got {}",
+                results[0].source_constraint_component.as_str()
+            );
+        }
+
+        // The NEIGHBOURING REFUSAL, on the one route that can reach it: a computed
+        // production is the only one whose shape node is not known until a value
+        // node arrives, so it is the only one that can produce a node the shapes
+        // graph does not describe.
+        for local in ["Computed", "Combined"] {
+            let error = super::validate_shape(&data, &ex("stray"), shape_named(local))
+                .expect_err("a produced node that is not a shape must be a hard error");
+            assert!(
+                error.contains("is not a shape of this shapes graph"),
+                "ex:{local}: got {error}"
+            );
+            assert!(
+                error.contains("NotAShape"),
+                "ex:{local}: the diagnostic must name the produced node, got {error}"
+            );
+        }
     }
 
     #[test]
@@ -3755,6 +4925,84 @@ mod tests {
         assert!(component_iri(&results)[0].contains("MinInclusive"));
     }
 
+    /// **A range-facet bound that is not an XSD numeric literal is an ordinary
+    /// shapes graph, and must never become a refusal.**
+    ///
+    /// The bound's numeric parse moved to stage 0, which is exactly the shape of
+    /// change that turns a soft `None` into a hard error: the parse now happens
+    /// during PREPARATION, where returning `Err` looks like proper strictness and
+    /// costs nothing to write. It would reject shapes graphs that validate today.
+    ///
+    /// So both neighbours are executed here, not just the one that looks invalid:
+    ///
+    /// 1. an `xsd:dateTime` bound is not numeric, and must still fall through to
+    ///    the XSD temporal value-space comparison — which really compares, so this
+    ///    half asserts a CONFORMING case as well as a violating one. A refusal
+    ///    would take out a whole datatype's worth of working shapes.
+    /// 2. a lexically invalid numeric bound is not numeric either, and must still
+    ///    produce the outcome it always produced: incomparable, therefore a
+    ///    violation — a validation result, not an error.
+    #[test]
+    fn a_non_numeric_range_facet_bound_is_never_refused() {
+        // ── Half one: a temporal bound still reaches the temporal comparison ──
+        let temporal = load_store(&format!(
+            "@prefix ex: <{EX}> . \
+             ex:after  ex:at \"2020-06-01T00:00:00Z\"^^<{XSD}dateTime> . \
+             ex:before ex:at \"2019-06-01T00:00:00Z\"^^<{XSD}dateTime> ."
+        ));
+        let temporal_shape = prop_shape(
+            "S",
+            &format!("{EX}at"),
+            vec![Constraint::MinInclusive(xsd_lit(
+                "2020-01-01T00:00:00Z",
+                "dateTime",
+            ))],
+        );
+        assert!(
+            validate_shape(&temporal, &ex("after"), &temporal_shape).is_empty(),
+            "a dateTime at or after a dateTime bound must CONFORM: the non-numeric bound has to \
+             reach the temporal comparison, not be refused and not be treated as incomparable"
+        );
+        let later = validate_shape(&temporal, &ex("before"), &temporal_shape);
+        assert_eq!(
+            later.len(),
+            1,
+            "a dateTime before the bound must violate, which is what says the temporal \
+             comparison really ran rather than conforming vacuously"
+        );
+        assert!(component_iri(&later)[0].contains("MinInclusive"));
+
+        // ── Half two: an unparseable numeric bound still violates, not errors ──
+        let numeric = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"18\"^^<{XSD}integer> ."
+        ));
+        let broken_bound = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("not-a-number", "integer"))],
+        );
+        let incomparable = validate_shape(&numeric, &ex("a"), &broken_bound);
+        assert_eq!(
+            incomparable.len(),
+            1,
+            "a bound whose lexical form does not parse leaves every value node incomparable, \
+             which SHACL reports as a violation — preparing the shape must not fail instead"
+        );
+        assert!(component_iri(&incomparable)[0].contains("MinInclusive"));
+
+        // ...and the neighbouring VALID bound over the very same data still
+        // conforms, which is the half an over-refusal would silently take with it.
+        let good_bound = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("18", "integer"))],
+        );
+        assert!(
+            validate_shape(&numeric, &ex("a"), &good_bound).is_empty(),
+            "the valid neighbour of the refused case must still validate"
+        );
+    }
+
     // ── maxInclusive ───────────────────────────────────────────────────────────
 
     #[test]
@@ -4035,6 +5283,83 @@ mod tests {
         // ex:parent_node has 1 inverse-parent (ex:child) → passes minCount(1).
         let results = validate_shape(&store, &ex("parent_node"), &shape);
         assert!(results.is_empty(), "expected pass, got: {results:?}");
+    }
+
+    /// **An inverse over a COMPOSITE path still selects the same value nodes once
+    /// the inversion is performed at lowering time instead of per focus node.**
+    ///
+    /// `^(p/q)` is the one path form whose lowering is a structural REWRITE rather
+    /// than a slot resolution, and the rewrite is direction-sensitive: `^(p/q)` is
+    /// `^q/^p`, not `^p/^q`, so getting it backwards produces a perfectly
+    /// well-formed path that selects the wrong nodes. The `Path`-driven evaluator's
+    /// own tests cover `invert` itself; this one drives the LOWERED path, through
+    /// the validator, which is the route every prepared shape takes and the only
+    /// one where a mis-lowering could hide.
+    ///
+    /// Stated as a conforming case and a violating one over the same data, because
+    /// an inversion that selected nothing at all would satisfy a pass-only
+    /// assertion on `sh:maxCount` and a fail-only assertion on `sh:minCount`.
+    #[test]
+    fn inverse_of_a_composite_path_is_lowered_in_the_right_direction() {
+        use crate::shapes::Path;
+        // ex:a ex:p ex:b . ex:b ex:q ex:d .  so  ex:a  p/q  ex:d,
+        // and therefore  ex:d  ^(p/q)  ex:a  — while ex:a reaches nothing.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p ex:b . ex:b ex:q ex:d ."
+        ));
+        let composite = || {
+            Path::Inverse(Box::new(Path::Sequence(vec![
+                Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                Path::Predicate(NamedNode::new_unchecked(format!("{EX}q"))),
+            ])))
+        };
+        let shape_with = |constraints: Vec<Constraint>| Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("S-property"),
+                path: composite(),
+                constraints,
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                message: None,
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            message: None,
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+
+        // The tail of the sequence reaches its head: one value node, ex:a.
+        let at_tail = shape_with(vec![Constraint::MinCount(1), Constraint::MaxCount(1)]);
+        assert!(
+            validate_shape(&store, &ex("d"), &at_tail).is_empty(),
+            "^(p/q) from the sequence's tail must yield exactly its head"
+        );
+        assert_eq!(
+            validate_shape(
+                &store,
+                &ex("d"),
+                &shape_with(vec![Constraint::HasValue(ex("a"))])
+            )
+            .len(),
+            0,
+            "and that one value node must be ex:a itself, not merely some node"
+        );
+
+        // The head reaches nothing: an inversion applied in the WRONG direction
+        // would light up here instead.
+        assert_eq!(
+            validate_shape(&store, &ex("a"), &at_tail).len(),
+            1,
+            "^(p/q) from the sequence's HEAD must yield nothing, so sh:minCount 1 violates"
+        );
     }
 
     #[test]
@@ -4601,6 +5926,12 @@ mod tests {
     #[test]
     fn compare_terms_covers_the_value_lattice() {
         use std::cmp::Ordering;
+        // The production comparison reads BORROWED literal views; over owned terms
+        // it is exactly this composition, which is what keeps the lattice below a
+        // statement about the code the pair constraints actually run.
+        let compare_terms = |a: &Term, b: &Term| {
+            compare_literal_views(literal_view_of_term(a), literal_view_of_term(b))
+        };
         // Mixed numeric datatypes compare by value.
         assert_eq!(
             compare_terms(&xsd_lit("2", "integer"), &xsd_lit("2.5", "decimal")),

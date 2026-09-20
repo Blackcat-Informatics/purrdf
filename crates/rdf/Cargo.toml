@@ -132,6 +132,11 @@ name = "gen_streamable_vectors"
 path = "src/bin/gen_streamable_vectors.rs"
 
 [dev-dependencies]
+# The workspace's shared counting allocator, for the `stream_parse_alloc`,
+# `jsonld_alloc` and `projections` bench probes. Path-only and unpublished, so it
+# is stripped from the packaged manifest; std-only and dependency-free, so it is
+# wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
 # Parse Rust scopes and token bodies for the closed GTS authorship census.
 syn = { workspace = true }
 proc-macro2 = { workspace = true }

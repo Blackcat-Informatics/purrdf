@@ -36,6 +36,14 @@
 # crates ahead of it. Ordering alone does not save a dev-edge here: the
 # ledger crate it points at is not "earlier and published", it is skipped.
 #
+# Before any of that, the set is refused outright if it carries a path
+# dependency onto a member that is never published (`publish = false`). Cargo
+# removes exactly ONE such edge from the manifest it uploads — a dev-dependency
+# with no version — and keeps every other shape, so a normal, build or versioned
+# dev edge onto such a member makes `cargo publish` fail on a crate that will
+# never have a crates.io record. That is a defect in the manifests, not a
+# bootstrap state, so it is a hard refusal (exit 1) rather than a clean stop.
+#
 # Usage:
 #   scripts/publish-release-crates.sh VERSION             publish (needs CARGO_REGISTRY_TOKEN)
 #   scripts/publish-release-crates.sh VERSION --dry-run   the same decisions, no publish
@@ -93,6 +101,10 @@ release_list="${PURRDF_RELEASE_CRATES_FILE:-${repo}/scripts/release-crates.sh}"
 source "${release_list}"
 # shellcheck source=scripts/crates-io-api.sh
 source "${repo}/scripts/crates-io-api.sh"
+# The one reading of which path dependencies survive packaging, shared with the
+# token bootstrap so the two lanes cannot disagree about what cargo strips.
+# shellcheck source=scripts/workspace-deps.sh
+source "${repo}/scripts/workspace-deps.sh"
 crates=("${PURRDF_RELEASE_CRATES[@]}")
 ledger=("${PURRDF_UNBOOTSTRAPPED_CRATES[@]}")
 user_agent="$(crates_io_user_agent "${VERSION}")"
@@ -125,20 +137,26 @@ version_state() {
   crates_io_version_state "$1" "${VERSION}" "${user_agent}"
 }
 
-# workspace_path_deps <crate>: "<kind> <name>" per PATH dependency, every kind.
-workspace_path_deps() {
-  python3 - "${metadata_json}" "$1" <<'PY'
-import json
-import sys
-
-metadata = json.load(open(sys.argv[1], encoding="utf-8"))
-for package in metadata["packages"]:
-    if package["name"] != sys.argv[2]:
-        continue
-    for dep in package["dependencies"]:
-        if dep.get("path"):
-            print(dep["kind"] or "normal", dep["name"])
-PY
+# private_dep_guard <metadata> <crate>...: refuse, before anything is uploaded,
+# every surviving path dependency of the release set onto a member that is never
+# published (workspace_private_path_deps states why each one is fatal). This is
+# the stop that costs nothing; the alternative is the same stop at the upload,
+# with the crates ahead of it permanently on the registry.
+private_dep_guard() {
+  local crate kind dep
+  local -a offending=()
+  while read -r crate kind dep; do
+    [[ -z "$dep" ]] && continue
+    offending+=("${crate} -> ${dep} (${kind} dependency)")
+  done < <(workspace_private_path_deps "$@")
+  [[ "${#offending[@]}" -eq 0 ]] && return 0
+  {
+    echo "the release set keeps path dependencies onto members that are never published (publish = false):"
+    printf '  %s\n' "${offending[@]}"
+    echo "cargo removes exactly one shape from the manifest it uploads, a dev-dependency with no version; every other shape is kept and the publish fails on a crate that will never have a crates.io record."
+    echo "Stopping: point each of these at a published crate, or make it a versionless dev-dependency. Nothing was published."
+  } >&2
+  exit 1
 }
 
 wait_for_crate_version() {
@@ -166,10 +184,13 @@ emit_output() {
 # ---------------------------------------------------------------------------
 
 run_loop() {
-  local crate state dep_line kind dep dep_state idx
+  local crate state kind dep dep_state idx
   local -a published=() skipped=() waiting=() not_attempted=()
   local verb="published"
   [[ "$mode" == "dry-run" ]] && verb="would publish"
+
+  # Manifest defect, not a bootstrap state: refused before the first upload.
+  private_dep_guard "${metadata_json}" "${crates[@]}"
 
   for idx in "${!crates[@]}"; do
     crate="${crates[$idx]}"
@@ -185,16 +206,14 @@ run_loop() {
       continue
     fi
     waiting=()
-    while IFS= read -r dep_line; do
-      [[ -z "$dep_line" ]] && continue
-      kind="${dep_line%% *}"
-      dep="${dep_line#* }"
+    while read -r _ kind dep; do
+      [[ -z "$dep" ]] && continue
       in_list "$dep" "${ledger[@]}" || continue
       in_list "$dep" "${published[@]}" && continue
       dep_state="$(version_state "$dep")"
       registry_or_die "$dep_state"
       [[ "$dep_state" == "present" ]] || waiting+=("${dep} ${VERSION} (${kind})")
-    done < <(workspace_path_deps "$crate")
+    done < <(workspace_path_deps "${metadata_json}" "$crate")
     if [[ "${#waiting[@]}" -gt 0 ]]; then
       not_attempted=("${crates[@]:$idx}")
       cat <<EOF
@@ -308,14 +327,14 @@ PY
 
   # token_step: create every fixture crate whose path deps are all present.
   token_step() {
-    local crate dep_line ok created=()
+    local crate dep ok created=()
     for crate in "${fixture[@]}"; do
       is_present "$crate" && continue
       ok=true
-      while IFS= read -r dep_line; do
-        [[ -z "$dep_line" ]] && continue
-        is_present "${dep_line#* }" || ok=false
-      done < <(workspace_path_deps "$crate")
+      while read -r _ _ dep; do
+        [[ -z "$dep" ]] && continue
+        is_present "$dep" || ok=false
+      done < <(workspace_path_deps "${metadata_json}" "$crate")
       if [[ "$ok" == "true" ]]; then
         present "$crate"
         created+=("$crate")
@@ -404,11 +423,98 @@ PY
     failures=$((failures + 1))
   fi
 
+  # Path dependencies onto a member that is never published. Cargo strips one
+  # shape and keeps the rest, so the filter has to be exact in BOTH directions:
+  # each kept shape must be refused, and the stripped one must pass in silence,
+  # because that is the shape the release crates really carry today. Each
+  # fixture is the committed metadata with one edge injected onto the first
+  # release crate, so the shapes are cargo's own and only the edge is invented.
+  local private_member fixture
+  private_member="$(workspace_never_published "${metadata_json}" | head -n 1)"
+  if [[ -z "$private_member" ]]; then
+    echo "  FAILED  no publish = false member to build the private-dependency fixtures from"
+    failures=$((failures + 1))
+  else
+    # inject_dep <kind> <req> <out>: the metadata with one path dependency of
+    # the first release crate onto the private member added. <kind> is "normal"
+    # (cargo metadata writes that kind as null), "build" or "dev".
+    inject_dep() {
+      python3 - "${metadata_json}" "${crates[0]}" "${private_member}" "$1" "$2" "$3" <<'PY'
+import json
+import sys
+
+metadata_path, crate, private, kind, req, out = sys.argv[1:7]
+metadata = json.load(open(metadata_path, encoding="utf-8"))
+for package in metadata["packages"]:
+    if package["name"] == crate:
+        package["dependencies"].append({
+            "name": private,
+            "source": None,
+            "req": req,
+            "kind": None if kind == "normal" else kind,
+            "rename": None,
+            "optional": False,
+            "uses_default_features": True,
+            "features": [],
+            "target": None,
+            "registry": None,
+            "path": "/injected-by-self-test",
+        })
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(metadata, handle)
+PY
+    }
+
+    # must_refuse <kind> <req> <label>: cargo keeps this shape, so the guard has
+    # to stop the run and name the edge rather than let the upload find it.
+    must_refuse() {
+      local shape_fixture="${tmp}/private-${3// /-}.json" shape_status=0 shape_out
+      inject_dep "$1" "$2" "${shape_fixture}"
+      shape_out="$(private_dep_guard "${shape_fixture}" "${crates[@]}" 2>&1)" || shape_status=$?
+      if [[ "$shape_status" -eq 1 ]] && grep -q "${crates[0]} -> ${private_member} ($1 dependency)" <<<"$shape_out"; then
+        printf '  ok      %s onto %s: refused, exit %s, edge named\n' "$3" "${private_member}" "$shape_status"
+      else
+        printf '  FAILED  %s onto %s: exit %s, expected exit 1 naming the edge\n' "$3" "${private_member}" "$shape_status"
+        while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$shape_out"
+        failures=$((failures + 1))
+      fi
+    }
+
+    must_refuse normal '*' "a normal dependency"
+    must_refuse build '*' "a build dependency"
+    must_refuse dev '^0.0.1' "a versioned dev-dependency"
+
+    # The other direction, twice: the injected legitimate shape, and the
+    # committed workspace itself — where every release crate's edge onto that
+    # member is exactly this shape. A filter that refused either would break the
+    # release lane outright, which is worse than the hole it closes.
+    fixture="${tmp}/private-versionless-dev.json"
+    inject_dep dev '*' "${fixture}"
+    status=0
+    out="$(private_dep_guard "${fixture}" "${crates[@]}" 2>&1)" || status=$?
+    if [[ "$status" -eq 0 && -z "$out" ]]; then
+      printf '  ok      a versionless dev-dependency onto %s: accepted in silence (cargo strips it)\n' "${private_member}"
+    else
+      printf '  FAILED  a versionless dev-dependency onto %s: exit %s, expected exit 0 and no output\n' "${private_member}" "$status"
+      while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
+      failures=$((failures + 1))
+    fi
+    status=0
+    out="$(private_dep_guard "${metadata_json}" "${crates[@]}" 2>&1)" || status=$?
+    if [[ "$status" -eq 0 && -z "$out" ]]; then
+      printf '  ok      the committed workspace: accepted, so the refusals above are a filter and not a ban\n'
+    else
+      printf '  FAILED  the committed workspace: exit %s, the control case must pass\n' "$status"
+      while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
+      failures=$((failures + 1))
+    fi
+  fi
+
   if [[ "$failures" -gt 0 ]]; then
     echo "publish-release-crates.sh self-test: ${failures} arm(s) FAILED" >&2
     return 1
   fi
-  echo "publish-release-crates.sh self-test: the interleave terminates, every STOP is at the right crate, faults stop the loop"
+  echo "publish-release-crates.sh self-test: the interleave terminates, every STOP is at the right crate, faults stop the loop, and a path dependency onto a never-published member is refused unless cargo would strip it"
 }
 
 case "$mode" in

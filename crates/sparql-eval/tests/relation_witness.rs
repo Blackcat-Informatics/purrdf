@@ -18,9 +18,10 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, EvalError, EvalOptions, GovernedOutcome, IndexGeneration, NativeSparqlEngine,
-    PfArgs, PfArity, PfAttestation, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
-    QueryGovernors, QueryOptions, RelationAttestations, RelationWitness, ServiceLevel, Volatility,
+    BindingPattern, EvalError, EvalOptions, GovernedOutcome, GovernorState, IndexGeneration,
+    InternedGoverned, InternedOutcome, InternedRequest, NativeSparqlEngine, PfArgs, PfArity,
+    PfAttestation, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions, RelationAttestations, RelationWitness, ServiceLevel, Volatility,
 };
 
 /// The relation IRI every query below calls. PurRDF mints no vocabulary: without this
@@ -286,6 +287,65 @@ fn a_declared_generation_reaches_the_governed_receipt() {
         attested.incompleteness.is_empty(),
         "a relation that declared no incompleteness must contribute none: {:?}",
         attested.incompleteness
+    );
+}
+
+/// The other governed egress — the borrowed, still-interned one an operation drives per
+/// focus node — carries the same witness, filled from the same place.
+///
+/// It builds its own context and resolves its own verdict, so it is exactly the lane
+/// a second copy of the witnessing wiring could have forgotten: a receipt with an
+/// empty ledger for a run that invoked a relation. Both halves of the record are
+/// asserted — the generation at open, and the incompleteness at close — because the
+/// second is the one that turns a hard refusal on the ungoverned lane into a report
+/// on this one, and a report nobody filled would be the silent short bag the refusal
+/// exists to forbid.
+#[test]
+fn a_declared_generation_and_incompleteness_reach_the_interned_governed_receipt() {
+    let engine = NativeSparqlEngine::new();
+    let relations = registry(
+        "ff",
+        Declares::GenerationThenIncomplete("gen-7", SHARD_REASON),
+    );
+    let dataset = dataset();
+    let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
+    let request = InternedRequest {
+        query: ONE_CALL,
+        base_iri: None,
+        substitutions: &[],
+    };
+    let outcome = engine
+        .query_governed_interned_in_operation(
+            &*dataset,
+            request,
+            with_relations(&relations),
+            &state,
+            |interned| match interned {
+                InternedOutcome::Solutions(solutions) => solutions.rows().len(),
+                other => panic!("a SELECT returns solutions, got {other:?}"),
+            },
+        )
+        .expect("a governed run of a valid query is an outcome, never an error");
+
+    let InternedGoverned::Complete {
+        value: rows,
+        relations: identity,
+        ..
+    } = outcome
+    else {
+        panic!("an unbounded governor never trips");
+    };
+    assert_eq!(rows, 1, "the relation answered its one row");
+    let attested = identity
+        .witness
+        .get(REL_IRI)
+        .expect("the relation this query invoked must appear on the interned receipt");
+    assert_eq!(attested.generations, declared("gen-7"));
+    assert_eq!(attested.invocations, 1);
+    assert_eq!(
+        attested.incompleteness,
+        BTreeSet::from([SHARD_REASON.to_owned()]),
+        "the incompleteness declared at close is reported on this receipt, verbatim"
     );
 }
 

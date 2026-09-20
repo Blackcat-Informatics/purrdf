@@ -133,9 +133,7 @@ fn sparql_current_shape_is_the_property_in_every_validation_entry() {
     assert_eq!(direct.results[0].source_shape, ex("Property"));
     let prepared =
         PreparedValidator::from_dataset(&data, Arc::clone(&shapes)).expect("prepared validator");
-    let focus_id = data
-        .term_id_by_iri("http://example.org/n")
-        .expect("focus ID");
+    let focus_id = prepared.term_id(&ex("n")).expect("focus ID");
     for report in [
         prepared.validate().expect("all targets"),
         prepared

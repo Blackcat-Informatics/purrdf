@@ -8,32 +8,90 @@
 //! deterministically-sorted [`ValidationReport`].
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
-use std::sync::Arc;
+use crate::footprint::Endpoint;
+use std::sync::{Arc, OnceLock};
 
 use ::purrdf::{DatasetView, FastMap, FastSet, IdSet, RdfDataset, TermId};
 
 use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, TrippedGovernor};
 
-use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
-use crate::expression::{FnCall, NodeExpr, ShapeArg};
+use crate::data::{DatasetIdentity, GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
+use crate::plan::{ClassCatalog, DatasetBinding, LoweredShapes, PreparedTargets, ShapePlan};
 use crate::provenance::ValidatorProvenance;
 use crate::report::ValidationReport;
-use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
-use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
+use crate::shapes::{Shape, Shapes, Target};
+use crate::term::{
+    NamedNode, Term, canonical_cmp, canonical_cmp_id_term, canonical_cmp_ids, term_id_to_native,
+};
 
 // ── Target resolution helpers ─────────────────────────────────────────────────
 
-/// Canonically order focus nodes without allocating one rendered key per node.
-/// Large target sets use Rayon's deterministic stable parallel merge sort; small
-/// bounded requests avoid scheduler overhead.
-fn sort_focus_nodes(nodes: &mut [FocusNode]) {
+/// Canonically order focus nodes without allocating one rendered key per node —
+/// and now without materializing the nodes themselves.
+///
+/// The order is the byte order of the rendered terms, which is what
+/// [`finish_report`] keys on and what the pinned report golden holds. An interned
+/// focus node's key is derived from what its id DENOTES, never from the id's
+/// numeric value: ids are handed out in insertion order, so comparing them would
+/// produce a deterministic order that is simply not the canonical one — and it
+/// would pass an all-interned test and an all-foreign test alike, since both
+/// would merely be self-consistent. See [`canonical_cmp_ids`].
+///
+/// Large target sets use Rayon's deterministic parallel sort; small bounded
+/// requests avoid scheduler overhead.
+///
+/// # Why an UNSTABLE sort, and why that changes nothing
+///
+/// [`focus_cmp`] is a strict total order over the set it is handed: every focus
+/// set reaching here has been deduplicated (by id for interned nodes, by term for
+/// foreign ones), two distinct ids in one dataset denote two distinct term values
+/// because interning is by value, and where the rendered bytes nonetheless
+/// coincide the comparator falls through to the ids themselves. A strict total
+/// order admits exactly one sorted permutation, so a stable and an unstable sort
+/// return the same array — and the unstable pair allocates NOTHING, where the
+/// stable pair allocates a merge scratch buffer whose size, and whose very
+/// existence on the parallel branch, is a function of the focus count. That was
+/// the last growth term standing between this route and
+/// `delta(2N) == delta(N)`, and it was a step at exactly the parallel threshold
+/// rather than a slope, which is the kind a per-node figure hides completely.
+fn sort_focus_nodes(dataset: &impl ShaclRead, nodes: &mut [FocusNode]) {
     const PARALLEL_SORT_MIN_NODES: usize = 4_096;
 
+    let order = |left: &FocusNode, right: &FocusNode| focus_cmp(dataset, left, right);
     if nodes.len() >= PARALLEL_SORT_MIN_NODES && rayon::current_num_threads() > 1 {
         use rayon::prelude::*;
-        nodes.par_sort_by(|left, right| canonical_cmp(&left.term, &right.term));
+        nodes.par_sort_unstable_by(order);
     } else {
-        nodes.sort_by(|left, right| canonical_cmp(&left.term, &right.term));
+        nodes.sort_unstable_by(order);
+    }
+}
+
+/// [`canonical_cmp`] over focus nodes in either representation.
+///
+/// All four pairings reduce to the same rendered-byte order: two interned nodes
+/// through the interner, two foreign nodes through their owned terms, and a mixed
+/// pair by streaming one of each. The mixed arm is the one a same-shape test
+/// never reaches, and the one that decides whether a focus set holding both kinds
+/// is ordered or merely partitioned.
+///
+/// The interned/interned arm carries a final tiebreak on the ids, and it is the
+/// only place in this file where an id's NUMBER is looked at. It is not the sort
+/// key and it cannot become one: it is consulted only after the canonical
+/// renderings have compared EQUAL, which for two distinct dataset terms takes a
+/// literal whose datatype is one of the two the rendering suppresses. That makes
+/// the order strict and total, which is what lets the sort be unstable.
+fn focus_cmp(dataset: &impl ShaclRead, left: &FocusNode, right: &FocusNode) -> std::cmp::Ordering {
+    match (left, right) {
+        (FocusNode::Interned(left), FocusNode::Interned(right)) => {
+            canonical_cmp_ids(dataset, *left, *right).then_with(|| left.index().cmp(&right.index()))
+        }
+        (FocusNode::Foreign(left), FocusNode::Foreign(right)) => canonical_cmp(left, right),
+        (FocusNode::Interned(left), FocusNode::Foreign(right)) => {
+            canonical_cmp_id_term(dataset, *left, right)
+        }
+        (FocusNode::Foreign(left), FocusNode::Interned(right)) => {
+            canonical_cmp_id_term(dataset, *right, left).reverse()
+        }
     }
 }
 
@@ -78,477 +136,264 @@ fn objects_of(ds: &impl ShaclRead, pred: &NamedNode) -> Vec<TermId> {
     result
 }
 
-/// Dataset-bound invariant state shared by every focus evaluation in one pass.
+/// A focus node identity together with the binding it was minted against.
 ///
-/// All class IRIs reachable from the parsed shape tree are resolved once. Their
-/// membership is answered by [`ShaclData`]'s shared immutable class view.
-#[derive(Debug)]
-pub(crate) struct ValidationPlan {
-    classes: Arc<ClassCatalog>,
-    class_ids: Box<[Option<TermId>]>,
-}
-
-impl ValidationPlan {
-    pub(crate) fn for_shapes(ds: &impl ShaclRead, shapes: &Shapes) -> Self {
-        Self::from_shape_iter(ds, shapes.node_shapes.iter())
-    }
-
-    pub(crate) fn for_shape(ds: &impl ShaclRead, shape: &Shape) -> Self {
-        Self::from_shape_iter(ds, std::iter::once(shape))
-    }
-
-    fn from_shape_iter<'a>(
-        ds: &impl ShaclRead,
-        shapes: impl IntoIterator<Item = &'a Shape>,
-    ) -> Self {
-        Self::bind(ds, Arc::new(ClassCatalog::for_shapes(shapes)))
-    }
-
-    fn bind(ds: &impl ShaclRead, classes: Arc<ClassCatalog>) -> Self {
-        let mut class_ids = vec![None; classes.indices.len()].into_boxed_slice();
-        for (class, &position) in &classes.indices {
-            class_ids[position] = ds.term_id_by_iri(class.as_str());
-        }
-        Self { classes, class_ids }
-    }
-
-    #[inline]
-    pub(crate) fn class_id(&self, class: &NamedNode) -> Option<TermId> {
-        self.class_ids[*self
-            .classes
-            .indices
-            .get(class)
-            .expect("every reachable sh:class and sh:targetClass is planned")]
-    }
-}
-
-/// Dataset-independent class references from the complete, cycle-aware shape walk.
-/// Dataset bindings retain only resolved IDs; class names are owned here once.
-#[derive(Debug)]
-pub(crate) struct ClassCatalog {
-    indices: FastMap<NamedNode, usize>,
-}
-
-impl ClassCatalog {
-    /// Every planned class with the position its resolved [`TermId`] occupies in a
-    /// [`ValidationPlan`]'s binding row, in unspecified order.
-    ///
-    /// `pub(crate)` for the prepared-product codec, which both WRITES these pairs
-    /// into the artifact (`crate::product::ast`) and digests them into the
-    /// product's identity (`crate::product::identity::class_catalog_digest`), so a
-    /// restore can prove the body it carried is the analysis the identity pinned.
-    /// The order is the backing map's and is therefore NOT a fact about the
-    /// catalog — every consumer sorts.
-    pub(crate) fn entries(&self) -> impl Iterator<Item = (&NamedNode, usize)> {
-        self.indices
-            .iter()
-            .map(|(class, &position)| (class, position))
-    }
-
-    /// Rebuild a catalog from `(class, position)` pairs a prepared product carried,
-    /// or `None` when those pairs are not a catalog any walk could have produced.
-    ///
-    /// This is the codec's re-entry point for the reusable analysis, and it is
-    /// deliberately the narrowest possible gate: it checks only what the TYPE's own
-    /// invariants require, and leaves the question of whether these are the RIGHT
-    /// classes to the identity digest that already binds them.
-    ///
-    /// Two conditions are structural rather than a matter of taste, because
-    /// [`ValidationPlan::bind`] indexes a `Vec` of exactly `indices.len()` slots by
-    /// the position it reads back out, and [`ValidationPlan::class_id`] expects
-    /// every class it is asked about to be present:
-    ///
-    /// * a class IRI may appear **once**, because a repeat would silently collapse
-    ///   two entries into one and leave the binding row short by a slot; and
-    /// * the positions must be a **permutation of `0..len`**, because a position at
-    ///   or past the row's length is an out-of-bounds index — a panic, which is an
-    ///   abort no caller of a decoder could handle, arriving from bytes a caller
-    ///   supplied.
-    ///
-    /// What it deliberately does NOT check is that each class sits at the rank
-    /// [`Self::for_shapes`] would have given it. That rule belongs to the
-    /// derivation, and re-stating it here would be a second transcription of the
-    /// reachability rule inside the reader — the drift this codec spends a stage id
-    /// preventing. A permutation that is not the derivation's own is caught where
-    /// every other content claim is caught: the position is folded into
-    /// `class_catalog_digest`, so a product carrying one is refused on the
-    /// class-catalog dimension rather than restored.
-    pub(crate) fn from_entries(entries: Vec<(NamedNode, usize)>) -> Option<Self> {
-        let mut seen = vec![false; entries.len()];
-        for &(_, position) in &entries {
-            let slot = seen.get_mut(position)?;
-            if std::mem::replace(slot, true) {
-                return None;
-            }
-        }
-        let indices: FastMap<NamedNode, usize> = entries.into_iter().collect();
-        // A duplicate class IRI collapses in the map and is visible only as a
-        // shortfall against the slots just proven to be a permutation.
-        (indices.len() == seen.len()).then_some(Self { indices })
-    }
-
-    pub(crate) fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
-        let mut scan = ClassScan::default();
-        for shape in shapes {
-            collect_shape_classes(shape, &mut scan);
-        }
-        let mut classes: Vec<_> = scan.classes.into_iter().collect();
-        classes.sort_unstable();
-        let indices = classes
-            .into_iter()
-            .enumerate()
-            .map(|(position, class)| (class, position))
-            .collect();
-        Self { indices }
-    }
-}
-
-/// The accumulator the class-planning walk carries.
+/// # Why a bare [`TermId`] is not enough
 ///
-/// It is a struct rather than a bare set because the walk has to be cycle-safe: a
-/// custom node-expression function's `sh:bodyExpression` may CALL the very function
-/// it belongs to (SHACL 1.2 Node Expressions §6.1/§6.2 hold the body by reference
-/// precisely so that is expressible), so the IR genuinely contains a cycle. Walking
-/// it without a record of the bodies already entered would recurse until the native
-/// stack was exhausted — an ABORT, not an error any caller could handle.
-#[derive(Default)]
-struct ClassScan {
-    /// Every class IRI the walk has reached.
-    classes: FastSet<NamedNode>,
-    /// The custom node-expression function bodies already walked, by IRI. A body
-    /// names the same classes at every call site, so once is enough — and once is
-    /// also all a cyclic body can be given.
-    walked_bodies: FastSet<String>,
-}
-
-fn collect_shape_classes(shape: &Shape, scan: &mut ClassScan) {
-    for target in &shape.targets {
-        match target {
-            Target::Class(class) => {
-                scan.classes.insert(class.clone());
-            }
-            Target::ImplicitClass(Term::NamedNode(class)) => {
-                scan.classes.insert(class.clone());
-            }
-            Target::SubjectsOf(_)
-            | Target::ObjectsOf(_)
-            | Target::Node(_)
-            | Target::ImplicitClass(_)
-            | Target::Sparql { .. } => {}
-        }
-    }
-    collect_constraints_classes(&shape.constraints, scan);
-    for property in &shape.property_shapes {
-        collect_property_classes(property, scan);
-    }
-}
-
-fn collect_property_classes(property: &PropertyShape, scan: &mut ClassScan) {
-    collect_constraints_classes(&property.constraints, scan);
-    for nested in &property.property_shapes {
-        collect_property_classes(nested, scan);
-    }
-    for reifier_shape in &property.reifier_shapes {
-        collect_shape_classes(reifier_shape, scan);
-    }
-}
-
-fn collect_constraints_classes(constraints: &[Constraint], scan: &mut ClassScan) {
-    for constraint in constraints {
-        match constraint {
-            Constraint::Class(class) => {
-                scan.classes.insert(class.clone());
-            }
-            Constraint::Not(shape) | Constraint::Node(shape) => {
-                collect_shape_classes(shape, scan);
-            }
-            Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
-                for shape in shapes {
-                    collect_shape_classes(shape, scan);
-                }
-            }
-            Constraint::QualifiedValueShape {
-                shape, siblings, ..
-            } => {
-                collect_shape_classes(shape, scan);
-                for sibling in siblings {
-                    collect_shape_classes(sibling, scan);
-                }
-            }
-            Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
-                collect_expression_classes(expr, scan);
-            }
-            Constraint::Datatype(_)
-            | Constraint::NodeKind(_)
-            | Constraint::MinCount(_)
-            | Constraint::MaxCount(_)
-            | Constraint::In(_)
-            | Constraint::HasValue(_)
-            | Constraint::Pattern { .. }
-            | Constraint::MinLength(_)
-            | Constraint::MaxLength(_)
-            | Constraint::UniqueLang(_)
-            | Constraint::LanguageIn(_)
-            | Constraint::Closed { .. }
-            | Constraint::MinInclusive(_)
-            | Constraint::MaxInclusive(_)
-            | Constraint::MinExclusive(_)
-            | Constraint::MaxExclusive(_)
-            | Constraint::Sparql { .. }
-            | Constraint::Equals(_)
-            | Constraint::Disjoint(_)
-            | Constraint::LessThan(_)
-            | Constraint::LessThanOrEquals(_)
-            | Constraint::Component { .. } => {}
-        }
-    }
-}
-
-fn collect_expression_classes(expr: &NodeExpr, scan: &mut ClassScan) {
-    match expr {
-        NodeExpr::Constant(_)
-        | NodeExpr::This
-        | NodeExpr::Path(_)
-        | NodeExpr::Empty
-        | NodeExpr::Var(_)
-        | NodeExpr::List(_)
-        // A SPARQL-based node expression (SPARQL Extensions §6.1/§6.2) names its
-        // classes inside opaque query TEXT, which this walk does not read. The
-        // membership view it would want is the SPARQL engine's own, not the
-        // validation plan's, so there is nothing here to pre-resolve.
-        | NodeExpr::Select { .. } => {}
-        // `shnex:instancesOf` (Node Expressions §4.5.1) selects the SHACL instances
-        // of a class, so that class must be resolved in the validation plan exactly
-        // like an `sh:class` constraint or the membership view answers "no
-        // instances" for it.
-        NodeExpr::InstancesOf(class) => {
-            scan.classes.insert(class.clone());
-        }
-        NodeExpr::Filter { nodes, shape } => {
-            collect_expression_classes(nodes, scan);
-            collect_shape_classes(shape, scan);
-        }
-        NodeExpr::FindFirst { nodes, shape } | NodeExpr::MatchAll { nodes, shape } => {
-            collect_expression_classes(nodes, scan);
-            collect_shape_classes(shape, scan);
-        }
-        NodeExpr::NodesMatching(shape) => collect_shape_classes(shape, scan),
-        NodeExpr::ConformsToShape { node, shape } => {
-            collect_expression_classes(node, scan);
-            match shape {
-                // A NAMED shape argument is only reachable through this
-                // expression, so the classes its constraints mention have to be
-                // collected here or they would go unresolved in the plan.
-                ShapeArg::Named(shape) => collect_shape_classes(shape, scan),
-                // A COMPUTED one resolves, at evaluation, to a shape out of the
-                // shapes graph's own top-level index — and every shape in that
-                // index is walked by this scan already, from the shape list. What
-                // does need collecting is the expression that computes the IRI.
-                ShapeArg::Computed { expr, .. } => collect_expression_classes(expr, scan),
-            }
-        }
-        NodeExpr::Remove { nodes, remove } => {
-            collect_expression_classes(nodes, scan);
-            collect_expression_classes(remove, scan);
-        }
-        NodeExpr::FlatMap { nodes, map } => {
-            collect_expression_classes(nodes, scan);
-            collect_expression_classes(map, scan);
-        }
-        NodeExpr::PathValues { focus, .. } => collect_expression_classes(focus, scan),
-        // A custom node-expression function call (Node Expressions §6.1/§6.2): the
-        // classes its BODY names must be pre-resolved too, because the body is what
-        // actually evaluates. The arguments are walked for the same reason every
-        // other operand is.
-        NodeExpr::CustomCall { func, args } => {
-            for (_, arg) in args {
-                collect_expression_classes(arg, scan);
-            }
-            // The body is walked ONCE per function: it is shared by `Arc` and names
-            // the same classes at every call site, and it may call this very
-            // function, so re-entering it would not terminate.
-            if scan.walked_bodies.insert(func.iri.as_str().to_owned())
-                && let Some(body) = func.body.get()
-            {
-                collect_expression_classes(body, scan);
-            }
-        }
-        // `shnex:arg` (§6.3) resolves to an argument expression bound at the call
-        // site, which this walk already visited there.
-        NodeExpr::Arg(_) => {}
-        NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
-            for item in items {
-                collect_expression_classes(item, scan);
-            }
-        }
-        NodeExpr::If { cond, then, els } => {
-            collect_expression_classes(cond, scan);
-            collect_expression_classes(then, scan);
-            collect_expression_classes(els, scan);
-        }
-        NodeExpr::Count { of, .. }
-        | NodeExpr::Distinct(of)
-        | NodeExpr::Min(of)
-        | NodeExpr::Max(of)
-        | NodeExpr::Sum(of)
-        | NodeExpr::Limit { of, .. }
-        | NodeExpr::Offset { of, .. }
-        | NodeExpr::Exists(of) => collect_expression_classes(of, scan),
-        NodeExpr::OrderBy { of, key, .. } => {
-            collect_expression_classes(of, scan);
-            collect_expression_classes(key, scan);
-        }
-        NodeExpr::Call(call) => {
-            let args = match call {
-                FnCall::Builtin { args, .. }
-                | FnCall::UserDefined { args, .. }
-                | FnCall::Sparql { args, .. } => args,
-            };
-            for arg in args {
-                collect_expression_classes(arg, scan);
-            }
-        }
-    }
-}
-
-/// Collect subjects that are SHACL instances of `class_iri`: nodes with an
-/// `rdf:type` to `class_iri` or to any asserted (transitive) subclass of it.
+/// A `TermId` is an index into ONE binding's term table. It carries no
+/// provenance, so an id minted against binding A is, handed to binding B, very
+/// probably in range — and it then resolves, dispatches, and validates a
+/// DIFFERENT node, quietly and with a conforming report to show for it. Two live
+/// id spaces is not an exotic misuse either: it is the designed situation the
+/// moment a caller binds a mutation snapshot beside the base binding through
+/// [`PreparedShapes::bind_delta_with_shapes_graph`].
 ///
-/// `plan` carries the pre-resolved class identity; the shared class view answers
-/// membership without a graph-wide closure walk during focus resolution.
-fn instances_of_class(
-    data: &ShaclData,
-    class_iri: &NamedNode,
-    plan: &ValidationPlan,
-) -> Vec<TermId> {
-    let Some(class) = plan.class_id(class_iri) else {
-        return Vec::new();
-    };
-    data.class_view().instances_of(class).collect()
+/// So the provenance travels with the id instead of being delegated to the
+/// caller. A `FocusId` can only be obtained from a binding — from
+/// [`PreparedValidator::term_id`] or from
+/// [`PreparedValidator::affected_focus_node_ids`] — and
+/// [`PreparedValidator::validate_focus_node_ids`] refuses one that names a
+/// different binding. There is no public constructor and no public field,
+/// because either would be a way to mint an id with a provenance it does not
+/// have.
+///
+/// # The check is binding-scoped, not dataset-scoped
+///
+/// A binding's identity is the retained view it was bound over, not the dataset
+/// underneath it, so binding the SAME dataset twice produces two identities and
+/// an id minted against one is refused by the other — even though both term
+/// tables are byte-identical and the id would have resolved correctly. That
+/// refusal is deliberate. A token loose enough to admit it would have to reason
+/// about how a delta view remaps ids locally, and the failure it would then be
+/// unable to catch is the silent one: validating the wrong node and reporting
+/// conformance for it. Refusing a portable id costs a caller one visible error
+/// telling them which binding to mint from; accepting a non-portable one costs
+/// them a wrong answer they never learn about. Mint from the binding you are
+/// about to validate against and the question does not arise.
+///
+/// # Cost
+///
+/// Two words where a `TermId` was one, and no allocation per focus node: the
+/// change-path entry point compares one `usize` per id and is otherwise
+/// unchanged. `crates/shapes/tests/change_path_alloc.rs` pins that.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FocusId {
+    /// Which binding's term table [`Self::id`] indexes.
+    dataset: DatasetIdentity,
+    /// The dataset-local identity itself.
+    id: TermId,
 }
 
-/// A resolved focus node carrying its already-known interned identity.
-#[derive(Debug, Clone)]
-pub(crate) struct FocusNode {
-    term: Term,
-    id: Option<TermId>,
-}
-
-impl FocusNode {
+impl FocusId {
+    /// Mint an id against the binding that resolved it.
+    ///
+    /// `pub(crate)` on purpose: minting is the act that asserts provenance, so
+    /// it stays with the code that actually performed the resolution.
     #[inline]
-    pub(crate) fn term(&self) -> &Term {
-        &self.term
+    pub(crate) const fn new(dataset: DatasetIdentity, id: TermId) -> Self {
+        Self { dataset, id }
     }
 
+    /// The dataset-local identity this names.
+    ///
+    /// Read-only, and deliberately one-way: a `TermId` can be logged, compared
+    /// against another of the same binding, or handed to a lower-level view, but
+    /// it cannot be turned back into a `FocusId` without a binding to mint it.
+    #[must_use]
     #[inline]
-    pub(crate) fn id(&self) -> Option<TermId> {
+    pub const fn term_id(self) -> TermId {
         self.id
     }
-
-    #[inline]
-    pub(crate) fn into_term(self) -> Term {
-        self.term
-    }
 }
 
-/// Resolve the focus node set for a single shape from its target declarations.
+/// Dataset-bound invariant state shared by every focus evaluation in one pass.
 ///
-/// Interned targets are deduplicated in id space and resolved to an owned term
-/// exactly once. Results retain that id for constraint and path evaluation and
-/// are sorted canonically before return.
-pub(crate) fn resolve_focus_nodes(
-    data: &ShaclData,
-    targets: &[Target],
-    plan: &ValidationPlan,
-) -> Result<Vec<FocusNode>, String> {
-    let ds = data.core_view();
-    let mut seen_ids: IdSet = IdSet::default();
-    let mut seen_foreign: FastSet<Term> = FastSet::default();
-    let mut nodes: Vec<FocusNode> = Vec::new();
+/// The expansion of a graph change into the focus nodes it can move, as answered
+/// by [`PreparedValidator::affected_focus_node_ids`].
+///
+/// Two answers, and the second is the point of the type. A bounded superset is what
+/// incremental validation wants; a shapes graph whose reads hide inside query text
+/// has no bounded superset anyone can derive from it, and saying so is the only
+/// honest alternative to returning a set that LOOKS complete and is not. An
+/// under-approximation here does not fail — it reports `conforms` about a node
+/// nobody re-checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FocusExpansion {
+    /// Every focus node the change can move, plus whatever the over-approximation
+    /// swept in, as identities of the binding that produced them and in ascending
+    /// id order. Hand it straight to
+    /// [`PreparedValidator::validate_focus_node_ids`].
+    ///
+    /// Empty means exactly what it says: nothing the shapes graph reads changed.
+    Bounded(Vec<FocusId>),
+    /// No bounded superset exists for this shapes graph, so the only sound
+    /// re-validation is [`PreparedValidator::validate`].
+    Everything {
+        /// Which construct made the footprint unreadable, for a caller who wants
+        /// to know what to change to get incremental validation back.
+        reason: &'static str,
+    },
+}
 
-    for target in targets {
-        let ids = match target {
-            Target::Class(class_iri) => Some(instances_of_class(data, class_iri, plan)),
-            Target::SubjectsOf(pred) => Some(subjects_of(ds, pred)),
-            Target::ObjectsOf(pred) => Some(objects_of(ds, pred)),
-            Target::ImplicitClass(Term::NamedNode(class)) => {
-                Some(instances_of_class(data, class, plan))
-            }
-            Target::ImplicitClass(_) => Some(Vec::new()),
-            Target::Node(_) | Target::Sparql { .. } => None,
-        };
-        if let Some(ids) = ids {
-            // Upper bound on the pushes this target adds: one Vec growth step
-            // instead of amortized doubling across the loop.
-            nodes.reserve(ids.len());
-            for id in ids {
-                if seen_ids.insert(id) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(ds, id),
-                        id: Some(id),
-                    });
-                }
-            }
-            continue;
-        }
-
-        let candidates = match target {
-            Target::Node(term) => vec![term.clone()],
-            // SELECT-form is enforced at shape-load; residual evaluation failures
-            // remain hard validation errors.
-            Target::Sparql {
-                select,
-                substitutions,
-            } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
-                .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
-            Target::Class(_)
-            | Target::SubjectsOf(_)
-            | Target::ObjectsOf(_)
-            | Target::ImplicitClass(_) => unreachable!("id-native target handled above"),
-        };
-        for term in candidates {
-            if let Some(id) = resolve_id(ds, &term) {
-                if seen_ids.insert(id) {
-                    nodes.push(FocusNode { term, id: Some(id) });
-                }
-            } else if seen_foreign.insert(term.clone()) {
-                nodes.push(FocusNode { term, id: None });
-            }
+impl FocusExpansion {
+    /// The bounded expansion, or `None` when the footprint is TOP.
+    ///
+    /// Deliberately NOT a `Default`-flavoured accessor that hands back an empty
+    /// slice for the TOP case: an empty slice and "every node in the graph" are
+    /// opposite instructions, and collapsing them is the drop this type exists to
+    /// prevent.
+    #[must_use]
+    pub fn ids(&self) -> Option<&[FocusId]> {
+        match self {
+            Self::Bounded(ids) => Some(ids),
+            Self::Everything { .. } => None,
         }
     }
 
-    sort_focus_nodes(&mut nodes);
-    Ok(nodes)
+    /// Why the footprint is TOP, or `None` when the expansion is bounded.
+    #[must_use]
+    pub fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Bounded(_) => None,
+            Self::Everything { reason } => Some(reason),
+        }
+    }
+
+    /// Whether this expansion requires a full validation.
+    #[must_use]
+    pub fn is_everything(&self) -> bool {
+        matches!(self, Self::Everything { .. })
+    }
 }
 
-/// Dataset-bound target predicates used by [`PreparedValidator`].
+/// The class analysis (dataset-independent) and the shape lowering it came out of
+/// are shared by `Arc`; only the resolved identities are rebuilt per dataset.
 ///
-/// Core targets are retained as compact membership indexes instead of eagerly
-/// expanding every target node. A bounded request can therefore test only its
-/// supplied candidates. Explicit and SHACL-SPARQL target results are resolved
-/// once at preparation because they cannot be answered through a Core pattern
-/// lookup.
-#[derive(Debug, Default)]
-struct PreparedTargets {
-    explicit_ids: IdSet,
-    explicit_foreign: FastSet<Term>,
-    target_class_ids: IdSet,
-    subject_predicates: IdSet,
-    object_predicates: IdSet,
+/// `targets` is positionally parallel to the node-shape list this was bound from.
+/// A deactivated shape still occupies its position with an empty index rather than
+/// being skipped, because a caller enumerating shapes and a caller enumerating
+/// target indexes have to agree on what the n-th entry is.
+#[derive(Debug)]
+pub(crate) struct BoundShapes {
+    lowered: Arc<LoweredShapes>,
+    classes: Arc<ClassCatalog>,
+    binding: DatasetBinding,
+    targets: Vec<PreparedTargets>,
+    /// `targets` inverted onto the node, for the bounded (change-path) dispatch.
+    /// Derived from `targets` alone, so it is stage-1 work like `targets` itself
+    /// and never repeated per focus node.
+    dispatch: TargetDispatch,
+}
+
+impl BoundShapes {
+    /// Resolve every dataset identity `lowered` asked for, then index each shape's
+    /// active targets.
+    fn bind(
+        data: &ShaclData,
+        shapes: &[Shape],
+        lowered: Arc<LoweredShapes>,
+        classes: Arc<ClassCatalog>,
+    ) -> Result<Self, String> {
+        let binding = lowered.bind(data.core_view(), &classes);
+        let targets = shapes
+            .iter()
+            .map(|shape| {
+                if shape.deactivated {
+                    Ok(PreparedTargets::default())
+                } else {
+                    PreparedTargets::for_shape(data, shape, &binding, &classes)
+                }
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let dispatch = TargetDispatch::invert(&targets);
+        Ok(Self {
+            lowered,
+            classes,
+            binding,
+            targets,
+            dispatch,
+        })
+    }
+
+    /// Bind without indexing any targets, for the entry points that resolve focus
+    /// nodes directly from the shape's declarations instead of from an index.
+    fn bind_untargeted(
+        data: &ShaclData,
+        lowered: Arc<LoweredShapes>,
+        classes: Arc<ClassCatalog>,
+    ) -> Self {
+        let binding = lowered.bind(data.core_view(), &classes);
+        Self {
+            lowered,
+            classes,
+            binding,
+            targets: Vec::new(),
+            dispatch: TargetDispatch::default(),
+        }
+    }
+
+    /// The dependency footprint the shapes-lowering walk derived.
+    fn footprint(&self) -> &crate::footprint::Footprint {
+        self.lowered.footprint()
+    }
+
+    /// The plan for the `position`-th shape, with its prepared target index.
+    fn plan<'a>(&'a self, shape: &'a Shape, position: usize) -> Result<ShapePlan<'a>, String> {
+        let targets = self
+            .targets
+            .get(position)
+            .unwrap_or_else(|| self.lowered.no_targets());
+        self.lowered
+            .plan(shape, position, &self.binding, &self.classes, targets)
+    }
+
+    /// The inverted target index behind this binding.
+    fn dispatch(&self) -> &TargetDispatch {
+        &self.dispatch
+    }
+
+    /// The class analysis behind this binding.
+    fn classes(&self) -> &ClassCatalog {
+        &self.classes
+    }
+
+    /// The resolved identities behind this binding.
+    fn binding(&self) -> &DatasetBinding {
+        &self.binding
+    }
 }
 
 impl PreparedTargets {
-    fn for_shape(data: &ShaclData, shape: &Shape, plan: &ValidationPlan) -> Result<Self, String> {
+    /// Resolve one shape's declared targets against an already-bound dataset.
+    ///
+    /// The two target families are treated differently on purpose. A Core target
+    /// keyed by class or predicate becomes a membership index — the target NODES
+    /// are never enumerated, so a bounded request tests only the candidates it
+    /// was given instead of paying for the whole extension of `sh:targetClass`.
+    /// `sh:targetNode` and a SHACL-SPARQL `sh:target` cannot be answered by a
+    /// pattern lookup, so their results are resolved once, here.
+    ///
+    /// A class or predicate the data graph never interned yields an EMPTY target
+    /// set rather than a failure: a shapes graph naming what this data graph does
+    /// not is ordinary, and refusing it here would reject valid input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a SHACL-SPARQL target fails to evaluate — an
+    /// unanswerable target is not an empty one.
+    fn for_shape(
+        data: &ShaclData,
+        shape: &Shape,
+        binding: &DatasetBinding,
+        classes: &ClassCatalog,
+    ) -> Result<Self, String> {
         let mut prepared = Self::default();
         for target in &shape.targets {
             match target {
-                Target::Class(class) => {
-                    if let Some(class) = plan.class_id(class) {
-                        prepared.target_class_ids.insert(class);
-                    }
-                }
-                Target::ImplicitClass(Term::NamedNode(class)) => {
-                    if let Some(class) = plan.class_id(class) {
+                Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
+                    // `None` = the data graph names no such class, so the target
+                    // set is empty; that is not a preparation failure.
+                    if let Some(class) = binding.class_id(classes, class)? {
                         prepared.target_class_ids.insert(class);
                     }
                 }
@@ -588,10 +433,28 @@ impl PreparedTargets {
         }
     }
 
-    #[inline]
+    /// Whether this shape's targets contain `focus` — **the definition** of
+    /// bounded-target membership.
+    ///
+    /// It is no longer the dispatch mechanism. Answering it once per
+    /// (shape, focus node) pair re-derives the focus node's class memberships and
+    /// re-scans its outgoing and incoming quads once per shape, so it is
+    /// quadratic in exactly the regime the change path exists to serve;
+    /// [`TargetDispatch`] inverts the same facts once at bind time and answers
+    /// the dual question instead.
+    ///
+    /// The definition stays executable, and is executed:
+    /// `target_dispatch_agrees_with_contains_and_resolve_all` drives it over
+    /// every [`Target`] variant and requires the index and
+    /// [`Self::resolve_all`] to select the identical focus set. Two
+    /// implementations of one predicate with no equivalence test is how they come
+    /// to disagree; this one has three, and one test binding all of them.
+    #[cfg(test)]
     fn contains(&self, data: &ShaclData, focus: &FocusNode) -> bool {
         let Some(id) = focus.id() else {
-            return self.explicit_foreign.contains(focus.term());
+            return focus
+                .foreign()
+                .is_some_and(|term| self.explicit_foreign.contains(term));
         };
         if self.explicit_ids.contains(&id) {
             return true;
@@ -623,19 +486,13 @@ impl PreparedTargets {
             .explicit_ids
             .iter()
             .copied()
-            .map(|id| FocusNode {
-                term: term_id_to_native(dataset, id),
-                id: Some(id),
-            })
+            .map(FocusNode::Interned)
             .collect();
 
         for &class in &self.target_class_ids {
             for subject in data.class_view().instances_of(class) {
                 if seen_ids.insert(subject) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(dataset, subject),
-                        id: Some(subject),
-                    });
+                    nodes.push(FocusNode::Interned(subject));
                 }
             }
         }
@@ -644,22 +501,26 @@ impl PreparedTargets {
                 quads_for_pattern_ids(dataset, None, Some(predicate), None, GraphFilter::AnyGraph)
             {
                 if seen_ids.insert(quad.s) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(dataset, quad.s),
-                        id: Some(quad.s),
-                    });
+                    nodes.push(FocusNode::Interned(quad.s));
                 }
             }
         }
+        // The pattern below is IDENTICAL to the subjects-of loop above it, and
+        // that is correct by construction, not a copy-paste defect: the pattern
+        // is `(?, predicate, ?)` — open on BOTH ends — so the one quad set
+        // carries every subjects-of AND every objects-of target of `predicate`.
+        // The loops differ in the only place they can: which END of the matched
+        // quad is the focus node, `quad.s` there and `quad.o` here. Binding the
+        // object here instead would be the real bug, because it would ask for
+        // quads whose object is a predicate. `resolve_all_is_asymmetric_in_the_
+        // subject_and_object_directions` pins the difference with a fixture whose
+        // subjects-of and objects-of sets are disjoint.
         for &predicate in &self.object_predicates {
             for quad in
                 quads_for_pattern_ids(dataset, None, Some(predicate), None, GraphFilter::AnyGraph)
             {
                 if seen_ids.insert(quad.o) {
-                    nodes.push(FocusNode {
-                        term: term_id_to_native(dataset, quad.o),
-                        id: Some(quad.o),
-                    });
+                    nodes.push(FocusNode::Interned(quad.o));
                 }
             }
         }
@@ -667,18 +528,480 @@ impl PreparedTargets {
             self.explicit_foreign
                 .iter()
                 .cloned()
-                .map(|term| FocusNode { term, id: None }),
+                .map(FocusNode::Foreign),
         );
-        sort_focus_nodes(&mut nodes);
+        sort_focus_nodes(dataset, &mut nodes);
         nodes
     }
+}
+
+/// The DUAL of [`PreparedTargets`]: which shapes claim a node, rather than which
+/// nodes a shape claims.
+///
+/// [`PreparedTargets::contains`] answers "shape, do you contain this node?". Used
+/// as the change path's DISPATCH it is answered once per (shape, focus node)
+/// pair, and each answer re-derives the focus node's class memberships and — for
+/// a shape with a `sh:targetSubjectsOf` or `sh:targetObjectsOf` target — re-scans
+/// the focus node's outgoing and incoming quads. Fifty node shapes against a
+/// thousand-node delta is fifty thousand probes and up to a hundred thousand
+/// quad-pattern scans before a single constraint is evaluated, and the whole
+/// reason the change path exists is to be cheaper than that.
+///
+/// The change path asks the dual question — "node, which shapes claim you?" —
+/// and this is the index that answers it. Every target key is inverted ONCE, at
+/// bind time, so a focus node needs one class-view lookup and one outgoing and
+/// one incoming predicate pass TOTAL, shared across every shape, yielding the
+/// candidate shape set directly. `O(S·F)` becomes `O(F·(1+deg))`.
+///
+/// `contains` keeps DEFINING the semantics; this only has to agree with it, and
+/// `target_dispatch_agrees_with_contains_and_resolve_all` is where that is
+/// executed, over every [`Target`] variant.
+///
+/// Immutable behind `&` once built, and every field is `Send + Sync`, because the
+/// claims derived from it are read from rayon focus-chunk workers.
+#[derive(Debug, Default)]
+pub(crate) struct TargetDispatch {
+    /// `sh:targetNode` identity → the shapes declaring it.
+    explicit: FastMap<TermId, Vec<usize>>,
+    /// A `sh:targetNode` this dataset never interned → the shapes declaring it.
+    foreign: FastMap<Term, Vec<usize>>,
+    /// `sh:targetClass` / implicit-class identity → the shapes declaring it.
+    classes: FastMap<TermId, Vec<usize>>,
+    /// `sh:targetSubjectsOf` predicate identity → the shapes declaring it.
+    subject_predicates: FastMap<TermId, Vec<usize>>,
+    /// `sh:targetObjectsOf` predicate identity → the shapes declaring it.
+    object_predicates: FastMap<TermId, Vec<usize>>,
+}
+
+impl TargetDispatch {
+    /// Invert `targets`, which is positionally parallel to the node-shape list.
+    fn invert(targets: &[PreparedTargets]) -> Self {
+        let mut dispatch = Self::default();
+        for (position, prepared) in targets.iter().enumerate() {
+            for &id in &prepared.explicit_ids {
+                dispatch.explicit.entry(id).or_default().push(position);
+            }
+            for term in &prepared.explicit_foreign {
+                dispatch
+                    .foreign
+                    .entry(term.clone())
+                    .or_default()
+                    .push(position);
+            }
+            for &id in &prepared.target_class_ids {
+                dispatch.classes.entry(id).or_default().push(position);
+            }
+            for &id in &prepared.subject_predicates {
+                dispatch
+                    .subject_predicates
+                    .entry(id)
+                    .or_default()
+                    .push(position);
+            }
+            for &id in &prepared.object_predicates {
+                dispatch
+                    .object_predicates
+                    .entry(id)
+                    .or_default()
+                    .push(position);
+            }
+        }
+        dispatch
+    }
+
+    /// Every shape position claiming `focus`, ascending and duplicate-free, into
+    /// `out` (which is cleared first, so one buffer serves a whole focus set).
+    fn claimants(&self, data: &ShaclData, focus: &FocusNode, out: &mut Vec<usize>) {
+        out.clear();
+        let Some(id) = focus.id() else {
+            // A focus node this dataset never interned can only be an EXPLICIT
+            // target: every other target form is a fact ABOUT the data graph, and
+            // a node absent from it participates in none of them. That is exactly
+            // the answer `contains` gives an id-less focus node.
+            if let Some(positions) = focus.foreign().and_then(|term| self.foreign.get(term)) {
+                out.extend(positions.iter().copied());
+            }
+            return;
+        };
+        if let Some(positions) = self.explicit.get(&id) {
+            out.extend(positions.iter().copied());
+        }
+        if !self.classes.is_empty() {
+            for class in data.class_view().classes_of(id) {
+                if let Some(positions) = self.classes.get(&class) {
+                    out.extend(positions.iter().copied());
+                }
+            }
+        }
+        let dataset = data.core_view();
+        if !self.subject_predicates.is_empty() {
+            for quad in quads_for_pattern_ids(dataset, Some(id), None, None, GraphFilter::AnyGraph)
+            {
+                if let Some(positions) = self.subject_predicates.get(&quad.p) {
+                    out.extend(positions.iter().copied());
+                }
+            }
+        }
+        if !self.object_predicates.is_empty() {
+            for quad in quads_for_pattern_ids(dataset, None, None, Some(id), GraphFilter::AnyGraph)
+            {
+                if let Some(positions) = self.object_predicates.get(&quad.p) {
+                    out.extend(positions.iter().copied());
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    /// Dispatch a whole focus set: for each of `shape_count` shape positions, the
+    /// focus nodes that position claims.
+    ///
+    /// One pass over the focus nodes for ALL shapes, which is the entire point.
+    fn claims(
+        &self,
+        data: &ShaclData,
+        focus_nodes: &[FocusNode],
+        shape_count: usize,
+    ) -> Vec<ClaimedFocus> {
+        // Both of these are INPUT-sized and both are sized here, because an
+        // unhinted collection that fills to N reallocates about log2(N) times and
+        // that is a real growth term in the focus count — small enough to have
+        // been invisible under the per-node materialization this dispatch sits
+        // behind, and the whole remaining difference once that is gone. The claim
+        // rows are one per shape and a shape's claimed set is bounded by the focus
+        // set; the claimant buffer is bounded by the shape count.
+        let mut claims: Vec<ClaimedFocus> = Vec::with_capacity(shape_count);
+        claims.resize_with(shape_count, ClaimedFocus::default);
+        let mut positions: Vec<usize> = Vec::with_capacity(shape_count);
+        for focus in focus_nodes {
+            self.claimants(data, focus, &mut positions);
+            for &position in &positions {
+                // A prepared-target row exists for every node shape, so a position
+                // out of range is impossible; ignoring one rather than indexing is
+                // what keeps that impossible case from being a panic across the
+                // PyO3 and C ABI boundaries.
+                if let Some(claimed) = claims.get_mut(position) {
+                    claimed.insert(focus, focus_nodes.len());
+                }
+            }
+        }
+        claims
+    }
+}
+
+/// The focus nodes one shape position claims, as a membership test.
+///
+/// Identity-keyed for the ordinary interned focus node; a focus node with no
+/// dataset identity is keyed by its term, exactly as the explicit-target index
+/// that is the only way such a node can be claimed at all.
+#[derive(Debug, Default)]
+struct ClaimedFocus {
+    /// Claimed interned focus nodes.
+    ids: IdSet,
+    /// Claimed focus nodes this dataset never interned.
+    foreign: FastSet<Term>,
+}
+
+impl ClaimedFocus {
+    /// Record a claim, sizing this row's table on its first entry.
+    ///
+    /// `focus_count` is the dispatched focus set's length, which is the exact
+    /// upper bound on what one row can hold. Taking it here rather than at
+    /// construction means only a row that really claims something allocates at
+    /// all, while the row that does allocates ONCE instead of growing.
+    fn insert(&mut self, focus: &FocusNode, focus_count: usize) {
+        match focus {
+            FocusNode::Interned(id) => {
+                if self.ids.capacity() == 0 {
+                    self.ids.reserve(focus_count);
+                }
+                self.ids.insert(*id);
+            }
+            FocusNode::Foreign(term) => {
+                if self.foreign.capacity() == 0 {
+                    self.foreign.reserve(focus_count);
+                }
+                self.foreign.insert(term.clone());
+            }
+        }
+    }
+
+    /// Whether this position claims `focus`.
+    #[inline]
+    fn contains(&self, focus: &FocusNode) -> bool {
+        match focus {
+            FocusNode::Interned(id) => self.ids.contains(id),
+            FocusNode::Foreign(term) => self.foreign.contains(term),
+        }
+    }
+
+    /// Whether this position claims nothing in the dispatched focus set.
+    fn is_empty(&self) -> bool {
+        self.ids.is_empty() && self.foreign.is_empty()
+    }
+}
+
+/// Collect subjects that are SHACL instances of `class_iri`: nodes with an
+/// `rdf:type` to `class_iri` or to any asserted (transitive) subclass of it.
+///
+/// `binding` carries the pre-resolved class identity; the shared class view answers
+/// membership without a graph-wide closure walk during focus resolution.
+fn instances_of_class(
+    data: &ShaclData,
+    class_iri: &NamedNode,
+    binding: &DatasetBinding,
+    classes: &ClassCatalog,
+) -> Result<Vec<TermId>, String> {
+    // A class the data graph never names has no instances — an ordinary empty
+    // target, not a failure.
+    let Some(class) = binding.class_id(classes, class_iri)? else {
+        return Ok(Vec::new());
+    };
+    Ok(data.class_view().instances_of(class).collect())
+}
+
+/// A resolved focus node: an interned identity, or a term the dataset does not
+/// hold.
+///
+/// **Two states, and exactly the two that occur.** The shape this replaced was a
+/// struct pairing an owned [`Term`] with an `Option<TermId>`, which spells four
+/// states for a value that only ever takes two: a term WITH an id duplicates
+/// what the id already denotes, and a value with neither is not a focus node at
+/// all. Every construction site builds one of the two arms below.
+///
+/// The interned arm carries NO term, and that is the point. Resolving one costs
+/// between one and three heap `String`s — an IRI, a blank label, or a literal's
+/// lexical form plus its datatype plus its tag — and on a conforming graph every
+/// one of them is discarded unread, because the only consumers are the canonical
+/// sort (which reads the interner instead, see
+/// [`canonical_cmp_ids`](crate::term::canonical_cmp_ids)) and the focus-node slot
+/// of a [`ValidationResult`](crate::report::ValidationResult) that a conforming
+/// node never produces. [`Self::to_term`] is where the cost is paid, at the one
+/// boundary that needs it.
+///
+/// `Send + Sync` and free of a lifetime parameter: rayon focus-chunk workers
+/// share the focus set, and this is deferred MATERIALIZATION rather than a borrow
+/// of the dataset.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum FocusNode {
+    /// A focus node the bound dataset interns, held as its identity alone.
+    Interned(TermId),
+    /// A focus node the bound dataset does not intern — an explicit
+    /// `sh:targetNode`, or a SHACL-SPARQL target result, naming a term absent
+    /// from the data graph. It has no identity to carry, so its term is.
+    Foreign(Term),
+}
+
+// `FocusNode` is stored one per focus node in a change-path request, so the
+// discriminant must not cost a word beside the term it is discriminating, and
+// `Option<FocusNode>` must stay niche-packed into that discriminant. This is the
+// same pin `SolutionTerm` carries in `purrdf_sparql_eval::scratch` and `TermId`
+// carries in `purrdf_core::ir::term`; it fails the build if either regresses.
+const _: () = assert!(size_of::<FocusNode>() == size_of::<Term>());
+const _: () = assert!(size_of::<Option<FocusNode>>() == size_of::<FocusNode>());
+
+impl FocusNode {
+    /// Resolve `term` against `dataset` into the arm that describes it.
+    pub(crate) fn resolve(dataset: &impl ShaclRead, term: &Term) -> Self {
+        resolve_id(dataset, term).map_or_else(|| Self::Foreign(term.clone()), Self::Interned)
+    }
+
+    /// The interned identity of this focus node, if it has one.
+    #[inline]
+    pub(crate) fn id(&self) -> Option<TermId> {
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(_) => None,
+        }
+    }
+
+    /// The owned term this focus node denotes — **the materialization boundary**.
+    ///
+    /// Every call site is one that is building a
+    /// [`ValidationResult`](crate::report::ValidationResult), handing the focus
+    /// node to a SPARQL surface that speaks owned terms, or recursing into a
+    /// shape at a value node. None of them runs for a conforming focus node on
+    /// the Core constraint path.
+    pub(crate) fn to_term(&self, dataset: &impl ShaclRead) -> Term {
+        match self {
+            Self::Interned(id) => term_id_to_native(dataset, *id),
+            Self::Foreign(term) => term.clone(),
+        }
+    }
+
+    /// The foreign term this focus node carries, or `None` when it is interned.
+    ///
+    /// The explicit-target indexes are keyed by term for exactly the nodes this
+    /// answers `Some` for, so a lookup never needs to materialize.
+    #[inline]
+    pub(crate) fn foreign(&self) -> Option<&Term> {
+        match self {
+            Self::Interned(_) => None,
+            Self::Foreign(term) => Some(term),
+        }
+    }
+
+    /// Whether this focus node can occupy a subject position (IRI or blank node),
+    /// answered from the interner rather than from a materialized term.
+    pub(crate) fn is_subject(&self, dataset: &impl ShaclRead) -> bool {
+        match self {
+            Self::Interned(id) => matches!(
+                dataset.resolve(*id),
+                ::purrdf::TermRef::Iri(_) | ::purrdf::TermRef::Blank { .. }
+            ),
+            Self::Foreign(term) => term.is_subject(),
+        }
+    }
+}
+
+/// A focus set together with the identity of the dataset its ids were resolved
+/// against.
+///
+/// [`TermId`]s are DATASET-LOCAL (C0.8): the same integer addresses a different
+/// term in every dataset, and an in-range id from the wrong one does not fail —
+/// it silently validates a different node and reports a conforming verdict about
+/// a node nobody asked about. `PreparedShapes::bind_delta_with_shapes_graph`
+/// exists precisely so a caller can hold a base binding and a delta binding at
+/// once, so two live id spaces is the DESIGNED situation rather than a mistake
+/// nobody would make; and now that a focus node is carried id-natively, a wrong
+/// id travels through target dispatch, claim indexing and constraint evaluation
+/// before anything renders it, if anything ever does.
+///
+/// So the set records which dataset it was built from, and
+/// [`Self::nodes_of`] refuses to hand it to a different one. The check is one
+/// integer comparison per validation, not per focus node.
+///
+/// # Where this sits relative to [`FocusId`]
+///
+/// This is the INNER half of the same guard. `FocusId` carries provenance across
+/// the public boundary, so an id from another binding is refused before it ever
+/// reaches a focus set; this pins the other leg — that a set assembled against
+/// one binding's view is never INTERPRETED against another's inside this crate,
+/// including on the term-keyed route, which mints no ids a caller can hold.
+pub(crate) struct FocusSet {
+    /// The dataset this set's ids are addressed against.
+    dataset: DatasetIdentity,
+    nodes: Vec<FocusNode>,
+}
+
+impl FocusSet {
+    /// An empty set over `data`, with room for `capacity` nodes.
+    fn with_capacity(data: &ShaclData, capacity: usize) -> Self {
+        Self {
+            dataset: data.identity(),
+            nodes: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Admit one focus node. Callers admit only nodes resolved against the
+    /// dataset this set was opened over.
+    #[inline]
+    fn push(&mut self, node: FocusNode) {
+        self.nodes.push(node);
+    }
+
+    /// Order this set canonically.
+    fn sort(&mut self, data: &ShaclData) {
+        debug_assert_eq!(
+            self.dataset,
+            data.identity(),
+            "a focus set is ordered against the dataset it was resolved from"
+        );
+        sort_focus_nodes(data.core_view(), &mut self.nodes);
+    }
+
+    /// The focus nodes, if `data` is the dataset they were resolved against.
+    ///
+    /// # Errors
+    /// Refuses a set whose ids address a different dataset.
+    fn nodes_of(&self, data: &ShaclData) -> Result<&[FocusNode], String> {
+        if self.dataset == data.identity() {
+            return Ok(&self.nodes);
+        }
+        Err(
+            "focus node TermIds were resolved against a different dataset than the one this \
+             validator is bound to; TermIds are dataset-local and an in-range id from another \
+             dataset addresses a different term"
+                .to_owned(),
+        )
+    }
+}
+
+/// Resolve the focus node set for a single shape from its target declarations.
+///
+/// Interned targets are deduplicated in id space and resolved to an owned term
+/// exactly once. Results retain that id for constraint and path evaluation and
+/// are sorted canonically before return.
+pub(crate) fn resolve_focus_nodes(
+    data: &ShaclData,
+    targets: &[Target],
+    binding: &DatasetBinding,
+    classes: &ClassCatalog,
+) -> Result<Vec<FocusNode>, String> {
+    let ds = data.core_view();
+    let mut seen_ids: IdSet = IdSet::default();
+    let mut seen_foreign: FastSet<Term> = FastSet::default();
+    let mut nodes: Vec<FocusNode> = Vec::new();
+
+    for target in targets {
+        let ids = match target {
+            Target::Class(class_iri) => {
+                Some(instances_of_class(data, class_iri, binding, classes)?)
+            }
+            Target::SubjectsOf(pred) => Some(subjects_of(ds, pred)),
+            Target::ObjectsOf(pred) => Some(objects_of(ds, pred)),
+            Target::ImplicitClass(Term::NamedNode(class)) => {
+                Some(instances_of_class(data, class, binding, classes)?)
+            }
+            Target::ImplicitClass(_) => Some(Vec::new()),
+            Target::Node(_) | Target::Sparql { .. } => None,
+        };
+        if let Some(ids) = ids {
+            // Upper bound on the pushes this target adds: one Vec growth step
+            // instead of amortized doubling across the loop.
+            nodes.reserve(ids.len());
+            for id in ids {
+                if seen_ids.insert(id) {
+                    nodes.push(FocusNode::Interned(id));
+                }
+            }
+            continue;
+        }
+
+        let candidates = match target {
+            Target::Node(term) => vec![term.clone()],
+            // SELECT-form is enforced at shape-load; residual evaluation failures
+            // remain hard validation errors.
+            Target::Sparql {
+                select,
+                substitutions,
+            } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
+                .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
+            Target::Class(_)
+            | Target::SubjectsOf(_)
+            | Target::ObjectsOf(_)
+            | Target::ImplicitClass(_) => unreachable!("id-native target handled above"),
+        };
+        for term in candidates {
+            if let Some(id) = resolve_id(ds, &term) {
+                if seen_ids.insert(id) {
+                    nodes.push(FocusNode::Interned(id));
+                }
+            } else if seen_foreign.insert(term.clone()) {
+                nodes.push(FocusNode::Foreign(term));
+            }
+        }
+    }
+
+    sort_focus_nodes(ds, &mut nodes);
+    Ok(nodes)
 }
 
 fn evaluate_shape_focus_nodes(
     data: &ShaclData,
     shapes: &Shapes,
-    shape: &Shape,
-    plan: &ValidationPlan,
+    plan: ShapePlan<'_>,
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
 ) -> Result<Vec<crate::report::ValidationResult>, String> {
@@ -695,9 +1018,7 @@ fn evaluate_shape_focus_nodes(
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,
-                    focus.term(),
-                    focus.id(),
-                    shape,
+                    focus,
                     shapes.box_role_vocab.as_ref(),
                     plan,
                 )?);
@@ -733,9 +1054,7 @@ fn evaluate_shape_focus_nodes(
             if include_focus(focus) {
                 out.extend(crate::constraints::validate_shape_with_plan_at(
                     data,
-                    focus.term(),
-                    focus.id(),
-                    shape,
+                    focus,
                     shapes.box_role_vocab.as_ref(),
                     plan,
                 )?);
@@ -783,7 +1102,7 @@ fn finish_report(mut results: Vec<crate::report::ValidationResult>) -> Validatio
 fn validate_with_plan_and_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
-    plan: &ValidationPlan,
+    bound: &BoundShapes,
     mut include_focus: F,
 ) -> Result<ValidationReport, String>
 where
@@ -796,20 +1115,22 @@ where
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut all_results = Vec::new();
 
-    for shape in &shapes.node_shapes {
+    for (position, shape) in shapes.node_shapes.iter().enumerate() {
         if shape.deactivated {
             continue;
         }
-        let mut focus_nodes = resolve_focus_nodes(data, &shape.targets, plan)?;
+        let mut focus_nodes =
+            resolve_focus_nodes(data, &shape.targets, bound.binding(), bound.classes())?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
-        // the retained set to workers.
-        focus_nodes.retain(|focus| include_focus(shape, focus.term()));
+        // the retained set to workers. The filter is a caller-supplied predicate
+        // over an owned term, so this route — and only this route — materializes
+        // one per focus node; the change path, which has no filter, does not.
+        focus_nodes.retain(|focus| include_focus(shape, &focus.to_term(data.core_view())));
         all_results.extend(evaluate_shape_focus_nodes(
             data,
             shapes,
-            shape,
-            plan,
+            bound.plan(shape, position)?,
             &focus_nodes,
             |_| true,
         )?);
@@ -834,6 +1155,23 @@ where
 pub struct PreparedShapes {
     shapes: Arc<Shapes>,
     classes: Arc<ClassCatalog>,
+    /// The stage-0 lowering of these shapes: their structure with every
+    /// shape-constant derivation already made, shared with every binding.
+    ///
+    /// Derived on first BIND rather than in a constructor, and that is the whole
+    /// point of the cell. [`Self::with_carried_analysis`] is the prepared-product
+    /// admit seam, and a restore is promised "no RDF reparsing, no shape
+    /// extraction, no repeated shared analysis" — a lowering built in
+    /// [`Self::with_provenance`] only would either be absent on a restored
+    /// preparation (leaving every `sh:in`, `sh:hasValue` and `sh:class` on it
+    /// unable to constrain, silently) or would have to be rebuilt at admit, which
+    /// is the repeated analysis the promise rules out. Deriving it here, once, on
+    /// whichever bind comes first, is the only placement that is correct for both
+    /// constructors.
+    ///
+    /// Shared by `Arc` so a clone of a preparation shares the memoized lowering
+    /// rather than deriving a second one.
+    lowered: OnceLock<Arc<LoweredShapes>>,
     /// Where this preparation came from, recorded by the expression that built it.
     ///
     /// Shared rather than owned so that binding a preparation to a dataset — the
@@ -866,8 +1204,15 @@ impl PreparedShapes {
     ///
     /// [`ParseProvenance`]: crate::provenance::ParseProvenance
     pub(crate) fn with_provenance(shapes: Arc<Shapes>, provenance: ValidatorProvenance) -> Self {
-        let classes = Arc::new(ClassCatalog::for_shapes(shapes.node_shapes.iter()));
-        Self::with_carried_analysis(shapes, provenance, classes)
+        // ONE walk: the class catalog is this lowering's own output, not a second
+        // traversal beside it. The lowering is retained rather than discarded, so a
+        // locally parsed preparation reaches its first bind with the memo already
+        // filled and pays for the walk exactly as many times as a restored one.
+        let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
+        let classes = Arc::clone(lowered.classes());
+        let prepared = Self::with_carried_analysis(shapes, provenance, classes);
+        let _ = prepared.lowered.set(lowered);
+        prepared
     }
 
     /// Assemble a preparation around an analysis that was NOT derived here.
@@ -896,8 +1241,22 @@ impl PreparedShapes {
         Self {
             shapes,
             classes,
+            lowered: OnceLock::new(),
             provenance: Arc::new(provenance),
         }
+    }
+
+    /// The stage-0 lowering of these shapes, deriving it on first use.
+    ///
+    /// Idempotent and shared: the walk runs at most once per preparation however
+    /// many datasets it is bound to, and a preparation restored from a prepared
+    /// product reaches it by exactly the same route a locally parsed one does.
+    fn lowered(&self) -> Arc<LoweredShapes> {
+        Arc::clone(
+            self.lowered.get_or_init(|| {
+                Arc::new(crate::plan::lower_shapes(self.shapes.node_shapes.iter()))
+            }),
+        )
     }
 
     /// Where this preparation came from: parsed in this process, or restored from a
@@ -981,6 +1340,14 @@ impl PreparedShapes {
 
     /// Bind a complete immutable SHACL carrier, retaining its exact identity.
     ///
+    /// The view's own read semantics are honoured as given, including a view
+    /// built without graph union or without statement projection. That makes this
+    /// the general door and [`Self::bind_delta_with_shapes_graph`] the specific
+    /// one: the incremental change path needs the projected surface its soundness
+    /// argument is written over, so a delta view bound here without statement
+    /// projection validates normally but is refused by
+    /// [`PreparedValidator::affected_focus_node_ids`].
+    ///
     /// # Errors
     /// Returns an error when a target cannot be evaluated.
     pub fn bind_view(&self, view: Arc<ShaclDatasetView>) -> Result<PreparedValidator, String> {
@@ -1011,6 +1378,12 @@ impl PreparedShapes {
 
     /// Bind an immutable mutation snapshot and its shapes graph through shared
     /// indexes, freezing neither the base nor a combined data-plus-shapes graph.
+    ///
+    /// The binding this returns can expand the same snapshot into the focus nodes
+    /// the change moved, through
+    /// [`PreparedValidator::affected_focus_node_ids`] — which is the only sound
+    /// input to [`PreparedValidator::validate_focus_node_ids`], because the
+    /// subjects of the changed rows are not it.
     ///
     /// # Errors
     /// Refuses retention limits, invalid graph placement or failed targets.
@@ -1080,6 +1453,7 @@ impl PreparedShapes {
 ///
 /// use purrdf::RdfDatasetBuilder;
 /// use purrdf_shapes::engine::{PreparedValidator, parse_shapes};
+/// use purrdf_shapes::term::NamedNode;
 ///
 /// # fn main() -> Result<(), String> {
 /// let mut builder = RdfDatasetBuilder::new();
@@ -1111,6 +1485,11 @@ impl PreparedShapes {
 /// )?;
 ///
 /// // Reuse `validator` for each affected focus set in this immutable snapshot.
+/// // A focus id is minted BY the binding, so it cannot be confused with an id
+/// // of the same number belonging to a different one.
+/// let alice = validator
+///     .term_id(&NamedNode::new_unchecked("https://example.org/alice").into_term())
+///     .ok_or("alice must be interned")?;
 /// let report = validator.validate_focus_node_ids(&[alice])?;
 /// assert!(report.conforms);
 /// # Ok(())
@@ -1124,8 +1503,10 @@ pub struct PreparedValidator {
     /// it and with every sibling binding — a bind copies a reference count, never an
     /// identity.
     provenance: Arc<ValidatorProvenance>,
-    plan: ValidationPlan,
-    targets: Vec<PreparedTargets>,
+    /// Stage 0 × this dataset: the shape lowering, the class analysis, every
+    /// identity they named and every active target, resolved once here so no focus
+    /// node resolves any of them again.
+    bound: BoundShapes,
 }
 
 impl PreparedValidator {
@@ -1143,24 +1524,17 @@ impl PreparedValidator {
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
-        let plan = ValidationPlan::bind(data.core_view(), Arc::clone(&prepared.classes));
-        let targets = shapes
-            .node_shapes
-            .iter()
-            .map(|shape| {
-                if shape.deactivated {
-                    Ok(PreparedTargets::default())
-                } else {
-                    PreparedTargets::for_shape(&data, shape, &plan)
-                }
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        let bound = BoundShapes::bind(
+            &data,
+            &shapes.node_shapes,
+            prepared.lowered(),
+            Arc::clone(&prepared.classes),
+        )?;
         Ok(Self {
             data,
             shapes,
             provenance: Arc::clone(&prepared.provenance),
-            plan,
-            targets,
+            bound,
         })
     }
 
@@ -1245,16 +1619,16 @@ impl PreparedValidator {
     /// Returns an error when a constraint evaluation hard-fails.
     pub fn validate(&self) -> Result<ValidationReport, String> {
         let mut all_results = Vec::new();
-        for (shape, targets) in self.shapes.node_shapes.iter().zip(&self.targets) {
+        for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
                 continue;
             }
-            let focus_nodes = targets.resolve_all(&self.data);
+            let plan = self.bound.plan(shape, position)?;
+            let focus_nodes = plan.targets().resolve_all(&self.data);
             all_results.extend(evaluate_shape_focus_nodes(
                 &self.data,
                 &self.shapes,
-                shape,
-                &self.plan,
+                plan,
                 &focus_nodes,
                 |_| true,
             )?);
@@ -1267,8 +1641,79 @@ impl PreparedValidator {
     ///
     /// Candidates are deduplicated and canonically ordered. Target membership is
     /// answered through direct IR index probes; whole target sets are not built.
-    /// The caller remains responsible for expanding a graph change into every
-    /// potentially affected focus node (for example, an inverse-path dependency).
+    ///
+    /// Expanding a graph change into the focus nodes it can move is
+    /// [`Self::affected_focus_node_ids`]'s job, not a caller's: it derives the
+    /// dependency footprint — inverse paths, sequence prefixes, closures,
+    /// `sh:targetObjectsOf`, `sh:node` recursion, property-pair comparands and the
+    /// class hierarchy — from the same walk that lowers the shapes graph, and
+    /// reports a footprint it cannot bound rather than returning a short answer.
+    /// Two obligations stay with the caller, and both are visible rather than
+    /// implied: feeding it the mutation snapshot this binding was built over, and
+    /// honouring a [`FocusExpansion::Everything`] answer by calling
+    /// [`Self::validate`] instead.
+    ///
+    /// # Bounded allocation
+    ///
+    /// **Validating a CONFORMING focus set through this method allocates a bounded
+    /// amount, independent of how many focus nodes were supplied — for every
+    /// constraint kind and path form whose evaluation stays inside this crate.**
+    /// Cost is proportional to the violations found, not to the focus nodes
+    /// examined: a focus node is carried as its interned identity and materialized
+    /// as an owned term only where a result is actually built. A shape that reads
+    /// through SPARQL query text is the one qualification, and it is stated in full
+    /// below rather than left to a reader to discover.
+    ///
+    /// This is a product claim and it is executed, not asserted in prose:
+    /// `crates/shapes/tests/change_path_alloc.rs` measures the allocation delta of
+    /// two conforming validations differing only in focus count, through both
+    /// change-path entry points, over every constraint kind and path form it
+    /// covers, and requires the two figures to be EQUAL. A companion test holds
+    /// the violation count fixed while the conforming population doubles and the
+    /// conforming population fixed while the violations double, so "bounded" cannot
+    /// be satisfied by a validator that stopped validating.
+    ///
+    /// Two THIRD-PARTY residuals are documented there, neither of them a
+    /// per-focus-node term: `rayon`'s global injector queue allocates one block
+    /// every 63 submissions, and the `regex` crate's thread-sharded cache pool
+    /// allocates when a worker finds its shard empty, which is reachable under
+    /// `sh:pattern` above the parallel threshold.
+    ///
+    /// ## The SPARQL-bearing surfaces DO carry a per-focus-node term
+    ///
+    /// That term is this crate's own traffic, not a third party's, so it is stated
+    /// here and not only in a test. A shape backed by query text — a `sh:sparql`
+    /// constraint, a custom component's `sh:ask`/`sh:select` validator, a SHACL-AF
+    /// `sh:expression` function call — runs one SPARQL query PER FOCUS NODE (per
+    /// value node for an `ASK` validator, per argument tuple for an expression
+    /// call), and a query evaluation is not allocation-free. Those four surfaces
+    /// satisfy a closed form rather than zero growth:
+    ///
+    /// ```text
+    /// allocations(N) == CHANGE_PATH_CONSTANT + per_focus_node * N
+    /// ```
+    ///
+    /// `CHANGE_PATH_CONSTANT` is the entry cost the zero-growth cases already pin.
+    /// `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, by
+    /// `crates/shapes/tests/sparql_path_alloc.rs`: **96** for a `sh:sparql` SELECT
+    /// constraint, **214** for a custom `sh:ask` component over a two-valued path,
+    /// **116** for a custom `sh:select` component, and **194** for a
+    /// `sh:expression` function call over two argument tuples.
+    ///
+    /// The term is FLAT in the data graph — a fixed focus count costs the same over
+    /// 768 quads and over 24,576 — so it is the price of executing a query, not of
+    /// scanning a graph. By measurement it divides into the SPARQL evaluator's
+    /// per-execution setup (the larger share on three of the four surfaces) and the
+    /// per-focus-node pre-binding rewrite, in which `purrdf_sparql_eval` clones the
+    /// prepared algebra and rebuilds it and every pre-bound term crosses as an owned
+    /// `TermValue` whose IRI is a fresh `String`. Neither share is zero today.
+    ///
+    /// The bind in front of this method is bounded too — independent of the data
+    /// graph's size beyond the class catalog — so an incremental caller does not
+    /// pay for the whole graph to ask about a handful of nodes.
+    /// [`PreparedShapes::bind_dataset`] is the deliberate exception: it projects
+    /// the data graph into an owned snapshot first, so it is linear in the graph by
+    /// construction.
     ///
     /// # Errors
     ///
@@ -1281,77 +1726,391 @@ impl PreparedValidator {
     /// Id-native twin of [`Self::validate_focus_nodes`] for callers already using
     /// the prepared dataset's interned identities.
     ///
-    /// [`TermId`] values are dataset-local. Passing an id from another dataset is a
-    /// caller error; out-of-range ids are rejected before lookup.
+    /// # Provenance is checked, not assumed
+    ///
+    /// Every [`FocusId`] names the binding it was minted against, and one minted
+    /// against a different binding is REFUSED here. That is the whole reason the
+    /// argument is a `FocusId` and not a [`TermId`]: a `TermId` is an index, an
+    /// index from another binding is very probably in range, and it would resolve
+    /// to a different term and validate the wrong node without any lookup ever
+    /// failing. Mint ids from this binding — [`Self::term_id`] for a caller
+    /// holding a [`Term`], [`Self::affected_focus_node_ids`] for the change path —
+    /// and the `delta` → expand → validate loop is provenance-safe end to end by
+    /// type.
+    ///
+    /// # Compatibility
+    ///
+    /// This method shipped in 2.0.2 taking `&[TermId]`, and the change to
+    /// `&[FocusId]` is a deliberate, un-versioned break of that signature. There
+    /// is no `&[TermId]` shim beside it on purpose: the old door is the unguarded
+    /// one, and keeping it open would leave the hazard reachable while claiming it
+    /// was closed. Callers holding `TermId`s re-mint them through
+    /// [`Self::term_id`], which is a lookup they were already entitled to do.
+    ///
+    /// # Bounded allocation
+    ///
+    /// **Validating a CONFORMING focus set through this method allocates a bounded
+    /// amount, independent of how many ids were supplied, for every constraint kind
+    /// and path form whose evaluation stays inside this crate** — the same
+    /// guarantee [`Self::validate_focus_nodes`] carries, with the same
+    /// qualification, measured through both entry points by the same tests in
+    /// `crates/shapes/tests/change_path_alloc.rs`. Cost is proportional to the
+    /// violations found, not to the focus nodes examined.
+    ///
+    /// A shape backed by SPARQL query text is the qualification and it is a
+    /// FIRST-PARTY one: `sh:sparql`, a custom component's `sh:ask`/`sh:select`
+    /// validator and a SHACL-AF `sh:expression` call each run one query per focus
+    /// node and so carry a real per-focus-node term, pinned in closed form at
+    /// 96 / 214 / 116 / 194 allocations by
+    /// `crates/shapes/tests/sparql_path_alloc.rs`. See
+    /// [`Self::validate_focus_nodes`] for that closed form, for what the term is
+    /// made of, and for the two third-party residuals the guarantee also excludes.
+    ///
+    /// This is the crate's headline realtime surface, so the claim is stated where
+    /// it is called rather than only in a design note: a caller sizing a latency
+    /// budget around "re-validate only what changed" is relying on it.
     ///
     /// # Errors
     ///
-    /// Returns an error for an out-of-range id or when constraint evaluation
-    /// hard-fails.
+    /// Returns an error for an id minted against another binding, for an
+    /// out-of-range id, or when constraint evaluation hard-fails.
     pub fn validate_focus_node_ids(
         &self,
-        focus_node_ids: &[TermId],
+        focus_node_ids: &[FocusId],
     ) -> Result<ValidationReport, String> {
-        let mut seen = IdSet::default();
-        let mut focus_nodes = Vec::with_capacity(focus_node_ids.len());
-        for &id in focus_node_ids {
-            if id.index() >= self.data.core_view().term_count() {
+        // Read once, compared per id: the comparison is one `usize` against a
+        // local, with no allocation and no lookup behind it.
+        let dataset = self.data.identity();
+        // INPUT-sized, and sized: `focus_node_ids.len()` is an exact upper bound
+        // on the distinct ids this loop admits, and an unhinted set filling to N
+        // reallocates about log2(N) times — a growth term in the focus count,
+        // which is the one thing the change path may not carry.
+        let mut seen: IdSet =
+            IdSet::with_capacity_and_hasher(focus_node_ids.len(), ::purrdf::FastHasher::default());
+        let mut focus_nodes = FocusSet::with_capacity(&self.data, focus_node_ids.len());
+        for &focus in focus_node_ids {
+            if focus.dataset != dataset {
+                return Err(format!(
+                    "focus node TermId {} was minted against a different dataset binding than the \
+                     one this validator is bound to; TermIds are dataset-local, so an in-range id \
+                     from another binding resolves to a different term",
+                    focus.id.index()
+                ));
+            }
+            // Unreachable through the public surface — an id minted by this
+            // binding indexes this binding's table — and kept because the mint is
+            // `pub(crate)`, so a future in-crate mint site that got the binding
+            // right and the id wrong has to fail here rather than read past the
+            // table.
+            if focus.id.index() >= self.data.core_view().term_count() {
                 return Err(format!(
                     "focus node TermId {} is outside the prepared dataset's {}-term table",
-                    id.index(),
+                    focus.id.index(),
                     self.data.core_view().term_count()
                 ));
             }
-            if seen.insert(id) {
-                focus_nodes.push(FocusNode {
-                    term: term_id_to_native(self.data.core_view(), id),
-                    id: Some(id),
-                });
+            if seen.insert(focus.id) {
+                focus_nodes.push(FocusNode::Interned(focus.id));
             }
         }
-        sort_focus_nodes(&mut focus_nodes);
+        focus_nodes.sort(&self.data);
         self.validate_bounded(&focus_nodes)
     }
 
-    fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> Vec<FocusNode> {
-        let mut seen_ids = IdSet::default();
-        let mut seen_foreign = FastSet::default();
-        let mut normalized = Vec::with_capacity(focus_nodes.len());
+    /// The identity this binding gives `term`, or `None` when the dataset never
+    /// interned it.
+    ///
+    /// The bridge between a caller's owned terms and the id-native change path,
+    /// and the only way a caller holding a [`Term`] mints a [`FocusId`]: the ids
+    /// [`Self::affected_focus_node_ids`] returns and the ids
+    /// [`Self::validate_focus_node_ids`] accepts are indices into THIS binding's
+    /// term table, stamped with THIS binding, and this is how one is obtained
+    /// without re-deriving the table.
+    #[must_use]
+    pub fn term_id(&self, term: &Term) -> Option<FocusId> {
+        resolve_id(self.data.core_view(), term).map(|id| FocusId::new(self.data.identity(), id))
+    }
+
+    /// Expand a mutation snapshot into every focus node whose verdict the change
+    /// can move — the SOUND input to [`Self::validate_focus_node_ids`].
+    ///
+    /// `delta` must be the snapshot this binding was built over, through
+    /// [`PreparedShapes::bind_delta_with_shapes_graph`]. That is checked, not
+    /// assumed: a [`TermId`] is an index, so ids derived from one dataset's changes
+    /// would be perfectly valid indices into another dataset's table and would
+    /// name the wrong nodes without any lookup ever failing.
+    ///
+    /// The binding must ALSO read the RDF 1.2 statement projection, and that is
+    /// checked here too rather than left to the constructor a caller happened to
+    /// reach for. [`ShaclDatasetView::delta`] is public and takes the projection
+    /// as an argument, so a delta-backed binding that reads the plain table alone
+    /// is reachable through [`PreparedShapes::bind_view`]. The change set is
+    /// stated over the whole RDF surface — plain rows and both statement tables —
+    /// so on a narrower view a row the overlay demotes off the plain table leaves
+    /// the reads while appearing in no change stream, and this answer would be
+    /// short by exactly the focus nodes that row moves. Refused, because a short
+    /// answer here cannot be told from a clean bill of health.
+    /// [`Self::validate_focus_node_ids`] carries no such check and needs none: it
+    /// promises nothing about completeness, it validates the nodes it is handed
+    /// under whatever read surface the binding has — the same surface
+    /// [`Self::validate`] would use — and the only focus set that could be short
+    /// is one minted here, which now cannot be minted at all.
+    ///
+    /// # What it guarantees
+    ///
+    /// The answer is a SUPERSET of the focus nodes whose validation outcome the
+    /// change can alter — in either direction, a violation gained or a violation
+    /// lost. It is derived from the dependency footprint of the shapes graph (see
+    /// `crate::footprint`), which the shapes-lowering walk emits alongside the
+    /// lowering itself, so it covers every route a read can take back to a focus
+    /// node: a forward predicate step at any depth of a sequence, an
+    /// `sh:inversePath`, a `sh:zeroOrMorePath` / `sh:oneOrMorePath` closure,
+    /// `sh:targetSubjectsOf` / `sh:targetObjectsOf`, the `rdf:type` and
+    /// `rdfs:subClassOf*` edges behind `sh:targetClass` and `sh:class`, a
+    /// property-pair comparand predicate, and the whole nesting of `sh:node`,
+    /// `sh:not`, `sh:and` / `sh:or` / `sh:xone` and `sh:qualifiedValueShape`.
+    ///
+    /// Over-approximating is the safe direction and this deliberately takes it: a
+    /// focus node that did not need re-validating merely conforms again.
+    ///
+    /// # When there is no bounded answer
+    ///
+    /// A shapes graph that reads through query text this walk does not interpret —
+    /// `sh:sparql`, a SPARQL target, a constraint component's `sh:ask` /
+    /// `sh:select` validator, a `sh:SPARQLFunction` call, a SPARQL node expression
+    /// — has no footprint anyone can bound from the shapes graph alone. That
+    /// answers [`FocusExpansion::Everything`], carrying the reason, and the caller
+    /// must run [`Self::validate`]. It is reported rather than silently
+    /// under-approximated because a short answer here is indistinguishable from a
+    /// clean bill of health.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this validator is not bound to a mutation snapshot,
+    /// when that binding does not project the RDF 1.2 statement layer, when
+    /// `delta` is not the snapshot this binding reads, and when a changed row
+    /// names a term this binding's own view does not map — which is a defect in
+    /// this crate rather than in a caller's data.
+    pub fn affected_focus_node_ids(
+        &self,
+        delta: &::purrdf::ir::DeltaDatasetView,
+    ) -> Result<FocusExpansion, String> {
+        let core = self.data.core_view();
+        let bound = core.delta_source().ok_or_else(|| {
+            "affected_focus_node_ids: this validator is not bound to a mutation snapshot, so it \
+             has no change to expand; bind through PreparedShapes::bind_delta_with_shapes_graph"
+                .to_owned()
+        })?;
+        // The third precondition, and the one that is a property of the BINDING
+        // rather than of the argument: the change set names every row that joins
+        // or leaves the RDF 1.2 surface — plain rows and both statement tables
+        // together — so an expansion derived from it is a superset only for a
+        // reader of that same surface. A delta view built without statement
+        // projection reads the plain table alone, and the overlay demotes rows
+        // off that table without touching the surface (`base_quad_is_ordinary`),
+        // so such a row leaves this view's reads while appearing in no added and
+        // no suppressed stream. The expansion would be short by exactly it, and a
+        // short answer here is indistinguishable from "nothing changed".
+        if !core.statements_projected() {
+            return Err(
+                "affected_focus_node_ids: this validator is bound to a mutation snapshot through a \
+                 view that does not project the RDF 1.2 statement layer, so it reads the plain \
+                 table alone; a row the overlay demotes onto the annotation table would leave that \
+                 read surface without appearing in the change set, and the expansion would silently \
+                 omit the focus nodes it moves; bind through \
+                 PreparedShapes::bind_delta_with_shapes_graph, which projects statements"
+                    .to_owned(),
+            );
+        }
+        if !std::ptr::eq(Arc::as_ptr(bound), std::ptr::from_ref(delta)) {
+            return Err(
+                "affected_focus_node_ids: the supplied mutation snapshot is not the one this \
+                 validator was bound to, and the ids it would produce would index this \
+                 validator's term table while naming the other snapshot's terms"
+                    .to_owned(),
+            );
+        }
+        if let Some(reason) = self.bound.footprint().opaque() {
+            return Ok(FocusExpansion::Everything { reason });
+        }
+        // The change set in THIS binding's id space, mapped once rather than once
+        // per trigger: the trigger loop below rescans it for every read the shapes
+        // graph performs.
+        let mut changed: Vec<::purrdf::QuadIds> = Vec::new();
+        for quad in delta.changed_quads() {
+            let ids = [quad.s, quad.p, quad.o].map(|id| core.local_delta_id(id));
+            let [Some(s), Some(p), Some(o)] = ids else {
+                return Err(format!(
+                    "internal change-path defect: a changed row of the bound mutation snapshot \
+                     names a term the binding's own {}-term view does not map",
+                    core.term_count()
+                ));
+            };
+            changed.push(::purrdf::QuadIds { s, p, o, g: None });
+        }
+        // The stamp every id this walk emits carries, read once. Dedup and the
+        // ordering below stay in the bare id space — the stamp is the same value
+        // for every element of one expansion, so it is not part of the key.
+        let dataset = self.data.identity();
+        let mut seen: IdSet = IdSet::default();
+        let mut affected: Vec<FocusId> = Vec::new();
+        // The slot row the lowered trigger chains index, resolved once at bind —
+        // the same row the validation beside this one reads.
+        let binding = self.bound.binding();
+        for trigger in self.bound.footprint().triggers() {
+            let predicate = match &trigger.predicate {
+                // A predicate this dataset never interned cannot be the predicate
+                // of a changed row, so this read matches nothing. That is the
+                // ordinary "the shapes graph names what the data does not" answer,
+                // not a refusal.
+                Some(predicate) => match core.term_id_by_iri(predicate.as_str()) {
+                    Some(id) => Some(id),
+                    None => continue,
+                },
+                // `sh:closed` binds no predicate: every changed row is a candidate.
+                None => None,
+            };
+            for quad in &changed {
+                if predicate.is_some_and(|predicate| predicate != quad.p) {
+                    continue;
+                }
+                let read_node = match trigger.endpoint {
+                    Endpoint::Subject => quad.s,
+                    Endpoint::Object => quad.o,
+                    // An RDF 1.2 reifier declaration carries the read node one level
+                    // down, inside the triple term it reifies, so the row is
+                    // unpacked before the chain is walked back. A changed
+                    // `rdf:reifies` row whose object is NOT a triple term reifies
+                    // nothing and is not this read — skipped, not guessed at.
+                    Endpoint::ObjectTripleSubject => match core.resolve(quad.o) {
+                        ::purrdf::TermRef::Triple { s, .. } => s,
+                        ::purrdf::TermRef::Iri(_)
+                        | ::purrdf::TermRef::Blank { .. }
+                        | ::purrdf::TermRef::Literal { .. } => continue,
+                    },
+                };
+                // The read described forwards, walked backwards. The reversal is
+                // stage-0 work and was done there: this walks a LOWERED path, on
+                // the evaluator validation itself runs, and neither rebuilds a
+                // `Path` nor re-resolves a predicate IRI per changed row.
+                match &trigger.reversed {
+                    // An empty chain: the focus node IS the node the read happens
+                    // at, so there is nothing to walk back.
+                    None => {
+                        if seen.insert(read_node) {
+                            affected.push(FocusId::new(dataset, read_node));
+                        }
+                    }
+                    Some(path) => {
+                        for id in
+                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)?
+                        {
+                            if seen.insert(id) {
+                                affected.push(FocusId::new(dataset, id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Canonical order, because a change expansion is a value a caller may log,
+        // compare or pin, and first-seen order is a fact about the walk rather than
+        // about the change.
+        affected.sort_unstable_by_key(|focus| focus.id.index());
+        Ok(FocusExpansion::Bounded(affected))
+    }
+
+    /// Admit a caller's owned terms as this binding's focus set: resolved,
+    /// deduplicated and canonically ordered.
+    ///
+    /// The owned-term counterpart of the admission loop inside
+    /// [`Self::validate_focus_node_ids`], and it has the same two obligations.
+    /// Deduplication is in ID space where the dataset interned the term and in
+    /// term space where it did not, because two `Term` values that name the same
+    /// node must not validate it twice. Ordering is applied here rather than left
+    /// to the caller so that the report a focus set produces does not depend on
+    /// the order the caller happened to list it in.
+    ///
+    /// A term the dataset never interned is kept as a FOREIGN focus node, not
+    /// dropped. Asking about a node the data graph does not mention is a valid
+    /// question with a real answer — a shape may well report a missing
+    /// `sh:minCount` against it — and silently discarding it would answer a
+    /// different question than the one asked.
+    ///
+    /// Both working sets are sized from the input, never from the graph, so this
+    /// carries no term proportional to the data.
+    fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> FocusSet {
+        // Both sets are INPUT-sized, from the same slice, for the same reason the
+        // id-native route's is.
+        let mut seen_ids: IdSet =
+            IdSet::with_capacity_and_hasher(focus_nodes.len(), ::purrdf::FastHasher::default());
+        let mut seen_foreign: FastSet<Term> =
+            FastSet::with_capacity_and_hasher(focus_nodes.len(), ::purrdf::FastHasher::default());
+        let mut normalized = FocusSet::with_capacity(&self.data, focus_nodes.len());
         for term in focus_nodes {
             if let Some(id) = resolve_id(self.data.core_view(), term) {
                 if seen_ids.insert(id) {
-                    normalized.push(FocusNode {
-                        term: term_id_to_native(self.data.core_view(), id),
-                        id: Some(id),
-                    });
+                    normalized.push(FocusNode::Interned(id));
                 }
             } else if seen_foreign.insert(term.clone()) {
-                normalized.push(FocusNode {
-                    term: term.clone(),
-                    id: None,
-                });
+                normalized.push(FocusNode::Foreign(term.clone()));
             }
         }
-        sort_focus_nodes(&mut normalized);
+        normalized.sort(&self.data);
         normalized
     }
 
-    fn validate_bounded(&self, focus_nodes: &[FocusNode]) -> Result<ValidationReport, String> {
+    /// Validate an ALREADY-ADMITTED focus set — the shared tail of both
+    /// focus-node entry points.
+    ///
+    /// The set is expected to have been through an admission step already
+    /// ([`Self::normalize_focus_nodes`], or the id loop in
+    /// [`Self::validate_focus_node_ids`]): deduplicated, ordered, and — the part
+    /// this method actually re-checks — resolved against THIS binding's dataset.
+    ///
+    /// Shape selection is inverted here. Rather than asking each shape whether it
+    /// contains each focus node, the dispatch is asked once for the whole set
+    /// which shapes claim which node, so the cost is per node rather than per
+    /// (shape, focus node) pair. Every non-deactivated shape is still PLANNED
+    /// unconditionally, before its claims are consulted: a shape whose plan
+    /// cannot be built is a defect in this crate, and a request that happened to
+    /// claim none of its nodes must not be the reason it goes unreported.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the focus set belongs to another binding, when a
+    /// shape cannot be planned, or when a constraint evaluation hard-fails.
+    fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, String> {
+        let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
             return Ok(finish_report(Vec::new()));
         }
+        // The dual question, asked once for the whole focus set: not "shape, do
+        // you contain this node?" once per (shape, focus node) pair, but "node,
+        // which shapes claim you?" once per node. See [`TargetDispatch`].
+        let claims =
+            self.bound
+                .dispatch()
+                .claims(&self.data, focus_nodes, self.shapes.node_shapes.len());
         let mut all_results = Vec::new();
-        for (shape, targets) in self.shapes.node_shapes.iter().zip(&self.targets) {
+        for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
                 continue;
             }
+            // Planned unconditionally, before the empty-claims check: a shape
+            // whose plan cannot be built is a defect in this crate, and a bounded
+            // request that happened to claim none of its nodes must not be the
+            // reason it goes unreported.
+            let plan = self.bound.plan(shape, position)?;
+            let Some(claimed) = claims.get(position).filter(|claimed| !claimed.is_empty()) else {
+                continue;
+            };
             all_results.extend(evaluate_shape_focus_nodes(
                 &self.data,
                 &self.shapes,
-                shape,
-                &self.plan,
+                plan,
                 focus_nodes,
-                |focus| targets.contains(&self.data, focus),
+                |focus| claimed.contains(focus),
             )?);
         }
         Ok(finish_report(all_results))
@@ -1502,6 +2261,198 @@ pub fn validate_dataset_with_governors(
     validate_with_governors(&data, shapes, governors)
 }
 
+/// WHICH QUESTION a change-path report answered.
+///
+/// A [`ValidationReport`] alone cannot say. An incremental run reports about the
+/// focus nodes the change could move, so `conforms` means *this change introduced
+/// no violation*; a run whose footprint could not be bounded validated the whole
+/// graph, so `conforms` means *the graph conforms*. Both are honest answers and
+/// they are not the same answer, which is why [`validate_change`] returns this
+/// beside the report rather than leaving a caller to assume one of them.
+///
+/// The two-answer shape of [`FocusExpansion`] is preserved deliberately: an empty
+/// bounded expansion and "every focus node in the graph" are opposite
+/// instructions, and a single count — with the fallback spelled as some large
+/// number — would collapse them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeScope {
+    /// The change's footprint was bounded, and the report covers exactly the
+    /// focus nodes named by that expansion.
+    Bounded {
+        /// How many focus nodes the expansion named. `0` means the change moved
+        /// nothing the shapes graph reads — not that nothing was checked.
+        focus_nodes: usize,
+    },
+    /// No bounded footprint exists for this shapes graph, so the run fell back to
+    /// a full [`PreparedValidator::validate`] of the mutated graph.
+    Everything {
+        /// Which construct made the footprint unreadable — actionable rather than
+        /// decorative: it names what to change to get incremental validation back.
+        reason: &'static str,
+    },
+}
+
+impl ChangeScope {
+    /// Whether the change's footprint could be bounded.
+    #[must_use]
+    pub const fn is_bounded(&self) -> bool {
+        matches!(self, Self::Bounded { .. })
+    }
+
+    /// How many focus nodes the bounded expansion named, or `None` on the
+    /// fallback — where "every focus node in the graph" is not a number.
+    #[must_use]
+    pub const fn focus_nodes(&self) -> Option<usize> {
+        match self {
+            Self::Bounded { focus_nodes } => Some(*focus_nodes),
+            Self::Everything { .. } => None,
+        }
+    }
+
+    /// Why the footprint was unbounded, or `None` when it was bounded.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Bounded { .. } => None,
+            Self::Everything { reason } => Some(*reason),
+        }
+    }
+}
+
+/// A change-path validation: the report, plus the [`ChangeScope`] it describes.
+#[derive(Debug)]
+pub struct ChangeValidation {
+    /// The SHACL report. See [`Self::scope`] for what it is a report ABOUT.
+    pub report: ValidationReport,
+    /// Which question [`Self::report`] answered.
+    pub scope: ChangeScope,
+}
+
+/// A governed change-path validation: the [`ChangeScope`], plus the governed
+/// outcome — a report and its evidence, or the budget that stopped it.
+///
+/// The scope sits OUTSIDE the outcome because it is known before any constraint
+/// is evaluated, so it survives a tripped budget: an operator whose incremental
+/// run ran out of fuel still learns which question the run was asking.
+#[derive(Debug)]
+pub struct GovernedChangeValidation {
+    /// Which question the run was asking, known before the first query ran.
+    pub scope: ChangeScope,
+    /// The governed outcome, exactly as [`validate_with_governors`] reports it.
+    pub outcome: GovernedValidation,
+}
+
+/// Expand a bound mutation snapshot into the focus nodes it can move, then
+/// validate exactly those — the `delta` → [`PreparedValidator::affected_focus_node_ids`]
+/// → [`PreparedValidator::validate_focus_node_ids`] loop, as ONE call.
+///
+/// `validator` must be bound to `delta` through
+/// [`PreparedShapes::bind_delta_with_shapes_graph`]; binding is the caller's,
+/// because a caller owns how its change was assembled (a parsed patch document, a
+/// store's copy-on-write delta, a pair of change graphs) and this owns only what
+/// is done with it afterwards.
+///
+/// # The fallback is not optional
+///
+/// A shapes graph whose constraints read through SPARQL query text has no
+/// footprint anyone can bound, and [`PreparedValidator::affected_focus_node_ids`]
+/// says so rather than returning a short answer. This honours that by running a
+/// full [`PreparedValidator::validate`] and reporting
+/// [`ChangeScope::Everything`] — because a short expansion and a clean bill of
+/// health are indistinguishable in a report, which is exactly why the expansion
+/// refuses to guess.
+///
+/// # Nothing sits between the two halves
+///
+/// The ids the expansion answers are stamped with the binding that minted them
+/// and [`PreparedValidator::validate_focus_node_ids`] refuses ids from any other,
+/// so the expansion feeds the validator UNCONVERTED. That is the property this
+/// entry point exists to hold in ONE place rather than in each surface that
+/// drives the change path.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `validator` is not bound to `delta`, and on a hard
+/// validation failure (see [`validate_with`]).
+pub fn validate_change(
+    validator: &PreparedValidator,
+    delta: &::purrdf::ir::DeltaDatasetView,
+) -> Result<ChangeValidation, String> {
+    let (scope, report) = change_pass(validator, delta)?;
+    report.map(|report| ChangeValidation { report, scope })
+}
+
+/// [`validate_change`] under caller-supplied execution governors.
+///
+/// # One budget for the whole change validation
+///
+/// The same arrangement [`validate_with_governors`] makes, over the same scope
+/// guard: **one** [`GovernorState`], built here and dropped with this call, so a
+/// ceiling bounds the incremental validation a caller asked about rather than
+/// each of the queries it decomposes into. The trip is read back off the state
+/// that latched it rather than parsed out of an error string, so the outcome and
+/// the evidence cannot be two independently-derived answers about one trip.
+///
+/// It matters most on the [`ChangeScope::Everything`] fallback, which is
+/// precisely the case where the shapes graph runs SPARQL. A bounded expansion
+/// executes no query text at all — that is *why* it could be bounded — and so
+/// consumes nothing, which is the honest answer rather than an oversight.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when `validator` is not bound to `delta`, and on a hard
+/// validation failure. A tripped governor is **not** an error: it is the
+/// [`GovernedValidation::BudgetExhausted`] outcome, carried beside the scope.
+pub fn validate_change_with_governors(
+    validator: &PreparedValidator,
+    delta: &::purrdf::ir::DeltaDatasetView,
+    governors: &QueryGovernors,
+) -> Result<GovernedChangeValidation, String> {
+    let state = Arc::new(GovernorState::new(governors));
+    let pass = {
+        let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
+        change_pass(validator, delta)
+    };
+    let evidence = state.evidence();
+    // `?` before the trip is read, and it cannot swallow one: the expansion
+    // executes no query text, so nothing can charge the state until the scope is
+    // already decided. An `Err` here is therefore a refusal of the binding, never
+    // a budget that stopped a query nobody ran.
+    let (scope, outcome) = pass?;
+    match (outcome, state.tripped()) {
+        (_, Some(tripped)) => Ok(GovernedChangeValidation {
+            scope,
+            outcome: GovernedValidation::BudgetExhausted { tripped, evidence },
+        }),
+        (Ok(report), None) => Ok(GovernedChangeValidation {
+            scope,
+            outcome: GovernedValidation::Complete { report, evidence },
+        }),
+        (Err(message), None) => Err(message),
+    }
+}
+
+/// The loop itself, with the scope reported SEPARATELY from the validation's own
+/// result so a governed caller can still say which question was asked when the
+/// answer is a tripped budget rather than a report.
+fn change_pass(
+    validator: &PreparedValidator,
+    delta: &::purrdf::ir::DeltaDatasetView,
+) -> Result<(ChangeScope, Result<ValidationReport, String>), String> {
+    let expansion = validator.affected_focus_node_ids(delta)?;
+    Ok(match &expansion {
+        FocusExpansion::Bounded(ids) => (
+            ChangeScope::Bounded {
+                focus_nodes: ids.len(),
+            },
+            validator.validate_focus_node_ids(ids),
+        ),
+        FocusExpansion::Everything { reason } => {
+            (ChangeScope::Everything { reason }, validator.validate())
+        }
+    })
+}
+
 /// Validate with an explicit focus-node filter.
 ///
 /// The filter is called after target resolution and before constraint evaluation.
@@ -1522,8 +2473,10 @@ pub fn validate_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    let plan = ValidationPlan::for_shapes(data.core_view(), shapes);
-    validate_with_plan_and_focus_filter(data, shapes, &plan, &mut include_focus)
+    let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
+    let classes = Arc::clone(lowered.classes());
+    let bound = BoundShapes::bind_untargeted(data, lowered, classes);
+    validate_with_plan_and_focus_filter(data, shapes, &bound, &mut include_focus)
 }
 
 /// Validate a frozen [`::purrdf::RdfDataset`] against parsed SHACL shapes, IR-natively.
@@ -1888,6 +2841,212 @@ mod tests {
         crate::shapes::from_dataset(&dataset).expect("shapes parse must succeed")
     }
 
+    // ── Target selection: three implementations, one predicate ────────────────
+
+    /// The namespace the target-agreement fixtures live in.
+    const TARGET_NS: &str = "http://example.org/ns#";
+
+    /// Bind `shapes_body` against `data_body` and return the bound validator.
+    fn bind_target_fixture(shapes_body: &str, data_body: &str) -> (Arc<Shapes>, PreparedValidator) {
+        let shapes = Arc::new(load_shapes_ttl(&format!("{PREFIXES}{shapes_body}")));
+        let data =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{data_body}"), None)
+                .expect("fixture data must parse");
+        let data = project_dataset(&data).expect("fixture data must project");
+        let validator = PreparedShapes::new(Arc::clone(&shapes))
+            .bind_projected_dataset(data)
+            .expect("fixture must bind");
+        (shapes, validator)
+    }
+
+    /// EVERY node this dataset can name, plus terms it never interned.
+    ///
+    /// A target set is not only about nodes the graph mentions — `sh:targetNode`
+    /// may name one that is absent — so the candidate set deliberately includes
+    /// both an absent term that IS an explicit target and one that is not.
+    fn every_candidate_focus_node(validator: &PreparedValidator) -> Vec<FocusNode> {
+        let view = validator.data.core_view();
+        let mut candidates: Vec<FocusNode> = (0..view.term_count())
+            .map(|index| {
+                FocusNode::Interned(TermId::from_index(
+                    u32::try_from(index).expect("fixture fits in u32"),
+                ))
+            })
+            .collect();
+        for local in ["neverInterned", "neverInternedAndNotATarget"] {
+            candidates.push(FocusNode::Foreign(Term::NamedNode(
+                NamedNode::new_unchecked(format!("{TARGET_NS}{local}")),
+            )));
+        }
+        candidates
+    }
+
+    /// The focus nodes each of the three implementations selects, per shape
+    /// position: `(contains, dispatch, resolve_all)`.
+    fn target_selections(
+        shapes: &Shapes,
+        validator: &PreparedValidator,
+    ) -> Vec<(
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    )> {
+        let candidates = every_candidate_focus_node(validator);
+        let claims = validator.bound.dispatch().claims(
+            &validator.data,
+            &candidates,
+            shapes.node_shapes.len(),
+        );
+        let key = |focus: &FocusNode| focus.to_term(validator.data.core_view()).to_string();
+        (0..shapes.node_shapes.len())
+            .map(|position| {
+                let targets = &validator.bound.targets[position];
+                let by_contains = candidates
+                    .iter()
+                    .filter(|focus| targets.contains(&validator.data, focus))
+                    .map(key)
+                    .collect();
+                let by_dispatch = candidates
+                    .iter()
+                    .filter(|focus| claims[position].contains(focus))
+                    .map(key)
+                    .collect();
+                let by_resolve_all = targets
+                    .resolve_all(&validator.data)
+                    .iter()
+                    .map(key)
+                    .collect();
+                (by_contains, by_dispatch, by_resolve_all)
+            })
+            .collect()
+    }
+
+    /// **`PreparedTargets::contains`, `PreparedTargets::resolve_all` and
+    /// `TargetDispatch` select the identical focus-node set — for every `Target`
+    /// variant there is.**
+    ///
+    /// Three implementations of one predicate. `contains` DEFINES it, one
+    /// (shape, node) pair at a time; `resolve_all` enumerates it forwards over the
+    /// whole graph; the dispatch index answers it backwards, from the node. Two
+    /// implementations of one predicate with no equivalence test is how they come
+    /// to disagree, and a disagreement here is not a slow validator but a wrong
+    /// one: a node the dispatch fails to claim is a node NO shape validates, which
+    /// is a silent drop with a conforming report to hide behind.
+    ///
+    /// The candidate set is exhaustive over the dataset's whole term table rather
+    /// than over a hand-listed set of "interesting" nodes, so a predicate that
+    /// over-selects (an IRI used only as a datatype, say) fails here too — the
+    /// mirror failure, and the one an under-selection test cannot see.
+    #[test]
+    fn target_dispatch_agrees_with_contains_and_resolve_all() {
+        let (shapes, validator) = bind_target_fixture(
+            r#"
+            ex:ClassShape a sh:NodeShape ; sh:targetClass ex:Person ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ImplicitShape a sh:NodeShape, rdfs:Class ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:SubjectsShape a sh:NodeShape ; sh:targetSubjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ObjectsShape a sh:NodeShape ; sh:targetObjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ExplicitShape a sh:NodeShape ;
+                sh:targetNode ex:explicit, ex:neverInterned ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:SparqlShape a sh:NodeShape ;
+                sh:target [ a sh:SPARQLTarget ; sh:select
+                    "SELECT ?this WHERE { ?this <http://example.org/ns#active> true }" ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            "#,
+            r"
+            ex:Child rdfs:subClassOf ex:Person .
+            ex:alice a ex:Child .
+            ex:bob a ex:Person .
+            ex:implicitInstance a ex:ImplicitShape .
+            ex:tail ex:link ex:head .
+            ex:explicit ex:required ex:anything .
+            ex:activeNode ex:active true .
+            ",
+        );
+
+        // The fixture's claim to be exhaustive is itself checked: a fixture that
+        // quietly stopped covering a variant would leave this test green while
+        // testing less, which is the failure mode an agreement test is for.
+        let mut covered = [false; 6];
+        for target in shapes.node_shapes.iter().flat_map(|shape| &shape.targets) {
+            covered[match target {
+                Target::Class(_) => 0,
+                Target::SubjectsOf(_) => 1,
+                Target::ObjectsOf(_) => 2,
+                Target::Node(_) => 3,
+                Target::ImplicitClass(_) => 4,
+                Target::Sparql { .. } => 5,
+            }] = true;
+        }
+        assert!(
+            covered.iter().all(|&seen| seen),
+            "the fixture must exercise EVERY Target variant, got {covered:?}",
+        );
+
+        for (position, (by_contains, by_dispatch, by_resolve_all)) in
+            target_selections(&shapes, &validator)
+                .into_iter()
+                .enumerate()
+        {
+            let shape = &shapes.node_shapes[position].id;
+            assert!(
+                !by_contains.is_empty(),
+                "{shape}: selects nothing, so its agreement is vacuous",
+            );
+            assert_eq!(
+                by_contains, by_dispatch,
+                "{shape}: the inverted dispatch disagrees with `contains`",
+            );
+            assert_eq!(
+                by_contains, by_resolve_all,
+                "{shape}: `resolve_all` disagrees with `contains`",
+            );
+        }
+    }
+
+    /// **The subjects-of and objects-of loops select opposite ends of the same
+    /// quad.**
+    ///
+    /// `resolve_all`'s two predicate loops use an IDENTICAL quad pattern —
+    /// `(?, predicate, ?)`, open on both ends — and differ only in taking
+    /// `quad.s` or `quad.o`. That is correct by construction, and it is also
+    /// invisible to any fixture whose subjects-of and objects-of sets overlap.
+    /// This one makes them DISJOINT, so swapping the two ends, or "tidying" the
+    /// object loop into binding its object, fails immediately.
+    #[test]
+    fn resolve_all_is_asymmetric_in_the_subject_and_object_directions() {
+        let (shapes, validator) = bind_target_fixture(
+            r"
+            ex:SubjectsShape a sh:NodeShape ; sh:targetSubjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:ObjectsShape a sh:NodeShape ; sh:targetObjectsOf ex:link ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ",
+            "ex:tail ex:link ex:head .",
+        );
+        // `node_shapes` is not in declaration order, so the expected end is keyed
+        // by the shape that declares it rather than by position.
+        let selections = target_selections(&shapes, &validator);
+        for (position, (by_contains, by_dispatch, by_resolve_all)) in
+            selections.into_iter().enumerate()
+        {
+            let shape = shapes.node_shapes[position].id.to_string();
+            let end = if shape.contains("SubjectsShape") {
+                "tail"
+            } else {
+                "head"
+            };
+            let only = std::collections::BTreeSet::from([format!("<{TARGET_NS}{end}>")]);
+            assert_eq!(by_resolve_all, only, "{shape}: wrong end of the quad");
+            assert_eq!(by_contains, only, "{shape}: wrong end of the quad");
+            assert_eq!(by_dispatch, only, "{shape}: wrong end of the quad");
+        }
+    }
+
     #[test]
     fn shared_shape_analysis_rebinds_class_ids_and_sparql_targets_per_dataset() {
         use rayon::prelude::*;
@@ -1921,7 +3080,7 @@ mod tests {
                     .unwrap();
             let data = project_dataset(&data).unwrap();
             let binding = prepared.bind_projected_dataset(Arc::clone(&data)).unwrap();
-            assert!(Arc::ptr_eq(&prepared.classes, &binding.plan.classes));
+            assert!(Arc::ptr_eq(&prepared.classes, &binding.bound.classes));
             assert!(Arc::ptr_eq(&data, &binding.data.core_arc()));
             let report = binding.validate().unwrap();
             assert_eq!(report.results.len(), *expected, "{source}");
@@ -2577,20 +3736,73 @@ mod tests {
              <http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Value> .\n",
         );
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let plan = ValidationPlan::for_shapes(data.as_ref(), &shapes);
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let classes = lowered.classes();
+        let binding = lowered.bind(data.as_ref(), classes);
 
-        assert_eq!(plan.class_ids.len(), 3);
+        assert_eq!(classes.len(), 3);
         assert!(
-            plan.class_id(&NamedNode::from("http://example.org/ns#Root"))
+            binding
+                .class_id(classes, &NamedNode::from("http://example.org/ns#Root"))
+                .expect("ex:Root is planned")
                 .is_some()
         );
         assert!(
-            plan.class_id(&NamedNode::from("http://example.org/ns#Value"))
+            binding
+                .class_id(classes, &NamedNode::from("http://example.org/ns#Value"))
+                .expect("ex:Value is planned")
                 .is_some()
         );
+        // Planned but absent from the DATA graph: a soft `None`, never an error.
         assert!(
-            plan.class_id(&NamedNode::from("http://example.org/ns#Nested"))
+            binding
+                .class_id(classes, &NamedNode::from("http://example.org/ns#Nested"))
+                .expect("ex:Nested is planned even though the data never names it")
                 .is_none()
+        );
+    }
+
+    /// The two "no id" answers are different conditions and must stay apart.
+    ///
+    /// A class the walk never collected is a defect in the PLAN, and it is
+    /// reported as an error — it used to be an `expect`, and a panic aborts
+    /// across the PyO3 and C ABI boundaries. A class the walk DID collect but the
+    /// data graph never names is ordinary and stays a soft `None`, because a
+    /// shapes graph is entitled to name a class its data lacks.
+    #[test]
+    fn an_unplanned_class_errors_while_a_planned_one_absent_from_the_data_stays_none() {
+        let shapes_ttl = format!(
+            r"{PREFIXES}
+            ex:PlannedShape a sh:NodeShape ;
+                sh:targetClass ex:Root ;
+                sh:property [ sh:path ex:member ; sh:class ex:Ghost ] .
+            "
+        );
+        let data = load_data_nt(
+            "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Root> .\n",
+        );
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let classes = lowered.classes();
+        let binding = lowered.bind(data.as_ref(), classes);
+
+        // Planned, but the data graph interns no such class term.
+        assert_eq!(
+            binding.class_id(classes, &NamedNode::from("http://example.org/ns#Ghost")),
+            Ok(None),
+            "a planned class the data never names is a soft None, not a refusal"
+        );
+
+        // Never collected by the walk at all.
+        let error = binding
+            .class_id(
+                classes,
+                &NamedNode::from("http://example.org/ns#NotInTheCatalog"),
+            )
+            .expect_err("a class outside the catalog is a plan defect");
+        assert!(
+            error.contains("NotInTheCatalog") && error.contains("class-planning walk"),
+            "the error must name the class and the walk that missed it, got: {error}"
         );
     }
 
@@ -2779,8 +3991,8 @@ mod tests {
             expected_whole.to_ntriples()
         );
 
-        let alice_id = projected
-            .term_id_by_iri("http://example.org/ns#alice")
+        let alice_id = prepared
+            .term_id(&NamedNode::new_unchecked("http://example.org/ns#alice").into_term())
             .expect("alice must be interned");
         assert_eq!(
             prepared
@@ -2796,8 +4008,13 @@ mod tests {
                 .conforms
         );
 
-        let invalid = TermId::from_index(
-            u32::try_from(projected.term_count()).expect("small test term table"),
+        // Minted with the RIGHT binding and an id past the end of its table, which
+        // is the only way to build one: the public surface cannot produce it. The
+        // range check behind it is therefore an in-crate backstop, and this is
+        // what keeps it honest.
+        let invalid = FocusId::new(
+            prepared.data.identity(),
+            TermId::from_index(u32::try_from(projected.term_count()).expect("small test term")),
         );
         assert!(
             prepared.validate_focus_node_ids(&[invalid]).is_err(),
@@ -3214,15 +4431,15 @@ mod tests {
 
     /// Resolve each `terms` entry (all named nodes, all `ex:v{i}` focus nodes) to its
     /// [`TermId`] in `projected`, panicking with `label` context on a lookup miss.
-    fn term_ids_for(projected: &RdfDataset, terms: &[Term], label: &str) -> Vec<TermId> {
+    fn term_ids_for(prepared: &PreparedValidator, terms: &[Term], label: &str) -> Vec<FocusId> {
         terms
             .iter()
             .map(|term| {
                 let Term::NamedNode(named) = term else {
                     panic!("{label}: focus term must be a named node: {term:?}")
                 };
-                projected
-                    .term_id_by_iri(named.as_str())
+                prepared
+                    .term_id(term)
                     .unwrap_or_else(|| panic!("{label}: {named} must be interned"))
             })
             .collect()
@@ -3427,7 +4644,7 @@ mod tests {
                 );
                 assert!(!bounded.conforms, "{label}: validate_focus_nodes");
 
-                let bounded_ids_input = term_ids_for(&projected, &bounded_focus_terms, label);
+                let bounded_ids_input = term_ids_for(&prepared, &bounded_focus_terms, label);
                 let bounded_ids = prepared
                     .validate_focus_node_ids(&bounded_ids_input)
                     .unwrap_or_else(|error| {
@@ -3683,7 +4900,7 @@ mod tests {
             );
             assert!(!bounded.conforms, "{label}: validate_focus_nodes");
 
-            let bounded_ids_input = term_ids_for(&projected, &bounded_focus_terms, label);
+            let bounded_ids_input = term_ids_for(&prepared, &bounded_focus_terms, label);
             let bounded_ids = pool
                 .install(|| {
                     let _scope = crate::sparql::enter_property_function_scope(Arc::new(
@@ -3767,5 +4984,562 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Focus-set ordering and dataset identity ──────────────────────────────
+
+    /// A dataset whose interning order is deliberately the REVERSE of its
+    /// canonical order, plus the shapes graph that targets every node in it.
+    ///
+    /// Interning descending means a focus comparator that reached for an id's
+    /// NUMBER — directly, or by shortcutting the interned/interned pair to an
+    /// integer compare — sorts the set exactly backwards rather than plausibly
+    /// wrong, which is the only way that mistake is visible in a test.
+    fn anti_canonical_focus_dataset() -> Arc<RdfDataset> {
+        // Descending locals, so ids ascend as the rendered IRIs descend.
+        focus_dataset_interning(&DESCENDING_FOCUS_LOCALS)
+    }
+
+    /// The fixture's ten focus locals in the order
+    /// [`anti_canonical_focus_dataset`] interns them.
+    const DESCENDING_FOCUS_LOCALS: [&str; 10] =
+        ["n9", "n8", "n7", "n6", "n5", "n4", "n3", "n2", "n1", "n0"];
+
+    /// The same ten focus nodes and the same targeting class, interned in
+    /// whatever order `locals` names.
+    ///
+    /// Interning order is what assigns ids, so two datasets built from the same
+    /// IRIs in two orders give the SAME IRI two different ids — and therefore give
+    /// one id two different meanings. That is the hazard a focus id's provenance
+    /// stamp exists for, and it is what
+    /// [`a_focus_id_from_another_binding_is_refused_and_its_own_is_accepted`]
+    /// builds.
+    fn focus_dataset_interning(locals: &[&str]) -> Arc<RdfDataset> {
+        let mut builder = ::purrdf::RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let class = builder.intern_iri("http://example.org/ns#Focus");
+        for local in locals {
+            let node = builder.intern_iri(&format!("http://example.org/ns#{local}"));
+            builder.push_quad(node, rdf_type, class, None);
+        }
+        builder.freeze().expect("the fixture dataset freezes")
+    }
+
+    /// Every interned focus node of [`anti_canonical_focus_dataset`], in id
+    /// order.
+    fn anti_canonical_focus_ids(data: &ShaclData) -> Vec<TermId> {
+        (0..data.core_view().term_count())
+            .map(|index| TermId::from_index(u32::try_from(index).expect("fixture fits in u32")))
+            .filter(|id| {
+                matches!(
+                    data.core_view().resolve(*id),
+                    ::purrdf::TermRef::Iri(iri) if iri.contains("/ns#n")
+                )
+            })
+            .collect()
+    }
+
+    /// Bind the anti-canonical fixture to a shapes graph that targets it.
+    fn anti_canonical_validator() -> PreparedValidator {
+        let shapes = load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:property [ sh:path ex:absent ; sh:maxCount 1 ] ."
+        ));
+        PreparedShapes::new(Arc::new(shapes))
+            .bind_shared_dataset(anti_canonical_focus_dataset())
+            .expect("the fixture binds")
+    }
+
+    /// **The focus comparator orders by what a node DENOTES, in all three
+    /// populations: all-interned, all-foreign, and interleaved.**
+    ///
+    /// The interleaved case is the one that matters. A comparator that shortcut
+    /// the interned/interned pair to an integer compare, or that partitioned the
+    /// two representations instead of interleaving them, passes the first two
+    /// cases — each is internally self-consistent — and reorders every mixed
+    /// focus set silently. The dataset is interned ANTI-CANONICALLY so that
+    /// comparing ids by number cannot accidentally look right.
+    #[test]
+    fn focus_order_is_canonical_across_interned_and_foreign_nodes() {
+        let validator = anti_canonical_validator();
+        let data = &validator.data;
+        let view = data.core_view();
+        let interned = anti_canonical_focus_ids(data);
+        assert!(
+            interned.len() >= 10,
+            "the fixture must hold every focus node"
+        );
+
+        // The fixture really is anti-canonical: id order is not canonical order.
+        assert!(
+            interned.windows(2).any(|pair| {
+                focus_cmp(
+                    view,
+                    &FocusNode::Interned(pair[0]),
+                    &FocusNode::Interned(pair[1]),
+                ) == std::cmp::Ordering::Greater
+            }),
+            "the fixture must intern its focus nodes out of canonical order"
+        );
+
+        // Terms this dataset never interned, so they can only be `Foreign`, and
+        // chosen to INTERLEAVE with the interned locals rather than sort as a
+        // block on either side of them.
+        let foreign: Vec<Term> = ["n05", "n15", "n25", "n35", "n45", "n55"]
+            .iter()
+            .map(|local| {
+                Term::NamedNode(NamedNode::new_unchecked(format!(
+                    "http://example.org/ns#{local}"
+                )))
+            })
+            .collect();
+        for term in &foreign {
+            assert!(
+                resolve_id(view, term).is_none(),
+                "a foreign fixture term must not be interned: {term}"
+            );
+        }
+
+        let all_interned: Vec<FocusNode> =
+            interned.iter().copied().map(FocusNode::Interned).collect();
+        let all_foreign: Vec<FocusNode> = foreign.iter().cloned().map(FocusNode::Foreign).collect();
+        let mut interleaved = Vec::new();
+        for (index, node) in all_interned.iter().enumerate() {
+            interleaved.push(node.clone());
+            if let Some(term) = foreign.get(index) {
+                interleaved.push(FocusNode::Foreign(term.clone()));
+            }
+        }
+        assert!(
+            interleaved.len() > all_interned.len() && interleaved.len() > all_foreign.len(),
+            "the interleaved population must really mix both representations"
+        );
+
+        for (label, mut population) in [
+            ("all-interned", all_interned),
+            ("all-foreign", all_foreign),
+            ("interleaved", interleaved),
+        ] {
+            // The reference order: materialize, render, sort the strings. That is
+            // the definition the comparator has to reproduce without rendering.
+            let mut expected: Vec<String> = population
+                .iter()
+                .map(|focus| focus.to_term(view).to_string())
+                .collect();
+            expected.sort();
+            sort_focus_nodes(view, &mut population);
+            let actual: Vec<String> = population
+                .iter()
+                .map(|focus| focus.to_term(view).to_string())
+                .collect();
+            assert_eq!(
+                actual, expected,
+                "{label}: the focus comparator did not reproduce rendered byte order"
+            );
+        }
+    }
+
+    /// **A focus set resolved against one binding is refused by another, and the
+    /// binding it came from still accepts it.**
+    ///
+    /// Both directions, because a refusal that fires on everything is not a
+    /// check: the accepting half is what says the guard distinguishes the
+    /// datasets rather than distrusting every caller. The refused ids are IN
+    /// RANGE for the receiving binding — that is the whole hazard, since an
+    /// out-of-range id is already rejected and a wrong-dataset one resolves
+    /// quietly to a different term.
+    #[test]
+    fn a_focus_set_from_another_binding_is_refused_and_its_own_is_accepted() {
+        let shapes = Arc::new(load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:property [ sh:path ex:absent ; sh:maxCount 1 ] ."
+        )));
+        let prepared = PreparedShapes::new(shapes);
+        let here = prepared
+            .bind_shared_dataset(anti_canonical_focus_dataset())
+            .expect("the first binding binds");
+        // A SECOND, independently interned snapshot of the same shape of data —
+        // exactly what `bind_delta_with_shapes_graph` leaves a caller holding
+        // beside a base binding.
+        let there = prepared
+            .bind_shared_dataset(anti_canonical_focus_dataset())
+            .expect("the second binding binds");
+
+        let ids = anti_canonical_focus_ids(&there.data);
+        assert!(!ids.is_empty(), "the fixture must hold focus nodes");
+        for &id in &ids {
+            assert!(
+                id.index() < here.data.core_view().term_count(),
+                "the refused ids must be IN RANGE for the receiving binding, or the existing \
+                 range check would be what rejected them"
+            );
+        }
+
+        // Built against `there`, handed to `there`: accepted.
+        let mut own = FocusSet::with_capacity(&there.data, ids.len());
+        for &id in &ids {
+            own.push(FocusNode::Interned(id));
+        }
+        own.sort(&there.data);
+        let accepted = there
+            .validate_bounded(&own)
+            .expect("a focus set from this very binding must be accepted");
+        assert!(
+            accepted.conforms,
+            "the fixture focus nodes conform, so the accepting half is a real validation"
+        );
+
+        // Built against `there`, handed to `here`: refused.
+        let mut foreign_set = FocusSet::with_capacity(&there.data, ids.len());
+        for &id in &ids {
+            foreign_set.push(FocusNode::Interned(id));
+        }
+        foreign_set.sort(&there.data);
+        let refused = here.validate_bounded(&foreign_set);
+        let message = refused.expect_err("a focus set from another binding must be refused");
+        assert!(
+            message.contains("dataset-local"),
+            "the refusal must say why TermIds are not portable: {message}"
+        );
+    }
+
+    /// The fixture's ten focus locals as owned terms, in interning order.
+    fn descending_focus_terms() -> Vec<Term> {
+        DESCENDING_FOCUS_LOCALS
+            .iter()
+            .map(|local| {
+                NamedNode::new_unchecked(format!("http://example.org/ns#{local}")).into_term()
+            })
+            .collect()
+    }
+
+    /// The shapes graph both focus-id provenance tests bind.
+    ///
+    /// `sh:minCount 1` on a predicate NOTHING in the fixture carries, so every
+    /// focus node produces a result. That is what lets the accepting half below
+    /// compare report CONTENT: a bare `conforms` flag is satisfied just as well by
+    /// a validator that stopped validating.
+    fn focus_provenance_shapes() -> Arc<Shapes> {
+        Arc::new(load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:property [ sh:path ex:absent ; sh:minCount 1 ] ."
+        )))
+    }
+
+    /// **The PUBLIC id-native entry point refuses a focus id minted by another
+    /// binding, and still validates one minted by its own.**
+    ///
+    /// The sibling test above drives `validate_bounded`, which carries no
+    /// visibility modifier at all and so is private to this module; a guard that
+    /// only ever runs behind a door no caller can open is not a guard on the door
+    /// callers use. This one drives
+    /// [`PreparedValidator::validate_focus_node_ids`] itself.
+    ///
+    /// The two bindings intern the SAME IRIs in OPPOSITE orders, so an id is not
+    /// merely foreign — it is in range and it denotes a different term, which is
+    /// asserted here rather than assumed. Both directions are executed: a refusal
+    /// that fired on everything would close the hazard by closing the feature,
+    /// and the accepting half is what distinguishes the two.
+    #[test]
+    fn a_focus_id_from_another_binding_is_refused_and_its_own_is_accepted() {
+        let prepared = PreparedShapes::new(focus_provenance_shapes());
+        let here = prepared
+            .bind_shared_dataset(focus_dataset_interning(&DESCENDING_FOCUS_LOCALS))
+            .expect("the first binding binds");
+        let mut ascending = DESCENDING_FOCUS_LOCALS;
+        ascending.reverse();
+        // A SECOND, independently interned snapshot of the same data — exactly
+        // what `bind_delta_with_shapes_graph` leaves a caller holding beside a
+        // base binding — with the interning order reversed.
+        let there = prepared
+            .bind_shared_dataset(focus_dataset_interning(&ascending))
+            .expect("the second binding binds");
+
+        let terms = descending_focus_terms();
+        let mint = |validator: &PreparedValidator| -> Vec<FocusId> {
+            terms
+                .iter()
+                .map(|term| {
+                    validator
+                        .term_id(term)
+                        .unwrap_or_else(|| panic!("{term} must be interned"))
+                })
+                .collect()
+        };
+        let here_ids = mint(&here);
+        let there_ids = mint(&there);
+
+        // The hazard, made concrete. Every id minted by `there` is IN RANGE for
+        // `here`, and at least one of them denotes a DIFFERENT term there — so
+        // without the stamp it would resolve, dispatch and validate the wrong
+        // node, reporting on a focus set nobody asked about.
+        let mut denoting_differently = 0_usize;
+        for (term, focus) in terms.iter().zip(&there_ids) {
+            assert!(
+                focus.term_id().index() < here.data.core_view().term_count(),
+                "{term}'s id from the other binding must be IN RANGE here, or the range check \
+                 would be what rejected it rather than the provenance stamp"
+            );
+            if let ::purrdf::TermRef::Iri(denoted) = here.data.core_view().resolve(focus.term_id())
+                && NamedNode::new_unchecked(denoted).into_term() != *term
+            {
+                denoting_differently += 1;
+            }
+        }
+        assert!(
+            denoting_differently > 0,
+            "the two bindings must give at least one IRI two different ids, or this fixture is \
+             not the hazard the stamp exists for"
+        );
+
+        // REFUSED: minted by `there`, handed to `here`.
+        let refused = here
+            .validate_focus_node_ids(&there_ids)
+            .expect_err("focus ids minted by another binding must be refused");
+        assert!(
+            refused.contains("minted against a different dataset binding"),
+            "the refusal must name the mismatch it found: {refused}"
+        );
+        assert!(
+            refused.contains("dataset-local"),
+            "the refusal must say why an id is not portable: {refused}"
+        );
+
+        // ACCEPTED: each binding still validates its own, and produces the report
+        // the term-keyed route produces over the same nodes — same content, same
+        // order.
+        for (label, validator, ids) in [("here", &here, &here_ids), ("there", &there, &there_ids)] {
+            let accepted = validator
+                .validate_focus_node_ids(ids)
+                .unwrap_or_else(|error| {
+                    panic!("{label}: its own focus ids must validate: {error}")
+                });
+            assert_eq!(
+                accepted.results.len(),
+                DESCENDING_FOCUS_LOCALS.len(),
+                "{label}: every focus node violates sh:minCount, so the accepting half has to be \
+                 a real validation rather than an empty pass"
+            );
+            assert_eq!(
+                accepted.to_ntriples(),
+                validator
+                    .validate_focus_nodes(&terms)
+                    .unwrap_or_else(|error| panic!("{label}: the term-keyed route: {error}"))
+                    .to_ntriples(),
+                "{label}: the id-native route must still produce the report it produced before, \
+                 content and ORDER alike"
+            );
+        }
+    }
+
+    /// **The change loop is type-closed: what the expansion answers is exactly
+    /// what the id-native entry point takes, with no conversion in between.**
+    ///
+    /// That is the point of carrying provenance on the id rather than documenting
+    /// it. `delta` → [`PreparedValidator::affected_focus_node_ids`] →
+    /// [`PreparedValidator::validate_focus_node_ids`] passes a `&[FocusId]`
+    /// straight through, so there is no place for a caller to strip the stamp and
+    /// no place for one to be attached to an id that did not earn it.
+    #[test]
+    fn the_change_expansion_feeds_the_id_native_entry_point_unconverted() {
+        let base = focus_dataset_interning(&DESCENDING_FOCUS_LOCALS);
+        let mut mutation = ::purrdf::MutableDataset::new(base);
+        assert!(
+            ::purrdf::DatasetMut::insert(
+                &mut mutation,
+                ::purrdf::QuadValues {
+                    s: ::purrdf::TermValue::iri("http://example.org/ns#n10"),
+                    p: ::purrdf::TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
+                    o: ::purrdf::TermValue::iri("http://example.org/ns#Focus"),
+                    g: None,
+                }
+            )
+            .expect("the insert applies"),
+            "the fixture row must really change the graph, or the expansion below is empty for \
+             the wrong reason"
+        );
+        let snapshot = Arc::new(mutation.snapshot_view().expect("the mutation snapshots"));
+        let validator = PreparedShapes::new(focus_provenance_shapes())
+            .bind_delta_with_shapes_graph(
+                Arc::clone(&snapshot),
+                None,
+                ::purrdf::ir::ViewLimits::default(),
+            )
+            .expect("the delta binds");
+
+        let expansion = validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("the expansion succeeds");
+        let ids = expansion.ids().unwrap_or_else(|| {
+            panic!(
+                "this shapes graph is readable, so the expansion must be bounded ({:?})",
+                expansion.reason()
+            )
+        });
+        assert_eq!(
+            ids.len(),
+            1,
+            "the inserted row makes exactly one new focus node, and an expansion that named \
+             more or fewer is not the loop this test closes"
+        );
+
+        // The loop, with nothing between its two halves.
+        let report = validator
+            .validate_focus_node_ids(ids)
+            .expect("the expansion must validate through the entry point it feeds");
+        assert_eq!(
+            report.results.len(),
+            1,
+            "the new focus node carries no ex:absent, so re-validating the expansion must report \
+             its violation"
+        );
+    }
+
+    /// Bind the one-row change of the test above against `shapes`, returning the
+    /// snapshot and the validator every change-path entry point below drives.
+    fn change_fixture(
+        shapes: Arc<Shapes>,
+    ) -> (Arc<::purrdf::ir::DeltaDatasetView>, PreparedValidator) {
+        let base = focus_dataset_interning(&DESCENDING_FOCUS_LOCALS);
+        let mut mutation = ::purrdf::MutableDataset::new(base);
+        assert!(
+            ::purrdf::DatasetMut::insert(
+                &mut mutation,
+                ::purrdf::QuadValues {
+                    s: ::purrdf::TermValue::iri("http://example.org/ns#n10"),
+                    p: ::purrdf::TermValue::iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
+                    o: ::purrdf::TermValue::iri("http://example.org/ns#Focus"),
+                    g: None,
+                }
+            )
+            .expect("the insert applies"),
+            "the fixture row must really change the graph"
+        );
+        let snapshot = Arc::new(mutation.snapshot_view().expect("the mutation snapshots"));
+        let validator = PreparedShapes::new(shapes)
+            .bind_delta_with_shapes_graph(
+                Arc::clone(&snapshot),
+                None,
+                ::purrdf::ir::ViewLimits::default(),
+            )
+            .expect("the delta binds");
+        (snapshot, validator)
+    }
+
+    /// A shapes graph whose constraint reads through SPARQL query text, so its
+    /// change footprint is TOP and the entry points below must fall back.
+    fn opaque_footprint_shapes() -> Arc<Shapes> {
+        Arc::new(load_shapes_ttl(&format!(
+            "{PREFIXES}
+            ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                sh:sparql [ a sh:SPARQLConstraint ;
+                    sh:message \"every focus node needs an ex:absent\" ;
+                    sh:select \"\"\"SELECT $this WHERE {{ \
+                        FILTER NOT EXISTS {{ $this <http://example.org/ns#absent> ?v }} }}\"\"\" ] ."
+        )))
+    }
+
+    /// **[`validate_change`] IS the loop, and it says which arm it took.**
+    ///
+    /// Both arms are executed, because the fallback is the one a surface can omit
+    /// and still pass every happy-path test: a bounded expansion and a full
+    /// validation are indistinguishable in a report, and the scope is the only
+    /// thing that distinguishes them.
+    #[test]
+    fn the_change_entry_point_reaches_both_arms_and_names_which() {
+        let (snapshot, validator) = change_fixture(focus_provenance_shapes());
+        let validation =
+            validate_change(&validator, &snapshot).expect("the bounded change validates");
+        assert_eq!(validation.scope, ChangeScope::Bounded { focus_nodes: 1 });
+        assert_eq!(validation.scope.focus_nodes(), Some(1));
+        assert_eq!(validation.scope.reason(), None);
+        let expansion = validator
+            .affected_focus_node_ids(&snapshot)
+            .expect("the expansion succeeds");
+        assert_eq!(
+            validation.report.to_ntriples(),
+            validator
+                .validate_focus_node_ids(expansion.ids().expect("bounded"))
+                .expect("the hand-driven loop validates")
+                .to_ntriples(),
+            "the one call and the hand-driven loop must reach one report, content and ORDER alike",
+        );
+
+        let (snapshot, validator) = change_fixture(opaque_footprint_shapes());
+        let validation =
+            validate_change(&validator, &snapshot).expect("the unbounded change validates");
+        assert!(!validation.scope.is_bounded(), "{:?}", validation.scope);
+        assert_eq!(
+            validation.scope.focus_nodes(),
+            None,
+            "a fallback covers no COUNT: every focus node in the graph is not a number",
+        );
+        assert!(validation.scope.reason().is_some_and(|why| !why.is_empty()));
+        assert_eq!(
+            validation.report.to_ntriples(),
+            validator
+                .validate()
+                .expect("the full validation succeeds")
+                .to_ntriples(),
+            "the fallback must BE the full validation, not a short answer wearing its name",
+        );
+    }
+
+    /// **The governed change entry point installs ONE budget and reports the
+    /// scope either way — including when the budget stops the run.**
+    ///
+    /// The scope is settled before the first query executes, so a tripped budget
+    /// cannot take it away; an operator whose incremental run ran out of fuel
+    /// still learns which question it was asking.
+    #[test]
+    fn the_governed_change_entry_point_reports_its_scope_through_a_trip() {
+        // A SPARQL-free shapes graph spends no evaluator budget, so it completes
+        // under a ZERO one. That is the honest answer rather than an oversight,
+        // and it is the neighbouring valid case for the trip below.
+        let (snapshot, validator) = change_fixture(focus_provenance_shapes());
+        let ungoverned =
+            validate_change(&validator, &snapshot).expect("the bounded change validates");
+        for governors in [
+            QueryGovernors::UNBOUNDED,
+            QueryGovernors::UNBOUNDED.with_fuel(0),
+        ] {
+            let governed = validate_change_with_governors(&validator, &snapshot, &governors)
+                .expect("the governed change validates");
+            assert_eq!(governed.scope, ungoverned.scope);
+            let GovernedValidation::Complete { report, .. } = governed.outcome else {
+                panic!("core constraint evaluation charges no evaluator budget, so this completes");
+            };
+            assert_eq!(report.to_ntriples(), ungoverned.report.to_ntriples());
+        }
+
+        // The fallback arm is where the budget bites, because it is the arm that
+        // runs the query text. The scope survives the trip.
+        let (snapshot, validator) = change_fixture(opaque_footprint_shapes());
+        let governed =
+            validate_change_with_governors(&validator, &snapshot, &QueryGovernors::UNBOUNDED)
+                .expect("the unbounded run completes");
+        assert!(!governed.scope.is_bounded());
+        assert!(matches!(
+            governed.outcome,
+            GovernedValidation::Complete { .. }
+        ));
+
+        let stopped = validate_change_with_governors(
+            &validator,
+            &snapshot,
+            &QueryGovernors::UNBOUNDED.with_fuel(0),
+        )
+        .expect("a trip is an outcome, not an error");
+        assert!(
+            !stopped.scope.is_bounded(),
+            "the scope is decided before the first query, so a trip cannot erase it",
+        );
+        assert!(
+            matches!(stopped.outcome, GovernedValidation::BudgetExhausted { .. }),
+            "zero fuel against a shapes graph that runs SPARQL must stop the run",
+        );
     }
 }

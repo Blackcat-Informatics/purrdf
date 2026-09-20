@@ -142,6 +142,44 @@ impl PyStore {
         Ok(())
     }
 
+    /// Fold everything mutated so far into this store's BASE, leaving the
+    /// copy-on-write delta empty. The store's contents are unchanged.
+    ///
+    /// This is what makes "what did my last change break?" a question with an
+    /// answer. A `Store` records mutations as a delta over a frozen base, and a
+    /// freshly constructed store has an EMPTY base — so without this, the delta of
+    /// a store you loaded a million triples into is those million triples, and
+    /// `purrdf.shapes.PreparedShapes.validate_store_changes` would dutifully
+    /// re-validate the whole graph. Checkpoint after loading, mutate, and the delta
+    /// is exactly the mutation.
+    ///
+    /// Cheap to call once after a bulk load and expensive to call in a tight
+    /// mutation loop: it is a real compaction (the COW base is rebuilt), which is
+    /// why it is an explicit act rather than something `add` does behind your back.
+    ///
+    /// Raises `ValueError` if the store cannot be frozen.
+    fn checkpoint(&mut self, py: Python<'_>) -> PyResult<()> {
+        let inner = &mut self.inner;
+        // A real compaction over the whole base — run it detached (GIL released).
+        py.detach(move || {
+            let base = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store checkpoint failed: {e}")))?;
+            *inner = MutableDataset::new(base);
+            Ok(())
+        })
+    }
+
+    /// The number of quads this store has ADDED since the last
+    /// [`checkpoint`](Self::checkpoint), and the number it has REMOVED, as a pair.
+    ///
+    /// The size of the change `validate_store_changes` expands, so a caller can see
+    /// whether a checkpoint is due (or whether the mutation they believe they made
+    /// actually landed) without validating anything.
+    fn change_size(&self) -> (usize, usize) {
+        (self.inner.added_len(), self.inner.suppressed_len())
+    }
+
     /// Run a SPARQL query. Returns `QuerySolutions` (SELECT), `QueryTriples`
     /// (CONSTRUCT/DESCRIBE), or `QueryBoolean` (ASK). Optional `substitutions`
     /// is a `{Variable: term}` mapping applied natively (never string-spliced).
@@ -862,6 +900,27 @@ impl PyStore {
 }
 
 impl PyStore {
+    /// An immutable snapshot of this store's copy-on-write DELTA — the base, the
+    /// rows added on top of it, and the rows suppressed from it, read through one
+    /// view rather than copied.
+    ///
+    /// The change-path counterpart of [`store_capsule`](Self::store_capsule), and
+    /// deliberately not a capsule: that protocol hands out a frozen
+    /// `Arc<RdfDataset>` with the change already flattened away, which is the one
+    /// thing an incremental validation needs. This is Rust-side and `pub(crate)`
+    /// because the consumer (`crate::shacl`) is in this crate, and because a
+    /// `DeltaDatasetView` names this store's own interners — there is no honest way
+    /// to hand one across a language boundary.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` when the snapshot exceeds the view's retention limits.
+    pub(crate) fn change_snapshot(&self) -> PyResult<purrdf_core::ir::DeltaDatasetView> {
+        self.inner
+            .snapshot_view()
+            .map_err(|e| PyValueError::new_err(format!("store change snapshot failed: {e}")))
+    }
+
     /// The next per-load blank scope ordinal (monotonic, wrapping past 1).
     fn next_load_scope(&self) -> u64 {
         self.next_load_scope.fetch_add(1, Ordering::Relaxed)
