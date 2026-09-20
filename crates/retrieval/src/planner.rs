@@ -733,8 +733,12 @@ enum Outcome<'a> {
 /// An index the request does not carry is skipped rather than refused: this is
 /// a lookup used to narrow a bound, and a bound is narrowed by the terms that
 /// exist. A plan whose recorded indices address no term of its own request is a
-/// separate, typed refusal at the admission waist, where untrusted plans are
-/// checked.
+/// separate, typed refusal, raised wherever untrusted plans are checked: by
+/// [`Plan::certify`](crate::Plan::certify) for the indices a derivation and a
+/// snapshot row record, as
+/// [`PlanError::SelectivityTermOutOfRange`](crate::PlanError::SelectivityTermOutOfRange),
+/// and at the admission waist for the ones a binding and the per-term unserved
+/// evidence record.
 fn terms_at<'a>(
     terms: &'a [RequestTerm],
     indices: Option<&BTreeSet<u32>>,

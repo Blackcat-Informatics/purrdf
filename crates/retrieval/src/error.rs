@@ -299,6 +299,65 @@ pub enum PlanError {
         key: String,
     },
 
+    /// A canonical encoding listed one record's selectivity-term run out of
+    /// ascending order.
+    ///
+    /// The run is the domain of a **sum**, so the order it is written in carries
+    /// no information about the data: `[1, 0]` and `[0, 1]` name one term set
+    /// contributing one aggregate. Both spellings would therefore be encodings of
+    /// one plan, each digesting to that plan's single id — the same break in the
+    /// plan-to-bytes biconditional that
+    /// [`NonAscendingCanonicalKeys`](Self::NonAscendingCanonicalKeys) refuses at
+    /// the level of a section's keys, one nesting level further in.
+    ///
+    /// It carries the record's own subject as well as the section, because a run
+    /// is nested inside a keyed entry: the section alone says which of a plan's
+    /// two selectivity records moved, and a plan has one such record per stratum
+    /// and per snapshot row.
+    #[error(
+        "plan canonical encoding lists {section} {subject} selectivity term {request_term} after \
+         {previous}; a canonical encoding orders them ascending"
+    )]
+    NonAscendingSelectivityTerms {
+        /// Which keyed section the run was nested in.
+        section: CanonicalSection,
+        /// The stratum or snapshot subject whose run it is, as its recorded text.
+        subject: String,
+        /// The index read immediately before.
+        previous: u32,
+        /// The index that did not follow it.
+        request_term: u32,
+    },
+
+    /// A canonical encoding named one request term twice in one selectivity-term
+    /// run.
+    ///
+    /// The run is the domain of a sum over the terms a provider answered for, and
+    /// a domain is a set: one term contributed to the aggregate once or not at
+    /// all. A repeat says the same term was counted twice into a total the
+    /// arithmetic reached once, so the run and the number beside it describe two
+    /// different measurements.
+    ///
+    /// One variant rather than one per section, which is where this parts company
+    /// with [`DuplicateStratumDerivation`](Self::DuplicateStratumDerivation) and
+    /// [`DuplicateStatisticsSubject`](Self::DuplicateStatisticsSubject). Those
+    /// keys index different dimensions of a plan, so a repeat means a different
+    /// thing in each. Both selectivity-term runs index the *same* dimension — the
+    /// plan's own request — so a repeat is one fact, and the section and subject
+    /// locate the record that carries it.
+    #[error(
+        "plan canonical encoding records {section} {subject} selectivity term {request_term} \
+         twice; the aggregate is a sum over distinct terms"
+    )]
+    DuplicateSelectivityTerm {
+        /// Which keyed section the run was nested in.
+        section: CanonicalSection,
+        /// The stratum or snapshot subject whose run it is, as its recorded text.
+        subject: String,
+        /// The repeated index.
+        request_term: u32,
+    },
+
     /// A recorded depth is not the depth its own recorded inputs derive.
     ///
     /// Raised only by [`Plan::certify`](crate::Plan::certify). A plan records
@@ -375,6 +434,38 @@ pub enum PlanError {
         /// What the derivation records for it.
         derivation: String,
     },
+
+    /// A recorded selectivity-term run names an index the plan's own request does
+    /// not carry.
+    ///
+    /// Raised only by [`Plan::certify`](crate::Plan::certify). The run is the
+    /// domain of a selectivity aggregate, written as indices into
+    /// [`Plan::request_terms`](crate::Plan::request_terms) so that a reader can
+    /// read the aggregate's derivation back onto the terms the caller wrote. An
+    /// index addressing no term of that request names nothing at all: the
+    /// aggregate's domain becomes unreadable, and the record that exists to make
+    /// the sum checkable stops being checkable.
+    ///
+    /// It is the derivation's and the snapshot's member of the family the
+    /// admission waist already enforces for
+    /// [`ProducerBinding::request_terms`](crate::ProducerBinding::request_terms)
+    /// and [`UnservedTerm::request_term`](crate::UnservedTerm::request_term). It
+    /// is decided here rather than there because the plan carries its own request
+    /// — so this is a property of the value alone, like every other question
+    /// `certify` answers, and it holds for a plan reached by any path in rather
+    /// than only for one being admitted against a registry.
+    #[error(
+        "subject {subject} records selectivity term {request_term}, but the plan carries \
+         {request_terms} request term(s)"
+    )]
+    SelectivityTermOutOfRange {
+        /// The stratum or snapshot subject whose run it is, as its recorded text.
+        subject: String,
+        /// The index that addresses no term.
+        request_term: u32,
+        /// How many terms the plan's own request carries.
+        request_terms: usize,
+    },
 }
 
 impl PlanError {
@@ -416,6 +507,9 @@ impl PlanError {
             Self::DuplicateStratumDerivation { .. } => "duplicate-stratum-derivation",
             Self::DuplicateStratumDepth { .. } => "duplicate-stratum-depth",
             Self::NonAscendingCanonicalKeys { .. } => "non-ascending-keys",
+            Self::NonAscendingSelectivityTerms { .. } => "non-ascending-selectivity-terms",
+            Self::DuplicateSelectivityTerm { .. } => "duplicate-selectivity-term",
+            Self::SelectivityTermOutOfRange { .. } => "selectivity-term-out-of-range",
             Self::DepthNotDerivable { .. } => "depth-not-derivable",
             Self::DepthWithoutDerivation { .. } => "depth-without-derivation",
             Self::DerivationWithoutDepth { .. } => "derivation-without-depth",
@@ -435,6 +529,14 @@ impl PlanError {
 /// They are written by different encoders, read into different containers and
 /// keyed on different things, and a caller repairing a document needs to know
 /// which one moved.
+///
+/// The two sections that nest a selectivity-term run inside each entry carry it
+/// for the same reason, on
+/// [`PlanError::NonAscendingSelectivityTerms`](PlanError::NonAscendingSelectivityTerms)
+/// and
+/// [`PlanError::DuplicateSelectivityTerm`](PlanError::DuplicateSelectivityTerm):
+/// a plan records one run per stratum and one per snapshot row, so the section
+/// and the entry's own subject together are what locate it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CanonicalSection {

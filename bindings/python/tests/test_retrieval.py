@@ -3668,6 +3668,215 @@ def test_a_section_that_does_not_ascend_is_refused() -> None:
     }
 
 
+def _selectivity_run(terms: list[int]) -> bytes:
+    """One length-framed run of 32-bit request-term indices."""
+    return len(terms).to_bytes(8, "little") + b"".join(
+        term.to_bytes(4, "little") for term in terms
+    )
+
+
+def _derivation_head(
+    stratum: str, declared: int, selectivity_ppm: int, terms: list[int]
+) -> bytes:
+    """A derivation record up to and including its selectivity-term run.
+
+    Stops at the run rather than spanning the whole record, so the splices below
+    do not have to spell the licensed prefix that follows it. It still begins
+    with the stratum key and the declaration, which is what tells it apart from
+    the snapshot row for the same stratum -- the row carries no declaration.
+    """
+    return (
+        _framed(stratum)
+        + declared.to_bytes(8, "little")
+        + b"\x00"
+        + b"\x01"
+        + selectivity_ppm.to_bytes(8, "little")
+        + _selectivity_run(terms)
+    )
+
+
+def _selective_snapshot_row(
+    subject: str, selectivity_ppm: int, terms: list[int]
+) -> bytes:
+    """One snapshot row: no cardinality, a measured selectivity, and its domain."""
+    return (
+        _framed(subject)
+        + b"\x00"
+        + b"\x01"
+        + selectivity_ppm.to_bytes(8, "little")
+        + _selectivity_run(terms)
+    )
+
+
+def _selective_one_stratum_document() -> tuple[dict[str, Any], bytes]:
+    """A one-term plan whose stratum records a selectivity over term 0.
+
+    One request term, so index 0 is the ONLY index that addresses this request --
+    which is what makes the forge below a term that names nothing rather than a
+    term that names another one.
+    """
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "selectivity": {(NOTE_STRATUM, 0): 500_000}},
+        top_k=PLAN_TOP_K,
+    )
+    assert [binding["request_terms"] for binding in planned["producer_bindings"]] == [
+        [0]
+    ], "one term, so index 0 is the only index this request has"
+    assert planned["stratum_derivations"][NOTE_STRATUM]["selectivity_terms"] == [0]
+    return planned, planned["canonical_bytes"]
+
+
+def _two_term_selectivity_document() -> tuple[dict[str, Any], bytes]:
+    """A two-term plan whose request predicate aggregates over BOTH terms.
+
+    A run of two indices is what makes an ORDER exist to break: a run of one is
+    ascending however it is written. The row is the note PREDICATE's, which
+    derives no depth -- so a forge of its run is refused for the run itself
+    rather than for disagreeing with a derivation it does not have.
+    """
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
+        text_producers=BOTH,
+        statistics={**STATISTICS, "selectivity": {(NOTE, 0): 100_000, (NOTE, 1): 200_000}},
+        top_k=PLAN_TOP_K,
+    )
+    assert sorted(
+        binding["request_terms"] for binding in planned["producer_bindings"]
+    ) == [[0], [1]], "two terms, so indices 0 and 1 address this request and 2 does not"
+    entries = {entry["subject"]: entry for entry in planned["statistics"]["entries"]}
+    assert entries[NOTE]["selectivity_terms"] == [0, 1]
+    assert entries[NOTE]["selectivity_ppm"] == 300_000, (
+        "the aggregate is the SUM of the two terms the host answered for, which "
+        "is the number the run beside it is the domain of"
+    )
+    return planned, planned["canonical_bytes"]
+
+
+def test_a_selectivity_domain_that_addresses_no_request_term_is_refused() -> None:
+    """A recorded selectivity domain indexes the plan's OWN request, or nothing.
+
+    The run says which request terms a selectivity aggregate was summed over. An
+    index past the end of the request names no term at all, so the aggregate's
+    domain becomes unreadable and the record that exists to make the sum
+    checkable stops being one. The forge moves the index in BOTH of the plan's
+    records of it, so the document is refused for the index rather than for the
+    two records disagreeing.
+
+    The over-refusal guard is the boundary: this request carries one term, so 0
+    addresses it and 1 does not, and both are executed. The empty run -- what a
+    subject nothing contributed a selectivity to records -- is asserted legal in
+    the same test, because a rule that refused a run field rather than an
+    unaddressable index would take every plan the planner writes with it.
+    """
+    planned, document = _selective_one_stratum_document()
+    declared = planned["stratum_derivations"][NOTE_STRATUM]["declared"]
+
+    for forged_index in (1, 99):
+        forged = _splice(
+            document,
+            _derivation_head(NOTE_STRATUM, declared, 500_000, [0]),
+            _derivation_head(NOTE_STRATUM, declared, 500_000, [forged_index]),
+            "derivation's selectivity-term run",
+        )
+        forged = _splice(
+            forged,
+            _selective_snapshot_row(NOTE_STRATUM, 500_000, [0]),
+            _selective_snapshot_row(NOTE_STRATUM, 500_000, [forged_index]),
+            "snapshot row's selectivity-term run",
+        )
+        assert forged != document, "the splices must actually have edited the document"
+
+        with pytest.raises(retrieval.PlanDocumentError) as refused:
+            retrieval.certify_plan(forged)
+        assert refused.value.refusal == "selectivity-term-out-of-range"
+        assert f"selectivity term {forged_index}" in str(refused.value)
+        assert "carries 1 request term(s)" in str(refused.value)
+
+    # The neighbour: the same document with the one index that DOES address this
+    # request, which certifies and arrives with its domain intact.
+    received = retrieval.certify_plan(document)
+    assert received["stratum_derivations"][NOTE_STRATUM]["selectivity_terms"] == [0]
+    entries = {entry["subject"]: entry for entry in received["statistics"]["entries"]}
+    assert entries[NOTE_STRATUM]["selectivity_terms"] == [0]
+
+    # And the empty run, which is what a subject no selectivity was reported for
+    # records. This document's every run is empty and it certifies untouched, so
+    # the refusals above are about the index and not about the field.
+    _empty, without_selectivity = _one_stratum_document()
+    certified = retrieval.certify_plan(without_selectivity)
+    assert all(
+        entry["selectivity_terms"] == []
+        for entry in certified["statistics"]["entries"]
+    )
+    assert certified["stratum_derivations"][NOTE_STRATUM]["selectivity_terms"] == []
+
+
+def test_a_selectivity_domain_out_of_order_or_repeated_is_refused() -> None:
+    """A selectivity domain is a SET, so its encoding ascends and never repeats.
+
+    The run is the domain of a sum, so `[1, 0]` states exactly what `[0, 1]`
+    states -- which is precisely why the order has to be required rather than
+    tolerated. Accepting both would give one plan two encodings, each digesting
+    to that plan's single id, and the identity a host compares would stop being a
+    function of the content. A repeat is the other clause: one term counted twice
+    into a total the arithmetic reached once.
+
+    Three forges and two neighbours over ONE fixture. The neighbours are a run
+    that is genuinely different from the control -- a single index, not the pair
+    -- so a decoder that had silently sorted or emptied the run could not pass
+    them.
+    """
+    planned, document = _two_term_selectivity_document()
+    honest = _selective_snapshot_row(NOTE, 300_000, [0, 1])
+
+    for run, refusal, fragment in (
+        ([1, 0], "non-ascending-selectivity-terms", "selectivity term 0 after 1"),
+        ([1, 1], "duplicate-selectivity-term", "selectivity term 1 twice"),
+        ([0, 2], "selectivity-term-out-of-range", "carries 2 request term(s)"),
+    ):
+        forged = _splice(
+            document,
+            honest,
+            _selective_snapshot_row(NOTE, 300_000, run),
+            "snapshot row's selectivity-term run",
+        )
+        with pytest.raises(retrieval.PlanDocumentError) as refused:
+            retrieval.certify_plan(forged)
+        assert refused.value.refusal == refusal, f"the run {run} is refused by name"
+        assert fragment in str(refused.value)
+        assert NOTE in str(refused.value), (
+            "and the refusal names the record that carries the run, since a plan "
+            "holds one per stratum and one per snapshot row"
+        )
+
+    # The neighbours, both over the same fixture. The first is a DIFFERENT run
+    # from the control -- ascending, distinct, and in range -- so it proves the
+    # decoder reads the run rather than waving a known pattern through.
+    narrowed = _splice(
+        document,
+        honest,
+        _selective_snapshot_row(NOTE, 300_000, [1]),
+        "snapshot row's selectivity-term run",
+    )
+    entries = {
+        entry["subject"]: entry
+        for entry in retrieval.certify_plan(narrowed)["statistics"]["entries"]
+    }
+    assert entries[NOTE]["selectivity_terms"] == [1], (
+        "an ascending, addressable run arrives exactly as it was written"
+    )
+
+    # The second is the untouched document, whose run is the pair.
+    received = retrieval.certify_plan(document)
+    assert received == planned
+    entries = {entry["subject"]: entry for entry in received["statistics"]["entries"]}
+    assert entries[NOTE]["selectivity_terms"] == [0, 1]
+
+
 def test_a_stratum_recorded_twice_in_the_depths_is_refused() -> None:
     """Two depths for one stratum are two answers to one question.
 

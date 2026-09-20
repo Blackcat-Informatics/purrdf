@@ -333,8 +333,8 @@ pub struct DepthInputs {
     /// report a selectivity for it that bounded nothing — and recording that
     /// value here would describe a derivation that did not happen.
     pub selectivity_ppm: Option<u64>,
-    /// The ascending request-term indices whose reported selectivity contributed
-    /// to [`Self::selectivity_ppm`]. Empty when none did.
+    /// The strictly ascending request-term indices whose reported selectivity
+    /// contributed to [`Self::selectivity_ppm`]. Empty when none did.
     ///
     /// The aggregate is a **sum** over the terms a provider answered for, so the
     /// sum alone does not say which terms those were: a provider that moved a
@@ -342,6 +342,15 @@ pub struct DepthInputs {
     /// identical record, and the move — which is a different statement about the
     /// data — would be undetectable. Recording the domain makes the aggregate's
     /// derivation as checkable as the depth's.
+    ///
+    /// Checkable is meant literally, and both halves of the law are enforced on
+    /// the untrusted paths. The order and the distinctness are decidable from the
+    /// run alone, so a document breaking either is refused at the decoder, as
+    /// [`PlanError::NonAscendingSelectivityTerms`] and
+    /// [`PlanError::DuplicateSelectivityTerm`]. That the indices address this
+    /// plan's own request is decidable only against
+    /// [`Plan::request_terms`](Plan::request_terms), so it is
+    /// [`Plan::certify`]'s, as [`PlanError::SelectivityTermOutOfRange`].
     pub selectivity_terms: Vec<u32>,
     /// The request's licensed row prefix, or `None` when the registry's own
     /// bound stood.
@@ -450,9 +459,11 @@ pub struct StatisticsEntry {
     pub cardinality: Option<u64>,
     /// An optional selectivity in parts per million.
     pub selectivity_ppm: Option<u64>,
-    /// The ascending request-term indices whose reported selectivity contributed
-    /// to [`Self::selectivity_ppm`], for the reason
-    /// [`DepthInputs::selectivity_terms`] records them.
+    /// The strictly ascending request-term indices whose reported selectivity
+    /// contributed to [`Self::selectivity_ppm`], for the reason
+    /// [`DepthInputs::selectivity_terms`] records them — and held to the same two
+    /// refusals, in the same two places: the order and the distinctness at the
+    /// decoder, the addressability at [`Plan::certify`].
     pub selectivity_terms: Vec<u32>,
 }
 
@@ -867,11 +878,14 @@ impl Plan {
     /// [`PlanError::DerivationWithoutDepth`] when the depth and derivation maps
     /// do not name the same strata;
     /// [`PlanError::DerivationWithoutStatisticsEntry`] when the snapshot does not
-    /// name a stratum a depth was derived for; and
+    /// name a stratum a depth was derived for;
     /// [`PlanError::StatisticsEntryContradictsDerivation`] when it names one and
-    /// says something else about it. Each is a refusal rather than a repair: a
-    /// plan whose depth and evidence disagree has no reading under which one of
-    /// them is the truth.
+    /// says something else about it; and
+    /// [`PlanError::SelectivityTermOutOfRange`] when a derivation's or a snapshot
+    /// row's recorded selectivity-term run addresses a term this plan's own
+    /// request does not carry. Each is a refusal rather than a repair: a plan
+    /// whose depth and evidence disagree has no reading under which one of them
+    /// is the truth.
     pub fn certify(&self) -> Result<(), PlanError> {
         let mut recorded: Vec<(&Iri, u32)> = self
             .stratum_depths
@@ -900,7 +914,24 @@ impl Plan {
                     stratum: stratum.as_str().to_owned(),
                 });
             }
+            // The run's own addressability before the two records are compared,
+            // so a plan that is wrong in both ways is named by the narrower fact:
+            // a contradiction between two runs is a question about which of them
+            // is the measurement, and it is not worth asking of a run that
+            // addresses nothing.
+            require_addressable(
+                stratum.as_str(),
+                &inputs.selectivity_terms,
+                self.request_terms.len(),
+            )?;
             reconcile(stratum, inputs, &self.statistics_snapshot)?;
+        }
+        for entry in &self.statistics_snapshot.entries {
+            require_addressable(
+                &entry.subject,
+                &entry.selectivity_terms,
+                self.request_terms.len(),
+            )?;
         }
         Ok(())
     }
@@ -1516,6 +1547,51 @@ fn require_ascending(
     }
 }
 
+/// Refuse a selectivity-term run that is not strictly ascending.
+///
+/// The run is the domain of a **sum**, so it is a set and its order carries
+/// nothing about the data. That is exactly why the order has to be required
+/// rather than tolerated: `[0, 1]` and `[1, 0]` would otherwise be two encodings
+/// of one plan, each digesting to that plan's single id, which is the
+/// plan-to-bytes biconditional broken one nesting level below the section keys
+/// [`require_ascending`] holds up.
+///
+/// A repeat is refused by its own name, by the law that function states: out of
+/// order is a fact about the encoding, a repeat is a fact about the data — here,
+/// one term counted twice into a total the arithmetic reached once.
+///
+/// Decided from the run alone, which is why it lives on the decode path. Whether
+/// the indices address any term of the plan's own request is a different fact,
+/// decidable only against [`Plan::request_terms`], and it is
+/// [`Plan::certify`]'s.
+fn require_ascending_terms(
+    section: CanonicalSection,
+    subject: &str,
+    terms: &[u32],
+) -> Result<(), PlanError> {
+    for pair in terms.windows(2) {
+        match pair[1].cmp(&pair[0]) {
+            core::cmp::Ordering::Greater => {}
+            core::cmp::Ordering::Equal => {
+                return Err(PlanError::DuplicateSelectivityTerm {
+                    section,
+                    subject: subject.to_owned(),
+                    request_term: pair[1],
+                });
+            }
+            core::cmp::Ordering::Less => {
+                return Err(PlanError::NonAscendingSelectivityTerms {
+                    section,
+                    subject: subject.to_owned(),
+                    previous: pair[0],
+                    request_term: pair[1],
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Read the per-stratum depths, which the encoding lists ascending by stratum.
 ///
 /// The order is required rather than merely produced. The map this returns does
@@ -1602,6 +1678,38 @@ fn reconcile(
     }
 }
 
+/// Refuse a selectivity-term run that addresses a term the request does not
+/// carry.
+///
+/// The run is written as indices into [`Plan::request_terms`], so an index past
+/// the end of that list names nothing: the aggregate's domain becomes
+/// unreadable, and the record that exists to make a sum checkable stops being
+/// checkable. An **empty** run is legal and is the common case — a subject whose
+/// selectivity nothing contributed to records `[]`, and every stratum planned
+/// under an unbounded declaration or a silent provider is one of those.
+///
+/// It is decided here rather than on the decode path because it is not a fact
+/// about one section of a document: it relates a record to the plan's request,
+/// which is the kind of question [`Plan::certify`] exists to ask. Deciding it at
+/// the decoder would also make a legal [`Plan`] value — every field of which is
+/// public — one that its own canonical bytes could not be read back into.
+fn require_addressable(
+    subject: &str,
+    terms: &[u32],
+    request_terms: usize,
+) -> Result<(), PlanError> {
+    for index in terms {
+        if *index as usize >= request_terms {
+            return Err(PlanError::SelectivityTermOutOfRange {
+                subject: subject.to_owned(),
+                request_term: *index,
+                request_terms,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// One reported statistic, rendered for a refusal message.
 ///
 /// An absent measurement renders as the word rather than as a number, because
@@ -1647,6 +1755,11 @@ fn write_derivations(writer: &mut Writer, derivations: &BTreeMap<Iri, DepthInput
 /// record this decoder reads — a statistics subject is a different dimension of
 /// the same plan, and naming it here would send a reader to inspect the snapshot
 /// over a document whose snapshot is fine.
+///
+/// Each record's selectivity-term run is held to the same ascending law, by
+/// [`require_ascending_terms`]: it is the domain of a sum, so its order says
+/// nothing about the data and every permutation would otherwise be another
+/// encoding of one plan.
 fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs>, PlanError> {
     let count = reader.count()?;
     let mut derivations = BTreeMap::new();
@@ -1666,6 +1779,11 @@ fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs
             selectivity_terms: reader.u32_slice()?,
             licensed_prefix: reader.option_u64("derivation licensed prefix presence")?,
         };
+        require_ascending_terms(
+            CanonicalSection::StratumDerivations,
+            stratum.as_str(),
+            &inputs.selectivity_terms,
+        )?;
         derivations.insert(stratum.clone(), inputs);
         previous = Some(stratum);
     }
@@ -1712,6 +1830,9 @@ fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
 /// unordered document is not an encoding of any plan — accepting it would have
 /// meant silently canonicalising bytes whose whole purpose is to be the plan's
 /// identity.
+///
+/// Each row's selectivity-term run is held to that same ascending law, by
+/// [`require_ascending_terms`], for the same reason and one nesting level in.
 fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
     let source = reader.string("statistics source")?;
     let revision = reader.string("statistics revision")?;
@@ -1725,12 +1846,18 @@ fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanEr
             &subject,
             |subject| PlanError::DuplicateStatisticsSubject { subject },
         )?;
-        entries.push(StatisticsEntry {
+        let entry = StatisticsEntry {
             subject,
             cardinality: reader.option_u64("statistics cardinality presence")?,
             selectivity_ppm: reader.option_u64("statistics selectivity presence")?,
             selectivity_terms: reader.u32_slice()?,
-        });
+        };
+        require_ascending_terms(
+            CanonicalSection::StatisticsEntries,
+            &entry.subject,
+            &entry.selectivity_terms,
+        )?;
+        entries.push(entry);
     }
     // Built through the constructor rather than around it, even though the loop
     // above has already proved what it checks. A decoder holding itself to the

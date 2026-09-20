@@ -1464,6 +1464,217 @@ fn a_canonical_document_repeating_or_reordering_a_depth_is_refused() {
     assert_eq!(decoded.stratum_depths[&ordered[1].0], 4);
 }
 
+/// [`baseline`] with `terms` as the stratum's recorded selectivity domain, in
+/// **both** of the plan's records of it.
+///
+/// Both, because they are compared to each other: a fixture that moved one would
+/// be refused for the disagreement rather than for the run, and every assertion
+/// below would be reading the wrong refusal. The baseline's stratum records no
+/// selectivity, so no run of indices changes the depth its inputs derive — which
+/// is what makes an in-range run a plan that still certifies.
+fn baseline_with_terms(terms: Vec<u32>) -> Plan {
+    let mut plan = baseline();
+    plan.stratum_derivations
+        .get_mut(&stratum())
+        .expect("the baseline derives a depth for its stratum")
+        .selectivity_terms
+        .clone_from(&terms);
+    let row = row_of(&plan, stratum().as_str());
+    edit_rows(&mut plan, |rows| rows[row].selectivity_terms = terms);
+    plan
+}
+
+/// A selectivity-term run that does not strictly ascend is not an encoding of
+/// any plan, and the same indices ascending are.
+///
+/// The run is the domain of a **sum**, so its order says nothing about the data
+/// and `[1, 0]` would otherwise be a second encoding of the plan `[0, 1]` is the
+/// encoding of — two documents digesting to one id. The repeat is the other
+/// clause and is refused by its own name: one term counted twice into a total
+/// the arithmetic reached once.
+///
+/// Both of the plan's records of a run are exercised, because they are written
+/// by two different encoders: the derivation's run, and a snapshot row that
+/// derives no depth at all. The valid neighbour is the same two indices in
+/// order, asserted to arrive as `[0, 1]` rather than merely to arrive — a
+/// decoder that silently sorted or dropped the run would pass a bare `is_ok`.
+#[test]
+fn a_canonical_document_whose_selectivity_terms_do_not_ascend_is_refused() {
+    match Plan::from_canonical_bytes(&baseline_with_terms(vec![1, 0]).canonical_bytes())
+        .expect_err("a descending selectivity-term run is refused")
+    {
+        PlanError::NonAscendingSelectivityTerms {
+            section,
+            subject,
+            previous,
+            request_term,
+        } => {
+            assert_eq!(section, CanonicalSection::StratumDerivations);
+            assert_eq!(subject, stratum().as_str(), "the record that carries it");
+            assert_eq!(previous, 1, "the index read before it");
+            assert_eq!(request_term, 0, "and the index that did not follow it");
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    match Plan::from_canonical_bytes(&baseline_with_terms(vec![0, 0]).canonical_bytes())
+        .expect_err("one term counted twice is refused")
+    {
+        PlanError::DuplicateSelectivityTerm {
+            section,
+            subject,
+            request_term,
+        } => {
+            assert_eq!(section, CanonicalSection::StratumDerivations);
+            assert_eq!(subject, stratum().as_str());
+            assert_eq!(request_term, 0);
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The snapshot's own encoder, over a row that derives no depth — so this
+    // document is refused for the run rather than for a disagreement with a
+    // derivation it has none of.
+    let predicate_row = row_of(&baseline(), "http://example.org/p");
+    let mut ancillary = baseline();
+    edit_rows(&mut ancillary, |rows| {
+        rows[predicate_row].selectivity_terms = vec![2, 1];
+    });
+    match Plan::from_canonical_bytes(&ancillary.canonical_bytes())
+        .expect_err("a descending run on a snapshot row is refused")
+    {
+        PlanError::NonAscendingSelectivityTerms {
+            section,
+            subject,
+            previous,
+            request_term,
+        } => {
+            assert_eq!(section, CanonicalSection::StatisticsEntries);
+            assert_eq!(subject, "http://example.org/p");
+            assert_eq!((previous, request_term), (2, 1));
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The neighbour: the same two indices, ascending. It decodes, it arrives
+    // unchanged in both records, and it certifies.
+    let ascending = baseline_with_terms(vec![0, 1]);
+    let decoded = Plan::from_canonical_bytes(&ascending.canonical_bytes())
+        .expect("an ascending run is an encoding of a plan");
+    assert_eq!(
+        decoded.stratum_derivations[&stratum()].selectivity_terms,
+        vec![0, 1],
+        "the run arrives as it was written, rather than sorted or emptied"
+    );
+    assert_eq!(
+        decoded.statistics_snapshot.entries[row_of(&ascending, stratum().as_str())]
+            .selectivity_terms,
+        vec![0, 1]
+    );
+    assert_eq!(decoded, ascending, "and the document round-trips whole");
+    decoded
+        .certify()
+        .expect("an ascending, addressable run certifies");
+}
+
+/// A recorded selectivity term that addresses no term of the plan's own request
+/// is refused by name, and the last index that does address one is not.
+///
+/// The run is written as indices into the plan's request, so an index past the
+/// end names nothing and the aggregate's domain becomes unreadable. The check
+/// lives on [`Plan::certify`] rather than at the decoder because it is the
+/// relation between two of the plan's fields, not a property of one section's
+/// bytes.
+///
+/// The over-refusal guard is the boundary itself: four terms, so index 3 is
+/// legal and index 4 is not, and both are executed over the same fixture. An
+/// **empty** run is legal in both, which is the case a subject whose selectivity
+/// nothing contributed to records — refusing it would refuse the plan the
+/// planner writes for every silent provider.
+#[test]
+fn certify_refuses_a_selectivity_term_that_addresses_no_request_term() {
+    assert_eq!(
+        baseline().request_terms.len(),
+        4,
+        "the boundary the two halves below straddle is this number"
+    );
+
+    for forged in [4, 99] {
+        match baseline_with_terms(vec![forged])
+            .certify()
+            .expect_err("a run addressing no term of the request is refused")
+        {
+            PlanError::SelectivityTermOutOfRange {
+                subject,
+                request_term,
+                request_terms,
+            } => {
+                assert_eq!(subject, stratum().as_str());
+                assert_eq!(request_term, forged);
+                assert_eq!(request_terms, 4, "and the message says what it counted");
+            }
+            other => panic!("refused by the wrong name: {other:?}"),
+        }
+    }
+
+    // The neighbour, one index below the first refused one: it addresses the
+    // request's last term, so it certifies.
+    baseline_with_terms(vec![3])
+        .certify()
+        .expect("the last index that names a term is not a forgery");
+    baseline_with_terms(vec![0, 3])
+        .certify()
+        .expect("nor is a run of two of them");
+    // And the empty run, which is what every subject nothing contributed a
+    // selectivity to records.
+    baseline_with_terms(Vec::new())
+        .certify()
+        .expect("an empty run addresses nothing and is the planner's own common case");
+
+    // A snapshot row that derives no depth is held to the same law, and named by
+    // its own subject.
+    let predicate_row = row_of(&baseline(), "http://example.org/p");
+    let mut forged_row = baseline();
+    edit_rows(&mut forged_row, |rows| {
+        rows[predicate_row].selectivity_terms = vec![4];
+    });
+    match forged_row
+        .certify()
+        .expect_err("a snapshot row addressing no term is refused")
+    {
+        PlanError::SelectivityTermOutOfRange {
+            subject,
+            request_term,
+            request_terms,
+        } => {
+            assert_eq!(subject, "http://example.org/p");
+            assert_eq!((request_term, request_terms), (4, 4));
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+    let mut ancillary = baseline();
+    edit_rows(&mut ancillary, |rows| {
+        rows[predicate_row].selectivity_terms = vec![3];
+    });
+    ancillary
+        .certify()
+        .expect("the same row one index lower addresses the request's last term");
+
+    // A request carrying no terms at all: every run is empty, every empty run
+    // addresses nothing, and the plan certifies. A rule that refused a run field
+    // rather than an unaddressable index would fail here.
+    let mut termless = baseline_with_terms(Vec::new());
+    termless.request_terms.clear();
+    edit_rows(&mut termless, |rows| {
+        for row in rows {
+            row.selectivity_terms.clear();
+        }
+    });
+    termless
+        .certify()
+        .expect("a request with no terms records empty runs, which address nothing");
+}
+
 /// A hand-written serde document is held to the entries' construction law: a
 /// repeated subject is refused, and an unordered one is ordered.
 ///
@@ -1872,6 +2083,22 @@ fn every_plan_refusal_has_its_own_pinned_name() {
             section: CanonicalSection::StratumDepths,
             previous: stratum(),
             key: stratum(),
+        },
+        PlanError::NonAscendingSelectivityTerms {
+            section: CanonicalSection::StratumDerivations,
+            subject: stratum(),
+            previous: 1,
+            request_term: 0,
+        },
+        PlanError::DuplicateSelectivityTerm {
+            section: CanonicalSection::StatisticsEntries,
+            subject: stratum(),
+            request_term: 0,
+        },
+        PlanError::SelectivityTermOutOfRange {
+            subject: stratum(),
+            request_term: 4,
+            request_terms: 4,
         },
         PlanError::DepthNotDerivable {
             stratum: stratum(),

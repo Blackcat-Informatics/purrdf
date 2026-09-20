@@ -1483,14 +1483,19 @@ create_exception!(
      a plan layout this build does not write), `truncated`, `trailing-bytes`, \
      `invalid-tag`, `invalid-utf8`, `invalid-iri`, `non-ascending-keys` (a keyed \
      section did not arrive strictly ascending, so the bytes are not an encoding of \
-     any plan), `duplicate-stratum-depth`, `duplicate-stratum-derivation` and \
+     any plan), `non-ascending-selectivity-terms` (a record's run of contributing \
+     request-term indices did not ascend either, which is the same fact one nesting \
+     level in), `duplicate-stratum-depth`, `duplicate-stratum-derivation`, \
      `duplicate-statistics-subject` (one subject answered twice, with nothing saying \
-     which answer the plan was planned against). The certificate-side names are \
-     `depth-not-derivable` (a recorded depth is not the depth its own recorded inputs \
-     derive), `depth-without-derivation`, `derivation-without-depth`, \
-     `derivation-without-statistics-entry` (a depth was derived for a stratum the \
-     snapshot names nowhere) and `statistics-entry-contradicts-derivation` (the \
-     plan's two records of one stratum's statistics disagree).\n\
+     which answer the plan was planned against) and `duplicate-selectivity-term` (one \
+     term counted twice into a sum the arithmetic reached once). The \
+     certificate-side names are `depth-not-derivable` (a recorded depth is not the \
+     depth its own recorded inputs derive), `depth-without-derivation`, \
+     `derivation-without-depth`, `derivation-without-statistics-entry` (a depth was \
+     derived for a stratum the snapshot names nowhere), \
+     `statistics-entry-contradicts-derivation` (the plan's two records of one \
+     stratum's statistics disagree) and `selectivity-term-out-of-range` (a recorded \
+     selectivity domain indexes a term the plan's own request does not carry).\n\
      \n\
      Branch on `.refusal`, never on `str(exc)`: the name is the pinned contract and \
      the message is prose that may be reworded. A `version` refusal means the \
@@ -2178,12 +2183,16 @@ fn plan<'py>(
 /// Every refusal raises `retrieval.PlanDocumentError` carrying a pinned
 /// `.refusal` name; branch on that, never on the message. A version this build
 /// does not write is `version`; a keyed section out of order is
-/// `non-ascending-keys`; one stratum recorded twice is `duplicate-stratum-depth`
-/// or `duplicate-stratum-derivation`; a depth that does not follow from its
-/// inputs is `depth-not-derivable`; a stratum the snapshot does not name is
-/// `derivation-without-statistics-entry`; and a snapshot row saying something
-/// else than the derivation beside it is
-/// `statistics-entry-contradicts-derivation`. The class lists them all.
+/// `non-ascending-keys`, and a record's run of contributing request-term indices
+/// out of order is `non-ascending-selectivity-terms`; one stratum recorded twice
+/// is `duplicate-stratum-depth` or `duplicate-stratum-derivation`, and one term
+/// counted twice into one selectivity is `duplicate-selectivity-term`; a depth
+/// that does not follow from its inputs is `depth-not-derivable`; a stratum the
+/// snapshot does not name is `derivation-without-statistics-entry`; a snapshot
+/// row saying something else than the derivation beside it is
+/// `statistics-entry-contradicts-derivation`; and a recorded selectivity domain
+/// indexing a term the plan's own request does not carry is
+/// `selectivity-term-out-of-range`. The class lists them all.
 #[pyfunction]
 #[pyo3(signature = (plan_bytes))]
 fn certify_plan<'py>(py: Python<'py>, plan_bytes: &[u8]) -> PyResult<Bound<'py, PyDict>> {
