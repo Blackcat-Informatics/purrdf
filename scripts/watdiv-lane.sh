@@ -358,9 +358,14 @@ tar xf "${CACHE}/watdiv_v06.tar" -C "${ARENA}" --strip-components=1 \
 # among them; they are removed so nothing downstream can accidentally count them.
 rm -rf "${TESTSUITE}/linear_incremental" "${TESTSUITE}/linear_mixed"
 
+# ONE COPY OF THE NUMBER, read from the pin file. The lane needs it three times --
+# here, for the instantiated query count, and as the report's denominator -- and this
+# was three typed literals, which is three chances to disagree.
+EXPECTED_TEMPLATES="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --template-count)" ||
+  die "could not read the pinned WatDiv basic-template count"
 template_count=$(find "${TESTSUITE}" -maxdepth 1 -type f -name '*.txt' | wc -l)
-((template_count == 20)) ||
-  die "expected 20 basic templates in ${TESTSUITE}, found ${template_count}"
+((template_count == EXPECTED_TEMPLATES)) ||
+  die "expected ${EXPECTED_TEMPLATES} basic templates in ${TESTSUITE}, found ${template_count}"
 [[ -f "${MODEL}" ]] || die "watdiv_v06.tar did not contain model/wsdbm-data-model.txt"
 
 # THE ROW COUNT IS ASSERTED AGAINST A PIN, not merely reported.
@@ -425,7 +430,7 @@ inst_ms=$(($(now_ms) - inst_start))
 # reason -- its manifest digest would be a perfectly ordinary-looking 64 hex
 # characters, and printing that under "the reproducibility check" would certify a
 # workload of no queries. The count below is the other half of the same guard.
-lane_require_query_count "${QUERIES}" 20 "WATDIV_OUT='${OUT}'"
+lane_require_query_count "${QUERIES}" "${EXPECTED_TEMPLATES}" "WATDIV_OUT='${OUT}'"
 require_nonempty_file "${QUERIES}/queries.tsv" "the instantiated query index"
 # EXISTING IS NOT BEING PRODUCED, and the report directs the reader here for the
 # explanation of every empty result -- so the record gets the same check its
@@ -679,8 +684,8 @@ verify_query_set "while the twenty queries were running"
 # SUMMARY and exit 0 -- under a line reading "queries executed 1 of 20". The
 # vacuous-run law was enforced at zero and not at one.
 query_total=$((executed + unexecuted))
-((query_total == 20)) ||
-  die "read ${query_total} row(s) from ${QUERIES}/queries.tsv, not 20.
+((query_total == EXPECTED_TEMPLATES)) ||
+  die "read ${query_total} row(s) from ${QUERIES}/queries.tsv, not ${EXPECTED_TEMPLATES}.
   The twenty .rq files were written and counted, so the index that drives this loop
   disagrees with them. No SUMMARY is printed for a run that measured part of the
   workload under the whole workload's name."

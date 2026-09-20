@@ -795,3 +795,62 @@ fn the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri() {
          output:\n{combined}"
     );
 }
+
+#[test]
+fn the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute() {
+    // `LUBM_ONTO` is stamped into every document the generator writes, so it is an
+    // input to the corpus digest as surely as the seed is, and it had been left out of
+    // the guard that decides whether to assert that digest against its pin.
+    //
+    // WHAT THIS TEST CAN AND CANNOT SEE, stated because the first version of it could
+    // see nothing. The knob VALIDATION runs before step 1, so it is testable here. The
+    // PIN GUARD lives at step 5, past generation and conversion, so no test in this
+    // file can reach it: every test here points the arena somewhere uncreatable
+    // precisely so the run stops before the network and the JDK. Asserting
+    // `!contains("does not match its recorded pin")` after an arena failure is
+    // trivially true and proves nothing — a non-control, which is what an earlier
+    // draft of this test was. The pin guard's two directions are demonstrated by
+    // running the lane instead, and `docs/design/purrdf-bench-lane-laws.md` records
+    // what that demonstration showed.
+    let (code, combined) =
+        run_lane_with_knobs("lubm", "LUBM_OUT", &["LUBM_ONTO=not-an-iri".to_string()]);
+    assert_ne!(
+        code, 0,
+        "make lubm: a relative ontology IRI must be refused — it is stamped into every \
+         generated document, so a relative one would put an unresolvable IRI in the \
+         corpus; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("LUBM_ONTO"),
+        "make lubm: the refusal must name the knob; output:\n{combined}"
+    );
+    assert!(
+        !combined.contains("1/7 artifacts"),
+        "make lubm: a knob this lane cannot honour must be refused before the artifacts \
+         step; output:\n{combined}"
+    );
+
+    // The valid neighbour for the VALIDATOR: an absolute, non-default ontology is a
+    // legitimate request for a different corpus and must get past the knob check.
+    let (unusable, unusable_root) = uncreatable_arena("onto-ok");
+    let (code, stdout, stderr) = run_make(&[
+        "lubm",
+        "LUBM_ONTO=http://example.org/onto/univ-bench.owl",
+        &format!("LUBM_OUT={unusable}"),
+    ]);
+    let combined = format!("{stdout}\n{stderr}");
+    let _ = std::fs::remove_dir_all(&unusable_root);
+    assert!(
+        !combined.contains("LUBM_ONTO must"),
+        "make lubm: an absolute IRI is what this knob takes; output:\n{combined}"
+    );
+    assert_ne!(
+        code, 0,
+        "make lubm: the arena is uncreatable; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("LUBM_OUT="),
+        "make lubm: the failure must name the arena knob, showing the ontology was \
+         accepted; output:\n{combined}"
+    );
+}

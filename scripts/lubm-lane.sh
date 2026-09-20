@@ -106,7 +106,8 @@ ONTO="${LUBM_ONTO:-${LUBM_DEFAULT_ONTO}}"
 # fixture convention. It is a placeholder for the corpus's publication IRI, which a
 # locally generated corpus does not have -- not a claim that anything is published
 # there. An operator who publishes a corpus sets this to where it actually lives.
-DOC_BASE="${LUBM_DOC_BASE:-http://example.org/lubm/}"
+readonly LUBM_DEFAULT_DOC_BASE="http://example.org/lubm/"
+DOC_BASE="${LUBM_DOC_BASE:-${LUBM_DEFAULT_DOC_BASE}}"
 ENTAIL_SLICE="${LUBM_ENTAIL_SLICE:-3000}"
 OUT="${LUBM_OUT:-target/lubm}"
 BIN="${LUBM_BIN:-}"
@@ -518,13 +519,23 @@ echo "data:     ${data_rows} rows, ${data_bytes} bytes, converted in ${conv_ms} 
 echo "ontology: ${onto_rows} rows"
 echo "sha256(lubm-data.nq) = ${data_sha}"
 # ASSERTED AT THE DEFAULT KNOBS. This digest is a deterministic function of
-# LUBM_UNIVERSITIES, LUBM_INDEX, LUBM_SEED, LUBM_DOC_BASE and the collation the lane
-# pins -- so at the defaults it is a CONSTANT, and printing a constant under "the
-# determinism check" without checking it is the missed refusal this lane preaches
-# about. At any other knob setting it is a different corpus and no pin exists, which
-# the else-branch says rather than silently skipping.
+# LUBM_UNIVERSITIES, LUBM_INDEX, LUBM_SEED, LUBM_ONTO, LUBM_DOC_BASE and the
+# collation the lane pins -- so at the defaults it is a CONSTANT, and printing a
+# constant under "the determinism check" without checking it is the missed refusal
+# this lane preaches about. At any other knob setting it is a different corpus and no
+# pin exists, which the else-branch says rather than silently skipping.
+#
+# LUBM_ONTO BELONGS IN THIS LIST AND WAS MISSING FROM IT, which made the guard an
+# OVER-REFUSAL: the generator stamps the `-onto` IRI into every document it writes
+# (`xmlns:ub=` and `owl:imports rdf:resource=` in UBA's own OwlWriter), and N-Quads
+# expands it into every type and property IRI of the corpus this digest is taken
+# over. So a legal `LUBM_ONTO=http://example.org/onto/univ-bench.owl` with everything
+# else default produced a legitimately different corpus, matched this guard anyway,
+# failed the pin, and died naming "generation, conversion, or the concatenation
+# order" -- none of which had changed. That is precisely the unnamed-input-to-a-
+# published-digest defect this branch exists to fix, reproduced by the fix for it.
 if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
-  "${DOC_BASE}" == "http://example.org/lubm/" ]]; then
+  "${ONTO}" == "${LUBM_DEFAULT_ONTO}" && "${DOC_BASE}" == "${LUBM_DEFAULT_DOC_BASE}" ]]; then
   expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
     --workload-pin lubm.1.0.seed0.corpus.sha256)" ||
     die "no corpus pin is recorded for LUBM(1, 0) seed 0 at the default document base"
@@ -541,9 +552,10 @@ else
   echo "  ^ NOT checked against a pin: at least one knob is not at its default, so"
   echo "    this is a different corpus and no pin is recorded for it."
 fi
-echo "  ^ this digest is the determinism check: the same LUBM_UNIVERSITIES/INDEX/SEED"
-echo "    and the same LUBM_DOC_BASE must reproduce it byte for byte. Collation is"
-echo "    the fifth input and is pinned to LC_ALL=C by the lane, not by the caller."
+echo "  ^ this digest is the determinism check: the same LUBM_UNIVERSITIES/INDEX/SEED,"
+echo "    the same LUBM_ONTO (the generator stamps it into every document) and the same"
+echo "    LUBM_DOC_BASE must reproduce it byte for byte. Collation is the sixth input"
+echo "    and is pinned to LC_ALL=C by the lane, not by the caller."
 
 # ── 6. Normalise the queries ────────────────────────────────────────────────────
 

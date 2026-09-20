@@ -113,8 +113,10 @@ invites them to disagree. "A digest covers it" is only a valid answer when that 
 the arena itself wrote is trust-on-first-use: it detects later change, which is
 worth having, but it cannot detect a first extraction that was already wrong,
 because that extraction is what wrote the record. So the WatDiv lane asserts its
-template count, its query count *and* its corpus row count, each against a value
-pinned beside the artifact pins rather than restated at the point of use.
+template count, its query count and its corpus row count, each against a value
+pinned beside the artifact pins rather than restated at the point of use — the
+template and query counts are one pinned number read once, because they are one
+fact, and three typed literals were three chances to disagree.
 
 This law was written before the code obeyed it, and briefly licensed its own
 violation — the row count was left reported on the argument that the corpus digest
@@ -175,6 +177,23 @@ a particular pathology's stray files land, never about concurrent safety. Two ru
 at once want two arenas. The artifact *cache* is separate from the arena and is
 shared regardless of it, so it must be safe under concurrent use on its own terms:
 a scratch name unique per process, with the atomic rename doing the rest.
+
+## Some guards are past the point a test can reach
+
+A lane validates its knobs before step 1, so those refusals are testable offline and
+are tested. The guards that decide whether to compare a digest against its pin sit at
+step 5, past generation and conversion — and every test that drives a lane points the
+arena somewhere uncreatable precisely so the run stops before the network and the JDK.
+Such a test therefore cannot observe a step-5 guard at all, and asserting that its
+failure message is absent is trivially true.
+
+That is worth writing down because it was got wrong twice in this file's own subject
+matter. Both directions of the corpus-pin guard are established by RUNNING the lane:
+at default knobs it prints that the digest matches the recorded pin, and with a
+non-default `LUBM_ONTO` — an absolute IRI the generator stamps into every document,
+and therefore an input to that digest — it completes and prints that no pin was
+checked, naming the knob. Before the knob was added to the guard it died against the
+default corpus's pin while blaming generation, conversion or concatenation order.
 
 ## A refusal is a claim in two directions
 

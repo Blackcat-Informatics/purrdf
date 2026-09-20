@@ -279,6 +279,14 @@ WATDIV_SCALES: tuple[str, ...] = ("10M", "100M", "1000M")
 # from prose, and cross-checked against the figure `docs/BENCHMARKS.md` publishes.
 WATDIV_DATASET_ROWS: dict[str, int] = {"10M": 10_916_457}
 
+# How many BASIC query templates WatDiv publishes: three complex, five snowflake,
+# five linear and seven star. One number, pinned once, because the lane needs it
+# three times -- the templates it extracts, the queries it instantiates, and the
+# denominator of its report -- and three typed literals are three chances to
+# disagree. `docs/design/purrdf-bench-lane-laws.md` says a denominator is only a true
+# statement if it is derived rather than typed; this is where it is derived from.
+WATDIV_BASIC_TEMPLATES: int = 20
+
 # Values that are deterministic functions of the PINNED artifacts and the DEFAULT
 # knobs, recorded here so a lane can ASSERT them rather than print them.
 #
@@ -292,7 +300,7 @@ WATDIV_DATASET_ROWS: dict[str, int] = {"10M": 10_916_457}
 # workload, and asserting a default's value against it would be an over-refusal.
 #
 # WHAT A SELF-DERIVED PIN DOES AND DOES NOT BUY, stated because the difference is
-# easy to overstate. The two DIGESTS below were produced by running the code they
+# easy to overstate. The four DIGESTS below were produced by running the code they
 # now pin, so they catch CHANGE and not CORRECTNESS: they will fail the day
 # generation, conversion, normalisation or instantiation alters its output, which is
 # the regression worth catching, and they would not have caught a value that was
@@ -1087,6 +1095,11 @@ def main() -> int:
         help="print every pinned artifact, its URL, its digest and its licence posture",
     )
     parser.add_argument(
+        "--template-count",
+        action="store_true",
+        help="print the pinned count of published WatDiv basic templates and exit",
+    )
+    parser.add_argument(
         "--workload-pin",
         metavar="NAME",
         help="print the recorded value of a workload pin and exit",
@@ -1112,6 +1125,9 @@ def main() -> int:
 
     if args.self_test:
         return self_test()
+    if args.template_count:
+        print(WATDIV_BASIC_TEMPLATES)
+        return 0
     if args.workload_pin is not None:
         value = WORKLOAD_PINS.get(args.workload_pin)
         if value is None:

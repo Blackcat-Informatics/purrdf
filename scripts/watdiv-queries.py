@@ -214,12 +214,23 @@ _PREFIXED = re.compile(r"(?<![\w:<])([A-Za-z][\w.-]*):[\w.%-]+")
 # template was REFUSED. SPARQL 1.1 §19.7 admits `\"` in a STRING_LITERAL2 via
 # ECHAR, so that body is legal and refusing it is an over-refusal: the mirror of
 # the silent drop the prefix check replaced.
+# Built from parts rather than one pattern, because the LONG forms must come FIRST and
+# an alternation is ordered: a short-literal arm ahead of them would consume the
+# opening pair of a long literal and leave its body exposed to the prefix scan -- the
+# same shape as the escape defect, one syntax over. No pinned template carries a quote
+# of any kind today and substitution injects only IRIs, so the long forms are
+# unreachable rather than broken; they are here so the first template to carry a
+# literal does not rediscover this.
 _LITERAL_OR_IRI = re.compile(
-    r"""<[^>\s]*>          # an IRI reference
-      | "(?:\\.|[^"\\\n])*"   # a double-quoted literal, escapes included
-      | '(?:\\.|[^'\\\n])*'   # a single-quoted literal, escapes included
-    """,
-    re.VERBOSE,
+    "|".join(
+        [
+            r"<[^>\s]*>",  # an IRI reference
+            r'"""(?:\\.|[^\\])*?"""',  # a long double-quoted literal
+            r"'''(?:\\.|[^\\])*?'''",  # a long single-quoted literal
+            r'"(?:\\.|[^"\\\n])*"',  # a double-quoted literal, escapes included
+            r"'(?:\\.|[^'\\\n])*'",  # a single-quoted literal, escapes included
+        ]
+    )
 )
 _NAMESPACE = re.compile(r"^#namespace\s+(\S+?)\s*=\s*(\S+)\s*$")
 
@@ -1090,6 +1101,12 @@ def offline_self_test() -> int:
         "escaped quotes wrapping a colon": (
             'SELECT ?v0 WHERE {\n  ?v0 sorg:name "say \\"nosuch:name\\"" . ?v0 wsdbm:likes ?v1 .\n}'
         ),
+        # The LONG forms are unreachable on today's templates and are covered anyway,
+        # so the first template to carry a literal cannot rediscover the defect the
+        # short form had. The colon inside is what makes each of these a control.
+        "a long literal wrapping a colon": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name """a "x:y" b""" .\n}'
+        ),
         "a colon inside an IRI path": (
             "SELECT ?v0 WHERE {\n  ?v0 <http://example.org/a:b> ?v1 .\n}"
         ),
@@ -1110,6 +1127,9 @@ def offline_self_test() -> int:
         "an undeclared prefix": "SELECT ?v0 WHERE {\n  ?v0 nosuch:name ?v1 .\n}",
         "an undeclared prefix beside an IRI": (
             "SELECT ?v0 WHERE {\n  <http://example.org/x> bogus:p ?v1 .\n}"
+        ),
+        "an undeclared prefix after a long literal": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name """q""" . ?v0 bogus:p ?v1 .\n}'
         ),
     }.items():
         try:
