@@ -346,7 +346,7 @@ use crate::retrieval::{
     AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, DepthCause, Fixed,
     FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution, ProducerDecision,
     ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, ScoreExactness, ScoreInterval,
-    SearchResult, Statistics, Term, ToleratedDepth, TopK, UnservedReason, depth_cause,
+    SearchResult, Statistics, Term, ToleratedDepth, TopK, UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
@@ -1611,7 +1611,27 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
         rendered.set_item("selectivity_ppm", inputs.selectivity_ppm)?;
         rendered.set_item("selectivity_terms", inputs.selectivity_terms.clone())?;
         rendered.set_item("licensed_prefix", inputs.licensed_prefix)?;
-        rendered.set_item("cause", depth_cause_name(depth_cause(inputs)))?;
+        // Asked of the PLAN, through the method the engine offers for exactly
+        // this question, rather than computed beside it from the inputs this
+        // loop happens to be holding. The two spellings would answer the same
+        // question today and would be one edit away from not doing so, and the
+        // one a caller of the Rust surface reads is the method — so a divergence
+        // would show up first as the binding quietly disagreeing with
+        // `Plan::explain_depth` about a plan they both hold.
+        let Some(cause) = planned.explain_depth(stratum) else {
+            // Unreachable: `stratum` is a key of `stratum_derivations`, which is
+            // the map `explain_depth` reads, so it answers `None` only for a
+            // stratum this loop is not iterating. Reported rather than unwrapped
+            // because a panic here would cross the FFI boundary, and reported as
+            // a disagreement inside this build rather than as anything the
+            // caller did.
+            return Err(PyValueError::new_err(format!(
+                "plan records a depth derivation for stratum {} that it then \
+                 reports no depth cause for; this build disagrees with itself",
+                stratum.as_str()
+            )));
+        };
+        rendered.set_item("cause", depth_cause_name(cause))?;
         derivations.set_item(stratum.as_str(), rendered)?;
     }
     out.set_item("stratum_derivations", derivations)?;
