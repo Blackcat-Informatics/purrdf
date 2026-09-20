@@ -114,12 +114,7 @@ SINK="${SCALE_SINK:-}"
 MANIFEST_PATH="${SCALE_MANIFEST:-}"
 BIN="${SCALE_BIN:-}"
 
-require_positive() {
-  local name="$1" value="$2"
-  [[ "${value}" =~ ^[0-9]+$ ]] ||
-    die "${name} must be a decimal unsigned integer (got '${value}')"
-  [[ "${value}" != "0" ]] || die "${name} must be positive"
-}
+
 
 # WHAT THE MANIFEST CERTIFIES AND WHAT THE LANE PRODUCED ARE TWO DIFFERENT
 # NUMBERS, and only the second one is evidence. The manifest is produced by
@@ -222,11 +217,10 @@ account_for_run() {
   require_run_rows "${rows}" "${where}"
 }
 
-require_positive SCALE_QUADS "${QUADS}"
-require_positive SCALE_IRIS "${IRIS}"
-require_positive SCALE_SHARDS "${SHARDS}"
-[[ "${SEED}" =~ ^[0-9]+$ ]] ||
-  die "SCALE_SEED must be a decimal unsigned integer (got '${SEED}')"
+lane_require_uint SCALE_SEED SEED
+lane_require_positive SCALE_QUADS QUADS
+lane_require_positive SCALE_IRIS IRIS
+lane_require_positive SCALE_SHARDS SHARDS
 
 case "${MODE}" in
   stream | pipe | files) ;;

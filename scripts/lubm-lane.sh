@@ -171,21 +171,12 @@ step() {
   echo "=== $* ==="
 }
 
-require_uint() {
-  local name="$1" value="$2"
-  [[ "${value}" =~ ^[0-9]+$ ]] ||
-    die "${name} must be a decimal unsigned integer (got '${value}')"
-}
-
-require_positive() {
-  require_uint "$1" "$2"
-  [[ "$2" != "0" ]] || die "$1 must be positive (got '$2')"
-}
-
-require_positive LUBM_UNIVERSITIES "${UNIVERSITIES}"
-require_positive LUBM_ENTAIL_SLICE "${ENTAIL_SLICE}"
-require_uint LUBM_SEED "${SEED}"
-require_uint LUBM_INDEX "${INDEX}"
+# Validated AND normalised by the shared implementation, so `LUBM_SEED=007`
+# cannot reach the report as one label while the generator reads another.
+lane_require_positive LUBM_UNIVERSITIES UNIVERSITIES
+lane_require_positive LUBM_ENTAIL_SLICE ENTAIL_SLICE
+lane_require_uint LUBM_SEED SEED
+lane_require_uint LUBM_INDEX INDEX
 [[ "${DOC_BASE}" == *://* ]] ||
   die "LUBM_DOC_BASE must be an absolute IRI (got '${DOC_BASE}')"
 [[ "${ONTO}" == *://* ]] || die "LUBM_ONTO must be an absolute IRI (got '${ONTO}')"
@@ -442,7 +433,7 @@ while IFS= read -r owl; do
   # failure names the file rather than the whole dataset.
   require_nonempty_file "${NQ}/${name}.nq" "the N-Quads conversion of ${name}"
   converted=$((converted + 1))
-done < <(find "${WORK}" -maxdepth 1 -name '*.owl' | sort)
+done < <(find "${WORK}" -maxdepth 1 -type f -name '*.owl' | sort)
 conv_ms=$(($(now_ms) - conv_start))
 
 ((converted == owl_count)) ||
@@ -455,7 +446,7 @@ DATA="${ARENA_ROOT}/lubm-data.nq"
 # and silently rewrites the digest published below. LUBM's instance data contains
 # no blank nodes, so concatenating separately converted files cannot collide
 # labels -- a property this lane checks below rather than assumes.
-mapfile -t nq_files < <(find "${NQ}" -maxdepth 1 -name '*.nq' | sort)
+mapfile -t nq_files < <(find "${NQ}" -maxdepth 1 -type f -name '*.nq' | sort)
 ((${#nq_files[@]} > 0)) ||
   die "no .nq files under ${NQ} after ${converted} conversion(s) reported success"
 write_checked "${DATA}" "the concatenated LUBM dataset" cat "${nq_files[@]}"
@@ -517,21 +508,17 @@ lane_require_nquads "${ONTO_NQ}" "the converted univ-bench ontology"
   runs about twice the input), so this is not a conversion of that corpus — it is a
   fraction of one. No digest is published for it and no query is run against it."
 
-data_sha=$(python3 -c '
-import hashlib, sys
-digest = hashlib.sha256()
-with open(sys.argv[1], "rb") as handle:
-    for chunk in iter(lambda: handle.read(1 << 20), b""):
-        digest.update(chunk)
-print(digest.hexdigest())
-' "${DATA}")
+# The SHARED digest, not a fourth inline copy. This lane had grown its own with a
+# different chunk size from the helper introduced to end exactly that -- the drift
+# the helper was justified by, committed in the same branch that added it.
+data_sha="$(lane_sha256_file "${DATA}")"
 
 echo "data:     ${data_rows} rows, ${data_bytes} bytes, converted in ${conv_ms} ms"
 echo "ontology: ${onto_rows} rows"
 echo "sha256(lubm-data.nq) = ${data_sha}"
 echo "  ^ this digest is the determinism check: the same LUBM_UNIVERSITIES/INDEX/SEED"
 echo "    and the same LUBM_DOC_BASE must reproduce it byte for byte. Collation is"
-echo "    the fourth input and is pinned to LC_ALL=C by the lane, not by the caller."
+echo "    the fifth input and is pinned to LC_ALL=C by the lane, not by the caller."
 
 # ── 6. Normalise the queries ────────────────────────────────────────────────────
 
@@ -613,11 +600,28 @@ run_query() {
   # lane reported "its results were not parseable SPARQL JSON". The results were
   # fine. That is a diagnosis the lane had not established, about the binary
   # under test, which is the misdiagnosis class the lane tests exist to stop.
+  # READ THE QUERY BEFORE MEASURING, AND CHECK THAT THE READ WORKED. Inlining
+  # `$(cat ...)` into the invocation put the read inside the `set +e` window, so a
+  # read that failed -- a mode changed between the guard above and this line, a
+  # filesystem error -- yielded the empty string, the engine was handed an empty
+  # query, and its usage complaint became this lane's diagnosis. The guard cannot
+  # close that window by itself; only checking the read can.
+  local query_text
+  query_text="$(cat "${query_file}")" ||
+    die "could not read ${query_file} at the moment ${LANE} was about to run it.
+  The engine has not been asked and is not at fault: an unread query becomes an
+  empty query string, and the engine's complaint about that would be reported here
+  as though the corpus or the binary were wrong."
+  [[ -n "${query_text}" ]] ||
+    die "${query_file} read as empty at the moment it was to be run, although it
+  passed the non-empty check moments earlier. Something is changing the arena
+  underneath this run."
+
   local start stop out rc errfile
   errfile="${LANE_TMP}/query.err"
   start="$(now_ms)"
   set +e
-  out="$("${BIN}" query "${flags[@]}" "$(cat "${query_file}")" 2>"${errfile}")"
+  out="$("${BIN}" query "${flags[@]}" "${query_text}" 2>"${errfile}")"
   rc=$?
   set -e
   stop="$(now_ms)"
@@ -734,10 +738,6 @@ while IFS=$'\t' read -r id regime cli file; do
     continue
   fi
   # A missing file is almost always a concurrent run having just deleted this
-  # directory, so ask that question first: it gives the real diagnosis instead of
-  # handing the engine an empty query string and reporting its parse complaint as
-  # though the corpus or the binary were at fault.
-  # A missing file is almost always a concurrent run having just deleted this
   # directory, so ask that question FIRST: it gives the real diagnosis instead of
   # a filename that vanished for no stated reason.
   [[ -f "${QUERIES}/${file}" ]] || verify_query_set "while ${id} was about to run"
@@ -810,6 +810,7 @@ SUMMARY
   generated          ${owl_count} RDF/XML file(s), ${owl_bytes} bytes, ${gen_ms} ms
   converted          ${data_rows} rows, ${data_bytes} bytes, ${conv_ms} ms
   sha256             ${data_sha}
+  queries sha256     ${queries_sha}
   queries executed   ${executed} of ${query_total} (${query_total_ms} ms total)
   matched nothing    $((executed - nonempty))
   not executed       ${unexecuted}

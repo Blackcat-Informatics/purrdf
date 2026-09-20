@@ -4048,7 +4048,14 @@ class Claim:
 
     def check(self) -> bool:
         text = _read(self.path)
-        matches = list(re.finditer(self.pattern, text))
+        # `re.MULTILINE`, so `^` and `$` mean what a pattern author writing a
+        # table row means by them. Without it they anchored the whole document, a
+        # line-anchored pattern silently matched nothing, and the failure read
+        # "expected exactly one match, found 0 — the row was reworded" — pointing
+        # the next author at the document when the fault was in the pattern. The
+        # first fix for that routed around it by anchoring on newlines instead,
+        # which left the trap in place for everyone else.
+        matches = list(re.finditer(self.pattern, text, re.MULTILINE))
         rel = self.path.relative_to(_REPO)
         # A capture group with no expected value is a number that LOOKS gated
         # and is not — the precise failure mode this whole script exists to
@@ -5086,7 +5093,7 @@ def watdiv_pin_claims() -> tuple[list[str], list[Claim]]:
         Claim(
             "the frozen WatDiv dataset's documented size",
             _BENCHMARKS,
-            r"\n\| Size \| (?P<size>[\d ,]+) bytes \|\n",
+            r"^\| Size \| (?P<size>[\d ,]+) bytes \|$",
             {"size": artifact.size},
             source,
         ),

@@ -468,6 +468,28 @@ def ensure_cached(
                 "  a cached file that stops verifying is an error, not a cache miss: nothing was\n"
                 "  re-downloaded over it. Inspect the quarantined copy, then remove it to refetch."
             )
+        # THE PUBLISHER'S MD5 IS CHECKED HERE TOO, because the run PRINTS it.
+        #
+        # On a cache hit no download happens, so `_verify_and_install` -- which
+        # checks md5 before any byte earns the cached name -- was never reached. A
+        # WRONG PIN therefore went unexamined while `acquire` still printed
+        # "md5 <value> (publisher-published)": a false report of an independent
+        # publisher confirmation that nothing had confirmed. Re-checking here is
+        # not a duplicate of that rule, it is the same rule on the other path.
+        if artifact.md5 is not None:
+            actual_md5 = md5_of(dest)
+            if actual_md5 != artifact.md5:
+                held = quarantine(dest, actual)
+                sys.exit(
+                    f"FAIL: cached {artifact.filename} disagrees with the publisher's own "
+                    "checksum\n"
+                    f"  path     {dest}\n"
+                    f"  expected {artifact.md5}\n"
+                    f"  actual   {actual_md5}\n"
+                    f"  quarantined at {held}\n"
+                    "  the sha256 pin matched, so the PIN is what is wrong here, not the bytes.\n"
+                    "  No publisher confirmation is printed for a checksum that does not agree."
+                )
         return "cache-hit"
 
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -821,6 +843,22 @@ def self_test() -> int:
         else:
             print("OK: self-test — an md5 mismatch is refused and nothing is installed")
 
+    # 7c. The licensing sentence is DERIVED from ARTIFACTS, so it is checked like
+    #     any other derived value. It is reached only from a `sys.exit` branch, so
+    #     nothing else in the gate would notice it going stale -- which is how its
+    #     hand-written predecessor came to describe four artifacts when there were
+    #     six, and to call one GPL when two are.
+    posture = _licence_posture_sentence()
+    gpl = sum(1 for a in ARTIFACTS if a.licence.startswith("GPL"))
+    if f"{gpl} of these artifacts" not in posture or "GPL-2.0-or-later" not in posture:
+        print(f"SELF-TEST FAIL: the licensing sentence does not count the GPL pins: {posture}")
+        ok = False
+    elif str(len(ARTIFACTS)) == posture:
+        print("SELF-TEST FAIL: the licensing sentence is a bare total, not a posture breakdown")
+        ok = False
+    else:
+        print(f"OK: self-test — the licensing posture sentence is derived from the pins ({posture})")
+
     # 8. The git-visibility matcher flags the cache tree and nothing adjacent.
     flagged = _offending_status_lines(
         "?? target\n"
@@ -939,14 +977,14 @@ def acquire(artifacts: tuple[Artifact, ...]) -> int:
             fetched += 1
         verify_digest(CACHE / artifact.filename, artifact.sha256, artifact.filename)
         if artifact.md5 is not None:
-            # The md5 is NOT re-checked here. `_verify_and_install` checks it
-            # before any byte reaches the cached name, and `ensure_cached` proves
-            # a pre-existing entry still matches its sha256 — so a third check
-            # would be a second implementation of one rule, with a weaker message
-            # (no quarantine, no url, and none of the "the PIN is what is wrong
-            # here" guidance the real one carries). Two copies of a rule are two
-            # rules, which is the drift this file's own design notes argue
-            # against, and it also read the artifact a third time per run.
+            # Not re-checked HERE, because both paths that can reach this line
+            # have already checked it: `_verify_and_install` before any byte earns
+            # the cached name, and `ensure_cached` on a cache hit. A third copy
+            # would be a weaker statement of a rule stated twice already. What
+            # matters is that no path prints this line without having verified it
+            # -- the earlier version of this comment argued against duplication
+            # while leaving the cache-hit path unverified, which is how a false
+            # publisher confirmation got printed.
             print(f"OK: {artifact.filename} md5 {artifact.md5} (publisher-published)")
         print(f"     {status}  {artifact.licence}")
 

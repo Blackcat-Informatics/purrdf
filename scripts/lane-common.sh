@@ -173,6 +173,37 @@ lane_require_nonempty_file() {
   digest and no size is published for it."
 }
 
+# ── Unsigned-integer knobs: validated and NORMALISED in one place ───────────────
+#
+# Validation alone is not enough, and that gap shipped: `require_uint` accepted
+# `007`, so a lane printed `seed=007` in the summary beside a digest it advertised
+# as reproducible from that seed, while the tool that consumed the value parsed it
+# as 7 and recorded `seed 7` in the provenance file. One run, two published labels
+# for one number, in the two artifacts whose whole job is attributing a number to
+# its conditions -- and `007` and `7` produce byte-identical output, so a reader
+# comparing the two reports concludes the digest is not seed-sensitive.
+#
+# Each lane had its own copy of these, and they had already drifted (one dropped
+# the offending value from its message). They take the knob's NAME and the
+# VARIABLE's name, so normalisation happens where validation does and no caller
+# can have one without the other.
+lane_require_uint() {
+  local name="$1"
+  local -n _lane_uint_value="$2"
+  [[ "${_lane_uint_value}" =~ ^[0-9]+$ ]] ||
+    die "${name} must be a decimal unsigned integer (got '${_lane_uint_value}')"
+  # Base 10 explicitly: a leading zero would otherwise be read as octal.
+  _lane_uint_value=$((10#${_lane_uint_value}))
+}
+
+lane_require_positive() {
+  local name="$1"
+  lane_require_uint "${name}" "$2"
+  local -n _lane_positive_value="$2"
+  ((_lane_positive_value > 0)) ||
+    die "${name} must be positive (got '${_lane_positive_value}')"
+}
+
 # The SHA-256 of `$1`, streamed. Every lane needs this and each one had grown its
 # own inline copy, which is how the chunk size, the file handling and eventually
 # the meaning drift apart. Streamed rather than read whole because the artifacts
@@ -224,17 +255,41 @@ lane_flatten_detail() {
 # the run, and the index could be rewritten underneath the loop without tripping
 # the concurrency check. Globbing the directory rather than a list of names also
 # means a sidecar added later cannot quietly fall outside the certificate.
+# A MANIFEST OF PER-FILE DIGESTS, never a concatenation of names and bytes.
+#
+# Streaming `name || NUL || content` into one hash is AMBIGUOUS, because nothing
+# delimits the end of content from the start of the next name. A directory holding
+# one file `a` whose content is `b\0c` streams exactly what a directory holding an
+# empty `a` and a `b` containing `c` streams, so two different query sets share one
+# digest and a substitution survives the tripwire that is supposed to catch it.
+# Demonstrated, not theorised.
+#
+# Each file is therefore hashed independently, and what gets hashed is a manifest
+# of fixed-width `<digest>  <name>` records in byte order. A digest is 64 hex
+# characters and a record is one line, so no content can be mistaken for a name. A
+# name carrying a newline or a NUL would break that representation, so it is
+# refused rather than silently encoded — these names come from the lane's own
+# generators, so one is an anomaly worth stopping for.
 lane_query_set_digest() {
   local directory="$1"
   python3 -c '
 import hashlib, pathlib, sys
-digest = hashlib.sha256()
+
 root = pathlib.Path(sys.argv[1])
+records = []
 for path in sorted((p for p in root.iterdir() if p.is_file()), key=lambda p: p.name.encode("utf-8")):
-    digest.update(path.name.encode("utf-8"))
-    digest.update(b"\x00")
-    digest.update(path.read_bytes())
-print(digest.hexdigest())
+    if "\n" in path.name or "\x00" in path.name:
+        sys.exit(
+            f"FAIL: {path.name!r} carries a newline or a NUL, which a manifest record "
+            "cannot represent unambiguously"
+        )
+    records.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")
+if not records:
+    sys.exit(
+        f"FAIL: {root} holds no files, so there is no query set to certify. The digest of "
+        "an empty manifest would certify a workload of no queries."
+    )
+print(hashlib.sha256(("\n".join(records) + "\n").encode("utf-8")).hexdigest())
 ' "${directory}"
 }
 

@@ -133,19 +133,7 @@ step() {
   echo "=== $* ==="
 }
 
-require_uint() {
-  local name="$1" value="$2"
-  [[ "${value}" =~ ^[0-9]+$ ]] ||
-    die "${name} must be a decimal unsigned integer (got '${value}')"
-}
-
-require_uint WATDIV_SEED "${SEED}"
-# Normalise now that it is known to be digits. `require_uint` accepts leading
-# zeros, so WATDIV_SEED=007 printed "seed 007" in the summary while the
-# instantiator's Python int recorded "seed 7" in provenance.txt -- one run, two
-# recorded seeds, in the two files whose whole job is to make a number
-# attributable to the conditions that produced it.
-SEED=$((10#${SEED}))
+lane_require_uint WATDIV_SEED SEED
 
 # Only the 10M dataset is pinned. A larger scale is a one-line addition to
 # scripts/benchmark-acquire.py -- but only by whoever fetches and hashes it
@@ -603,9 +591,6 @@ declare -a EMPTY=()
 while IFS=$'\t' read -r id _regime mappings file; do
   [[ "${id}" != "id" ]] || continue
   # A missing file is almost always a concurrent run having just deleted the
-  # directory, so ask that question first: it gives the real diagnosis instead of
-  # a filename that vanished for no stated reason.
-  # A missing file is almost always a concurrent run having just deleted the
   # directory, so ask that question FIRST: it gives the real diagnosis instead of
   # a filename that vanished for no stated reason.
   [[ -f "${QUERIES}/${file}" ]] || verify_query_set "while ${id} was about to run"
@@ -613,7 +598,19 @@ while IFS=$'\t' read -r id _regime mappings file; do
   # missing: present-but-unreadable and present-but-empty both reach `cat` and
   # both become an empty query the engine is then blamed for rejecting.
   lane_require_query_file "${QUERIES}/${file}" "${id}" "WATDIV_OUT='${OUT}'"
-  result="$(run_query "$(cat "${QUERIES}/${file}")")"
+  # THE READ IS CHECKED, not nested inside the call. `run_query "$(cat ...)"`
+  # hides a failed read completely: the inner substitution yields the empty string
+  # and the outer one still succeeds because `run_query` returns 0, so the engine
+  # is handed an empty query and its usage complaint becomes this lane's diagnosis.
+  query_text="$(cat "${QUERIES}/${file}")" ||
+    die "could not read ${QUERIES}/${file} (under WATDIV_OUT='${OUT}') at the moment
+  ${id} was about to run. The engine has not been asked and is not at fault: an
+  unread query becomes an empty query string, and the engine's complaint about that
+  would be reported here as though the pack or the binary were wrong."
+  [[ -n "${query_text}" ]] ||
+    die "${QUERIES}/${file} read as empty although it passed the non-empty check
+  moments earlier. Something is changing the arena underneath this run."
+  result="$(run_query "${query_text}")"
   status="$(printf '%s' "${result}" | cut -f1)"
   rows="$(printf '%s' "${result}" | cut -f2)"
   ms="$(printf '%s' "${result}" | cut -f3)"
@@ -690,6 +687,7 @@ fi
 
 cat <<REPORT
 SUMMARY
+  binary             ${BIN} (${PURRDF_VERSION})
   dataset            WatDiv ${SCALE} frozen output, ${data_rows} triples, ${data_bytes} bytes
   dataset sha256     ${TARBALL_SHA}  (the pinned tarball)
   loaded             ${pack_bytes}-byte pack, ${loaded} in ${load_ms} ms

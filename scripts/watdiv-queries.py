@@ -870,7 +870,7 @@ def _fixture_candidates(namespaces: dict[str, str]) -> Candidates:
 #
 # Everything below is synthetic and runs offline, so it can live in `make check`.
 
-_PINNED_FIXTURE_SEED_0 = "c96709dc5bf68fb6dedbed67917dff05a7ffa6e96098d45f5fd107d8331b0a38"
+_PINNED_FIXTURE_SEED_0 = "e377b94c325592336ef1a40f37dc7165faf0251e9f9883643cffe5225635276c"
 
 _FIXTURE_NAMESPACES = {
     "wsdbm": "http://db.uwaterloo.ca/~galuc/wsdbm/",
@@ -913,13 +913,20 @@ def _fixture_pool() -> Candidates:
 
 
 def _fixture_digest(seed: int) -> str:
-    """Digest the query set built from the fixtures at *seed*, name and text."""
-    digest = hashlib.sha256()
-    for query in build(_fixture_templates(), seed, _fixture_pool(), _FIXTURE_NAMESPACES):
-        digest.update(query.name.encode("utf-8"))
-        digest.update(b"\x00")
-        digest.update(query.text.encode("utf-8"))
-    return digest.hexdigest()
+    """Digest the fixture query set at *seed* as a manifest of per-query digests.
+
+    NOT a concatenation of names and texts. That stream is ambiguous -- nothing
+    delimits the end of one text from the start of the next name -- so two
+    different query sets can share one digest, which would make this pin
+    unfalsifiable in exactly the cases it exists to catch. This mirrors
+    `lane_query_set_digest`, and it is the same law: a directory digest is a
+    manifest of per-file digests, never a concatenation.
+    """
+    records = sorted(
+        f"{hashlib.sha256(query.text.encode('utf-8')).hexdigest()}  {query.name}"
+        for query in build(_fixture_templates(), seed, _fixture_pool(), _FIXTURE_NAMESPACES)
+    )
+    return hashlib.sha256(("\n".join(records) + "\n").encode("utf-8")).hexdigest()
 
 
 def offline_self_test() -> int:
@@ -970,16 +977,42 @@ def offline_self_test() -> int:
     # spans its pool rather than favouring an index, which is the property the
     # digest cannot see.
     #
-    # The retry branch is deliberately NOT claimed as covered. Rejection fires
-    # when a draw lands in a window `2**64 % count` wide out of 2**64 -- below
-    # one part in 2^44 at these counts -- so `_RETRY_STRIDE` is unreachable in
-    # practice and mutating it does not change any query set. Saying it is
-    # pinned here would be a coverage claim this fixture does not support.
+    # THE RETRY BRANCH IS COVERED, at a count where rejection actually fires.
+    #
+    # An earlier version of this comment declined to cover it, reasoning that
+    # rejection lands in a window `2**64 % count` wide and so is unreachable. That
+    # is true of WATDIV'S POOL SIZES -- at count 7 the window is 2, about one part
+    # in 1.1e19 -- and false of `uniform_index`'s own contract, which this fixture
+    # is free to exercise at any count. At `2**63 + 1` the window is half the
+    # space, so every stream retries, and `_RETRY_STRIDE` moves from "argued
+    # unreachable" to pinned. Declining coverage that costs two lines was a gap
+    # dressed as a principle.
     reachable = {uniform_index(0, stream, 7)[0] for stream in range(4000)}
     check(
         reachable == set(range(7)),
         f"every index of a 7-candidate pool is reachable (saw {len(reachable)}/7)",
     )
+
+    # A count whose reject window is half the space: the loop must terminate, stay
+    # in range, and demonstrably have taken the retry path.
+    wide = (1 << 63) + 1
+    draws = [uniform_index(0, stream, wide) for stream in range(200)]
+    check(
+        all(0 <= index < wide for index, _ in draws),
+        "every draw at a half-rejecting count is still in range",
+    )
+    check(
+        sum(1 for _, attempts in draws if attempts > 1) > 0,
+        "the rejection retry path is actually taken at a half-rejecting count "
+        f"(retried {sum(1 for _, attempts in draws if attempts > 1)} of {len(draws)})",
+    )
+    # The stride's ODDNESS is the invariant that makes the retry walk sound: only an
+    # odd addend generates the whole additive group mod 2**64, so only an odd stride
+    # is guaranteed to reach an acceptable draw rather than cycling inside a
+    # subgroup. Exercising the path does NOT pin this -- an even stride still finds a
+    # draw quickly when the reject window is wide, which is exactly what a mutation
+    # to an even value demonstrated -- so the property is asserted directly.
+    check(_RETRY_STRIDE % 2 == 1, f"the retry stride is odd ({_RETRY_STRIDE:#x})")
 
     # Candidate order read back from a cache must be re-canonicalised, not
     # trusted: order IS the workload, and a cache written in another order has
