@@ -1,0 +1,142 @@
+<!--
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-License-Identifier: CC-BY-4.0
+-->
+
+# Benchmark lane laws: what a lane must refuse, and what its digest actually certifies
+
+The comparison lanes — `scripts/scale-corpus.sh`, `scripts/lubm-lane.sh` and
+`scripts/watdiv-lane.sh` — are report-only by construction. No gate runs them and
+no number they print is asserted anywhere, which is the right posture for a
+workload whose timings depend on the host. It also means **a defect in a lane is
+invisible to every gate in this repository**: the lane will happily print a
+well-formed report about nothing, and the only reader who can tell is a human who
+already knew what the number should be.
+
+Everything below exists because of that asymmetry. A lane cannot be trusted to be
+correct because it passed; it can only be trusted because it refuses.
+
+## The parity rule, and why the thin wrappers are not duplication
+
+`scripts/lane-common.sh` holds the laws every lane shares, in one
+implementation, and its header states the rule: *a law that holds in one lane and
+not its siblings is not a law*. The failure that produced it is on the record in
+`crates/bench/tests/make_bench_lanes.rs` — one repair reached two lanes and left
+the third carrying the defect, and the binary check had drifted in five places
+between two copies of itself.
+
+Each lane then defines a handful of same-named helpers — `write_checked`,
+`mkdir_checked`, `require_nonempty_file` — and these are **adapters, not copies**.
+Their entire body delegates to the `lane_*` implementation, passing the one thing
+that genuinely differs: which knob supplied the path, so the diagnostic can quote
+`LUBM_OUT` or `WATDIV_OUT` back at the operator instead of emitting a bare
+`mkdir: cannot create directory`. Collapsing them into direct `lane_*` calls would
+discard the knob name and make every path failure anonymous. They are correct as
+they stand; do not "de-duplicate" them.
+
+The laws that are genuinely shared, and therefore hold for every lane:
+
+| law | shared implementation |
+| --- | --- |
+| A lane names itself in every diagnostic | `die` |
+| A certificate never outlives the run it certifies | `lane_certify`, `lane_revoke_certificates` |
+| Scratch space is created and removed by the lane, not the caller | `lane_cleanup` |
+| A path that cannot be written names the knob that supplied it | `lane_write_checked`, `lane_mkdir_checked` |
+| Existing is not being produced — an artifact must be a regular, non-empty file | `lane_require_nonempty_file` |
+| Non-empty is not "is what it claims to be" | `lane_require_magic`, `lane_require_nquads` |
+| The binary that certifies every number is itself checked, before step 1 | `lane_require_executable`, `lane_run_probe`, `lane_require_probe_said_something` |
+
+## A digest is a certificate only if every input to it is pinned
+
+A lane that prints `sha256(...)` and calls it the determinism check is making a
+falsifiable promise: *these named inputs, and nothing else, reproduce these
+bytes*. The promise is only as good as the enumeration. Any input the lane does
+not name is a free variable, and a free variable turns the certificate into a
+coincidence.
+
+Ordering is the input that is easiest to forget, because it is usually supplied
+by a tool rather than written down. `sort(1)` obeys `LC_COLLATE`: under `LC_ALL=C`
+it compares bytes, so `.` (0x2E) precedes `0` (0x30) and `University0_1.owl`
+sorts before `University0_10.owl`; under a UTF-8 collation punctuation is
+ignorable at the primary level and the two reverse. A lane that concatenates in
+`find | sort` order therefore produces a different corpus — and a different
+digest, and a different one-file rung — on two hosts that differ only in their
+environment. The fix is not to document the collation but to remove it as a
+variable: order bytes, with `LC_ALL=C`, or order in a language whose sort is
+defined (Python's `sorted` on `str` is code-point ordered and never locale-aware).
+
+The same applies to any ordering that reaches an emitted artifact: a filesystem
+glob, a `set` iteration, a dictionary built in insertion order. Collect in
+whatever order is convenient, then canonicalise before anything downstream can
+observe it.
+
+## Container identity is not corpus identity
+
+A digest-pinned archive proves what was *downloaded*. It proves nothing about
+what is currently *extracted*, because extraction is a separate event with its
+own failure modes: a truncated write, a manual edit, an interrupted run, a
+half-finished experiment left in the arena.
+
+So a reuse stamp keyed on the archive's digest answers the wrong question. It
+says "an extraction from this tarball happened here once", and a later run reads
+that as "the bytes in this arena are that tarball's contents". Between those two
+statements sits every way the extracted file can have changed since. The
+consequence is specific and bad: the lane queries whatever is there now and
+reports its results beside the *archive's* pinned digest, which is a provenance
+claim the bytes it measured do not have.
+
+A reuse stamp must therefore be keyed on a digest of the artifact the lane is
+about to read, not of the container it came from — and where the artifact's true
+shape is a known constant of a pinned release, that constant belongs in a tracked
+file next to the pin, asserted rather than printed.
+
+## A count that is known must be asserted, not reported
+
+`> 0` is the weakest possible guard and it is almost never the right one. When a
+pinned artifact has a known shape — twenty query templates, fourteen queries, a
+published triple count — the lane knows the expected value, so printing the
+observed one is a missed refusal. The failure it admits is not "nothing happened",
+which is loud; it is "less happened than should have", which reads as success and
+is fast.
+
+This extends past artifact counts to the rows of the report itself. A lane that
+proves it wrote twenty queries and then prints however many rows it managed to
+read has verified the artifacts and not the work: `executed of 20` is only a true
+statement if the denominator is derived rather than typed.
+
+## A diagnosis must not name a cause the lane has not established
+
+A lane fails in front of an operator who does not know its internals, so the
+first line it prints becomes the diagnosis. Two habits make that line lie:
+
+**Merging stderr into a results stream.** Capturing `2>&1` and then parsing the
+result means any notice the binary writes — a warning, a future governor line —
+prepends non-JSON to well-formed output. The parse fails and the lane reports
+that the results were unparseable, which is false; the results were fine. Capture
+stderr separately and put its first line in the detail column.
+
+**Reading a file that may not exist.** A command substitution over a missing file
+yields the empty string, and an empty query is a *usage* error from the engine.
+The lane then prints the engine's parse complaint for what is actually a missing
+artifact, blaming the thing under test for the harness's own fault. Check the file
+exists, and name it.
+
+## What is enforced in one lane and not its siblings
+
+These are laws by the rule at the top of this document, and they currently live in
+`scripts/watdiv-lane.sh` alone. Until they are shared, the LUBM lane does not
+have them:
+
+| law | where it lives |
+| --- | --- |
+| The query set is re-verified by digest before the first query, on a missing file, and after the last — so a concurrent run that wipes the arena mid-loop is caught rather than measured | `verify_query_set` |
+| A query file that is missing is named as missing, before the engine is handed an empty string | the guard preceding `run_query` |
+| The instantiated query count is asserted against the expected count, and no digest is published for a set that is not the full one | the `rq_count` check |
+
+Concurrency is the one to be most careful about, because the arena is derived
+from a single knob. Two runs with default knobs share it, and every step begins
+with a destructive wipe — so "each run generates into its own directory" is true
+only of where a particular pathology's stray files land, and is not a statement
+about concurrent safety. Two runs at once want two arenas. The artifact *cache* is
+separate from the arena and is shared regardless, so it must be safe under
+concurrent use on its own terms rather than by the operator separating arenas.
