@@ -536,7 +536,25 @@ python3 "${REPO_ROOT}/scripts/lubm-queries.py" --self-test ||
   die "the query normaliser failed its own self-test"
 python3 "${REPO_ROOT}/scripts/lubm-queries.py" --namespace "${NAMESPACE}" --out "${QUERIES}" ||
   die "could not normalise the LUBM queries"
+
+# A NORMALISER REPORTING SUCCESS IS NOT 14 QUERIES, and the artifacts it names
+# are not evidence until they are checked for being artifacts. The report below
+# counts what it executed; without these, the denominator it counts against was a
+# typed literal and a partial query set would have read as "executed 3 of 14".
+lane_require_query_count "${QUERIES}" 14 "LUBM_OUT='${OUT}'"
+require_nonempty_file "${QUERIES}/regimes.tsv" "the per-query entailment regime index"
+require_nonempty_file "${QUERIES}/provenance.txt" "the query normalisation record"
+
+# The digest is the reproducibility handle for the query set AND the tripwire that
+# makes a concurrent run visible: this directory is deleted at the top of this
+# step, so a second run sharing LUBM_OUT rewrites it underneath the loop below.
+queries_sha="$(lane_query_set_digest "${QUERIES}")"
+verify_query_set() {
+  lane_verify_query_set "${QUERIES}" "${queries_sha}" "$1" "LUBM_OUT='${OUT}'"
+}
+
 echo "provenance: ${QUERIES}/provenance.txt"
+echo "sha256(queries) = ${queries_sha}"
 
 # ── 7. Run the queries ──────────────────────────────────────────────────────────
 
@@ -660,8 +678,19 @@ resolve_regime() {
   REGIME_RUNG["${regime}"]="none"
 }
 
+# The regimes to probe are DERIVED from the query set rather than listed here. A
+# hardcoded triple is a second source of truth beside `lubm-queries.py`'s regime
+# table, whose own self-test admits every CLI regime the binary offers: retagging
+# one query to a regime not in this list is an edit that passes that self-test and
+# then dies in this loop with a bare `REGIME_NOTE[...]: unbound variable`, naming
+# neither the lane nor the knob nor the query.
+mapfile -t probe_regimes < <(tail -n +2 "${QUERIES}/regimes.tsv" | cut -f3 | sort -u)
+((${#probe_regimes[@]} > 0)) ||
+  die "${QUERIES}/regimes.tsv names no entailment regimes; the normaliser wrote an
+  index this lane cannot probe against."
+
 echo "probing each regime's closure against the dataset ladder:"
-for regime in "-" rdfs owl-rl; do
+for regime in "${probe_regimes[@]}"; do
   resolve_regime "${regime}"
 done
 
@@ -683,9 +712,17 @@ while IFS=$'\t' read -r id regime cli file; do
   if [[ -z "${dataset}" ]]; then
     printf '%-4s %-36s %-8s %-9s %-15s %8s %8s\n' \
       "${id}" "${regime}" "${cli}" "-" "CANNOT-EXECUTE" "-" "-"
-    NOTES+=("${id}: no rung of the ladder could close ${cli} -- ${REGIME_NOTE[${cli}]}")
+    NOTES+=("${id}: no rung of the ladder could close ${cli} -- ${REGIME_NOTE[${cli}]:-no rung was probed for regime '${cli}'}")
     unexecuted=$((unexecuted + 1))
     continue
+  fi
+  # A missing file is almost always a concurrent run having just deleted this
+  # directory, so ask that question first: it gives the real diagnosis instead of
+  # handing the engine an empty query string and reporting its parse complaint as
+  # though the corpus or the binary were at fault.
+  if [[ ! -f "${QUERIES}/${file}" ]]; then
+    verify_query_set "while ${id} was about to run"
+    lane_require_query_file "${QUERIES}/${file}" "${id}" "LUBM_OUT='${OUT}'"
   fi
   result="$(run_query "${QUERIES}/${file}" "${dataset}" "${cli}")"
   status="$(printf '%s' "${result}" | cut -f1)"
@@ -703,6 +740,17 @@ while IFS=$'\t' read -r id regime cli file; do
     NOTES+=("${id}: ${detail}")
   fi
 done <"${QUERIES}/regimes.tsv"
+
+# The rows above are one measurement only if they were all answered over the same
+# query set, and only if they are all of it. Both are checked after the fact,
+# because that is what proves it rather than assumes it.
+verify_query_set "while the 14 queries were running"
+query_total=$((executed + unexecuted))
+((query_total == 14)) ||
+  die "read ${query_total} row(s) from ${QUERIES}/regimes.tsv, not 14. The 14 .rq
+  files were written and counted, so the index that drives this loop disagrees with
+  them. No SUMMARY is printed for a run that measured part of the workload under
+  the whole workload's name."
 
 echo ""
 if ((${#NOTES[@]} > 0)); then
@@ -740,7 +788,7 @@ SUMMARY
   generated          ${owl_count} RDF/XML file(s), ${owl_bytes} bytes, ${gen_ms} ms
   converted          ${data_rows} rows, ${data_bytes} bytes, ${conv_ms} ms
   sha256             ${data_sha}
-  queries executed   ${executed} of 14 (${query_total_ms} ms total)
+  queries executed   ${executed} of ${query_total} (${query_total_ms} ms total)
   matched nothing    $((executed - nonempty))
   not executed       ${unexecuted}
 

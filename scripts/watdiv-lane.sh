@@ -401,15 +401,9 @@ inst_ms=$(($(now_ms) - inst_start))
 # Digest the emitted .rq files in name order. This is the reproducibility handle
 # -- the same dataset and the same seed must reproduce it exactly -- and it is
 # also the tripwire that makes a CONCURRENT RUN visible (see verify_query_set).
+# The implementation is shared with the sibling lanes; see lane-common.sh.
 queries_digest() {
-  python3 -c '
-import hashlib, pathlib, sys
-digest = hashlib.sha256()
-for path in sorted(pathlib.Path(sys.argv[1]).glob("*.rq")):
-    digest.update(path.name.encode("utf-8"))
-    digest.update(path.read_bytes())
-print(digest.hexdigest())
-' "${QUERIES}"
+  lane_query_set_digest "${QUERIES}"
 }
 
 # A DIGEST IS A CERTIFICATE, so it is never published for output that was not
@@ -417,10 +411,8 @@ print(digest.hexdigest())
 # e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -- the SHA-256
 # of the empty string -- and printing that under "the reproducibility check"
 # would certify a workload of no queries.
-rq_count=$(find "${QUERIES}" -maxdepth 1 -name '*.rq' | wc -l)
-((rq_count == 20)) ||
-  die "the instantiator reported success but wrote ${rq_count} .rq file(s) to ${QUERIES}, not 20.
-  No query-set digest is published for a set that is not the 20 published templates."
+lane_require_query_count "${QUERIES}" 20 "WATDIV_OUT='${OUT}'"
+rq_count=20
 require_nonempty_file "${QUERIES}/queries.tsv" "the instantiated query index"
 
 queries_sha="$(queries_digest)"
@@ -559,16 +551,7 @@ step "7/7 run the 20 instantiated queries (pure BGP, no entailment)"
 # change means a concurrent run, and it is named as one rather than surfacing as
 # a puzzling "some file is missing".
 verify_query_set() {
-  local when="$1" now
-  now="$(queries_digest)"
-  [[ "${now}" == "${queries_sha}" ]] && return 0
-  die "the instantiated query set CHANGED ${when}.
-  expected ${queries_sha}
-  found    ${now}
-  Another run is almost certainly using the same WATDIV_OUT ('${OUT}') and rewrote
-  the queries underneath this one: step 4 starts by deleting that directory. Numbers
-  from a run whose queries changed mid-flight are not numbers, so this run stops.
-  Give each concurrent run its own arena, for example WATDIV_OUT=target/watdiv-\$\$."
+  lane_verify_query_set "${QUERIES}" "${queries_sha}" "$1" "WATDIV_OUT='${OUT}'"
 }
 
 verify_query_set "between instantiation and the first query"
@@ -595,14 +578,14 @@ total_rows=0
 declare -a NOTES=()
 declare -a EMPTY=()
 
-while IFS=$'\t' read -r id regime mappings file; do
+while IFS=$'\t' read -r id _regime mappings file; do
   [[ "${id}" != "id" ]] || continue
   # A missing file is almost always a concurrent run having just deleted the
   # directory, so ask that question first: it gives the real diagnosis instead of
   # a filename that vanished for no stated reason.
   if [[ ! -f "${QUERIES}/${file}" ]]; then
     verify_query_set "while ${id} was about to run"
-    die "${file} is missing from ${QUERIES}, yet the query set digest is unchanged"
+    lane_require_query_file "${QUERIES}/${file}" "${id}" "WATDIV_OUT='${OUT}'"
   fi
   result="$(run_query "$(cat "${QUERIES}/${file}")")"
   status="$(printf '%s' "${result}" | cut -f1)"
@@ -634,6 +617,18 @@ done <"${QUERIES}/queries.tsv"
 # The twenty rows above are only one measurement if they were all answered over
 # the same query set. Checking afterwards is what proves they were.
 verify_query_set "while the twenty queries were running"
+
+# TWENTY ARTIFACTS IS NOT TWENTY ROWS. The .rq count is asserted above, but the
+# rows printed come from `queries.tsv`, and nothing tied the two together: an
+# index carrying a header and one row produced one row, `executed=1`, a full
+# SUMMARY and exit 0 -- under a line reading "queries executed 1 of 20". The
+# vacuous-run law was enforced at zero and not at one.
+query_total=$((executed + unexecuted))
+((query_total == 20)) ||
+  die "read ${query_total} row(s) from ${QUERIES}/queries.tsv, not 20.
+  The twenty .rq files were written and counted, so the index that drives this loop
+  disagrees with them. No SUMMARY is printed for a run that measured part of the
+  workload under the whole workload's name."
 
 echo ""
 if ((${#NOTES[@]} > 0)); then
@@ -674,7 +669,7 @@ SUMMARY
   loaded             ${pack_bytes}-byte pack, ${loaded} in ${load_ms} ms
   seed               ${SEED}
   queries sha256     ${queries_sha}
-  queries executed   ${executed} of 20 (${total_ms} ms total, ${total_rows} rows)
+  queries executed   ${executed} of ${query_total} (${total_ms} ms total, ${total_rows} rows)
   matched nothing    ${#EMPTY[@]}
   not executed       ${unexecuted}
   open cost          ${OPEN_MS} ms, included in every TOTAL_MS above

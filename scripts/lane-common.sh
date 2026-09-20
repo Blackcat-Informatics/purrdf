@@ -193,6 +193,79 @@ print(digest.hexdigest())
 ' "${path}"
 }
 
+# ── The query set: counted, certified, and re-checked while it is being read ────
+#
+# These three laws were written for one lane and left out of its sibling, which is
+# the shape `make_bench_lanes.rs` exists to warn about. They live here so that
+# cannot happen again, and each takes the things that genuinely differ -- the
+# directory, the expected count, the knob that named the arena -- as parameters.
+
+# The digest of an emitted query set, in name order. This is the reproducibility
+# handle AND the tripwire for a concurrent run, so the name is folded in beside
+# the bytes: two files that swapped contents must not digest the same.
+lane_query_set_digest() {
+  local directory="$1"
+  python3 -c '
+import hashlib, pathlib, sys
+digest = hashlib.sha256()
+for path in sorted(pathlib.Path(sys.argv[1]).glob("*.rq")):
+    digest.update(path.name.encode("utf-8"))
+    digest.update(path.read_bytes())
+print(digest.hexdigest())
+' "${directory}"
+}
+
+# A GENERATOR REPORTING SUCCESS IS NOT A FULL QUERY SET. `$1` is the directory,
+# `$2` the count the pinned workload is defined to have, `$3` the knob that named
+# the arena. No digest is published for a set that is not the whole set: a partial
+# one runs, reports fast, and is a different workload wearing the same name.
+lane_require_query_count() {
+  local directory="$1" expected="$2" knob="$3" actual
+  actual=$(find "${directory}" -maxdepth 1 -type f -name '*.rq' | wc -l)
+  ((actual == expected)) ||
+    die "the instantiator reported success but wrote ${actual} .rq file(s) to
+  '${directory}' (under ${knob}), not ${expected}. No query-set digest is published
+  for a set that is not the ${expected} published queries."
+}
+
+# Re-derives the query set's digest and refuses if it moved. `$1` is the
+# directory, `$2` the digest recorded when the set was written, `$3` when this
+# check is happening, `$4` the knob that named the arena.
+#
+# The arena is derived from one knob, so two runs with default knobs share it and
+# each begins by deleting this directory. A run whose queries changed mid-flight
+# did not measure the workload it reports, and that is the most expensive kind of
+# wrong number: it looks exactly like a right one.
+lane_verify_query_set() {
+  local directory="$1" expected="$2" when="$3" knob="$4" now
+  now="$(lane_query_set_digest "${directory}")"
+  [[ "${now}" == "${expected}" ]] && return 0
+  die "the instantiated query set CHANGED ${when}.
+  expected ${expected}
+  found    ${now}
+  Another run is almost certainly using the same arena (${knob}) and rewrote the
+  queries underneath this one. Numbers from a run whose queries changed mid-flight
+  are not numbers, so this run stops. Give each concurrent run its own arena."
+}
+
+# A MISSING QUERY FILE MUST NAME ITSELF. Reading one with a command substitution
+# yields the empty string, and an empty query is a USAGE error from the engine --
+# so the lane would print the engine's parse complaint as the diagnosis for what
+# is actually the harness's own missing artifact, blaming the thing under test.
+# `$1` is the path, `$2` the query's id, `$3` the knob that named the arena.
+lane_require_query_file() {
+  local path="$1" id="$2" knob="$3"
+  [[ -f "${path}" ]] ||
+    die "${id} is missing from '${path}' (under ${knob}) at the moment it was to be
+  run. The engine is not at fault and has not been asked: an unreadable query file
+  becomes an empty query string, and the engine's complaint about that would be
+  reported here as though the corpus or the binary were wrong."
+  [[ -s "${path}" ]] ||
+    die "${id} at '${path}' (under ${knob}) is EMPTY. An empty query is a usage
+  error, and reporting the engine's complaint about it would blame the binary for
+  an artifact this lane produced."
+}
+
 # NON-EMPTY IS NOT "IS WHAT IT CLAIMS TO BE". A CLI that writes eight bytes and
 # exits 0 passes an emptiness test, and a lane that stamps that file as a
 # reusable artifact hands every later run a certificate for something that is
