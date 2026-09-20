@@ -204,6 +204,23 @@ def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int]:
 _MAPPING = re.compile(r"^#mapping\s+(\S+)\s+(\S+)\s+(\S+)\s*$")
 _PLACEHOLDER = re.compile(r"%(\w+)%")
 _PREFIXED = re.compile(r"(?<![\w:<])([A-Za-z][\w.-]*):[\w.%-]+")
+
+# An angle-bracketed IRI, or a quoted literal INCLUDING its ECHAR escapes.
+#
+# The escapes are the whole point. A naive `"[^"\n]*"` closes the literal at the
+# first `\"` inside it and leaves the remainder of that literal standing in the
+# text the prefix scan then reads -- so a perfectly legal
+# `"say \"nosuch:name\""` had `nosuch:name` scanned as a prefixed name and the
+# template was REFUSED. SPARQL 1.1 §19.7 admits `\"` in a STRING_LITERAL2 via
+# ECHAR, so that body is legal and refusing it is an over-refusal: the mirror of
+# the silent drop the prefix check replaced.
+_LITERAL_OR_IRI = re.compile(
+    r"""<[^>\s]*>          # an IRI reference
+      | "(?:\\.|[^"\\\n])*"   # a double-quoted literal, escapes included
+      | '(?:\\.|[^'\\\n])*'   # a single-quoted literal, escapes included
+    """,
+    re.VERBOSE,
+)
 _NAMESPACE = re.compile(r"^#namespace\s+(\S+?)\s*=\s*(\S+)\s*$")
 
 # The distributions this program implements. A mapping naming anything else is a
@@ -678,6 +695,8 @@ def instantiate(
     # already treats this exact condition as fatal and names the prefix; this is
     # the same law and now says the same thing.
     # Quoted literals AND angle-bracketed IRIs are removed before scanning.
+    # `_LITERAL_OR_IRI` understands ECHAR escapes; a regex that did not closed the
+    # literal at the first `\"` and left the rest of it exposed to the prefix scan.
     # `_PREFIXED` is deliberately loose: a literal such as "note: see below"
     # matches it, and so does the `a:b` inside `<http://example.org/a:b>`, because
     # the lookbehind only blocks a match immediately after `<`. Since
@@ -685,7 +704,7 @@ def instantiate(
     # would refuse legal output -- the over-refusal that mirrors the silent drop
     # this check exists to fix. Only prefixes outside literals and IRIs count, in
     # both directions.
-    scannable = re.sub(r'<[^>\s]*>|"[^"\n]*"|\'[^\'\n]*\'', " ", body)
+    scannable = _LITERAL_OR_IRI.sub(" ", body)
     found = sorted(set(_PREFIXED.findall(scannable)))
     undeclared = [prefix for prefix in found if prefix not in namespaces]
     if undeclared:
@@ -1062,8 +1081,14 @@ def offline_self_test() -> int:
         "a colon inside a quoted literal": (
             'SELECT ?v0 WHERE {\n  ?v0 sorg:name "note: see below" .\n}'
         ),
-        "escaped quotes inside a literal": (
-            'SELECT ?v0 WHERE {\n  ?v0 sorg:name "say \\"hi\\"" . ?v0 wsdbm:likes ?v1 .\n}'
+        # THE COLON INSIDE THE ESCAPED QUOTES IS THE CONTROL. This fixture used
+        # `"say \"hi\""` first, and `hi` carries no colon -- so it passed whether or
+        # not the literal stripper understood ECHAR escapes, and it certified a LIVE
+        # over-refusal as a false positive. A control that cannot distinguish the
+        # case it exists for is not a control; this one fails if the stripper
+        # regresses.
+        "escaped quotes wrapping a colon": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name "say \\"nosuch:name\\"" . ?v0 wsdbm:likes ?v1 .\n}'
         ),
         "a colon inside an IRI path": (
             "SELECT ?v0 WHERE {\n  ?v0 <http://example.org/a:b> ?v1 .\n}"

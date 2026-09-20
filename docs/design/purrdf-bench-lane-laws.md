@@ -108,12 +108,18 @@ The exception is worth stating precisely, because it is easy to misread as an
 excuse. A count need not be asserted where **something strictly stronger already
 fixes it**: a verified digest over the same bytes pins every count those bytes
 have, so adding the count as a second literal states one fact in two places and
-invites them to disagree. That is why the WatDiv lane asserts its template and
-query counts — nothing else fixes them — and reports the corpus row count, whose
-digest is re-derived and compared on every run. "A digest covers it" is only a
-valid answer when the digest is actually verified against a pin on the path in
-question; where a digest is merely recorded and never re-checked, it fixes
-nothing and the count must be asserted.
+invites them to disagree. "A digest covers it" is only a valid answer when that digest is verified against a
+**pin** on the path in question. A digest re-derived and compared against a stamp
+the arena itself wrote is trust-on-first-use: it detects later change, which is
+worth having, but it cannot detect a first extraction that was already wrong,
+because that extraction is what wrote the record. So the WatDiv lane asserts its
+template count, its query count *and* its corpus row count, each against a value
+pinned beside the artifact pins rather than restated at the point of use.
+
+This law was written before the code obeyed it, and briefly licensed its own
+violation — the row count was left reported on the argument that the corpus digest
+subsumed it, when that digest answers to a stamp rather than a pin. The rule is
+the one to keep; the exception was the mistake.
 
 This extends past artifact counts to the rows of the report itself. A lane that
 proves it wrote twenty queries and then prints however many rows it managed to

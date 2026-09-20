@@ -310,7 +310,17 @@ root = pathlib.Path(sys.argv[1])
 if not root.is_dir():
     sys.exit(f"FAIL: {root} is not a directory; it was removed or replaced underneath this run")
 records = []
-for path in sorted((p for p in root.iterdir() if p.is_file()), key=lambda p: p.name.encode("utf-8")):
+for path in sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8")):
+    # A NON-REGULAR ENTRY IS REFUSED, not skipped. Filtering to `is_file()` made the
+    # claim above false: a subdirectory queued alongside the queries had its contents
+    # excluded from the certificate that is also the concurrency tripwire, silently.
+    # Refusing keeps the certificate closed over what is actually there, and matches
+    # the `-maxdepth 1` the count uses.
+    if not path.is_file():
+        sys.exit(
+            f"FAIL: {root} holds {path.name!r}, which is not a regular file. A query set "
+            "is a flat directory of files; nothing else can be certified here."
+        )
     if "\n" in path.name or "\x00" in path.name:
         sys.exit(
             f"FAIL: {path.name!r} carries a newline or a NUL, which a manifest record "

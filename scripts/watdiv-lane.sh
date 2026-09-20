@@ -363,17 +363,25 @@ template_count=$(find "${TESTSUITE}" -maxdepth 1 -type f -name '*.txt' | wc -l)
   die "expected 20 basic templates in ${TESTSUITE}, found ${template_count}"
 [[ -f "${MODEL}" ]] || die "watdiv_v06.tar did not contain model/wsdbm-data-model.txt"
 
-# The row count is REPORTED rather than asserted against a constant, and that is
-# deliberate now that the corpus is identified by digest above: a verified digest
-# already fixes the row count exactly, so a second pinned literal here would be a
-# second source of truth for one fact -- the drift this lane's shared law file was
-# created to end. The `> 0` guard stays as the floor, because it is the one case
-# the digest cannot catch on the path where the corpus was just extracted.
+# THE ROW COUNT IS ASSERTED AGAINST A PIN, not merely reported.
+#
+# An earlier version of this reported it, arguing that the corpus digest already
+# fixed it. That argument does not survive its own law: the digest above is
+# re-verified against a STAMP THIS ARENA WROTE, not against a pin, so a first
+# extraction that was already wrong would be certified by its own record and agreed
+# with forever. `docs/design/purrdf-bench-lane-laws.md` permits an unasserted count
+# only where a digest re-verified AGAINST A PIN fixes it, so this one must be
+# asserted -- and the pin lives beside the artifact pins rather than here, so there
+# is still exactly one copy of the number.
+expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --dataset-rows "${SCALE}")" ||
+  die "no extracted row count is pinned for WatDiv scale ${SCALE}"
 data_rows=$(wc -l <"${DATASET}")
 data_bytes=$(wc -c <"${DATASET}")
-((data_rows > 0)) ||
-  die "the extracted dataset at ${DATASET} has ${data_bytes} bytes but not one triple;
-  every row this lane prints would be a zero over an empty corpus"
+((data_rows == expected_rows)) ||
+  die "the extracted dataset at ${DATASET} holds ${data_rows} triples in ${data_bytes}
+  bytes, but the pinned count for WatDiv ${SCALE} is ${expected_rows}.
+  The tarball matched its digest, so the extraction is what disagrees. No number is
+  published for a corpus that is not the pinned one."
 echo "dataset:   ${data_rows} triples, ${data_bytes} bytes (${extracted} in ${extract_ms} ms)"
 echo "templates: ${template_count} basic templates, prefix table from $(basename "${MODEL}")"
 
@@ -416,6 +424,21 @@ echo "instantiated in ${inst_ms} ms"
 echo "provenance: ${QUERIES}/provenance.txt"
 echo "sha256(queries @ seed ${SEED}) = ${queries_sha}"
 echo "  ^ the reproducibility check: this dataset and this seed must reproduce it"
+if [[ "${SCALE}" == "10M" && "${SEED}" == "0" ]]; then
+  expected_queries="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --workload-pin "watdiv.10M.seed0.queries.sha256")" ||
+    die "no query-set pin is recorded for WatDiv 10M at seed 0"
+  [[ "${queries_sha}" == "${expected_queries}" ]] ||
+    die "the instantiated WatDiv query set does not match its recorded pin.
+  expected ${expected_queries}
+  found    ${queries_sha}
+  The dataset matched its pin and the seed is 0, so the INSTANTIATOR changed. Every
+  number below would be for a different workload under the same name."
+  echo "    and it does: checked against the recorded pin for 10M at seed 0."
+else
+  echo "    NOT checked against a pin: no pin is recorded for scale ${SCALE} at seed"
+  echo "    ${SEED}, and a different seed is a different workload."
+fi
 echo "    byte for byte. A DIFFERENT SEED IS A DIFFERENT WORKLOAD, not a re-run."
 
 # ── 5. Load through the purrdf CLI ──────────────────────────────────────────────

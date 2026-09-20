@@ -100,7 +100,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lane-common.sh"
 UNIVERSITIES="${LUBM_UNIVERSITIES:-1}"
 SEED="${LUBM_SEED:-0}"
 INDEX="${LUBM_INDEX:-0}"
-ONTO="${LUBM_ONTO:-http://swat.cse.lehigh.edu/onto/univ-bench.owl}"
+readonly LUBM_DEFAULT_ONTO="http://swat.cse.lehigh.edu/onto/univ-bench.owl"
+ONTO="${LUBM_ONTO:-${LUBM_DEFAULT_ONTO}}"
 # example.org is RFC 2606's reserved documentation domain and this repository's own
 # fixture convention. It is a placeholder for the corpus's publication IRI, which a
 # locally generated corpus does not have -- not a claim that anything is published
@@ -550,6 +551,29 @@ verify_query_set() {
 echo "provenance: ${QUERIES}/provenance.txt"
 echo "sha256(queries) = ${queries_sha}"
 
+# ASSERTED, not printed -- but only at the knob it depends on. The normalisation is
+# a pure function of the pinned queries file and the target namespace, so at the
+# default namespace the digest is a constant and printing it instead of checking it
+# would be a known value left unchecked. A non-default namespace is a different
+# query set, and asserting the default's digest against it would be an
+# over-refusal, so that case says what it is doing instead.
+if [[ "${ONTO}" == "${LUBM_DEFAULT_ONTO}" ]]; then
+  expected_queries="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --workload-pin lubm.queries.sha256)" ||
+    die "no query-set pin is recorded for the default LUBM namespace"
+  [[ "${queries_sha}" == "${expected_queries}" ]] ||
+    die "the normalised LUBM query set does not match its recorded pin.
+  expected ${expected_queries}
+  found    ${queries_sha}
+  The queries file matched its own digest, so the NORMALISATION changed. Every row
+  below would be answered over a different query set than the one these rules were
+  reviewed against."
+  echo "  ^ matches the recorded pin for the default namespace"
+else
+  echo "  ^ NOT checked against a pin: LUBM_ONTO is not the default, so this is a"
+  echo "    different query set and no pin is recorded for it."
+fi
+
 # ── 7. Run the queries ──────────────────────────────────────────────────────────
 
 step "7/7 run the queries, per regime"
@@ -724,7 +748,16 @@ query_total_ms=0
 executed=0
 unexecuted=0
 nonempty=0
+# COUNTING EXECUTIONS IS NOT COUNTING COMPARABLE ANSWERS. A row answered on a rung
+# below 'full' is, by this lane's own rule below, NOT the published LUBM answer --
+# it is an answer over a strict subset. A reader who quotes "14 of 14, not executed
+# 0" from the summary concludes the workload was demonstrated; if eleven of those
+# ran on a slice, almost none of it is comparable to anything published. So the
+# summary carries the number that decides that, rather than leaving it to be
+# reconstructed from fourteen table rows.
+comparable=0
 declare -a NOTES=()
+declare -A ANSWERED=()
 
 while IFS=$'\t' read -r id regime cli file; do
   [[ "${id}" != "id" ]] || continue
@@ -754,6 +787,10 @@ while IFS=$'\t' read -r id regime cli file; do
     "${id}" "${regime}" "${cli}" "${rung}" "${status}" "${rows}" "${ms}"
   if [[ "${status}" == "OK" ]]; then
     executed=$((executed + 1))
+    if [[ "${rung}" == "full" ]]; then
+      comparable=$((comparable + 1))
+      ANSWERED["${id}"]="${rows}"
+    fi
     query_total_ms=$((query_total_ms + ms))
     ((rows == 0)) || nonempty=$((nonempty + 1))
   else
@@ -774,6 +811,13 @@ query_total=$((executed + unexecuted))
   the whole workload's name."
 
 echo ""
+if ((comparable == 0)); then
+  echo "NOT ONE ROW ABOVE IS COMPARABLE TO A PUBLISHED LUBM ANSWER: every query that"
+  echo "  executed did so on a rung BELOW 'full', which is a strict subset of the"
+  echo "  corpus. The rows say the regimes WORK and what they cost on this machine."
+  echo "  They are not results for LUBM(${UNIVERSITIES}, ${INDEX})."
+  echo ""
+fi
 if ((${#NOTES[@]} > 0)); then
   echo "QUERIES THAT DID NOT EXECUTE, and exactly why:"
   for note in "${NOTES[@]}"; do
@@ -797,6 +841,28 @@ fi
 # nothing is a run over something that is not LUBM. (A zero on an individual
 # query is a real answer and always reported as one: Q2 is legitimately 0, and a
 # rung below 'full' legitimately answers 0 for individuals outside its subset.)
+# LUBM PUBLISHES ANSWERS FOR Q1 AND Q14, and they are the only oracle this lane
+# has: both need NO entailment, so both run on the full corpus, and at the default
+# knobs their counts are constants of LUBM(1, 0) seed 0. `nonempty > 0` -- one
+# non-zero row anywhere among fourteen -- would let a conversion bug that halved
+# either one pass silently. Checked only at the default corpus, because at any
+# other scale or seed these are not the published numbers.
+if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" ]]; then
+  for oracle in Q1 Q14; do
+    want="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+      --workload-pin "lubm.1.0.seed0.rows.${oracle}")" ||
+      die "no published answer is recorded for ${oracle}"
+    got="${ANSWERED[${oracle}]:-}"
+    [[ -n "${got}" ]] ||
+      die "${oracle} did not execute on the full rung, so LUBM's own published answer
+  for it could not be checked. It needs no entailment, so nothing should prevent it."
+    ((got == want)) ||
+      die "${oracle} answered ${got} rows over LUBM(1, 0) seed 0; LUBM publishes ${want}.
+  This query needs no entailment and runs over the full corpus, so the corpus or the
+  conversion is wrong -- not the regime, and not the engine's inference."
+  done
+  echo "oracle: Q1 and Q14 match LUBM's published answers for LUBM(1, 0)"
+fi
 ((nonempty > 0)) ||
   die "all ${executed} queries executed and every one matched zero rows.
   That is vacuous, not fast: Q1 and Q14 are answered without entailment over the
@@ -812,6 +878,7 @@ SUMMARY
   sha256             ${data_sha}
   queries sha256     ${queries_sha}
   queries executed   ${executed} of ${query_total} (${query_total_ms} ms total)
+  comparable rows    ${comparable} of ${query_total} (answered on rung 'full')
   matched nothing    $((executed - nonempty))
   not executed       ${unexecuted}
 

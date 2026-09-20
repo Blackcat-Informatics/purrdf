@@ -5057,14 +5057,20 @@ class _PinnedArtifact(Protocol):
     size: int
 
 
-def _pinned_watdiv_artifact() -> "_PinnedArtifact":
-    """Read the pinned WatDiv dataset artifact out of the acquisition script."""
+def _acquisition_module():
+    """Load scripts/benchmark-acquire.py once, so its pins have one reader here."""
     path = _REPO / "scripts" / "benchmark-acquire.py"
     spec = importlib.util.spec_from_file_location("_benchmark_acquire", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"check-doc-claims: cannot load {path.relative_to(_REPO)}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _pinned_watdiv_artifact() -> "_PinnedArtifact":
+    """Read the pinned WatDiv dataset artifact out of the acquisition script."""
+    module = _acquisition_module()
     for artifact in module.ARTIFACTS:
         if artifact.filename.startswith("watdiv.") and artifact.filename.endswith(".tar.bz2"):
             return artifact
@@ -5101,7 +5107,23 @@ def watdiv_pin_claims() -> tuple[list[str], list[Claim]]:
             f"{digest_row.group('sha')}, but the pin is {artifact.sha256} ({source})"
         )
 
+    rows_module = _acquisition_module()
+    scale = artifact.filename.removeprefix("watdiv.").removesuffix(".tar.bz2")
+    pinned_rows = rows_module.WATDIV_DATASET_ROWS.get(scale)
+    if pinned_rows is None:
+        problems.append(
+            f"{rel}: scripts/benchmark-acquire.py pins no extracted row count for WatDiv "
+            f"{scale}, so the documented triple count states something no pin backs"
+        )
+
     return problems, [
+        Claim(
+            "the frozen WatDiv dataset's documented triple count",
+            _BENCHMARKS,
+            r"^\| Triples \| (?P<triples>[\d ,]+) \|$",
+            {"triples": pinned_rows or -1},
+            source,
+        ),
         Claim(
             "the frozen WatDiv dataset's documented size",
             _BENCHMARKS,

@@ -265,6 +265,48 @@ ARTIFACTS: tuple[Artifact, ...] = (
 # points an operator at that output instead of carrying its own copy of the list.
 WATDIV_SCALES: tuple[str, ...] = ("10M", "100M", "1000M")
 
+# The row count of each pinned dataset AFTER extraction, as a tracked pin.
+#
+# The tarball's digest is pinned and re-verified every run, so the bytes that go
+# INTO an extraction are certain. What comes out is certified only by a stamp the
+# first extraction itself wrote -- trust-on-first-use -- and a stamp is not a pin.
+# `docs/design/purrdf-bench-lane-laws.md` states that a known count may go
+# unasserted only where a digest re-verified AGAINST A PIN already fixes it; the
+# corpus digest is re-verified against a stamp, so by that law this count must be
+# asserted, and here it is.
+#
+# Measured from an extraction of the digest-verified tarball rather than copied
+# from prose, and cross-checked against the figure `docs/BENCHMARKS.md` publishes.
+WATDIV_DATASET_ROWS: dict[str, int] = {"10M": 10_916_457}
+
+# Values that are deterministic functions of the PINNED artifacts and the DEFAULT
+# knobs, recorded here so a lane can ASSERT them rather than print them.
+#
+# Each of these was already deterministic and already printed; printing a known
+# value instead of checking it is the "missed refusal" this repository's lane-laws
+# document names. They live beside the artifact pins because that is what they are
+# derived from -- one copy of each number, next to the bytes that determine it.
+#
+# A lane compares one of these ONLY when the knobs it depends on are at their
+# defaults, and says so when they are not. A different seed or scale is a different
+# workload, and asserting a default's value against it would be an over-refusal.
+WORKLOAD_PINS: dict[str, str] = {
+    # sha256 over the normalised LUBM query set, at the default ontology namespace.
+    "lubm.queries.sha256": (
+        "5ad5a5c735bc86625c0f008fc78a2f7cfc30f063de25ad33a36339e2e49774a8"
+    ),
+    # LUBM's own published answers for LUBM(1, 0) seed 0. These two queries need NO
+    # entailment, so they run on the full corpus on any engine and their counts are
+    # the only oracle this lane has. `> 0` was letting a conversion bug that halved
+    # either one pass silently.
+    "lubm.1.0.seed0.rows.Q1": "4",
+    "lubm.1.0.seed0.rows.Q14": "5916",
+    # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
+    "watdiv.10M.seed0.queries.sha256": (
+        "2fabc0ef56b5d18bb9a7c9d6a4aa5c661043500103d6f133087d39d41fa59301"
+    ),
+}
+
 
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
@@ -657,6 +699,8 @@ def list_artifacts() -> int:
         for index, line in enumerate(_wrap(artifact.posture, 74)):
             print(f"  posture  {line}" if index == 0 else f"           {line}")
     print()
+    for scale, rows in sorted(WATDIV_DATASET_ROWS.items()):
+        print(f"watdiv.{scale} extracted row count (pinned): {rows}")
     print(f"WatDiv scales pinned here:  {', '.join(pinned_watdiv_scales())}")
     print(f"published upstream, NOT pinned: {', '.join(unpinned_watdiv_scales())}")
     print(
@@ -1011,6 +1055,16 @@ def main() -> int:
         action="store_true",
         help="print every pinned artifact, its URL, its digest and its licence posture",
     )
+    parser.add_argument(
+        "--workload-pin",
+        metavar="NAME",
+        help="print the recorded value of a workload pin and exit",
+    )
+    parser.add_argument(
+        "--dataset-rows",
+        metavar="SCALE",
+        help="print the pinned extracted row count for SCALE and exit",
+    )
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
         "--only",
@@ -1027,6 +1081,27 @@ def main() -> int:
 
     if args.self_test:
         return self_test()
+    if args.workload_pin is not None:
+        value = WORKLOAD_PINS.get(args.workload_pin)
+        if value is None:
+            sys.exit(
+                f"FAIL: no workload pin named {args.workload_pin!r}.\n"
+                f"  Recorded: {', '.join(sorted(WORKLOAD_PINS))}.\n"
+                "  This tool will not invent a value for a workload it has not recorded."
+            )
+        print(value)
+        return 0
+    if args.dataset_rows is not None:
+        rows = WATDIV_DATASET_ROWS.get(args.dataset_rows)
+        if rows is None:
+            sys.exit(
+                f"FAIL: no extracted row count is pinned for WatDiv scale "
+                f"{args.dataset_rows!r}. Pinned: {', '.join(sorted(WATDIV_DATASET_ROWS))}.\n"
+                "  A scale whose row count is not pinned cannot have that count asserted, and\n"
+                "  this tool will not invent one."
+            )
+        print(rows)
+        return 0
     if args.list:
         return list_artifacts()
 
