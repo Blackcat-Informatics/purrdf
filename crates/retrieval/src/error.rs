@@ -221,6 +221,71 @@ pub enum PlanError {
         /// The stratum whose depth is missing.
         stratum: String,
     },
+
+    /// A stratum a depth was derived for is named by no statistics-snapshot row.
+    ///
+    /// The snapshot's whole claim is that it names every subject planning
+    /// consulted, and a stratum is the subject planning consulted in order to
+    /// *decide*. A snapshot missing one is a plan asserting it consulted nothing
+    /// for a depth it recorded — so the omission is refused rather than repaired
+    /// from the derivation, which would let the plan's two records drift apart
+    /// silently in exactly the direction this check exists to catch.
+    #[error("stratum {stratum} records a derivation with no statistics snapshot entry")]
+    DerivationWithoutStatisticsEntry {
+        /// The stratum the snapshot does not name.
+        stratum: String,
+    },
+
+    /// A stratum's statistics-snapshot row contradicts its own recorded
+    /// derivation.
+    ///
+    /// The row is written as a projection of the derivation, so the two agree by
+    /// construction in any plan this build emitted. A plan in which they differ
+    /// was edited or forged, and the two readings license different depths with
+    /// nothing saying which is the measurement — so it is refused, naming the
+    /// dimension that disagreed and both of its values.
+    #[error(
+        "stratum {stratum} records {dimension} {snapshot} in its statistics snapshot and {derivation} in its derivation"
+    )]
+    StatisticsEntryContradictsDerivation {
+        /// The stratum whose two records disagree.
+        stratum: String,
+        /// Which statistic they disagree about.
+        dimension: StatisticsDimension,
+        /// What the snapshot entry records for that dimension.
+        snapshot: String,
+        /// What the derivation records for it.
+        derivation: String,
+    },
+}
+
+/// Which statistic a plan's two records of one stratum disagree about.
+///
+/// Carried by
+/// [`PlanError::StatisticsEntryContradictsDerivation`](PlanError::StatisticsEntryContradictsDerivation)
+/// so the refusal names a dimension rather than reporting that "the statistics"
+/// differ: the three are measured separately, edited separately, and lead to
+/// different depths, and a caller repairing a plan needs to know which one moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StatisticsDimension {
+    /// The row count the provider reported for the subject.
+    Cardinality,
+    /// The aggregate selectivity, in parts per million, that was applied.
+    SelectivityPpm,
+    /// The request-term indices that aggregate was summed over.
+    SelectivityTerms,
+}
+
+impl core::fmt::Display for StatisticsDimension {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let name = match self {
+            Self::Cardinality => "cardinality",
+            Self::SelectivityPpm => "selectivity in parts per million",
+            Self::SelectivityTerms => "selectivity terms",
+        };
+        formatter.write_str(name)
+    }
 }
 
 /// A failure raised while building a profile or fusing ranked streams.

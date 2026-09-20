@@ -37,7 +37,7 @@ use purrdf_text::Fixed;
 use serde::{Deserialize, Serialize};
 
 use crate::canonical::{Reader, Writer};
-use crate::error::PlanError;
+use crate::error::{PlanError, StatisticsDimension};
 use crate::fuse::TopK;
 use crate::id::{PLAN_VERSION, PlanId};
 use crate::iri::{Iri, Term};
@@ -681,35 +681,67 @@ impl Plan {
     /// keeps the per-read cost where it was and leaves the check available to
     /// anyone receiving a plan from somewhere they do not control.
     ///
+    /// # The two records of one stratum must agree
+    ///
+    /// A stratum's statistics are recorded twice — in [`Self::stratum_derivations`],
+    /// bound to the depth they produced, and in [`Self::statistics_snapshot`],
+    /// which names every subject planning consulted. The planner writes the
+    /// second as a projection of the first, so they agree by construction in any
+    /// plan it emitted; a plan in which they differ was edited or forged, and its
+    /// two readings license different depths with nothing saying which is the
+    /// measurement. Both directions are checked here, so neither record can
+    /// quietly become the other's contradiction.
+    ///
+    /// # Which stratum a refusal names is a function of the plan
+    ///
+    /// Every loop below walks a sorted key list or a
+    /// [`BTreeMap`](std::collections::BTreeMap), never [`Self::stratum_depths`]
+    /// in its own iteration order. A `HashMap` walk would make the *first*
+    /// disagreement a plan carries several of depend on hash order, so two
+    /// processes refusing one forged plan could name two different strata and a
+    /// caller comparing the messages would think the plans differed.
+    ///
     /// # Errors
     ///
     /// [`PlanError::DepthNotDerivable`] when a recorded depth is not the depth
     /// its inputs derive; [`PlanError::DepthWithoutDerivation`] and
-    /// [`PlanError::DerivationWithoutDepth`] when the two maps do not name the
-    /// same strata. Each is a refusal rather than a repair: a plan whose depth and
-    /// evidence disagree has no reading under which one of them is the truth.
+    /// [`PlanError::DerivationWithoutDepth`] when the depth and derivation maps
+    /// do not name the same strata;
+    /// [`PlanError::DerivationWithoutStatisticsEntry`] when the snapshot does not
+    /// name a stratum a depth was derived for; and
+    /// [`PlanError::StatisticsEntryContradictsDerivation`] when it names one and
+    /// says something else about it. Each is a refusal rather than a repair: a
+    /// plan whose depth and evidence disagree has no reading under which one of
+    /// them is the truth.
     pub fn certify(&self) -> Result<(), PlanError> {
-        for (stratum, depth) in &self.stratum_depths {
+        let mut recorded: Vec<(&Iri, u32)> = self
+            .stratum_depths
+            .iter()
+            .map(|(stratum, depth)| (stratum, *depth))
+            .collect();
+        recorded.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        for (stratum, depth) in recorded {
             let Some(inputs) = self.stratum_derivations.get(stratum) else {
                 return Err(PlanError::DepthWithoutDerivation {
                     stratum: stratum.as_str().to_owned(),
                 });
             };
             let derived = crate::depth_from(inputs);
-            if derived != *depth {
+            if derived != depth {
                 return Err(PlanError::DepthNotDerivable {
                     stratum: stratum.as_str().to_owned(),
-                    recorded: *depth,
+                    recorded: depth,
                     derived,
                 });
             }
         }
-        for stratum in self.stratum_derivations.keys() {
+        for (stratum, inputs) in &self.stratum_derivations {
             if !self.stratum_depths.contains_key(stratum) {
                 return Err(PlanError::DerivationWithoutDepth {
                     stratum: stratum.as_str().to_owned(),
                 });
             }
+            reconcile(stratum, inputs, &self.statistics_snapshot)?;
         }
         Ok(())
     }
@@ -1295,6 +1327,80 @@ fn read_depths(reader: &mut Reader<'_>) -> Result<HashMap<Iri, u32>, PlanError> 
         depths.insert(key, value);
     }
     Ok(depths)
+}
+
+/// Refuse a stratum whose snapshot row says anything other than its derivation.
+///
+/// The planner writes the row as a projection of `inputs`, so the two are equal
+/// in any plan it emitted and this reads as a no-op there. It earns its keep on
+/// the plans [`Plan::certify`] exists for: edited ones, forged ones, and ones
+/// written by a build whose projection differed.
+///
+/// The dimensions are tested in the order [`depth_from`](crate::depth_from)
+/// consumes them, so a plan disagreeing about several is named by the one
+/// nearest the arithmetic — and the order is fixed rather than incidental, which
+/// is what makes the reported dimension a function of the plan.
+///
+/// A missing row is a different fact from a wrong one and is refused separately:
+/// one is a snapshot that forgot a subject, the other a snapshot that
+/// contradicts one.
+fn reconcile(
+    stratum: &Iri,
+    inputs: &DepthInputs,
+    snapshot: &StatisticsSnapshot,
+) -> Result<(), PlanError> {
+    let Some(entry) = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.subject == stratum.as_str())
+    else {
+        return Err(PlanError::DerivationWithoutStatisticsEntry {
+            stratum: stratum.as_str().to_owned(),
+        });
+    };
+    let disagreement = if entry.cardinality != inputs.cardinality {
+        Some((
+            StatisticsDimension::Cardinality,
+            measurement(entry.cardinality),
+            measurement(inputs.cardinality),
+        ))
+    } else if entry.selectivity_ppm != inputs.selectivity_ppm {
+        Some((
+            StatisticsDimension::SelectivityPpm,
+            measurement(entry.selectivity_ppm),
+            measurement(inputs.selectivity_ppm),
+        ))
+    } else if entry.selectivity_terms != inputs.selectivity_terms {
+        Some((
+            StatisticsDimension::SelectivityTerms,
+            format!("{:?}", entry.selectivity_terms),
+            format!("{:?}", inputs.selectivity_terms),
+        ))
+    } else {
+        None
+    };
+    match disagreement {
+        Some((dimension, snapshot, derivation)) => {
+            Err(PlanError::StatisticsEntryContradictsDerivation {
+                stratum: stratum.as_str().to_owned(),
+                dimension,
+                snapshot,
+                derivation,
+            })
+        }
+        None => Ok(()),
+    }
+}
+
+/// One reported statistic, rendered for a refusal message.
+///
+/// An absent measurement renders as the word rather than as a number, because
+/// "the provider measured nothing" and "the provider measured zero" are the two
+/// facts this whole record exists to keep apart — and a message that printed
+/// `0` for both would collapse them at the one moment a reader is trying to tell
+/// which of them moved.
+fn measurement(value: Option<u64>) -> String {
+    value.map_or_else(|| "absent".to_owned(), |value| value.to_string())
 }
 
 /// Write the per-stratum derivations, sorted by stratum IRI.

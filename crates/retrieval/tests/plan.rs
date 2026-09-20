@@ -11,7 +11,8 @@ use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
     ProducerDecision, RankFidelity, ReadBound, RegistryId, RejectionReason, RequestTerm,
-    StatisticsEntry, StatisticsSnapshot, Term, TopK, UnservedReason, UnservedTerm,
+    StatisticsDimension, StatisticsEntry, StatisticsSnapshot, Term, TopK, UnservedReason,
+    UnservedTerm,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
@@ -104,15 +105,29 @@ fn baseline() -> Plan {
         ],
         stratum_depths,
         stratum_derivations,
+        // The snapshot names every subject planning consults: the request's own
+        // predicate, and the stratum a depth was derived for. The stratum's row
+        // is the projection of the derivation above — absent cardinality, absent
+        // selectivity — and the predicate's row carries different values in every
+        // field, so a test that mixed the two up fails on the number rather than
+        // on the shape.
         statistics_snapshot: StatisticsSnapshot {
             source: "example-statistics".to_owned(),
             revision: "r1".to_owned(),
-            entries: vec![StatisticsEntry {
-                subject: "http://example.org/p".to_owned(),
-                cardinality: Some(42),
-                selectivity_ppm: Some(1_000),
-                selectivity_terms: vec![0],
-            }],
+            entries: vec![
+                StatisticsEntry {
+                    subject: "http://example.org/p".to_owned(),
+                    cardinality: Some(42),
+                    selectivity_ppm: Some(1_000),
+                    selectivity_terms: vec![0],
+                },
+                StatisticsEntry {
+                    subject: stratum().as_str().to_owned(),
+                    cardinality: None,
+                    selectivity_ppm: None,
+                    selectivity_terms: Vec::new(),
+                },
+            ],
         },
         registry_instance_id: RegistryId::from_raw(7),
         registry_content_fingerprint: "example-fingerprint".to_owned(),
@@ -1096,6 +1111,237 @@ fn certify_refuses_a_depth_its_inputs_do_not_derive() {
         orphan_derivation.certify(),
         Err(PlanError::DerivationWithoutDepth { .. })
     ));
+}
+
+/// The index of the baseline snapshot row for a subject, so an edit names the
+/// row it means rather than a position that moves when a row is added.
+fn row_of(plan: &Plan, subject: &str) -> usize {
+    plan.statistics_snapshot
+        .entries
+        .iter()
+        .position(|entry| entry.subject == subject)
+        .unwrap_or_else(|| panic!("the baseline names {subject}"))
+}
+
+/// A stratum whose snapshot row contradicts its derivation is refused, naming
+/// the dimension that disagreed and both values — and the same edit to a row
+/// that explains no depth changes nothing.
+///
+/// Both halves run on every dimension. The refusal alone would pass for a
+/// checker that rejected any snapshot at all, and a request predicate's row is
+/// exactly the case such a checker would wrongly reject: it derives no depth, so
+/// there is nothing for it to contradict, and a host is free to record whatever
+/// the provider told it there.
+#[test]
+fn certify_refuses_a_snapshot_row_that_contradicts_its_derivation() {
+    let stratum_row = row_of(&baseline(), stratum().as_str());
+    let predicate_row = row_of(&baseline(), "http://example.org/p");
+
+    // Each edit moves ONE dimension, to a value the derivation does not carry.
+    // The derivation records `None`, `None` and `[]`, so every replacement below
+    // is a different statement about what the provider said.
+    let mut wrong_cardinality = baseline();
+    wrong_cardinality.statistics_snapshot.entries[stratum_row].cardinality = Some(7);
+    let mut wrong_selectivity = baseline();
+    wrong_selectivity.statistics_snapshot.entries[stratum_row].selectivity_ppm = Some(250_000);
+    let mut wrong_terms = baseline();
+    wrong_terms.statistics_snapshot.entries[stratum_row].selectivity_terms = vec![0, 2];
+
+    // The neighbours: the identical three edits, to the request predicate's row.
+    let mut ancillary_cardinality = baseline();
+    ancillary_cardinality.statistics_snapshot.entries[predicate_row].cardinality = Some(7);
+    let mut ancillary_selectivity = baseline();
+    ancillary_selectivity.statistics_snapshot.entries[predicate_row].selectivity_ppm =
+        Some(250_000);
+    let mut ancillary_terms = baseline();
+    ancillary_terms.statistics_snapshot.entries[predicate_row].selectivity_terms = vec![0, 2];
+
+    for (forged, ancillary, dimension, expected_snapshot, expected_derivation) in [
+        (
+            wrong_cardinality,
+            ancillary_cardinality,
+            StatisticsDimension::Cardinality,
+            "7",
+            "absent",
+        ),
+        (
+            wrong_selectivity,
+            ancillary_selectivity,
+            StatisticsDimension::SelectivityPpm,
+            "250000",
+            "absent",
+        ),
+        (
+            wrong_terms,
+            ancillary_terms,
+            StatisticsDimension::SelectivityTerms,
+            "[0, 2]",
+            "[]",
+        ),
+    ] {
+        match forged
+            .certify()
+            .expect_err("a snapshot row that contradicts its derivation is refused")
+        {
+            PlanError::StatisticsEntryContradictsDerivation {
+                stratum: named,
+                dimension: reported,
+                snapshot,
+                derivation,
+            } => {
+                assert_eq!(named, stratum().as_str());
+                assert_eq!(
+                    reported, dimension,
+                    "the refusal names the failed dimension"
+                );
+                assert_eq!(snapshot, expected_snapshot);
+                assert_eq!(
+                    derivation, expected_derivation,
+                    "and carries both values, so the message says what disagreed"
+                );
+            }
+            other => panic!("refused by the wrong name: {other:?}"),
+        }
+
+        // The neighbour, carrying the identical edit on the request predicate's
+        // row. It explains no depth, so there is no second record for it to
+        // contradict and the plan still certifies.
+        ancillary
+            .certify()
+            .expect("a row that derives no depth contradicts nothing");
+    }
+
+    // And the plan whose two records agree — which is what the planner writes —
+    // certifies untouched, so the three refusals above are decisions rather than
+    // the absence of one.
+    baseline()
+        .certify()
+        .expect("the baseline's two records of its stratum say the same thing");
+}
+
+/// A stratum the snapshot does not name at all is refused, and dropping a row
+/// that explains no depth is not.
+///
+/// The two are different facts: one is a snapshot that forgot the subject a
+/// depth was derived for, the other a host recording less ancillary context than
+/// the planner would have. Only the first makes a recorded depth unexplainable.
+#[test]
+fn certify_refuses_a_stratum_the_snapshot_does_not_name() {
+    let stratum_row = row_of(&baseline(), stratum().as_str());
+    let mut missing = baseline();
+    missing.statistics_snapshot.entries.remove(stratum_row);
+    match missing
+        .certify()
+        .expect_err("a derivation with no snapshot row is refused")
+    {
+        PlanError::DerivationWithoutStatisticsEntry { stratum: named } => {
+            assert_eq!(named, stratum().as_str());
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The neighbour: drop the request predicate's row instead. Nothing was
+    // derived from it, so nothing is left unexplained and the plan certifies.
+    let predicate_row = row_of(&baseline(), "http://example.org/p");
+    let mut thinner = baseline();
+    thinner.statistics_snapshot.entries.remove(predicate_row);
+    thinner
+        .certify()
+        .expect("a snapshot without an ancillary row still explains every depth");
+
+    // And an empty snapshot is refused for the stratum, not waved through as
+    // "nothing to compare against".
+    let mut empty = baseline();
+    empty.statistics_snapshot.entries.clear();
+    assert!(matches!(
+        empty.certify(),
+        Err(PlanError::DerivationWithoutStatisticsEntry { .. })
+    ));
+}
+
+/// Which stratum a refusal names is a function of the plan, never of hash order.
+///
+/// `stratum_depths` is a `HashMap`, so a checker walking it in its own iteration
+/// order picks an arbitrary one of a plan's several disagreements, and two
+/// processes refusing one forged plan could name two different strata. Thirty-two
+/// strata all disagree here and the refusal must name the lexicographically first.
+///
+/// # Why the plan is rebuilt every round
+///
+/// One `HashMap` walked once proves nothing: a single map's order is fixed, and
+/// it can perfectly well begin at the key the assertion expects — asserting over
+/// one is a test that passes against the very bug it names, which is exactly how
+/// a laundered oracle looks. The standard library seeds each `HashMap` from a
+/// per-thread counter, so a fresh map of the same thirty-two keys is a fresh
+/// order. Sixty-four rounds of an order-dependent walk agreeing on one key out of
+/// thirty-two is a coincidence of about one in `32^64`; the sorted walk agrees
+/// every time by construction.
+///
+/// The valid neighbour is the same thirty-two-stratum plan with honest depths,
+/// which certifies: the ordering fix must not turn a wide plan into a refusal.
+#[test]
+fn certify_names_the_first_disagreement_in_stratum_order() {
+    let wide = |honest: bool| {
+        let mut plan = baseline();
+        plan.stratum_depths.clear();
+        plan.stratum_derivations.clear();
+        plan.statistics_snapshot.entries.clear();
+        for index in 0..32_u32 {
+            let stratum = iri(&format!("http://example.org/stratum/{index:02}"));
+            // Distinct declarations, so each stratum's honest depth is its own
+            // number and a record read off the wrong stratum fails on the value.
+            let declared = u64::from(index) + 1;
+            plan.stratum_derivations.insert(
+                stratum.clone(),
+                DepthInputs {
+                    declared,
+                    cardinality: None,
+                    selectivity_ppm: None,
+                    selectivity_terms: Vec::new(),
+                    licensed_prefix: None,
+                },
+            );
+            let depth = u32::try_from(declared).expect("the fixture declarations fit a rank");
+            plan.stratum_depths
+                .insert(stratum.clone(), if honest { depth } else { depth + 1 });
+            plan.statistics_snapshot.entries.push(StatisticsEntry {
+                subject: stratum.as_str().to_owned(),
+                cardinality: None,
+                selectivity_ppm: None,
+                selectivity_terms: Vec::new(),
+            });
+        }
+        plan
+    };
+
+    for round in 0..64 {
+        match wide(false)
+            .certify()
+            .expect_err("every one of the thirty-two depths is wrong")
+        {
+            PlanError::DepthNotDerivable {
+                stratum,
+                recorded,
+                derived,
+            } => {
+                assert_eq!(
+                    stratum, "http://example.org/stratum/00",
+                    "round {round} named another stratum, so which disagreement is \
+                     reported depends on hash order rather than on the plan"
+                );
+                assert_eq!(
+                    (recorded, derived),
+                    (2, 1),
+                    "and the values are that stratum's own, not another's"
+                );
+            }
+            other => panic!("refused by the wrong name: {other:?}"),
+        }
+    }
+
+    wide(true)
+        .certify()
+        .expect("thirty-two honest strata certify; the ordering rule refuses nothing");
 }
 
 /// A version-3 document is refused by name rather than reinterpreted under the
