@@ -1401,8 +1401,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   A bound also gives a finite depth to a producer that declares unboundedly many
   rows, where previously only a measured cardinality could: such a read, taken for
   an answer that provably cannot use more than `k` rows, is a read of `k` rows.
-  `PlanError::StatisticsUnavailable` still refuses the same declaration asked for
-  everything.
+  The same declaration asked for everything is not refused: it is recorded at the
+  deepest depth a read can be taken to, and the read's own ending names that depth
+  as the stopper. `PlanError::StatisticsUnavailable`, which used to refuse it, is
+  removed in this same release.
 
   The probe row is untouched: the emitted bound is still the depth plus one
   wherever the declaration leaves room, and a depth *argument* is still never
@@ -1496,11 +1498,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   admitted as many documents for one plan as its sections have permutations, each
   digesting to that plan's single id.
 
-  Admission gains one refusal of its own: `PlanError::UndeclaredRowBound`, for a
-  producer placed on a stratum whose declaration states no row bound at the mode
-  it is invoked under. Placement and the row-bound read then disagree about one
-  snapshot of the registry, and continuing would have derived every other
-  stratum's depth from the same broken reading.
+  Planning gains one refusal of its own: `PlanError::UndeclaredRowBound`, raised
+  by `retrieval::plan` and by nothing else -- it reaches a caller of `plan`, never
+  a caller of `compile` -- for a producer placed on a stratum whose declaration
+  states no row bound at the mode it is invoked under. Placement and the row-bound
+  read then disagree about one snapshot of the registry, so it ends the whole plan
+  where a placement failure rejects only the producer it is a fact about:
+  continuing would have derived every other stratum's depth from the same broken
+  reading.
 
   A version-3 plan's bytes lie at different offsets under this layout, so the
   decoder refuses the old version by name instead of misreading it. Every plan
