@@ -146,20 +146,67 @@ pub enum PlanError {
     /// A producer that placement accepted declares no row bound at the mode it
     /// will be invoked under.
     ///
-    /// Unreachable against a registry that did not move under the plan, and
-    /// refused rather than defaulted for exactly that reason.
-    /// Placement admits an invocation only when some declared mode subsumes it,
-    /// and the declared row bound is read by filtering on that same predicate —
-    /// so a placement that succeeded has already proved the filter is non-empty.
+    /// # Why this cannot happen, written down where a change would break it
     ///
-    /// The alternative was a default, and every available default is a lie about
-    /// a number the depth is derived from: zero declares an empty relation and
-    /// floors the read to a single probing row, while
-    /// [`u64::MAX`] declares an unbounded one. A missing declaration can refuse
-    /// nothing and a zero is a measurement, so the absence is reported here
-    /// rather than resolved into either.
+    /// `plan` reads `PropertyFunctionRegistry::describe` **once**, and both
+    /// steps below read that one snapshot, so there is no window for the
+    /// registry to move between them. Within that snapshot:
+    ///
+    /// * `matching::place` admits an invocation only when
+    ///   `descriptor.modes` holds a declared mode that `subsumes` the invoked
+    ///   one, and refuses with `PlacementError::NoSatisfiableMode` otherwise;
+    /// * `admission::declared_row_bound` reads the bound by filtering that same
+    ///   `descriptor.modes` on that same `subsumes` predicate against that same
+    ///   invoked mode, and returns `RowBound::Undeclared` only when the filter
+    ///   is empty.
+    ///
+    /// Same collection, same predicate, same argument: a placement that
+    /// succeeded has already proved the filter is non-empty. Reaching this
+    /// variant therefore means those two readings disagree, which is a defect in
+    /// this crate rather than anything a caller's registry did — so the message
+    /// names the disagreement rather than diagnosing a registry that moved,
+    /// which within one snapshot it cannot have. Anything narrowing what `place`
+    /// admits, or widening what `declared_row_bound` filters out, breaks the
+    /// argument, and this is where it is written.
+    ///
+    /// # Why it is refused rather than defaulted
+    ///
+    /// Every available default is a lie about a number the depth is derived
+    /// from: zero declares an empty relation and floors the read to a single
+    /// probing row, while [`u64::MAX`] declares an unbounded one. A missing
+    /// declaration can refuse nothing and a zero is a measurement, so the
+    /// absence is reported here rather than resolved into either. The guard
+    /// stays as defence in depth precisely because the proof above is a proof
+    /// about today's two functions.
+    ///
+    /// # Why it ends the whole plan
+    ///
+    /// The neighbouring failure — `place` returning `Err` — records
+    /// [`ProducerDecision::Rejected`](crate::ProducerDecision) and planning
+    /// continues, and the asymmetry is deliberate.
+    ///
+    /// A placement failure is a fact **about that producer**: its declarations
+    /// do not admit this request's invocation,
+    /// [`RejectionReason`](crate::RejectionReason) has a variant that says so,
+    /// and the other producers are unaffected. This is not a fact about the
+    /// producer at all. No rejection reason means "the planner could not read a
+    /// number it had just proved was there", and recording
+    /// [`UnsatisfiedConstraint`](crate::RejectionReason::UnsatisfiedConstraint)
+    /// would report the producer as
+    /// having failed a constraint it did not fail — the misattribution a
+    /// recorded derivation exists to remove. Worse, it would drop the stratum
+    /// from the plan looking exactly like a producer that honestly did not
+    /// apply.
+    ///
+    /// And the condition is not local. Both readings run for **every** placed
+    /// producer, so a disagreement between them is not confined to the one
+    /// producer it became visible at: continuing would emit a plan whose other
+    /// strata were derived by the same broken reading, under a registry
+    /// fingerprint asserting it was planned against declarations it was not read
+    /// from. One refusal that names the producer is the smaller harm than a plan
+    /// that looks complete.
     #[error(
-        "producer {producer} was placed on stratum {stratum} but declares no row bound at the mode it is invoked under; the registry moved under the plan"
+        "producer {producer} was placed on stratum {stratum} but declares no row bound at the mode it is invoked under; placement and the row-bound read disagree about one snapshot of the registry's declarations"
     )]
     UndeclaredRowBound {
         /// The stratum whose declaration went missing.

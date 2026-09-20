@@ -573,11 +573,14 @@ pub fn plan(
         //
         // The absence is refused rather than defaulted. `place` above admits an
         // invocation only when some declared mode subsumes it, and the bound is read
-        // by filtering on that same predicate, so the placement that just succeeded
-        // has already proved this is `Some`. Defaulting it anyway would pick a number
-        // the depth is then derived from: zero floors the read to one probing row,
-        // and `u64::MAX` declares an unbounded relation. Neither is a thing the
-        // registry said.
+        // by filtering the SAME `descriptor.modes` — read once at step 2 and
+        // immutable since — on that same predicate, so the placement that just
+        // succeeded has already proved this is `Some`. Defaulting it anyway would
+        // pick a number the depth is then derived from: zero floors the read to one
+        // probing row, and `u64::MAX` declares an unbounded relation. Neither is a
+        // thing the registry said. The unreachability argument, and why this ends
+        // the plan where a placement failure only rejects a producer, are recorded
+        // on `PlanError::UndeclaredRowBound` itself.
         let Some(declared_rows) = declared_row_bound(descriptor, Some(invocation.mode)).rows()
         else {
             return Err(PlanError::UndeclaredRowBound {

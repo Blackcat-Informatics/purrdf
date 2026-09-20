@@ -2157,11 +2157,17 @@ fn a_cardinality_carrying_plan_records_every_value_version_three_did() {
 
 /// A missing row declaration is never defaulted into a measurement.
 ///
-/// `place` admits an invocation only where some declared mode subsumes it, and
-/// `declared_row_bound` reads the declaration by filtering on that same
-/// predicate — so a placement that succeeded has already proved the bound
-/// exists, and `PlanError::UndeclaredRowBound` is unreachable against a registry
-/// that did not move. This executes that guard rather than assuming it.
+/// What runs here is the **placement** guard, and that is the point: it is the
+/// guard that makes the derivation's own guard unreachable. `place` admits an
+/// invocation only where some declared mode subsumes it, and
+/// `declared_row_bound` reads the declaration by filtering the same
+/// `descriptor.modes` on the same predicate — one snapshot, read once — so a
+/// placement that succeeded has already proved the bound exists.
+/// `PlanError::UndeclaredRowBound` is therefore not constructible from outside
+/// and **no test reaches it**; the argument that it cannot be reached is
+/// recorded on the variant itself, where a change to `place` that broke it would
+/// be read. The refusal asserted below is `PlanError::NoApplicableProducers`,
+/// raised by that placement pass.
 ///
 /// The value matters because it is an input every depth is derived from. A
 /// default of zero floors the read to one probing row — a plan quietly asking a
@@ -2169,9 +2175,10 @@ fn a_cardinality_carrying_plan_records_every_value_version_three_did() {
 /// Neither is a thing the registry said.
 ///
 /// Both halves run, because a refusal is a claim too: the producer whose
-/// declared mode subsumes nothing is refused, and its neighbour — the same
-/// registry with a mode that does subsume the invocation — plans, and records
-/// the declaration it really made rather than `declared: 0` at `depth: 1`.
+/// declared mode subsumes nothing is refused by name, and its neighbour — the
+/// same registry with a mode that does subsume the invocation — plans, and
+/// records the declaration it really made rather than `declared: 0` at
+/// `depth: 1`.
 #[test]
 fn an_undeclared_row_bound_is_not_a_declaration_of_zero_rows() {
     let stratum = ex("transcript/undeclared");
