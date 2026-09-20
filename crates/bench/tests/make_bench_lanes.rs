@@ -119,6 +119,23 @@ fn run_lane_with_bin(lane: &str, bin_knob: &str, out_knob: &str, binary: &str) -
     (code, format!("{stdout}\n{stderr}"))
 }
 
+/// A path no process can create an arena at, INCLUDING one running as uid 0.
+///
+/// `/nonexistent-<tag>/deeper` is uncreatable for an ordinary user and creatable
+/// for root, and test containers commonly run as root. There, the lane would pass
+/// arena creation and fall through into the artifacts step -- downloading tens of
+/// megabytes, wanting a JDK for the LUBM lane, and contradicting the no-network
+/// property these tests are built on -- while also leaving a directory under `/`.
+///
+/// A REGULAR FILE as the parent makes `mkdir` fail with `ENOTDIR` for every uid,
+/// because the kernel's check is about the parent's type rather than about
+/// permission. It is also confined to the scratch directory.
+fn uncreatable_arena(label: &str) -> String {
+    let blocker = scratch(label).join("not-a-directory");
+    std::fs::write(&blocker, b"").expect("write the file that blocks arena creation");
+    format!("{}/deeper", blocker.display())
+}
+
 /// Writes `contents` to `path` and makes it executable, returning `path`.
 fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
     std::fs::write(&path, contents).expect("write the executable script");
@@ -471,7 +488,7 @@ fn every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path() {
 
         // The arena is pointed somewhere uncreatable so the run stops on the NEXT knob rather
         // than entering step 1 and its download.
-        let unusable = format!("/nonexistent-arena-{}/deeper/arena", unique_tag());
+        let unusable = uncreatable_arena("arena-blocked");
         let (code, stdout, stderr) = run_make(&[
             lane,
             &format!("{bin_knob}={}", relative.display()),
@@ -526,7 +543,7 @@ fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
     // never on the binary.
     let dir = scratch("arena-unusable");
     let wrapper = credible_stand_in(dir.join("purrdf wrapper"));
-    let unusable = format!("/nonexistent-arena-{}/deeper/arena", unique_tag());
+    let unusable = uncreatable_arena("arena-blocked");
 
     for (lane, bin_knob, out_knob) in LANES {
         let (code, stdout, stderr) = run_make(&[
@@ -651,7 +668,7 @@ fn the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed() {
     // ordinary seed, so neither may be refused. The run is still made to fail — on an uncreatable
     // arena — because that is what proves execution got PAST the knob checks rather than merely
     // that it exited non-zero for some reason of its own.
-    let unusable = format!("/nonexistent-arena-{}/deeper", unique_tag());
+    let unusable = uncreatable_arena("arena-blocked");
     let (code, stdout, stderr) = run_make(&[
         "watdiv",
         "WATDIV_SCALE=10M",
@@ -698,7 +715,7 @@ fn the_lubm_lane_refuses_a_zero_university_count_and_accepts_one() {
         "make lubm: the refusal must name the knob; output:\n{combined}"
     );
 
-    let unusable = format!("/nonexistent-arena-{}/deeper", unique_tag());
+    let unusable = uncreatable_arena("arena-blocked");
     let (code, stdout, stderr) = run_make(&[
         "lubm",
         "LUBM_UNIVERSITIES=1",

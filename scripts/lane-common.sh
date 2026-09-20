@@ -283,6 +283,17 @@ lane_require_query_file() {
   run. The engine is not at fault and has not been asked: an unreadable query file
   becomes an empty query string, and the engine's complaint about that would be
   reported here as though the corpus or the binary were wrong."
+  # PRESENT IS NOT READABLE. A file that exists and has bytes but cannot be read
+  # -- a mode an interrupted run left behind, a file owned by another operator in
+  # a shared arena -- reaches `cat` under `set +e`, yields the empty string, and
+  # the engine is asked to parse nothing. Its complaint about that would be
+  # reported as the diagnosis, which is the same misdiagnosis a missing file used
+  # to produce, arriving through a different door.
+  [[ -r "${path}" ]] ||
+    die "${id} at '${path}' (under ${knob}) exists but cannot be READ by this
+  process. Reading it would yield the empty string, and the engine's complaint
+  about an empty query would be reported here as though the binary or the corpus
+  were at fault. Check the file's mode and owner."
   [[ -s "${path}" ]] ||
     die "${id} at '${path}' (under ${knob}) is EMPTY. An empty query is a usage
   error, and reporting the engine's complaint about it would blame the binary for

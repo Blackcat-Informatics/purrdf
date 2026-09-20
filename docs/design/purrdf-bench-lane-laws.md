@@ -116,7 +116,8 @@ first line it prints becomes the diagnosis. Two habits make that line lie:
 result means any notice the binary writes — a warning, a future governor line —
 prepends non-JSON to well-formed output. The parse fails and the lane reports
 that the results were unparseable, which is false; the results were fine. Capture
-stderr separately and put its first line in the detail column.
+stderr separately and put the complete flattened diagnostic in the detail column —
+not its first line, since the part that matters is often on a later one.
 
 **Reading a file that may not exist.** A command substitution over a missing file
 yields the empty string, and an empty query is a *usage* error from the engine.

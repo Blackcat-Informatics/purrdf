@@ -605,10 +605,14 @@ while IFS=$'\t' read -r id _regime mappings file; do
   # A missing file is almost always a concurrent run having just deleted the
   # directory, so ask that question first: it gives the real diagnosis instead of
   # a filename that vanished for no stated reason.
-  if [[ ! -f "${QUERIES}/${file}" ]]; then
-    verify_query_set "while ${id} was about to run"
-    lane_require_query_file "${QUERIES}/${file}" "${id}" "WATDIV_OUT='${OUT}'"
-  fi
+  # A missing file is almost always a concurrent run having just deleted the
+  # directory, so ask that question FIRST: it gives the real diagnosis instead of
+  # a filename that vanished for no stated reason.
+  [[ -f "${QUERIES}/${file}" ]] || verify_query_set "while ${id} was about to run"
+  # Then the artifact itself, on EVERY iteration rather than only when it is
+  # missing: present-but-unreadable and present-but-empty both reach `cat` and
+  # both become an empty query the engine is then blamed for rejecting.
+  lane_require_query_file "${QUERIES}/${file}" "${id}" "WATDIV_OUT='${OUT}'"
   result="$(run_query "$(cat "${QUERIES}/${file}")")"
   status="$(printf '%s' "${result}" | cut -f1)"
   rows="$(printf '%s' "${result}" | cut -f2)"
