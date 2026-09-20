@@ -34,8 +34,8 @@
 //!   deeper than the depth so the executor can tell a read the bound cut from a
 //!   read that ran out; at [`u32::MAX`] that row is not expressible in the
 //!   `LIMIT` the compiler writes, and the read would be reported
-//!   [`Exhausted`](crate::ProducerStatus::Exhausted) — this layer's strongest
-//!   completeness claim — for a stratum whose ending nobody was able to observe.
+//!   [`Exhausted`](crate::ProducerStatus::Exhausted) — the one ending that names
+//!   no stopper — for a stratum whose ending nobody was able to observe.
 //!   A depth whose ending cannot be verified is refused rather than certified,
 //!   and [`ProbedDepth`] is the type that carries the proof to the compiler;
 //! * every bound producer can actually be *invoked* for the request terms the

@@ -137,8 +137,8 @@
 //! depth three and a producer holding exactly three rows read at depth three
 //! both hand back three rows and an empty cursor, so an executor that only ever
 //! saw `depth` rows had to guess — and the guess it used to make was
-//! [`ProducerStatus::Exhausted`](crate::ProducerStatus), which is the strongest
-//! completeness claim this layer can utter, minted for a read the plan itself
+//! [`ProducerStatus::Exhausted`](crate::ProducerStatus), which is the one ending
+//! that names no stopper, minted for a read the plan itself
 //! cut short. That is the zero-depth fault one size larger: a bound on the read
 //! silently becoming a statement about the answer.
 //!
@@ -159,8 +159,8 @@
 //! caller assembling a bundle by hand writes `LIMIT <depth>`, because the depth is the
 //! number this layer reasons about everywhere, and the read then returned `depth` rows
 //! with no slot for the probe. `execute` writes `DepthReached` only when a row arrives
-//! *past* the depth, so that read was reported `Exhausted` — the strongest
-//! completeness claim this layer has — for a text that had cut it. A depth of three
+//! *past* the depth, so that read was reported `Exhausted` — the one ending that
+//! names no stopper — for a text that had cut it. A depth of three
 //! over nine real rows reported `Exhausted { rows_emitted: 3 }`, and the trailer above
 //! it read `Exact`.
 //!
@@ -676,8 +676,8 @@ pub enum UnitError {
 ///
 /// Driving [`execute`](crate::execute) over a text of a caller's own is the point of
 /// [`Self::new`], and it stays open. What such a unit cannot do is yield
-/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — this layer's strongest
-/// completeness claim — because the claim rests on a read this layer bounded one row
+/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — the one ending that names
+/// no stopper — because that ending rests on a read this layer bounded one row
 /// past the depth, and it cannot see what bound a caller's text carries. Its ending
 /// names that text as the stopper instead
 /// ([`StreamEnding::SuppliedQueryEnded`](crate::StreamEnding)), which is the same

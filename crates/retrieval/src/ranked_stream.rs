@@ -489,8 +489,8 @@ pub enum ProducerReceipt {
     /// # Why this is none of the three endings beside it
     ///
     /// * [`Self::Exhausted`] would claim the rows ran out, on the strength of a probe
-    ///   slot that may never have existed. That is this layer's strongest completeness
-    ///   claim, minted from a text whose bounds the layer never read — and it is
+    ///   slot that may never have existed. That is the one ending that names no
+    ///   stopper, minted from a text whose bounds the layer never read — and it is
     ///   exactly the defect this vocabulary exists to prevent, reached through the one
     ///   door that stayed open longest.
     /// * [`Self::DepthReached`] would name the planned depth as the stopper and assert

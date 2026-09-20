@@ -709,8 +709,8 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
 /// A provider that measured an empty stratum is reporting honestly, and the
 /// plan still asks. The old behaviour scaled the declared bound to zero,
 /// compiled `LIMIT 0`, took no row from the relation whatever its index held, and
-/// reported the stratum exhausted having emitted nothing — the strongest
-/// completeness claim this layer makes, minted from an estimate. Both halves are
+/// reported the stratum exhausted having emitted nothing — the one ending that
+/// names no stopper, minted from an estimate. Both halves are
 /// asserted here: the depth is one, and the emptiness that comes back is the
 /// *producer's*, because the producer was allowed to answer.
 #[test]

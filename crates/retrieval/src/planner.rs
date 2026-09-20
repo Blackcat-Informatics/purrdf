@@ -905,8 +905,8 @@ fn licensed_prefix(
 /// it actually pulled — so nothing upstream of the producer may be the thing
 /// that decides a stratum is empty. A bound of zero would be exactly that: it
 /// compiles to `LIMIT 0`, which hands back no row whatever the relation holds,
-/// and the stratum is then reported exhausted with no rows — the strongest
-/// completeness claim this layer has, minted from a number nobody checked against
+/// and the stratum is then reported exhausted with no rows — the one ending that
+/// names no stopper, minted from a number nobody checked against
 /// the data and indistinguishable afterwards from an honest empty answer.
 ///
 /// A tiny non-zero selectivity already lands on one row through `div_ceil`;

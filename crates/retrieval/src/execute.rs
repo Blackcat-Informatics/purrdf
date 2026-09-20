@@ -558,8 +558,8 @@ pub enum StreamEnding {
     /// own bound. The layer bounds such a text only on the outside; what the text
     /// bounds *inside* itself — a `LIMIT` on a sub-`SELECT`, a pattern matching less
     /// than the producer holds — is no part of what this layer reads, so the absence of
-    /// the probe row is no evidence. `Exhausted` would be this layer's strongest
-    /// completeness claim minted from a text whose bounds it never read, which is the
+    /// the probe row is no evidence. `Exhausted` would be the one ending that names
+    /// no stopper, minted from a text whose bounds it never read, which is the
     /// defect this vocabulary exists to prevent; see
     /// [`ProducerReceipt::SuppliedQueryEnded`].
     ///
@@ -972,8 +972,8 @@ fn bound_to_depth(
     }
     // A read that filled a depth it could not be taken past has an ending nobody
     // observed, and the honest report names the bound that made the row past it
-    // unaskable. `Exhausted` here would be this layer's strongest completeness
-    // claim, minted from the producer's registration rather than from a read.
+    // unaskable. `Exhausted` here would be the one ending that names no
+    // stopper, minted from the producer's registration rather than from a read.
     if reach == ReadReach::AtDepth && ranked.len() == ceiling {
         let rank = u64::from(depth);
         return Ok((

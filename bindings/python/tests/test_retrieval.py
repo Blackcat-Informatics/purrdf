@@ -727,7 +727,9 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
 def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -> None:
     """Three of the seven endings, executed — and the suite says which three those are.
 
-    ``"exhausted"`` says the producer emitted every row it had. The other six
+    ``"exhausted"`` says the producer emitted every row its SEARCH produced --
+    not that everything matching was returned, which is what the stratum's
+    ``"fidelities"`` entry says beside it. The other six
     each name who stopped the read: ``"depth_reached"`` the producer stopping at
     the depth the plan gave it, ``"row_bound_reached"`` the producer stopping at
     the row count it declared it can serve per invocation — a read whose ending
@@ -1499,8 +1501,8 @@ def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> N
 
     With no statistic to narrow it, the depth is already the producer's whole
     declared row bound. A read that stopped exactly there could not tell a producer
-    that ran out from one the bound cut, so it would report the strongest
-    completeness claim this layer has on the strength of a number nobody checked.
+    that ran out from one the bound cut, so it would report the one ending that
+    names no stopper on the strength of a number nobody checked.
     The unit asks for one row more instead: if that row arrives the producer
     contradicted its own registration and the read is refused by name, and if it
     does not, the exhaustion is verified rather than believed.

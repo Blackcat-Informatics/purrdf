@@ -832,8 +832,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   also holds a non-literal statement under a configured predicate.
 
 - **retrieval:** A stratum whose planned depth already equalled its producer's
-  declared row bound was reported `ProducerStatus::Exhausted` -- the strongest
-  completeness claim this layer has -- for a read that bound had cut, with
+  declared row bound was reported `ProducerStatus::Exhausted` -- the one ending
+  that names no stopper -- for a read that bound had cut, with
   nothing anywhere saying so. The depth probe is the row that tells a read which
   ran out from a read which was stopped, and it was emitted at
   `min(depth + 1, declared)`: at that one depth the `min` selected the

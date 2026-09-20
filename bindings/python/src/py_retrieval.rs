@@ -2177,8 +2177,11 @@ fn compile<'py>(
 /// reached cost it nothing.
 ///
 /// Every `"statuses"` entry spells its own ending, and there are exactly seven
-/// spellings. `"exhausted"` (with `"rows_emitted"`) is the ONLY completeness
-/// claim of the seven: that producer emitted every row it had. The other six
+/// spellings. `"exhausted"` (with `"rows_emitted"`) is the only one of the seven
+/// that names no stopper: that producer emitted every row ITS SEARCH PRODUCED.
+/// On its own that is not a claim that everything matching was returned — whether
+/// those were every row that was DUE is what `"fidelities"` says under the same
+/// stratum key, and the two are read together. The other six
 /// each name who stopped the read and where. `"depth_reached"` (with `"rank"`)
 /// is the producer stopping at the depth the plan gave it, verified against the
 /// rows fusion really pulled: ranks one through `"rank"` were read and nothing

@@ -1641,9 +1641,9 @@ fn the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness() {
     );
 
     // The answer. No rows, and the reason there are none is the producer's own
-    // receipt rather than a planner verdict: `Exhausted` is the strongest
-    // completeness claim this vocabulary has, and here it is true, because the
-    // relation really did run and really found nothing.
+    // receipt rather than a planner verdict: `Exhausted` is the one ending that
+    // names no stopper, and here it says all it can say, because the relation
+    // really did run and really found nothing.
     assert!(
         result.rows.is_empty(),
         "an empty corpus ranks nothing: {:?}",
