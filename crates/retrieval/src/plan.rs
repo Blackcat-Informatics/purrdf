@@ -380,14 +380,20 @@ pub enum DepthCause {
     ReadCeiling,
 }
 
-/// One entry of a statistics snapshot: what a provider said about a subject no
-/// depth is derived for.
+/// One entry of a statistics snapshot: what a provider said about one subject
+/// planning consulted.
 ///
-/// These are the request's own predicates. Nothing in planning derives a number
-/// from them — only a *stratum's* selectivity bounds a stratum's depth — so they
-/// are recorded as context rather than as derivation evidence, which is why they
-/// live here and the strata live in
-/// [`Plan::stratum_derivations`](Plan::stratum_derivations).
+/// A subject is here for one of two reasons, and the row reads the same either
+/// way. A **stratum** is here because a depth was derived for it; its row is a
+/// projection of the [`DepthInputs`] recorded in
+/// [`Plan::stratum_derivations`](Plan::stratum_derivations), so the two records
+/// state the same statistics and [`Plan::certify`] refuses a plan in which they
+/// disagree. A **request predicate** is here because planning asked about it in
+/// order to report: nothing derives a number from it — only a stratum's own
+/// selectivity bounds a stratum's depth — so its row is context alone.
+///
+/// A subject that is both carries the stratum's row, because that is the
+/// consultation that bound a depth.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatisticsEntry {
     /// A caller-supplied subject label (a predicate IRI, a producer IRI, …).
@@ -408,8 +414,8 @@ pub struct StatisticsEntry {
     pub selectivity_terms: Vec<u32>,
 }
 
-/// The statistics a plan was planned against, for the subjects no depth is
-/// derived for.
+/// The statistics a plan was planned against, for every subject planning
+/// consulted.
 ///
 /// Statistics are an explicit input to planning, not something the planner
 /// reaches into a store for; the emitted plan records what it assumed so a
@@ -420,10 +426,15 @@ pub struct StatisticsEntry {
 /// is still named, and a subject nothing consulted is absent rather than
 /// recorded as empty.
 ///
-/// The strata are **not** here. Their statistics produce a number, so they are
-/// recorded in [`Plan::stratum_derivations`] beside the depth they produced,
-/// where [`Plan::certify`] can check the one against the other. What remains
-/// here is context: the request's own predicates, which bound nothing.
+/// The strata are here too, and so are their statistics in
+/// [`Plan::stratum_derivations`], because the two answer different questions. A
+/// derivation binds a stratum's statistics to the one depth they produced, which
+/// is what makes that depth recomputable. This names, in one place, every subject
+/// an answer to this plan depended on a provider for, whether or not a number
+/// came of it — which is what makes "the statistics moved" a question a caller
+/// can ask of the snapshot alone. A stratum's entry here is a projection of its
+/// derivation rather than a second consultation, and [`Plan::certify`] refuses a
+/// plan whose two records of one stratum disagree.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatisticsSnapshot {
     /// A caller-supplied label for the statistics provider.

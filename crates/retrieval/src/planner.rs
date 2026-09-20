@@ -648,10 +648,12 @@ pub fn plan(
         stratum_depths.insert(stratum.clone(), depth);
     }
 
-    // 6. Capture the statistics for the subjects no depth is derived for: the
-    //    predicates the request named. The strata were recorded above, beside
-    //    the depths they explain.
-    let statistics_snapshot = capture_statistics(request, statistics);
+    // 6. Capture the snapshot of every subject planning consulted: the strata a
+    //    depth was derived for, projected out of the derivations built above, and
+    //    the predicates the request named. The derivations keep the per-depth
+    //    binding; this names, in one place, every subject an answer to this plan
+    //    depended on a provider for.
+    let statistics_snapshot = capture_statistics(request, statistics, &stratum_derivations);
 
     // 7. Record both registry identities.
     Ok(Plan {
@@ -1291,8 +1293,9 @@ fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
     }
 }
 
-/// Record what the provider says about the subjects **no depth is derived
-/// for** — the predicates the request names — ascending by subject.
+/// Record what the provider says about **every subject planning consulted** —
+/// each stratum a depth was derived for, and each predicate the request names —
+/// ascending by subject.
 ///
 /// Every fact the provider is asked for is recorded, whether or not it answered:
 /// a subject with no cardinality is named with an absent one rather than dropped,
@@ -1300,48 +1303,83 @@ fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
 /// provider's answer for that subject moved. Absent is still not zero; zero is a
 /// measurement and absence is not.
 ///
-/// # Why the strata are not here
+/// # A stratum's row is a projection, never a second consultation
 ///
-/// A stratum's statistics are *derivation evidence* — they produce a number — and
-/// they live in [`Plan::stratum_derivations`](crate::Plan::stratum_derivations)
-/// beside the depth they explain. These subjects produce nothing: only a
-/// stratum's own selectivity bounds a stratum's own depth, so a request
-/// predicate's statistics are context a caller may want and no input to any
-/// arithmetic. Keeping them apart is what lets "consulted" mean something: the
-/// derivations record what planning asked in order to decide, and this records
-/// what it asked in order to report.
+/// The strata are also recorded in
+/// [`Plan::stratum_derivations`](crate::Plan::stratum_derivations), beside the
+/// depth they explain, and that record is what this one is built from: the row
+/// here copies `cardinality`, `selectivity_ppm` and `selectivity_terms` straight
+/// out of the [`DepthInputs`] the planner already derived.
 ///
-/// Because no depth is derived for them, the recorded selectivity aggregates over
-/// the **whole request** rather than over the terms some binding carried — there
-/// is no binding to consult, and the provider decides which `(subject, term)`
-/// pairs it can answer.
+/// Re-asking the provider would be wrong rather than merely wasteful. [`consult`]
+/// deliberately does not ask for a selectivity when the bound is [`u64::MAX`] —
+/// an unbounded stratum has no row count for a ratio to be a fraction of — so a
+/// provider willing to report one for such a stratum would have its value land
+/// here describing a derivation that did not happen. What a projection records is
+/// what was consulted, which for that stratum is no selectivity at all.
+///
+/// # One row per subject
+///
+/// A subject that is both a stratum and a request-term predicate gets the
+/// **stratum's** row, because that is the consultation that actually bound a
+/// depth. The aggregate a request predicate would carry is a different number
+/// over a different term set, and the row that explains a depth is the one a
+/// reader checking the depth needs to see.
+///
+/// The predicates that are *not* strata derive no depth, so their recorded
+/// selectivity aggregates over the **whole request** rather than over the terms
+/// some binding carried — there is no binding to consult, and the provider
+/// decides which `(subject, term)` pairs it can answer.
 fn capture_statistics(
     request: &RetrievalRequest,
     statistics: &impl Statistics,
+    derivations: &BTreeMap<Iri, DepthInputs>,
 ) -> StatisticsSnapshot {
-    let mut subjects: BTreeSet<Iri> = BTreeSet::new();
-    for term in &request.terms {
-        if let Some(predicate) = term_predicate(term) {
-            subjects.insert(predicate.clone());
-        }
-    }
-    let all_terms = all_indexed_terms(&request.terms);
+    // Keyed rather than pushed, so "one row per subject" is the container's law
+    // instead of a rule this function has to remember, and the ascending order
+    // the snapshot promises falls out of the key type.
+    let mut rows: BTreeMap<&Iri, StatisticsEntry> = BTreeMap::new();
 
-    let mut entries = Vec::with_capacity(subjects.len());
-    for subject in subjects {
+    // The strata first, so the projection is what a predicate sharing an IRI
+    // with one finds already recorded and leaves standing.
+    for (stratum, inputs) in derivations {
+        rows.insert(
+            stratum,
+            StatisticsEntry {
+                subject: stratum.as_str().to_owned(),
+                cardinality: inputs.cardinality,
+                selectivity_ppm: inputs.selectivity_ppm,
+                selectivity_terms: inputs.selectivity_terms.clone(),
+            },
+        );
+    }
+
+    let all_terms = all_indexed_terms(&request.terms);
+    for term in &request.terms {
+        let Some(predicate) = term_predicate(term) else {
+            continue;
+        };
+        if rows.contains_key(predicate) {
+            // Either a stratum's projection, which wins, or a predicate two
+            // terms name, whose row already aggregates across the whole request.
+            continue;
+        }
         let (selectivity_ppm, selectivity_terms) =
-            combined_selectivity_ppm(&subject, &all_terms, statistics);
-        entries.push(StatisticsEntry {
-            subject: subject.as_str().to_owned(),
-            cardinality: statistics.cardinality(&subject),
-            selectivity_ppm,
-            selectivity_terms,
-        });
+            combined_selectivity_ppm(predicate, &all_terms, statistics);
+        rows.insert(
+            predicate,
+            StatisticsEntry {
+                subject: predicate.as_str().to_owned(),
+                cardinality: statistics.cardinality(predicate),
+                selectivity_ppm,
+                selectivity_terms,
+            },
+        );
     }
 
     StatisticsSnapshot {
         source: statistics.source().to_owned(),
         revision: statistics.revision().to_owned(),
-        entries,
+        entries: rows.into_values().collect(),
     }
 }

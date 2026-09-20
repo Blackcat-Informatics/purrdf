@@ -99,10 +99,11 @@ pub trait Statistics {
     /// never raise it.
     /// The option travels: a cardinality the provider declines to report is
     /// recorded as absent rather than as zero, in
+    /// [`StatisticsEntry::cardinality`](crate::StatisticsEntry::cardinality) for
+    /// every subject that was consulted and additionally in
     /// [`DepthInputs::cardinality`](crate::DepthInputs::cardinality) for a
-    /// stratum and [`StatisticsEntry::cardinality`](crate::StatisticsEntry::cardinality)
-    /// for a request predicate. An unknown cardinality is not a zero one at the
-    /// boundary or in the record.
+    /// stratum, beside the depth it produced. An unknown cardinality is not a
+    /// zero one at the boundary or in either record.
     fn cardinality(&self, subject: &Iri) -> Option<u64>;
 
     /// The selectivity the provider reports for `term` under `subject`, in
@@ -142,10 +143,11 @@ pub trait Statistics {
     /// well; a plan records every selectivity it was asked for and told, whatever
     /// the subject. Only a stratum's own selectivity bounds a stratum's own
     /// depth, because only that one is a statement about the rows the depth
-    /// counts — so a stratum's lands in
-    /// [`DepthInputs`](crate::DepthInputs) beside the depth it produced, and a
-    /// request predicate's, which produces nothing, in
-    /// [`StatisticsSnapshot`](crate::StatisticsSnapshot) as context.
+    /// counts — so a stratum's lands in [`DepthInputs`](crate::DepthInputs)
+    /// beside the depth it produced, and is projected from there onto
+    /// [`StatisticsSnapshot`](crate::StatisticsSnapshot), which names every
+    /// subject that was consulted at all. A request predicate's, which produces
+    /// nothing, lands in the snapshot alone, as context.
     ///
     /// The one selectivity a plan does **not** record is the one it never asked
     /// for: an unbounded stratum has no row count for a ratio to be a fraction

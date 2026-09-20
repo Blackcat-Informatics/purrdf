@@ -1429,16 +1429,24 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
     assert bounded["stratum_derivations"][NOTE_STRATUM]["cause"] == "cardinality"
     assert unbounded["stratum_derivations"][NOTE_STRATUM]["cause"] == "declaration"
 
-    # The request predicate derives no depth, so it is ancillary context. The
-    # cardinality of 1 belongs to the stratum and must not appear here; a swap of
-    # the two is exactly the mis-mapping this assertion exists to catch.
+    # The snapshot names every subject planning consulted: the request predicate,
+    # which derives no depth and about which this host says nothing, AND the
+    # stratum, whose row is the projection of the derivation above. The two rows
+    # differ in the cardinality, so a swap of the two -- the mis-mapping this
+    # assertion exists to catch -- fails on the number.
     assert bounded["statistics"]["entries"] == [
         {
             "subject": NOTE,
             "cardinality": None,
             "selectivity_ppm": None,
             "selectivity_terms": [],
-        }
+        },
+        {
+            "subject": NOTE_STRATUM,
+            "cardinality": 1,
+            "selectivity_ppm": None,
+            "selectivity_terms": [],
+        },
     ]
 
 
@@ -1476,6 +1484,34 @@ def test_a_selectivity_only_statistic_is_recorded_on_the_plan() -> None:
     )
     assert derivation["selectivity_terms"] == [0]
     assert derivation["cause"] == "floor"
+
+    # And the plan's own snapshot names that stratum, so a caller asking which
+    # statistics this was planned against is told about it without having to
+    # know that a depth happened to be derived for it. The cardinality is `None`
+    # -- absence, not the zero the selectivity beside it really is.
+    entries = {entry["subject"]: entry for entry in planned["statistics"]["entries"]}
+    assert entries[NOTE_STRATUM] == {
+        "subject": NOTE_STRATUM,
+        "cardinality": None,
+        "selectivity_ppm": 0,
+        "selectivity_terms": [0],
+    }, (
+        "a stratum consulted for a selectivity alone is named on the snapshot, "
+        "with the measurement it gave and the absence it did not"
+    )
+    assert entries[NOTE_STRATUM]["cardinality"] is None, (
+        "`None` and `0` are different facts, and this row carries one of each: "
+        "the host measured a selectivity of zero and no cardinality at all"
+    )
+    # The neighbour, in the same snapshot: the request predicate the host is
+    # equally silent about carries no selectivity either, so the `0` above is the
+    # stratum's own measurement rather than a value smeared across every row.
+    assert entries[NOTE] == {
+        "subject": NOTE,
+        "cardinality": None,
+        "selectivity_ppm": None,
+        "selectivity_terms": [],
+    }
 
     compiled = retrieval.compile(
         DATA,

@@ -478,12 +478,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "00ce3870d79600df500ade15e1c6b9773b946366adda708f473865151d69e04a";
+    "a208c3b5fa55e6a374a2530c1368a652aa1d64edadedbb95c2caab8d9e37312b";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "69d8b1196623e936caf0fc0306e58692992d19605d52b57dd97884149c9dfa36";
+    "ae44005737dd7d7cbfc1c70b4c8df081d04e4247c9442f2078515c3f12e9b7ac";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -510,6 +510,32 @@ fn depths_of(plan: &Plan) -> BTreeMap<String, u32> {
     plan.stratum_depths
         .iter()
         .map(|(stratum, depth)| (stratum.as_str().to_owned(), *depth))
+        .collect()
+}
+
+/// One statistics-snapshot row as plain data: the subject, the reported
+/// cardinality, the aggregate selectivity in parts per million, and the request
+/// terms that aggregate came from.
+type SnapshotRow = (String, Option<u64>, Option<u64>, Vec<u32>);
+
+/// A plan's statistics snapshot as plain tuples, in the recorded order.
+///
+/// Compared whole rather than key by key, for the reason [`depths_of`] is: an
+/// *extra* row is a subject the plan claims to have consulted and did not, and a
+/// per-key assertion would never see it. The tuple carries every field a row has,
+/// so a value mapped onto the wrong subject fails on the number.
+fn entries_of(plan: &Plan) -> Vec<SnapshotRow> {
+    plan.statistics_snapshot
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.subject.clone(),
+                entry.cardinality,
+                entry.selectivity_ppm,
+                entry.selectivity_terms.clone(),
+            )
+        })
         .collect()
 }
 
@@ -1669,6 +1695,32 @@ fn a_selectivity_only_stratum_is_recorded_and_narrows_the_depth() {
         planned.explain_depth(&stratum),
         Some(DepthCause::Selectivity)
     );
+
+    // The same stratum is named on the plan's own snapshot, with the cardinality
+    // absent rather than zero. The neighbour in the same assertion is a stratum
+    // the provider DID count, so "everything is None" cannot pass for this.
+    let row = |subject: &str| {
+        entries_of(&planned)
+            .into_iter()
+            .find(|(recorded, ..)| recorded == subject)
+    };
+    assert_eq!(
+        row(&ex("transcript/selectivity-only")),
+        Some((
+            ex("transcript/selectivity-only"),
+            None,
+            Some(250_000),
+            vec![0]
+        )),
+        "a stratum consulted for a selectivity alone is named, with the \
+         cardinality recorded as the absence it was"
+    );
+    assert_eq!(
+        row(&ex("transcript/cardinality-only")),
+        Some((ex("transcript/cardinality-only"), Some(100), None, vec![])),
+        "and the stratum the provider counted carries its count, so `None` above \
+         is a measurement of silence rather than a snapshot that records nothing"
+    );
 }
 
 /// A stratum the planner consulted and the provider said nothing about is named
@@ -1787,19 +1839,67 @@ fn the_record_names_exactly_the_consulted_subjects() {
         "a derivation for every depth and a depth for every derivation"
     );
 
-    // The lexical term names a predicate; the seed term names none. So the
-    // ancillary entries are exactly one subject.
+    // The snapshot names every subject either statistic was consulted for: the
+    // four strata, and the one predicate the request named — the lexical term
+    // names `body`, the seed term names none.
+    let mut expected: Vec<String> = derived
+        .iter()
+        .map(|stratum| (*stratum).to_owned())
+        .collect();
+    expected.push(ex("body"));
+    expected.sort();
     assert_eq!(
         planned
             .statistics_snapshot
             .entries
             .iter()
-            .map(|entry| entry.subject.as_str())
-            .collect::<Vec<&str>>(),
-        vec![ex("body").as_str()],
-        "the request's predicates, and nothing a depth was derived for"
+            .map(|entry| entry.subject.clone())
+            .collect::<Vec<String>>(),
+        expected,
+        "every stratum a depth was derived for, and every request predicate"
     );
     planned.certify().expect("every depth derives");
+}
+
+/// Every stratum a depth was derived for is named on the plan's own snapshot,
+/// carrying the statistics its derivation was built from.
+///
+/// The whole list is asserted, and the five rows differ in every field that can
+/// differ: a cardinality with no selectivity, a selectivity with no cardinality,
+/// both, neither, and the request predicate the provider is silent about. A
+/// build that mapped one stratum's statistics onto another, or dropped a row,
+/// fails on the number rather than on a shape.
+#[test]
+fn the_snapshot_names_every_stratum_a_depth_was_derived_for() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            // The request's predicate. This provider says nothing about it.
+            (ex("body"), None, None, vec![]),
+            // A stratum the provider answered both questions for.
+            (ex("transcript/both"), Some(100), Some(300_000), vec![1]),
+            // A catch-all: it receives no term, so no selectivity can bound it
+            // and none was consulted.
+            (ex("transcript/cardinality-only"), Some(100), None, vec![]),
+            // The defect's own case: a selectivity narrowed the depth and the
+            // provider reported no cardinality at all.
+            (
+                ex("transcript/selectivity-only"),
+                None,
+                Some(250_000),
+                vec![0]
+            ),
+            (ex("transcript/silent"), None, None, vec![]),
+        ],
+        "the snapshot names every consulted subject, with what was consulted for it"
+    );
 }
 
 /// An unbounded stratum never reaches the selectivity step, so a selectivity
@@ -1859,6 +1959,115 @@ fn an_unbounded_stratum_records_no_applied_selectivity() {
         Some(DepthCause::Unbounded),
         "an unbounded declaration with no licensed prefix reads at the ceiling"
     );
+
+    // And the snapshot row for that stratum is a PROJECTION of the derivation,
+    // not a second consultation. The oracle is real: this provider answers
+    // 250000 for exactly this `(stratum, term)` pair, so a build that re-asked
+    // it would record that number here and the plan would state a derivation
+    // that did not happen.
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            // The request predicate, which this provider says nothing about.
+            (ex("body"), None, None, vec![]),
+            (ex("transcript/unbounded"), None, None, vec![]),
+        ],
+        "the entry records what was consulted, which here is no selectivity at all"
+    );
+}
+
+/// A subject that is both a stratum and a request-term predicate is recorded
+/// once, as the derivation's own consultation.
+///
+/// The stratum's row wins because that is the consultation that actually bound a
+/// depth: a reader checking the depth needs the selectivity the depth came from,
+/// not a wider aggregate nothing was derived from.
+///
+/// The two candidates are made to differ so the assertion can tell which was
+/// recorded. `pf/shared` receives only the lexical term, so its derivation
+/// aggregates 200000 over term 0; the request-predicate rule aggregates over the
+/// whole request, which under this provider is 500000 over terms 0 and 1. The
+/// control stratum beside it carries a third, different pair.
+#[test]
+fn a_subject_that_is_both_a_stratum_and_a_request_predicate_records_the_derivation() {
+    let shared = ex("body");
+    let mut registry = PropertyFunctionRegistry::new();
+    // Its stratum IRI *is* the lexical term's predicate IRI.
+    registry.register_ranked(
+        ex("pf/shared"),
+        relation(1_000),
+        ranked(
+            &shared,
+            vec![TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: Some("en".to_owned()),
+                predicate: Some(ex("body")),
+            }],
+            false,
+        ),
+    );
+    // The control: a stratum that is nobody's predicate, with its own distinct
+    // numbers, so a row copied onto the wrong subject fails on the value.
+    registry.register_ranked(
+        ex("pf/other"),
+        relation(50),
+        ranked(
+            &ex("stratum/other"),
+            vec![TermPattern::of_kind(TermKind::Iri)],
+            false,
+        ),
+    );
+
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&shared), 400);
+    let statistics = MockStatistics {
+        source: "shared-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+        selectivities: vec![
+            // Reached by the stratum, because `pf/shared` receives term 0.
+            (iri(&shared), lexical_term(), 200_000),
+            // Reached only by the request-predicate rule, which aggregates over
+            // every term: `pf/shared` does not receive the seed.
+            (iri(&shared), seed_term(), 300_000),
+            (iri(&ex("stratum/other")), seed_term(), 600_000),
+        ],
+    };
+
+    let planned =
+        plan(&lexical_and_seed_request(), &registry, &statistics).expect("the request plans");
+
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            (shared.clone(), Some(400), Some(200_000), vec![0]),
+            (ex("stratum/other"), None, Some(600_000), vec![1]),
+        ],
+        "one row for the shared subject, and it is the derivation's"
+    );
+    assert_ne!(
+        entries_of(&planned)[0],
+        (shared.clone(), Some(400), Some(500_000), vec![0, 1]),
+        "the request-predicate aggregate over the whole request is the value that \
+         must NOT have been recorded"
+    );
+
+    // The row is the derivation's because the derivation says the same thing,
+    // and the depths differ per stratum so neither row can be the other's.
+    let derivation = planned
+        .stratum_derivations
+        .get(&iri(&shared))
+        .expect("the shared subject is a stratum");
+    assert_eq!(derivation.cardinality, Some(400));
+    assert_eq!(derivation.selectivity_ppm, Some(200_000));
+    assert_eq!(derivation.selectivity_terms, vec![0]);
+    assert_eq!(
+        depths_of(&planned),
+        BTreeMap::from([(shared, 80), (ex("stratum/other"), 30)]),
+        "a fifth of 400 rows, and three fifths of 50"
+    );
+    planned.certify().expect("the two records agree");
 }
 
 /// Every plan the golden corpus pins derives its own depths, and those depths
@@ -1901,23 +2110,28 @@ fn every_golden_plan_certifies_at_the_depths_version_three_recorded() {
     }
 }
 
-/// Every value a version-3 plan recorded is still recorded.
+/// Every value a version-3 plan recorded is still recorded, in the place
+/// version 3 recorded it.
 ///
-/// The expected literals are transcribed from the committed version-3 golden
-/// before regeneration: `body` 500/500000 as a request predicate, and the three
-/// strata's cardinalities. Where they live changed; what they say did not.
+/// The expected literals are transcribed from the committed version-3 golden:
+/// `body` 500/500000 as a request predicate, and the three strata's
+/// cardinalities on the snapshot. The derivation record was *added* beside them;
+/// nothing moved out of the snapshot to make room for it, because a reader who
+/// asks a plan which subjects it consulted must still be told all of them.
 #[test]
 fn a_cardinality_carrying_plan_records_every_value_version_three_did() {
     let planned = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
 
-    let body = planned
-        .statistics_snapshot
-        .entries
-        .iter()
-        .find(|entry| entry.subject == ex("body"))
-        .expect("the request predicate is recorded");
-    assert_eq!(body.cardinality, Some(500));
-    assert_eq!(body.selectivity_ppm, Some(500_000));
+    assert_eq!(
+        entries_of(&planned),
+        vec![
+            (ex("body"), Some(500), Some(500_000), vec![0]),
+            (ex("stratum/graph"), Some(50), None, vec![]),
+            (ex("stratum/text"), Some(100), None, vec![]),
+            (ex("stratum/universal"), Some(1000), None, vec![]),
+        ],
+        "the four rows version 3's snapshot carried, with the four values it carried"
+    );
 
     for (stratum, cardinality) in [
         (ex("stratum/graph"), 50_u64),

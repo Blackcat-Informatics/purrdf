@@ -2356,8 +2356,13 @@ class retrieval:
     # "read_ceiling"). The depth is recomputable from those inputs, which is
     # what makes it a checkable claim rather than an asserted one; `plan`
     # recomputes it before returning and raises if this build disagrees with
-    # itself. `"statistics"["entries"]` carries the subjects no depth is derived
-    # for — the request's own predicates — as context.
+    # itself. `"statistics"["entries"]` names EVERY subject planning consulted —
+    # each of those strata, and each predicate the request named — so a caller
+    # asking one question ("which statistics was this planned against?") reads
+    # one list. A stratum's entry is a projection of its derivation rather than a
+    # second consultation of the host, and `plan` refuses a plan whose two
+    # records of one stratum disagree; a subject that is both a stratum and a
+    # request predicate is named once, carrying the derivation's own values.
     #
     # In both, "cardinality" and "selectivity_ppm" are `None` when the provider
     # reported none, never 0: zero is a measurement and absence is not, and a
