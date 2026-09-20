@@ -572,3 +572,173 @@ fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
 
     std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
 }
+
+// ---------------------------------------------------------------------------------------------
+// A LANE'S OWN KNOBS ARE LAWS TOO, AND THEY WERE THE UNTESTED HALF.
+//
+// The tests above cover the laws that live in `scripts/lane-common.sh`, so they cover every lane
+// at once. Each lane ALSO validates its own knobs, before step 1 and before any download — and
+// none of that had a test on either side. `docs/BENCHMARKS.md` states the WatDiv scale rule as a
+// guarantee ("only `10M` is pinned; any other value is refused by name"), and a guarantee with no
+// test is a sentence.
+//
+// Both halves are checked here, because a refusal is a claim in two directions. The valid
+// neighbour is the one that actually bites: a knob check written slightly too eagerly refuses
+// every run, and a test that only ever feeds it bad input passes exactly as happily.
+//
+// These cost nothing to run. Every one of them fires before the artifacts step, so there is no
+// network, no JRE and no 58 MB download anywhere in this section — the same property that lets
+// the binary-knob tests above run in the gate.
+// ---------------------------------------------------------------------------------------------
+
+/// Runs a lane with extra knob assignments in a private arena, returning the exit code and output.
+fn run_lane_with_knobs(lane: &str, out_knob: &str, knobs: &[String]) -> (i32, String) {
+    let arena = scratch(&format!("{lane}-knobs"));
+    let mut args: Vec<String> = vec![lane.to_string()];
+    args.extend(knobs.iter().cloned());
+    args.push(format!("{out_knob}={}", arena.display()));
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (code, stdout, stderr) = run_make(&borrowed);
+    let _ = std::fs::remove_dir_all(&arena);
+    (code, format!("{stdout}\n{stderr}"))
+}
+
+#[test]
+fn the_watdiv_lane_refuses_an_unpinned_scale_by_name() {
+    let (code, combined) =
+        run_lane_with_knobs("watdiv", "WATDIV_OUT", &["WATDIV_SCALE=100M".to_string()]);
+
+    assert_ne!(
+        code, 0,
+        "make watdiv: an unpinned scale must be refused, never silently run as 10M — reporting a \
+         number for the wrong corpus under the right name is the failure this guard exists for; \
+         output:\n{combined}"
+    );
+    assert!(
+        combined.contains("WATDIV_SCALE='100M' is not pinned"),
+        "make watdiv: the refusal must quote the value back, so an operator sees WHICH scale was \
+         rejected rather than a bare usage error; output:\n{combined}"
+    );
+    assert!(
+        !combined.contains("1/7 artifacts"),
+        "make watdiv: a knob this lane cannot honour must be refused BEFORE the artifacts step — \
+         a rejected run must not first download tens of megabytes; output:\n{combined}"
+    );
+}
+
+#[test]
+fn the_watdiv_lane_refuses_a_seed_that_is_not_a_number() {
+    let (code, combined) =
+        run_lane_with_knobs("watdiv", "WATDIV_OUT", &["WATDIV_SEED=abc".to_string()]);
+
+    assert_ne!(
+        code, 0,
+        "make watdiv: a non-numeric seed must be refused; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("WATDIV_SEED") && combined.contains("abc"),
+        "make watdiv: the refusal must name the knob and quote the value; output:\n{combined}"
+    );
+    assert!(
+        !combined.contains("1/7 artifacts"),
+        "make watdiv: a bad seed must be caught before the artifacts step; output:\n{combined}"
+    );
+}
+
+#[test]
+fn the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed() {
+    // THE OVER-REFUSAL HALF. `WATDIV_SCALE=10M` is the pinned value and `WATDIV_SEED=7` is an
+    // ordinary seed, so neither may be refused. The run is still made to fail — on an uncreatable
+    // arena — because that is what proves execution got PAST the knob checks rather than merely
+    // that it exited non-zero for some reason of its own.
+    let unusable = format!("/nonexistent-arena-{}/deeper", unique_tag());
+    let (code, stdout, stderr) = run_make(&[
+        "watdiv",
+        "WATDIV_SCALE=10M",
+        "WATDIV_SEED=7",
+        &format!("WATDIV_OUT={unusable}"),
+    ]);
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        !combined.contains("is not pinned"),
+        "make watdiv: 10M IS the pinned scale and must not be refused; output:\n{combined}"
+    );
+    assert!(
+        !combined.contains("WATDIV_SEED must be"),
+        "make watdiv: 7 is an ordinary seed and must not be refused — a seed check that rejects \
+         valid seeds is the mirror of one that accepts junk; output:\n{combined}"
+    );
+    assert_ne!(
+        code, 0,
+        "make watdiv: the arena is uncreatable, so this run must still fail — the point is that it \
+         fails on the ARENA, having accepted both knobs; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("WATDIV_OUT="),
+        "make watdiv: the failure must name the arena knob, which is what shows the knob checks \
+         passed and execution reached arena creation; output:\n{combined}"
+    );
+}
+
+#[test]
+fn the_lubm_lane_refuses_a_zero_university_count_and_accepts_one() {
+    // `LUBM_UNIVERSITIES=0` generates no corpus at all, so it is refused by name. The valid
+    // neighbour is 1 — the default and the count the published LUBM answers are quoted for — which
+    // must reach arena creation instead.
+    let (code, combined) =
+        run_lane_with_knobs("lubm", "LUBM_OUT", &["LUBM_UNIVERSITIES=0".to_string()]);
+    assert_ne!(
+        code, 0,
+        "make lubm: zero universities is an empty corpus, which converts cleanly and answers every \
+         query 0 — it must be refused, not measured; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("LUBM_UNIVERSITIES"),
+        "make lubm: the refusal must name the knob; output:\n{combined}"
+    );
+
+    let unusable = format!("/nonexistent-arena-{}/deeper", unique_tag());
+    let (code, stdout, stderr) = run_make(&[
+        "lubm",
+        "LUBM_UNIVERSITIES=1",
+        "LUBM_SEED=0",
+        &format!("LUBM_OUT={unusable}"),
+    ]);
+    let combined = format!("{stdout}\n{stderr}");
+    assert!(
+        !combined.contains("LUBM_UNIVERSITIES must be"),
+        "make lubm: one university is the DEFAULT and the count LUBM's published answers are \
+         quoted for; refusing it would break every ordinary run; output:\n{combined}"
+    );
+    assert_ne!(
+        code, 0,
+        "make lubm: the arena is uncreatable, so the run must fail on the ARENA; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("LUBM_OUT="),
+        "make lubm: the failure must name the arena knob, showing the knob checks passed; \
+         output:\n{combined}"
+    );
+}
+
+#[test]
+fn the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri() {
+    // An empty relative IRI in every generated file resolves against this base, so a base that is
+    // not an absolute IRI silently puts the scratch directory's `file://` path into the corpus —
+    // and into the digest published as that corpus's provenance.
+    let (code, combined) = run_lane_with_knobs(
+        "lubm",
+        "LUBM_OUT",
+        &["LUBM_DOC_BASE=not-an-iri".to_string()],
+    );
+    assert_ne!(
+        code, 0,
+        "make lubm: a relative document base reintroduces the `file://` leak the `--base` flag \
+         exists to close; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("LUBM_DOC_BASE"),
+        "make lubm: the refusal must name the knob; output:\n{combined}"
+    );
+}
