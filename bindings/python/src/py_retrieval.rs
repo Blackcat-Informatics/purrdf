@@ -340,10 +340,10 @@ use pyo3::types::{PyDict, PyList};
 
 use crate::attestation::Attestation;
 use crate::retrieval::{
-    AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
-    Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason,
-    RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, Statistics, Term, ToleratedDepth,
-    TopK, UnservedReason,
+    AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, DepthCause, Fixed,
+    FusionProfile, Iri, Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus,
+    RejectionReason, RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, Statistics, Term,
+    ToleratedDepth, TopK, UnservedReason, depth_cause,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
@@ -1311,6 +1311,23 @@ const fn unserved_reason(reason: UnservedReason) -> &'static str {
     }
 }
 
+/// The stable lowercase name of a depth's binding cause.
+///
+/// Spelled here rather than derived from `Debug`, so the Python surface's
+/// vocabulary is a decision this file makes and not a rename away from changing.
+fn depth_cause_name(cause: DepthCause) -> &'static str {
+    match cause {
+        DepthCause::Declaration => "declaration",
+        DepthCause::Cardinality => "cardinality",
+        DepthCause::Selectivity => "selectivity",
+        DepthCause::LicensedPrefix => "licensed_prefix",
+        DepthCause::Floor => "floor",
+        DepthCause::Unbounded => "unbounded",
+        DepthCause::ReadCeiling => "read_ceiling",
+        _ => "unknown",
+    }
+}
+
 /// Render one plan as a dict.
 fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
@@ -1366,12 +1383,38 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
     for entry in &planned.statistics_snapshot.entries {
         let rendered = PyDict::new(py);
         rendered.set_item("subject", &entry.subject)?;
+        // An absent cardinality renders as `None`, never as `0`. Zero is a
+        // measurement and absence is not, and collapsing them at the binding
+        // boundary would undo the distinction the record is built on.
         rendered.set_item("cardinality", entry.cardinality)?;
         rendered.set_item("selectivity_ppm", entry.selectivity_ppm)?;
+        rendered.set_item("selectivity_terms", entry.selectivity_terms.clone())?;
         entries.append(rendered)?;
     }
     snapshot.set_item("entries", entries)?;
     out.set_item("statistics", snapshot)?;
+
+    // What each recorded depth was derived from, so a host can recompute the
+    // number rather than take the plan's word for it.
+    let derivations = PyDict::new(py);
+    for (stratum, inputs) in &planned.stratum_derivations {
+        let rendered = PyDict::new(py);
+        rendered.set_item("declared", inputs.declared)?;
+        rendered.set_item("cardinality", inputs.cardinality)?;
+        rendered.set_item("selectivity_ppm", inputs.selectivity_ppm)?;
+        rendered.set_item("selectivity_terms", inputs.selectivity_terms.clone())?;
+        rendered.set_item("licensed_prefix", inputs.licensed_prefix)?;
+        rendered.set_item("cause", depth_cause_name(depth_cause(inputs)))?;
+        derivations.set_item(stratum.as_str(), rendered)?;
+    }
+    out.set_item("stratum_derivations", derivations)?;
+
+    // Recomputed here rather than reported as a boolean the caller must trust:
+    // planning just built this plan, so a failure is this build disagreeing with
+    // itself and is raised rather than rendered.
+    planned
+        .certify()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
     out.set_item(
         "registry_content_fingerprint",

@@ -2301,6 +2301,24 @@ class retrieval:
     # value reaches the plan's canonical identity). A reported selectivity
     # lowers that stratum's planned depth; it never raises one.
     #
+    # The returned plan states what it was built against, in two places that
+    # answer two questions. `"stratum_derivations"` maps each stratum to
+    # everything its depth was derived from — "declared", "cardinality",
+    # "selectivity_ppm", "selectivity_terms" and "licensed_prefix", plus a
+    # "cause" naming which of them bound the number ("declaration",
+    # "cardinality", "selectivity", "licensed_prefix", "floor", "unbounded" or
+    # "read_ceiling"). The depth is recomputable from those inputs, which is
+    # what makes it a checkable claim rather than an asserted one; `plan`
+    # recomputes it before returning and raises if this build disagrees with
+    # itself. `"statistics"["entries"]` carries the subjects no depth is derived
+    # for — the request's own predicates — as context.
+    #
+    # In both, "cardinality" and "selectivity_ppm" are `None` when the provider
+    # reported none, never 0: zero is a measurement and absence is not, and a
+    # subject the provider was silent about is still named so that a replay
+    # against moved statistics is detectable. A subject planning never consulted
+    # is absent from both rather than recorded as empty.
+    #
     # `top_k` is required here, on the stage that executes nothing, because the
     # row bound is a PLANNING input: it decides how deep each stratum is read, so
     # a top-five request and a top-five-hundred request are different plans with

@@ -1384,11 +1384,107 @@ def test_a_measured_cardinality_lowers_the_planned_depth() -> None:
         <= unbounded["stratum_depths"][NOTE_STRATUM]
     )
     # The plan records what it assumed, so a replay against moved statistics is
-    # a detectable condition rather than a silent replan.
-    assert unbounded["statistics"]["entries"] == []
+    # a detectable condition rather than a silent replan. The stratum a depth is
+    # derived for is recorded beside that depth, with everything it came from.
+    assert unbounded["stratum_derivations"][NOTE_STRATUM]["cardinality"] is None, (
+        "a provider that reported nothing is recorded as having reported nothing, "
+        "not omitted: a subject the plan does not name is one a replay cannot check"
+    )
+    assert bounded["stratum_derivations"][NOTE_STRATUM]["cardinality"] == 1
+    assert bounded["stratum_derivations"][NOTE_STRATUM]["cause"] == "cardinality"
+    assert unbounded["stratum_derivations"][NOTE_STRATUM]["cause"] == "declaration"
+
+    # The request predicate derives no depth, so it is ancillary context. The
+    # cardinality of 1 belongs to the stratum and must not appear here; a swap of
+    # the two is exactly the mis-mapping this assertion exists to catch.
     assert bounded["statistics"]["entries"] == [
-        {"subject": NOTE_STRATUM, "cardinality": 1, "selectivity_ppm": None}
+        {
+            "subject": NOTE,
+            "cardinality": None,
+            "selectivity_ppm": None,
+            "selectivity_terms": [],
+        }
     ]
+
+
+def test_a_selectivity_only_statistic_is_recorded_on_the_plan() -> None:
+    """A selectivity with no cardinality narrows the depth, so the plan records it.
+
+    This is the whole of the defect it pins: the depth moved and the evidence did
+    not, so a replay against moved statistics could derive a different depth with
+    nothing in the plan to compare against. All three facts are asserted
+    together, because each alone passes over a different bug -- the depth is what
+    a plan already got right, and the record alone would pass for a build that
+    recorded a statistic it never applied.
+    """
+    request = [_lexical("quick fox", NOTE)]
+    selectivity_only = {**STATISTICS, "selectivity": {(NOTE_STRATUM, 0): 0}}
+
+    planned = retrieval.plan(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=selectivity_only,
+        top_k=PLAN_TOP_K,
+    )
+    assert planned["stratum_depths"][NOTE_STRATUM] == 1, (
+        "a selectivity of zero narrows the read, floored at one probing row so "
+        "the producer is the thing that reports the emptiness"
+    )
+
+    derivation = planned["stratum_derivations"][NOTE_STRATUM]
+    assert derivation["selectivity_ppm"] == 0, (
+        "the statistic that narrowed the depth is the statistic recorded"
+    )
+    assert derivation["cardinality"] is None, (
+        "absent is not zero; the provider reported no cardinality at all"
+    )
+    assert derivation["selectivity_terms"] == [0]
+    assert derivation["cause"] == "floor"
+
+    compiled = retrieval.compile(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=selectivity_only,
+        top_k=PLAN_TOP_K,
+    )
+    unit = compiled["units"][0]
+    assert unit["depth"] == 1
+    assert "LIMIT 2" in unit["sparql"], (
+        "one row past the planned depth, so a read this bound cuts is reported "
+        f"as such rather than as an exhausted stratum: {unit['sparql']}"
+    )
+
+
+def test_a_subject_the_host_reports_but_planning_never_consults_is_absent() -> None:
+    """A cardinality for a subject no depth is derived for stays out of the plan.
+
+    The control has an oracle: the host is willing to speak about the unconsulted
+    subject, so a build that recorded every subject it could reach rather than
+    every subject it asked about would name it. The consulted subject is asserted
+    present in the same test with a different value, so this cannot pass for a
+    plan that recorded nothing.
+    """
+    unconsulted = f"{EX}stratum/nobody-asks"
+    planned = retrieval.plan(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics={
+            **STATISTICS,
+            "cardinality": {NOTE_STRATUM: 3, unconsulted: 9999},
+        },
+        top_k=PLAN_TOP_K,
+    )
+
+    assert planned["stratum_derivations"][NOTE_STRATUM]["cardinality"] == 3, (
+        "the consulted subject carries its own value, not the other one"
+    )
+    assert unconsulted not in planned["stratum_derivations"]
+    assert all(
+        entry["subject"] != unconsulted for entry in planned["statistics"]["entries"]
+    ), "a subject planning never consulted is named nowhere"
 
 
 def test_compile_emits_the_sparql_each_stratum_runs() -> None:
