@@ -287,6 +287,14 @@ WATDIV_DATASET_ROWS: dict[str, int] = {"10M": 10_916_457}
 # statement if it is derived rather than typed; this is where it is derived from.
 WATDIV_BASIC_TEMPLATES: int = 20
 
+# How many queries LUBM publishes. Pinned for the same reason as the template count
+# above and read the same way: the LUBM lane enforced it at two shell sites and
+# `lubm-queries.py` at two more, four typed literals for one published fact, while the
+# sibling lane had already been moved to a pin. The design note says a denominator is
+# only a true statement if it is derived rather than typed; this is what both lanes now
+# derive from.
+LUBM_PUBLISHED_QUERIES: int = 14
+
 # Values that are deterministic functions of the PINNED artifacts and the DEFAULT
 # knobs, recorded here so a lane can ASSERT them rather than print them.
 #
@@ -956,6 +964,28 @@ def self_test() -> int:
     else:
         print(f"OK: self-test — the licensing posture sentence is derived from the pins ({posture})")
 
+    # 7c-bis. THE CACHE-HIT MD5 REFUSAL, whose valid side was the only one executed.
+    #         It was added because a wrong pin printed "md5 ... (publisher-published)"
+    #         on every warm-cache run with nothing hashing the bytes -- and then it too
+    #         went untested, which is the same omission one layer down.
+    with tempfile.TemporaryDirectory() as raw:
+        warm = Path(raw)
+        (warm / fixture.filename).write_bytes(good)
+        wrong_md5 = fixture._replace(md5="0" * 32)
+        ok &= _expect_exit(
+            lambda: ensure_cached(wrong_md5, warm, explode),
+            "a cached entry whose publisher md5 disagrees is refused, not reported OK",
+            ["disagrees with the publisher", "the PIN is what is wrong here"],
+        )
+        if (warm / fixture.filename).exists():
+            print("SELF-TEST FAIL: the cache entry failing the md5 cross-check was left in place")
+            ok = False
+        elif not list(warm.glob(f"{fixture.filename}.rejected-*")):
+            print("SELF-TEST FAIL: the cache entry failing the md5 cross-check was not quarantined")
+            ok = False
+        else:
+            print("OK: self-test — a cached md5 mismatch is quarantined and nothing is refetched")
+
     # 7d. THE PINS THIS FILE EXISTS TO HOLD, which had no check of their own. The
     #     artifact pins were covered and the workload pins were not -- and one of them
     #     carries a binary version in its key, so a version bump silently makes it
@@ -1019,6 +1049,12 @@ def self_test() -> int:
             f"OK: self-test — every version-keyed pin names the workspace version "
             f"({workspace_version})"
         )
+
+    if LUBM_PUBLISHED_QUERIES <= 0:
+        print(f"SELF-TEST FAIL: the LUBM query count pin is not positive ({LUBM_PUBLISHED_QUERIES})")
+        ok = False
+    else:
+        print(f"OK: self-test — the LUBM published-query count is pinned ({LUBM_PUBLISHED_QUERIES})")
 
     if WATDIV_BASIC_TEMPLATES <= 0 or not WATDIV_DATASET_ROWS:
         print("SELF-TEST FAIL: the template count or the dataset row pins are empty")
@@ -1189,6 +1225,11 @@ def main() -> int:
         help="print the pinned count of published WatDiv basic templates and exit",
     )
     parser.add_argument(
+        "--lubm-query-count",
+        action="store_true",
+        help="print the pinned count of published LUBM queries and exit",
+    )
+    parser.add_argument(
         "--workload-pin",
         metavar="NAME",
         help="print the recorded value of a workload pin and exit",
@@ -1216,6 +1257,9 @@ def main() -> int:
         return self_test()
     if args.template_count:
         print(WATDIV_BASIC_TEMPLATES)
+        return 0
+    if args.lubm_query_count:
+        print(LUBM_PUBLISHED_QUERIES)
         return 0
     if args.workload_pin is not None:
         value = WORKLOAD_PINS.get(args.workload_pin)

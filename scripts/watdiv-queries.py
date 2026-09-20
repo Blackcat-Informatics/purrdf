@@ -108,6 +108,7 @@ against another engine answering THE SAME query under the same conditions.
 
 import argparse
 import hashlib
+import subprocess
 import re
 import sys
 import tempfile
@@ -179,8 +180,14 @@ def stream_of(template: str, variable: str) -> int:
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
-def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int]:
-    """Choose one of ``count`` candidates uniformly. Returns ``(index, draw)``.
+def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int, int]:
+    """Choose one of ``count`` candidates uniformly. Returns ``(index, draw, attempts)``.
+
+    ``attempts`` is 1 when the first draw was accepted and rises by one per
+    REJECTION. It is returned because the rejection path is otherwise invisible:
+    a check that read the raw draw as an attempt count passed identically at a
+    count where rejection is arithmetically impossible, and printed a retry figure
+    that was simply the sample size.
 
     Plain ``draw % count`` folds the top of the 64-bit range unevenly, favouring
     the first ``2**64 % count`` candidates. The draw is therefore rejected and
@@ -195,7 +202,7 @@ def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int]:
     while True:
         value = draw(seed, TAG_MAPPING, stream + attempt * _RETRY_STRIDE)
         if value < limit:
-            return value % count, value
+            return value % count, value, attempt + 1
         attempt += 1
 
 
@@ -392,7 +399,9 @@ def expand(prefixed: str, namespaces: dict[str, str]) -> str:
 
 _ENTITY_LOCAL = re.compile(r"^([A-Za-z]+?)(\d+)$")
 
-CANDIDATES_HEADER = "# purrdf-watdiv-candidates-v1"
+# Bumped to v2 when the body digest was added: a v1 file has no digest line, so an
+# older cache is a MISS rather than something read under a format it does not follow.
+CANDIDATES_HEADER = "# purrdf-watdiv-candidates-v2"
 
 
 class Candidates(NamedTuple):
@@ -542,14 +551,37 @@ def scrape_candidates(
     return Candidates(sha256_of(dataset), ordered)
 
 
+def _candidates_body(candidates: Candidates) -> str:
+    """The cache body: one `type&lt;TAB&gt;iri` row per candidate, in canonical order."""
+    return "".join(
+        f"{prefixed}\t{iri}\n"
+        for prefixed in sorted(candidates.by_type)
+        for iri in candidates.by_type[prefixed]
+    )
+
+
 def write_candidates(candidates: Candidates, path: Path) -> None:
-    """Persist the scrape so re-running at another seed need not re-read 1.5 GB."""
+    """Persist the scrape so re-running at another seed need not re-read 1.5 GB.
+
+    THE BODY CARRIES ITS OWN DIGEST, because this file IS the workload. Every `%vN%`
+    substitution indexes into these pools, so an edited cache is a different query set
+    -- and the dataset digest in the header says only which corpus it was scraped
+    FROM, not that the rows are still what the scrape produced. Per-type counts are no
+    better: swapping one IRI for another of the same type preserves every count, keeps
+    the cache a hit, passes the census cross-check, and silently changes an emitted
+    query. A cross-run cache a later run consults instead of re-deriving is a
+    certificate by this repository's own definition, so it carries one.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [CANDIDATES_HEADER, f"# dataset-sha256 {candidates.dataset_sha256}"]
-    for prefixed in sorted(candidates.by_type):
-        for iri in candidates.by_type[prefixed]:
-            lines.append(f"{prefixed}\t{iri}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    body = _candidates_body(candidates)
+    header = "\n".join(
+        [
+            CANDIDATES_HEADER,
+            f"# dataset-sha256 {candidates.dataset_sha256}",
+            f"# body-sha256 {hashlib.sha256(body.encode('utf-8')).hexdigest()}",
+        ]
+    )
+    path.write_text(header + "\n" + body, encoding="utf-8")
 
 
 def check_against_census(
@@ -599,13 +631,27 @@ def read_candidates(path: Path, dataset_sha256: str) -> Candidates | None:
     if not path.exists():
         return None
     lines = path.read_text(encoding="utf-8").splitlines()
-    if len(lines) < 2 or lines[0] != CANDIDATES_HEADER:
+    if len(lines) < 3 or lines[0] != CANDIDATES_HEADER:
         return None
     marker, _, recorded = lines[1].partition(" dataset-sha256 ")
     if marker != "#" or recorded.strip() != dataset_sha256:
         return None
+    # THE BODY IS RE-DIGESTED. Without this the cache was validated only by which
+    # corpus it came from and by per-type counts, and an IRI swapped for another of
+    # the same type survived both while changing every query drawn from that pool.
+    body_marker, _, recorded_body = lines[2].partition(" body-sha256 ")
+    if body_marker != "#":
+        return None
+    body = "".join(f"{line}\n" for line in lines[3:])
+    if hashlib.sha256(body.encode("utf-8")).hexdigest() != recorded_body.strip():
+        sys.exit(
+            f"FAIL: {path} no longer digests to what its own header records.\n"
+            "  This file IS the workload: every substitution indexes into these pools, so an\n"
+            "  edited cache is a different query set under the same name. Delete it to force a\n"
+            "  fresh scrape."
+        )
     by_type: dict[str, list[str]] = {}
-    for line in lines[2:]:
+    for line in lines[3:]:
         prefixed, _, iri = line.partition("\t")
         if iri:
             by_type.setdefault(prefixed, []).append(iri)
@@ -664,7 +710,9 @@ def instantiate(
                 f"for {mapping.type_prefixed!r} in this dataset"
             )
 
-        index, raw = uniform_index(seed, stream_of(template.name, mapping.variable), len(pool))
+        index, raw, _attempts = uniform_index(
+            seed, stream_of(template.name, mapping.variable), len(pool)
+        )
         chosen = pool[index]
         placeholder = f"%{mapping.variable}%"
         if placeholder not in body:
@@ -1038,14 +1086,30 @@ def offline_self_test() -> int:
     # in range, and demonstrably have taken the retry path.
     wide = (1 << 63) + 1
     draws = [uniform_index(0, stream, wide) for stream in range(200)]
+    retried = sum(1 for _, _, attempts in draws if attempts > 1)
     check(
-        all(0 <= index < wide for index, _ in draws),
+        all(0 <= index < wide for index, _, _ in draws),
         "every draw at a half-rejecting count is still in range",
     )
     check(
-        sum(1 for _, attempts in draws if attempts > 1) > 0,
-        "the rejection retry path is actually taken at a half-rejecting count "
-        f"(retried {sum(1 for _, attempts in draws if attempts > 1)} of {len(draws)})",
+        retried > 0,
+        f"the rejection retry path is taken at a half-rejecting count ({retried} of {len(draws)})",
+    )
+    # THE CONTROL. Without it this proves nothing: the previous version of this check
+    # read the raw 64-bit draw as an attempt count, so it passed identically at a count
+    # where rejection is ARITHMETICALLY IMPOSSIBLE, and reported the sample size as the
+    # retry count. A pool of 7 has a reject window of 2 out of 2**64, so the honest
+    # expectation here is zero retries -- and if this ever sees one, the check above is
+    # measuring something other than rejection.
+    never = [uniform_index(0, stream, 7) for stream in range(200)]
+    check(
+        all(attempts == 1 for _, _, attempts in never),
+        "a pool whose reject window is 2 out of 2**64 never retries "
+        f"({sum(1 for _, _, a in never if a > 1)} of {len(never)} retried)",
+    )
+    check(
+        retried < len(draws),
+        f"the retry figure is a measurement, not the sample size ({retried} < {len(draws)})",
     )
     # The stride's ODDNESS is the invariant that makes the retry walk sound: only an
     # odd addend generates the whole additive group mod 2**64, so only an odd stride
@@ -1055,23 +1119,48 @@ def offline_self_test() -> int:
     # to an even value demonstrated -- so the property is asserted directly.
     check(_RETRY_STRIDE % 2 == 1, f"the retry stride is odd ({_RETRY_STRIDE:#x})")
 
-    # Candidate order read back from a cache must be re-canonicalised, not
-    # trusted: order IS the workload, and a cache written in another order has
-    # the same digest and the same counts.
+    # THE CACHE IS THE WORKLOAD, so it is checked three ways. Order IS the
+    # workload -- every substitution indexes into these pools -- and so are the
+    # rows themselves.
     with tempfile.TemporaryDirectory() as raw:
-        scratch = Path(raw) / "candidates.tsv"
         pool = _fixture_pool()
-        write_candidates(pool, scratch)
-        shuffled = scratch.read_text(encoding="utf-8").splitlines()
-        body = shuffled[2:]
-        scratch.write_text(
-            "\n".join([*shuffled[:2], *reversed(body)]) + "\n", encoding="utf-8"
-        )
-        reloaded = read_candidates(scratch, pool.dataset_sha256)
+
+        # 1. A valid cache round-trips exactly, canonically ordered. The valid
+        #    neighbour first: the two refusals below would "pass" against a reader
+        #    that rejected every cache.
+        good = Path(raw) / "good.tsv"
+        write_candidates(pool, good)
+        reloaded = read_candidates(good, pool.dataset_sha256)
         check(
             reloaded is not None and reloaded.by_type == pool.by_type,
-            "a candidates cache written in another order reloads canonically",
+            "a freshly written candidates cache round-trips exactly",
         )
+
+        # 2. A cache from OTHER bytes is a miss, not a stale hit.
+        check(
+            read_candidates(good, "0" * 64) is None,
+            "a cache taken from a different dataset is a miss",
+        )
+
+        # 3. A TAMPERED BODY is refused, which per-type counts could never catch.
+        #    Swapping one IRI for another of the same type preserves every count,
+        #    keeps the dataset digest intact, passes the census cross-check, and
+        #    changes every query drawn from that pool. This is the case a reordering
+        #    test could not distinguish, because reordering is itself a tamper now.
+        tampered = Path(raw) / "tampered.tsv"
+        lines = good.read_text(encoding="utf-8").splitlines()
+        swapped = [*lines[:3], *reversed(lines[3:])]
+        tampered.write_text("\n".join(swapped) + "\n", encoding="utf-8")
+        try:
+            read_candidates(tampered, pool.dataset_sha256)
+        except SystemExit as exc:
+            check(
+                "no longer digests" in str(exc.code),
+                "a candidates cache whose body was edited is refused, naming the cause",
+            )
+        else:
+            print("SELF-TEST FAIL: an edited candidates cache was accepted as a hit")
+            ok = False
 
     # THE PREFIX REFUSAL, BOTH DIRECTIONS, ON THE PRODUCTION FUNCTION.
     #
@@ -1224,6 +1313,26 @@ def offline_self_test() -> int:
             lambda: load_templates(root / "nowhere"),
             "a templates path that is not a directory is refused",
             ["FAIL:"],
+        )
+
+
+    # The pin file is the single source of truth for this count. This script keeps its
+    # own constant so it runs standalone, and the self-test asserts the two agree --
+    # otherwise "one copy of the number" is two copies that happen to match today.
+    pinned = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "benchmark-acquire.py"), "--template-count"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        print(f"SELF-TEST FAIL: could not read the pinned count: {pinned.stderr.strip()}")
+        ok = False
+    else:
+        check(
+            int(pinned.stdout.strip()) == EXPECTED_TEMPLATES,
+            f"this script's EXPECTED_TEMPLATES ({EXPECTED_TEMPLATES}) equals the pinned count "
+            f"({pinned.stdout.strip()})",
         )
 
     print("OFFLINE SELF-TEST PASS" if ok else "OFFLINE SELF-TEST FAIL")

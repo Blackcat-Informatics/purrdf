@@ -28,14 +28,20 @@ not its siblings is not a law*. The failure that produced it is on the record in
 the third carrying the defect, and the binary check had drifted in five places
 between two copies of itself.
 
-Each lane then defines a handful of same-named helpers — `write_checked`,
+Two of the three lanes then define a handful of same-named helpers — `write_checked`,
 `mkdir_checked`, `require_nonempty_file` — and these are **adapters, not copies**.
 Their entire body delegates to the `lane_*` implementation, passing the one thing
 that genuinely differs: which knob supplied the path, so the diagnostic can quote
 `LUBM_OUT` or `WATDIV_OUT` back at the operator instead of emitting a bare
-`mkdir: cannot create directory`. Collapsing them into direct `lane_*` calls would
-discard the knob name and make every path failure anonymous. They are correct as
-they stand; do not "de-duplicate" them.
+`mkdir: cannot create directory`.
+
+`scale-corpus.sh` does it the other way — it calls `lane_write_checked` and
+`lane_mkdir_checked` directly and passes the knob name inline at each site. Both forms
+keep the knob name, which is the property that matters; the wrappers only save
+repeating it. So the instruction is narrower than it first read: do not collapse a
+wrapper into a `lane_*` call *and drop the knob argument*, because that is what makes
+a path failure anonymous. An earlier version of this paragraph claimed collapsing them
+would necessarily discard the knob name, which the third lane already disproves.
 
 The laws that are genuinely shared, and therefore hold for every lane:
 
@@ -50,7 +56,7 @@ The laws that are genuinely shared, and therefore hold for every lane:
 | A path that cannot be written names the knob that supplied it | `lane_write_checked`, `lane_mkdir_checked` |
 | Existing is not being produced — an artifact must be a regular, non-empty file | `lane_require_nonempty_file` |
 | Non-empty is not "is what it claims to be" | `lane_require_magic`, `lane_require_nquads` |
-| The binary that certifies every number is itself checked, before step 1 | `lane_require_executable`, `lane_run_probe`, `lane_require_probe_said_something` |
+| The binary that certifies every number is itself checked before it is trusted — before step 1 when a `*_BIN` knob supplies it, and at the build step when the lane builds it | `lane_require_executable`, `lane_run_probe`, `lane_require_probe_said_something` |
 
 ## A digest is a certificate only if every input to it is pinned
 
@@ -180,12 +186,13 @@ a scratch name unique per process, with the atomic rename doing the rest.
 
 ## Some guards are past the point a test can reach
 
-A lane validates its knobs and proves its binary before step 1, so those refusals are
-testable offline and are tested. The guards that decide whether to compare a digest
+A lane validates its knobs before step 1, and proves its binary before trusting it —
+which is before step 1 when a `*_BIN` knob supplies one, and at the build step
+otherwise. Those refusals are therefore testable offline and are tested. The guards that decide whether to compare a digest
 against its pin sit at step 5, past generation and conversion — and every test that
 drives a lane stops it before step 1, either at the binary probe or at a knob
-validator, so that no test needs the network or a JDK. (Some point the arena somewhere
-uncreatable; most do not need to, because the binary probe comes first.) Such a test
+validator, so that no test needs the network or a JDK. (Six of the fourteen point the arena somewhere
+uncreatable; the rest do not need to, because the binary probe comes first.) Such a test
 therefore cannot observe a step-5 guard at all, and asserting that its failure message
 is absent is trivially true — which is why the step-5 laws are proved against the
 shared helpers directly instead, in `crates/bench/tests/lane_common_laws.rs`.

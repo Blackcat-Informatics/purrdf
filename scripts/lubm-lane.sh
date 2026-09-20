@@ -295,8 +295,8 @@ python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
   die "artifact acquisition failed -- nothing downstream can be trusted, stopping"
 
 for required in uba1.7.zip univ-bench.owl queries-sparql.txt; do
-  [[ -f "${CACHE}/${required}" ]] ||
-    die "${required} is missing from ${CACHE} after acquisition reported success"
+  require_nonempty_file "${CACHE}/${required}" \
+    "${required}, which acquisition reported it had cached,"
 done
 
 # ── 2. The purrdf binary ────────────────────────────────────────────────────────
@@ -350,7 +350,10 @@ renamed=0
 shopt -s nullglob
 for stray in "${ARENA}/work\\"*; do
   base="${stray##*work\\}"
-  mv -- "${stray}" "${WORK}/${base}"
+  mv -- "${stray}" "${WORK}/${base}" ||
+    die "could not move the backslash-named stray '${stray}' to '${WORK}/${base}'
+  (under LUBM_OUT='${OUT}'). The generator wrote it and this lane must rename it; a
+  partially renamed corpus would be converted as though it were whole."
   renamed=$((renamed + 1))
 done
 shopt -u nullglob
@@ -566,8 +569,17 @@ if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
     echo "    another version does not apply to them."
   fi
 else
-  echo "  ^ NOT checked against a pin: at least one knob is not at its default, so"
-  echo "    this is a different corpus and no pin is recorded for it."
+  # NAME THE KNOB THAT DIFFERS, and its value. "At least one knob" out of five sends
+  # an operator to read the source to find out which; the sibling lane names both the
+  # knob and the value it carried, and this is the same diagnostic.
+  differing=()
+  [[ "${UNIVERSITIES}" == "1" ]] || differing+=("LUBM_UNIVERSITIES=${UNIVERSITIES}")
+  [[ "${INDEX}" == "0" ]] || differing+=("LUBM_INDEX=${INDEX}")
+  [[ "${SEED}" == "0" ]] || differing+=("LUBM_SEED=${SEED}")
+  [[ "${ONTO}" == "${LUBM_DEFAULT_ONTO}" ]] || differing+=("LUBM_ONTO=${ONTO}")
+  [[ "${DOC_BASE}" == "${LUBM_DEFAULT_DOC_BASE}" ]] || differing+=("LUBM_DOC_BASE=${DOC_BASE}")
+  echo "  ^ NOT checked against a pin: ${differing[*]} is not at its default, so this is"
+  echo "    a different corpus and no pin is recorded for it."
 fi
 echo "  ^ this digest is the determinism check, and it has SEVEN inputs. Five are knobs:"
 echo "    LUBM_UNIVERSITIES, LUBM_INDEX, LUBM_SEED, LUBM_ONTO (the generator stamps it"
@@ -591,7 +603,10 @@ python3 "${REPO_ROOT}/scripts/lubm-queries.py" --namespace "${NAMESPACE}" --out 
 # are not evidence until they are checked for being artifacts. The report below
 # counts what it executed; without these, the denominator it counts against was a
 # typed literal and a partial query set would have read as "executed 3 of 14".
-lane_require_query_count "${QUERIES}" 14 "LUBM_OUT='${OUT}'"
+# ONE COPY OF THE NUMBER, read from the pin file, as the sibling lane already does.
+EXPECTED_QUERIES="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --lubm-query-count)" ||
+  die "could not read the pinned LUBM published-query count"
+lane_require_query_count "${QUERIES}" "${EXPECTED_QUERIES}" "LUBM_OUT='${OUT}'"
 require_nonempty_file "${QUERIES}/regimes.tsv" "the per-query entailment regime index"
 require_nonempty_file "${QUERIES}/provenance.txt" "the query normalisation record"
 
@@ -870,7 +885,7 @@ done <"${QUERIES}/regimes.tsv"
 # because that is what proves it rather than assumes it.
 verify_query_set "while the 14 queries were running"
 query_total=$((executed + unexecuted))
-((query_total == 14)) ||
+((query_total == EXPECTED_QUERIES)) ||
   die "read ${query_total} row(s) from ${QUERIES}/regimes.tsv, not 14. The 14 .rq
   files were written and counted, so the index that drives this loop disagrees with
   them. No SUMMARY is printed for a run that measured part of the workload under

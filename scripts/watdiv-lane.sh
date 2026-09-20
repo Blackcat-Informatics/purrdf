@@ -762,7 +762,8 @@ cat <<REPORT
 SUMMARY
   binary             ${BIN} (${PURRDF_VERSION})
   dataset            WatDiv ${SCALE} frozen output, ${data_rows} triples, ${data_bytes} bytes
-  dataset sha256     ${TARBALL_SHA}  (the pinned tarball)
+  corpus sha256      ${actual_corpus}  (the extracted corpus, checked against its pin)
+  tarball sha256     ${TARBALL_SHA}  (the container it came out of)
   loaded             ${pack_bytes}-byte pack, ${loaded} in ${load_ms} ms
   seed               ${SEED}
   queries sha256     ${queries_sha}

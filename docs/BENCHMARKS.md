@@ -1435,10 +1435,18 @@ Every knob is an overridable `make` variable, in the same style as `LUBM_*`.
 | `WATDIV_OUT` | `target/watdiv` | Where the lane works. An absolute path is used verbatim; a relative one resolves against the repository root, so the default keeps everything the lane writes inside `target/` as build output. |
 | `WATDIV_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
 
-The extraction and the pack are each stamped with the digest they were built
-from — the dataset tarball's digest, and for the pack that plus the binary's own
-version — so a re-run reuses them only when they provably came from the same
-bytes, and a stale artifact is a cache miss rather than a silent stale hit.
+The extraction and the pack are each stamped with the digest of **the artifact a
+later run will actually read**, not of the container it came out of. The extraction
+stamp records the tarball's digest, the extracted corpus's and the census's, and
+re-derives the last two on every reuse; the pack stamp records the corpus digest and
+the binary's version, plus the pack's own digest, re-derived the same way. So a re-run
+reuses them only when the bytes it is about to read are still the bytes that were
+certified, and a stale artifact is a cache miss rather than a silent stale hit.
+
+Keying a stamp on a container instead would say only that something was once built
+here from those bytes — which is true of an artifact that has since been edited. Both
+stamps were once keyed that way; see [the lane laws](design/purrdf-bench-lane-laws.md)
+for why that is not the same claim.
 
 **Give concurrent runs separate arenas.** Instantiation begins by deleting
 `$WATDIV_OUT/queries`, so a second run starting while a first is partway through

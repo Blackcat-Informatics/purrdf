@@ -81,6 +81,7 @@ it is why every row this lane reports carries its regime and its dataset.
 
 import argparse
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -99,6 +100,12 @@ DRAFT_NAMESPACE = "http://www.lehigh.edu/~zhp2/2004/0401/univ-bench.owl#"
 # The namespace the ontology Lehigh publishes today declares, and the one the UBA
 # generator stamps into its output when run with the matching `-onto`.
 PUBLISHED_NAMESPACE = "http://swat.cse.lehigh.edu/onto/univ-bench.owl#"
+
+# How many queries LUBM publishes. Named rather than typed at each use: it was inline
+# at two sites here and two more in the lane, four literals for one published fact.
+# The pin beside the artifact pins is the source of truth; `--offline-self-test`
+# asserts this constant still agrees with it.
+PUBLISHED_QUERIES = 14
 
 
 class Regime(NamedTuple):
@@ -310,15 +317,15 @@ def load(source: Path, namespace: str) -> list[Query]:
             "  grant, so they are fetched by digest at use time and never vendored here."
         )
     blocks = _split_blocks(source.read_text(encoding="utf-8"))
-    if len(blocks) != 14:
+    if len(blocks) != PUBLISHED_QUERIES:
         sys.exit(
-            f"FAIL: expected 14 LUBM queries in {source}, found {len(blocks)}.\n"
+            f"FAIL: expected {PUBLISHED_QUERIES} LUBM queries in {source}, found {len(blocks)}.\n"
             "  The pinned file changed shape; the digest pin and these rules must be "
             "re-checked together."
         )
     queries = [normalise(number, block, namespace) for number, block in blocks]
     seen = [query.number for query in queries]
-    if seen != list(range(1, 15)):
+    if seen != list(range(1, PUBLISHED_QUERIES + 1)):
         sys.exit(f"FAIL: LUBM queries are not 1..14 in order: {seen}")
     return queries
 
@@ -493,6 +500,26 @@ def offline_self_test() -> int:
             lambda: load(short, PUBLISHED_NAMESPACE),
             "a file holding fewer than 14 queries is refused, naming the count",
             ["expected 14 LUBM queries", "found 2"],
+        )
+
+
+    # The pin file is the single source of truth for this count. This script keeps its
+    # own constant so it runs standalone, and the self-test asserts the two agree --
+    # otherwise "one copy of the number" is two copies that happen to match today.
+    pinned = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "benchmark-acquire.py"), "--lubm-query-count"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        print(f"SELF-TEST FAIL: could not read the pinned count: {pinned.stderr.strip()}")
+        ok = False
+    else:
+        check(
+            int(pinned.stdout.strip()) == PUBLISHED_QUERIES,
+            f"this script's PUBLISHED_QUERIES ({PUBLISHED_QUERIES}) equals the pinned count "
+            f"({pinned.stdout.strip()})",
         )
 
     print("OFFLINE SELF-TEST PASS" if ok else "OFFLINE SELF-TEST FAIL")

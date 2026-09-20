@@ -18,6 +18,7 @@
 //! unless the valid neighbour is executed too — and two defects in this file's own
 //! subject matter were caught exactly that way rather than by reading.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -280,11 +281,18 @@ fn an_unreadable_query_file_is_refused_when_the_process_genuinely_cannot_read_it
     // because it observes the read rather than predicting it.
     let readable_anyway = std::fs::read(&path).is_ok();
     if readable_anyway {
-        eprintln!(
-            "skipped: this process can read a mode-000 file (running as uid 0), so the \
-             condition under test cannot occur here"
-        );
+        // A `return` after an `eprintln!` reports a PASS for a check that never ran,
+        // and libtest hides that output for a passing test — the mechanism this file's
+        // sibling bans as a design constraint. So the skip is ASSERTED instead: under
+        // CI it is a failure, because a suite that silently stops proving something is
+        // worse than one that says it cannot.
         let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            std::env::var("CI").is_err(),
+            "running as a uid that can read a mode-000 file (root): the unreadable-file \
+             branch cannot be reached, so this test is not proving what it is named for. \
+             Run the suite as a non-root uid."
+        );
         return;
     }
 
@@ -348,6 +356,16 @@ fn a_uint_knob_refuses_what_is_not_an_unsigned_integer_and_quotes_it_back() {
         assert!(
             out.contains("PROBE_SEED"),
             "the refusal must name the knob; output:\n{out}"
+        );
+        // AND THE VALUE, which is what "quotes it back" means. Asserting only the knob
+        // name left the quoted value unguarded — and `lane-common.sh` records that one
+        // of the three per-lane copies of this check had already dropped it, so this is
+        // a drift that has happened before. Mutation-checked: stripping `(got '…')`
+        // from the message turns this red.
+        assert!(
+            out.contains(&format!("'{bad}'")),
+            "the refusal must quote the offending value back, or an operator cannot see \
+             what the knob actually carried; output:\n{out}"
         );
     }
 }
@@ -686,8 +704,13 @@ fn digesting_a_file_is_streamed_stable_and_refuses_what_it_cannot_read() {
         "a SHA-256 is 64 hex characters; got {digest:?}"
     );
 
-    // Independently computed, so this is agreement with the algorithm rather than with
-    // itself: `sha256sum` if present, else Python's hashlib.
+    // A one-shot digest of the same bytes, so what this proves is CHUNK-INVARIANCE:
+    // that streaming in 4 MiB pieces equals hashing the whole file at once. Both sides
+    // are CPython's hashlib, so it is not independent of the implementation — an
+    // earlier version of this comment claimed `sha256sum` as a fallback and there was
+    // no such branch. The algorithm itself is pinned elsewhere, by the reference
+    // vector `splitmix64(0) == 0xe220a8397b1dcdaf` for the mixing function and by the
+    // published artifact digests for SHA-256.
     let reference = Command::new("python3")
         .arg("-c")
         .arg("import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())")
@@ -719,6 +742,39 @@ fn digesting_a_file_is_streamed_stable_and_refuses_what_it_cannot_read() {
         "the refusal must carry the lane's name, not surface as a bare traceback; \
          output:\n{out}"
     );
+
+    // AND THE UNREADABLE BRANCH, which had no test in either direction. Without it the
+    // helper emits a bare PermissionError for what may be a multi-gigabyte corpus in an
+    // arena an operator has touched. A diagnostic must name the right cause, and this
+    // helper is one over from where that was last enforced.
+    let unreadable = root.join("noread.nq");
+    write(&unreadable, body);
+    let mut permissions = std::fs::metadata(&unreadable)
+        .expect("stat the fixture")
+        .permissions();
+    permissions.set_mode(0o000);
+    std::fs::set_permissions(&unreadable, permissions).expect("drop every permission bit");
+    if std::fs::read(&unreadable).is_err() {
+        let (code, out) = in_lane_common(&format!("lane_sha256_file '{}'", unreadable.display()));
+        assert_ne!(
+            code, 0,
+            "an unreadable file must be refused; output:\n{out}"
+        );
+        assert!(
+            out.contains("cannot read it") && out.contains("probe:"),
+            "the refusal must distinguish unreadable from missing AND carry the lane's \
+             name, rather than surfacing as a PermissionError traceback; output:\n{out}"
+        );
+    } else {
+        // uid 0 bypasses permission bits, so the condition cannot occur. Asserted
+        // rather than skipped silently, so a root run fails visibly instead of
+        // reporting a pass for a check it never made.
+        assert!(
+            std::env::var("CI").is_err(),
+            "running as a uid that can read a mode-000 file (root): the unreadable branch \
+             is unreachable here, so this suite is not proving it. Run as a non-root uid."
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&root);
 }
