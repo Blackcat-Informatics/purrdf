@@ -173,6 +173,26 @@ lane_require_nonempty_file() {
   digest and no size is published for it."
 }
 
+# The SHA-256 of `$1`, streamed. Every lane needs this and each one had grown its
+# own inline copy, which is how the chunk size, the file handling and eventually
+# the meaning drift apart. Streamed rather than read whole because the artifacts
+# these lanes digest are corpora, and the scale knobs above them have no ceiling:
+# a digest step that is O(corpus) resident becomes a lane's memory peak exactly
+# when an operator turns the interesting knob up.
+lane_sha256_file() {
+  local path="$1"
+  [[ -f "${path}" ]] ||
+    die "cannot digest '${path}': it does not exist"
+  python3 -c '
+import hashlib, sys
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as handle:
+    for chunk in iter(lambda: handle.read(1 << 22), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+' "${path}"
+}
+
 # NON-EMPTY IS NOT "IS WHAT IT CLAIMS TO BE". A CLI that writes eight bytes and
 # exits 0 passes an emptiness test, and a lane that stamps that file as a
 # reusable artifact hands every later run a certificate for something that is

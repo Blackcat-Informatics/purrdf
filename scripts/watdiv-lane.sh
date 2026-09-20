@@ -263,14 +263,7 @@ for required in "${TARBALL}" watdiv_v06.tar; do
     "${required}, which acquisition reported it had cached,"
 done
 
-TARBALL_SHA="$(python3 -c '
-import hashlib, sys
-digest = hashlib.sha256()
-with open(sys.argv[1], "rb") as handle:
-    for chunk in iter(lambda: handle.read(1 << 22), b""):
-        digest.update(chunk)
-print(digest.hexdigest())
-' "${CACHE}/${TARBALL}")"
+TARBALL_SHA="$(lane_sha256_file "${CACHE}/${TARBALL}")"
 echo "frozen dataset tarball: ${TARBALL}  sha256 ${TARBALL_SHA}"
 
 # ── 2. The purrdf binary ────────────────────────────────────────────────────────
@@ -293,15 +286,43 @@ command -v bzip2 >/dev/null 2>&1 || die "bzip2 is not on PATH; the dataset is bz
 
 mkdir_checked "${ARENA}"
 
-# Extraction is keyed by the tarball's DIGEST, not by the presence of a file or by
-# its mtime, so a stale extraction from other bytes is a miss and never a hit.
+# CONTAINER IDENTITY IS NOT CORPUS IDENTITY, so the stamp records both digests
+# and the reuse test re-derives the one that matters.
+#
+# The tarball's digest proves what was DOWNLOADED. Extraction is a separate event
+# with its own failure modes -- a truncated write, an interrupted run, a manual
+# edit, a half-finished experiment left in the arena -- so a stamp carrying only
+# the tarball's digest says no more than "an extraction from these bytes happened
+# here once". A later run reads that as a claim about the bytes present NOW, and
+# every number it goes on to print is reported beside the tarball's pinned digest:
+# a provenance claim the corpus it actually measured does not carry. Substituting
+# any non-empty file for the dataset was enough, because the only other condition
+# was `-s`.
+#
+# So the reuse branch re-digests the dataset and compares. A mismatch is a CACHE
+# MISS, not a refusal: the arena is scratch, the tarball is pinned, and
+# re-extracting is both self-healing and cheaper than making an operator who
+# touched a file in `target/` work out why the lane now refuses to run.
 #
 # A STAMP IS A CERTIFICATE: it is what a LATER run consults to skip this work
 # entirely. So it is written only after the artifacts it certifies have been
 # checked for being artifacts, and the reuse test demands a NON-EMPTY dataset —
 # `-f` alone would have made a zero-byte `watdiv.10M.nt` reusable forever.
 extract_start="$(now_ms)"
-if [[ -f "${DATA_STAMP}" && "$(cat "${DATA_STAMP}")" == "${TARBALL_SHA}" && -s "${DATASET}" && -s "${CENSUS}" ]]; then
+stamp_matches=0
+if [[ -f "${DATA_STAMP}" && -s "${DATASET}" && -s "${CENSUS}" ]]; then
+  stamped_tarball="$(awk 'NR==1 {print $1}' "${DATA_STAMP}")"
+  stamped_dataset="$(awk 'NR==2 {print $1}' "${DATA_STAMP}")"
+  if [[ "${stamped_tarball}" == "${TARBALL_SHA}" && -n "${stamped_dataset}" ]]; then
+    if [[ "$(lane_sha256_file "${DATASET}")" == "${stamped_dataset}" ]]; then
+      stamp_matches=1
+    else
+      echo "dataset: the extracted corpus no longer digests to what this arena's" \
+        "stamp recorded; re-extracting rather than reporting numbers about it" >&2
+    fi
+  fi
+fi
+if ((stamp_matches == 1)); then
   echo "dataset: reusing the extraction already stamped with this tarball's digest"
   extracted="reused"
 else
@@ -312,7 +333,10 @@ else
   require_nonempty_file "${DATASET}" "${DATASET_NAME}, which ${TARBALL} must contain,"
   require_nonempty_file "${CENSUS}" \
     "saved.txt (the entity census the candidate scrape is checked against), which ${TARBALL} must contain,"
-  write_checked "${DATA_STAMP}" "the dataset stamp" printf '%s\n' "${TARBALL_SHA}"
+  # Line 1 is the container's digest, line 2 the corpus's. The second is the one
+  # a later run re-derives; the first records which pinned bytes it came from.
+  write_checked "${DATA_STAMP}" "the dataset stamp" \
+    printf '%s\n%s\n' "${TARBALL_SHA}" "$(lane_sha256_file "${DATASET}")"
   # A STAMP IS A CERTIFICATE THIS RUN WROTE, so it does not survive this run
   # failing: the next run would otherwise skip the extraction on the strength of
   # a certificate written by a run that never finished.
@@ -341,6 +365,12 @@ template_count=$(find "${TESTSUITE}" -maxdepth 1 -name '*.txt' | wc -l)
   die "expected 20 basic templates in ${TESTSUITE}, found ${template_count}"
 [[ -f "${MODEL}" ]] || die "watdiv_v06.tar did not contain model/wsdbm-data-model.txt"
 
+# The row count is REPORTED rather than asserted against a constant, and that is
+# deliberate now that the corpus is identified by digest above: a verified digest
+# already fixes the row count exactly, so a second pinned literal here would be a
+# second source of truth for one fact -- the drift this lane's shared law file was
+# created to end. The `> 0` guard stays as the floor, because it is the one case
+# the digest cannot catch on the path where the corpus was just extracted.
 data_rows=$(wc -l <"${DATASET}")
 data_bytes=$(wc -c <"${DATASET}")
 ((data_rows > 0)) ||
