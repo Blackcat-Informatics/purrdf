@@ -981,6 +981,87 @@ def offline_self_test() -> int:
             "a candidates cache written in another order reloads canonically",
         )
 
+    # THE CENSUS PARSER HAD NO TEST AT ALL, in either direction -- and
+    # `saved.txt` is, by this module's own docstring, the only independent check
+    # on the scrape that exists. `scrape_candidates` is well covered, but only
+    # ever against a hand-built `declared` dict, so nothing exercised the code
+    # that produces that dict from the frozen file.
+    def expect_exit(thunk, label: str, must_contain: list[str]) -> None:
+        nonlocal ok
+        try:
+            thunk()
+        except SystemExit as exc:
+            message = str(exc.code)
+            if not exc.code or isinstance(exc.code, int) and exc.code == 0:
+                print(f"SELF-TEST FAIL: {label} exited zero")
+                ok = False
+                return
+            missing = [needle for needle in must_contain if needle not in message]
+            if missing:
+                print(f"SELF-TEST FAIL: {label} did not say {missing}: {message}")
+                ok = False
+                return
+            print(f"OK: {label}")
+            return
+        print(f"SELF-TEST FAIL: {label} did not refuse at all")
+        ok = False
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+
+        # The valid neighbour FIRST: a well-formed census must parse, or every
+        # refusal below would "pass" against a parser that rejects everything.
+        good = root / "saved.txt"
+        good.write_text("2\nwsdbm:User 100\nwsdbm:City 7\n", encoding="utf-8")
+        parsed = read_declared(good)
+        check(
+            parsed == {"wsdbm:User": 100, "wsdbm:City": 7},
+            f"a well-formed census parses to its declared counts (got {parsed})",
+        )
+
+        missing = root / "absent.txt"
+        expect_exit(lambda: read_declared(missing), "a missing census is refused", ["FAIL:"])
+
+        headless = root / "headless.txt"
+        headless.write_text("wsdbm:User 100\n", encoding="utf-8")
+        expect_exit(
+            lambda: read_declared(headless),
+            "a census with no leading type count is refused",
+            ["does not start with a type count"],
+        )
+
+        short = root / "short.txt"
+        short.write_text("5\nwsdbm:User 100\n", encoding="utf-8")
+        expect_exit(
+            lambda: read_declared(short),
+            "a census declaring more rows than it holds is refused",
+            ["declares 5 types"],
+        )
+
+        malformed = root / "malformed.txt"
+        malformed.write_text("1\nnot-a-census-row\n", encoding="utf-8")
+        expect_exit(
+            lambda: read_declared(malformed),
+            "a census row the parser cannot read is refused, quoting it",
+            ["cannot read"],
+        )
+
+        # `load_templates` is the loader the LANE uses, and the tarball-backed
+        # self-test exercises a different one (`_toolkit_templates`), so its
+        # directory and count refusals were untested on both sides.
+        empty = root / "no-templates"
+        empty.mkdir()
+        expect_exit(
+            lambda: load_templates(empty),
+            f"a directory holding fewer than {EXPECTED_TEMPLATES} templates is refused",
+            ["FAIL:"],
+        )
+        expect_exit(
+            lambda: load_templates(root / "nowhere"),
+            "a templates path that is not a directory is refused",
+            ["FAIL:"],
+        )
+
     print("OFFLINE SELF-TEST PASS" if ok else "OFFLINE SELF-TEST FAIL")
     return 0 if ok else 1
 
@@ -1000,7 +1081,11 @@ def self_test() -> int:
             thunk()
         except SystemExit as exc:
             message = str(exc.code)
-            if isinstance(exc.code, int) and exc.code == 0:
+            # `SystemExit(None)` is a ZERO exit too, and this missed it -- so a
+            # refusal that vanished into a bare `sys.exit()` would be judged by
+            # its message rather than by the fact that it succeeded. The sibling
+            # helper in benchmark-acquire.py already reads it this way.
+            if not exc.code or isinstance(exc.code, int) and exc.code == 0:
                 print(f"SELF-TEST FAIL: {label} exited zero")
                 ok = False
                 return

@@ -82,6 +82,7 @@ it is why every row this lane reports carries its regime and its dataset.
 import argparse
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -397,6 +398,103 @@ def provenance(queries: list[Query], namespace: str) -> str:
     return "\n".join(lines)
 
 
+# ── The offline half of the self-test ───────────────────────────────────────────
+#
+# `self_test()` reads the PUBLISHED file, which is fetched by digest at use time
+# and never vendored -- so it runs only inside `make lubm`, after a download, and
+# never in a gate. That left the splitter and the loader's refusals uncovered in
+# both directions. Everything below drives them over inline fixtures instead, so
+# it can live in `make check`.
+
+
+_PROSE_COMMENT_FIXTURE = """\
+# Query 11, 12 and 13 exercise transitivity and inverse properties. This line
+# OPENS with the same three words a delimiter does and is prose, which is the
+# whole point of the fixture: a splitter matching `# Query` loosely cuts here.
+# Query1
+SELECT ?X
+WHERE {?X rdf:type ub:GraduateStudent}
+# Query2
+SELECT ?X, ?Y
+WHERE {?X ub:memberOf ?Y}
+"""
+
+
+def offline_self_test() -> int:
+    """The fetch-free checks: the block splitter and the loader's refusals."""
+    ok = True
+
+    def check(condition: bool, label: str) -> None:
+        nonlocal ok
+        print(f"{'OK' if condition else 'SELF-TEST FAIL'}: {label}")
+        ok = ok and condition
+
+    def expect_exit(thunk, label: str, must_contain: list[str]) -> None:
+        nonlocal ok
+        try:
+            thunk()
+        except SystemExit as exc:
+            message = str(exc.code)
+            if not exc.code or isinstance(exc.code, int) and exc.code == 0:
+                print(f"SELF-TEST FAIL: {label} exited zero")
+                ok = False
+                return
+            missing = [needle for needle in must_contain if needle not in message]
+            if missing:
+                print(f"SELF-TEST FAIL: {label} did not say {missing}: {message}")
+                ok = False
+                return
+            print(f"OK: {label}")
+            return
+        print(f"SELF-TEST FAIL: {label} did not refuse at all")
+        ok = False
+
+    # THE DELIMITER SPLIT, PROVEN RATHER THAN ASSERTED. The published file opens
+    # with prose that contains the words "Query 11, 12 and 13". A splitter that
+    # matched `# Query` loosely would cut there and mis-number everything after
+    # it, so this fixture is built around exactly that sentence: the control line
+    # differs from the two real delimiters in the one way that matters, and the
+    # expected answer is two blocks numbered 1 and 2 -- never three, and never a
+    # block numbered 11.
+    blocks = _split_blocks(_PROSE_COMMENT_FIXTURE)
+    check(
+        [number for number, _ in blocks] == [1, 2],
+        f"prose naming 'Query 11, 12 and 13' does not split a block (got {[n for n, _ in blocks]})",
+    )
+    check(
+        _PROSE_COMMENT_FIXTURE.startswith("# Query 11, 12 and 13"),
+        "the fixture OPENS on the prose line the split must survive, not merely contains it",
+    )
+
+    # The valid neighbour for the comma rule: a pre-final projection list loses
+    # its commas, and the variables, their spelling and their ORDER survive.
+    projection = normalise(2, blocks[1][1], PUBLISHED_NAMESPACE)
+    head = projection.text.partition("WHERE")[0]
+    check("," not in head, f"projection commas are removed (got {head.strip()!r})")
+    check(
+        re.findall(r"\?\w+", head) == ["X", "Y"] or re.findall(r"\?\w+", head) == ["?X", "?Y"],
+        f"the projection keeps both variables in order (got {re.findall(r'[?]\w+', head)})",
+    )
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        expect_exit(
+            lambda: load(root / "absent.txt", PUBLISHED_NAMESPACE),
+            "a queries file that is not in the cache is refused, naming the fetch step",
+            ["is not in the cache"],
+        )
+        short = root / "short.txt"
+        short.write_text(_PROSE_COMMENT_FIXTURE, encoding="utf-8")
+        expect_exit(
+            lambda: load(short, PUBLISHED_NAMESPACE),
+            "a file holding fewer than 14 queries is refused, naming the count",
+            ["expected 14 LUBM queries", "found 2"],
+        )
+
+    print("OFFLINE SELF-TEST PASS" if ok else "OFFLINE SELF-TEST FAIL")
+    return 0 if ok else 1
+
+
 def self_test(namespace: str) -> int:
     """Check the rules against the pinned file, including what they must NOT touch."""
     ok = True
@@ -491,7 +589,15 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="directory to write .rq files into")
     parser.add_argument("--provenance", action="store_true", help="print the audit trail")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--offline-self-test",
+        action="store_true",
+        help="the fetch-free checks, suitable for a gate",
+    )
     args = parser.parse_args()
+
+    if args.offline_self_test:
+        return offline_self_test()
 
     if args.self_test:
         return self_test(args.namespace)

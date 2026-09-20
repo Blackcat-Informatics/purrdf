@@ -115,6 +115,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/benchmark-acquire.py --self-test
 	python3 scripts/watdiv-queries.py --offline-self-test
+	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
