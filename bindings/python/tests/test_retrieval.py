@@ -226,6 +226,38 @@ def _emitted_limit(sparql: str) -> int:
     return int(found.group(1))
 
 
+def _emitted_limits(sparql: str) -> list[int]:
+    """EVERY row bound a compiled unit's text carries, in the order it writes them.
+
+    A unit bounds itself twice: the inner ``SELECT`` around the producer call
+    carries the planned depth, and the outer one carries it again. Only the
+    second is ``_emitted_limit``, and a test that reads only the second cannot
+    see the first go missing or go wrong — which is the bound that actually stops
+    the producer's read.
+
+    The two are the same number by construction, and that is exactly why the
+    substring they share is not a check: ``"LIMIT 2" in sparql`` stays true when
+    the inner one is dropped, because the outer one still spells it. Reading them
+    as a LIST makes their count and their positions observable, so an inner bound
+    that vanished, doubled or drifted is a different value and not a matching
+    substring.
+    """
+    return [int(found) for found in re.findall(r"LIMIT (\d+)", sparql)]
+
+
+def _producer_call(sparql: str) -> tuple[str, str]:
+    """The producer a compiled unit calls, and the argument list it hands it.
+
+    Read as a pair rather than asserted as two substrings, because a needle that
+    appears SOMEWHERE in the text is not a needle the producer was handed: a
+    build that rendered a request term into the wrong argument list, or into no
+    argument list at all, leaves every substring of the text where it was.
+    """
+    found = re.search(r"<([^<>]+)> \( ([^()]*) \)", sparql)
+    assert found is not None, f"a compiled unit calls one producer: {sparql!r}"
+    return found.group(1), found.group(2)
+
+
 def _ranking(answer: dict[str, Any]) -> list[tuple[str, str, tuple[Any, ...]]]:
     """An answer's rows, scores and provenance, as one comparable value."""
     return [
@@ -1522,9 +1554,45 @@ def test_a_selectivity_only_statistic_is_recorded_on_the_plan() -> None:
     )
     unit = compiled["units"][0]
     assert unit["depth"] == 1
-    assert "LIMIT 2" in unit["sparql"], (
+    # THE DEPTH-BEARING BOUNDS, both of them, read as values rather than as a
+    # substring. The unit writes its bound twice -- once around the producer call
+    # and once around the whole SELECT -- and the two are the same number by
+    # construction: the compiler derives each from the same depth, so no fixture
+    # can make them differ, and a host that reads a depth as an argument gets no
+    # inner LIMIT at all rather than a different one. That is precisely why
+    # `"LIMIT 2" in sparql` guarded nothing here: it is satisfied by the outer
+    # bound alone, so the INNER one -- the bound that stops the producer's read,
+    # which is the whole subject of this test -- could go missing under it.
+    assert _emitted_limits(unit["sparql"]) == [2, 2], (
+        "the planned depth of one, plus the one probe row, at BOTH bounds the "
+        f"unit writes: {unit['sparql']}"
+    )
+    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
         "one row past the planned depth, so a read this bound cuts is reported "
         f"as such rather than as an exhausted stratum: {unit['sparql']}"
+    )
+
+    # THE CONTROL, and the reason the numbers above are an observation. A
+    # selectivity of half narrows the same three declared rows to two rather than
+    # to one, so the same producer over the same corpus emits a DIFFERENT pair of
+    # bounds. A build that had baked in a constant, or that emitted the
+    # declaration instead of the planned depth, agrees with one of these two rows
+    # and fails on the other.
+    narrowed = retrieval.compile(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics={**STATISTICS, "selectivity": {(NOTE_STRATUM, 0): 500_000}},
+        top_k=PLAN_TOP_K,
+    )["units"][0]
+    assert narrowed["depth"] == 2, (
+        "half of the three rows this producer declares, rounded up, is two"
+    )
+    assert narrowed["declared_rows"] == 3, (
+        "the declaration did not move between the two rows; the statistic did"
+    )
+    assert _emitted_limits(narrowed["sparql"]) == [3, 3], (
+        f"a different planned depth is a different emitted bound: {narrowed['sparql']}"
     )
 
 
@@ -1578,16 +1646,24 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
     units = compiled["units"]
     assert len(units) == 1
     assert units[0]["stratum"] == NOTE_STRATUM
-    assert '"quick fox"' in units[0]["sparql"], "the needle is a rendered constant"
-    assert f"<{NOTE_PRODUCER}>" in units[0]["sparql"], "the unit calls the bound producer"
+    # Read as a call rather than as two substrings: a needle that appears
+    # somewhere in the text is not a needle the producer was handed, and a term
+    # rendered into no argument list at all would leave both substrings where
+    # they were.
+    producer, arguments = _producer_call(units[0]["sparql"])
+    assert producer == NOTE_PRODUCER, "the unit calls the bound producer"
+    assert '"quick fox"' in arguments, (
+        f"the needle is rendered into that producer's own arguments: {arguments!r}"
+    )
     depth = units[0]["depth"]
     assert isinstance(depth, int) and depth >= 1, (
         "the reportable bound travels with the text it bounds"
     )
-    assert _emitted_limit(units[0]["sparql"]) == depth + 1, (
-        "the emitted bound is the depth plus the one probe row, at every depth: a "
-        "text bounded at exactly the depth could not tell an exhausted producer "
-        "from a read the depth cut short"
+    assert _emitted_limits(units[0]["sparql"]) == [depth + 1, depth + 1], (
+        "the emitted bound is the depth plus the one probe row, at every depth "
+        "and at BOTH bounds the unit writes: a text bounded at exactly the depth "
+        "could not tell an exhausted producer from a read the depth cut short, "
+        "and an inner bound nothing reads is an inner bound nothing checks"
     )
     assert compiled["plan_id"] == compiled["plan"]["plan_id"]
     assert compiled["planned_resolution"] == {}, (
@@ -1624,9 +1700,10 @@ def test_a_compiled_unit_is_emitted_one_probe_row_deeper_than_it_reports() -> No
         "the room the probe row needs, read off the declaration the unit carries: "
         f"declared {unit['declared_rows']}, depth {unit['depth']}"
     )
-    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+    assert _emitted_limits(unit["sparql"]) == [unit["depth"] + 1, unit["depth"] + 1], (
         "the extra row is the probe, and a host that runs this text reports "
-        "only the first `depth` rows"
+        "only the first `depth` rows -- at both bounds, since the inner one is "
+        "what actually stops the producer's read"
     )
 
 
@@ -1678,9 +1755,10 @@ def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> N
         "the producer's whole declared row bound and there is no room under it — "
         f"declared {unit['declared_rows']}, depth {unit['depth']}"
     )
-    assert _emitted_limit(unit["sparql"]) == unit["depth"] + 1, (
+    assert _emitted_limits(unit["sparql"]) == [unit["depth"] + 1, unit["depth"] + 1], (
         "the probe slot exists even on the declaration, so exhaustion is checked "
-        "rather than assumed"
+        "rather than assumed -- and it exists at the inner bound too, which is "
+        "the one a producer's read actually runs into"
     )
 
 
@@ -1711,7 +1789,11 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         planned["separates_to"] >= planned["requested_depth"]
     )
     # The units are still the units: asking what the plan costs did not run it.
-    assert f"<{NOTE_PRODUCER}>" in compiled["units"][0]["sparql"]
+    called, handed = _producer_call(compiled["units"][0]["sparql"])
+    assert called == NOTE_PRODUCER
+    assert '"quick fox"' in handed, (
+        f"and the request term is still in the call's own arguments: {handed!r}"
+    )
 
     # The neighbouring case that is NOT fully separated, derived rather than
     # guessed: `weight_for_depth` reports the TRUE minimum weight that still
