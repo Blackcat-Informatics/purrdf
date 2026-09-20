@@ -518,7 +518,7 @@ stopped before anything stopped it.
 Raising the argument to go looking is not available and is not an oversight: it is
 precisely the request a conforming relation must refuse. If you want that read taken
 further, raise your declared row bound — re-planning deeper cannot help, because
-`capped` bounds every derived depth by the declaration.
+the planner's `derived_bound` derives every depth downward from the declaration.
 Pinned by
 `the_probe_separates_a_cut_read_from_an_exhausted_one` and
 `an_under_declared_row_bound_is_refused_and_an_honest_one_is_not` in

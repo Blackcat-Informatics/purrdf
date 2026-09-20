@@ -309,11 +309,13 @@
 //! Under-declaring is *not* loud for this class of producer, and saying otherwise
 //! would be the comfortable falsehood here. Under-declaring is caught elsewhere by
 //! the probe row, and this is the one shape that never receives one. The depth
-//! cannot rise above the declaration to go looking either — `capped` bounds every
-//! derived depth by the declared row count, so no planner-written plan asks for
-//! more, and raising the *argument* past the declaration is precisely the request a
-//! conforming relation must refuse. What the layer can do honestly is report that it
-//! read to the producer's bound and no further, and it does.
+//! cannot rise above the declaration to go looking either — the planner's
+//! `derived_bound` derives every depth downward from the declared row count, and the
+//! one row it can add is the floor that keeps a zero-declaring producer's relation
+//! invoked, so no planner-written plan asks for more, and raising the *argument* past
+//! the declaration is precisely the request a conforming relation must refuse. What
+//! the layer can do honestly is report that it read to the producer's bound and no
+//! further, and it does.
 //!
 //! Which of the two cases a unit was emitted for is not recorded beside its query: it
 //! is read *off* that query, by [`read_reach`], because "the producer was handed the
@@ -1454,9 +1456,9 @@ fn emitted_limit(depth: ProbedDepth) -> u32 {
 /// then their query form as a sub-`SELECT`, with this layer's bound on the result of
 /// the whole of it.
 ///
-/// `body_at` is where that prologue ends, as [`prologue_end`] read it off the parse
-/// [`StratumUnit::new`] already ran; `text[..body_at]` is hoisted in front of the
-/// wrapper and `text[body_at..]` goes inside it.
+/// `body_at` is where that prologue ends, as [`hoistable_clauses`] read it off the
+/// parse [`StratumUnit::new`] already ran; `text[..body_at]` is hoisted in front of
+/// the wrapper and `text[body_at..]` goes inside it.
 ///
 /// The layer's bound **wraps** the caller's text rather than following it, and the
 /// difference is the difference between a query and an invalid one. Appended, the two
@@ -1616,10 +1618,10 @@ fn hoistable_clauses(text: &str) -> Result<(usize, Option<Range<usize>>), UnitEr
 /// [`execute`](crate::execute) is allowed to report.
 ///
 /// It is called twice over one unit and must agree with itself both times: once at
-/// emission, where [`place`] needs the value to occupy the argument slot and derive
-/// the access mode it satisfies, and once per read of the unit's text, where
-/// [`RenderedQuery::text`] renders it into that slot. Same function, same two
-/// arguments, both of them facts the unit holds.
+/// emission, where [`place`](crate::matching::place) needs the value to occupy the
+/// argument slot and derive the access mode it satisfies, and once per read of the
+/// unit's text, where [`RenderedQuery::text`] renders it into that slot. Same
+/// function, same two arguments, both of them facts the unit holds.
 fn depth_argument(depth: ProbedDepth, declared_rows: Option<u64>) -> u32 {
     let probe = depth.probe();
     match declared_rows {
@@ -1714,9 +1716,9 @@ fn malformed(binding: &ProducerBinding, what: &str) -> AdmissionError {
 
 /// A placed value that has no SPARQL constant form.
 ///
-/// [`place`] proves every slot it fills renders, so reaching this means the
-/// registry moved between the two calls; it is reported on the same dimension
-/// because it is the same claim.
+/// [`place`](crate::matching::place) proves every slot it fills renders, so reaching
+/// this means the registry moved between the two calls; it is reported on the same
+/// dimension because it is the same claim.
 fn unrenderable(binding: &ProducerBinding, error: &RenderError) -> AdmissionError {
     match Iri::parse(&binding.producer) {
         Ok(producer) => AdmissionError::UnsatisfiablePlacement {

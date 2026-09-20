@@ -279,8 +279,9 @@
 //! becomes a value: an estimate may narrow a read, and a declaration may bound
 //! it, but only the producer can report that there was nothing to read, through
 //! a receipt fusion checks against the rows it pulled. So the derived depth is
-//! floored at one — see [`capped`] — and a stratum planned at depth one is a
-//! stratum whose relation is still invoked and still asked.
+//! floored at one — see [`derived_bound`], which applies that floor to the whole
+//! derivation before [`depth_from`] clamps it — and a stratum planned at depth one
+//! is a stratum whose relation is still invoked and still asked.
 //!
 //! That floor covers the registry's own zero as well as the provider's. A
 //! producer whose every declared access mode promises zero rows per invocation
@@ -1255,9 +1256,9 @@ fn combined_selectivity_ppm(
 /// unusable: it constrains nothing (neither endpoint), or it can match nothing
 /// (a lower endpoint above its upper). The second is checked for a numeric range
 /// and not for a temporal one, and the asymmetry is the point rather than an
-/// omission: a numeric endpoint is an exact [`Fixed`] this layer can order, while
-/// a temporal endpoint is the caller's own lexical form, which this layer does
-/// not parse and therefore cannot order — comparing two calendar lexicals as
+/// omission: a numeric endpoint is an exact [`Fixed`](purrdf_text::Fixed) this layer
+/// can order, while a temporal endpoint is the caller's own lexical form, which this
+/// layer does not parse and therefore cannot order — comparing two calendar lexicals as
 /// strings would refuse legitimate intervals whose encoding is not
 /// lexicographically ordered. A degenerate range whose endpoints are equal is a
 /// single point and is admitted.
@@ -1326,7 +1327,7 @@ fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
 /// probe row past that depth is not a number an emitted bound can hold, so
 /// admitting it here would have named a ceiling the layer cannot serve a read at.
 /// A bound of zero is admitted too, and floored to the single probing row by
-/// [`capped`]: a bound may narrow a read and may never eliminate one.
+/// [`derived_bound`]: a bound may narrow a read and may never eliminate one.
 ///
 /// A *declared* row bound past the same ceiling is not refused anywhere — it is
 /// recorded at the ceiling, for the reason in this module's header. The asymmetry

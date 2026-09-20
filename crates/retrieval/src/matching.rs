@@ -18,8 +18,8 @@
 //! field equality over the declaration. [`place`] answers *where each facet of
 //! that term goes* and *what constant it becomes*, by reading the same
 //! declaration's [`TermPlacement`]s. The two halves are paired in the registry's
-//! [`AcceptedTerm`] so a reader cannot mis-align them, and they are paired here
-//! for the same reason.
+//! [`AcceptedTerm`](purrdf_sparql_eval::AcceptedTerm) so a reader cannot mis-align
+//! them, and they are paired here for the same reason.
 //!
 //! # Matching is not receiving
 //!
