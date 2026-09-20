@@ -2589,3 +2589,59 @@ fn a_named_cause_names_the_number_recorded() {
         "the sweep reaches every cause"
     );
 }
+
+/// Every stratum's derivation carries the row bound ITS OWN producer declared.
+///
+/// The declaration reaches `DepthInputs.declared` from a map keyed by stratum,
+/// and this is the witness that the key and the value travel together. Four
+/// surviving strata declare four different row counts, the provider narrows none
+/// of them, and no request bound licenses a prefix — so each depth IS that
+/// stratum's declaration and no two of them are the same number. A build that
+/// read one stratum's bound under another's key lands on the wrong depth for at
+/// least two of the four, and a build that defaulted a bound it could not find
+/// records `declared: 0` and a floored depth of one, which is neither of the
+/// four numbers below.
+#[test]
+fn every_stratum_records_the_row_bound_its_own_producer_declared() {
+    let planned = plan(
+        &mixed_request(),
+        &mixed_registry(),
+        // Reports the request predicate and nothing about any stratum, so
+        // nothing lowers a declaration and the depth is the declaration.
+        &no_stratum_cardinality(),
+    )
+    .expect("plans");
+
+    for (stratum, declared) in [
+        (ex("stratum/universal"), 200_u64),
+        (ex("stratum/text"), 100),
+        (ex("stratum/graph"), 50),
+    ] {
+        let inputs = planned
+            .stratum_derivations
+            .get(&iri(&stratum))
+            .unwrap_or_else(|| panic!("{stratum} records a derivation"));
+        assert_eq!(
+            inputs.declared, declared,
+            "{stratum} records the bound its own producer declared"
+        );
+        assert_eq!(
+            inputs.cardinality, None,
+            "{stratum} was not measured, so nothing narrowed the declaration"
+        );
+        assert_eq!(
+            planned.stratum_depths[&iri(&stratum)],
+            u32::try_from(declared).expect("the fixture bounds fit a read depth"),
+            "{stratum} reads exactly as deep as it declared"
+        );
+    }
+    assert_eq!(
+        planned.stratum_derivations.len(),
+        3,
+        "three strata survived — the quoted one's producer accepts no term this \
+         request carries — and a fourth would mean a bound arrived from nowhere"
+    );
+    planned
+        .certify()
+        .expect("each depth follows from the inputs recorded beside it");
+}

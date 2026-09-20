@@ -633,11 +633,17 @@ pub fn plan(
     // holds, `None` when it does not and the registry's own bound stands. Decided
     // once, from the shape of the declarations, with no caller hint in it.
     let prefix = licensed_prefix(request.bound, &surviving_declarations);
-    let strata: BTreeSet<Iri> = declared_bounds.keys().cloned().collect();
-    let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(strata.len());
+    // Walked as pairs, not as a key set that is then looked up. A lookup has a
+    // miss to answer for, and every answer available to it is a lie about a
+    // number the depth is derived from — which is why the *other* reading of
+    // this same field, at step 4 above, is `PlanError::UndeclaredRowBound`
+    // rather than a default. Here the declaration arrives with its stratum and
+    // no default is expressible, so the refusal has nothing to guard. The map is
+    // a `BTreeMap`, so the walk is ascending by stratum and two plans of one
+    // request visit the strata in one order.
+    let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(declared_bounds.len());
     let mut stratum_derivations: BTreeMap<Iri, DepthInputs> = BTreeMap::new();
-    for stratum in &strata {
-        let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
+    for (stratum, &declared) in &declared_bounds {
         let reached = terms_at(&request.terms, reaching.get(stratum));
         // Consult once, record what was consulted, then derive from the record.
         // The depth and the evidence beside it are therefore the same numbers
