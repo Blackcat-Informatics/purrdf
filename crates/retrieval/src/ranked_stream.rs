@@ -476,6 +476,44 @@ pub enum ProducerReceipt {
         /// number of rows it emitted, which is what fusion measures it against.
         rank: u64,
     },
+    /// The read ran a query text this layer did not write, and that text is the
+    /// stopper: whether anything lay below `rank` could not be observed.
+    ///
+    /// The ending of a unit a caller assembled itself
+    /// ([`StratumUnit::new`](crate::StratumUnit::new)). The retrieval layer renders a
+    /// bound one row past the planned depth onto such a text, but only on its
+    /// *outside*; a `LIMIT` on a sub-`SELECT` inside it, or a pattern that matches
+    /// less than the producer holds, cuts the read before that bound is consulted and
+    /// is no part of what the layer reads of that text.
+    ///
+    /// # Why this is none of the three endings beside it
+    ///
+    /// * [`Self::Exhausted`] would claim the rows ran out, on the strength of a probe
+    ///   slot that may never have existed. That is this layer's strongest completeness
+    ///   claim, minted from a text whose bounds the layer never read — and it is
+    ///   exactly the defect this vocabulary exists to prevent, reached through the one
+    ///   door that stayed open longest.
+    /// * [`Self::DepthReached`] would name the planned depth as the stopper and assert
+    ///   that a further row existed. Neither half is known: the depth may not have
+    ///   been reached at all.
+    /// * [`Self::RowBoundReached`] would blame the producer's registration for a cut
+    ///   the caller's own text may have made.
+    ///
+    /// A consumer that wants the question answered has one honest move, and it is a
+    /// different move from any neighbour's: run the query
+    /// [`compile`](crate::compile) renders, whose bounds this layer wrote and can
+    /// therefore reason about.
+    ///
+    /// `rank` is measured like [`Self::DepthReached`]'s: a caller may run its own
+    /// query, and the stream may not miscount what it emitted
+    /// ([`ProtocolError::ForgedReceipt`]).
+    SuppliedQueryEnded {
+        /// The last 1-based rank the stream emitted, which — ranks being contiguous
+        /// from one — is also the number of rows it emitted, and is what fusion
+        /// measures it against. Zero for a read that emitted nothing, which is not a
+        /// claim that there was nothing to emit.
+        rank: u64,
+    },
     /// The producer stopped at a declared score bound rather than at
     /// exhaustion.
     CeilingReached {

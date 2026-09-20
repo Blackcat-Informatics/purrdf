@@ -10,20 +10,22 @@
 //!
 //! Both run the [`NativeSparqlEngine`] over the borrowed `Arc<RdfDataset>` — there is
 //! no oxigraph SPARQL engine and no materialized `Store`. Focus-node substitution
-//! uses [`SparqlRequest::substitutions`] (the native replacement for oxigraph's
-//! `PreparedSparqlQuery::substitute_variable`,  GAP-A).
+//! uses [`Prebinding`] (the native replacement for oxigraph's
+//! `PreparedSparqlQuery::substitute_variable`,  GAP-A) — the borrowed-name
+//! pre-binding list the evaluator's interned entry points take, so a validation
+//! does not re-allocate the shape's variable names once per focus node.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, RdfDataset};
-use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
-    AggregateRegistry, GovernedOutcome, GovernorState, NativeSparqlEngine,
-    PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, UserFunctionRegistry, ValueAggregate,
-    fold_values, order_values,
+    AggregateRegistry, GovernorState, InternedGoverned, InternedOutcome, InternedRequest,
+    InternedSolutions, NativeSparqlEngine, Prebinding, PropertyFunctionRegistry, QueryOptions,
+    ShaclPrebinding, UserFunctionRegistry, ValueAggregate, fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -61,26 +63,32 @@ pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
     select: &str,
     substitutions: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
-    let subs: Vec<(String, TermValue)> = substitutions
+    // The NAME borrows: a target's variable names are text out of the shapes
+    // graph, already allocated there, and identical on every evaluation.
+    let subs: Vec<Prebinding<'_>> = substitutions
         .iter()
-        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
+        })
         .collect();
-    let solutions =
-        run_select_generic_view(dataset, select, &subs).map_err(|e| format!("SPARQLTarget {e}"))?;
-
-    let this_index = column_index(&solutions.0, "this");
-
-    let mut nodes: Vec<Term> = Vec::new();
-    for row in &solutions.1 {
-        match this_index.and_then(|i| row.get(i)).and_then(Option::as_ref) {
-            Some(value) => nodes.push(term_value_to_native(value)),
-            None => {
-                return Err(
-                    "SPARQLTarget query produced a solution row with no ?this binding".to_owned(),
-                );
+    let mut nodes = run_select_generic_view(dataset, select, &subs, |solutions| {
+        let this_index = solutions.column("this");
+        let mut nodes: Vec<Term> = Vec::with_capacity(solutions.len());
+        for row in solutions.rows() {
+            match this_index.and_then(|i| solutions.cell(row, i)) {
+                Some(value) => nodes.push(term_value_to_native(&value)),
+                // Unprefixed: the `SPARQLTarget ` prefix is added by the one
+                // `map_err` below, so both the engine's errors and this one are
+                // spelled the same way for a reader.
+                None => {
+                    return Err("query produced a solution row with no ?this binding".to_owned());
+                }
             }
         }
-    }
+        Ok(nodes)
+    })
+    .map_err(|e| format!("SPARQLTarget {e}"))?;
 
     crate::term::sort_terms_canonical(&mut nodes);
     nodes.dedup();
@@ -158,73 +166,81 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     // unsubstituted query returns no rows and silently drops the violation. The parse
     // is memoized by the thread-local engine's plan cache, so per-focus evaluation
     // re-runs the plan, not the parse.
-    let subs = [("this".to_owned(), focus.to_term_value())];
-    let (variables, rows) = run_select_with_shacl_prebinding_view(
-        dataset,
-        select,
-        &subs,
-        shapes_graph_iri,
-        current_shape,
-    )
-    .map_err(|e| format!("SPARQLConstraint {e}"))?;
-    let path_index = column_index(&variables, "path");
-    let value_index = column_index(&variables, "value");
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3);
+    subs.push(Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    });
+    push_shape_context(&mut subs, shapes_graph_iri, current_shape);
+    run_select_with_shacl_prebinding_view(dataset, select, &subs, |solutions| {
+        let path_index = solutions.column("path");
+        let value_index = solutions.column("value");
 
-    // Message templating (§5.3.3) needs the solution's own bindings, so the buffer
-    // is built once and refilled per row — and only when there is a message to
-    // render, so the overwhelmingly common message-less constraint pays nothing.
-    let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
-        Vec::with_capacity(variables.len() + 1)
-    } else {
-        Vec::new()
-    };
+        // Message templating (§5.3.3) needs the solution's own bindings, so the
+        // buffer is built once and refilled per row — and only when there is a
+        // message to render, so the overwhelmingly common message-less constraint
+        // pays nothing.
+        let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+            Vec::with_capacity(solutions.variables().len() + 1)
+        } else {
+            Vec::new()
+        };
 
-    let mut out: Vec<ValidationResult> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let result_path = path_index
-            .and_then(|i| row.get(i))
-            .and_then(Option::as_ref)
-            .map(term_value_to_native);
-        // SHACL-SPARQL result mapping (§5.3.1): sh:value is the solution's
-        // ?value binding when present, otherwise the FOCUS NODE ($this).
-        let value = value_index
-            .and_then(|i| row.get(i))
-            .and_then(Option::as_ref)
-            .map(term_value_to_native)
-            .or_else(|| Some(focus.clone()));
-        // §5.3.3: render the message against THIS solution. The row's own bindings
-        // come first so a projected `?this` wins; `$this` is added only as a
-        // fallback because it is pre-bound (line ~158) whether or not it is
-        // projected. Nothing else is synthesized — in particular `{$value}` is NOT
-        // filled from the focus-node default above, because that default is a rule
-        // about `sh:value`, not a variable binding the solution actually carries.
-        let message = message.map(|m| {
-            template_bindings.clear();
-            template_bindings.extend(variables.iter().zip(row.iter()).filter_map(|(var, cell)| {
-                cell.as_ref()
-                    .map(|tv| (var.clone(), term_value_to_native(tv)))
-            }));
-            if !template_bindings.iter().any(|(n, _)| n == "this") {
-                template_bindings.push(("this".to_owned(), focus.clone()));
-            }
-            crate::components::substitute_message_templates(m, &template_bindings)
-        });
-        out.push(ValidationResult {
-            focus_node: focus.clone(),
-            result_path,
-            path_structure: None,
-            value,
-            source_constraint_component: component.clone(),
-            source_shape: source_shape.clone(),
-            severity: severity.clone(),
-            message,
-            source_box_roles: vec![],
-            path_box_roles: vec![],
-            result_box_roles: vec![],
-            attributions: vec![],
-        });
-    }
-    Ok(out)
+        let mut out: Vec<ValidationResult> = Vec::with_capacity(solutions.len());
+        for row in solutions.rows() {
+            let result_path = path_index
+                .and_then(|i| solutions.cell(row, i))
+                .as_ref()
+                .map(term_value_to_native);
+            // SHACL-SPARQL result mapping (§5.3.1): sh:value is the solution's
+            // ?value binding when present, otherwise the FOCUS NODE ($this).
+            let value = value_index
+                .and_then(|i| solutions.cell(row, i))
+                .as_ref()
+                .map(term_value_to_native)
+                .or_else(|| Some(focus.clone()));
+            // §5.3.3: render the message against THIS solution. The row's own
+            // bindings come first so a projected `?this` wins; `$this` is added only
+            // as a fallback because it is pre-bound above whether or not it is
+            // projected. Nothing else is synthesized — in particular `{$value}` is
+            // NOT filled from the focus-node default above, because that default is
+            // a rule about `sh:value`, not a variable binding the solution actually
+            // carries.
+            //
+            // This is also the ONE reader of every column, and the reason the
+            // interned egress converts per cell rather than per row: a constraint
+            // with no `sh:message` never asks for a cell it does not report.
+            let message = message.map(|m| {
+                template_bindings.clear();
+                for (index, var) in solutions.variables().iter().enumerate() {
+                    if let Some(value) = solutions.cell(row, index) {
+                        template_bindings
+                            .push((var.as_str().to_owned(), term_value_to_native(&value)));
+                    }
+                }
+                if !template_bindings.iter().any(|(n, _)| n == "this") {
+                    template_bindings.push(("this".to_owned(), focus.clone()));
+                }
+                crate::components::substitute_message_templates(m, &template_bindings)
+            });
+            out.push(ValidationResult {
+                focus_node: focus.clone(),
+                result_path,
+                path_structure: None,
+                value,
+                source_constraint_component: component.clone(),
+                source_shape: source_shape.clone(),
+                severity: severity.clone(),
+                message,
+                source_box_roles: vec![],
+                path_box_roles: vec![],
+                result_box_roles: vec![],
+                attributions: vec![],
+            });
+        }
+        Ok(out)
+    })
+    .map_err(|e| format!("SPARQLConstraint {e}"))
 }
 
 /// Evaluate a single SPARQL scalar expression against `dataset`, with `args`
@@ -257,35 +273,71 @@ pub fn eval_scalar_expr(
 }
 
 /// Internal view-generic implementation of [`eval_scalar_expr`].
+///
+/// Assembles the wrapper query text and delegates to [`eval_scalar_query_view`].
+/// Every in-crate caller is on the plan path and calls that directly with text
+/// assembled once; this spelling exists for [`eval_scalar_expr`]'s published
+/// signature, which takes a bare expression.
 pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     sparql_expr: &str,
     args: &[(String, Term)],
 ) -> Result<Option<Term>, String> {
-    let select = format!("SELECT (({sparql_expr}) AS ?result) WHERE {{}}");
-    let subs: Vec<(String, TermValue)> = args
-        .iter()
-        .map(|(name, term)| (name.clone(), term.to_term_value()))
-        .collect();
-    let (variables, rows) = run_select_generic_view(dataset, &select, &subs)
-        .map_err(|e| format!("scalar expression {e}"))?;
+    eval_scalar_query_view(dataset, &scalar_expr_query(sparql_expr), args)
+}
 
-    if rows.len() > 1 {
-        return Err(format!(
-            "scalar expression produced {} solution rows (expected exactly one)",
-            rows.len()
-        ));
-    }
-    let Some(row) = rows.first() else {
-        // No row at all is a degenerate/undef result → no value.
-        return Ok(None);
-    };
-    let result_index = column_index(&variables, "result");
-    let value = result_index
-        .and_then(|i| row.get(i))
-        .and_then(Option::as_ref)
-        .map(term_value_to_native);
-    Ok(value)
+/// Wrap a SPARQL scalar expression in the single-row SELECT that evaluates it.
+///
+/// The empty `WHERE` yields exactly one solution, so `?result` is bound to the
+/// expression's single value (or left unbound on a SPARQL error). The text is a
+/// function of the EXPRESSION alone, which is a constant of the node expression —
+/// see [`eval_scalar_query_view`] for why that matters.
+pub(crate) fn scalar_expr_query(sparql_expr: &str) -> String {
+    format!("SELECT (({sparql_expr}) AS ?result) WHERE {{}}")
+}
+
+/// Evaluate a pre-assembled single-row scalar SELECT, with `args` pre-bound.
+///
+/// # Why the text is a parameter
+///
+/// The query text is a constant of the node expression: the callee IRI and the
+/// argument arity are both fixed when the shapes graph is lowered. Assembling it
+/// per CALL — which is what taking a bare expression here forced — put a `format!`
+/// inside the cartesian-product loop over argument tuples in
+/// [`crate::expression`], and made the engine's never-evicted plan cache hash a
+/// freshly allocated key on every one of those calls. It is now assembled once, at
+/// plan time, for the same reason the aggregate and order-by paths bypass query
+/// text altogether.
+pub(crate) fn eval_scalar_query_view<D: DatasetView + Sync + FocusGraphSource>(
+    dataset: &D,
+    select: &str,
+    args: &[(String, Term)],
+) -> Result<Option<Term>, String> {
+    let subs: Vec<Prebinding<'_>> = args
+        .iter()
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
+        })
+        .collect();
+    run_select_generic_view(dataset, select, &subs, |solutions| {
+        if solutions.len() > 1 {
+            return Err(format!(
+                "produced {} solution rows (expected exactly one)",
+                solutions.len()
+            ));
+        }
+        let Some(row) = solutions.rows().first() else {
+            // No row at all is a degenerate/undef result → no value.
+            return Ok(None);
+        };
+        Ok(solutions
+            .column("result")
+            .and_then(|i| solutions.cell(row, i))
+            .as_ref()
+            .map(term_value_to_native))
+    })
+    .map_err(|e| format!("scalar expression {e}"))
 }
 
 /// Run a SHACL 1.2 SPARQL-based node expression (SPARQL Extensions §6.1
@@ -293,7 +345,7 @@ pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync + FocusGraphSource>(
 /// projected `variable`.
 ///
 /// `bindings` pre-binds the focus node (`this`) and every scope variable through
-/// the SAME [`SparqlRequest::substitutions`] mechanism [`eval_scalar_expr`] uses
+/// the SAME [`Prebinding`] mechanism [`eval_scalar_expr`] uses
 /// for its arguments — the specification's "focusNode pre-bound to variable
 /// `$this` and scope variables pre-bound with matching names".
 ///
@@ -316,22 +368,28 @@ pub(crate) fn eval_select_nodes_view<D: DatasetView + Sync + FocusGraphSource>(
     variable: &str,
     bindings: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
-    let subs: Vec<(String, TermValue)> = bindings
+    let subs: Vec<Prebinding<'_>> = bindings
         .iter()
-        .map(|(name, term)| (name.clone(), term.to_term_value()))
-        .collect();
-    let (variables, rows) = run_select_generic_view(dataset, select, &subs)?;
-    let index = column_index(&variables, variable).ok_or_else(|| {
-        format!("SELECT result has no ?{variable} column, but that is the projected variable")
-    })?;
-    Ok(rows
-        .iter()
-        .filter_map(|row| {
-            row.get(index)
-                .and_then(Option::as_ref)
-                .map(term_value_to_native)
+        .map(|(name, term)| Prebinding {
+            variable: name.as_str(),
+            value: term.to_term_value(),
         })
-        .collect())
+        .collect();
+    run_select_generic_view(dataset, select, &subs, |solutions| {
+        let index = solutions.column(variable).ok_or_else(|| {
+            format!("SELECT result has no ?{variable} column, but that is the projected variable")
+        })?;
+        Ok(solutions
+            .rows()
+            .iter()
+            .filter_map(|row| {
+                solutions
+                    .cell(row, index)
+                    .as_ref()
+                    .map(term_value_to_native)
+            })
+            .collect())
+    })
 }
 
 /// Evaluate a SPARQL set aggregate (`"MIN"` / `"MAX"` / `"SUM"`) over an explicit
@@ -440,10 +498,6 @@ pub(crate) fn eval_order_view<D: DatasetView + Sync + FocusGraphSource>(
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
-
-/// A materialized SELECT result: the projected variable names and the rows of
-/// optional term-value cells.
-type SelectRows = (Vec<String>, Vec<Vec<Option<TermValue>>>);
 
 thread_local! {
     /// A per-thread [`NativeSparqlEngine`] reused across SHACL-AF evaluations so its
@@ -604,13 +658,31 @@ pub fn current_governors() -> Option<Arc<GovernorState>> {
 /// folding it into a report would produce a `conforms` that means nothing. So the trip
 /// becomes an `Err` on the spot; the governed validation entry recovers the *typed* trip
 /// from the shared state, which latched it, and reports that instead of a report.
-fn run_query_view<D: DatasetView + Sync + FocusGraphSource>(
+///
+/// # The door is an INTERNED one
+///
+/// `visit` is run inside the evaluation, on
+/// [`purrdf_sparql_eval::InternedOutcome`] — the rows as the evaluator holds them,
+/// over interned ids. It is not run on a [`purrdf_core::SparqlResult`], and that
+/// is deliberate: building one copies every projected cell into an owned
+/// `TermValue`, every row into a `Vec` and every variable name into a `String`,
+/// then builds the auxiliary constructed-cell graph — and SHACL reads at most
+/// three columns (`?this`, `?path`, `?value`) out of any of it, once per focus
+/// node. Crossing that boundary per focus node threw away every interning gain the
+/// evaluator had just made. An additive accessor on `SparqlResult` could not have
+/// fixed it: `SparqlResult::Solutions` OWNS its rows, so the copy has already
+/// happened by the time any accessor exists to be called.
+///
+/// `SparqlResult` is untouched and remains the egress for every generic
+/// `SparqlEngine` consumer. SHACL is simply a different consumer, not a mode.
+fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     query: &str,
-    substitutions: &[(String, TermValue)],
+    substitutions: &[Prebinding<'_>],
     prebind: ShaclPrebinding,
     bnode_mint_prefix: Option<&str>,
-) -> Result<SparqlResult, String> {
+    visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
     // Snapshot both ambient scopes (an `Arc` clone each) BEFORE evaluating, so no
     // `RefCell` borrow is held across the query: a `sh:sparql` body whose evaluation
     // re-enters SHACL validation (a nested shape / SHACL-AF function) installs its own
@@ -638,7 +710,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource>(
     let registry = functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS);
     let property_functions = relations.as_deref().unwrap_or(&EMPTY_RELATIONS);
     let agg_registry = aggregates.as_deref().unwrap_or(&EMPTY_AGGREGATES);
-    let request = SparqlRequest {
+    let request = InternedRequest {
         query,
         base_iri: None,
         substitutions,
@@ -663,16 +735,46 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource>(
 
     let Some(state) = governors else {
         return SPARQL_ENGINE
-            .with(|engine| engine.query_with_options_view(dataset, request, options))
-            .map_err(|e| format!("query evaluation error: {e}"));
+            .with(|engine| engine.query_interned_view(dataset, request, options, visit))
+            .map_err(|e| format!("query evaluation error: {e}"))?;
     };
 
     let outcome = SPARQL_ENGINE
-        .with(|engine| engine.query_governed_in_operation(dataset, request, options, &state))
+        .with(|engine| {
+            engine.query_governed_interned_in_operation(dataset, request, options, &state, visit)
+        })
         .map_err(|e| format!("query evaluation error: {e}"))?;
     match outcome {
-        GovernedOutcome::Complete { result, .. } => Ok(result),
-        GovernedOutcome::BudgetExhausted(exhausted) => Err(format!(
+        InternedGoverned::Complete {
+            value, relations, ..
+        } => {
+            // The governed lane RECORDS a relation that declared its index was not
+            // whole, instead of refusing it at the seam the way the ungoverned lane
+            // does, because its receipt has a slot to report it on — and this is where
+            // that receipt is read. A conformance verdict computed over an index that
+            // was not whole is not a verdict, for exactly the reason the truncated arm
+            // below is not one, so the incompleteness is refused here by name rather
+            // than discarded along with the receipt it rode in on.
+            let incomplete: Vec<String> = relations
+                .witness
+                .iter()
+                .flat_map(|(iri, attested)| {
+                    attested
+                        .incompleteness
+                        .iter()
+                        .map(move |reason| format!("<{iri}>: {reason}"))
+                })
+                .collect();
+            if !incomplete.is_empty() {
+                return Err(format!(
+                    "a relation this query invoked declares its index was not whole ({}); a \
+                     conformance verdict cannot be computed over an index that was not whole",
+                    incomplete.join("; ")
+                ));
+            }
+            value
+        }
+        InternedGoverned::BudgetExhausted(exhausted) => Err(format!(
             "validation budget exhausted: {}; a conformance verdict cannot be computed \
              from a truncated solution bag",
             exhausted.tripped
@@ -831,63 +933,108 @@ pub fn current_call_depth() -> u32 {
     CURRENT_CALL_DEPTH.with(std::cell::Cell::get)
 }
 
+/// Append the SHACL-SPARQL *shape context* pre-bindings — `$shapesGraph` and
+/// `$currentShape` — to a substitution buffer the caller owns.
+///
+/// It is the CALLER's buffer, deliberately. These two bindings are constants of
+/// the shape, so appending them inside the run helper meant re-allocating both
+/// names, and copying every substitution the caller had already built, once per
+/// focus node (or, on the custom-component ASK path, once per VALUE NODE). A
+/// caller that runs the same query for many nodes now builds the whole
+/// substitution list once and overwrites only the cells that actually vary.
+pub(crate) fn push_shape_context(
+    subs: &mut Vec<Prebinding<'_>>,
+    shapes_graph_iri: Option<&str>,
+    current_shape: Option<&Term>,
+) {
+    if let Some(iri) = shapes_graph_iri {
+        subs.push(Prebinding {
+            variable: "shapesGraph",
+            value: TermValue::Iri(iri.to_owned()),
+        });
+    }
+    if let Some(shape) = current_shape {
+        subs.push(Prebinding {
+            variable: "currentShape",
+            value: shape.to_term_value(),
+        });
+    }
+}
+
+/// Run a SELECT query and project its interned solutions through `project`.
+///
+/// `prebind` selects the rewrite: [`ShaclPrebinding::None`] is the generic
+/// substitution path SHACL-AF node expressions and `sh:SPARQLTarget` use;
+/// [`ShaclPrebinding::Applied`] adds the SHACL-specific FILTER/EXISTS expression
+/// substitution and `BOUND($v)` → `true` that `sh:sparql` constraint and component
+/// bodies need.
+///
+/// A non-SELECT result is refused here rather than inside each caller, so the
+/// three wordings stay one wording.
+fn run_select_view<D: DatasetView + Sync + FocusGraphSource, R>(
+    dataset: &D,
+    select: &str,
+    substitutions: &[Prebinding<'_>],
+    prebind: ShaclPrebinding,
+    project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    run_query_view(
+        dataset,
+        select,
+        substitutions,
+        prebind,
+        None,
+        |outcome| match outcome {
+            InternedOutcome::Solutions(solutions) => project(&solutions),
+            InternedOutcome::Boolean(_) => {
+                Err("query must be a SELECT, got a boolean (ASK) result".to_owned())
+            }
+            InternedOutcome::Graph(_) => {
+                Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
+            }
+        },
+    )
+}
+
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
-/// with variable substitutions.
+/// with variable substitutions, projecting its interned solutions.
 ///
 /// This is the path used by SHACL-AF node expressions (scalar, aggregate,
 /// order-by). It does NOT apply the SHACL-specific pre-binding rewrite used for
 /// `sh:sparql` constraint/component bodies.
-pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource>(
+pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     select: &str,
-    substitutions: &[(String, TermValue)],
-) -> Result<SelectRows, String> {
-    let result = run_query_view(dataset, select, substitutions, ShaclPrebinding::None, None)?;
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => Ok((variables, rows)),
-        SparqlResult::Boolean(_) => {
-            Err("query must be a SELECT, got a boolean (ASK) result".to_owned())
-        }
-        SparqlResult::Graph(_) => {
-            Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
-        }
-    }
+    substitutions: &[Prebinding<'_>],
+    project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    run_select_view(
+        dataset,
+        select,
+        substitutions,
+        ShaclPrebinding::None,
+        project,
+    )
 }
 
-/// Run a SELECT query over the dataset using SHACL-SPARQL pre-binding semantics.
+/// Run a SELECT query over the dataset using SHACL-SPARQL pre-binding semantics,
+/// projecting its interned solutions.
 ///
-/// Pre-binds `$this`, and when known `$shapesGraph` and `$currentShape`, then
-/// applies the SHACL-specific substitution rewrite (FILTER/EXISTS expression
-/// substitution and `BOUND($v)` → `true`).
-pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
+/// `substitutions` is the COMPLETE pre-binding list, shape context included; see
+/// [`push_shape_context`] for why it is assembled by the caller.
+pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource, R>(
     dataset: &D,
     select: &str,
-    substitutions: &[(String, TermValue)],
-    shapes_graph_iri: Option<&str>,
-    current_shape: Option<&Term>,
-) -> Result<SelectRows, String> {
-    let mut subs: Vec<(String, TermValue)> = substitutions.to_vec();
-    if let Some(iri) = shapes_graph_iri {
-        subs.push(("shapesGraph".to_owned(), TermValue::Iri(iri.to_owned())));
-    }
-    if let Some(shape) = current_shape {
-        subs.push(("currentShape".to_owned(), shape.to_term_value()));
-    }
-
-    let result = run_query_view(dataset, select, &subs, ShaclPrebinding::Applied, None)?;
-    match result {
-        SparqlResult::Solutions {
-            variables, rows, ..
-        } => Ok((variables, rows)),
-        SparqlResult::Boolean(_) => {
-            Err("query must be a SELECT, got a boolean (ASK) result".to_owned())
-        }
-        SparqlResult::Graph(_) => {
-            Err("query must be a SELECT, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
-        }
-    }
+    substitutions: &[Prebinding<'_>],
+    project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
+) -> Result<R, String> {
+    run_select_view(
+        dataset,
+        select,
+        substitutions,
+        ShaclPrebinding::Applied,
+        project,
+    )
 }
 
 /// Run a CONSTRUCT query using SHACL-SPARQL pre-binding semantics, returning the
@@ -912,68 +1059,60 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + Focu
 pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     construct: &str,
-    substitutions: &[(String, TermValue)],
-    shapes_graph_iri: Option<&str>,
-    current_shape: Option<&Term>,
+    substitutions: &[Prebinding<'_>],
     bnode_mint_prefix: Option<&str>,
 ) -> Result<Arc<RdfDataset>, String> {
-    let mut subs: Vec<(String, TermValue)> = substitutions.to_vec();
-    if let Some(iri) = shapes_graph_iri {
-        subs.push(("shapesGraph".to_owned(), TermValue::Iri(iri.to_owned())));
-    }
-    if let Some(shape) = current_shape {
-        subs.push(("currentShape".to_owned(), shape.to_term_value()));
-    }
-
-    let result = run_query_view(
+    run_query_view(
         dataset,
         construct,
-        &subs,
+        substitutions,
         ShaclPrebinding::Applied,
         bnode_mint_prefix,
-    )?;
-    match result {
-        SparqlResult::Graph(graph) => Ok(graph),
-        SparqlResult::Solutions { .. } => {
-            Err("query must be a CONSTRUCT, got a SELECT result".to_owned())
-        }
-        SparqlResult::Boolean(_) => {
-            Err("query must be a CONSTRUCT, got a boolean (ASK) result".to_owned())
-        }
-    }
+        |outcome| match outcome {
+            // The graph is already frozen and shared by `Arc`; taking it out of the
+            // evaluation is a handle clone, not a copy of the derived triples.
+            InternedOutcome::Graph(graph) => Ok(Arc::clone(graph)),
+            InternedOutcome::Solutions(_) => {
+                Err("query must be a CONSTRUCT, got a SELECT result".to_owned())
+            }
+            InternedOutcome::Boolean(_) => {
+                Err("query must be a CONSTRUCT, got a boolean (ASK) result".to_owned())
+            }
+        },
+    )
 }
 
 /// Run an ASK query using SHACL-SPARQL pre-binding semantics.
+///
+/// An ASK materializes NO rows on any path: the evaluator answers the boolean from
+/// the emptiness of the solution bag and never crosses a cell into the egress
+/// model. It still runs through [`run_query_view`] rather than beside it, because
+/// the one-door property is about where SHACL may reach the engine, not about
+/// which results are expensive.
+///
+/// `substitutions` is the COMPLETE pre-binding list, shape context included; see
+/// [`push_shape_context`].
 pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     ask: &str,
-    substitutions: &[(String, TermValue)],
-    shapes_graph_iri: Option<&str>,
-    current_shape: Option<&Term>,
+    substitutions: &[Prebinding<'_>],
 ) -> Result<bool, String> {
-    let mut subs: Vec<(String, TermValue)> = substitutions.to_vec();
-    if let Some(iri) = shapes_graph_iri {
-        subs.push(("shapesGraph".to_owned(), TermValue::Iri(iri.to_owned())));
-    }
-    if let Some(shape) = current_shape {
-        subs.push(("currentShape".to_owned(), shape.to_term_value()));
-    }
-
-    let result = run_query_view(dataset, ask, &subs, ShaclPrebinding::Applied, None)?;
-    match result {
-        SparqlResult::Boolean(b) => Ok(b),
-        SparqlResult::Solutions { .. } => {
-            Err("query must be an ASK, got a SELECT result".to_owned())
-        }
-        SparqlResult::Graph(_) => {
-            Err("query must be an ASK, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
-        }
-    }
-}
-
-/// The column index of variable `name` in a result header.
-fn column_index(variables: &[String], name: &str) -> Option<usize> {
-    variables.iter().position(|v| v == name)
+    run_query_view(
+        dataset,
+        ask,
+        substitutions,
+        ShaclPrebinding::Applied,
+        None,
+        |outcome| match outcome {
+            InternedOutcome::Boolean(b) => Ok(b),
+            InternedOutcome::Solutions(_) => {
+                Err("query must be an ASK, got a SELECT result".to_owned())
+            }
+            InternedOutcome::Graph(_) => {
+                Err("query must be an ASK, got a graph (CONSTRUCT/DESCRIBE) result".to_owned())
+            }
+        },
+    )
 }
 
 /// The number of query plans this thread's SHACL engine has memoized.

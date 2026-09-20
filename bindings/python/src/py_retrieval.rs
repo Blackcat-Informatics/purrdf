@@ -304,6 +304,32 @@
 //! column, so nothing registered here can emit such a row. What a Python host
 //! can actually meet is the two stratum-level messages above and the
 //! registration refusal.
+//!
+//! Two terminal *statuses* are unreachable here for the same kind of reason, and
+//! they are recorded next to those refusals because a reader checking whether a
+//! status is testable from Python will look in one place for all of them.
+//!
+//! `"supplied_query_ended"` — a unit running a query text the host wrote rather
+//! than one this layer rendered, whose own internal bound the layer cannot see —
+//! needs a caller-assembled bundle. This surface compiles every unit it runs and
+//! accepts no bundle from a caller, so no stratum a Python host can configure can
+//! end that way. It is mapped here for the same reason the next one is: a host
+//! fusing streams from the Rust surface can be handed it.
+//!
+//! `"row_bound_reached"`
+//! — the producer stopping at the row count it declared it can serve per
+//! invocation — needs a **self-bounding** producer: one whose declaration places
+//! the depth as an argument the producer itself reads, so the read cannot reach
+//! for the row past it and how that read ended is not observable. The only
+//! relation this module registers is the text-search one, whose ranked
+//! declaration places no depth argument, so every stratum a Python host can
+//! configure is bounded by the unit's own emitted `LIMIT` and ends
+//! `"exhausted"`, `"depth_reached"` or `"ceiling_reached"` instead. The status is
+//! documented on [`search`] and mapped here because a host fusing streams from
+//! the Rust surface can be handed it, and reading it as "that was all of it"
+//! would be the exact mistake the seven spellings exist to prevent. Making it
+//! reachable from Python means letting a caller register a producer of its own,
+//! which this surface does not do.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -1153,7 +1179,8 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
 /// three, four, five or six positions, or when the fifth is not a two-member
 /// sequence;
 /// `TypeError` naming the field when an attestation member is neither `str` nor
-/// `None`, or when a mandatory position is not a string.
+/// `None`, or when a mandatory position is not a string; `ValueError` naming both
+/// producers and the stratum when two entries claim one stratum.
 fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer>> {
     let mut declared = Vec::with_capacity(producers.len());
     for (key, value) in producers {
@@ -1249,6 +1276,31 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
     // of the declarations, so the registry's content fingerprint — which the
     // plan records — cannot depend on how the dict was written.
     declared.sort_by(|left, right| left.producer.cmp(&right.producer));
+    // One stratum carries one producer, and the registry enforces that with a
+    // panic — the right shape for a Rust caller assembling a registry in code, and
+    // the wrong one here: a panic crosses the boundary as `PanicException`, which
+    // derives from `BaseException` and slips past a host's `except Exception`.
+    // Every other misconfiguration on this surface raises `ValueError` by name, so
+    // this one does too, before the registry is touched. Scanned after the sort,
+    // so the two names reported are a function of the declarations and not of the
+    // order the host wrote the dict in.
+    for (index, later) in declared.iter().enumerate().skip(1) {
+        if let Some(earlier) = declared[..index]
+            .iter()
+            .find(|earlier| earlier.stratum == later.stratum)
+        {
+            return Err(PyValueError::new_err(format!(
+                "text producers <{}> and <{}> both claim stratum <{}>: one stratum carries one \
+                 producer, because a rank is meaningful only inside the list that assigned it \
+                 and two lists concatenated rank the second producer's best row below every row \
+                 of the first. Shards or segments whose scores are already comparable belong \
+                 inside ONE producer that merges them by score; producers that score by \
+                 different laws belong in two strata, where the weighted sum across strata is \
+                 the point of the fusion",
+                earlier.producer, later.producer, later.stratum
+            )));
+        }
+    }
     Ok(declared)
 }
 
@@ -1518,6 +1570,17 @@ fn planned_resolution_dict<'py>(
 /// rows it may keep — the depth is not recoverable from the text, and
 /// `planned_resolution` answers only when the call named a fusion law — so the
 /// bound travels with the text it bounds.
+///
+/// `"declared_rows"` travels beside it because the depth alone does not say which
+/// of two situations a host is in. A depth *below* the declaration leaves rows
+/// underneath the read; a depth *on* it means the producer has promised there is
+/// nothing further, and the probe row is what checks that promise. Those are
+/// different facts about the same run, and the difference is not recoverable from
+/// the depth, the text or the plan — only from the number the registry declared.
+/// It is `None` for a producer that declared no access mode and therefore no row
+/// count at all, because "declared nothing" and "declared zero" are different
+/// facts here too: an absent declaration can refuse nothing, while a zero is a
+/// measurement of the producer's data.
 fn compile_dict<'py>(
     py: Python<'py>,
     planned: &Plan,
@@ -1529,11 +1592,19 @@ fn compile_dict<'py>(
     for unit in &compiled.units {
         let entry = PyDict::new(py);
         entry.set_item("stratum", unit.stratum.as_str())?;
-        entry.set_item("sparql", &unit.sparql)?;
+        // Rendered rather than read off a field: the unit carries the query body
+        // and appends its own bound, so the text a host runs cannot disagree with
+        // the depth beside it. The value is byte-identical to what the field held.
+        entry.set_item("sparql", unit.sparql())?;
         // The unit's own reportable bound, read off the field that carries it
         // rather than re-derived from the text or looked up again in the plan:
         // the text's `LIMIT` is the emitted bound, which includes the probe.
         entry.set_item("depth", unit.depth())?;
+        // The declaration the depth above was checked against, projected and never
+        // defaulted: `None` stays `None` all the way out to the host, because a
+        // producer that declared no access mode declared no row count, and a zero
+        // put there in its place would be a measurement nobody took.
+        entry.set_item("declared_rows", unit.declared_rows())?;
         units.append(entry)?;
     }
     out.set_item("units", units)?;
@@ -1658,6 +1729,16 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
             // lies below it, which is the whole difference between the two.
             ProducerStatus::RowBoundReached { rank } => {
                 entry.set_item("status", "row_bound_reached")?;
+                entry.set_item("rank", rank)?;
+            }
+            // A unit running a query text the host supplied rather than one this
+            // layer rendered. The layer bounds only the outside of such a text, so
+            // what that text bounds inside itself — and therefore what it left
+            // unread — was not observable. It carries a rank like
+            // `"depth_reached"` and, like `"row_bound_reached"`, claims nothing
+            // about what lies below it.
+            ProducerStatus::SuppliedQueryEnded { rank } => {
+                entry.set_item("status", "supplied_query_ended")?;
                 entry.set_item("rank", rank)?;
             }
             ProducerStatus::CeilingReached { bound } => {
@@ -1951,6 +2032,14 @@ fn plan<'py>(
 /// of zero, because a bound equal to its own depth admits no row for the probe to
 /// arrive in and every such read would be reported as an exhaustion.
 ///
+/// `"declared_rows"` is that declared bound, on the unit beside the depth it was
+/// checked against, and `None` for a producer that declared no access mode and so
+/// declared no row count at all. It is the one number that distinguishes a depth
+/// with rows still under it from a depth sitting *on* the producer's own promise
+/// that there are none — the case the probe row exists to check — and a host
+/// reading `"depth"` to know how many rows it may report is entitled to know which
+/// of the two it has.
+///
 /// One relation shape is bounded by something the text does not carry: one that
 /// takes the depth as an argument bounds itself by the number it was handed, which
 /// is never raised past the row count it registered. Where the depth already sits on
@@ -2087,9 +2176,9 @@ fn compile<'py>(
 /// reaching its planned depth, and that gap is the point: a depth a fusion never
 /// reached cost it nothing.
 ///
-/// Every `"statuses"` entry spells its own ending, and there are exactly six
+/// Every `"statuses"` entry spells its own ending, and there are exactly seven
 /// spellings. `"exhausted"` (with `"rows_emitted"`) is the ONLY completeness
-/// claim of the six: that producer emitted every row it had. The other five
+/// claim of the seven: that producer emitted every row it had. The other six
 /// each name who stopped the read and where. `"depth_reached"` (with `"rank"`)
 /// is the producer stopping at the depth the plan gave it, verified against the
 /// rows fusion really pulled: ranks one through `"rank"` were read and nothing
@@ -2101,11 +2190,15 @@ fn compile<'py>(
 /// declared bound rather than re-planning. `"ceiling_reached"` (with `"bound"`, an
 /// exact decimal `str`) is a contribution bound: every row at or above it was read
 /// and the rows below were not — usually written by a fusion the caller's `top_k`
-/// stopped. `"execution_failed"` (with `"reason"`) is the producer that could
-/// not run at all, and `"terms_rejected"` is the producer that declined the
-/// request terms it was handed. A stratum that answered with nothing and one
-/// that could not answer stay distinguishable, because none of the six is
-/// reduced to an aggregate flag.
+/// stopped. `"supplied_query_ended"` (with `"rank"`) is a unit running a query
+/// text the host wrote rather than one this layer rendered: the layer bounds only
+/// the outside of such a text, so what that text bounded inside itself — and
+/// therefore what it left unread — was not observable either, which is why it is
+/// its own word and not `"exhausted"`. `"execution_failed"` (with `"reason"`) is
+/// the producer that could not run at all, and `"terms_rejected"` is the producer
+/// that declined the request terms it was handed. A stratum that answered with
+/// nothing and one that could not answer stay distinguishable, because none of
+/// the seven is reduced to an aggregate flag.
 ///
 /// `"attestations"` maps each stratum whose stream was handed to fusion to what
 /// the index behind it attested, as `{"generation": str | None, "incomplete":

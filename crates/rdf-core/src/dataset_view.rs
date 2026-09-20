@@ -373,6 +373,40 @@ pub trait DatasetView {
         std::iter::empty()
     }
 
+    /// The reifier side-table rows scoped to graph `g`: the graph-narrowed twin of
+    /// [`reifier_quads`](Self::reifier_quads), for a caller that already knows the
+    /// active graph scope before it starts the walk (e.g. `GRAPH <g> { ... }`).
+    ///
+    /// Yields EXACTLY the rows `reifier_quads().filter(|q| g.matches(q.g))` yields, in
+    /// the same order. The default IS that filter, so every backend — including one
+    /// with no reifier layer at all — is correct with no per-backend work: this
+    /// method is an OPTIMIZATION SEAM, not a new obligation on implementors that
+    /// don't need it. A backend that can name, without materializing anything, which
+    /// of its own storage units could possibly hold a row in `g` overrides this to
+    /// visit only those units — see [`PagedDataset`](crate::ir::paged::PagedDataset)'s
+    /// and [`PagedQueryView`](crate::ir::paged::PagedQueryView)'s overrides, which
+    /// narrow to the pages a derived graph-postings index names for the reifier
+    /// stream, then still apply the per-row graph filter within each admitted unit
+    /// (a unit named by the index may also hold rows in OTHER graphs).
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifier_quads().filter(move |q| g.matches(q.g))
+    }
+
+    /// The annotation side-table rows scoped to graph `g`: the graph-narrowed twin of
+    /// [`annotation_quads`](Self::annotation_quads). See
+    /// [`reifier_quads_in_graph`](Self::reifier_quads_in_graph) for the full contract
+    /// (default-equivalence, optimization-seam status, and the override discipline);
+    /// this is the same seam for the annotation stream.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.annotation_quads().filter(move |q| g.matches(q.g))
+    }
+
     /// Every named graph this view addresses, in ascending id order (sorted,
     /// deduplicated). Drives `GRAPH ?g` enumeration, so the order is
     /// result-observable and must be deterministic. The default derives the set
@@ -1051,6 +1085,28 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         reifier: Self::Id,
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
         (**self).annotations_of_with_graph(reifier)
+    }
+
+    /// Forwarded per the impl-level doc above: whatever narrowing `T` provides for its
+    /// own [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) override is
+    /// inherited unchanged, so an `Arc`-wrapped paged backend keeps skipping the same
+    /// pages it would skip unwrapped.
+    #[inline]
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_in_graph(g)
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same unconditional forward, over the ANNOTATION stream.
+    #[inline]
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).annotation_quads_in_graph(g)
     }
 
     #[inline]

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Sequence
+from types import CapsuleType
 from typing import IO, Any, Callable, TypeAlias, TypedDict, overload
 
 # `Literal` is aliased because this package DEFINES an RDF `Literal` class below.
@@ -629,6 +630,23 @@ class Store:
     ) -> None: ...
     def add(self, quad: Quad) -> None: ...
     def remove(self, quad: Quad) -> None: ...
+    # Fold everything mutated so far into this store's BASE, leaving the copy-on-write
+    # delta empty. The store's CONTENTS are unchanged; what changes is what counts as a
+    # "change". A freshly constructed `Store` has an EMPTY base, so without this the
+    # delta of a store a million triples were loaded into IS those million triples and
+    # `shapes.PreparedShapes.validate_store_changes` re-validates the whole graph.
+    # Checkpoint after loading, mutate, and the delta is exactly the mutation.
+    #
+    # A real compaction (the base is rebuilt), so it is cheap once after a bulk load and
+    # expensive in a tight mutation loop — which is why it is an explicit act rather than
+    # something `add` does behind your back. Raises `ValueError` if the store cannot be
+    # frozen.
+    def checkpoint(self) -> None: ...
+    # `(added, removed)`: how many quads this store has added since the last
+    # `checkpoint`, and how many it has removed. The size of the change
+    # `shapes.PreparedShapes.validate_store_changes` expands, readable without
+    # validating anything.
+    def change_size(self) -> tuple[int, int]: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF
     # by default), `property_fn_namespaces` does the same for property-function
@@ -818,6 +836,15 @@ class Store:
     # the named-graph count meaningless, and the JSON-LD family loses nothing.
     def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
     def __len__(self) -> int: ...
+    # INTERNAL cross-package protocol, not a caller surface: a capsule exposing a
+    # frozen snapshot of this store by address, which `purrdf.shapes.Shapes`
+    # (`purrdf_shapes`) calls BY STRING so the SHACL engine validates natively with no
+    # N-Triples round-trip. Declared because it is live — the underscore is the whole
+    # of its "do not call this" — and because a member the stub omits is a member a
+    # checked caller cannot see at all, including to see that it is private. The
+    # snapshot is immutable: a later `add`/`remove`/`update` leaves a capsule already
+    # handed out untouched.
+    def _store_capsule(self) -> CapsuleType: ...
 
 class MutableDataset:
     def __init__(self) -> None: ...
@@ -968,6 +995,14 @@ class MutableDataset:
     ) -> UpdateOutcome: ...
     def compact(self) -> None: ...
     def __len__(self) -> int: ...
+    # The same INTERNAL cross-package protocol `Store._store_capsule` is, under the
+    # same name and with the same pointee type: a capsule carrying a frozen snapshot
+    # of this dataset by address, which `purrdf.shapes.Shapes.validate_store` reaches
+    # BY STRING. Declared for the reason `Store`'s is — a member the stub omits is a
+    # member a checked caller cannot see at all, including to see that it is private.
+    # The snapshot is taken at the call and is immutable: a later `add`/`remove`/
+    # `update` on this dataset leaves a capsule already handed out untouched.
+    def _store_capsule(self) -> CapsuleType: ...
 
 class Dataset:
     def __init__(self, quads: object | None = ...) -> None: ...
@@ -1500,6 +1535,54 @@ class _PreparedShapes:
     # Total — there is always an answer, and none of them means "unknown".
     def provenance(self) -> str: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
+    # THE INCREMENTAL LANE: validate only what `store`'s PENDING CHANGE can move,
+    # rather than the whole graph. A `Store` records its mutations as a copy-on-write
+    # delta over a frozen base, so a mutated store already holds the one thing
+    # incremental validation needs — a description of what moved.
+    #
+    #     store.load(base_ttl, RdfFormat.TURTLE)
+    #     store.checkpoint()      # everything loaded so far is now the BASE
+    #     store.add(quad)         # ... and this is the change
+    #     outcome = prepared.validate_store_changes(store)
+    #
+    # Call `Store.checkpoint()` first or the "change" is the whole store, and read
+    # `ChangeValidation.bounded` before reading `conforms`: the two arms answer
+    # different questions. Raises `ValueError` when the store cannot be snapshotted,
+    # when the snapshot exceeds the view's retention limits, or when constraint
+    # evaluation hard-fails.
+    def validate_store_changes(self, store: Store) -> _ChangeValidation: ...
+
+class _ChangeValidation:
+    """The outcome of `PreparedShapes.validate_store_changes`: the report, plus the
+    SCOPE the report describes.
+
+    Two facts rather than one, because a `ValidationReport` alone cannot say which
+    question it answered. Read `bounded` first.
+    """
+
+    # The SHACL validation report. See `bounded` for what it describes.
+    @property
+    def report(self) -> _ValidationReport: ...
+    # `True`: the change's footprint was bounded, the report describes the AFFECTED
+    # focus nodes only, and `conforms` means THIS CHANGE introduced no violation (it
+    # says nothing about a pre-existing violation the change cannot reach). `False`:
+    # no bounded footprint exists for this shapes graph, the run fell back to a FULL
+    # validation of the mutated graph, and `conforms` means the whole graph conforms.
+    @property
+    def bounded(self) -> bool: ...
+    # How many focus nodes the change expanded into, or `None` on the unbounded arm.
+    # `None` rather than the graph's node count: "every focus node in the graph" and a
+    # number are different statements, and collapsing them would make a fallback
+    # indistinguishable from a large bounded expansion.
+    @property
+    def focus_nodes(self) -> int | None: ...
+    # Which construct made this shapes graph's change footprint unbounded (SPARQL query
+    # text: `sh:sparql`, a SPARQL target, a component's `sh:ask`/`sh:select` validator,
+    # a `sh:SPARQLFunction` call, a SPARQL node expression), or `None` when it was
+    # bounded. Actionable rather than decorative: it names what to change to get
+    # incremental validation back.
+    @property
+    def reason(self) -> str | None: ...
 
 class _ShapesProduct:
     """A prepared product whose envelope is verified and whose self-description is
@@ -1528,11 +1611,21 @@ class _ShapesProduct:
     def certify(self) -> None: ...
 
 class shapes:
-    ValidationReport = _ValidationReport
-    Shapes = _Shapes
-    PreparedShapes = _PreparedShapes
-    ShapesProduct = _ShapesProduct
-    ShapesProductError = _ShapesProductError
+    # Every re-export below is spelled with an explicit `TypeAlias` — as
+    # `purrdf.entail.Regime` is, and for the same reason — because each is a type a
+    # caller ANNOTATES with: a function that takes a prepared shapes graph or returns
+    # the outcome of a change validation writes `purrdf.shapes.PreparedShapes` or
+    # `purrdf.shapes.ChangeValidation` in the signature, and a plain `X = X` reads to a
+    # type checker as a variable, which is then rejected in annotation position. There
+    # is no other public spelling of these names — `purrdf.PreparedShapes` does not
+    # exist and `__all__` carries neither — so a plain assignment here makes the type
+    # unwritable rather than merely awkward.
+    ValidationReport: TypeAlias = _ValidationReport
+    Shapes: TypeAlias = _Shapes
+    PreparedShapes: TypeAlias = _PreparedShapes
+    ChangeValidation: TypeAlias = _ChangeValidation
+    ShapesProduct: TypeAlias = _ShapesProduct
+    ShapesProductError: TypeAlias = _ShapesProductError
     # Compile a Turtle shapes graph into a prepared product in one call — the
     # composition of `Shapes(...).prepare().to_product()`.
     @staticmethod
@@ -1580,10 +1673,10 @@ class _Regime:
 type RegimeLike = _Regime | str
 
 class entail:
-    # Spelled with an explicit `TypeAlias` (rather than the bare `X = _X` the
-    # namespaces above use) because `purrdf.entail.Regime` is a *type* every call
-    # site annotates with; a plain assignment reads to mypy as a variable and is
-    # then rejected in annotation position.
+    # Spelled with an explicit `TypeAlias`, as every type re-exported by a namespace
+    # class here is, because `purrdf.entail.Regime` is a *type* every call site
+    # annotates with; a plain assignment reads to mypy as a variable and is then
+    # rejected in annotation position.
     Regime: TypeAlias = _Regime
     # Close a frozen RdfDataset under `regime`, returning (closure, report). The
     # report is never optional: it names which rules fired, which specification
@@ -1924,8 +2017,12 @@ class gts:
     gts_to_sqlite = _gts_to_sqlite
     gts_to_duckdb = _gts_to_duckdb
     gts_to_parquet = _gts_to_parquet
-    RdfDataset = _RdfDataset
-    GtsFoldViewNative = _GtsFoldViewNative
+    # The two TYPES of this namespace, so spelled with an explicit `TypeAlias`: the
+    # function re-exports above are values a caller CALLS, but these are written in
+    # annotation position, where a plain assignment reads to a type checker as a
+    # variable and is rejected.
+    RdfDataset: TypeAlias = _RdfDataset
+    GtsFoldViewNative: TypeAlias = _GtsFoldViewNative
 
 # ── Slice tooling (bindings/python/src/py_slice.rs, purrdf_native.slice) ─────────
 # Project artifact/dependency tooling, surfaced as `purrdf.slice`.
@@ -2006,18 +2103,24 @@ class _SliceCatalog:
     def fix_deps(self) -> list[_ManifestPatch]: ...
 
 class _OwnershipAnalyzer:
+    # The analysis borrows the catalog, so it runs EAGERLY here and the owned report is
+    # retained: constructing one is the work, and `analyze()` hands back what it found.
+    def __init__(self, catalog: _SliceCatalog) -> None: ...
     def analyze(self) -> _OwnershipReport: ...
     def analysis_graph_turtle(self) -> str: ...
 
 class slice:
-    ArtifactRecord = _ArtifactRecord
-    ManifestView = _ManifestView
-    SliceRecord = _SliceRecord
-    DependencyEdge = _DependencyEdge
-    ManifestPatch = _ManifestPatch
-    OwnershipReport = _OwnershipReport
-    SliceCatalog = _SliceCatalog
-    OwnershipAnalyzer = _OwnershipAnalyzer
+    # Every one an explicit `TypeAlias`, for the reason spelled out on `class shapes:`
+    # above: these are the types a caller writes in a signature, and a plain assignment
+    # reads to a type checker as a variable that is rejected in annotation position.
+    ArtifactRecord: TypeAlias = _ArtifactRecord
+    ManifestView: TypeAlias = _ManifestView
+    SliceRecord: TypeAlias = _SliceRecord
+    DependencyEdge: TypeAlias = _DependencyEdge
+    ManifestPatch: TypeAlias = _ManifestPatch
+    OwnershipReport: TypeAlias = _OwnershipReport
+    SliceCatalog: TypeAlias = _SliceCatalog
+    OwnershipAnalyzer: TypeAlias = _OwnershipAnalyzer
 
 # ── Ranked retrieval (bindings/python/src/py_retrieval.rs, purrdf_native.retrieval) ──
 # The composition layer over the ranked property-function producers, surfaced as
@@ -2265,9 +2368,10 @@ class retrieval:
     ) -> dict[str, builtins.object]: ...
     # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
     #
-    # Each entry under `"units"` is `{"stratum": str, "sparql": str, "depth":
-    # int}`. `"depth"` is the REPORTABLE bound — the most rows that stratum may
-    # contribute to an answer — and it is deliberately NOT the `LIMIT` in
+    # Each entry under `"units"` is `{"stratum": str, "sparql": str, "depth": int,
+    # "declared_rows": int | None}`. `"depth"` is the REPORTABLE bound — the most
+    # rows that stratum may contribute to an answer — and it is deliberately NOT
+    # the `LIMIT` in
     # `"sparql"`. The text is emitted exactly `depth + 1` rows deep, and that last
     # row is a probe: it exists only so a reader can tell a producer that ran out
     # of rows from a read the planned depth cut short, two endings a text bounded
@@ -2295,16 +2399,34 @@ class retrieval:
     # exactly `depth` rows and no row past them can arrive, however many its index
     # holds. That stratum's status is `"row_bound_reached"`, which names the
     # declared bound as the stopper and claims nothing about what lies below it.
+    # No relation THIS module registers has that shape — the text producers it
+    # wires place no depth argument — so the shape is described for a host driving
+    # the Rust surface, and `"declared_rows"` equalling `"depth"` here does not put
+    # a Python caller in it.
     #
     # The extra row is in the `LIMIT` only — a ceiling the evaluator applies to a
     # cursor the producer never hears about, so probing costs nothing and a
     # producer that reads a depth argument is never asked to exceed what it
-    # registered. The single exception is a producer that declared no rows at all:
-    # there the floor of one row is the whole read, so the `LIMIT` equals
-    # `"depth"`, and the emptiness that comes back is the producer's own.
+    # registered. That is why `depth + 1` holds with no exception: what a
+    # self-bounding producer is asked for is capped at its declaration, but the
+    # `LIMIT` the text carries is not, and those are two different numbers.
     #
-    # Read the bound off `"depth"`, never off the text's `LIMIT`, which is the
-    # larger of the two everywhere else. `"planned_resolution"` is not a fallback
+    # `"declared_rows"` is the row count the registry declared for that stratum's
+    # one producer — the number the depth was checked against — and it is `None`
+    # for a producer that declared no access mode and therefore declared no row
+    # count at all. "Declared nothing" and "declared zero" are different facts and
+    # do not share a representation: an absent declaration can refuse nothing,
+    # while a zero is a measurement of the producer's data. It is here because the
+    # depth alone cannot say which situation a host is in. A depth BELOW
+    # `"declared_rows"` leaves rows underneath the read; a depth EQUAL to it means
+    # the producer has already promised there is nothing further, and the probe row
+    # is what checks that promise rather than taking it. The distinction is not
+    # recoverable from `"depth"`, from the text, or from the plan — and a host
+    # reading `"depth"` to know how many rows it may report has the same claim on
+    # it that `search` does.
+    #
+    # Read the bound off `"depth"`, never off the text's `LIMIT`, which is always
+    # the larger of the two. `"planned_resolution"` is not a fallback
     # source for it: that map is empty unless the call names a fusion law.
     #
     # `weights`, `k` and `decay` are the fusion law the caller means to fuse
@@ -2374,11 +2496,11 @@ class retrieval:
     # correction of the other.
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
-    # `"status"` string has exactly six spellings. `"exhausted"` (with
+    # `"status"` string has exactly seven spellings. `"exhausted"` (with
     # `"rows_emitted"`: int) is the only one that names no stopper — that producer
     # emitted every row ITS SEARCH PRODUCED. On its own that is not a claim that
     # everything matching was returned, which is why it is read beside the
-    # stratum's `"fidelities"` entry and never instead of it. The other five each
+    # stratum's `"fidelities"` entry and never instead of it. The other six each
     # name who stopped the read and where, and none may be read as "that was all
     # of it":
     # `"depth_reached"` (with `"rank"`: int) is the producer stopping at the depth
@@ -2392,10 +2514,26 @@ class retrieval:
     # `"ceiling_reached"` (with `"bound"`: an exact decimal `str`) is a
     # contribution bound, every row at or above it read and the rows below not —
     # what a fusion the caller's `top_k` stopped writes over the streams it
-    # stopped; `"execution_failed"` (with `"reason"`: str) is a producer that
+    # stopped; `"supplied_query_ended"` (with `"rank"`: int) is a unit running a
+    # query text the host wrote rather than one this layer rendered — the layer
+    # bounds only the outside of such a text, so what that text bounded inside
+    # itself, and therefore what it left unread, was not observable either;
+    # `"execution_failed"` (with `"reason"`: str) is a producer that
     # could not run at all; and `"terms_rejected"` is one that declined the
     # request terms it was handed. "Answered with nothing" and "could not answer"
-    # stay distinguishable, because none of the six is reduced to a flag.
+    # stay distinguishable, because none of the seven is reduced to a flag.
+    #
+    # Three of the seven can come out of THIS surface: `"exhausted"`,
+    # `"depth_reached"` and `"ceiling_reached"`. The other four belong to
+    # producers or bundles this module does not build — `"row_bound_reached"` needs
+    # a producer that takes its depth as an argument, `"supplied_query_ended"`
+    # needs a unit carrying a query text a caller wrote and this surface compiles
+    # every unit it runs, `"terms_rejected"` is a receipt a producer writes for
+    # itself, and `"execution_failed"` needs a unit whose text
+    # could not be prepared or run — so they are reachable for a host driving the
+    # Rust surface with a bundle of its own. They are spelled and mapped here
+    # regardless: the mapping is what makes a status a host DOES receive readable,
+    # and the seven-way vocabulary is the engine's, not this binding's.
     #
     # `"attestations"` maps a stratum to what the index behind its stream
     # attested, as `{"generation": str | None, "incomplete": str | None}`, read

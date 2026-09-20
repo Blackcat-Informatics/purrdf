@@ -60,6 +60,14 @@ mod term;
 mod xsd;
 
 pub(crate) use io::{PyRdfFormat, parse_quads};
+/// The mutable quad store itself, re-exported for the SHACL surface.
+///
+/// `purrdf.shapes`'s incremental lane takes a `Store` and reads the copy-on-write
+/// DELTA out of it (see [`store::PyStore::change_snapshot`]), which it cannot do
+/// through the Python object protocol: a delta is a Rust view over this store's own
+/// interners, not something expressible as a capsule of a frozen snapshot the way
+/// `_store_capsule` is.
+pub(crate) use store::PyStore;
 
 use pyo3::prelude::*;
 
@@ -97,7 +105,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<query::PyQueryOutcome>()?;
     m.add_class::<query::PyEntailmentQueryOutcome>()?;
     m.add_class::<query::PyUpdateOutcome>()?;
-    m.add_class::<store::PyStore>()?;
+    m.add_class::<PyStore>()?;
     m.add_class::<store::PyDataset>()?;
     m.add_class::<mutable::PyMutableDataset>()?;
     m.add_class::<store::PyQuadIter>()?;

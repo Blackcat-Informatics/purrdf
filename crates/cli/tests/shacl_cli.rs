@@ -1878,3 +1878,72 @@ fn diff_refuses_two_stdins() {
     assert_eq!(code(&out), 2);
     assert!(stderr(&out).contains("standard input"), "{}", stderr(&out));
 }
+
+/// A restored PRODUCT reaches the INCREMENTAL lane, and reaches it with the preparation the
+/// product carried rather than a re-derived one.
+///
+/// `validate --changes` binds a mutation snapshot against a `PreparedShapes`, and a product
+/// IS one — so the two spellings of the shapes input have to agree here for the same reason
+/// they agree on the whole-graph route: a cached preparation that reached a different verdict
+/// than its own source document would be a cache that silently changes answers, and a route
+/// added after the cache existed is exactly where that would first show.
+#[test]
+fn a_restored_product_reaches_the_same_change_verdict_as_a_parsed_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    // A conforming base, so everything reported below came out of the CHANGE.
+    let base = write_file(
+        dir.path(),
+        "base.ttl",
+        "@prefix ex: <http://example.org/> .\nex:bob a ex:Person ; ex:age 42 .\n",
+    );
+    let added = write_file(
+        dir.path(),
+        "added.ttl",
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person ; ex:age \"nope\" .\n",
+    );
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+    assert_eq!(
+        code(&run(&[
+            "shacl",
+            "pack",
+            "--shapes",
+            &shapes,
+            "--out",
+            product_path
+        ])),
+        0,
+        "the fixture must pack"
+    );
+
+    let parsed = run(&["validate", "--shapes", &shapes, "--changes", &added, &base]);
+    let restored = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--changes",
+        &added,
+        &base,
+    ]);
+    let err = stderr(&restored);
+    assert_eq!(code(&restored), 0, "{err}");
+    assert!(
+        err.contains("shacl shapes-provenance restored-admitted "),
+        "the product's own identity is still attributed on this route: {err}"
+    );
+    assert!(
+        err.contains("shacl change-expansion bounded 1\n"),
+        "the restored preparation expands the change the same way: {err}"
+    );
+    assert_eq!(
+        stdout(&restored),
+        stdout(&parsed),
+        "a product and its source document reach the identical incremental report"
+    );
+    assert!(
+        stderr(&parsed).contains("shacl change-expansion bounded 1\n"),
+        "and the parsed route really did take the incremental lane: {}",
+        stderr(&parsed)
+    );
+}

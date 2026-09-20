@@ -101,7 +101,10 @@ enum TermLookup<'a> {
 /// its input. A BCP 47 language tag reaching an interner has normally already been
 /// lowercased at ingress, so the copy is the common case and the comparison is what
 /// the caller actually wanted.
-fn is_lowercase(s: &str) -> bool {
+/// Shared with the LOOKUP path (`RdfDataset::term_id_by_literal`) on purpose: a lookup
+/// that folded tags differently from the interner would report a term absent that this
+/// dataset holds, which is the disagreement the canonicalization exists to prevent.
+pub(crate) fn is_lowercase(s: &str) -> bool {
     s.chars().flat_map(char::to_lowercase).eq(s.chars())
 }
 

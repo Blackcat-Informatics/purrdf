@@ -149,6 +149,16 @@
 //! the producer's declared bound as the stopper and claims nothing about what lies
 //! below it.
 //!
+//! A unit running a query text a *caller* supplied rather than one [`compile`]
+//! rendered is the other read this layer will not certify. It bounds only the outside
+//! of such a text, and a bound inside it — a `LIMIT` on a sub-`SELECT`, a pattern
+//! matching less than the producer holds — decides the read where this layer cannot
+//! see it. So that read ends [`ProducerStatus::SuppliedQueryEnded`], which names the
+//! caller's own text as the stopper. It still runs, still ranks, still reports
+//! `DepthReached` when a row past the depth really did arrive, and still refuses a
+//! producer that beat its own declaration; what it cannot carry is the completeness
+//! claim.
+//!
 //! Rank order is not carried there, because it is not a per-producer variable.
 //! Every ranked stream owes its consumer the same law — 1-based, contiguous,
 //! ascending ranks — and [`FusionStream`] enforces it row by row against the
@@ -296,8 +306,8 @@
 //! What an index attested is a different kind of fact from how a read ended, and
 //! it is kept apart from one deliberately. A producer's terminal
 //! [`ProducerStatus`] says who stopped the read — the planned depth, the producer's
-//! own declared row bound, fusion's contribution bound, the producer's refusal of
-//! the terms, or a failed run —
+//! own declared row bound, a caller's own query text, fusion's contribution bound, the
+//! producer's refusal of the terms, or a failed run —
 //! and only [`ProducerStatus::Exhausted`] claims a stratum's rows ran out. An
 //! incomplete *index* is none of those: it is true from the instant the stream
 //! opened and stays true however the read ends, so it is read from
@@ -392,10 +402,8 @@ mod statistics;
 #[doc = include_str!("../PRODUCER-CONTRACT.md")]
 pub mod producer_contract {}
 
-pub use admission::{AdmissionEnvironment, AdmissionError};
-pub use compile::{
-    CompiledRetrieval, DepthApplication, PlannedResolution, StratumUnit, UnitError, compile,
-};
+pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
+pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, UnitError, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{FusionError, PlanError};
 pub use execute::{

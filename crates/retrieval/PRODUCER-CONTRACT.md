@@ -390,6 +390,10 @@ cannot enumerate needles for a document. Declaring narrowly is the honest move
 when the index really is directional. Declaring broadly is the honest move when it
 is not. Neither is a default.
 
+Declaring several modes also decides which row bound your read is held to, because that
+bound is a function of the mode — see
+[A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound).
+
 ---
 
 ## A9, A10 and A14 are one doctrine: stopping early and running out are the same empty cursor
@@ -455,17 +459,23 @@ edited plan (`AdmissionError::DepthWithoutProbe`, the mirror of
 (`UnitError::DepthWithoutProbe`).
 
 Declaring more rows per invocation than a read can be taken to is therefore **not**
-a refusal. It is an honest description of a large index, the read the caller asked
-for may be a single page of it, and the shapes that cannot narrow a depth to that
-page — `DuplicatePolicy::Allowed`, or `CandidateDomains::Unrestricted`, which is the
-nearest-neighbour relation's own documented default — are ordinary rather than
-exotic. Refusing them would have left you two ways out and both are dishonest:
-under-declare `rows_per_invocation` against [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound),
-or invent a cardinality statistic. Pinned by
+a refusal, at any size up to and including the genuinely unbounded `u64::MAX`. It is
+an honest description of a large index, the read the caller asked for may be a single
+page of it, and the shapes that cannot narrow a depth to that page —
+`DuplicatePolicy::Allowed`, or two or more strata none of which declares a block —
+are ordinary rather than exotic. Refusing them would have left you two ways out and
+both are dishonest: under-declare `rows_per_invocation` against
+[A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound), or invent a
+cardinality statistic. Such a declaration is recorded at the deepest readable depth
+with the probe row one past it, so the read ends `DepthReached`, which names the
+planned depth as the stopper and claims nothing about the rows below it. Pinned by
 `a_declared_row_bound_past_the_read_range_is_planned_at_the_ceiling`,
-`a_small_top_k_over_an_oversized_declaration_plans_admits_and_runs` and
-`a_read_bound_no_rank_can_address_is_refused_and_the_addressable_ones_plan` in
-`tests/compile_request.rs`, and by
+`a_small_top_k_over_an_oversized_declaration_plans_admits_and_runs`,
+`a_bound_gives_an_unbounded_declaration_a_finite_depth_and_its_absence_reads_to_the_ceiling`
+and `a_read_bound_no_rank_can_address_is_refused_and_the_addressable_ones_plan` in
+`tests/compile_request.rs`, by
+`an_unbounded_stratum_without_statistics_reads_to_the_ceiling` in
+`tests/planner_golden.rs`, and by
 `a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling` in
 `tests/admission_tests.rs`, each of which executes the depth one rank shallower and
 requires it to plan, admit and compile with its probe row present.
@@ -475,8 +485,8 @@ nothing. A producer that declared `n` and really holds `n` returns `n` rows into
 an `n + 1`-row bound, the slot comes back empty, and `Exhausted` is *verified*
 rather than believed. A row arriving in it is the producer yielding an `n + 1`-th
 after promising there is none, and the executor refuses the run by name
-(`ExecutionError::RowBoundBreached`, carrying the stratum, the declared bound and
-the count actually returned) rather than truncating to the depth and certifying
+(`ExecutionError::RowBoundBreached`, carrying the stratum, the declared bound, the
+access mode that bound was read at and the count actually returned) rather than truncating to the depth and certifying
 the remainder as completeness.
 
 **If you declare a depth placement, the number you receive is bounded
@@ -539,7 +549,10 @@ say only that the search did.
 **The obligation.** [`rows_per_invocation`](purrdf_sparql_eval::PropertyFunction::rows_per_invocation)
 reports the most rows one invocation can emit under that mode, measured against
 the index with no request's filters applied. A genuinely unbounded generator
-declares `u64::MAX`.
+declares `u64::MAX`, and nothing asks it for a cardinality statistic to go with
+that: the planner records such a stratum at the deepest depth a read can be taken
+to, one row past which the probe still fits, so the read's own ending reports that
+the planned depth stopped it.
 
 **The failure it prevents.** The two directions fail differently, and that
 asymmetry is the whole guidance.
@@ -555,8 +568,8 @@ declaration. If your index really does stop where you said, that row never
 arrives and your stratum is reported
 [`ProducerStatus::Exhausted`], now verified rather
 than assumed. If it does not, the row arrives, and the run is refused by name with
-your declared bound and the count actually returned in the message
-(`ExecutionError::RowBoundBreached`). Either way the mistake is *said*, and nothing
+your declared bound, the mode that bound was read at and the count actually returned
+in the message (`ExecutionError::RowBoundBreached`). Either way the mistake is *said*, and nothing
 is reported exhausted on the strength of a bound you got wrong.
 
 **If you declare a depth placement, that probe is not available at this depth, and
@@ -571,6 +584,25 @@ declaration. The obligation this places on you is the one A9 already states: mea
 the bound from the index. The layer's promise is narrower and exact — it never
 reports exhaustion on the strength of a bound you got wrong; it reports that it read
 to your bound and stopped.
+
+**If you declare several modes, the bound that binds is the tightest of the ones
+serving the call.** This obligation is per mode, and A8 tells you to declare many, so
+"your declaration" has to name one number. The layer reads the bound at the mode your
+producer is invoked in: the tightest declared under any mode that subsumes the
+invocation, which is the same lattice rule placement admitted the call by. A producer
+serving through a subsuming mode emits at most that mode's rows, since the extra
+bindings only filter, so every subsuming mode is a valid bound and the smallest is the
+promise you actually made about this read. The number you are handed, the depth the
+waist admits and the breach the executor refuses all use that one number, computed in
+one place — never the widest mode you happen to have declared elsewhere.
+
+So declaring `3` rows with a position free and `100` with it bound holds the bound call
+to `3`: the free mode covers it, and the `100` over-declares a read its own coarser mode
+already bounds. Because the binding number is therefore routinely declared at a mode the
+call is *not* made under, both refusals that name a row bound
+(`AdmissionError::DepthBoundViolation` and `ExecutionError::RowBoundBreached`) name the
+mode they read it at, and say so when that mode is not the invoked one — so the figure
+in the message always points at a declaration you wrote.
 
 This is what makes A8's reading of `rows_per_invocation` hold on this path rather
 than needing an exception carved out of it. The number remains an estimate in
@@ -973,9 +1005,23 @@ the compiled unit is emitted at that `LIMIT`. The read itself is bounded, not me
 the walk over a stream that was materialized in full. The `Unique` condition is not
 decoration: the merge argument counts ranks and reads the count as a count of
 candidates, which is true only of a stream that names an item once — see
-[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer). Drop any one of the
-three conditions and the depth is the declared-or-measured bound it always was; no
-request is refused and no answer moves either way.
+[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer). Drop `Unique` and the
+depth is the declared-or-measured bound it always was; no request is refused and no
+answer moves either way.
+
+**A single surviving stratum needs no domain declaration for that depth**, and the
+reason is what disjointness is a statement about: pairs. With one stratum there is no
+pair, so the premise the blocks supply is one the shape already has — every candidate
+the answer can hold was named by that one stream, its rank order is the fused order,
+and a `k`-row prefix of it is the top `k` under `Unique` alone. So a lone
+`Unrestricted` producer narrows exactly as a lone `Within` producer does. Withholding
+it asked the ordinary configuration to pay for a premise it did not need: neither
+shipped ranked relation declares a domain, so a top-five over a declared
+ten-billion-row index recorded a depth at the read ceiling and emitted
+`LIMIT 4294967295` for five wanted rows, with the executor materializing every row
+that came back. Register a second producer and the pair exists, `Unrestricted` is a
+missing promise again, and the narrowing stops there rather than silently later — the
+depth is re-derived per request from the registry in hand.
 
 **Who enforces it.** Both.
 

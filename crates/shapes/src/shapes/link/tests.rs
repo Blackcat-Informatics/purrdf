@@ -142,7 +142,7 @@ fn shared_shape_index_is_one_allocation() {
         );
         let filled = handle.get().expect("linking fills the shared index");
         assert!(
-            filled.contains_key(&Term::NamedNode(ex("T")).to_string()),
+            filled.contains_key(&Term::NamedNode(ex("T"))),
             "the one write must reach every constraint",
         );
     }
@@ -196,7 +196,7 @@ fn link_accepts_correctly_shared_index() {
     .expect("a correctly shared index must link");
 
     let filled = index.get().expect("the shared index is filled");
-    assert!(filled.contains_key(&Term::NamedNode(ex("A")).to_string()));
+    assert!(filled.contains_key(&Term::NamedNode(ex("A"))));
 }
 
 /// VALID NEIGHBOUR: a graph with NO shape-index site at all still links, and the

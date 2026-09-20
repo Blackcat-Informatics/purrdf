@@ -147,9 +147,17 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
     // The interned id of `rdf:reifies`, resolved once. `None` ⇒ the dataset has no
     // reifier layer at all (the predicate was never interned), so no virtual reifier
     // candidates exist for any pattern.
-    let reifies_id = ctx
-        .dataset
-        .term_id_by_value(&purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
+    //
+    // The lookup value is a process-wide `static`, not a fresh `TermValue::Iri` per
+    // BGP: `DatasetView::term_id_by_value` takes a borrowed value, the IRI is a
+    // constant, and minting it here charged one heap allocation to every BGP
+    // evaluation — a per-focus-node cost on the SHACL path, for a string that is the
+    // same bytes every time. `TermValue::Iri` owns a `String`, so it cannot be a
+    // `const`; a write-once `OnceLock` is the allocation-free-after-first-use form
+    // and needs no dependency (same shape as `SINGLETON` in `plan_or_cached_order`).
+    static REIFIES: std::sync::OnceLock<purrdf_core::TermValue> = std::sync::OnceLock::new();
+    let reifies_value = REIFIES.get_or_init(|| purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
+    let reifies_id = ctx.dataset.term_id_by_value(reifies_value);
 
     // Whether this execution charges fuel at all. Read once, outside the pattern loop:
     // an ungoverned run (and a run whose caller set only a deadline or only an answer
@@ -438,6 +446,25 @@ fn plan_or_cached_order<D: DatasetView>(
     scope: &GraphScope<D::Id>,
     cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
 ) -> Arc<[usize]> {
+    // A one-pattern BGP has exactly one join order, so there is nothing to plan and
+    // nothing worth remembering. Short-circuiting it is not a micro-optimisation of
+    // a cheap case: it is what keeps the cache USEFUL once a pre-bound variable has
+    // been pushed into the pattern.
+    //
+    // `bgp_shape_key` hashes a `Pos::Bound`'s interned ID, so `<c1> <p> ?o` and
+    // `<c2> <p> ?o` are different keys. That is right for a multi-pattern BGP, where
+    // which constant is bound really can change the best order. For the single
+    // pattern a SHACL-SPARQL constraint body usually is, it meant one fresh key per
+    // FOCUS NODE — a cache that could never hit, charged the full `cost_based_order`
+    // walk anyway, and then evicted a live entry to store an answer nobody would ask
+    // for again. The order-cache traffic was the largest term left in the per-focus
+    // cost after the pre-binding pushdown, and it was the only one that was not
+    // exactly linear in the focus count, because what a bounded cache evicts depends
+    // on how the focus nodes were chunked across workers.
+    if compiled.len() == 1 {
+        static SINGLETON: std::sync::OnceLock<Arc<[usize]>> = std::sync::OnceLock::new();
+        return Arc::clone(SINGLETON.get_or_init(|| Arc::from(vec![0_usize])));
+    }
     let Some(cache) = cache else {
         return Arc::from(cost_based_order(compiled, dataset, scope));
     };

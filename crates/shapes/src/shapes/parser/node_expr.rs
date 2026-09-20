@@ -136,11 +136,19 @@ impl Parser<'_> {
             constraints.push(Constraint::LanguageIn(tags));
         }
 
-        // sh:not — a single nested shape (mirrors sh:node)
+        // sh:not — a single nested shape (mirrors sh:node).
+        //
+        // The argument is a SHAPE (§4.6.1), and §2.1 lets any shape be a property
+        // shape, so it is parsed exactly like a member of `sh:and`/`sh:or`: a node
+        // carrying `sh:path` becomes an inline property shape. Parsing it as a node
+        // shape instead would DROP the path and re-read the path-scoped constraints
+        // against the value node itself — `sh:minCount 1` over the single value node
+        // `$this` is then trivially satisfied, so the negated shape "conforms" for
+        // every node and `sh:not` reports a violation regardless of the data.
         let mut not_refs: Vec<Term> = self.objects_of(id, sh::NOT);
         crate::term::sort_terms_canonical(&mut not_refs);
         for not_ref in not_refs {
-            let inner = self.parse_node_shape(not_ref)?;
+            let inner = self.parse_inline_shape(not_ref)?;
             constraints.push(Constraint::Not(Box::new(inner)));
         }
 
@@ -273,11 +281,13 @@ impl Parser<'_> {
             constraints.push(Constraint::Xone(members));
         }
 
-        // sh:node
+        // sh:node — the positive form of sh:not, and parsed the same way: a shape
+        // argument carrying `sh:path` is an inline property shape (§4.6.6 + §2.1),
+        // not a node shape whose path may be discarded.
         let mut node_refs: Vec<Term> = self.objects_of(id, sh::NODE);
         crate::term::sort_terms_canonical(&mut node_refs);
         for node_ref in node_refs {
-            let inner = self.parse_node_shape(node_ref)?;
+            let inner = self.parse_inline_shape(node_ref)?;
             constraints.push(Constraint::Node(Box::new(inner)));
         }
 

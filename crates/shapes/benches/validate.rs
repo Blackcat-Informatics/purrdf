@@ -17,21 +17,60 @@
 //! by `sh:minLength`/`sh:maxLength`/`sh:nodeKind`/`sh:languageIn` — the arms that
 //! now read the interned value node's borrowed surface (length, kind, language)
 //! and the closed-permitted set's borrowed keys instead of materializing terms.
+//!
+//! `shacl_change_path_contrast` is the conforming-versus-violating pair over ONE
+//! dataset and ONE binding: the change path materializes a focus node only where a
+//! result is built, so a conforming request should cost a constant whatever the
+//! focus count while a violating one pays per violation. Reporting only the
+//! conforming half would be satisfied by a validator that had stopped validating,
+//! so the violating half asserts its result count.
+//!
+//! Its conforming probe reads flat up to 512 focus nodes and then steps at 4,096.
+//! That step is not a growth term and it is not this crate: 4,096 is above
+//! `crate::parallel::PARALLEL_MIN_FOCUS_NODES`, and the shape carries
+//! `sh:pattern`, whose `regex::Regex::is_match` borrows a scratch cache from a
+//! thread-sharded pool inside the `regex` crate — a worker that finds its shard
+//! empty builds one. `crates/shapes/tests/change_path_alloc.rs` traced that
+//! residual allocation by allocation and holds `sh:pattern` out of its two exact
+//! equality assertions for exactly this reason, while
+//! `pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold`
+//! measures the same shape below the threshold and pins a slope of exactly zero.
+//!
+//! Every group here is **report-only**: nothing in this file asserts a threshold,
+//! a ratio or a comparison against a baseline. The allocation invariants these
+//! groups illustrate are executed as contracts in
+//! `crates/shapes/tests/change_path_alloc.rs`.
+//!
+//! # The probe lines, and why this target uses both measurement modes
+//!
+//! Interleaved with the criterion groups are `println!` probe lines a human
+//! reads when comparing two runs. They are measured with the workspace's shared
+//! counting allocator, and this is the one target that needs both of its
+//! windows in one process:
+//!
+//! * the validation, preparation, pattern and rule probes wrap code that fans
+//!   focus nodes out over `rayon` above `PARALLEL_MIN_FOCUS_NODES`, so they use
+//!   a [`WholeProcessWindow`]; a per-thread window would miss every worker and
+//!   report the parallel sizes as the cheapest in the sweep;
+//! * the schema-import, LinkML-import and slot-emission probes are
+//!   single-threaded, so they use a [`CurrentThreadWindow`], which keeps their
+//!   figures free of whatever criterion's own machinery is doing elsewhere.
+//!
+//! The whole-process ledger is armed only inside its windows, so the timed
+//! criterion measurements outside them pay one relaxed load per allocation.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf::loss::LossLedger;
 use purrdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
 use purrdf_shapes::engine::{
-    __prepared_class_membership_view, PreparedValidator, parse_shapes, validate_graphs,
+    __prepared_class_membership_view, FocusId, PreparedValidator, parse_shapes, validate_graphs,
     validate_projected_dataset, validate_projected_dataset_with_focus_filter,
 };
 use purrdf_shapes::json_schema::CompiledSchema;
@@ -42,45 +81,6 @@ use purrdf_shapes::{
     import_json_schema, import_linkml,
 };
 use serde_json::{Map, Value, json};
-
-thread_local! {
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
-}
-
-static VALIDATION_COUNTING: AtomicBool = AtomicBool::new(false);
-static VALIDATION_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-static VALIDATION_ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-
-struct CountingAllocator;
-
-// SAFETY: every operation forwards the original pointer/layout to the system
-// allocator; thread-local counters are observational only.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + layout.size() as u64));
-        if VALIDATION_COUNTING.load(Ordering::Relaxed) {
-            VALIDATION_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-            VALIDATION_ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        }
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + new_size as u64));
-        if VALIDATION_COUNTING.load(Ordering::Relaxed) {
-            VALIDATION_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-            VALIDATION_ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
-        }
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -102,6 +102,12 @@ const CLASS_DEPTH: usize = 40;
 const MEMBERSHIP_DATASET_FOCUS_NODES: usize = 100_000;
 const MEMBERSHIP_PATTERN_FOCUS_NODES: usize = 4_096;
 const MEMBERSHIP_RULE_FOCUS_NODES: usize = 64;
+/// How many conforming focus nodes the change-path contrast's dataset holds.
+///
+/// The same scale as `shacl_focus_realtime`'s: the claim being illustrated is that
+/// the change path's per-request cost is independent of the graph it sits on, and
+/// illustrating it over a small graph would illustrate nothing.
+const CONTRAST_DATASET_FOCUS_NODES: usize = 1_000_000;
 
 struct ValidationFixture {
     dataset: Arc<RdfDataset>,
@@ -149,23 +155,6 @@ struct MembershipFixture {
     variant: MembershipVariant,
 }
 
-struct ValidationCountGuard;
-
-impl ValidationCountGuard {
-    fn start() -> Self {
-        VALIDATION_ALLOCATIONS.store(0, Ordering::Relaxed);
-        VALIDATION_ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-        VALIDATION_COUNTING.store(true, Ordering::Release);
-        Self
-    }
-}
-
-impl Drop for ValidationCountGuard {
-    fn drop(&mut self) {
-        VALIDATION_COUNTING.store(false, Ordering::Release);
-    }
-}
-
 /// Read every `corpus/<case>/{data.nt, shapes.ttl}` pair, sorted by case name.
 fn corpus_cases() -> Vec<(String, String, String)> {
     let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/corpus"));
@@ -207,6 +196,19 @@ fn bench_validate(c: &mut Criterion) {
 }
 
 fn core_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+    core_focus_dataset(focus_nodes, 0)
+}
+
+/// The Core focus fixture, optionally carrying a disjoint VIOLATING population.
+///
+/// `violating` subjects are targeted by the same shape and carry `ex:value` and
+/// `ex:member` but no `ex:label`, so each trips that property shape's
+/// `sh:minCount` exactly once and contributes exactly one result. They live in the
+/// same dataset as the conforming ones deliberately: the contrast group varies
+/// *conformance* and nothing else — same graph, same binding, same shapes — so a
+/// difference between its two rows cannot be a difference in dataset size,
+/// interning or target resolution.
+fn core_focus_dataset(focus_nodes: usize, violating: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
     let subclass = builder.intern_iri(RDFS_SUBCLASS_OF);
@@ -244,6 +246,14 @@ fn core_focus_fixture(focus_nodes: usize) -> ValidationFixture {
         let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
         builder.push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None);
         builder.push_quad(focus, label_predicate, label, None);
+        builder.push_quad(focus, value_predicate, value, None);
+        builder.push_quad(focus, member_predicate, member, None);
+    }
+
+    for index in 0..violating {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}unlabelled-item{index}"));
+        let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
+        builder.push_quad(focus, rdf_type, focus_classes[CLASS_DEPTH - 1], None);
         builder.push_quad(focus, value_predicate, value, None);
         builder.push_quad(focus, member_predicate, member, None);
     }
@@ -503,11 +513,11 @@ fn validate_fixture(fixture: &ValidationFixture) {
 
 fn print_validation_probe(label: &str, fixture: &ValidationFixture) {
     validate_fixture(fixture);
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     validate_fixture(fixture);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     println!(
         "[shacl_focus_validation] case={label} focus_nodes={} quads={} terms={} threads={} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.focus_nodes,
@@ -515,8 +525,8 @@ fn print_validation_probe(label: &str, fixture: &ValidationFixture) {
         fixture.dataset.term_count(),
         rayon::current_num_threads(),
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -583,7 +593,26 @@ fn bench_focus_sparql(c: &mut Criterion) {
     group.finish();
 }
 
-fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) {
+/// Mint one focus id against the binding that will validate it.
+///
+/// The change path takes ids stamped with their binding, so a benchmark resolves
+/// them through the binding rather than through the dataset beside it. Every call
+/// happens while a fixture is being assembled, outside every timed or measured
+/// region.
+fn focus_id(prepared: &PreparedValidator, iri: &str) -> FocusId {
+    prepared
+        .term_id(&purrdf_shapes::term::NamedNode::new_unchecked(iri).into_term())
+        .unwrap_or_else(|| panic!("benchmark focus {iri} must be interned"))
+}
+
+/// The first `count` class-membership focus nodes, minted against `prepared`.
+fn membership_focus_ids(prepared: &PreparedValidator, count: usize) -> Vec<FocusId> {
+    (0..count)
+        .map(|index| focus_id(prepared, &format!("{BENCH_EX}membership-item{index}")))
+        .collect()
+}
+
+fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[FocusId]) {
     let report = prepared
         .validate_focus_node_ids(focus_ids)
         .expect("prepared benchmark validation must not error");
@@ -591,19 +620,19 @@ fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) {
     black_box(report);
 }
 
-fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[TermId]) {
+fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[FocusId]) {
     validate_prepared_ids(prepared, focus_ids);
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     validate_prepared_ids(prepared, focus_ids);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     println!(
         "[shacl_focus_realtime] requested_focus_nodes={} elapsed_ns={} allocations={} allocated_bytes={}",
         focus_ids.len(),
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -611,7 +640,7 @@ fn bench_focus_realtime(c: &mut Criterion) {
     const DATASET_FOCUS_NODES: usize = 1_000_000;
 
     let fixture = core_focus_fixture(DATASET_FOCUS_NODES);
-    let preparation_guard = ValidationCountGuard::start();
+    let preparation_window = WholeProcessWindow::open();
     let preparation_started = Instant::now();
     let prepared = PreparedValidator::from_projected_dataset(
         Arc::clone(&fixture.dataset),
@@ -619,20 +648,17 @@ fn bench_focus_realtime(c: &mut Criterion) {
     )
     .expect("realtime benchmark preparation must succeed");
     let preparation_elapsed = preparation_started.elapsed();
-    drop(preparation_guard);
+    let measured = preparation_window.close();
     println!(
         "[shacl_focus_prepare] dataset_focus_nodes={DATASET_FOCUS_NODES} elapsed_ns={} allocations={} allocated_bytes={}",
         preparation_elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
-    let all_focus_ids: Vec<_> = (0..*REALTIME_FOCUS_SIZES.last().expect("non-empty sizes"))
-        .map(|index| {
-            fixture
-                .dataset
-                .term_id_by_iri(&format!("{BENCH_EX}item{index}"))
-                .expect("benchmark focus must be interned")
-        })
+    // Minted BY the binding: a focus id names the binding it belongs to, so it
+    // cannot be resolved from the dataset beside it.
+    let all_focus_ids: Vec<FocusId> = (0..*REALTIME_FOCUS_SIZES.last().expect("non-empty sizes"))
+        .map(|index| focus_id(&prepared, &format!("{BENCH_EX}item{index}")))
         .collect();
 
     let mut group = c.benchmark_group("shacl_focus_realtime");
@@ -674,15 +700,167 @@ fn bench_focus_realtime(c: &mut Criterion) {
     group.finish();
 }
 
+/// One binding over one graph, with a conforming and a violating focus
+/// population addressable separately.
+struct ContrastFixture {
+    prepared: PreparedValidator,
+    conforming_ids: Vec<FocusId>,
+    violating_ids: Vec<FocusId>,
+    dataset_focus_nodes: usize,
+}
+
+/// Build the contrast fixture: one dataset, one preparation, two focus
+/// populations differing only in whether they satisfy the shape.
+fn contrast_fixture() -> ContrastFixture {
+    let violating = *REALTIME_FOCUS_SIZES
+        .last()
+        .expect("realtime sizes are non-empty");
+    let fixture = core_focus_dataset(CONTRAST_DATASET_FOCUS_NODES, violating);
+    let prepared = PreparedValidator::from_projected_dataset(
+        Arc::clone(&fixture.dataset),
+        Arc::new(fixture.shapes.clone()),
+    )
+    .expect("contrast benchmark preparation must succeed");
+    let conforming_ids = (0..violating)
+        .map(|index| focus_id(&prepared, &format!("{BENCH_EX}item{index}")))
+        .collect();
+    let violating_ids = (0..violating)
+        .map(|index| focus_id(&prepared, &format!("{BENCH_EX}unlabelled-item{index}")))
+        .collect();
+    ContrastFixture {
+        prepared,
+        conforming_ids,
+        violating_ids,
+        dataset_focus_nodes: fixture.focus_nodes,
+    }
+}
+
+/// Validate a conforming focus set through the change path; answer its result
+/// count, which must be zero.
+fn validate_conforming_ids(prepared: &PreparedValidator, focus_ids: &[FocusId]) -> usize {
+    let report = prepared
+        .validate_focus_node_ids(focus_ids)
+        .expect("conforming contrast validation must not error");
+    assert!(report.conforms, "the conforming contrast row must conform");
+    let results = report.results.len();
+    black_box(report);
+    results
+}
+
+/// Validate a violating focus set through the same path; answer its result count,
+/// which must be one per focus node.
+///
+/// The count is asserted, not merely reported: a cheap row that had stopped
+/// producing results would otherwise be indistinguishable from a cheap row that
+/// still checked everything, and the whole contrast rests on the violating side
+/// really doing the work.
+fn validate_violating_ids(prepared: &PreparedValidator, focus_ids: &[FocusId]) -> usize {
+    let report = prepared
+        .validate_focus_node_ids(focus_ids)
+        .expect("violating contrast validation must not error");
+    assert!(
+        !report.conforms,
+        "the violating contrast row must not conform"
+    );
+    assert_eq!(
+        report.results.len(),
+        focus_ids.len(),
+        "every violating contrast focus node must contribute exactly one result"
+    );
+    let results = report.results.len();
+    black_box(report);
+    results
+}
+
+fn print_contrast_probe(
+    fixture: &ContrastFixture,
+    conformance: &str,
+    focus_ids: &[FocusId],
+    run: fn(&PreparedValidator, &[FocusId]) -> usize,
+) {
+    run(&fixture.prepared, focus_ids);
+    let window = WholeProcessWindow::open();
+    let started = Instant::now();
+    let results = run(&fixture.prepared, focus_ids);
+    let elapsed = started.elapsed();
+    let measured = window.close();
+    println!(
+        "[shacl_change_path_contrast] stage=2 conformance={conformance} dataset_focus_nodes={} requested_focus_nodes={} results={results} elapsed_ns={} allocations={} allocated_bytes={}",
+        fixture.dataset_focus_nodes,
+        focus_ids.len(),
+        elapsed.as_nanos(),
+        measured.allocations,
+        measured.requested_bytes,
+    );
+}
+
+/// The conforming-versus-violating contrast, which is what deferred
+/// materialization buys.
+///
+/// The change path materializes a focus node only where a result is built, so a
+/// conforming graph should pay a constant no matter how many focus nodes the
+/// change touched, while a violating one pays per violation. Both halves of that
+/// sentence are measurable and neither is worth much alone: the conforming row on
+/// its own is satisfied perfectly by a validator that stopped validating, and the
+/// violating row on its own says nothing about the common case. They are reported
+/// side by side, over one dataset and one binding, so the only thing that differs
+/// between two rows at the same size is whether the focus nodes conform.
+///
+/// Report-only, like every other group in this file: no threshold, ratio or
+/// baseline is asserted here. The zero-growth claim itself is an executable
+/// contract in `crates/shapes/tests/change_path_alloc.rs`, which is where it
+/// belongs — a bench that gated on it would be a gate on a machine, not on the
+/// code.
+fn bench_change_path_contrast(c: &mut Criterion) {
+    let fixture = contrast_fixture();
+
+    let mut group = c.benchmark_group("shacl_change_path_contrast");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    for &focus_nodes in REALTIME_FOCUS_SIZES {
+        for (conformance, ids, run) in [
+            (
+                "conforming",
+                &fixture.conforming_ids[..focus_nodes],
+                validate_conforming_ids as fn(&PreparedValidator, &[FocusId]) -> usize,
+            ),
+            (
+                "violating",
+                &fixture.violating_ids[..focus_nodes],
+                validate_violating_ids as fn(&PreparedValidator, &[FocusId]) -> usize,
+            ),
+        ] {
+            let probe = Once::new();
+            let fixture_ref = &fixture;
+            group.throughput(Throughput::Elements(focus_nodes as u64));
+            group.bench_with_input(
+                BenchmarkId::new(conformance, focus_nodes),
+                ids,
+                move |bencher, focus_ids| {
+                    probe.call_once(|| {
+                        print_contrast_probe(fixture_ref, conformance, focus_ids, run);
+                    });
+                    bencher.iter(|| {
+                        black_box(run(black_box(&fixture_ref.prepared), black_box(focus_ids)));
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 fn print_membership_preparation_probe(fixture: &MembershipFixture) -> PreparedValidator {
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     let prepared = prepare_membership_fixture(fixture);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     let dimensions = prepared.__class_membership_dimensions();
     assert_membership_dimensions(fixture, dimensions);
-    validate_prepared_ids(&prepared, &fixture.focus_ids[..1]);
+    validate_prepared_ids(&prepared, &membership_focus_ids(&prepared, 1));
     println!(
         "[shacl_subclass_prepare] variant={} dataset_focus_nodes={} quads={} terms={} class_depth={CLASS_DEPTH} indexed_typed_classes={} indexed_subject_ids={} ancestor_ids={} superclass_entries={} source_class_ids={} virtual_row_upper_bound={} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.variant.label(),
@@ -696,8 +874,8 @@ fn print_membership_preparation_probe(fixture: &MembershipFixture) -> PreparedVa
         dimensions[4],
         dimensions[5],
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
     prepared
 }
@@ -705,22 +883,22 @@ fn print_membership_preparation_probe(fixture: &MembershipFixture) -> PreparedVa
 fn print_membership_realtime_probe(
     fixture: &MembershipFixture,
     prepared: &PreparedValidator,
-    focus_ids: &[TermId],
+    focus_ids: &[FocusId],
 ) {
     validate_prepared_ids(prepared, focus_ids);
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     validate_prepared_ids(prepared, focus_ids);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     println!(
         "[shacl_subclass_realtime] variant={} dataset_focus_nodes={} requested_focus_nodes={} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.variant.label(),
         fixture.focus_nodes,
         focus_ids.len(),
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -733,6 +911,7 @@ fn bench_subclass_membership(c: &mut Criterion) {
     for variant in MembershipVariant::ALL {
         let fixture = membership_fixture(MEMBERSHIP_DATASET_FOCUS_NODES, variant);
         let prepared = print_membership_preparation_probe(&fixture);
+        let membership_ids = membership_focus_ids(&prepared, fixture.focus_ids.len());
 
         group.throughput(Throughput::Elements(fixture.focus_nodes as u64));
         group.bench_with_input(
@@ -746,7 +925,7 @@ fn bench_subclass_membership(c: &mut Criterion) {
         );
 
         for &focus_nodes in REALTIME_FOCUS_SIZES {
-            let focus_ids = &fixture.focus_ids[..focus_nodes];
+            let focus_ids = &membership_ids[..focus_nodes];
             let probe = Once::new();
             group.throughput(Throughput::Elements(focus_nodes as u64));
             group.bench_with_input(
@@ -793,19 +972,19 @@ fn print_membership_pattern_probe<D>(
         membership_pattern_count(view, subject, Some(fixture.rdf_type), object),
         expected_rows
     );
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     let rows = membership_pattern_count(view, subject, Some(fixture.rdf_type), object);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     assert_eq!(rows, expected_rows);
     println!(
         "[shacl_subclass_pattern] variant={} pattern={pattern} dataset_focus_nodes={} result_rows={rows} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.variant.label(),
         fixture.focus_nodes,
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -911,18 +1090,18 @@ fn bench_subclass_rule_rounds(c: &mut Criterion) {
     for variant in MembershipVariant::ALL {
         let fixture = membership_fixture(MEMBERSHIP_RULE_FOCUS_NODES, variant);
         run_membership_rules(&fixture, &shapes);
-        let guard = ValidationCountGuard::start();
+        let window = WholeProcessWindow::open();
         let started = Instant::now();
         run_membership_rules(&fixture, &shapes);
         let elapsed = started.elapsed();
-        drop(guard);
+        let measured = window.close();
         println!(
             "[shacl_subclass_rule_rounds] variant={} focus_nodes={} rounds=2 index_builds_per_round=1 elapsed_ns={} allocations={} allocated_bytes={}",
             variant.label(),
             fixture.focus_nodes,
             elapsed.as_nanos(),
-            VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-            VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+            measured.allocations,
+            measured.requested_bytes,
         );
         group.bench_with_input(
             BenchmarkId::from_parameter(variant.label()),
@@ -1006,10 +1185,6 @@ fn schema_import_fixture() -> String {
     .expect("benchmark schema serializes")
 }
 
-fn allocation_snapshot() -> (u64, u64) {
-    (ALLOCATIONS.with(Cell::get), ALLOCATED_BYTES.with(Cell::get))
-}
-
 fn linkml_import_fixture(config: &SchemaImportConfig) -> LinkmlDocument {
     let imported = import_json_schema(&schema_import_fixture(), config)
         .expect("benchmark source schema imports");
@@ -1039,15 +1214,15 @@ fn bench_schema_import(c: &mut Criterion) {
     assert_eq!(warm.shapes.node_shapes.len(), IMPORT_CLASSES);
     drop(warm);
 
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let observed = import_json_schema(&schema, &config).expect("allocation probe imports");
-    let after = allocation_snapshot();
+    let measured = window.close();
     assert_eq!(observed.shapes.node_shapes.len(), IMPORT_CLASSES);
     println!(
         "[shacl_schema_import] classes={IMPORT_CLASSES} properties={} allocations={} allocated_bytes={}",
         IMPORT_CLASSES * IMPORT_PROPERTIES_PER_CLASS,
-        after.0 - before.0,
-        after.1 - before.1
+        measured.allocations,
+        measured.requested_bytes
     );
     black_box(observed);
 
@@ -1081,15 +1256,15 @@ fn bench_linkml_import(c: &mut Criterion) {
     assert_eq!(warm.shapes.node_shapes.len(), expected_shapes);
     drop(warm);
 
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let observed = import_linkml(&document, &config).expect("allocation probe imports");
-    let after = allocation_snapshot();
+    let measured = window.close();
     assert_eq!(observed.shapes.node_shapes.len(), expected_shapes);
     println!(
         "[shacl_linkml_import] source_classes={IMPORT_CLASSES} source_properties={} imported_shapes={expected_shapes} allocations={} allocated_bytes={}",
         IMPORT_CLASSES * IMPORT_PROPERTIES_PER_CLASS,
-        after.0 - before.0,
-        after.1 - before.1
+        measured.allocations,
+        measured.requested_bytes
     );
     black_box(observed);
 
@@ -1225,15 +1400,15 @@ fn bench_linkml_slot_emission(c: &mut Criterion) {
             assert_output(&warm);
             drop(warm);
 
-            let before = allocation_snapshot();
+            let window = CurrentThreadWindow::open();
             let observed = emit_linkml(&compiled, &config).expect("allocation probe emits");
-            let after = allocation_snapshot();
+            let measured = window.close();
             assert_output(&observed);
             println!(
                 "[linkml_slot_emission] mode={} slots={slots} renames={expected_renames} collisions={expected_collisions} allocations={} allocated_bytes={}",
                 mode.label(),
-                after.0 - before.0,
-                after.1 - before.1
+                measured.allocations,
+                measured.requested_bytes
             );
             black_box(observed);
 
@@ -1264,6 +1439,7 @@ criterion_group!(
     bench_focus_closed,
     bench_focus_sparql,
     bench_focus_realtime,
+    bench_change_path_contrast,
     bench_subclass_membership,
     bench_subclass_patterns,
     bench_subclass_rule_rounds,

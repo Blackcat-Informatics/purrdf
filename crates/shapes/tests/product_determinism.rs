@@ -36,9 +36,16 @@
 //! # Regeneration
 //!
 //! `fixtures/prepared-shapes-core.product` is this build's output for
-//! [`product_fixture::SHAPES`]. When the container format legitimately changes,
-//! [`frozen_product_bytes`] fails, and the artifact and [`GOLDEN_LEN`] are updated
-//! together in the same reviewable commit as the format change.
+//! [`product_fixture::SHAPES`]. When the container format or the derived
+//! `STAGE_ID` legitimately changes, [`frozen_product_bytes`] fails, and the
+//! artifact and [`GOLDEN_LEN`] are updated together in the same reviewable commit
+//! as the change that moved them.
+//!
+//! That update is a **command**, not an improvisation:
+//! [`regenerate_the_prepared_product_fixture`] is `#[ignore]`d and run by name.
+//! It is a supported target rather than a scratch one because the step it
+//! replaces — a throwaway writer hand-rolled and then deleted — is where an
+//! artifact gets written by a build nobody can identify afterwards.
 //!
 //! `fixtures/prepared-shapes-core-format-v1-frozen.product` is NOT that file and
 //! is never regenerated — see [`the_frozen_format_epoch_product_stays_readable`].
@@ -203,8 +210,11 @@ fn frozen_product_bytes() {
         &bytes,
         product_fixture::GOLDEN,
         "this build writes a different product for the fixture than the committed golden, so \
-         the container format moved; re-prepare the artifact in the same commit as the format \
-         change, and expect every cached product in the wild to need the same treatment",
+         the container format or the derived stage id moved; re-prepare the artifact in the \
+         same commit as the change, with `cargo test -p purrdf-shapes --test \
+         product_determinism -- --ignored --exact --nocapture \
+         regenerate_the_prepared_product_fixture`, and expect every cached product in the wild \
+         to need the same treatment",
     );
 }
 
@@ -228,6 +238,78 @@ fn frozen_golden_admits() {
         product_fixture::expected_report_nt(),
         "the golden restored to a validator that answers differently from a fresh parse of the \
          same shapes graph",
+    );
+}
+
+// ── The supported regeneration path ────────────────────────────────────────────
+
+/// **Rewrite `fixtures/prepared-shapes-core.product` from this build. The one
+/// supported way to move that artifact.**
+///
+/// `#[ignore]`d, so it never runs as part of the suite: it WRITES a committed
+/// file, and a regeneration that fires by accident is indistinguishable from the
+/// format drift [`frozen_product_bytes`] exists to catch. Run it by name, and only
+/// after deciding that the move is legitimate:
+///
+/// ```text
+/// cargo test -p purrdf-shapes --test product_determinism -- \
+///     --ignored --exact --nocapture regenerate_the_prepared_product_fixture
+/// ```
+///
+/// Then set [`GOLDEN_LEN`] to the length it prints, and re-run the suite.
+///
+/// # Why this exists rather than a throwaway test somebody writes each time
+///
+/// `purrdf_shapes::product::STAGE_ID` is *derived*, never hand-incremented, so any
+/// change to the declarative model, the SPARQL built-in table, the
+/// constraint-component parameter table or the class-analysis derivation moves it
+/// — and every product this build writes with it, including this fixture. The
+/// census test that detects the move
+/// (`crates/shapes/tests/product_model_census.rs::stage_id_matches_shipped_constant`)
+/// can tell you the new digest, but re-preparing the artifact it invalidates was
+/// left to whoever happened to be holding the change. Improvised each time, in a
+/// scratch target deleted afterwards, that step is exactly where an artifact gets
+/// written by a build nobody can identify later, or where a `git checkout` during
+/// cleanup reverts a real change. It is a command now.
+///
+/// # What it deliberately does not touch
+///
+/// `fixtures/prepared-shapes-core-format-v1-frozen.product` is the cross-version
+/// reader proof's input and is **never** regenerated — see
+/// [`the_frozen_format_epoch_product_stays_readable`]. Regenerating it would
+/// delete the only evidence this repository holds that an older product still
+/// opens. This writes one path and names it literally.
+#[test]
+#[ignore = "writes a committed artifact; run by name when the format or the stage id moved"]
+fn regenerate_the_prepared_product_fixture() {
+    const FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/prepared-shapes-core.product"
+    );
+
+    let bytes = product_fixture::encode();
+
+    // Check before writing, not after: an artifact that cannot be restored is
+    // worse than a stale one, because the next run's failure names the format
+    // rather than this regeneration.
+    let restored = ShapesProduct::open(&bytes)
+        .expect("the product this build just wrote must open")
+        .admit(&ShapesProfile::CORE, &product_fixture::host())
+        .expect("the product this build just wrote must admit");
+    let restored_nt = product_fixture::report_nt(&restored);
+    product_fixture::assert_non_vacuous(&restored_nt);
+    assert_eq!(
+        restored_nt,
+        product_fixture::expected_report_nt(),
+        "the regenerated product restores to a validator that answers differently from a fresh \
+         parse of the same shapes graph, so it must not be committed",
+    );
+
+    std::fs::write(FIXTURE, &bytes).expect("the fixture path is writable");
+    println!("wrote {} bytes to {FIXTURE}", bytes.len());
+    println!(
+        "next: set GOLDEN_LEN in this file to {}, then re-run the suite",
+        bytes.len()
     );
 }
 

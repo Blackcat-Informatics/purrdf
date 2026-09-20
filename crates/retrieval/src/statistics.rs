@@ -23,11 +23,16 @@
 //!
 //! An unknown cardinality is not a zero one. Returning `Option` lets the
 //! planner distinguish "the provider measured nothing" from "the provider
-//! measured empty": the former falls back to the producer's declared row bound
-//! (except where that bound is genuinely unbounded — see
-//! [`PlanError::StatisticsUnavailable`](crate::PlanError::StatisticsUnavailable)),
-//! the latter narrows the stratum as far as a statistic is allowed to narrow
+//! measured empty": the former falls back to the producer's declared row bound —
+//! at the deepest depth a read can be taken to, where that bound is larger than a
+//! read can reach or is the genuinely unbounded `u64::MAX` — while the latter
+//! narrows the stratum as far as a statistic is allowed to narrow
 //! anything, which is to one row and no further.
+//!
+//! So a provider that measures nothing is never why a plan is refused. It leaves
+//! the declaration standing, and a declaration past the read range is recorded at
+//! the ceiling with the probe row one past it, so the read's own ending names the
+//! planned depth as the stopper — see [`plan`](crate::plan).
 //!
 //! # A statistic narrows a read; it never eliminates one
 //!

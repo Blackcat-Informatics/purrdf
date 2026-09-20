@@ -52,19 +52,6 @@ pub enum PlanError {
         reason: String,
     },
 
-    /// A stratum has no finite depth and no statistic supplies one.
-    ///
-    /// Raised when every selected producer in the stratum declares a genuinely
-    /// unbounded row count ([`u64::MAX`](u64::MAX)) and statistics report no
-    /// cardinality to bound it. Recording `u32::MAX` would claim a bound no
-    /// producer declared, so the plan is refused instead.
-    #[error("no cardinality is available for {predicate}")]
-    StatisticsUnavailable {
-        /// The stratum whose depth could not be bounded. Boxed so recording it
-        /// does not inflate every `Result<_, PlanError>`.
-        predicate: Box<crate::iri::Iri>,
-    },
-
     /// The request's own row bound is a number no read this layer plans can reach.
     ///
     /// A [`ReadBound::Bounded`](crate::ReadBound::Bounded) states how many fused

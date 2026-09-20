@@ -71,7 +71,8 @@ use purrdf_core::artifact::Identity;
 use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{UserFunctionRegistry, user_fn};
 
-use crate::engine::{ClassCatalog, PreparedShapes};
+use crate::engine::PreparedShapes;
+use crate::plan::ClassCatalog;
 use crate::provenance::{ProductRestore, ValidatorProvenance};
 use crate::shapes::{Shapes, link};
 

@@ -1135,6 +1135,15 @@ impl RdfDataset {
     }
 
     /// The id of an interned literal, borrowing all string components.
+    ///
+    /// The components are canonicalized exactly as interning canonicalizes them before
+    /// the probe — C0.1 datatype expansion, then the BCP 47 lowercase fold — because a
+    /// dataset can only ever CONTAIN canonical forms. Probing the caller's spelling
+    /// verbatim would report a term absent that this dataset genuinely holds, and the
+    /// callers that resolve an outside value against a dataset read that `None` as "new
+    /// term": a set-union seam then admits a second copy of a row it already has. The
+    /// fold is idempotent, so an already-canonical caller — the overwhelmingly common
+    /// one — is byte-identical to a verbatim probe and allocates nothing.
     #[must_use]
     pub fn term_id_by_literal(
         &self,
@@ -1143,6 +1152,18 @@ impl RdfDataset {
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
     ) -> Option<TermId> {
+        // A language tag names the datatype whatever the explicit one says (C0.1),
+        // identical to `RdfDatasetBuilder::intern_literal_parts`.
+        let datatype = if language.is_some() {
+            RdfLiteral::language_datatype_iri(direction)
+        } else {
+            datatype
+        };
+        let lowered = language
+            .filter(|tag| !super::builder::is_lowercase(tag))
+            .map(str::to_lowercase);
+        let language = lowered.as_deref().or(language);
+
         let datatype_id = self.term_id_by_iri(datatype)?;
         let mut hasher = ahash::AHasher::default();
         2u8.hash(&mut hasher);

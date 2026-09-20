@@ -83,6 +83,13 @@ purrdf-slice = { workspace = true }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }
+# The workspace's shared counting allocator, for `benches/validate.rs`, which is
+# the one target here needing BOTH measurement modes in one process: per-thread
+# figures for the single-threaded import/emission probes, whole-process figures
+# for the rayon-parallel validation phases. Path-only and unpublished, so it is
+# stripped from the packaged manifest; std-only and dependency-free, so unlike
+# the three harness crates below it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
 # Rust parser for the structural source census (`tests/product_model_census.rs`).
 # The declarative SHACL model's totality guarantee — a codec covers every variant
 # and every field — is only mechanical if the variant/field set is READ from the

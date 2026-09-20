@@ -130,7 +130,15 @@
 //!   [`DuplicatePolicy::Unique`](purrdf_sparql_eval::DuplicatePolicy::Unique).**
 //!   Then depth `min(declared, statistics-narrowed, k)` is *exact* — the proof is
 //!   below, and it runs on two premises rather than one.
-//! * **Anything else** — two strata that share a block, any stratum declaring
+//! * **Exactly one surviving stratum, declaring
+//!   [`DuplicatePolicy::Unique`](purrdf_sparql_eval::DuplicatePolicy::Unique).**
+//!   The same depth, and the same proof with its first premise discharged for
+//!   free: disjointness is a statement about *pairs*, and there is no pair. What
+//!   the blocks are declared to be — including
+//!   [`Unrestricted`](purrdf_sparql_eval::CandidateDomains::Unrestricted) — cannot
+//!   change that, so no declaration is asked for.
+//! * **Anything else** — two strata that share a block, one of two-or-more strata
+//!   declaring
 //!   [`Unrestricted`](purrdf_sparql_eval::CandidateDomains::Unrestricted), or any
 //!   stratum declaring
 //!   [`DuplicatePolicy::Allowed`](purrdf_sparql_eval::DuplicatePolicy::Allowed) —
@@ -189,17 +197,42 @@
 //! more at a tight depth than at a loose one. That row is a read and never a
 //! value, so it is the probe that supplies it and not the depth.
 //!
+//! ## The one-stratum case, where the first premise is vacuous
+//!
+//! Take `m = 1`. The premise the disjointness is for — a candidate has at most one
+//! naming stratum — is then not *inferred* from the count; it is what "one
+//! stratum" means. There is exactly one stream, so every candidate the answer can
+//! hold was named by it, every fused score is that stream's single weighted
+//! contribution, and the proof above runs word for word with the pairwise step
+//! ranging over no pair. A `k`-row prefix of a `Unique` stream is `k` candidates,
+//! its rank order is the fused order, and reading past `k` can only produce rows
+//! the tie-break has already put below the `k` above them.
+//!
+//! So a single stratum is asked for no domain declaration at all, and
+//! `Unrestricted` is not withheld from it. Withholding it was an over-refusal of
+//! exactly the ordinary configuration: neither shipped ranked relation declares a
+//! domain, `Unrestricted` is what the text relation's own documentation calls the
+//! honest value where the host has no blocks to name, and the cost fell on the
+//! read rather than on the answer — a top-five over a declared ten-billion-row
+//! index recorded a depth at [`MAX_READ_DEPTH`] and emitted `LIMIT 4294967295`
+//! where five rows were wanted, with [`execute`](crate::execute) materializing
+//! every row the unit returned.
+//!
+//! What this does *not* do is rest a multi-stratum depth on a count. With a second
+//! surviving producer the pair exists, the premise is a promise again, and an
+//! `Unrestricted` declaration supplies none — so the narrowing stops, by the rule
+//! below, at the moment the pair appears rather than silently after it. The depth
+//! is derived per request from the registry in hand, so "a second producer is
+//! registered" is re-decided rather than inherited.
+//!
 //! ## Why `Unrestricted` and `Allowed` are excluded, and why neither is an
 //! over-refusal
 //!
-//! The first premise — each candidate has at most one naming stratum — is
+//! With two or more surviving strata the first premise — each candidate has at
+//! most one naming stratum — is
 //! supplied by the domain declarations and by nothing else. An `Unrestricted`
 //! declaration supplies none: it says the producer may name anything, which is
 //! exactly the promise that lets two strata name one candidate and sum into it.
-//! Inferring the premise from the *shape of the plan* instead — one stratum, so
-//! there is nobody to overlap with — would rest the depth on a count rather than
-//! on a promise, and it would stop holding the moment a second producer is
-//! registered, silently.
 //!
 //! The second premise — that the rows above rank `r` name `r-1` distinct
 //! candidates — is supplied by `DuplicatePolicy::Unique` and by nothing else. An
@@ -309,7 +342,7 @@ use purrdf_sparql_eval::{
     CandidateDomains, DuplicatePolicy, PfDescriptor, PropertyFunctionRegistry, RankedDeclaration,
 };
 
-use crate::admission::MAX_READ_DEPTH;
+use crate::admission::{MAX_READ_DEPTH, declared_row_bound};
 use crate::error::PlanError;
 use crate::iri::Iri;
 use crate::matching::{carries_content, pattern_matches, place};
@@ -357,14 +390,12 @@ const PPM_UNIT: u64 = 1_000_000;
 /// * [`PlanError::NoApplicableProducers`] when no registered producer accepts any
 ///   term of the request, or when every producer that does accept one cannot be
 ///   invoked for it.
-/// * [`PlanError::StatisticsUnavailable`] when a selected producer declares an
-///   unbounded row count, statistics supply no cardinality to bound it, and the
-///   request's own bound licenses no prefix either.
 /// * [`PlanError::ReadBoundBeyondDepthRange`] when the request's own bound is
 ///   above the deepest depth a read can be taken to, which no per-stratum depth
-///   can address. A *declared* row bound above that ceiling is not an error: it is
-///   recorded at the ceiling, and the ending says the planned depth stopped the
-///   read — see this module's header.
+///   can address. A *declared* row bound above that ceiling is not an error, at any
+///   size up to and including the genuinely unbounded `u64::MAX`: it is recorded at
+///   the ceiling, and the ending says the planned depth stopped the read — see this
+///   module's header.
 pub fn plan(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry,
@@ -402,7 +433,7 @@ pub fn plan(
     // 3. Match request terms to producers by declared capability only. This pass
     //    settles term matching and nothing else; a producer that matches here is
     //    still only a candidate, because whether its declaration can actually
-    //    *render* those terms into its argument positions is decided in step 5.
+    //    *render* those terms into its argument positions is decided in step 4.
     let mut candidates: Vec<Candidate<'_>> = Vec::new();
     for descriptor in &descriptors {
         let producer = descriptor.iri.clone();
@@ -462,13 +493,7 @@ pub fn plan(
         });
     }
 
-    // 4. The depth every candidate would be invoked at. `place` renders the
-    //    per-stratum depth into an argument for a producer that declares a depth
-    //    placement, so the bound has to exist before placement runs — over the
-    //    term-matched set, which is the widest set placement can survive from.
-    let provisional = depth_bounds(&candidates, &request.terms, statistics);
-
-    // 5. Placement: can this producer's declaration actually render the terms it
+    // 4. Placement: can this producer's declaration actually render the terms it
     //    matched into its own argument positions, under a mode it declares? A
     //    producer that cannot is rejected here rather than emitted as a call that
     //    silently drops the facet it could not write.
@@ -511,28 +536,25 @@ pub fn plan(
         // `NoApplicableProducers`, a message that denies the very acceptance the
         // matching pass had just recorded.
         //
-        // A stratum with no provisional entry is handed the deepest depth a read
-        // can be taken to, for the reason `depth_bounds` carries that number for a
-        // bound no depth can serve: this value only lets `place` run, and the one
-        // property it owes is that no producer is handed a depth *smaller* than
-        // the one its stratum finally records.
-        let depth = provisional.get(stratum).copied().unwrap_or(MAX_READ_DEPTH);
-        if place(
+        // Placement takes no depth, which is why this pass runs before any depth
+        // exists rather than after a provisional one. The access mode an invocation
+        // has is decided by which argument positions are occupied, and the position a
+        // declared depth placement occupies is occupied whatever number lands in it —
+        // so the mode, and therefore the row bound the next step reads at that mode,
+        // are knowable before a depth is chosen.
+        let Ok(invocation) = place(
             &candidate.producer,
             descriptor,
             declaration,
             &request.terms,
             carried,
-            depth,
-        )
-        .is_err()
-        {
+        ) else {
             decisions.push(ProducerDecision::Rejected {
                 producer: candidate.producer.clone(),
                 reason: RejectionReason::UnsatisfiedConstraint,
             });
             continue;
-        }
+        };
         decisions.push(ProducerDecision::Selected {
             producer: candidate.producer.clone(),
             stratum: stratum.clone(),
@@ -542,7 +564,17 @@ pub fn plan(
             stratum: stratum.clone(),
             request_terms: carried.clone(),
         });
-        selected.push((stratum.clone(), declared_row_bound(descriptor)));
+        // The declaration read at the mode this producer will actually be invoked
+        // under — the waist's own function, called here rather than restated, because
+        // the depth derived from this number is the depth that waist holds to it.
+        // Read at the widest mode instead, a plan recorded a depth the invoked mode
+        // had declared it could not serve.
+        selected.push((
+            stratum.clone(),
+            declared_row_bound(descriptor, Some(invocation.mode))
+                .rows()
+                .unwrap_or(0),
+        ));
         surviving_declarations.insert(
             stratum.clone(),
             (&declaration.domains, declaration.duplicates),
@@ -553,7 +585,7 @@ pub fn plan(
         return Err(PlanError::NoApplicableProducers);
     }
 
-    // 5b. Per-TERM evidence, which the per-producer decisions above cannot
+    // 4b. Per-TERM evidence, which the per-producer decisions above cannot
     //     carry. A request term the bindings do not reach went unserved, and the
     //     two ways that happens are different facts about the registry: nothing
     //     declared a shape that accepts it at all, or something did and every
@@ -562,7 +594,7 @@ pub fn plan(
     //     than as a term that quietly fell out of the plan.
     let unserved_terms = unserved_terms(&request.terms, &candidates, &bindings);
 
-    // 6. Per-stratum depth over the SURVIVING set: a producer dropped in step 5
+    // 5. Per-stratum depth over the SURVIVING set: a producer dropped in step 4
     //    can lower its stratum's worst-case bound, and recording the wider bound
     //    would license a depth no remaining producer can fill. The bound is the
     //    declared row count, capped by a measured cardinality when statistics
@@ -596,13 +628,15 @@ pub fn plan(
         let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
         let reached = terms_at(&request.terms, reaching.get(stratum));
         let bound = capped(declared, stratum, &reached, statistics, prefix);
-        if bound == u64::MAX {
-            return Err(PlanError::StatisticsUnavailable {
-                predicate: Box::new(stratum.clone()),
-            });
-        }
         // Recorded at the deepest depth a read can be taken to wherever the
-        // declared bound is deeper than that. The old truncation to `u32::MAX` was
+        // declared bound is deeper than that — including the genuinely unbounded
+        // `u64::MAX`, which is the same fact about the read: more rows than a read
+        // can reach. This used to be `PlanError::StatisticsUnavailable`, and what
+        // made that refusal obsolete is the line below. It refused `u64::MAX` and
+        // served `u64::MAX - 1`, two declarations of an index larger than any read,
+        // at the identical depth and with the identical ending — so the refusal
+        // separated a declaration from its own neighbour and bought nothing the
+        // ending does not already report. The old truncation to `u32::MAX` was
         // wrong for two reasons and only one of them was the number: it recorded a
         // depth **below** the bound it was derived to serve with nothing anywhere
         // reporting the difference, and `u32::MAX` was also the one depth whose
@@ -619,11 +653,11 @@ pub fn plan(
         stratum_depths.insert(stratum.clone(), depth);
     }
 
-    // 5. Capture the statistics the planner actually consulted: the strata it
+    // 6. Capture the statistics the planner actually consulted: the strata it
     //    placed and the predicates the request named.
     let statistics_snapshot = capture_statistics(request, &strata, &reaching, statistics);
 
-    // 6. Record both registry identities.
+    // 7. Record both registry identities.
     Ok(Plan {
         version: Plan::VERSION,
         request_terms: request.terms.clone(),
@@ -684,81 +718,6 @@ enum Outcome<'a> {
         /// actually receives, and therefore the ones it is bound to.
         carried: Vec<u32>,
     },
-}
-
-/// The depth each stratum would carry over the term-matched candidates.
-///
-/// This is the provisional bound placement is run against, not the bound the
-/// plan records: it is computed over the widest set (every producer whose terms
-/// matched), so a producer can only ever be handed a depth at least as large as
-/// the one its stratum finally records. A stratum whose bound no depth can express
-/// — an unbounded declaration with no statistic to bound it, or a declared bound
-/// above [`MAX_READ_DEPTH`] — is carried as [`MAX_READ_DEPTH`] here.
-///
-/// Carried as the read ceiling rather than as [`u32::MAX`], and the distinction is
-/// the point of the number: it is the deepest depth `plan` itself can record, so no
-/// depth this planner hands to anything is one no plan could record. Such a stratum
-/// has no smaller final depth to contradict either — its producer is dropped at
-/// placement, or `plan` records the same ceiling, or the unbounded case is refused
-/// there by name ([`PlanError::StatisticsUnavailable`]). Nothing reads this value as
-/// a row count and no plan records it: it decides only whether a producer's declared
-/// depth placement *renders*.
-///
-/// The terms read are the **carried** ones, matching what `plan` finally
-/// records. Reading the accepted set instead would let a stratum's provisional
-/// depth be narrowed by a selectivity its final depth is not, which is the one
-/// direction the invariant above forbids.
-///
-/// The request's own bound ([`ReadBound`]) is deliberately **not** applied here,
-/// for that same invariant. This depth exists only so [`place`] can be run, and
-/// the one property it owes is that no producer is ever handed a depth smaller
-/// than the one its stratum finally records; the request's bound only ever lowers
-/// a depth, so applying it on this side could only push against that direction
-/// while buying nothing — the number never reaches a plan, a unit or a row.
-///
-/// Every finite depth here carries [`capped`]'s floor of one, which matters
-/// more at this step than at the final one: this is the depth [`place`] renders
-/// into a producer's declared depth argument, so a zero would hand a relation a
-/// literal instruction to return nothing before anything had read a row. The
-/// floor applies to a registry bound of zero exactly as it does to a measured
-/// zero, and for the same reason — the one row it asks for is the probe that lets
-/// the producer say, in its own receipt, that it has none.
-fn depth_bounds(
-    candidates: &[Candidate<'_>],
-    terms: &[RequestTerm],
-    statistics: &impl Statistics,
-) -> BTreeMap<Iri, u32> {
-    let mut bounds: BTreeMap<Iri, u64> = BTreeMap::new();
-    let mut reaching: BTreeMap<Iri, BTreeSet<u32>> = BTreeMap::new();
-    for candidate in candidates {
-        let Outcome::Matched {
-            descriptor,
-            stratum,
-            carried,
-            ..
-        } = &candidate.outcome
-        else {
-            continue;
-        };
-        // One producer per stratum, so this key is fresh: see `plan`'s own
-        // `declared_bounds` for why there is no worst case to take here.
-        bounds.insert(stratum.clone(), declared_row_bound(descriptor));
-        reaching
-            .entry(stratum.clone())
-            .or_default()
-            .extend(carried.iter().copied());
-    }
-    bounds
-        .into_iter()
-        .map(|(stratum, declared)| {
-            let reached = terms_at(terms, reaching.get(&stratum));
-            let bound = capped(declared, &stratum, &reached, statistics, None);
-            let depth = u32::try_from(bound)
-                .unwrap_or(MAX_READ_DEPTH)
-                .min(MAX_READ_DEPTH);
-            (stratum, depth)
-        })
-        .collect()
 }
 
 /// The request terms a recorded index set names, in ascending index order.
@@ -860,22 +819,27 @@ fn unserved_terms(
 /// surviving producers' own declarations. There is no caller hint, no mode and no
 /// heuristic.
 ///
-/// `Some(k)` requires **all three** of the conditions the proof's premises rest
-/// on:
+/// `Some(k)` requires every surviving stratum to declare
+/// [`DuplicatePolicy::Unique`] — which is what makes its depth-`k` prefix `k`
+/// *candidates* rather than `k` rows. A repeat under [`DuplicatePolicy::Allowed`]
+/// is validated, charged and then discarded by
+/// [`FusionStream`](crate::FusionStream), so such a prefix can hold fewer
+/// candidates than rows and is then not a superset of the top `k`.
 ///
-/// * every surviving stratum declares a block set — an `Unrestricted` stratum
+/// Beyond that the answer turns on how many strata survive, because the other
+/// premise — each candidate has at most one naming stratum — is about *pairs*:
+///
+/// * **one** surviving stratum: there is no pair, so the premise holds with
+///   nothing declared. Its rank order is the fused order, so its `k`-row prefix is
+///   the top `k`, whatever it says about which blocks it may name;
+/// * **two or more**: each must declare a block set — an `Unrestricted` stratum
 ///   promises nothing about which candidates it will not name, so it supplies no
-///   premise at all;
-/// * no two of those sets meet, which is what makes each candidate's naming
-///   stratum unique and its fused score a single term rather than a sum;
-/// * every one of those strata declares [`DuplicatePolicy::Unique`], which is what
-///   makes its depth-`k` prefix `k` *candidates* rather than `k` rows. A repeat
-///   under [`DuplicatePolicy::Allowed`] is validated, charged and then discarded
-///   by [`FusionStream`](crate::FusionStream), so such a prefix can hold fewer
-///   candidates than rows and is then not a superset of the top `k`.
+///   premise at all — and no two of those sets may meet, which is what makes each
+///   candidate's naming stratum unique and its fused score a single term rather
+///   than a sum.
 ///
-/// [`CandidateDomains::intersects`] decides the second, and it is the right
-/// question rather than a convenient one: it is true exactly when some candidate
+/// [`CandidateDomains::intersects`] decides the pairwise question, and it is the
+/// right one rather than a convenient one: it is true exactly when some candidate
 /// could satisfy both declarations, which is exactly the case the merge argument
 /// cannot survive.
 ///
@@ -890,9 +854,9 @@ fn licensed_prefix(
         return None;
     };
     // The duplicate policies are read first and in one pass, and a single
-    // `Allowed` stratum ends the question before any block set is compared: that
-    // stream's rows are not its candidates, so no arrangement of the declared
-    // blocks can make a depth of `k` hold `k` candidates.
+    // `Allowed` stratum ends the question before any block set is consulted: that
+    // stream's rows are not its candidates, so neither the declared blocks nor the
+    // stratum count can make a depth of `k` hold `k` candidates.
     let declared: Vec<&CandidateDomains> = declarations
         .values()
         .map(|(domains, duplicates)| match duplicates {
@@ -900,6 +864,13 @@ fn licensed_prefix(
             DuplicatePolicy::Allowed => None,
         })
         .collect::<Option<Vec<&CandidateDomains>>>()?;
+    // One stratum, so the disjointness premise is vacuous rather than unmet: the
+    // scan below would range over no pair, and a promise about blocks has nothing
+    // left to rule out. Uniqueness alone carries the prefix here — see this
+    // module's header.
+    if declared.len() == 1 {
+        return Some(top_k.get() as u64);
+    }
     if declared
         .iter()
         .any(|entry| matches!(entry, CandidateDomains::Unrestricted))
@@ -963,9 +934,9 @@ fn licensed_prefix(
 /// never reaches this function.
 ///
 /// The genuinely unbounded case returns before the floor and keeps returning
-/// [`u64::MAX`]: the caller turns that into
-/// [`PlanError::StatisticsUnavailable`], and flooring it would be flooring an
-/// absent bound rather than a derived one.
+/// [`u64::MAX`]: flooring it would be flooring an absent bound rather than a
+/// derived one, and the caller records it at the deepest depth a read can be taken
+/// to, exactly as it records any other declaration larger than a read can reach.
 fn capped(
     declared: u64,
     stratum: &Iri,
@@ -977,16 +948,15 @@ fn capped(
         Some(cardinality) => declared.min(cardinality),
         None => declared,
     };
-    // An unbounded stratum has no row count for a ratio to be a fraction of.
-    // Scaling `u64::MAX` would manufacture a finite bound out of a missing one
-    // and hide the condition `StatisticsUnavailable` exists to report.
+    // An unbounded stratum has no row count for a ratio to be a fraction of, so
+    // the selectivity step is skipped rather than applied: a fraction of an
+    // unmeasured total is not a measurement, and the caller is about to record this
+    // number at the read ceiling whatever fraction of it were taken.
     //
     // The request's own bound is the exception, and it is not a manufactured
     // bound: a stratum whose declaration promises unboundedly many rows, read for
     // an answer that provably cannot use more than `k` of them, is a read of `k`
-    // rows and not an unbounded read. Reporting `StatisticsUnavailable` there
-    // would refuse a plan whose depth is exactly known — the over-refusal mirror
-    // of the silent truncation the rest of this function guards against.
+    // rows and not an unbounded read.
     if bound == u64::MAX {
         return prefix.map_or(u64::MAX, |rows| rows.max(1));
     }
@@ -1148,19 +1118,6 @@ fn validate_bound(bound: ReadBound) -> Result<(), PlanError> {
         }
         ReadBound::Bounded(_) | ReadBound::Complete => Ok(()),
     }
-}
-
-/// A producer's worst-case declared row count across its access modes.
-///
-/// This is the registry's own cost declaration (`rows_per_invocation` per
-/// declared mode), read from the descriptor — never a parallel field.
-fn declared_row_bound(descriptor: &PfDescriptor) -> u64 {
-    descriptor
-        .modes
-        .iter()
-        .map(|mode| mode.rows_per_invocation)
-        .max()
-        .unwrap_or(0)
 }
 
 /// The predicate a request term names, when it names one.

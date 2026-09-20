@@ -21,17 +21,20 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TermValue};
+use purrdf_core::{
+    RdfDataset, RdfDatasetBuilder, ResourceDimension, SparqlRequest, SparqlResult, TermValue,
+};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, ExecutionError, Fixed,
-    FusionProfile, IndexGeneration, Iri, ProducerStatus, RankFidelity, RankedStream,
-    RankedStreamAdapter, RequestTerm, RetrievalRequest, ScoreExactness, SearchResult, ServiceLevel,
-    Statistics, StreamContract, Term, TopK, compile, execute, plan, search,
+    AdmissionEnvironment, BoundMode, CandidateDomains, CompiledRetrieval, DecayRule,
+    ExecutionError, Fixed, FusionProfile, IndexGeneration, Iri, ProducerStatus, RankFidelity,
+    RankedStream, RankedStreamAdapter, RequestTerm, RetrievalRequest, ScoreExactness, SearchResult,
+    ServiceLevel, Statistics, StratumUnit, StreamContract, Term, TopK, UnitError, compile, execute,
+    plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const K: u32 = 60;
@@ -464,6 +467,32 @@ fn calling(producer: &str) -> String {
     format!("{{ SELECT (?r0 AS ?probe) WHERE {{ ( ?r0 ) <{producer}> ( ?r1 ) }} LIMIT 1 }}")
 }
 
+/// Replace the unit at `index` with one running `query`, a text of this test's own.
+///
+/// [`StratumUnit::new`] is the only way to hand `execute` a query nobody compiled, and
+/// it is what every substitution below goes through. Nothing else about the unit
+/// moves: the stratum, the contract, the depth and the declared row bound are the
+/// compiler's own, so each test varies exactly the thing it is about.
+///
+/// The cost of the seam is stated once here rather than at each site. A text this
+/// layer did not write is bounded by it only on the outside, so such a read is never
+/// certified `ProducerStatus::Exhausted`: it ends
+/// `ProducerStatus::SuppliedQueryEnded`, naming the caller's text as the stopper. The
+/// rows, the ranks, the refusals and the attestations are unaffected — they are
+/// observations rather than completeness claims.
+fn running(bundle: &mut CompiledRetrieval, index: usize, query: String) {
+    let unit = &bundle.units[index];
+    let replacement = StratumUnit::new(
+        unit.stratum.clone(),
+        query,
+        unit.contract.clone(),
+        unit.depth(),
+        unit.declared_rows(),
+    )
+    .expect("the compiler's own depth and declaration are admitted");
+    bundle.units[index] = replacement;
+}
+
 /// The unit that reads the graph: whatever `<mentions>` the fox, in IRI order.
 fn mentions_fox() -> String {
     format!(
@@ -482,7 +511,7 @@ fn execute_answers_from_the_callers_dataset() {
     // One stratum's unit is replaced with a graph query. The bundle is otherwise
     // exactly what `compile` produced, so the plan identity and the registry
     // instance the executor checks are the real ones.
-    bundle.units[0].sparql = mentions_fox();
+    running(&mut bundle, 0, mentions_fox());
 
     let alpha = iri(&ex(STRATA[0]));
     let mentions = ex("mentions");
@@ -504,7 +533,9 @@ fn execute_answers_from_the_callers_dataset() {
     );
     assert_eq!(
         execution.statuses[&alpha],
-        ProducerStatus::Exhausted { rows_emitted: 2 }
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "the two rows are the caller's query's, and so is whatever bounded it, so the \
+         ending names that query rather than certifying an exhaustion"
     );
 
     // The same bundle, the same registry, different stored data: the answer
@@ -607,7 +638,7 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
         bundle
             .units
             .iter()
-            .all(|unit| unit.sparql.contains(candidate.as_str())),
+            .all(|unit| unit.sparql().contains(candidate.as_str())),
         "the candidate is written back into the emitted text verbatim: {:?}",
         bundle.units
     );
@@ -646,8 +677,16 @@ fn an_unbound_projection_fails_its_stratum_while_a_bound_one_streams() {
     let mut bundle = compiled(&registry, &stats);
     // Stratum alpha asks for a topic the dataset does not hold, so its single
     // solution leaves `?candidate` unbound. Stratum beta asks for one it does.
-    bundle.units[0].sparql = optional_mentions(&ex("pf/alpha"), "topic/unicorn");
-    bundle.units[1].sparql = optional_mentions(&ex("pf/beta"), "topic/fox");
+    running(
+        &mut bundle,
+        0,
+        optional_mentions(&ex("pf/alpha"), "topic/unicorn"),
+    );
+    running(
+        &mut bundle,
+        1,
+        optional_mentions(&ex("pf/beta"), "topic/fox"),
+    );
 
     let dataset = dataset_of(&[(&ex("doc/alpha"), &ex("mentions"), &ex("topic/fox"))]);
     let mut execution = block_on(execute(&bundle, &registry, &*dataset)).expect("the units run");
@@ -689,8 +728,9 @@ fn an_unbound_projection_fails_its_stratum_while_a_bound_one_streams() {
     );
     assert_eq!(
         execution.statuses[&beta],
-        ProducerStatus::Exhausted { rows_emitted: 1 },
-        "the surviving stratum streams to completion"
+        ProducerStatus::SuppliedQueryEnded { rank: 1 },
+        "the surviving stratum streams its row to the end of the caller's own query, \
+         which is the ending this layer can honestly report of a text it did not write"
     );
 }
 
@@ -703,18 +743,47 @@ fn a_forced_failure_isolates_to_its_stratum() {
     let registry = fixture_registry();
     let stats = statistics();
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].sparql = "THIS IS NOT SPARQL".to_owned();
+    // A text that is not SPARQL never gets as far as a bundle: the constructor reads
+    // what it is handed, so this is refused there rather than isolated here.
+    let template = &bundle.units[0];
+    match StratumUnit::new(
+        template.stratum.clone(),
+        "THIS IS NOT SPARQL".to_owned(),
+        template.contract.clone(),
+        template.depth(),
+        template.declared_rows(),
+    )
+    .expect_err("a text that is not a query is not a unit")
+    {
+        UnitError::NotAQuery { reason } => assert!(
+            reason.contains("expected SELECT, CONSTRUCT, ASK or DESCRIBE"),
+            "the parser's own diagnostic reaches the caller: {reason}"
+        ),
+        other => panic!("expected NotAQuery, got {other:?}"),
+    }
+
+    // What is isolated here is a failure of a text that IS a query: it reaches for a
+    // user-defined function nothing registered, so the read cannot be performed at all.
+    running(
+        &mut bundle,
+        0,
+        format!(
+            "SELECT ?candidate WHERE {{ BIND(<{}>(1) AS ?candidate) }}",
+            ex("fn/absent")
+        ),
+    );
 
     let mut execution =
         block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("execution starts");
 
-    assert!(
-        matches!(
-            execution.statuses[&iri(&ex(STRATA[0]))],
-            ProducerStatus::ExecutionFailed { .. }
+    match &execution.statuses[&iri(&ex(STRATA[0]))] {
+        ProducerStatus::ExecutionFailed { reason } => assert!(
+            reason.contains(&ex("fn/absent")),
+            "the broken unit's stratum carries its own typed status, naming what it \
+             could not reach: {reason}"
         ),
-        "the broken unit's stratum carries its own typed status"
-    );
+        other => panic!("expected the failing stratum's own status, got {other:?}"),
+    }
     assert_eq!(execution.streams.len(), 1, "only the survivor streams");
     assert_eq!(
         candidates(&mut execution, &iri(&ex(STRATA[1]))).len(),
@@ -1060,9 +1129,9 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
     };
     let bundle = compile(&planned, &env).expect("admits");
     assert!(
-        bundle.units[0].sparql.ends_with("LIMIT 4"),
+        bundle.units[0].sparql().ends_with("LIMIT 4"),
         "the emitted bound is the depth plus one probe row: {}",
-        bundle.units[0].sparql
+        bundle.units[0].sparql()
     );
     assert_eq!(
         bundle.units[0].depth(),
@@ -1135,10 +1204,10 @@ fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
     };
     let bundle = compile(&planned, &env).expect("admits");
     assert!(
-        bundle.units[0].sparql.ends_with("LIMIT 4"),
+        bundle.units[0].sparql().ends_with("LIMIT 4"),
         "the probe slot exists at the declared bound too — erasing it there is the \
          one depth where `Exhausted` would be a guess: {}",
-        bundle.units[0].sparql
+        bundle.units[0].sparql()
     );
     assert_eq!(
         bundle.units[0].depth(),
@@ -1200,9 +1269,9 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
     };
     let bundle = compile(&planned, &env).expect("a depth at the bound is admitted, not refused");
     assert!(
-        bundle.units[0].sparql.ends_with("LIMIT 4"),
+        bundle.units[0].sparql().ends_with("LIMIT 4"),
         "the read reaches for the row the declaration ruled out: {}",
-        bundle.units[0].sparql
+        bundle.units[0].sparql()
     );
     assert_eq!(
         bundle.units[0].depth(),
@@ -1216,6 +1285,7 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
             stratum,
             declared,
             pulled,
+            mode,
         } => {
             assert_eq!(
                 stratum.as_str(),
@@ -1224,13 +1294,28 @@ fn an_under_declared_row_bound_is_refused_and_an_honest_one_is_not() {
             );
             assert_eq!(*declared, 3, "the promise the host has to go and fix");
             assert_eq!(*pulled, 4, "and the evidence that it is false");
+            assert_eq!(
+                *mode,
+                BoundMode::Subsuming {
+                    declared: BindingPattern::from_code("ff"),
+                    invoked: BindingPattern::from_code("fb"),
+                },
+                "this fixture declares the all-free mode alone and serves the needle \
+                 bound through it, which is the shape the reference relation has — so \
+                 the promise was read at `ff` and the refusal says which call it \
+                 served: {mode:?}"
+            );
         }
         other => panic!("the breach is refused by name, not reported as a status or as {other:?}"),
     }
     let message = error.to_string();
     assert!(
-        message.contains("at most 3 rows") && message.contains("returned 4"),
-        "both numbers reach a host that only reads the message: {message}"
+        message.contains(
+            "at most 3 rows per invocation under mode `ff`, which serves this call \
+             under mode `fb`, and the read returned 4"
+        ),
+        "both numbers and the declared mode they were read at reach a host that only \
+         reads the message: {message}"
     );
 
     // The neighbour that must stay green: the same depth, the same declaration,
@@ -1325,7 +1410,7 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     // The defect: two invocations of one relation, two generations.
     let (registry, opens) = registry_counting_opens(Attests::Moving);
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].sparql = driven_by_the_data(&ex("pf/alpha"));
+    running(&mut bundle, 0, driven_by_the_data(&ex("pf/alpha")));
     let error = block_on(execute(&bundle, &registry, &*dataset))
         .expect_err("a snapshot that moved mid-run invalidates the run");
     match error {
@@ -1356,7 +1441,7 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     // invocations, one unchanged index.
     let (registry, opens) = registry_counting_opens(Attests::Generation("gen-7"));
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].sparql = driven_by_the_data(&ex("pf/alpha"));
+    running(&mut bundle, 0, driven_by_the_data(&ex("pf/alpha")));
     let mut execution =
         block_on(execute(&bundle, &registry, &*dataset)).expect("one index is one generation");
     assert_eq!(
@@ -1379,7 +1464,9 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     );
     assert_eq!(
         execution.statuses[&alpha],
-        ProducerStatus::Exhausted { rows_emitted: 2 }
+        ProducerStatus::SuppliedQueryEnded { rank: 2 },
+        "an attestation is an observation and survives a caller's own query; the \
+         completeness claim is what does not"
     );
 }
 
@@ -1432,10 +1519,14 @@ fn the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it() {
     let registry = fixture_registry();
     let stats = statistics();
     let mut bundle = compiled(&registry, &stats);
-    bundle.units[0].sparql = format!(
-        "SELECT ?candidate WHERE {{ {} BIND(<{}>(1) AS ?candidate) }}",
-        calling(&ex("pf/alpha")),
-        ex("fn/deepen")
+    running(
+        &mut bundle,
+        0,
+        format!(
+            "SELECT ?candidate WHERE {{ {} BIND(<{}>(1) AS ?candidate) }}",
+            calling(&ex("pf/alpha")),
+            ex("fn/deepen")
+        ),
     );
     let mut execution = block_on(execute(&bundle, &registry, &*dataset_of(&[])))
         .expect("an unreachable function is a stratum's failure, never a budget trip");
@@ -1454,5 +1545,397 @@ fn the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it() {
         candidates(&mut execution, &iri(&ex(STRATA[1]))).len(),
         2,
         "and the sibling stratum answered, because nothing whole-run happened"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10. The bundle above the unit decides whose read the evidence describes
+// ---------------------------------------------------------------------------
+
+/// Re-tagging, swapping or dropping a unit AFTER the bundle was assembled is refused
+/// by name, and a bundle a caller assembles for itself still runs.
+///
+/// A unit's numbers and its query were sealed one at a time, each because a writable
+/// value there decided what a run could claim. The tag *above* them was the one left
+/// open: `CompiledRetrieval::units` is a public `Vec` and a unit's stratum is a public
+/// field, and every later step of a run is keyed by that stratum — the status map, the
+/// tag on the stream, the per-stratum weight a fusion profile applies. So three edits
+/// each produced a served answer carrying the real plan identity:
+///
+/// * renaming one unit's stratum onto its neighbour's ran two units and recorded ONE
+///   status, so a producer's evidence was simply gone;
+/// * swapping the two strata attached each status to the other producer's read, and the
+///   fused answer came back `Exact` over six rows;
+/// * removing a unit answered from one stratum fewer, still `Exact`, still under the
+///   plan identity of a plan that had two.
+///
+/// The waist already enforces the same implication one stage earlier — a stratum missing
+/// from the compiled set is a producer missing from the emitted text — and it is
+/// enforced from plan into `compile` and not from `compile` into `execute`. This is that
+/// second half.
+///
+/// The seam it must not close is executed first and last: a bundle assembled by a
+/// caller, and a unit whose *query* a caller substituted, both run. Only a bundle that
+/// changed after assembly is refused.
+#[test]
+fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not() {
+    let registry = fixture_registry();
+    let stats = statistics();
+    let alpha = iri(&ex(STRATA[0]));
+    let beta = iri(&ex(STRATA[1]));
+
+    // The seam, first: a bundle assembled out of the compiler's own units runs exactly
+    // as the compiler's own bundle does. Recording the attribution is not a lock on the
+    // door.
+    let source = compiled(&registry, &stats);
+    let by_hand = CompiledRetrieval::new(
+        source.units.clone(),
+        source.plan_id,
+        source.registry_id,
+        source.registry_fingerprint.clone(),
+        source.fused_bound,
+        source.resolution,
+    );
+    let execution = block_on(execute(&by_hand, &registry, &*dataset_of(&[])))
+        .expect("a bundle a caller assembled runs");
+    assert_eq!(
+        execution.statuses.len(),
+        2,
+        "both producers answered, each under its own stratum"
+    );
+
+    // (1) One unit's stratum renamed onto its neighbour's. Two units run, and without
+    //     the check they wrote one status between them.
+    let mut renamed = compiled(&registry, &stats);
+    renamed.units[1].stratum = alpha.clone();
+    let error = block_on(execute(&renamed, &registry, &*dataset_of(&[])))
+        .expect_err("a unit reporting under another producer's stratum");
+    match error {
+        ExecutionError::UnitsNotAsAssembled { plan, reason } => {
+            assert_eq!(plan, renamed.plan_id, "the refusal names the bundle's plan");
+            assert!(
+                reason.contains(alpha.as_str()) && reason.contains(beta.as_str()),
+                "and says which tag moved where: {reason}"
+            );
+        }
+        other => panic!("expected UnitsNotAsAssembled, got {other:?}"),
+    }
+
+    // (2) The two strata swapped. Both units still run and both statuses are still
+    //     written — each onto the other producer's read, which is why a count of
+    //     statuses could never have caught this.
+    let mut swapped = compiled(&registry, &stats);
+    swapped.units[0].stratum = beta;
+    swapped.units[1].stratum = alpha;
+    assert!(
+        matches!(
+            block_on(execute(&swapped, &registry, &*dataset_of(&[]))),
+            Err(ExecutionError::UnitsNotAsAssembled { .. })
+        ),
+        "a swap crosses two producers' evidence and is refused"
+    );
+
+    // (3) A unit removed. The narrowing the waist exists to prevent, one stage later.
+    let mut dropped = compiled(&registry, &stats);
+    dropped.units.remove(1);
+    match block_on(execute(&dropped, &registry, &*dataset_of(&[]))) {
+        Err(ExecutionError::UnitsNotAsAssembled { reason, .. }) => assert!(
+            reason.contains("assembled with 2 unit(s) and holds 1"),
+            "the count is reported before any position, because a removal shifts every \
+             position after it: {reason}"
+        ),
+        other => panic!("expected UnitsNotAsAssembled, got {other:?}"),
+    }
+
+    // (4) The promise a stream is held to is part of the attribution: a duplicate
+    //     policy rewritten after assembly is the same class of edit, and fusion reads
+    //     that policy before it pulls a row.
+    let mut relaxed = compiled(&registry, &stats);
+    relaxed.units[0].contract = StreamContract {
+        duplicates: DuplicatePolicy::Allowed,
+        // Carried over rather than restated: this test rewrites the DUPLICATE
+        // policy and nothing else, so a fidelity typed in here would be a second
+        // edit the assertion below could not tell apart from the first.
+        fidelity: relaxed.units[0].contract.fidelity.clone(),
+        domains: relaxed.units[0].contract.domains.clone(),
+    };
+    assert!(
+        matches!(
+            block_on(execute(&relaxed, &registry, &*dataset_of(&[]))),
+            Err(ExecutionError::UnitsNotAsAssembled { .. })
+        ),
+        "a rewritten declaration is not the declaration the producer made"
+    );
+
+    // And the seam once more, at the end: substituting a unit's QUERY is what
+    // `StratumUnit::new` is for, and it still runs. The attribution deliberately
+    // records neither the text nor the numbers, so the one thing refused above is the
+    // one thing that was wrong.
+    let mut supplied = compiled(&registry, &stats);
+    running(&mut supplied, 0, mentions_fox());
+    block_on(execute(&supplied, &registry, &*dataset_of(&[])))
+        .expect("a caller's own text in a compiled unit still runs");
+}
+
+// ---------------------------------------------------------------------------
+// 11. A caller's dataset clause decides which graphs the caller's query reads
+// ---------------------------------------------------------------------------
+
+/// The named graph the cases below address, holding rows the store's default graph
+/// does not.
+fn graph() -> String {
+    ex("g")
+}
+
+/// A dataset holding one matching triple in the default graph and two more in
+/// `<http://example.org/g>`.
+///
+/// The shape is what makes a dataset clause **observable**: every `FROM` spelling
+/// below selects a different set of graphs, and each set has a different answer, so a
+/// clause that was quietly dropped cannot pass as a clause that was honoured. Two rows
+/// in the named graph rather than one, because a case further down writes a `LIMIT` of
+/// its own and a bound of one is invisible against a single row.
+fn two_graphs() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let mentions = builder.intern_iri(&ex("mentions"));
+    let fox = builder.intern_iri(&ex("topic/fox"));
+    let plain = builder.intern_iri(&ex("doc/plain"));
+    let first = builder.intern_iri(&ex("doc/graphed-1"));
+    let second = builder.intern_iri(&ex("doc/graphed-2"));
+    let named = builder.intern_iri(&graph());
+    builder.push_quad(plain, mentions, fox, None);
+    builder.push_quad(first, mentions, fox, Some(named));
+    builder.push_quad(second, mentions, fox, Some(named));
+    builder
+        .freeze()
+        .expect("the fixture dataset is structurally valid")
+}
+
+/// A caller's query: whatever `<mentions>` the fox, in IRI order, read under the
+/// dataset `clause` names and matched by `pattern`.
+///
+/// `clause` is written where a WHOLE query writes one — between the projection and the
+/// `WHERE` — because that is the only place the grammar has for it, and the whole point
+/// of the cases below is that this text is a whole query when the caller writes it and
+/// a sub-`SELECT` after the layer wraps it.
+fn reading(clause: &str, pattern: &str) -> String {
+    format!(
+        "SELECT ?candidate {clause}WHERE {{ {} {pattern} }} ORDER BY ?candidate",
+        calling(&ex("pf/alpha"))
+    )
+}
+
+/// The pattern that reads the active default graph, whatever the clause made that.
+fn in_the_default_graph() -> String {
+    format!("?candidate <{}> <{}>", ex("mentions"), ex("topic/fox"))
+}
+
+/// The same pattern, addressed through `GRAPH ?g`, which only a `FROM NAMED` graph
+/// answers.
+fn in_an_addressable_graph() -> String {
+    format!("GRAPH ?g {{ {} }}", in_the_default_graph())
+}
+
+/// One of [`two_graphs`]'s documents, spelled as a candidate column reads it back.
+fn doc(name: &str) -> String {
+    format!("<{}>", ex(&format!("doc/{name}")))
+}
+
+/// The candidate column of a solution sequence, spelled as [`candidates`] spells it.
+///
+/// Every fixture here binds that column to an IRI, and anything else is this test's own
+/// mistake rather than an answer to interpret — so it panics instead of coercing.
+fn candidate_column(rows: &[Vec<Option<TermValue>>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| match row.first() {
+            Some(Some(TermValue::Iri(value))) => format!("<{value}>"),
+            other => panic!("the candidate column of these fixtures is an IRI: {other:?}"),
+        })
+        .collect()
+}
+
+/// The caller's text run by the evaluator as the WHOLE query it is, over `held`.
+///
+/// This is the oracle the wrapped read is held to. It is the answer the caller asked
+/// for — the text as written, parsed as a whole query, with its dataset clause in the
+/// position the grammar puts one — and the whole claim the wrap makes is that putting
+/// that text inside a bounded sub-`SELECT` does not change what it means.
+fn whole_query(
+    sparql: &str,
+    registry: &PropertyFunctionRegistry,
+    held: &RdfDataset,
+) -> Vec<String> {
+    let engine = NativeSparqlEngine::new();
+    let outcome = engine
+        .query_with_options_view(
+            held,
+            SparqlRequest {
+                query: sparql,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                property_functions: registry,
+                ..QueryOptions::EMPTY
+            },
+        )
+        .expect("the caller's own text evaluates as a whole query");
+    match outcome {
+        SparqlResult::Solutions { rows, .. } => candidate_column(&rows),
+        other => panic!("expected a SELECT solution sequence, got {other:?}"),
+    }
+}
+
+/// The same text run the way a unit runs it: wrapped, bounded, through `execute`.
+fn wrapped_query(
+    sparql: &str,
+    registry: &PropertyFunctionRegistry,
+    stats: &MockStatistics,
+    held: &RdfDataset,
+) -> (Vec<String>, ProducerStatus) {
+    let mut bundle = compiled(registry, stats);
+    running(&mut bundle, 0, sparql.to_owned());
+    let alpha = iri(&ex(STRATA[0]));
+    let mut execution = block_on(execute(&bundle, registry, held)).expect("the units run");
+    let rows = candidates(&mut execution, &alpha);
+    (rows, execution.statuses[&alpha].clone())
+}
+
+/// **A caller's `FROM` / `FROM NAMED` decides the wrapped read's dataset, and decides
+/// it the same way it decides the whole query's.**
+///
+/// The wrap is a sub-`SELECT`, and `SubSelect ::= SelectClause WhereClause
+/// SolutionModifier ValuesClause` has no `DatasetClause` in it. The clause used to be
+/// carried inside that wrapper, where the parser read it and then dropped it, and this
+/// is the defect that made that unacceptable rather than merely untidy: a caller writing
+/// `FROM <a-graph-that-does-not-exist>` got **rows** — read out of the very default
+/// graph the clause excluded — under an ordinary ending, with no refusal and no
+/// diagnostic anywhere. A wrong answer is worse than a broken one.
+///
+/// Every spelling is executed twice over the same data: once as the whole query the
+/// caller wrote, and once wrapped. The pair is the assertion. Asserting only the wrapped
+/// row counts would have passed against the defect, because the defect returned rows;
+/// only the comparison with the text's own meaning can see it. And the fixture is built
+/// so the spellings disagree with each other — a graph with rows the default graph does
+/// not have, and a graph with none at all — because over a dataset where every clause
+/// selects the same triples, a dropped clause and an honoured one are the same answer.
+#[test]
+fn a_supplied_dataset_clause_reads_the_graphs_it_names_wrapped_or_whole() {
+    let registry = fixture_registry();
+    let stats = statistics();
+    let held = two_graphs();
+
+    for (shape, text, expected) in [
+        // THE CONTROL: no dataset clause at all. The store's own default dataset
+        // answers, the emitted text is byte for byte what it always was, and this is
+        // the answer every clause below has to differ from for the rest of the case to
+        // mean anything.
+        (
+            "no dataset clause",
+            reading("", &in_the_default_graph()),
+            vec![doc("plain")],
+        ),
+        // (1) A graph the dataset does not hold. The active default graph is the merge
+        //     of nothing, so the pattern matches nothing. This is the case the defect
+        //     answered with the control's row.
+        (
+            "FROM a graph that does not exist",
+            reading(
+                &format!("FROM <{}> ", ex("no-such-graph")),
+                &in_the_default_graph(),
+            ),
+            Vec::new(),
+        ),
+        // (2) A graph the dataset does hold, whose rows are NOT the default graph's.
+        //     Both directions are therefore observable at once: the named graph's rows
+        //     arrive and the default graph's row does not.
+        (
+            "FROM a named graph",
+            reading(&format!("FROM <{}> ", graph()), &in_the_default_graph()),
+            vec![doc("graphed-1"), doc("graphed-2")],
+        ),
+        // (3) `FROM NAMED` addresses rather than merges, so it takes a `GRAPH` block to
+        //     reach and leaves the active default graph empty.
+        (
+            "FROM NAMED with a GRAPH block",
+            reading(
+                &format!("FROM NAMED <{}> ", graph()),
+                &in_an_addressable_graph(),
+            ),
+            vec![doc("graphed-1"), doc("graphed-2")],
+        ),
+        // (4) A prologue AND a dataset clause: both moves in one text, to two different
+        //     positions. The prefixed names must still resolve against the caller's own
+        //     declarations while the clause still selects the caller's own graphs.
+        (
+            "PREFIX and FROM together",
+            format!(
+                "PREFIX p: <{}>\nPREFIX t: <{}>\nSELECT ?candidate FROM <{}> \
+                 WHERE {{ {} ?candidate p:mentions t:fox }} ORDER BY ?candidate",
+                ex(""),
+                ex("topic/"),
+                graph(),
+                calling(&ex("pf/alpha"))
+            ),
+            vec![doc("graphed-1"), doc("graphed-2")],
+        ),
+        // (5) The caller's own bound AND a dataset clause. The bound is why the wrap
+        //     exists; the clause is what the wrap was destroying. Both stand, and the
+        //     bound is the one that cuts, so the row it keeps says the clause chose the
+        //     graph first.
+        (
+            "FROM with the caller's own LIMIT",
+            format!(
+                "{} LIMIT 1",
+                reading(&format!("FROM <{}> ", graph()), &in_the_default_graph())
+            ),
+            vec![doc("graphed-1")],
+        ),
+    ] {
+        assert_eq!(
+            whole_query(&text, &registry, &held),
+            expected,
+            "the whole query's own answer, for {shape}"
+        );
+        let (rows, status) = wrapped_query(&text, &registry, &stats, &held);
+        assert_eq!(
+            rows, expected,
+            "and the wrapped read agrees with it, for {shape}"
+        );
+        assert_eq!(
+            status,
+            ProducerStatus::SuppliedQueryEnded {
+                rank: u64::try_from(expected.len()).expect("a fixture row count fits"),
+            },
+            "the ending names the caller's text as the stopper and reports the rank it \
+             reached, which for a clause selecting nothing is zero, for {shape}"
+        );
+    }
+
+    // What the emitted text actually is, for the one shape it matters in: the clause is
+    // written on the WRAPPER's own `SELECT`, where it scopes the whole query and
+    // therefore the body inside it, and it is cut out of the body — the one edit the
+    // wrap makes to a caller's bytes, and the only one.
+    let text = reading(&format!("FROM <{}> ", graph()), &in_the_default_graph());
+    let mut bundle = compiled(&registry, &stats);
+    running(&mut bundle, 0, text.clone());
+    let unit = &bundle.units[0];
+    assert_eq!(
+        unit.sparql(),
+        format!(
+            "SELECT * FROM <{}> WHERE {{\n  {{ SELECT ?candidate WHERE {{ {} {} }} \
+             ORDER BY ?candidate }}\n}}\nLIMIT {}",
+            graph(),
+            calling(&ex("pf/alpha")),
+            in_the_default_graph(),
+            unit.depth() + 1
+        ),
+        "the clause moves onto the wrapper and out of the body; nothing else moves"
+    );
+    assert_eq!(
+        unit.supplied_query(),
+        Some(text.as_str()),
+        "and the text read back is the whole of what the caller handed over, dataset \
+         clause included and in the caller's own position"
     );
 }

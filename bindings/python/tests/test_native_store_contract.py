@@ -320,13 +320,26 @@ def test_validate_store_refuses_a_value_that_is_no_data_graph_by_name() -> None:
     """
     shapes = purrdf.shapes.Shapes(_SHAPES)
 
+    text = _violating_person("alice")
     with pytest.raises(TypeError) as refused:
-        shapes.validate_store(_violating_person("alice"))
+        shapes.validate_store(text)
     message = str(refused.value)
-    assert not isinstance(refused.value, AttributeError), (
-        "a missing private attribute is not a diagnosis of anything"
+    assert f"a {type(text).__name__} exposes no" in message, (
+        "the refusal names the type that arrived, read off the value"
     )
-    assert "str" in message, "the refusal names what arrived"
+    # And read off THE value: a second refusal over a different type names that
+    # type instead. A message with the type name spelled into it would satisfy
+    # the assertion above and tell the next caller about the wrong argument.
+    number = 42
+    with pytest.raises(TypeError) as refused_number:
+        shapes.validate_store(number)
+    number_message = str(refused_number.value)
+    assert f"a {type(number).__name__} exposes no" in number_message, (
+        f"the arriving type is the value's, not a constant: {number_message}"
+    )
+    assert type(text).__name__ not in number_message, (
+        "and nothing of the first argument survives into the second refusal"
+    )
     assert "purrdf.Store" in message and "purrdf.MutableDataset" in message
     assert "validate_nt" in message, "and the exit for a caller holding text"
 

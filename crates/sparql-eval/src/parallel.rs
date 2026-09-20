@@ -1068,12 +1068,21 @@ where
 /// pair; the harvest is a parameter rather than a second primitive so there is exactly
 /// ONE implementation of the chunking, the per-chunk `init`, the short-circuit and the
 /// chunk-index-ordered reduce.
+///
+/// The harvests come back in a [`smallvec::SmallVec`] holding one inline, not a `Vec`, and that
+/// is a measured choice rather than a stylistic one. Below the parallel threshold
+/// there is exactly one chunk and therefore exactly one harvest, and that is the
+/// common case: a per-focus-node SHACL query evaluates its `FILTER`s over a handful of
+/// rows, once per focus node. A `Vec` of one element is a heap allocation per call
+/// whose whole content is one (almost always empty) witness — one more allocation on
+/// a path whose per-focus-node allocation count is pinned exactly by the shapes
+/// crate's test suite, which is how it was found.
 pub(crate) fn par_chunk_try_map_init<T, S, R, H>(
     items: &[T],
     init: impl Fn() -> S + Sync,
     push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
     harvest: impl Fn(&mut S) -> H + Sync,
-) -> Result<(Vec<R>, Vec<H>), EvalError>
+) -> Result<(Vec<R>, smallvec::SmallVec<[H; 1]>), EvalError>
 where
     T: Sync,
     R: Send,
@@ -1086,7 +1095,7 @@ where
             push(&mut state, &mut out, item)?;
         }
         let harvested = harvest(&mut state);
-        return Ok((out, vec![harvested]));
+        return Ok((out, smallvec::smallvec![harvested]));
     }
 
     use rayon::prelude::*;
@@ -1111,7 +1120,7 @@ where
             .map(|r| r.as_ref().map_or(0, |(rows, _)| rows.len()))
             .sum(),
     );
-    let mut harvests = Vec::with_capacity(per_chunk.len());
+    let mut harvests = smallvec::SmallVec::with_capacity(per_chunk.len());
     for chunk_result in per_chunk {
         let (rows, harvested) = chunk_result?;
         out.extend(rows);
@@ -2160,21 +2169,22 @@ mod tests {
         let _parallel_guard = force_parallel_for_test(true);
         let _chunk_guard = force_chunk_size_for_test(5);
         let items: Vec<usize> = (0..40).collect();
-        let result: Result<(Vec<Solution>, Vec<()>), EvalError> = par_chunk_try_map_init(
-            &items,
-            || (),
-            |(), _acc, &i| {
-                if i == 22 {
-                    std::thread::yield_now();
-                    return Err(EvalError::internal("error at 22"));
-                }
-                if i == 6 {
-                    return Err(EvalError::internal("error at 6"));
-                }
-                Ok(())
-            },
-            |()| (),
-        );
+        let result: Result<(Vec<Solution>, smallvec::SmallVec<[(); 1]>), EvalError> =
+            par_chunk_try_map_init(
+                &items,
+                || (),
+                |(), _acc, &i| {
+                    if i == 22 {
+                        std::thread::yield_now();
+                        return Err(EvalError::internal("error at 22"));
+                    }
+                    if i == 6 {
+                        return Err(EvalError::internal("error at 6"));
+                    }
+                    Ok(())
+                },
+                |()| (),
+            );
         let err = result.unwrap_err();
         assert_eq!(err, EvalError::internal("error at 6"));
     }
