@@ -4,14 +4,14 @@
 //! The plan value's contract: equality, serialization, canonical stability,
 //! digest sensitivity, decode round-trip and loud version refusal.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
-    ProducerDecision, ReadBound, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
-    StatisticsSnapshot, Term, TopK, UnservedReason, UnservedTerm,
+    DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin,
+    ProducerBinding, ProducerDecision, ReadBound, RegistryId, RejectionReason, RequestTerm,
+    StatisticsEntry, StatisticsSnapshot, Term, TopK, UnservedReason, UnservedTerm,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
@@ -29,6 +29,23 @@ fn stratum() -> Iri {
 fn baseline() -> Plan {
     let mut stratum_depths = HashMap::new();
     stratum_depths.insert(stratum(), 10);
+
+    // The inputs derive the depth beside them, so the baseline is a plan that
+    // certifies: a declaration of ten rows, no reported statistic, under a
+    // licensed prefix of the request's own twenty-five. Building it any other way
+    // would make every test that clones it start from a plan whose own evidence
+    // contradicts it.
+    let mut stratum_derivations = BTreeMap::new();
+    stratum_derivations.insert(
+        stratum(),
+        DepthInputs {
+            declared: 10,
+            cardinality: None,
+            selectivity_ppm: None,
+            selectivity_terms: Vec::new(),
+            licensed_prefix: Some(25),
+        },
+    );
 
     Plan {
         version: Plan::VERSION,
@@ -86,13 +103,15 @@ fn baseline() -> Plan {
             },
         ],
         stratum_depths,
+        stratum_derivations,
         statistics_snapshot: StatisticsSnapshot {
             source: "example-statistics".to_owned(),
             revision: "r1".to_owned(),
             entries: vec![StatisticsEntry {
                 subject: "http://example.org/p".to_owned(),
-                cardinality: 42,
+                cardinality: Some(42),
                 selectivity_ppm: Some(1_000),
+                selectivity_terms: vec![0],
             }],
         },
         registry_instance_id: RegistryId::from_raw(7),
@@ -516,8 +535,39 @@ fn digest_is_sensitive_to_every_field() {
     assert_ne!(changed.id(), base_id, "statistics revision");
 
     let mut changed = base.clone();
-    changed.statistics_snapshot.entries[0].cardinality = 43;
+    changed.statistics_snapshot.entries[0].cardinality = Some(43);
     assert_ne!(changed.id(), base_id, "statistics entry");
+
+    // A statistic the plan was built against that the plan does not carry into
+    // its identity is a statistic a replay cannot be held to, so every field of
+    // the derivation record moves the id — including the term domain of the
+    // selectivity, whose aggregate alone would be identical under a provider that
+    // moved the same number to a different term.
+    let mut changed = base.clone();
+    changed.statistics_snapshot.entries[0].selectivity_terms = vec![1];
+    assert_ne!(changed.id(), base_id, "statistics selectivity term domain");
+
+    for (label, mutate) in [
+        ("derivation declared", 0usize),
+        ("derivation cardinality", 1),
+        ("derivation selectivity", 2),
+        ("derivation selectivity terms", 3),
+        ("derivation licensed prefix", 4),
+    ] {
+        let mut changed = base.clone();
+        let inputs = changed
+            .stratum_derivations
+            .get_mut(&stratum())
+            .expect("the baseline records the stratum's derivation");
+        match mutate {
+            0 => inputs.declared = 11,
+            1 => inputs.cardinality = Some(9),
+            2 => inputs.selectivity_ppm = Some(500_000),
+            3 => inputs.selectivity_terms = vec![2],
+            _ => inputs.licensed_prefix = None,
+        }
+        assert_ne!(changed.id(), base_id, "{label}");
+    }
 
     let mut changed = base.clone();
     changed.registry_instance_id = RegistryId::from_raw(8);

@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Iri, Metric, Plan, PlanError, RegistryId, RejectionReason, RequestTerm, RetrievalRequest,
-    Statistics, Term, UnservedReason, UnservedTerm, plan,
+    DepthCause, Iri, Metric, Plan, PlanError, RegistryId, RejectionReason, RequestTerm,
+    RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -393,12 +393,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "812a811b57d65ec25b35f210d1830a0c053baa5de5fc5e72fbd4f80a39f02d15";
+    "9797d25072e6a7bfc66a73cb214bfead14ede2930b47ec8770d30e6998f1d23a";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "d4949c9af9995f02c8768881961d410287165cee67cd02091f42f1f2d9e4f981";
+    "b2b99ae87025d8c01e321a6bf6c5a00e62ad98aa233c3c0bd59b92a86d0f798e";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -1070,7 +1070,8 @@ fn an_interval_predicate_reaches_the_statistics_snapshot() {
             .iter()
             .find(|entry| entry.subject == ex("body"))
             .map(|entry| entry.cardinality),
-        Some(500)
+        Some(Some(500)),
+        "the predicate is named, and the provider's cardinality for it is recorded"
     );
 }
 
@@ -1173,12 +1174,10 @@ fn depths_come_from_the_registry_row_bound_capped_by_statistics() {
         (ex("stratum/graph"), 50),
     ] {
         assert_eq!(
-            plan.statistics_snapshot
-                .entries
-                .iter()
-                .find(|entry| entry.subject == stratum)
-                .map(|entry| entry.cardinality),
-            Some(cardinality),
+            plan.stratum_derivations
+                .get(&iri(&stratum))
+                .map(|inputs| inputs.cardinality),
+            Some(Some(cardinality)),
             "the recorded cardinality is the statistic planning consulted"
         );
     }
@@ -1290,7 +1289,7 @@ fn the_snapshot_records_the_consulted_selectivity() {
         .iter()
         .find(|entry| entry.subject == ex("body"))
         .expect("the request predicate is recorded");
-    assert_eq!(body.cardinality, 500);
+    assert_eq!(body.cardinality, Some(500));
     assert_eq!(body.selectivity_ppm, Some(500_000));
     assert_eq!(plan.statistics_snapshot.source, "example-statistics");
     assert_eq!(plan.statistics_snapshot.revision, "r1");
@@ -1338,17 +1337,30 @@ fn a_reported_stratum_selectivity_bounds_that_stratum_and_only_that_stratum() {
         "a provider that measured no selectivity narrows nothing"
     );
 
-    // The snapshot explains the depth rather than reporting a second number:
-    // the value that narrowed the stratum is the value recorded beside it.
+    // The record explains the depth rather than reporting a second number: the
+    // value that narrowed the stratum is the value recorded beside it, and the
+    // depth is recomputable from it.
+    let inputs = narrowed
+        .stratum_derivations
+        .get(&iri(&ex("stratum/text")))
+        .expect("the narrowed stratum records its derivation");
+    assert_eq!(inputs.selectivity_ppm, Some(250_000));
     assert_eq!(
-        narrowed
-            .statistics_snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.subject == ex("stratum/text"))
-            .and_then(|entry| entry.selectivity_ppm),
-        Some(250_000)
+        inputs.selectivity_terms,
+        vec![0],
+        "the aggregate names the one term it came from"
     );
+    narrowed.certify().expect("the plan derives its own depths");
+
+    // The stratum the provider said nothing about records the silence rather
+    // than a number, and still certifies.
+    let untouched_inputs = narrowed
+        .stratum_derivations
+        .get(&iri(&ex("stratum/universal")))
+        .expect("the untouched stratum records its derivation too");
+    assert_eq!(untouched_inputs.selectivity_ppm, None);
+    assert!(untouched_inputs.selectivity_terms.is_empty());
+    untouched.certify().expect("the plan derives its own depths");
 }
 
 /// The bound is rounded up and clamped at unity, because the failure mode of
@@ -1394,18 +1406,27 @@ fn a_selectivity_rounds_up_and_never_raises_a_declared_depth() {
         1
     );
 
-    // The snapshot still records what the provider actually said. The floor is
-    // the planner's decision about the depth, not an edit of the measurement.
+    // The record still holds what the provider actually said. The floor is the
+    // planner's decision about the depth, not an edit of the measurement — so a
+    // recorded zero beside a depth of one is the honest pair, and `certify`
+    // agrees because the floor is part of the one arithmetic path.
+    let floored = plan(&lexical_request(), &mixed_registry(), &none).expect("plans");
     assert_eq!(
-        plan(&lexical_request(), &mixed_registry(), &none)
-            .expect("plans")
-            .statistics_snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.subject == ex("stratum/text"))
-            .and_then(|entry| entry.selectivity_ppm),
+        floored
+            .stratum_derivations
+            .get(&iri(&ex("stratum/text")))
+            .and_then(|inputs| inputs.selectivity_ppm),
         Some(0),
         "the provider reported zero and the plan says so"
+    );
+    floored
+        .certify()
+        .expect("a floored depth is still derivable from its own inputs");
+    assert_eq!(
+        floored.explain_depth(&iri(&ex("stratum/text"))),
+        Some(DepthCause::Floor),
+        "a depth of one that came from the floor says so, rather than looking like \
+         a declaration of one row"
     );
 }
 
@@ -1430,16 +1451,24 @@ fn selectivities_across_the_terms_one_stratum_receives_are_summed() {
         140,
         "seven tenths of the 200-row bound, not the three tenths the most selective term names"
     );
+    let inputs = planned
+        .stratum_derivations
+        .get(&iri(&ex("stratum/pair")))
+        .expect("the summed stratum records its derivation");
     assert_eq!(
-        planned
-            .statistics_snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.subject == ex("stratum/pair"))
-            .and_then(|entry| entry.selectivity_ppm),
+        inputs.selectivity_ppm,
         Some(700_000),
         "the recorded aggregate is the one the depth was derived from"
     );
+    // A sum does not say which terms it came from, so the domain is recorded
+    // beside it: without this, a provider that moved the same total onto other
+    // terms would leave a byte-identical plan describing a different measurement.
+    assert_eq!(
+        inputs.selectivity_terms,
+        vec![0, 1],
+        "both terms contributed, and the record names both"
+    );
+    planned.certify().expect("the plan derives its own depths");
 }
 
 #[test]

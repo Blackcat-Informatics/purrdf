@@ -40,7 +40,8 @@ use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
     ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
-    Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
+    DepthInputs, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding,
+    ProducerReceipt,
     ProducerStatus, ProtocolError, RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl,
     ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult,
     Statistics, StatisticsSnapshot, StratumUnit, StreamContract, StreamEnding, Term, TopK,
@@ -589,6 +590,19 @@ fn start_at_compile_hand_built_plan() {
             reason: UnservedReason::AcceptedWithoutPlacement,
         }],
         stratum_depths,
+        // The depth this fixture asserts, with the inputs that derive it: a
+        // declared ten rows, the provider's matching ten, and no request bound.
+        // A hand-built plan is still held to its own evidence.
+        stratum_derivations: BTreeMap::from([(
+            iri(&ex("stratum/hand")),
+            DepthInputs {
+                declared: 10,
+                cardinality: Some(10),
+                selectivity_ppm: None,
+                selectivity_terms: Vec::new(),
+                licensed_prefix: None,
+            },
+        )]),
         statistics_snapshot: StatisticsSnapshot {
             source: stats.source().to_owned(),
             revision: stats.revision().to_owned(),
