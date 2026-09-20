@@ -623,3 +623,102 @@ fn an_empty_artifact_is_refused_and_a_non_empty_one_is_not() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_file_that_is_not_n_quads_is_refused_and_a_real_one_is_not() {
+    // NON-EMPTY IS NOT "IS WHAT IT CLAIMS TO BE". A CLI that exits 0 having written
+    // something other than N-Quads passes an emptiness test, and a lane that then
+    // digests it publishes provenance for bytes that are not the corpus.
+    let root = scratch("nquads");
+    let good = root.join("good.nq");
+    let bad = root.join("bad.nq");
+    write(
+        &good,
+        b"<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+    );
+    // Plausible, non-empty, and not N-Quads: no terminating dot.
+    write(&bad, b"this is not a quad\nnor is this\n");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_nquads '{}' 'the corpus' && echo ACCEPTED",
+        good.display()
+    ));
+    assert_eq!(
+        code, 0,
+        "a real N-Quads row must be accepted; output:\n{out}"
+    );
+    assert!(out.contains("ACCEPTED"), "output:\n{out}");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_nquads '{}' 'the corpus'",
+        bad.display()
+    ));
+    assert_ne!(code, 0, "output:\n{out}");
+    assert!(
+        out.contains("is not N-Quads"),
+        "the refusal must name what the file is not; output:\n{out}"
+    );
+    assert!(
+        out.contains("this is not a quad"),
+        "and it must quote the offending first row back, so an operator can see what \
+         arrived instead of guessing; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn digesting_a_file_is_streamed_stable_and_refuses_what_it_cannot_read() {
+    // Used at nine sites across the lanes and never proved directly. The property that
+    // matters is agreement with the reference implementation, since this value ends up
+    // in a published certificate.
+    let root = scratch("sha");
+    let path = root.join("corpus.nq");
+    let body = b"<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+    write(&path, body);
+
+    let (code, out) = in_lane_common(&format!("lane_sha256_file '{}'", path.display()));
+    assert_eq!(code, 0, "output:\n{out}");
+    let digest = out.trim().to_string();
+    assert_eq!(
+        digest.len(),
+        64,
+        "a SHA-256 is 64 hex characters; got {digest:?}"
+    );
+
+    // Independently computed, so this is agreement with the algorithm rather than with
+    // itself: `sha256sum` if present, else Python's hashlib.
+    let reference = Command::new("python3")
+        .arg("-c")
+        .arg("import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())")
+        .arg(&path)
+        .output()
+        .expect("compute a reference digest");
+    let expected = String::from_utf8_lossy(&reference.stdout)
+        .trim()
+        .to_string();
+    assert_eq!(
+        digest, expected,
+        "the streamed digest must equal the one-shot digest of the same bytes, or the \
+         chunking is wrong and every certificate built on it is wrong too"
+    );
+
+    // Two calls agree: a digest that varied per invocation would make every reuse
+    // stamp a cache miss.
+    let (_, again) = in_lane_common(&format!("lane_sha256_file '{}'", path.display()));
+    assert_eq!(again.trim(), digest, "two digests of one file must agree");
+
+    // A missing file is refused in the lane's voice, not as a Python traceback.
+    let (code, out) = in_lane_common(&format!(
+        "lane_sha256_file '{}'",
+        root.join("absent.nq").display()
+    ));
+    assert_ne!(code, 0, "output:\n{out}");
+    assert!(
+        out.contains("does not exist") && out.contains("probe:"),
+        "the refusal must carry the lane's name, not surface as a bare traceback; \
+         output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
