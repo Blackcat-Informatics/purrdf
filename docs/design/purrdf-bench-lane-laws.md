@@ -5,6 +5,9 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Benchmark lane laws: what a lane must refuse, and what its digest actually certifies
 
+Referenced from `scripts/lane-common.sh`, which implements these, and from
+[BENCHMARKS.md](../BENCHMARKS.md), which documents the lanes they govern.
+
 The comparison lanes — `scripts/scale-corpus.sh`, `scripts/lubm-lane.sh` and
 `scripts/watdiv-lane.sh` — are report-only by construction. No gate runs them and
 no number they print is asserted anywhere, which is the right posture for a
@@ -96,11 +99,21 @@ file next to the pin, asserted rather than printed.
 ## A count that is known must be asserted, not reported
 
 `> 0` is the weakest possible guard and it is almost never the right one. When a
-pinned artifact has a known shape — twenty query templates, fourteen queries, a
-published triple count — the lane knows the expected value, so printing the
-observed one is a missed refusal. The failure it admits is not "nothing happened",
-which is loud; it is "less happened than should have", which reads as success and
-is fast.
+pinned artifact has a known shape — twenty query templates, fourteen queries — the
+lane knows the expected value, so printing the observed one is a missed refusal.
+The failure it admits is not "nothing happened", which is loud; it is "less
+happened than should have", which reads as success and is fast.
+
+The exception is worth stating precisely, because it is easy to misread as an
+excuse. A count need not be asserted where **something strictly stronger already
+fixes it**: a verified digest over the same bytes pins every count those bytes
+have, so adding the count as a second literal states one fact in two places and
+invites them to disagree. That is why the WatDiv lane asserts its template and
+query counts — nothing else fixes them — and reports the corpus row count, whose
+digest is re-derived and compared on every run. "A digest covers it" is only a
+valid answer when the digest is actually verified against a pin on the path in
+question; where a digest is merely recorded and never re-checked, it fixes
+nothing and the count must be asserted.
 
 This extends past artifact counts to the rows of the report itself. A lane that
 proves it wrote twenty queries and then prints however many rows it managed to

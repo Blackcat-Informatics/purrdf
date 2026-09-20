@@ -471,9 +471,13 @@ def offline_self_test() -> int:
     projection = normalise(2, blocks[1][1], PUBLISHED_NAMESPACE)
     head = projection.text.partition("WHERE")[0]
     check("," not in head, f"projection commas are removed (got {head.strip()!r})")
+    # One exact expectation, not a disjunction. `findall` with no capture group
+    # returns whole matches, so `["X", "Y"]` was unreachable -- and a disjunction
+    # that tolerates two answers tolerates a regex whose meaning changed.
+    projected = re.findall(r"\?\w+", head)
     check(
-        re.findall(r"\?\w+", head) == ["X", "Y"] or re.findall(r"\?\w+", head) == ["?X", "?Y"],
-        f"the projection keeps both variables in order (got {re.findall(r'[?]\w+', head)})",
+        projected == ["?X", "?Y"],
+        f"the projection keeps both variables in order (got {projected})",
     )
 
     with tempfile.TemporaryDirectory() as raw:

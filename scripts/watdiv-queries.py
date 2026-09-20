@@ -1032,6 +1032,63 @@ def offline_self_test() -> int:
             "a candidates cache written in another order reloads canonically",
         )
 
+    # THE PREFIX REFUSAL, BOTH DIRECTIONS, ON THE PRODUCTION FUNCTION.
+    #
+    # `instantiate` hard-fails on a prefix the data model does not declare. The
+    # cases below were run once in a shell when that refusal was written and then
+    # discarded, which is not coverage -- and the over-refusal half is the one that
+    # matters, because `_PREFIXED` is deliberately loose and instantiation
+    # substitutes full IRIs into these bodies. The valid neighbours come first: a
+    # refusal that rejected them would be the mirror of the silent drop this
+    # replaced.
+    def instantiate_body(body: str, mappings: tuple[Mapping, ...] = ()) -> Query:
+        return instantiate(
+            Template("P1", mappings, body), 0, _fixture_pool(), _FIXTURE_NAMESPACES
+        )
+
+    accepted = {
+        "declared prefixes only": "SELECT ?v0 WHERE {\n  ?v0 wsdbm:likes ?v1 .\n}",
+        "a colon inside a quoted literal": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name "note: see below" .\n}'
+        ),
+        "escaped quotes inside a literal": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name "say \\"hi\\"" . ?v0 wsdbm:likes ?v1 .\n}'
+        ),
+        "a colon inside an IRI path": (
+            "SELECT ?v0 WHERE {\n  ?v0 <http://example.org/a:b> ?v1 .\n}"
+        ),
+        "a real substituted WatDiv IRI": (
+            "SELECT ?v0 WHERE {\n  <http://db.uwaterloo.ca/~galuc/wsdbm/User1> wsdbm:likes ?v0 .\n}"
+        ),
+    }
+    for label, body in accepted.items():
+        try:
+            instantiate_body(body)
+        except SystemExit as exc:
+            print(f"SELF-TEST FAIL: a legal body was refused ({label}): {exc.code}")
+            ok = False
+        else:
+            print(f"OK: a legal body is accepted -- {label}")
+
+    for label, body in {
+        "an undeclared prefix": "SELECT ?v0 WHERE {\n  ?v0 nosuch:name ?v1 .\n}",
+        "an undeclared prefix beside an IRI": (
+            "SELECT ?v0 WHERE {\n  <http://example.org/x> bogus:p ?v1 .\n}"
+        ),
+    }.items():
+        try:
+            instantiate_body(body)
+        except SystemExit as exc:
+            message = str(exc.code)
+            if "does not declare" in message:
+                print(f"OK: {label} is refused, naming the prefix")
+            else:
+                print(f"SELF-TEST FAIL: {label} refused for the wrong reason: {message}")
+                ok = False
+        else:
+            print(f"SELF-TEST FAIL: {label} was accepted; the emitted query would not parse")
+            ok = False
+
     # THE CENSUS PARSER HAD NO TEST AT ALL, in either direction -- and
     # `saved.txt` is, by this module's own docstring, the only independent check
     # on the scrape that exists. `scrape_candidates` is well covered, but only

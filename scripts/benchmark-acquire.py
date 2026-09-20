@@ -114,6 +114,7 @@ import os
 import re
 import subprocess
 import sys
+import http.client
 import tempfile
 import time
 import urllib.error
@@ -425,7 +426,10 @@ def _download_verified(artifact: Artifact, dest: Path) -> None:
                 for chunk in iter(lambda: response.read(1 << 22), b""):  # noqa: B023
                     handle.write(chunk)
             break
-        except (urllib.error.URLError, OSError) as error:
+        # `http.client.IncompleteRead` is an HTTPException, NOT an OSError, so the
+        # commonest mid-transfer truncation -- the exact failure the retry below
+        # exists for -- escaped it as a traceback and left a scratch file behind.
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
             tmp.unlink(missing_ok=True)
             if attempt == _FETCH_ATTEMPTS:
                 sys.exit(

@@ -97,12 +97,14 @@ prose agrees with them. Run standalone, or as part of
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import re
 import string
 import sys
 import subprocess
 import tomllib
+from typing import Protocol
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -5043,10 +5045,20 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
 _BENCHMARKS = _REPO / "docs" / "BENCHMARKS.md"
 
 
-def _pinned_watdiv_artifact() -> object:
-    """Read the pinned WatDiv dataset artifact out of the acquisition script."""
-    import importlib.util
+class _PinnedArtifact(Protocol):
+    """The two fields of an acquisition pin this gate reads.
 
+    Named rather than returned as `object`, so a caller reading `.size`/`.sha256`
+    type-checks instead of relying on the reader knowing what came back.
+    """
+
+    filename: str
+    sha256: str
+    size: int
+
+
+def _pinned_watdiv_artifact() -> "_PinnedArtifact":
+    """Read the pinned WatDiv dataset artifact out of the acquisition script."""
     path = _REPO / "scripts" / "benchmark-acquire.py"
     spec = importlib.util.spec_from_file_location("_benchmark_acquire", path)
     if spec is None or spec.loader is None:

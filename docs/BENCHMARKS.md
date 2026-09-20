@@ -1081,6 +1081,16 @@ documentation domain and this repository's fixture convention, standing in for
 the publication IRI a locally generated corpus does not have. An operator who
 publishes a corpus sets it to where that corpus actually lives.
 
+There is a fifth input, and it is not a knob: **collation**. The lane
+concatenates its converted files in `find | sort` order, and `sort` obeys
+`LC_COLLATE` — under a UTF-8 collation `University0_10.owl` sorts *before*
+`University0_1.owl`, which changes the concatenation order, the published digest,
+and which file becomes the smallest entailment rung. So the lanes pin `LC_ALL=C`
+themselves rather than trusting the caller's environment; see
+[the lane laws](design/purrdf-bench-lane-laws.md). A digest is only as good as
+the enumeration behind it, and this one was missing from the list until it was
+found by comparing two hosts that differed in nothing else.
+
 ### Entailment regimes are part of the query, not metadata about it
 
 This is the part of LUBM that is easiest to get quietly wrong.

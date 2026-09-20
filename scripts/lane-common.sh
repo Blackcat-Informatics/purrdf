@@ -4,6 +4,11 @@
 #
 # The laws every benchmark lane in this repository shares, in ONE implementation.
 #
+# WHY each of these is a law, what a lane's digest does and does not certify, and
+# why the per-lane `write_checked`/`mkdir_checked`/`require_nonempty_file` wrappers
+# are adapters that must NOT be "de-duplicated" away:
+# docs/design/purrdf-bench-lane-laws.md
+#
 # WHY THIS FILE EXISTS
 # ====================
 #
@@ -67,6 +72,17 @@
 # so a decimal separator or a case-folding rule cannot reach generated output
 # either. The certificate is only worth as much as the enumeration behind it,
 # and the cheapest way to enumerate collation is to remove it as a variable.
+#
+# A change justified by enumeration must not itself be under-enumerated, so the
+# one locale-derived JVM behaviour that could reach generated output is written
+# down: on JDK 18 and later, JEP 400 fixes `file.encoding` to UTF-8 regardless of
+# locale (measured: `LC_ALL=C java -XshowSettings:properties` reports
+# `file.encoding = UTF-8`, with only `native.encoding`/`sun.jnu.encoding` becoming
+# ASCII, and those govern FILENAME decoding rather than content). On JDK 17 and
+# earlier `file.encoding` did follow the locale, and UBA writes through a
+# default-charset `FileWriter` -- so on such a JVM a non-ASCII character would be
+# emitted as `?`. LUBM content is ASCII, which is why this is benign rather than
+# why it is unexamined.
 export LC_ALL=C
 
 die() {
@@ -214,6 +230,15 @@ lane_sha256_file() {
   local path="$1"
   [[ -f "${path}" ]] ||
     die "cannot digest '${path}': it does not exist"
+  # PRESENT IS NOT READABLE, here too. Without this the lane emits a bare Python
+  # PermissionError traceback with no lane name and no knob -- for a corpus that
+  # may be over a gigabyte in an arena an operator has touched. That is the
+  # misdiagnosis class `lane_require_query_file` was extended to stop, one helper
+  # over.
+  [[ -r "${path}" ]] ||
+    die "cannot digest '${path}': it exists but this process cannot read it.
+  Check the file's mode and owner; nothing about the corpus or the binary is at
+  fault here."
   python3 -c '
 import hashlib, sys
 digest = hashlib.sha256()
@@ -276,6 +301,14 @@ lane_query_set_digest() {
 import hashlib, pathlib, sys
 
 root = pathlib.Path(sys.argv[1])
+# THE DIRECTORY VANISHING IS THE STATE THIS DIGEST EXISTS TO DIAGNOSE, so it must
+# not be the one state that produces a traceback. A concurrent run deletes this
+# directory at the top of its own instantiation step, and `iterdir()` then raises
+# FileNotFoundError -- so the carefully written "another run is almost certainly
+# using the same arena" message never printed in precisely the case it was
+# written for. No apostrophes in here: this block is single-quoted to the shell.
+if not root.is_dir():
+    sys.exit(f"FAIL: {root} is not a directory; it was removed or replaced underneath this run")
 records = []
 for path in sorted((p for p in root.iterdir() if p.is_file()), key=lambda p: p.name.encode("utf-8")):
     if "\n" in path.name or "\x00" in path.name:
@@ -335,9 +368,9 @@ lane_require_query_file() {
   local path="$1" id="$2" knob="$3"
   [[ -f "${path}" ]] ||
     die "${id} is missing from '${path}' (under ${knob}) at the moment it was to be
-  run. The engine is not at fault and has not been asked: an unreadable query file
-  becomes an empty query string, and the engine's complaint about that would be
-  reported here as though the corpus or the binary were wrong."
+  run. The engine is not at fault and has not been asked: a query file that is not
+  there reads as the empty string, and the engine's complaint about an empty query
+  would be reported here as though the corpus or the binary were wrong."
   # PRESENT IS NOT READABLE. A file that exists and has bytes but cannot be read
   # -- a mode an interrupted run left behind, a file owned by another operator in
   # a shared arena -- reaches `cat` under `set +e`, yields the empty string, and

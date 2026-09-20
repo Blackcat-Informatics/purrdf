@@ -329,10 +329,12 @@ else
   require_nonempty_file "${DATASET}" "${DATASET_NAME}, which ${TARBALL} must contain,"
   require_nonempty_file "${CENSUS}" \
     "saved.txt (the entity census the candidate scrape is checked against), which ${TARBALL} must contain,"
-  # Line 1 is the container's digest, line 2 the corpus's. The second is the one
-  # a later run re-derives; the first records which pinned bytes it came from.
+  # Line 1 is the container digest, line 2 the corpus, line 3 the census that
+  # audits the corpus. Lines 2 and 3 are what a later run re-derives; line 1
+  # records which pinned bytes they came from.
   write_checked "${DATA_STAMP}" "the dataset stamp" \
-    printf '%s\n%s\n' "${TARBALL_SHA}" "$(lane_sha256_file "${DATASET}")"
+    printf '%s\n%s\n%s\n' "${TARBALL_SHA}" "$(lane_sha256_file "${DATASET}")" \
+    "$(lane_sha256_file "${CENSUS}")"
   # A STAMP IS A CERTIFICATE THIS RUN WROTE, so it does not survive this run
   # failing: the next run would otherwise skip the extraction on the strength of
   # a certificate written by a run that never finished.
@@ -394,28 +396,21 @@ python3 "${REPO_ROOT}/scripts/watdiv-queries.py" \
   die "could not instantiate the WatDiv templates"
 inst_ms=$(($(now_ms) - inst_start))
 
-# Digest the emitted .rq files in name order. This is the reproducibility handle
-# -- the same dataset and the same seed must reproduce it exactly -- and it is
-# also the tripwire that makes a CONCURRENT RUN visible (see verify_query_set).
-# The implementation is shared with the sibling lanes; see lane-common.sh.
-queries_digest() {
-  lane_query_set_digest "${QUERIES}"
-}
+
 
 # A DIGEST IS A CERTIFICATE, so it is never published for output that was not
-# produced. `queries_digest` over an EMPTY directory is
-# e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -- the SHA-256
-# of the empty string -- and printing that under "the reproducibility check"
-# would certify a workload of no queries.
+# produced. `lane_query_set_digest` refuses an empty directory outright for this
+# reason -- its manifest digest would be a perfectly ordinary-looking 64 hex
+# characters, and printing that under "the reproducibility check" would certify a
+# workload of no queries. The count below is the other half of the same guard.
 lane_require_query_count "${QUERIES}" 20 "WATDIV_OUT='${OUT}'"
-rq_count=20
 require_nonempty_file "${QUERIES}/queries.tsv" "the instantiated query index"
 # EXISTING IS NOT BEING PRODUCED, and the report directs the reader here for the
 # explanation of every empty result -- so the record gets the same check its
 # sibling four lines up already had.
 require_nonempty_file "${QUERIES}/provenance.txt" "the instantiation provenance record"
 
-queries_sha="$(queries_digest)"
+queries_sha="$(lane_query_set_digest "${QUERIES}")"
 
 echo "instantiated in ${inst_ms} ms"
 echo "provenance: ${QUERIES}/provenance.txt"

@@ -130,10 +130,11 @@ fn run_lane_with_bin(lane: &str, bin_knob: &str, out_knob: &str, binary: &str) -
 /// A REGULAR FILE as the parent makes `mkdir` fail with `ENOTDIR` for every uid,
 /// because the kernel's check is about the parent's type rather than about
 /// permission. It is also confined to the scratch directory.
-fn uncreatable_arena(label: &str) -> String {
-    let blocker = scratch(label).join("not-a-directory");
+fn uncreatable_arena(label: &str) -> (String, PathBuf) {
+    let root = scratch(label);
+    let blocker = root.join("not-a-directory");
     std::fs::write(&blocker, b"").expect("write the file that blocks arena creation");
-    format!("{}/deeper", blocker.display())
+    (format!("{}/deeper", blocker.display()), root)
 }
 
 /// Writes `contents` to `path` and makes it executable, returning `path`.
@@ -488,13 +489,14 @@ fn every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path() {
 
         // The arena is pointed somewhere uncreatable so the run stops on the NEXT knob rather
         // than entering step 1 and its download.
-        let unusable = uncreatable_arena("arena-blocked");
+        let (unusable, unusable_root) = uncreatable_arena("arena-blocked");
         let (code, stdout, stderr) = run_make(&[
             lane,
             &format!("{bin_knob}={}", relative.display()),
             &format!("{out_knob}={unusable}"),
         ]);
         let combined = format!("{stdout}\n{stderr}");
+        let _ = std::fs::remove_dir_all(&unusable_root);
 
         assert!(
             combined.contains(&format!("{out_knob}='{unusable}'")),
@@ -543,7 +545,7 @@ fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
     // never on the binary.
     let dir = scratch("arena-unusable");
     let wrapper = credible_stand_in(dir.join("purrdf wrapper"));
-    let unusable = uncreatable_arena("arena-blocked");
+    let (unusable, unusable_root) = uncreatable_arena("arena-blocked");
 
     for (lane, bin_knob, out_knob) in LANES {
         let (code, stdout, stderr) = run_make(&[
@@ -587,6 +589,10 @@ fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
         );
     }
 
+    // Removed after BOTH lanes have run: the blocker file IS the uncreatable
+    // arena, so deleting it inside the loop would let the second lane create one
+    // and fall through into step 1 and its download.
+    let _ = std::fs::remove_dir_all(&unusable_root);
     std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
 }
 
@@ -668,7 +674,7 @@ fn the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed() {
     // ordinary seed, so neither may be refused. The run is still made to fail — on an uncreatable
     // arena — because that is what proves execution got PAST the knob checks rather than merely
     // that it exited non-zero for some reason of its own.
-    let unusable = uncreatable_arena("arena-blocked");
+    let (unusable, unusable_root) = uncreatable_arena("arena-blocked");
     let (code, stdout, stderr) = run_make(&[
         "watdiv",
         "WATDIV_SCALE=10M",
@@ -676,6 +682,7 @@ fn the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed() {
         &format!("WATDIV_OUT={unusable}"),
     ]);
     let combined = format!("{stdout}\n{stderr}");
+    let _ = std::fs::remove_dir_all(&unusable_root);
 
     assert!(
         !combined.contains("is not pinned"),
@@ -715,7 +722,7 @@ fn the_lubm_lane_refuses_a_zero_university_count_and_accepts_one() {
         "make lubm: the refusal must name the knob; output:\n{combined}"
     );
 
-    let unusable = uncreatable_arena("arena-blocked");
+    let (unusable, unusable_root) = uncreatable_arena("arena-blocked");
     let (code, stdout, stderr) = run_make(&[
         "lubm",
         "LUBM_UNIVERSITIES=1",
@@ -723,6 +730,7 @@ fn the_lubm_lane_refuses_a_zero_university_count_and_accepts_one() {
         &format!("LUBM_OUT={unusable}"),
     ]);
     let combined = format!("{stdout}\n{stderr}");
+    let _ = std::fs::remove_dir_all(&unusable_root);
     assert!(
         !combined.contains("LUBM_UNIVERSITIES must be"),
         "make lubm: one university is the DEFAULT and the count LUBM's published answers are \
@@ -757,5 +765,33 @@ fn the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri() {
     assert!(
         combined.contains("LUBM_DOC_BASE"),
         "make lubm: the refusal must name the knob; output:\n{combined}"
+    );
+
+    // THE VALID NEIGHBOUR. An absolute IRI is what the knob is for, and it must get
+    // PAST this check — a guard that rejected every base would satisfy the half
+    // above just as happily. As elsewhere, the neighbour is made to fail on the
+    // ARENA, which is what shows execution reached it.
+    let (unusable, unusable_root) = uncreatable_arena("doc-base-ok");
+    let (code, stdout, stderr) = run_make(&[
+        "lubm",
+        "LUBM_DOC_BASE=http://example.org/lubm/",
+        &format!("LUBM_OUT={unusable}"),
+    ]);
+    let combined = format!("{stdout}\n{stderr}");
+    let _ = std::fs::remove_dir_all(&unusable_root);
+    assert!(
+        !combined.contains("LUBM_DOC_BASE must"),
+        "make lubm: an absolute IRI is exactly what LUBM_DOC_BASE takes, and it is the \
+         default this lane ships; refusing it would break every ordinary run; output:\n{combined}"
+    );
+    assert_ne!(
+        code, 0,
+        "make lubm: the arena is uncreatable, so the run must still fail — on the ARENA, having \
+         accepted the base; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("LUBM_OUT="),
+        "make lubm: the failure must name the arena knob, showing the base check passed; \
+         output:\n{combined}"
     );
 }
