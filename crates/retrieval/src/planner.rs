@@ -1350,7 +1350,13 @@ fn validate_bound(bound: ReadBound) -> Result<(), PlanError> {
 }
 
 /// The predicate a request term names, when it names one.
-fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
+///
+/// Read by [`capture_statistics`], which records a row for each of them, and by
+/// [`Plan::certify`](crate::Plan::certify), which refuses a row for anything
+/// else. One function rather than two readings of one rule: a checker with its
+/// own idea of which terms name a predicate would refuse rows the planner
+/// itself writes the moment the two drifted.
+pub(crate) fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
     match term {
         RequestTerm::Lexical { predicate, .. } => predicate.as_ref(),
         RequestTerm::Spatial { predicate, .. }

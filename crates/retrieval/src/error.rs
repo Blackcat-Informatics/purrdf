@@ -466,6 +466,34 @@ pub enum PlanError {
         /// How many terms the plan's own request carries.
         request_terms: usize,
     },
+
+    /// A statistics-snapshot row names a subject nothing in the plan consulted.
+    ///
+    /// Raised only by [`Plan::certify`](crate::Plan::certify), and the mirror of
+    /// [`DerivationWithoutStatisticsEntry`](Self::DerivationWithoutStatisticsEntry):
+    /// that one refuses a consultation with no row, this one a row with no
+    /// consultation. Both directions are needed, because the snapshot's claim
+    /// runs both ways —
+    /// [`StatisticsSnapshot`](crate::StatisticsSnapshot) states that it names
+    /// every subject planning consulted *and* that a subject nothing consulted is
+    /// absent rather than recorded as empty. Enforcing only the first leaves the
+    /// second exactly where a forger would reach for it: a row can be added, and
+    /// the plan then reads back as evidence about a consultation that never
+    /// happened.
+    ///
+    /// Planning consults two kinds of subject and no others: a stratum, asked
+    /// about in order to *decide* a depth, and the predicate of a request term,
+    /// asked about in order to *report*. Both are read off the plan itself, so
+    /// this is a property of the value alone, like every other question `certify`
+    /// answers.
+    #[error(
+        "the statistics snapshot names subject {subject}, which is neither a stratum this plan \
+         derives a depth for nor a predicate of any of its request terms"
+    )]
+    UnconsultedStatisticsSubject {
+        /// The subject nothing consulted, as its recorded text.
+        subject: String,
+    },
 }
 
 impl PlanError {
@@ -510,6 +538,7 @@ impl PlanError {
             Self::NonAscendingSelectivityTerms { .. } => "non-ascending-selectivity-terms",
             Self::DuplicateSelectivityTerm { .. } => "duplicate-selectivity-term",
             Self::SelectivityTermOutOfRange { .. } => "selectivity-term-out-of-range",
+            Self::UnconsultedStatisticsSubject { .. } => "unconsulted-statistics-subject",
             Self::DepthNotDerivable { .. } => "depth-not-derivable",
             Self::DepthWithoutDerivation { .. } => "depth-without-derivation",
             Self::DerivationWithoutDepth { .. } => "derivation-without-depth",

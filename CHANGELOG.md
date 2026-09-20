@@ -1473,7 +1473,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   is a projection of its `DepthInputs` rather than a second consultation, which
   is what `StatisticsEntryContradictsDerivation` holds up; a request predicate's
   row derives nothing and is context alone. A subject nothing consulted is absent
-  rather than recorded as empty.
+  rather than recorded as empty, and both halves of that are checked: a stratum
+  named nowhere is `DerivationWithoutStatisticsEntry`, and a row naming anything
+  outside those two kinds is `UnconsultedStatisticsSubject`. Enforcing only the
+  first would have left a plan able to *add* evidence — a row reads back as a
+  consultation whether or not one happened.
 
   Their order is the value's law and not the encoder's.
   `StatisticsSnapshot.entries` is a `StatisticsEntries`, which establishes the

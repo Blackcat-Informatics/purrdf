@@ -30,7 +30,7 @@
 //! registry. Those two cases must be admitted on different terms, so the plan
 //! records which it is in [`PlanOrigin`] rather than leaving admission to guess.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use purrdf_sparql_eval::RegistryId;
 use purrdf_text::Fixed;
@@ -447,7 +447,12 @@ pub enum DepthCause {
 /// consultation that bound a depth.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatisticsEntry {
-    /// A caller-supplied subject label (a predicate IRI, a producer IRI, …).
+    /// The subject this row reports on: a stratum a depth was derived for, or
+    /// the predicate of one of the request's terms.
+    ///
+    /// Those two are the whole vocabulary, because they are the only subjects
+    /// planning consults — [`Plan::certify`] refuses a row naming anything else,
+    /// as [`PlanError::UnconsultedStatisticsSubject`].
     pub subject: String,
     /// The cardinality the statistics provider reported for it, or `None` when
     /// it reported none.
@@ -604,6 +609,17 @@ impl Serialize for StatisticsEntries {
 /// can ask of the snapshot alone. A stratum's entry here is a projection of its
 /// derivation rather than a second consultation, and [`Plan::certify`] refuses a
 /// plan whose two records of one stratum disagree.
+///
+/// # Both halves of that claim are checked
+///
+/// "An entry for every subject consulted, and none for a subject nothing
+/// consulted" is two statements, and a checker that enforced only the first
+/// would leave the second wherever a forger reached for it — a row can be added
+/// as easily as removed, and the plan then reads back as evidence about a
+/// consultation that never happened. [`Plan::certify`] refuses both directions:
+/// [`PlanError::DerivationWithoutStatisticsEntry`] for a stratum named nowhere
+/// here, and [`PlanError::UnconsultedStatisticsSubject`] for a row naming
+/// neither a stratum nor a request predicate.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatisticsSnapshot {
     /// A caller-supplied label for the statistics provider.
@@ -862,6 +878,13 @@ impl Plan {
     /// measurement. Both directions are checked here, so neither record can
     /// quietly become the other's contradiction.
     ///
+    /// The snapshot's own membership is checked in both directions too: a
+    /// stratum it does not name is refused, and so is a row naming a subject
+    /// planning never consulted — which is anything that is neither a stratum
+    /// nor the predicate of one of this plan's request terms. The first
+    /// direction alone would let a forged plan *add* evidence, which reads back
+    /// as a consultation that did not happen.
+    ///
     /// # Which stratum a refusal names is a function of the plan
     ///
     /// Every loop below walks a sorted key list or a
@@ -883,9 +906,11 @@ impl Plan {
     /// says something else about it; and
     /// [`PlanError::SelectivityTermOutOfRange`] when a derivation's or a snapshot
     /// row's recorded selectivity-term run addresses a term this plan's own
-    /// request does not carry. Each is a refusal rather than a repair: a plan
-    /// whose depth and evidence disagree has no reading under which one of them
-    /// is the truth.
+    /// request does not carry; and
+    /// [`PlanError::UnconsultedStatisticsSubject`] when the snapshot names a
+    /// subject that is neither a stratum nor a predicate of one of this plan's
+    /// request terms. Each is a refusal rather than a repair: a plan whose depth
+    /// and evidence disagree has no reading under which one of them is the truth.
     pub fn certify(&self) -> Result<(), PlanError> {
         let mut recorded: Vec<(&Iri, u32)> = self
             .stratum_depths
@@ -926,12 +951,35 @@ impl Plan {
             )?;
             reconcile(stratum, inputs, &self.statistics_snapshot)?;
         }
+        // The subjects planning consults, which is exactly the set a snapshot row
+        // may name: every stratum a depth was derived for, and the predicate of
+        // every request term. Both are read off this plan, which is what makes
+        // the question a property of the value.
+        //
+        // Materialized once rather than searched per row. The loop below is over
+        // the snapshot, and asking `stratum_derivations` and `request_terms`
+        // afresh for each of its rows would make certifying a plan quadratic in
+        // that plan's own size — over a value that arrives from wherever a plan
+        // arrives from.
+        let mut consulted: BTreeSet<&str> =
+            self.stratum_derivations.keys().map(Iri::as_str).collect();
+        consulted.extend(
+            self.request_terms
+                .iter()
+                .filter_map(crate::planner::term_predicate)
+                .map(Iri::as_str),
+        );
         for entry in &self.statistics_snapshot.entries {
             require_addressable(
                 &entry.subject,
                 &entry.selectivity_terms,
                 self.request_terms.len(),
             )?;
+            if !consulted.contains(entry.subject.as_str()) {
+                return Err(PlanError::UnconsultedStatisticsSubject {
+                    subject: entry.subject.clone(),
+                });
+            }
         }
         Ok(())
     }

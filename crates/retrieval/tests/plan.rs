@@ -1662,13 +1662,14 @@ fn certify_refuses_a_selectivity_term_that_addresses_no_request_term() {
 
     // A request carrying no terms at all: every run is empty, every empty run
     // addresses nothing, and the plan certifies. A rule that refused a run field
-    // rather than an unaddressable index would fail here.
+    // rather than an unaddressable index would fail here. The request predicate's
+    // row goes with the request — with no terms there is no predicate, so that
+    // row would name a subject nothing consulted.
     let mut termless = baseline_with_terms(Vec::new());
     termless.request_terms.clear();
+    let predicate_row = row_of(&termless, "http://example.org/p");
     edit_rows(&mut termless, |rows| {
-        for row in rows {
-            row.selectivity_terms.clear();
-        }
+        rows.remove(predicate_row);
     });
     termless
         .certify()
@@ -1924,6 +1925,89 @@ fn certify_refuses_a_stratum_the_snapshot_does_not_name() {
     ));
 }
 
+/// A snapshot row for a subject nothing consulted is refused, and a row for a
+/// request predicate the baseline does not already carry is not.
+///
+/// The mirror of the test above, and the direction a forger would use: a row can
+/// be ADDED as easily as removed, and the plan then reads back as evidence about
+/// a consultation that never happened. The snapshot's own doc says a subject
+/// nothing consulted is absent rather than recorded as empty; this is what makes
+/// that a checked claim.
+///
+/// The over-refusal guard is the whole legitimate set, exercised row by row. A
+/// stratum's row and the request's first predicate are already in the baseline,
+/// so the neighbour here is the request's *other* predicate — the spatial term's
+/// — added with values no existing row carries. A rule tighter than "every
+/// stratum, plus every request-term predicate" rejects that row, which is a row
+/// the planner itself writes.
+#[test]
+fn certify_refuses_a_snapshot_row_for_a_subject_nothing_consulted() {
+    let predicate_row = row_of(&baseline(), "http://example.org/p");
+
+    // The forge: the request predicate's row renamed to a subject of equal
+    // length that no term of this request names. The order is re-established on
+    // construction, so the document is refused for the subject rather than for a
+    // sequence the rename disturbed.
+    let mut ghost = baseline();
+    edit_rows(&mut ghost, |rows| {
+        rows[predicate_row].subject = "http://example.org/q".to_owned();
+    });
+    match ghost
+        .certify()
+        .expect_err("a row naming a subject nothing consulted is refused")
+    {
+        PlanError::UnconsultedStatisticsSubject { subject } => {
+            assert_eq!(subject, "http://example.org/q");
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // A term that names no predicate contributes no subject. The baseline's
+    // fourth term is an entity seed over `http://example.org/e`, and a row for
+    // that IRI is a row for something nothing was ever asked about.
+    let mut seeded = baseline();
+    edit_rows(&mut seeded, |rows| {
+        rows[predicate_row].subject = "http://example.org/e".to_owned();
+    });
+    match seeded
+        .certify()
+        .expect_err("an entity seed is not a subject a provider was consulted for")
+    {
+        PlanError::UnconsultedStatisticsSubject { subject } => {
+            assert_eq!(subject, "http://example.org/e");
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The neighbour: the request's OTHER predicate, which the baseline's snapshot
+    // does not name. It is a legitimate consultation, so adding it certifies —
+    // and its values differ from both existing rows, so a check that had waved
+    // through a row it recognised by its numbers could not pass this.
+    let mut widened = baseline();
+    edit_rows(&mut widened, |rows| {
+        rows.push(StatisticsEntry {
+            subject: "http://example.org/geo".to_owned(),
+            cardinality: Some(11),
+            selectivity_ppm: Some(3),
+            selectivity_terms: vec![2],
+        });
+    });
+    widened
+        .certify()
+        .expect("a predicate this request names is a subject planning consulted");
+    assert_eq!(
+        widened.statistics_snapshot.entries.len(),
+        3,
+        "the row really was added rather than collapsed into one of the others"
+    );
+
+    // And the baseline itself, whose two rows are the stratum and the request's
+    // first predicate — one of each legitimate kind.
+    baseline()
+        .certify()
+        .expect("a stratum's row and a request predicate's row are both consultations");
+}
+
 /// Which stratum a refusal names is a function of the plan, never of hash order.
 ///
 /// `stratum_depths` is a `HashMap`, so a checker walking it in its own iteration
@@ -2100,6 +2184,7 @@ fn every_plan_refusal_has_its_own_pinned_name() {
             request_term: 4,
             request_terms: 4,
         },
+        PlanError::UnconsultedStatisticsSubject { subject: stratum() },
         PlanError::DepthNotDerivable {
             stratum: stratum(),
             recorded: 2,
@@ -2531,8 +2616,20 @@ const MEASURED_NOTHING: &[u8] = &[
 #[test]
 fn the_statistics_section_spells_a_measured_cardinality_beside_a_silent_one() {
     let plan = statistics_only_plan(Some(42));
-    plan.certify()
-        .expect("a plan deriving no depth has no depth to contradict");
+    // A byte-layout specimen rather than a plan any planner would emit: its
+    // request is empty, so both subjects its snapshot names are subjects nothing
+    // consulted, and `certify` says exactly that. The depth side is coherent —
+    // there are no depths to contradict — which is what makes the refusal the
+    // snapshot's own. The bytes below are the subject here, and they are the
+    // bytes of this value either way.
+    assert!(
+        matches!(
+            plan.certify(),
+            Err(PlanError::UnconsultedStatisticsSubject { .. })
+        ),
+        "the fixture's empty request consults nothing, so its rows are evidence \
+         about no consultation"
+    );
     let encoded = plan.canonical_bytes();
 
     // The offset, verified rather than trusted: the version, then five empty

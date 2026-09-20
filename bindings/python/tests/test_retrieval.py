@@ -3639,6 +3639,69 @@ def test_a_derivation_the_snapshot_does_not_name_is_refused() -> None:
     )
 
 
+def _silent_snapshot_row(subject: str) -> bytes:
+    """One snapshot row for a subject the provider said nothing about.
+
+    Both measurements absent and an empty term domain -- the shape a request
+    predicate gets from a host that reports only about strata.
+    """
+    return _framed(subject) + b"\x00" + b"\x00" + (0).to_bytes(8, "little")
+
+
+def test_a_snapshot_row_for_a_subject_nothing_consulted_is_refused() -> None:
+    """A snapshot names the subjects planning consulted, and no others.
+
+    The mirror of the test above, and the direction a forger would use: a row can
+    be ADDED as easily as removed, and the plan then reads back as evidence about
+    a consultation that never happened. The splice renames the request
+    predicate's row to a subject of the same length that still sorts before the
+    stratum beside it -- so the document remains ascending and decodes, and the
+    only thing wrong with it is that nothing in this plan ever asked about the
+    subject it now names.
+
+    The over-refusal guard runs on a wider fixture: two strata and two request
+    predicates, four rows of both legitimate kinds, all of which certify. A rule
+    tighter than "every stratum, plus every request-term predicate" would reject
+    rows the planner itself writes.
+    """
+    _planned, document = _one_stratum_document()
+    renamed = f"{EX}aote"
+    assert len(renamed) == len(NOTE) and renamed < NOTE_STRATUM, (
+        "the replacement subject keeps the snapshot ascending, so this document "
+        "is refused for the unconsulted subject rather than for an unordered section"
+    )
+    forged = _splice(
+        document,
+        _silent_snapshot_row(NOTE),
+        _silent_snapshot_row(renamed),
+        "snapshot row for the request predicate",
+    )
+
+    with pytest.raises(retrieval.PlanDocumentError) as refused:
+        retrieval.certify_plan(forged)
+    assert refused.value.refusal == "unconsulted-statistics-subject"
+    assert renamed in str(refused.value)
+
+    # The neighbour, on the same document: the row under the predicate this
+    # request actually names, which certifies.
+    subjects = [
+        entry["subject"]
+        for entry in retrieval.certify_plan(document)["statistics"]["entries"]
+    ]
+    assert subjects == [NOTE, NOTE_STRATUM], (
+        "one row for the request's predicate and one for the stratum a depth was "
+        "derived for -- one of each kind of consultation"
+    )
+
+    # The wider neighbour: two strata and two predicates, every one of them a
+    # legitimate row, certified together.
+    _wider, two_terms = _two_term_selectivity_document()
+    assert sorted(
+        entry["subject"]
+        for entry in retrieval.certify_plan(two_terms)["statistics"]["entries"]
+    ) == sorted([NOTE, NOTE_STRATUM, TITLE, TITLE_STRATUM])
+
+
 def test_a_section_that_does_not_ascend_is_refused() -> None:
     """A keyed section out of order is not an encoding of any plan.
 
