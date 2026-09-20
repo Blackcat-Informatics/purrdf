@@ -111,15 +111,28 @@ Four ways it fails, each by NAME:
 * the runtime docstring names a refusal the stub does not — the live defect;
 * the stub names one the runtime docstring does not — the mirror, where a caller is
   told to branch on something that boundary cannot raise;
-* either spells a hyphenated name in backticks that `refusal()` cannot return — a
+* either ENUMERATES a hyphenated name in backticks that `refusal()` cannot return — a
   refusal renamed in the engine while the prose still promises the old word, which is
   also what stops this arm going quietly vacuous when a name moves;
 * the stub declares no class for the boundary at all, so the whole vocabulary is
   declared nowhere a type checker reads.
 
-The third means one rule for these two docstrings: a hyphenated word in backticks there
-is read as a refusal name. Write prose hyphenation without backticks — `_ACCEPTED` holds
-this gate to accepting that.
+The third is SCOPED, and its scope is the rule a writer of these two docstrings needs: a
+backticked hyphenated word is read as a promised name only where it is ENUMERATED —
+where the backticked token immediately beside it is itself one of the engine's names.
+An enumeration is a run of names written next to each other, and that is exactly the
+span this arm may read as promises.
+
+Everything outside a run is prose, backticks and all. `plan-document`,
+`content-addressed` and `length-framed` are code terms about this very boundary, and
+they may be backticked anywhere a run of refusal names does not surround them. Reading
+the WHOLE block refused all three, which is worse than having no arm: the message told a
+reader their ordinary Markdown was a broken promise, and the only way to satisfy it was
+to edit this gate. Both ends of both docstrings are pinned in `_ACCEPTED`. Locality is
+also what keeps the arm's purpose — a renamed refusal sits in the middle of the run it
+was part of, with a surviving name beside it, so the rename mutation still fires at BOTH
+docstrings. One span from the first known name to the last would have missed a rename of
+whichever name a docstring enumerates LAST, which is where the newest refusal is written.
 
 # What this gate CANNOT see — the stated boundary
 
@@ -740,6 +753,45 @@ def _backticked(text: str) -> set[str]:
     return set(_BACKTICKED_RE.findall(text))
 
 
+def _promised_names(text: str, names: frozenset[str]) -> set[str]:
+    """Every hyphenated token `text` backticks INSIDE its enumeration of pinned names.
+
+    A docstring that enumerates a vocabulary is still mostly prose, and backticking a
+    code term is ordinary Markdown: `plan-document`, `content-addressed` and
+    `length-framed` are all words these two docstrings may legitimately acquire. Reading
+    every backticked hyphenated token of the whole block as a promised refusal name made
+    this arm refuse that — an over-refusal, and one a reader could not satisfy without
+    editing this gate, because the message told them a word `refusal()` cannot return is
+    a broken promise rather than telling them where the promise is being read from.
+
+    So the scan is scoped to the ENUMERATING REGION, and the region is defined locally
+    rather than as one span of the block: a hyphenated token counts as promised when the
+    backticked token immediately before or after it is one of the engine's own names.
+    That is what an enumeration is — a run of names written next to each other — and
+    locality is what keeps the arm's real purpose. A refusal renamed in the engine sits
+    in the middle of the run it was part of, with a surviving name on at least one side
+    of it, so it is still read as the stale promise it is. One span from the first known
+    name to the last would have missed a rename of whichever name the docstring
+    enumerates LAST, which is where the stub's run ends and where a reader adding the
+    newest refusal writes.
+
+    Prose outside a run is free: a term whose backticked neighbours are not names, or
+    which has no backticked neighbour at all, is a code term and not a promise.
+    """
+    tokens = _BACKTICKED_RE.findall(text)
+
+    def beside_a_name(index: int) -> bool:
+        before = tokens[max(index - 1, 0) : index]
+        after = tokens[index + 1 : index + 2]
+        return any(neighbour in names for neighbour in before + after)
+
+    return {
+        token
+        for index, token in enumerate(tokens)
+        if token not in names and _HYPHENATED_RE.match(token) and beside_a_name(index)
+    }
+
+
 def refusal_boundaries() -> dict[str, str]:
     """Every `create_exception!` class the binding raises carrying `PlanError::refusal`.
 
@@ -819,17 +871,15 @@ def refusal_parity_problems(stubs: dict[str, list[str]]) -> list[str]:
                 "caller is told to branch on a refusal this boundary does not raise."
             )
         for text, site in ((block, where), ("\n".join(body), f"{_STUB} `{stub_name}`")):
-            for unknown in sorted(
-                token
-                for token in _backticked(text)
-                if _HYPHENATED_RE.match(token) and token not in names
-            ):
+            for unknown in sorted(_promised_names(text, names)):
                 problems.append(
-                    f"  • {class_name}.refusal `{unknown}`: spelled as a pinned name at "
-                    f"{site}, and `{_REFUSAL_SIGNATURE}` in {_ENGINE_ERRORS} cannot "
-                    "return it. Either the engine renamed the refusal and the prose "
-                    "still promises the old word, or the word is prose that should not "
-                    "be in backticks here."
+                    f"  • {class_name}.refusal `{unknown}`: enumerated at {site} beside "
+                    f"the pinned names, and `{_REFUSAL_SIGNATURE}` in {_ENGINE_ERRORS} "
+                    "cannot return it. Either the engine renamed the refusal and the "
+                    "prose still promises the old word, or it is an ordinary code term "
+                    "that happens to sit in the run of names — move it into a sentence "
+                    "whose backticked neighbours are not refusal names, where a "
+                    "hyphenated term is read as prose and promises nothing."
                 )
     return problems
 
@@ -1129,6 +1179,52 @@ _ACCEPTED: tuple[tuple[str, str, Callable[[str], str]], ...] = (
             text,
             "Branch on it, never on `str(exc)`.",
             "Branch on it at the plan-document boundary, never on `str(exc)`.",
+        ),
+    ),
+    # Backticking a code term is ordinary Markdown, and these are the two docstrings
+    # most likely to acquire one: `plan-document`, `content-addressed`, `length-framed`
+    # are all words about this very boundary. The unknown-name arm once read ANY
+    # backticked hyphenated token of either block as a promised refusal name and refused
+    # all four spellings below — a gate a reader could not satisfy without editing the
+    # gate. Both ENDS of both docstrings are held here, because the enumeration has two
+    # of them and prose sits on each side.
+    (
+        "a backticked code term in the stub's prose, before the enumeration",
+        str(_STUB),
+        lambda text: _swap(
+            text,
+            "A refusal from the plan-document boundary: `certify_plan`, `explain_depth`.",
+            "A refusal from the `content-addressed` plan-document boundary:\n"
+            "    `certify_plan`, `explain_depth`.",
+        ),
+    ),
+    (
+        "a backticked code term in the stub's prose, after the enumeration",
+        str(_STUB),
+        lambda text: _swap(
+            text,
+            "`unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.",
+            "`unconsulted-statistics-subject`. Branch on it, never on `str(exc)`. The\n"
+            "    bytes it refused are `length-framed`.",
+        ),
+    ),
+    (
+        "a backticked code term in the `create_exception!` prose, before the enumeration",
+        _REFUSAL_SPECIMEN_SOURCE,
+        lambda text: _swap(
+            text,
+            "A refusal from the plan-document boundary —",
+            "A refusal from the `content-addressed` plan-document boundary —",
+        ),
+    ),
+    (
+        "a backticked code term in the `create_exception!` prose, after the enumeration",
+        _REFUSAL_SPECIMEN_SOURCE,
+        lambda text: _swap(
+            text,
+            '`ValueError` keeps working."',
+            "`ValueError` keeps working.\\n\\\n      \\n\\\n"
+            '      The bytes it refused are `length-framed`."',
         ),
     ),
 )
