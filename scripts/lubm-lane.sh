@@ -517,6 +517,30 @@ data_sha="$(lane_sha256_file "${DATA}")"
 echo "data:     ${data_rows} rows, ${data_bytes} bytes, converted in ${conv_ms} ms"
 echo "ontology: ${onto_rows} rows"
 echo "sha256(lubm-data.nq) = ${data_sha}"
+# ASSERTED AT THE DEFAULT KNOBS. This digest is a deterministic function of
+# LUBM_UNIVERSITIES, LUBM_INDEX, LUBM_SEED, LUBM_DOC_BASE and the collation the lane
+# pins -- so at the defaults it is a CONSTANT, and printing a constant under "the
+# determinism check" without checking it is the missed refusal this lane preaches
+# about. At any other knob setting it is a different corpus and no pin exists, which
+# the else-branch says rather than silently skipping.
+if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
+  "${DOC_BASE}" == "http://example.org/lubm/" ]]; then
+  expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --workload-pin lubm.1.0.seed0.corpus.sha256)" ||
+    die "no corpus pin is recorded for LUBM(1, 0) seed 0 at the default document base"
+  [[ "${data_sha}" == "${expected_corpus}" ]] ||
+    die "the converted LUBM corpus does not match its recorded pin.
+  expected ${expected_corpus}
+  found    ${data_sha}
+  Every input this lane names is at its default and the generator is pinned by
+  digest, so the corpus should be byte-identical. Generation, conversion, or the
+  concatenation order changed; no number is published for a corpus that is not the
+  pinned one."
+  echo "  ^ and it matches the recorded pin for LUBM(1, 0) seed 0."
+else
+  echo "  ^ NOT checked against a pin: at least one knob is not at its default, so"
+  echo "    this is a different corpus and no pin is recorded for it."
+fi
 echo "  ^ this digest is the determinism check: the same LUBM_UNIVERSITIES/INDEX/SEED"
 echo "    and the same LUBM_DOC_BASE must reproduce it byte for byte. Collation is"
 echo "    the fifth input and is pinned to LC_ALL=C by the lane, not by the caller."

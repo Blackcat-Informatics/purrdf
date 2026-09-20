@@ -375,6 +375,20 @@ template_count=$(find "${TESTSUITE}" -maxdepth 1 -type f -name '*.txt' | wc -l)
 # is still exactly one copy of the number.
 expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --dataset-rows "${SCALE}")" ||
   die "no extracted row count is pinned for WatDiv scale ${SCALE}"
+# AND THE CORPUS DIGEST AGAINST A PIN, not only against the stamp this arena wrote.
+# The stamp detects later change; it cannot detect a first extraction that was
+# already wrong, because that extraction is what wrote it. With the pin there is no
+# trust-on-first-use left in this lane.
+expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+  --workload-pin "watdiv.${SCALE}.corpus.sha256")" ||
+  die "no extracted-corpus digest is pinned for WatDiv scale ${SCALE}"
+actual_corpus="$(lane_sha256_file "${DATASET}")"
+[[ "${actual_corpus}" == "${expected_corpus}" ]] ||
+  die "the extracted WatDiv ${SCALE} corpus does not match its recorded pin.
+  expected ${expected_corpus}
+  found    ${actual_corpus}
+  The tarball matched its own digest, so the extraction is what disagrees. No number
+  is published for a corpus that is not the pinned one."
 data_rows=$(wc -l <"${DATASET}")
 data_bytes=$(wc -c <"${DATASET}")
 ((data_rows == expected_rows)) ||

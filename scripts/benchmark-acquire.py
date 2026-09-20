@@ -301,6 +301,22 @@ WORKLOAD_PINS: dict[str, str] = {
     # either one pass silently.
     "lubm.1.0.seed0.rows.Q1": "4",
     "lubm.1.0.seed0.rows.Q14": "5916",
+    # sha256 over the EXTRACTED WatDiv corpus. The tarball is pinned and verified
+    # every run, but what comes out of an extraction was certified only by a stamp
+    # the first extraction itself wrote -- trust-on-first-use, which cannot detect a
+    # first extraction that was already wrong because that extraction is what wrote
+    # the record. Pinning it removes the TOFU entirely and makes the lane-laws
+    # exception ("a digest verified against a pin") true rather than aspirational.
+    "watdiv.10M.corpus.sha256": (
+        "7cfe0341d578a677d3b5d562eaaf94d67aff8587d9e0ef3d83cc82765b77cddd"
+    ),
+    # sha256 over the concatenated LUBM corpus at the default knobs. Deterministic
+    # given LUBM(1, 0) seed 0, the default document base, and the collation the lane
+    # pins -- so it is a constant, and printing a constant instead of checking it is
+    # the missed refusal this file's neighbours are all about.
+    "lubm.1.0.seed0.corpus.sha256": (
+        "b3fbfcc822092428fcf6e03757f0ca555e39c2b29304bc8638c9d9d05f875308"
+    ),
     # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
     "watdiv.10M.seed0.queries.sha256": (
         "2fabc0ef56b5d18bb9a7c9d6a4aa5c661043500103d6f133087d39d41fa59301"
