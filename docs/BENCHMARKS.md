@@ -1049,9 +1049,20 @@ The file *contents* are valid RDF/XML; only the name is wrong. The lane
 therefore **renames the output after generation** instead of patching
 `Generator.java`, which keeps the GPL source unmodified and un-vendored, needs
 no Java compiler (the artifact ships prebuilt `classes/`, and a JRE is enough),
-and is checkable — the lane counts what it renamed and fails if nothing
-appeared. Each run generates inside its own directory, so concurrent runs cannot
-collide.
+and is checkable — the lane refuses to leave a single backslash-named stray
+behind, so a pathology that changes shape (some files misplaced, some not) fails
+rather than converting a partial corpus.
+
+A rename count of zero is **not** a failure: it is what a fixed generator, or a
+platform that splits the backslash, looks like. The lane's guard is that a corpus
+exists and has bytes, never how its files came by their names.
+
+Each run generates inside its own directory, so the misplaced files land in that
+run's own arena rather than in a shared parent. That is a statement about where
+the strays go, not about concurrent safety — the arena is derived from `LUBM_OUT`
+alone, so two runs with default knobs share it and each step begins by wiping it.
+Two runs at once want two arenas: `make lubm LUBM_OUT=target/lubm-$$`. The
+artifact cache is shared regardless of the arena.
 
 ### Determinism, and the one place it was not free
 

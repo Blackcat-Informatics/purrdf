@@ -36,11 +36,22 @@
 #     licensing posture this tree can take;
 #   * patching would require a Java compiler, and the artifact ships prebuilt
 #     `classes/` precisely so that a JRE is enough;
-#   * a rename is checkable -- the lane counts what it renamed and fails if the
-#     count is not what the generator said it wrote.
+#   * a rename is checkable -- the lane refuses to leave a single backslash-named
+#     stray behind, so a pathology that changes shape (some files misplaced and
+#     some not) is caught rather than half-converted.
+#
+# The lane does NOT check the renamed count against a count parsed out of the
+# generator's own output: UBA's file count is not a closed form of `-univ` (the
+# department count per university is itself generated), and nothing here has
+# established the format of what it prints. What IS checked is that the corpus
+# exists, that it has bytes, that no stray remains, and that every file found was
+# converted -- see step 5's `converted == owl_count`.
 #
 # Each run generates inside its own directory (`<arena>/work`), so the misplaced
-# files land in that run's own arena and concurrent runs cannot collide.
+# files land in that run's own arena rather than in a shared parent. That is a
+# statement about WHERE the strays go, NOT about concurrent safety: the arena is
+# derived from `LUBM_OUT` alone, so two runs with default knobs share it and every
+# step below begins by wiping it. Two runs at once want two arenas.
 #
 # DETERMINISM, AND THE ONE PLACE IT WAS NOT FREE
 # ==============================================
@@ -328,9 +339,7 @@ gen_start="$(now_ms)"
 gen_ms=$(($(now_ms) - gen_start))
 
 # The Windows-separator pathology: the files are in ARENA, named `work\NAME`.
-# Move each one to the name it was trying to have. The count is checked against
-# what actually appeared, and a run that produced nothing is a hard failure rather
-# than an empty dataset that converts cleanly and answers every query 0.
+# Move each one to the name it was trying to have.
 renamed=0
 shopt -s nullglob
 for stray in "${ARENA}/work\\"*; do
@@ -340,17 +349,56 @@ for stray in "${ARENA}/work\\"*; do
 done
 shopt -u nullglob
 
-((renamed > 0)) ||
-  die "the generator wrote no files under ${ARENA} -- the Linux path pathology may have changed shape"
+# A ZERO RENAME COUNT IS NOT A FAILURE, and refusing it was an over-refusal that
+# would have rejected a PERFECT corpus. `renamed == 0` is what a FIXED generator
+# looks like -- a future upstream release, a platform that splits the backslash, or
+# an operator running a patched build. In every one of those cases the files land
+# in `WORK` correctly named and there is nothing to rename, which the guard below
+# confirms directly. The load-bearing question is whether a corpus exists, never
+# how it got its names.
+#
+# What the pathology changing shape WOULD look like is output this lane does not
+# recognise: a different wrong prefix, or some files placed correctly and others
+# misplaced under a name the loop above does not match. Re-globbing `work\*` would
+# not find that -- the loop just moved every one of those, so that glob is empty by
+# construction and testing it would prove only that the loop ran.
+#
+# What distinguishes the cases is what is LEFT in the arena. After a recognised
+# run it holds exactly the work directory and the generator's captured output;
+# anything else is output placed somewhere this lane has not accounted for, and
+# converting only the part it did recognise would report a fraction of LUBM as
+# LUBM.
+shopt -s nullglob dotglob
+unaccounted=()
+for entry in "${ARENA}"/*; do
+  case "${entry}" in
+    "${WORK}" | "${ARENA}/generator.stdout") continue ;;
+    *) unaccounted+=("${entry##*/}") ;;
+  esac
+done
+shopt -u nullglob dotglob
+((${#unaccounted[@]} == 0)) ||
+  die "after renaming ${renamed} stray file(s), ${ARENA} still holds entries this lane
+  does not account for: ${unaccounted[*]}
+  The Linux path pathology has changed shape. Converting only the files that were
+  recognised would report a fraction of LUBM under LUBM's name."
 
-owl_count=$(find "${WORK}" -maxdepth 1 -name '*.owl' | wc -l)
-((owl_count > 0)) || die "no .owl files after renaming ${renamed} stray file(s)"
-owl_bytes=$(find "${WORK}" -maxdepth 1 -name '*.owl' -printf '%s\n' | awk '{t+=$1} END {print t+0}')
+owl_count=$(find "${WORK}" -maxdepth 1 -type f -name '*.owl' | wc -l)
+((owl_count > 0)) ||
+  die "the generator produced no .owl files in ${WORK} (${renamed} stray file(s) were
+  renamed out of ${ARENA}). There is no corpus to convert, and an empty one converts
+  cleanly and answers every one of the 14 queries 0."
+owl_bytes=$(find "${WORK}" -maxdepth 1 -type f -name '*.owl' -printf '%s\n' | awk '{t+=$1} END {print t+0}')
 ((owl_bytes > 0)) ||
   die "the generator wrote ${owl_count} .owl file(s) totalling zero bytes; there is
   no corpus to convert and nothing downstream would be measuring LUBM"
 echo "generated ${owl_count} RDF/XML file(s), ${owl_bytes} bytes, in ${gen_ms} ms"
-echo "renamed ${renamed} backslash-named file(s) out of the parent directory"
+if ((renamed > 0)); then
+  echo "renamed ${renamed} backslash-named file(s) out of the parent directory"
+else
+  echo "renamed 0 files: the generator named its output correctly, so the Linux path"
+  echo "  pathology did not occur on this run"
+fi
 
 # ── 5. Convert RDF/XML -> N-Quads through purrdf itself ─────────────────────────
 
