@@ -396,8 +396,9 @@ pub enum ProducerReceipt {
     /// nothing below `rank`. The rows did not run out — the depth did. A
     /// producer handed a depth of fifty that still had a fifty-first row says
     /// this; a producer handed a depth of fifty whose index held forty rows says
-    /// [`Self::Exhausted`], because the depth is not what stopped it and its
-    /// stratum *is* complete.
+    /// [`Self::Exhausted`], because the depth is not what stopped it -- its own
+    /// rows ran out first. Whether those were every row that was DUE is a
+    /// question that ending does not answer; the stratum's fidelity does.
     ///
     /// # Why this is not [`Self::CeilingReached`]
     ///

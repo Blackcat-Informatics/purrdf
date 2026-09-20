@@ -156,8 +156,9 @@ NOTE_DOMAIN = f"{EX}domain/notes"
 TITLE_DOMAIN = f"{EX}domain/titles"
 
 # The seven spellings a terminal status may carry, and nothing else may appear.
-# Only the first is a completeness claim; the other six each name who stopped
-# the read and where.
+# Only the first names no stopper; the other six each name who stopped the read
+# and where. Naming no stopper is not on its own a completeness claim -- that is
+# what the stratum's ``"fidelities"`` entry says beside it.
 STATUS_SPELLINGS = frozenset(
     {
         "exhausted",
@@ -766,7 +767,7 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
     emitted value and the payload each spelling owes.
     """
     # ``"exhausted"``: a corpus small enough that this query drains it, so the
-    # producer really did emit every row it had.
+    # producer's search really did run out of rows.
     exhausted = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE)],
@@ -820,7 +821,8 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
     for entry in (exhausted, bounded, *stopped.values()):
         assert entry["status"] in STATUS_SPELLINGS, entry
         assert ("rows_emitted" in entry) == (entry["status"] == "exhausted"), (
-            "a row count is the completeness claim, and only it carries one"
+            "only the ending that names no stopper carries a row count; every "
+            "other spelling names its stopper instead"
         )
 
     # And the coverage this test does and does not have, stated rather than

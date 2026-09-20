@@ -5542,8 +5542,8 @@ fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
 // strata whose candidate sets do not overlap, nothing ever certifies while
 // another stream is open, and a top-five answer over two thousand-row strata
 // reads two thousand rows. The trailer then compounds it: a stream that was
-// DRAINED reports `Exhausted`, which is a completeness claim the caller's bound
-// never asked anyone to earn.
+// DRAINED reports `Exhausted`, the one ending that names no stopper, which the
+// caller's bound never asked anyone to earn.
 //
 // A producer's declaration is what removes it. `CandidateDomains` names the
 // blocks of the candidate universe a producer may draw from, fusion skips

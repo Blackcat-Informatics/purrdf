@@ -1467,8 +1467,9 @@ fn the_knn_producer_names_each_target_once_when_two_rows_share_one_vector() {
 // surviving producer, so the plan always had something else to bind and the
 // sole-producer registry was never driven. The claim here is that the relation
 // is INVOKED at the floored depth of one and reports its own
-// `Exhausted { rows_emitted: 0 }` — a completeness claim it earned by reading —
-// rather than the request being refused before anything ran.
+// `Exhausted { rows_emitted: 0 }` — an ending it earned by reading, rather than
+// one a bound asserted for it — rather than the request being refused before
+// anything ran.
 
 /// A real index over a corpus holding no documents at all.
 ///
