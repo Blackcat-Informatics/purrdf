@@ -39,6 +39,9 @@ The laws that are genuinely shared, and therefore hold for every lane:
 | law | shared implementation |
 | --- | --- |
 | A lane names itself in every diagnostic | `die` |
+| Collation is pinned, so a caller's locale cannot reorder what a digest covers | `export LC_ALL=C` |
+| One streaming implementation of a file digest, rather than one per lane | `lane_sha256_file` |
+| A diagnostic survives the tab-separated record it travels in, instead of being truncated | `lane_flatten_detail` |
 | A certificate never outlives the run it certifies | `lane_certify`, `lane_revoke_certificates` |
 | Scratch space is created and removed by the lane, not the caller | `lane_cleanup` |
 | A path that cannot be written names the knob that supplied it | `lane_write_checked`, `lane_mkdir_checked` |
@@ -121,22 +124,57 @@ The lane then prints the engine's parse complaint for what is actually a missing
 artifact, blaming the thing under test for the harness's own fault. Check the file
 exists, and name it.
 
-## What is enforced in one lane and not its siblings
+## The query set: counted, certified, re-checked
 
-These are laws by the rule at the top of this document, and they currently live in
-`scripts/watdiv-lane.sh` alone. Until they are shared, the LUBM lane does not
-have them:
+These three began life in `scripts/watdiv-lane.sh` alone, which is the shape the
+parity rule exists to catch — the LUBM lane went without them. They are shared
+now, each taking the directory, the expected count and the arena knob as
+parameters:
 
-| law | where it lives |
+| law | shared implementation |
 | --- | --- |
-| The query set is re-verified by digest before the first query, on a missing file, and after the last — so a concurrent run that wipes the arena mid-loop is caught rather than measured | `verify_query_set` |
-| A query file that is missing is named as missing, before the engine is handed an empty string | the guard preceding `run_query` |
-| The instantiated query count is asserted against the expected count, and no digest is published for a set that is not the full one | the `rq_count` check |
+| A generator reporting success is not a full query set; no digest is published for a partial one | `lane_require_query_count` |
+| A missing query file names itself, rather than becoming an empty query string the engine is then blamed for rejecting | `lane_require_query_file` |
+| The set is digested, and re-verified before the first query, on a missing file, and after the last — so a concurrent run that rewrites the arena mid-loop is caught rather than measured | `lane_query_set_digest`, `lane_verify_query_set` |
 
-Concurrency is the one to be most careful about, because the arena is derived
-from a single knob. Two runs with default knobs share it, and every step begins
-with a destructive wipe — so "each run generates into its own directory" is true
-only of where a particular pathology's stray files land, and is not a statement
-about concurrent safety. Two runs at once want two arenas. The artifact *cache* is
-separate from the arena and is shared regardless, so it must be safe under
-concurrent use on its own terms rather than by the operator separating arenas.
+The digest covers **every** file in the directory, not only the queries. The
+index the result loop reads and the provenance record naming each candidate drawn
+are part of what a run is; leaving them outside meant a change to what was
+*recorded* was invisible to the certificate, and the index could be rewritten
+underneath the loop without tripping the concurrency check.
+
+Counting artifacts is not counting work, either. A lane that proves it wrote
+twenty queries and then reports however many rows it managed to read has verified
+the artifacts and not the run, so both lanes check that what the loop read is the
+whole workload and report a denominator derived from that count rather than typed.
+
+Concurrency deserves particular care, because the arena comes from a single knob.
+Two runs with default knobs share it, and every step begins with a destructive
+wipe — so "each run generates into its own directory" is a statement about where
+a particular pathology's stray files land, never about concurrent safety. Two runs
+at once want two arenas. The artifact *cache* is separate from the arena and is
+shared regardless of it, so it must be safe under concurrent use on its own terms:
+a scratch name unique per process, with the atomic rename doing the rest.
+
+## A refusal is a claim in two directions
+
+Every guard above rejects something, and a guard written slightly too eagerly
+rejects everything — which looks identical from the inside, because a test that
+only ever feeds it bad input passes just as happily. So each refusal is exercised
+on both sides, and the valid neighbour is made to fail for a *different, named*
+reason rather than to succeed: a run given a good knob and an uncreatable arena
+must fail **on the arena**, which is what shows execution got past the knob check
+rather than merely that it exited non-zero.
+
+Two of these were caught by that discipline rather than by review. Refusing a
+LUBM generation because nothing needed renaming would have rejected a corpus from
+a *fixed* generator, where the load-bearing check — that a corpus exists — sat
+two lines below unexecuted. And a prefix check written against raw template text
+refused legal output, because the loose prefix pattern also matches inside a
+quoted literal and inside an IRI path, which instantiation substitutes.
+
+A control that cannot distinguish the case it exists for is not a control. The
+fixture proving the LUBM block splitter survives the published file's own
+`# Query 11, 12 and 13` prose comment had to *open* on those words: a first
+version merely contained them later in the line, and a deliberately loosened
+splitter still passed.
