@@ -2304,11 +2304,13 @@ class _PlanDocumentError(ValueError):
 
     `refusal` is one of the engine's pinned kebab-case names. Decode side:
     `version`, `truncated`, `trailing-bytes`, `invalid-tag`, `invalid-utf8`,
-    `invalid-iri`, `non-ascending-keys`, `duplicate-stratum-depth`,
-    `duplicate-stratum-derivation`, `duplicate-statistics-subject`. Certificate
+    `invalid-iri`, `non-ascending-keys`, `non-ascending-selectivity-terms`,
+    `duplicate-stratum-depth`, `duplicate-stratum-derivation`,
+    `duplicate-statistics-subject`, `duplicate-selectivity-term`. Certificate
     side: `depth-not-derivable`, `depth-without-derivation`,
     `derivation-without-depth`, `derivation-without-statistics-entry`,
-    `statistics-entry-contradicts-derivation`. Branch on it, never on `str(exc)`.
+    `statistics-entry-contradicts-derivation`, `selectivity-term-out-of-range`,
+    `unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.
     """
 
     refusal: str
@@ -2442,13 +2444,19 @@ class retrieval:
     #
     # Every refusal raises `retrieval.PlanDocumentError` with a pinned `.refusal`
     # name; branch on that, never on the message. A layout this build does not
-    # write is `version`; a keyed section out of order is `non-ascending-keys`;
-    # one stratum recorded twice is `duplicate-stratum-depth` or
-    # `duplicate-stratum-derivation`; a depth that does not follow from its own
-    # inputs is `depth-not-derivable`; a stratum the snapshot names nowhere is
-    # `derivation-without-statistics-entry`; and a snapshot row saying something
-    # other than the derivation beside it is
-    # `statistics-entry-contradicts-derivation`.
+    # write is `version`; a keyed section out of order is `non-ascending-keys`,
+    # and a record's run of contributing request-term indices out of order is
+    # `non-ascending-selectivity-terms`; one stratum recorded twice is
+    # `duplicate-stratum-depth` or `duplicate-stratum-derivation`, and one term
+    # counted twice into one selectivity is `duplicate-selectivity-term`; a depth
+    # that does not follow from its own inputs is `depth-not-derivable`; a
+    # stratum the snapshot names nowhere is
+    # `derivation-without-statistics-entry`, and a snapshot row for a subject
+    # nothing consulted is `unconsulted-statistics-subject`; a snapshot row
+    # saying something other than the derivation beside it is
+    # `statistics-entry-contradicts-derivation`; and a recorded selectivity
+    # domain indexing a term the plan's own request does not carry is
+    # `selectivity-term-out-of-range`. `PlanDocumentError` documents every one.
     @staticmethod
     def certify_plan(plan_bytes: bytes) -> dict[str, builtins.object]: ...
     # Which recorded input bound `stratum`'s depth in the plan document
