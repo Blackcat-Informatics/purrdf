@@ -246,7 +246,12 @@ def _int(text: str) -> int:
     ungated. The word forms are `_SPELLED` read backwards, so there is one
     table rather than two that can fall out of step.
     """
-    cleaned = text.replace(",", "").replace(" ", "")
+    # Commas, the narrow no-break space this repository's prose prefers, and a
+    # plain ASCII space -- all three are thousands separators an author
+    # reaches for, and a claim written with the one this did not strip failed
+    # to parse rather than failing to match, which reads as a broken gate
+    # rather than as an ungated number.
+    cleaned = text.replace(",", "").replace(" ", "").replace(" ", "")
     spelled = _CARDINAL.get(cleaned.lower())
     return spelled if spelled is not None else int(cleaned)
 
@@ -5022,6 +5027,72 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
     return problems, claims
 
 
+# The frozen WatDiv dataset's identity is pinned once, in ARTIFACTS, and restated
+# in prose in the benchmarks page. Two of those numbers are mechanically
+# checkable against the pin, and neither was: re-pinning the artifact would have
+# left the documentation publishing a stale digest and a stale size for bytes
+# nobody fetches, which is exactly the ungated-prose drift this script exists to
+# catch, on a page whose claim list simply did not name it.
+_BENCHMARKS = _REPO / "docs" / "BENCHMARKS.md"
+
+
+def _pinned_watdiv_artifact() -> object:
+    """Read the pinned WatDiv dataset artifact out of the acquisition script."""
+    import importlib.util
+
+    path = _REPO / "scripts" / "benchmark-acquire.py"
+    spec = importlib.util.spec_from_file_location("_benchmark_acquire", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"check-doc-claims: cannot load {path.relative_to(_REPO)}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for artifact in module.ARTIFACTS:
+        if artifact.filename.startswith("watdiv.") and artifact.filename.endswith(".tar.bz2"):
+            return artifact
+    raise SystemExit(
+        "check-doc-claims: scripts/benchmark-acquire.py pins no watdiv.*.tar.bz2 dataset, "
+        "so the size and digest documented in docs/BENCHMARKS.md state something no pin "
+        "backs. Either restore the pin or remove the documented rows."
+    )
+
+
+def watdiv_pin_claims() -> tuple[list[str], list[Claim]]:
+    """The documented size and SHA-256 of the frozen dataset, against the pin itself."""
+    artifact = _pinned_watdiv_artifact()
+    rel = _BENCHMARKS.relative_to(_REPO)
+    source = (
+        "the watdiv.*.tar.bz2 entry in scripts/benchmark-acquire.py's ARTIFACTS, which is "
+        "what the lane actually verifies every fetched byte against"
+    )
+
+    problems: list[str] = []
+    text = _read(_BENCHMARKS)
+    # The digest is a hex string rather than a count, so it cannot travel as a
+    # Claim (those compare integers). It is checked here in the same spirit.
+    digest_row = re.search(r"^\| SHA-256 \| `(?P<sha>[0-9a-f]{64})` \|$", text, re.M)
+    if digest_row is None:
+        problems.append(
+            f"{rel}: no '| SHA-256 | `<64 hex>` |' row for the frozen WatDiv dataset. The "
+            f"row was reworded or removed; update the pattern in "
+            f"scripts/check-doc-claims.py so the digest stays checked."
+        )
+    elif digest_row.group("sha") != artifact.sha256:
+        problems.append(
+            f"{rel}: the documented frozen-dataset SHA-256 is "
+            f"{digest_row.group('sha')}, but the pin is {artifact.sha256} ({source})"
+        )
+
+    return problems, [
+        Claim(
+            "the frozen WatDiv dataset's documented size",
+            _BENCHMARKS,
+            r"\n\| Size \| (?P<size>[\d ,]+) bytes \|\n",
+            {"size": artifact.size},
+            source,
+        ),
+    ]
+
+
 def build_claims(
     inventory: dict[str, tuple[int, int]],
     matrix: dict[str, tuple[int, int]],
@@ -6169,6 +6240,8 @@ def main(argv: list[str]) -> int:
     problems.extend(sparql_surface_coverage_claim(surfaces))
     checked += 1
     decomposition_problems, decomposition_claims = change_path_decomposition_claims()
+    watdiv_problems, watdiv_claims = watdiv_pin_claims()
+    problems.extend(watdiv_problems)
     problems.extend(decomposition_problems)
     # Two column identities per surface: the components against their total, and the
     # whole table against the stated baseline.
@@ -6195,6 +6268,7 @@ def main(argv: list[str]) -> int:
         + product_alloc_prose_claims(load_product_alloc_report())
         + change_path_pin_claims(load_change_path_pins())
         + decomposition_claims
+        + watdiv_claims
     ):
         claim.check()
         problems.extend(claim.failures)
