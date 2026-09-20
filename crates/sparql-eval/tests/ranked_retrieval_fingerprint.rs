@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError, PfArgs,
-    PfArity, PfCursor, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PfArity, PfCursor, PropertyFunction, PropertyFunctionRegistry, RankFidelity, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const EX_REL: &str = "http://example.org/ns#ranked";
@@ -95,6 +95,8 @@ fn ranked_declaration() -> RankedDeclaration {
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        // The fixture producer is exhaustive over its own table.
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory: true,
@@ -279,7 +281,7 @@ fn a_declared_block_column_moves_the_fingerprint() {
 /// framing change. Never edit it to match a run — re-run this test and record
 /// what it reports.
 const FIXTURE_FINGERPRINT: &str =
-    "8f898041be994d883bb13bd260df377b44a614145c336cd00b171a7a73e11a4a";
+    "66a03fe28652060971789637c9fdb09139344d3dbe4a60d2c337d944b8b40a72";
 
 #[test]
 fn the_fingerprint_is_the_same_string_every_time_the_registry_is_rebuilt() {

@@ -41,8 +41,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_retrieval::{
-    CandidateDomains, DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, RankedStreamAdapter,
-    RankedStreamImpl, RowBlock, StreamContract, StreamEnding, Term, TopK, fuse,
+    CandidateDomains, DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, RankFidelity,
+    RankedStreamAdapter, RankedStreamImpl, RowBlock, StreamContract, StreamEnding, Term, TopK,
+    fuse,
 };
 
 /// A minimal executor. The adapter's rows are already materialized, so nothing
@@ -89,7 +90,11 @@ fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
             )
         })
         .collect();
-    let contract = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
+    let contract = StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    );
     let adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(rows, StreamEnding::Exhausted),
         contract,

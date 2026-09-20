@@ -45,8 +45,8 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, IndexGeneration, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement, Volatility,
+    PfCursor, PfRow, PropertyFunction, RankFidelity, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -727,6 +727,7 @@ impl TextSearchRelation {
         &self,
         stratum: Iri,
         predicate: Option<String>,
+        fidelity: RankFidelity,
         domains: CandidateDomains,
     ) -> Result<RankedDeclaration, TextError> {
         let partitions = self.index.partition_count();
@@ -763,6 +764,21 @@ impl TextSearchRelation {
             depth_placement: None,
             candidate_position: Self::DOC,
             duplicates: DuplicatePolicy::Unique,
+            // Passed through, never asserted here, for the reason `domains` is.
+            // BM25 over THIS index is exhaustive — every document holding a
+            // query term is scored, in exact fixed-point arithmetic, with no
+            // pruning and no early exit — so if the index covers what the host
+            // means by its corpus, [`RankFidelity::EXACT`] is the true
+            // declaration and the host states it.
+            //
+            // Whether it does cover that corpus is not a fact this relation
+            // holds. A host that indexed a sample, or one partition of a larger
+            // collection, or a snapshot it knows has fallen behind, has a
+            // genuinely lossy producer, and the only honest way for it to say so
+            // is here. Asserting exactness on its behalf would put the strongest
+            // claim in the lattice into the mouth of the one party that never
+            // spoke.
+            fidelity,
             domains,
             // A text index answers with documents, a score and the matched
             // terms; it holds no notion of a host's partition, so there is no
@@ -1594,6 +1610,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_sparql_eval::RankFidelity;
 
     use super::{
         OCCURRENCE_MODE, RDF_DIR_LANG_STRING, SEARCH_DOC, SEARCH_LANG, SEARCH_MATCHED, SEARCH_MODE,
@@ -1793,6 +1810,7 @@ mod tests {
             .ranked_declaration(
                 stratum.clone(),
                 Some(NOTE.to_owned()),
+                RankFidelity::EXACT,
                 CandidateDomains::Unrestricted,
             )
             .expect("a single-partition index has one ranked order");
@@ -1809,6 +1827,7 @@ mod tests {
                 .ranked_declaration(
                     stratum,
                     Some(NOTE.to_owned()),
+                    RankFidelity::EXACT,
                     CandidateDomains::within([DomainTag::parse(
                         "https://example.org/domain/documents"
                     )
@@ -1873,7 +1892,12 @@ mod tests {
         let spread = TextSearchRelation::new(spread_subject());
         assert!(spread.index().partition_count() > 1);
         let error = spread
-            .ranked_declaration(stratum.clone(), None, CandidateDomains::Unrestricted)
+            .ranked_declaration(
+                stratum.clone(),
+                None,
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+            )
             .expect_err("three partitions have no one ranked order");
         match error {
             TextError::Config(message) => {
@@ -1889,13 +1913,23 @@ mod tests {
         assert_eq!(empty.index().partition_count(), 0);
         assert!(
             empty
-                .ranked_declaration(stratum.clone(), None, CandidateDomains::Unrestricted)
+                .ranked_declaration(
+                    stratum.clone(),
+                    None,
+                    RankFidelity::EXACT,
+                    CandidateDomains::Unrestricted,
+                )
                 .is_ok(),
             "an empty index ranks nothing, which is one ranked order"
         );
         assert!(
             TextSearchRelation::new(golden())
-                .ranked_declaration(stratum, None, CandidateDomains::Unrestricted)
+                .ranked_declaration(
+                    stratum,
+                    None,
+                    RankFidelity::EXACT,
+                    CandidateDomains::Unrestricted,
+                )
                 .is_ok(),
             "and a one-partition index still declares"
         );

@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use purrdf_core::Iri;
 use purrdf_sparql_eval::{
-    AcceptedTerm, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy, MemoryRelation,
-    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement,
+    AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DomainTag, DuplicatePolicy,
+    MemoryRelation, OrderFidelity, PropertyFunction, PropertyFunctionRegistry, RankFidelity,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
 };
 
 const EX_REL: &str = "http://example.org/ns#search";
@@ -89,6 +89,10 @@ fn declaration() -> RankedDeclaration {
         }),
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        // The reference declaration promises a complete, order-faithful search,
+        // which is what every producer promised before the term existed. The
+        // tests that are ABOUT the term state their own.
+        fidelity: RankFidelity::EXACT,
         // The reference declaration promises nothing about where its candidates
         // lie, which is the widest promise and the one every producer made
         // before the term existed. The tests that are ABOUT the term state
@@ -812,6 +816,61 @@ fn canonical_description_is_injective_over_every_field() {
                 ..base.clone()
             },
         ),
+        // Both fidelity axes, and the evidence bytes on each. A declaration that
+        // approximates is not the declaration that does not, and two producers
+        // disclosing different losses are not the same producer — so all four
+        // of these must separate, or two registries that answer differently
+        // could share a digest.
+        (
+            "fidelity lossy",
+            RankedDeclaration {
+                fidelity: RankFidelity {
+                    completeness: Completeness::Lossy {
+                        evidence: Arc::from("approximate: beam search, recall unmeasured"),
+                    },
+                    order: OrderFidelity::Faithful,
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "fidelity lossy, other evidence",
+            RankedDeclaration {
+                fidelity: RankFidelity {
+                    completeness: Completeness::Lossy {
+                        evidence: Arc::from("approximate: sampled, 1 in 8 rows"),
+                    },
+                    order: OrderFidelity::Faithful,
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "fidelity perturbed",
+            RankedDeclaration {
+                fidelity: RankFidelity {
+                    completeness: Completeness::Complete,
+                    order: OrderFidelity::Perturbed {
+                        evidence: Arc::from("quantized: distances compared in 8-bit space"),
+                    },
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "fidelity lossy and perturbed",
+            RankedDeclaration {
+                fidelity: RankFidelity {
+                    completeness: Completeness::Lossy {
+                        evidence: Arc::from("approximate: beam search, recall unmeasured"),
+                    },
+                    order: OrderFidelity::Perturbed {
+                        evidence: Arc::from("quantized: distances compared in 8-bit space"),
+                    },
+                },
+                ..base.clone()
+            },
+        ),
         (
             "domains restricted",
             RankedDeclaration {
@@ -1036,4 +1095,187 @@ fn request_facet_spellings_are_stable() {
     assert_eq!(RequestFacet::Language.as_str(), "language");
     assert_eq!(RequestFacet::Predicate.as_str(), "predicate");
     assert_eq!(RequestFacet::MaxDistance.as_str(), "max-distance");
+}
+
+// ---------------------------------------------------------------------------
+// The fidelity term: what a producer promises about its own rows.
+// ---------------------------------------------------------------------------
+
+/// A declaration whose completeness axis declares `evidence`.
+fn lossy(evidence: &str) -> RankedDeclaration {
+    RankedDeclaration {
+        fidelity: RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from(evidence),
+            },
+            order: OrderFidelity::Faithful,
+        },
+        ..declaration()
+    }
+}
+
+/// A declaration whose order axis declares `evidence`.
+fn perturbed(evidence: &str) -> RankedDeclaration {
+    RankedDeclaration {
+        fidelity: RankFidelity {
+            completeness: Completeness::Complete,
+            order: OrderFidelity::Perturbed {
+                evidence: Arc::from(evidence),
+            },
+        },
+        ..declaration()
+    }
+}
+
+#[test]
+#[should_panic(expected = "declares a loss on its completeness axis but supplies no evidence")]
+fn an_empty_completeness_evidence_is_refused() {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), lossy(""));
+}
+
+#[test]
+#[should_panic(expected = "declares a loss on its completeness axis but supplies no evidence")]
+fn a_whitespace_only_completeness_evidence_is_refused() {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), lossy("   \t\n "));
+}
+
+#[test]
+#[should_panic(expected = "declares a loss on its order axis but supplies no evidence")]
+fn an_empty_order_evidence_is_refused() {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), perturbed(""));
+}
+
+#[test]
+fn the_refusal_names_the_producer_and_shows_the_way_out() {
+    let message = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(EX_REL, relation(), lossy(""));
+    });
+    assert!(
+        message.contains(EX_REL),
+        "the refusal names the producer a host must go and fix: {message}"
+    );
+    assert!(
+        message.contains("declare the exhaustive variant"),
+        "the refusal names the neighbouring declaration a producer with nothing to \
+         disclose actually wants, so a host cannot read it as 'approximation is \
+         unwelcome': {message}"
+    );
+}
+
+// --- The neighbouring VALID cases. -----------------------------------------
+//
+// Over-refusal is the mirror of the silent-drop bug and it hides perfectly: a
+// refusal LOOKS like correct strictness and every test above passes either way.
+// So each refusal is executed beside the nearest input that must still be
+// accepted, and these assert acceptance rather than the absence of a panic.
+
+#[test]
+fn a_real_evidence_sentence_registers_and_reads_back_verbatim() {
+    let evidence = "approximate: recall measured against the exact oracle up to 50,000 rows";
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), lossy(evidence));
+
+    let read_back = registry
+        .ranked_declaration(EX_REL)
+        .expect("a ranked registration reads its declaration back");
+    let Completeness::Lossy {
+        evidence: stored, ..
+    } = &read_back.fidelity.completeness
+    else {
+        panic!("the completeness axis kept the declared loss");
+    };
+    assert_eq!(
+        &**stored, evidence,
+        "the string the producer published is the string a consumer reads: no \
+         normalization, no truncation, no re-wording"
+    );
+}
+
+#[test]
+fn an_exhaustive_declaration_still_registers() {
+    // The case the refusal above must NOT catch. A producer with nothing to
+    // disclose supplies no evidence on either axis, and that is not an empty
+    // evidence string -- it is a different variant, and it registers exactly as
+    // it did before the term existed.
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), declaration());
+
+    assert_eq!(
+        registry
+            .ranked_declaration(EX_REL)
+            .expect("an exhaustive producer registers")
+            .fidelity,
+        RankFidelity::EXACT,
+    );
+}
+
+#[test]
+fn evidence_carrying_the_framing_characters_survives_the_canonical_encoding() {
+    // The canonical description frames every string as `<byte-len>:<bytes>` and
+    // escapes nothing, so the characters that frame it are exactly the ones a
+    // naive encoder would corrupt. A producer's evidence is prose written by a
+    // human and will contain them.
+    let evidence = "approximate: recall unmeasured at 10^6; see \u{1}note\u{6}\nand the oracle";
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), lossy(evidence));
+
+    let read_back = registry
+        .ranked_declaration(EX_REL)
+        .expect("a ranked registration reads its declaration back");
+    let Completeness::Lossy {
+        evidence: stored, ..
+    } = &read_back.fidelity.completeness
+    else {
+        panic!("the completeness axis kept the declared loss");
+    };
+    assert_eq!(&**stored, evidence, "framing characters survive verbatim");
+
+    // And the encoding still separates it from a neighbour differing by one byte.
+    assert_ne!(
+        lossy(evidence).canonical_description(),
+        lossy(&format!("{evidence}.")).canonical_description(),
+    );
+}
+
+#[test]
+fn both_axes_may_declare_a_loss_at_once() {
+    // A quantized approximate index is lossy AND perturbed. The axes are
+    // independent, so declaring both is an ordinary declaration, not a
+    // contradiction to be refused.
+    let decl = RankedDeclaration {
+        fidelity: RankFidelity {
+            completeness: Completeness::Lossy {
+                evidence: Arc::from("approximate: beam search"),
+            },
+            order: OrderFidelity::Perturbed {
+                evidence: Arc::from("quantized: distances compared in 8-bit space"),
+            },
+        },
+        ..declaration()
+    };
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), decl);
+
+    let read_back = registry
+        .ranked_declaration(EX_REL)
+        .expect("a doubly-degraded producer registers");
+    assert!(read_back.fidelity.may_omit());
+    assert!(read_back.fidelity.order_is_unbounded());
+    assert_eq!(
+        read_back.fidelity.evidence().count(),
+        2,
+        "a consumer reads both disclosures, in axis order"
+    );
+}
+
+#[test]
+fn exact_declares_nothing_and_claims_nothing() {
+    let fidelity = RankFidelity::EXACT;
+    assert!(!fidelity.may_omit());
+    assert!(!fidelity.order_is_unbounded());
+    assert_eq!(fidelity.evidence().count(), 0);
 }

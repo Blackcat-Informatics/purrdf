@@ -18,10 +18,11 @@ use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, DerivedIndex, DimensionalityPolicy, DistanceMetric,
     EffectivePrefix, EmbeddingBuilder, EmbeddingFamily, EmbeddingFamilyContract, EmbeddingTarget,
-    EmbeddingView, ExtensionTarget, IndexCoordinates, MatrixInput, MatrixRow,
-    PURREMB_HEADER_LENGTH, PrefixPostprocessing, RdfDatasetBuilder, SECTION_INDEX_PAYLOAD,
-    StageImplementation, TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
-    derive_artifact_root, verify_embedding,
+    EmbeddingView, ExtensionTarget, IndexBuildDeterminism, IndexCoordinates, IndexGuardContract,
+    IndexLossContract, IndexPayloadStorage, MatrixInput, MatrixRow, PURREMB_HEADER_LENGTH,
+    PrefixPostprocessing, RdfDatasetBuilder, SECTION_INDEX_PAYLOAD, StageImplementation, TargetId,
+    TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, derive_artifact_root,
+    verify_embedding,
 };
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard, level::splitmix64};
 
@@ -162,6 +163,65 @@ impl Fixture {
         bytes[offset] ^= 0x01;
         reseal(&mut bytes, &[(SECTION_INDEX_PAYLOAD, 1)]);
         bytes
+    }
+
+    /// The artifact whose HNSW guard publishes some OTHER implementation evidence revision.
+    ///
+    /// Identifier, media type, profile digest, parameter encoding, parameters, loss contract,
+    /// use role and payload are all the profile's own, so the revision bytes are the single
+    /// thing a test over this artifact is exercising.
+    #[must_use]
+    pub fn foreign_evidence_revision(&self) -> Vec<u8> {
+        self.with_guard_contract(|contract| {
+            contract.implementation.revision =
+                Some(b"approximate: recall is exact at every scale and absence is proven".to_vec());
+        })
+    }
+
+    /// The artifact whose HNSW guard declares a loss contract that transforms vectors.
+    ///
+    /// PURREMB requires an encoding and parameters alongside that claim, so both are supplied
+    /// -- the artifact is well-formed at the container boundary and false only about this
+    /// profile, which stores no vectors and therefore cannot transform any.
+    #[must_use]
+    pub fn transforming_loss_contract(&self) -> Vec<u8> {
+        self.with_guard_contract(|contract| {
+            contract.loss = IndexLossContract {
+                transforms_vectors: true,
+                loss_encoding: Some("https://example.org/index/loss/int8".to_owned()),
+                loss_parameters: Some(vec![8]),
+            };
+        })
+    }
+
+    /// The artifact rebuilt with this profile's guard contract mutated by `mutate`.
+    ///
+    /// The builder is the real one, so the result is a properly sealed artifact that opens and
+    /// verifies; nothing is patched behind rdf-core's back. The unmutated contract is rebuilt
+    /// first and asserted byte-identical to `self.bytes`, which is what makes the mutation the
+    /// ONLY difference between the two artifacts: a refusal observed over the result cannot be
+    /// firing for something else the rebuild happened to change.
+    fn with_guard_contract(&self, mutate: impl FnOnce(&mut IndexGuardContract)) -> Vec<u8> {
+        let mut contract = guard::guard_contract(self.params, self.use_role);
+        assert_eq!(
+            self.rebuild(&contract),
+            self.bytes,
+            "the unmutated contract must reproduce the fixture byte for byte"
+        );
+        mutate(&mut contract);
+        self.rebuild(&contract)
+    }
+
+    /// One artifact carrying exactly this fixture's payload under `contract`.
+    fn rebuild(&self, contract: &IndexGuardContract) -> Vec<u8> {
+        let derived = DerivedIndex::new(
+            self.coordinates,
+            IndexPayloadStorage::Inline(self.image.clone()),
+            IndexBuildDeterminism::Deterministic,
+            contract,
+        )
+        .expect("the substituted guard folds into a derived index");
+        build(&self.context, vec![derived])
     }
 
     /// Bind every row target to its row term, in row order.

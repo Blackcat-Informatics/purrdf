@@ -89,8 +89,8 @@ use std::task::{Context, Poll, Waker};
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, EVIDENCE_VERSION, EvidenceId, Fixed,
     FusionProfile, IndexGeneration, Iri, PfAttestation, ProducerReceipt, ProducerStatus,
-    ProtocolError, RankedRow, RankedStream, RowBlock, ScoreExactness, ServiceLevel, StreamContract,
-    Term, TopK, contribution, fuse,
+    ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock, ScoreExactness, ServiceLevel,
+    StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -194,7 +194,11 @@ impl RankedStream for ScriptedStream {
 /// The contract a fixture stream of distinct, strictly rank-ordered rows honestly
 /// declares when it promises nothing about where its candidates lie.
 fn unrestricted() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 /// Script one stream's three rows, in the order `candidates` names them.
@@ -512,6 +516,7 @@ fn scripted_in(candidates: &[&str], block: &str) -> ScriptedStream {
         emitted: 0,
         contract: StreamContract::new(
             DuplicatePolicy::Unique,
+            RankFidelity::EXACT,
             CandidateDomains::within([domain(block)]),
         ),
         attestation: PfAttestation::UNDECLARED,
@@ -617,11 +622,18 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
     assert_eq!(result.trailer.evidence_id.to_hex(), EVIDENCE_ID_HEX);
 
     // One stratum served from an index it called short, so every fused score is
-    // a lower bound — and the answer names which stratum made it one.
+    // an ESTIMATE rather than a value — and the answer names which stratum made
+    // it one, on both sides. Fusion scores by rank, so a stratum that fails to
+    // name a row both withholds that row's contribution and promotes every row
+    // behind it: the error runs in both directions, which is why the same
+    // stratum appears under `deficit` and under `inflation`. Its declared order
+    // is faithful, so both directions stay finite and `unbounded` is empty.
     assert_eq!(
         result.trailer.exactness,
-        ScoreExactness::LowerBounds {
-            strata: BTreeSet::from([iri(STRATUM_TWO)]),
+        ScoreExactness::Estimated {
+            deficit: BTreeSet::from([iri(STRATUM_TWO)]),
+            inflation: BTreeSet::from([iri(STRATUM_TWO)]),
+            unbounded: BTreeSet::new(),
         },
         "the shortfall reaches the exactness verdict identically on both targets"
     );

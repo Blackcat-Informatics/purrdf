@@ -30,7 +30,7 @@ name the test in this repository that proves the shipped producers keep the
 promise, where one exists. Where no such test exists, the entry says that too:
 an unverifiable claim in a contract document is worse than no claim.
 
-A third property cuts across both and is stated once here rather than fifteen
+A third property cuts across both and is stated once here rather than sixteen
 times. **A promise about rows nobody has pulled is verified exactly as far as the
 rows actually pulled reach, and no further.** A false declaration that no pulled
 row contradicts produces a wrong answer, and this layer does not dress that up as
@@ -423,8 +423,8 @@ stream, never ranked, never counted, present in no plan field, no identity and n
 resolution number. All it decides is
 [`ProducerStatus::DepthReached`] versus
 [`ProducerStatus::Exhausted`]. Without it an
-executor could only ever say `Exhausted` — the strongest completeness claim this
-layer makes — about a read the plan itself had cut short.
+executor could only ever say `Exhausted` — the one ending that names no
+stopper — about a read the plan itself had cut short.
 
 Your declared row bound does **not** cap that emitted bound, at any size. The
 admission waist has already refused a recorded depth above your declaration, so
@@ -534,8 +534,15 @@ exhaustion, and the depth below the declaration where the probe returns — and 
 `the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it`
 in `tests/real_producers.rs`, which drives the shipped relation end to end.
 
-`Exhausted` is the only completeness claim in the vocabulary. Every other ending
-names the stopper.
+`Exhausted` is the only ending that names no stopper. Every other one says who
+stopped the read.
+
+It is not, on its own, a completeness claim. It says the producer emitted every
+row **its search produced**; whether those were every row that was **due** is
+[A16](#a16--declare-the-fidelity-of-the-rows-you-can-name), reported beside it as
+`FusionTrailer::fidelities`. For a producer that declared itself exhaustive the
+two together do say the corpus ran out. For one that declared a lossy search they
+say only that the search did.
 
 ## A9 — Declare the honest unfiltered worst case for the row bound
 
@@ -695,9 +702,9 @@ right now, and it too is read rather than obeyed.
 
 **The failure it prevents.** A depth of zero compiles to `LIMIT 0`, which hands
 back no row whatever the relation holds, and the trailer still reports the stratum
-exhausted with zero rows — the strongest completeness claim the vocabulary has,
-made about the bound rather than about the data, and identical in every trailer
-field to an honest empty answer, so nothing downstream can tell them apart.
+exhausted with zero rows — the one ending that names no stopper, made about the
+bound rather than about the data, and identical in every trailer field to an
+honest empty answer, so nothing downstream can tell them apart.
 A tiny non-zero selectivity was already safe through ceiling division;
 zero was the one input that escaped it, and it arrives by three roads: a provider
 honestly reporting a selectivity of zero parts per million, a measured
@@ -893,14 +900,22 @@ sides of the refusal executed:
 * `an_update_over_an_incomplete_relation_refuses_and_writes_nothing`, with
   `the_same_update_over_a_relation_declaring_nothing_short_commits` beside it.
 
-**What it does to a fused score.** A stratum serving from a short index omits
-whatever its missing shard held, so a candidate that shard would have named is
-summed one contribution light. Labelling that "exact" would be a bound on the read
-becoming a value. [`FusionTrailer::exactness`]
-says which reading applies: [`ScoreExactness::Exact`], or
-[`ScoreExactness::LowerBounds`] naming exactly the strata
-that declared themselves short. The rows are returned either way, because a short
-index still produced real rows in a real order.
+**What it does to a fused score, in both directions.** A stratum serving from a
+short index omits whatever its missing shard held, so a candidate that shard would
+have named is summed one contribution light. That much is obvious. What is not is
+that fusion scores by **rank** and nothing else, so the omission also promotes
+every row behind the missing one into a rank it did not earn — and each of those
+collects a *larger* contribution than it was due. A candidate the short stratum
+missed scores too low; one it named scores too high.
+
+Labelling that "exact" would be a bound on the read becoming a value, and
+labelling it a *lower bound* would be worse: right about the first direction and
+wrong about the second, so a consumer acting on the name would be confidently
+wrong in the one direction the name told it not to look.
+[`FusionTrailer::exactness`] says which reading applies: [`ScoreExactness::Exact`],
+or [`ScoreExactness::Estimated`] naming the responsible strata on each side.
+`FusedRow::interval` carries the size of each for one row. The rows are returned
+either way, because a short index still produced real rows in a real order.
 
 ## A15 — Declare candidate domains, and never name a candidate outside them
 
@@ -1082,3 +1097,99 @@ that was valid, or lets it certify a score missing a contribution the other stre
 was about to make. A wrong guess here is a wrong answer, so there is no guess — and
 that is also why neither shipped producer carries a domain declaration of its own.
 Each takes one from the host at registration and passes it through unchanged.
+
+## A16 — Declare the fidelity of the rows you can name
+
+**The obligation.** State, where you register, whether your search names every
+row that was due to it, and whether a row you *do* name arrives at a rank no
+better than the one it earned. The two are independent axes and both are
+required. If either is degraded, supply your own evidence for it — prose a
+reader can act on, naming the measurement, its limit, and what an empty result
+does not prove.
+
+**The failure it prevents.** Every other ending in the vocabulary is
+contradicted by a row that *arrives*: a repeat falsifies `DuplicatePolicy::Unique`,
+an out-of-block candidate falsifies a domain declaration. This one cannot be, and
+that is exactly why it must be declared. A stream that ran out of rows and a
+stream whose beam stopped finding them are indistinguishable from the consumer's
+side — both simply stop yielding, both leave contiguous ranks, both report
+`Exhausted`. So an undeclared approximation is invisible here **by construction**,
+and silence about it is read as completeness. Nothing downstream can recover the
+fact; a consumer either receives it from the producer or never has it.
+
+The second axis carries a fact the first cannot. Order faithfulness is the
+precondition for any finite bound on the answer's error: if a named row's true
+rank is at least its emitted rank, the contribution it collected bounds the
+contribution it was due. A producer comparing *approximated* values — quantized
+vectors, a sketched score — can rank a row it found better than it was due, and
+then no bound exists at all. A consumer must be told that rather than handed a
+number, and one flag could not carry both facts.
+
+**Who enforces it.** The producer, and it cannot be otherwise. Registration
+refuses a declared loss with empty evidence — a disclosure that discloses nothing
+is the one failure visible from here — but nothing checks that an exhaustive
+declaration is true, for the same reason nothing checks a `Unique` promise before
+the repeat arrives. A producer declaring itself exhaustive while quietly missing
+rows yields an answer that declaration made wrong, and this layer does not claim
+otherwise.
+
+**Where a shipped relation gets it from.** Every ranked producer in this
+workspace takes its fidelity, or the half of it the relation cannot derive, as a
+parameter at the point of declaration. `TextSearchRelation` and
+`EmbeddingKnnRelation` take the whole `RankFidelity`, because both are
+exhaustive over the data they hold and neither can see whether that data is the
+whole of the host's corpus: BM25 scores every document holding a query term and
+the kNN relation scans every row of its space, so `RankFidelity::EXACT` is a true
+statement about each one's *search* and says nothing about its *coverage*. A
+relation asserting it would be the failure above in its purest form — the
+strongest claim in the lattice in the mouth of the one party that never spoke,
+about the one fact nothing downstream can recover.
+
+The HNSW relation is the exception, and takes only an `OrderFidelity`. Its
+completeness axis is `Lossy` over every space on every request, derived from a
+fact it genuinely holds — a beam offers what it reached and never certifies that
+nothing else matched — so there is no silence there to be read as completeness,
+and the profile's own evidence occupies the axis, which is where this contract
+requires it to reach a consumer byte for byte. What the relation cannot see is
+what the host did to the vectors *before* the build: quantize them and the
+producer is order-perturbed, and no loss contract reachable from the index
+records it. That is the parameter, and it composes with the derived value by
+taking the worse of the two, so a host can degrade the axis and never upgrade it.
+
+**This is not the attestation channel, and does not duplicate it.**
+`ServiceLevel::Incomplete` answers a different question — was the index *version*
+that served this invocation whole, given a shard that failed to load or a replica
+that has not caught up — and it already degrades `ScoreExactness` on its own. It
+is the wrong channel for a corpus a host deliberately sampled, twice over: it is
+read per invocation from the cursor rather than stated at registration, and an
+`Incomplete` reading is a *refusal* on every entry point that carries no witness,
+so a host stating a permanent fact there would take out its ordinary SPARQL
+queries along with its fused ones.
+
+**What it does to a fused answer.** The declaration reaches
+`FusionTrailer::fidelities` verbatim, under the same stratum key as the status,
+and the two are read together: a status is how the read *ended*, a fidelity is
+whether the rows that ended it were all the rows that were *due*. It also drives
+`FusionTrailer::exactness` and each row's `FusedRow::interval`, exactly as a short
+index does and for the identical reason — see
+[A14](#a14--attest-the-generation-that-answered-and-say-when-it-was-short).
+
+**It is part of a compiled plan's identity.** The declaration folds into the
+registry's content fingerprint and so into the plan id: a plan drawn from
+producers that approximate is not the plan drawn from producers that do not, and
+the two answers differ in what they may be read to claim. **A consequence worth
+knowing before you edit an evidence string:** changing that sentence changes
+every plan that names the producer.
+
+Pinned by `the_declaration_carries_the_profile_evidence_byte_for_byte`,
+`the_order_axis_is_a_function_of_the_loss_contract_and_not_a_literal`,
+`a_host_that_approximated_its_vectors_declares_a_perturbed_order`,
+`a_host_that_transformed_nothing_gets_the_declaration_it_always_had` and
+`the_composition_takes_the_worse_of_the_two_and_keeps_the_hosts_words` in
+`crates/hnsw/tests/ranked_declaration.rs`; by
+`the_ranked_declaration_carries_the_fidelity_the_caller_stated` in
+`crates/sparql-eval/src/knn/tests.rs`; by
+`a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness` and its
+neighbour `a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores`
+in `tests/real_producers.rs`, which run the whole ladder over a real sealed
+artifact holding half a corpus; and by the `T8`/`T9` groups in `tests/fusion.rs`.

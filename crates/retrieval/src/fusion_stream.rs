@@ -102,7 +102,8 @@ use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, btree_map};
 
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, DuplicatePolicy, IndexGeneration, PfAttestation, ServiceLevel,
+    CandidateDomains, DomainTag, DuplicatePolicy, IndexGeneration, PfAttestation, RankFidelity,
+    ServiceLevel,
 };
 use purrdf_text::Fixed;
 
@@ -123,11 +124,12 @@ pub type CandidateId = Term;
 /// that contributed — and every applicable one that could not — keeps its own
 /// status, so "all producers answered" and "one could not" stay distinguishable.
 ///
-/// # `Exhausted` is the only completeness claim in the vocabulary
+/// # `Exhausted` is the only READ ENDING that reports no stopper — and that is
+/// not the same as a completeness claim
 ///
-/// There are seven variants and exactly one of them says a stratum's rows ran
-/// out. Every other one names *who stopped the read*, and they are six
-/// different parties stopping it at six different places:
+/// There are seven variants and exactly one of them says the rows ran out rather
+/// than naming who stopped the read. Every other one names *who stopped it*, and
+/// they are six different parties stopping it at six different places:
 ///
 /// * [`Self::DepthReached`] — the **plan's depth** stopped the producer, at a
 ///   rank. The rows below it exist and were not looked at.
@@ -149,10 +151,48 @@ pub type CandidateId = Term;
 /// * [`Self::ExecutionFailed`] — the **run** stopped it: the unit could not
 ///   execute at all.
 ///
-/// A consumer therefore reads completeness by looking for one variant rather
-/// than by eliminating the others, which is the property that makes this
+/// A consumer therefore reads the read's ending by looking for one variant
+/// rather than by eliminating the others, which is the property that makes this
 /// vocabulary safe to extend: a read ending added later is incomplete by
 /// construction instead of complete by omission.
+///
+/// # What `Exhausted` does NOT say, and where the missing half is
+///
+/// It says the producer emitted every row **its search produced**. Whether those
+/// were every row that was **due** is a different question, and this enum cannot
+/// answer it — the answer is the producer's declared
+/// [`StreamContract::fidelity`](crate::StreamContract::fidelity), reported per
+/// stratum in [`FusionTrailer::fidelities`] under the same key as the status.
+/// The two are read together or not at all.
+///
+/// The gap is not hypothetical and it is not visible from here. An approximate
+/// index whose beam stopped finding rows reports `Exhausted` with a perfectly
+/// well-formed stream: contiguous ranks, an honest count, no error. It is
+/// indistinguishable at this layer from a producer that genuinely held nothing
+/// more, because the rows that would tell them apart are exactly the rows that
+/// never arrived. Reading `Exhausted` alone as "everything that matches was
+/// returned" is therefore wrong for any stratum whose producer declared
+/// [`Completeness::Lossy`](crate::Completeness::Lossy) — and that stratum's own
+/// vocabulary gives no warning, which is why the warning lives beside it.
+///
+/// `Exhausted { rows_emitted: 0 }` is the sharpest case. For an exhaustive
+/// producer it means "I looked and found nothing". For a lossy one it means "my
+/// search found nothing", which is an offer of candidates and never a
+/// certification of absence.
+///
+/// ```
+/// # use purrdf_retrieval::{ProducerStatus, FusionTrailer, Completeness};
+/// # fn read(trailer: &FusionTrailer, stratum: &purrdf_retrieval::Iri) -> bool {
+/// // The qualified reading: a status is a completeness claim only when the
+/// // producer beside it promised to find everything.
+/// let ran_out = matches!(trailer.statuses.get(stratum), Some(ProducerStatus::Exhausted { .. }));
+/// let exhaustive = trailer
+///     .fidelities
+///     .get(stratum)
+///     .is_some_and(|fidelity| !fidelity.may_omit());
+/// ran_out && exhaustive
+/// # }
+/// ```
 ///
 /// The first two are the pair most easily confused, and collapsing them would
 /// lose the fact a consumer acts on. Both say "this stratum is not complete",
@@ -232,7 +272,15 @@ pub type CandidateId = Term;
 /// Pinned at open, both facts reach the trailer together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerStatus {
-    /// The producer emitted every row it had.
+    /// The producer emitted every row **its search produced**, and stopped
+    /// because there were no more rather than because something stopped it.
+    ///
+    /// Whether those were every row that was *due* is a separate fact, carried
+    /// separately: see this type's header, and
+    /// [`FusionTrailer::fidelities`] under the same stratum key. For a producer
+    /// that declared [`Completeness::Lossy`](crate::Completeness::Lossy) this
+    /// status is an offer of what the search found, never a certification that
+    /// nothing else matched.
     Exhausted {
         /// How many rows it emitted.
         rows_emitted: u64,
@@ -334,11 +382,14 @@ impl From<ProducerReceipt> for ProducerStatus {
 ///
 /// `contributions` names, for every stratum the candidate surfaced in, the
 /// 1-based rank and the contribution that stratum made. Their checked sum is
-/// `score` — exact over the strata that answered, and a lower bound where one
-/// of them served from an index it attested was not whole (see
-/// [`FusionTrailer::exactness`]). `threshold_witness` is the global threshold
-/// in force when the row was certified, so a reader can replay the
-/// certification.
+/// `score` — exact over the strata that answered, and an estimate where one of
+/// them could not name every row that was due, whether because its index was
+/// short or because its search is approximate (see
+/// [`FusionTrailer::exactness`] for the verdict and [`Self::interval`] for this
+/// row's own error bounds, in both directions). `threshold_witness` is the
+/// global threshold in force when the row was certified, so a reader can replay
+/// the certification — over the streams **as emitted**, which is the whole of
+/// what it witnesses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusedRow {
     /// The candidate, in its canonical term lexical — `<http://example.org/doc>`,
@@ -355,19 +406,33 @@ pub struct FusedRow {
     /// fixed-point value the engine re-derived itself — but arithmetic is not
     /// the whole of the claim. Whether this number is the candidate's *whole*
     /// score depends on whether every stratum that could have contributed to it
-    /// had a whole index to contribute from, and that is a fact about the
-    /// producers, not about the sum. A stratum serving from a short index omits
-    /// the rows its missing shard held, so a candidate that shard would have
-    /// named is summed without that contribution and scores lower than it
-    /// should.
+    /// had every row that was due to contribute, and that is a fact about the
+    /// producers, not about the sum.
+    ///
+    /// # The error runs in BOTH directions
+    ///
+    /// A stratum that fails to name a row — because its shard was missing, or
+    /// because its search is approximate — does two things at once, and only
+    /// the first is obvious. The candidate that row belonged to is summed
+    /// without that contribution and scores **lower** than it should. And
+    /// because this fusion scores by *rank* and nothing else, every row behind
+    /// the missing one moves up a rank and collects a **larger** contribution
+    /// than it earned, so every candidate that stratum *did* name scores
+    /// **higher** than it should.
+    ///
+    /// Calling such a score a "lower bound" is therefore right about the first
+    /// and wrong about the second, which is worse than saying nothing: a
+    /// consumer acting on the name would be confidently wrong in the one
+    /// direction it was told not to look.
     ///
     /// So this field is not an unconditional exactness claim, and reading it as
     /// one is the very fault this protocol exists to prevent — a bound on the
-    /// read silently becoming a value. The trailer says which reading applies:
-    /// [`FusionTrailer::exactness`] is [`ScoreExactness::Exact`] when no handed
-    /// stream attested an incomplete index, and
-    /// [`ScoreExactness::LowerBounds`] naming the short strata otherwise, in
-    /// which case every score here is a **lower bound** on the true one. This
+    /// read silently becoming a value. Two fields say which reading applies.
+    /// [`FusionTrailer::exactness`] says it once for the answer:
+    /// [`ScoreExactness::Exact`] when no stratum declared itself degraded on
+    /// either axis — the narrower true thing, and not a certificate that every
+    /// index was whole — [`ScoreExactness::Estimated`] naming the responsible
+    /// strata on each side otherwise. [`Self::interval`] says it for this row, with numbers. This
     /// is the same refusal to overstate that the row list itself already makes:
     /// a returned row is never a completeness claim, and the trailer is where
     /// completeness is asserted.
@@ -379,7 +444,29 @@ pub struct FusedRow {
     pub score: Fixed,
     /// Per-stratum provenance: `(stratum, rank, contribution)`.
     pub contributions: Vec<(Iri, u64, Fixed)>,
+    /// Where this row's **true** score lies, given what its producers declared.
+    ///
+    /// [`Self::score`] is the exact sum of the contributions that arrived;
+    /// this says how far the contributions that did *not* arrive, and the ones
+    /// that arrived at a better rank than they earned, could have moved it.
+    /// Both terms are zero when every stratum in the fusion was exhaustive, so
+    /// an answer over undegraded producers reads exactly as it always did.
+    pub interval: ScoreInterval,
     /// The threshold in force when this row was certified.
+    ///
+    /// # What it certifies, and over which streams
+    ///
+    /// The order it witnesses is this fusion's own, over the streams **as
+    /// emitted**. That is the whole of the claim, and it is unchanged by a
+    /// degraded producer: the arithmetic is replayable either way. What it does
+    /// not witness — and never could — is that the emitted streams were the
+    /// streams the producers owed. When a stratum declared
+    /// [`Completeness::Lossy`](crate::Completeness::Lossy), a candidate it never
+    /// named could have been due above this threshold, so the threshold bounds
+    /// the unseen only among rows the producers actually offered.
+    /// [`Self::interval`] carries the size of that gap, and
+    /// [`FusionTrailer::certain_prefix`] is where it is turned into an answer
+    /// about membership.
     pub threshold_witness: Fixed,
 }
 
@@ -433,61 +520,195 @@ pub struct StratumResolution {
     pub collisions_observed: u64,
 }
 
-/// Whether the fused scores in an answer are the scores, or floors under them.
+/// Where a row's true score lies, given what its producers declared.
+///
+/// [`ScoreExactness`] answers the same question once for the whole answer;
+/// this answers it for one row, with numbers. The two are consistent by
+/// construction: a fusion whose exactness is [`ScoreExactness::Exact`] emits
+/// only [`Self::Bounded`] rows with both terms zero.
+///
+/// # Why a per-row answer is computable when a per-row CAUSE is not
+///
+/// Knowing *which particular* candidates a degraded stratum failed to name
+/// would mean knowing what it did not look at, which nobody has. Knowing *how
+/// much* such a stratum could have moved a given candidate is a different
+/// question, and the fusion engine already holds every term of it: which
+/// streams have named this candidate, which of the rest could still name it
+/// under their declared domains, and what each of those is currently offering.
+/// This reads those terms; it computes no new ones and changes no decision.
+///
+/// # It is a bound on the SCORE, not a statement about membership
+///
+/// A row outside a tighter bound is not excluded from the answer and a row
+/// inside one is not guaranteed a place in it. Use
+/// [`FusionTrailer::certain_prefix`] for the membership question, which is what
+/// these intervals are the input to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScoreInterval {
+    /// `true_score` lies in `[score - inflation, score + deficit]`.
+    ///
+    /// Both terms are zero when no stratum in this fusion declared a loss, which
+    /// is the ordinary case and the one every answer had before this existed.
+    Bounded {
+        /// How much a degraded stratum could still have ADDED to this row.
+        ///
+        /// Summed over the streams that have not named this candidate and whose
+        /// declared domains do not rule it out — the same `Dom(x)` narrowing the
+        /// engine's own certification bound takes, and taken here for the same
+        /// reason: a stream that provably cannot name this candidate could not
+        /// have withheld anything from it, so charging it would inflate the
+        /// bound with a contribution that was never possible.
+        ///
+        /// A stream still holding rows contributes its current head, which is
+        /// the most it can now offer. A stream that declared itself
+        /// [`Completeness::Lossy`](crate::Completeness::Lossy) — or attested a
+        /// short index — contributes its rank-one contribution instead, because
+        /// a row it never found could have been due at any rank, including the
+        /// first.
+        deficit: Fixed,
+        /// How much a degraded stratum could have OVER-contributed to this row.
+        ///
+        /// This is the term a one-sided reading misses. Reciprocal-rank fusion
+        /// scores by rank alone, so when a lossy stratum fails to name a row,
+        /// every row behind it moves up a rank and collects more than it
+        /// earned. For a candidate such a stratum *did* name, the true rank is
+        /// therefore at least the emitted rank and the true contribution lies
+        /// in `[0, emitted]` — so the whole emitted contribution is what could
+        /// be spurious, and that is what is summed here.
+        ///
+        /// Zero for a row no degraded stratum named, and zero for every row
+        /// when every stratum was exhaustive.
+        inflation: Fixed,
+    },
+    /// A stratum whose declared order is
+    /// [`OrderFidelity::Perturbed`](crate::OrderFidelity::Perturbed) named this
+    /// row, so no finite bound on its score exists.
+    ///
+    /// Every bound above rests on one inequality — a named row's true rank is at
+    /// least its emitted rank — and a producer comparing approximated values
+    /// breaks exactly that: it can rank a row it found *better* than the row was
+    /// due. There is no number to report, and reporting one anyway would be the
+    /// fabrication this protocol exists to prevent. The responsible strata are
+    /// named so the fact stays actionable.
+    Unbounded {
+        /// The strata that named this row and declared a perturbed order, in
+        /// canonical stratum order.
+        perturbed: BTreeSet<Iri>,
+    },
+}
+
+/// Whether the fused scores in an answer are the scores, or estimates whose
+/// error this answer bounds.
 ///
 /// A fused score is the checked sum of a candidate's contributions across
-/// strata. The arithmetic is exact in every case; what varies is whether all
-/// the summands were there to be summed. A stratum serving from an index it
-/// attests was **not whole** ([`ServiceLevel::Incomplete`]) omits whatever its
-/// missing shard held, so any candidate that shard would have named is summed
-/// short — a real score, one contribution light.
+/// strata. The arithmetic is exact in every case; what varies is whether the
+/// summands were the summands there were, and whether each was the summand it
+/// should have been.
 ///
-/// Labelling such a score "exact" would be the fault this whole protocol
-/// exists to remove: a bound on the read presented as a value. So the trailer
-/// states which of the two readings applies, once, for the whole answer, and
-/// the rows are still returned either way. Refusing to answer at all would be
-/// the mirror error — a short index still produced real rows in a real order,
-/// and a caller that knows the scores are floors can use them.
+/// # The error is TWO-SIDED, and reading it as one-sided is the trap
 ///
-/// # Why the answer is per fusion rather than per row
+/// Reciprocal-rank fusion discards score magnitude: a contribution is a
+/// function of `(decay rule, K, weight, rank)` and of nothing else. So a
+/// stratum that fails to name a row does not merely withhold that row's
+/// contribution — **every row behind the missing one moves up a rank and
+/// collects a larger contribution than it earned**. This is the mechanism the
+/// producer contract already names for a filter that deletes rows, and a
+/// [`Completeness::Lossy`](crate::Completeness::Lossy) search is that deletion arriving by another route.
 ///
-/// The honest per-row answer is not computable. Knowing which *particular*
-/// candidates lost a contribution would mean knowing what the missing shard
-/// held, which is precisely what nobody has — the producer least of all, since
-/// a shard that failed to load cannot be consulted about its contents. What is
-/// knowable is the set of strata that could have contributed and could not
-/// fully, and that is what [`Self::LowerBounds`] names. A per-row flag would
-/// have to be either fabricated or set on every row, and the second is this
-/// value spelled once.
+/// A candidate the short stratum **missed** is therefore summed too LOW, and a
+/// candidate it **named** is summed too HIGH. Calling the result a "lower
+/// bound" would be right about the first and wrong about the second, and a
+/// consumer acting on it would be confidently wrong in the direction the name
+/// told it not to look. Both sides are named here, and
+/// [`FusedRow::interval`] carries the size of each per row.
+///
+/// # What is still true when this is [`Self::Estimated`]
+///
+/// The rows are real rows, in this fusion's own certified order over the
+/// contributions it did receive, and the arithmetic that produced them is
+/// replayable. What cannot be concluded is that a row absent from the answer
+/// would have stayed absent, or that the emitted order would have survived the
+/// contributions that never arrived. Refusing to answer at all would be the
+/// mirror error: a degraded stratum still produced real rows, and a caller that
+/// knows the error is bounded can use them.
+///
+/// # Why a bounded read does not land here
+///
+/// A stratum stopped at its depth or at a contribution ceiling also failed to
+/// name rows — and it stays [`Self::Exact`]. The difference is not size, it is
+/// **whether the shortfall is already described by the stratum's own reported
+/// status**. [`ProducerStatus::DepthReached`] states the rank it stopped at and
+/// [`ProducerStatus::CeilingReached`] states the bound, so a consumer reading
+/// [`FusionTrailer::statuses`] already knows what was left unread, and can undo
+/// it by reading deeper. A lossy search and a short index announce nothing in
+/// the status — `Exhausted` is what both report — and no amount of further
+/// reading recovers what they did not find.
+///
+/// Widening this verdict to "any shortfall at all" would therefore mark nearly
+/// every bounded fusion inexact, which is both useless and false to the
+/// invariance [`FusionTrailer::exactness`] documents: a caller that reads
+/// deeper must not see this value move.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScoreExactness {
-    /// Every handed stream served from an index it did not attest was short, so
-    /// each score is the exact sum of every contribution that was due.
+    /// Every handed stream was complete and order-faithful so far as it
+    /// declared, and none attested a short index, so each score is the exact sum
+    /// of every contribution that was due.
     ///
-    /// Not a certificate that every index was whole. Most producers attest
-    /// nothing at all ([`ServiceLevel::Undeclared`] is silence, and there is no
-    /// `Whole` variant to attest), so this says the narrower true thing: no
-    /// stratum in this fusion declared itself short. It is the strongest claim
+    /// Not a certificate that every index was whole and every search
+    /// exhaustive. Producers attest nothing about wholeness unless they are
+    /// short ([`ServiceLevel::Undeclared`] is silence and there is no `Whole`
+    /// variant), so this says the narrower true thing: **no stratum in this
+    /// fusion declared itself degraded on any axis.** It is the strongest claim
     /// the seam can carry, and reading it as more would put words in the mouth
     /// of every producer that stayed silent.
     Exact,
-    /// At least one handed stream attested an incomplete index, so every score
-    /// in this answer is a lower bound on the score the whole index would have
-    /// produced.
+    /// At least one stratum could not name every row that was due, or could not
+    /// be trusted to name rows at the rank they earned, so each score is an
+    /// estimate rather than a value.
     ///
-    /// The order is still this fusion's own certified order over the
-    /// contributions it did receive, and the rows are real rows. What cannot be
-    /// concluded is that a row absent from the answer would have stayed absent,
-    /// or that the emitted order would have survived the missing contributions.
-    LowerBounds {
-        /// Exactly the strata that attested [`ServiceLevel::Incomplete`], in
-        /// canonical stratum order.
+    /// The per-row size of the error is in [`FusedRow::interval`]; the sets
+    /// below name which strata are responsible, so the fact stays actionable
+    /// rather than being a flag. A caller reads each one's verbatim reason out
+    /// of [`FusionTrailer::fidelities`] or [`FusionTrailer::attestations`] under
+    /// the same key.
+    Estimated {
+        /// Strata that may have withheld a contribution, so a candidate's true
+        /// score could be **higher** than the one reported.
         ///
-        /// Naming them rather than raising a flag is what makes the fact
-        /// actionable: these are the indexes to rebuild, and a caller can read
-        /// each one's verbatim reason out of
-        /// [`FusionTrailer::attestations`] under the same key.
-        strata: BTreeSet<Iri>,
+        /// Exactly the [`Completeness::Lossy`](crate::Completeness::Lossy) declarers and the
+        /// [`ServiceLevel::Incomplete`] attesters, in canonical stratum order.
+        /// The two arrive by different routes and have opposite remedies — a
+        /// short index is rebuilt, an approximate search is not — which is why
+        /// they stay separately readable under their own keys rather than being
+        /// merged into one cause here.
+        deficit: BTreeSet<Iri>,
+        /// Strata that may have over-contributed, so a candidate's true score
+        /// could be **lower** than the one reported.
+        ///
+        /// The same strata as [`Self::Estimated::deficit`], and that is not a
+        /// redundancy — it is the rank-compaction consequence spelled where a
+        /// consumer will look for it. A stratum that omits a row promotes every
+        /// row behind it, so the identical declaration produces both effects and
+        /// a consumer that handled only one would be wrong half the time. The
+        /// two sets are carried separately because a future cause need not
+        /// produce both: a stratum stopped early withholds without promoting,
+        /// and would belong in one set alone.
+        inflation: BTreeSet<Iri>,
+        /// Strata whose declared order is [`OrderFidelity::Perturbed`](crate::OrderFidelity::Perturbed), for
+        /// which **no finite bound on the error exists at all**.
+        ///
+        /// A producer that compares approximated values can rank a row it found
+        /// better than that row was due, so the inequality every bound here
+        /// rests on — a named row's true rank is at least its emitted rank —
+        /// does not hold for it. There is no number to report, and inventing one
+        /// would be the fabrication this whole protocol exists to prevent, so
+        /// the strata are named and [`FusedRow::interval`] says
+        /// [`ScoreInterval::Unbounded`] for every row they touched.
+        ///
+        /// Empty for every producer this workspace ships today: an HNSW graph
+        /// compares exact distances and fails only to visit, which is lossy but
+        /// faithful. A quantized index would populate it.
+        unbounded: BTreeSet<Iri>,
     },
 }
 
@@ -533,24 +754,63 @@ pub struct FusionTrailer {
     /// and said nothing, and fabricating it here would report a producer that
     /// was never asked as one that declined to answer.
     pub attestations: BTreeMap<Iri, PfAttestation>,
-    /// Whether the fused scores are exact, or floors under the scores a whole
-    /// index would have produced.
+    /// What each handed stream declared about the rows it can name, keyed by its
+    /// stratum: whether its search finds every row that was due, and whether a
+    /// row it does name arrives at a rank no better than the one it earned.
     ///
-    /// [`ScoreExactness::Exact`] when no handed stream attested an incomplete
-    /// index, and [`ScoreExactness::LowerBounds`] naming exactly the strata
-    /// that did.
+    /// This is where a consumer learns that a stratum was served approximately,
+    /// and it is where that producer's own words about the loss are read —
+    /// verbatim, through [`RankFidelity::evidence`]. Nothing in this crate
+    /// parses those strings or re-words them; the string the producer published
+    /// is the string that arrives here.
+    ///
+    /// # It is read with [`Self::statuses`], never instead of it
+    ///
+    /// The two answer different questions under the same key, and only the pair
+    /// is a complete answer. A status says **how the read ended**. A fidelity
+    /// says **whether the rows that ended it were all the rows that were due**.
+    /// So [`ProducerStatus::Exhausted`] beside a [`Completeness::Lossy`](crate::Completeness::Lossy)
+    /// declaration is not a contradiction and not a completeness claim: it says
+    /// the producer emitted every row its search produced, and the declaration
+    /// beside it says the search does not produce every row there was.
+    ///
+    /// # Why it is pinned before the first row, like the attestations above
+    ///
+    /// Because a bounded read must not be able to destroy it. A stream a
+    /// [`TopK`](crate::TopK) stopped never reports again, so a fidelity fetched
+    /// at the end would go missing precisely in the runs where the caller read
+    /// shallowly — which are the runs where an approximation matters most,
+    /// because fewer rows were seen and more were left to be wrong about.
+    ///
+    /// # The key set
+    ///
+    /// Identical to [`Self::attestations`]' and [`Self::domains`]': every stream
+    /// this fusion was handed, and nothing else. A stratum that never became a
+    /// stream — one whose unit failed to run, added afterwards through
+    /// [`FusionTrailer::completed_with`] — is **absent** rather than reported as
+    /// [`RankFidelity::EXACT`], for the reason its attestation is absent: no
+    /// producer was asked, and filling in the top of the lattice would report a
+    /// producer that never answered as one that promised everything.
+    pub fidelities: BTreeMap<Iri, RankFidelity>,
+    /// Whether the fused scores are exact, or estimates whose error this answer
+    /// bounds.
+    ///
+    /// [`ScoreExactness::Exact`] when every handed stream was complete and
+    /// order-faithful, and [`ScoreExactness::Estimated`] naming exactly the
+    /// strata that were not, on each side.
     ///
     /// # As of when
     ///
     /// Like every other field here it is as of the moment
     /// [`FusionStream::trailer`] was called, but unlike [`Self::statuses`] and
     /// [`Self::resolution`] it does not move between calls, and that difference
-    /// is the point. Its inputs are [`Self::attestations`], pinned before the
-    /// first row was pulled; how deep a caller then read changes which streams
-    /// are still open, never whether an index was whole. A caller that reads a
-    /// trailer, certifies more rows and reads another gets a different set of
-    /// statuses and the same exactness — which is exactly the invariance a read
-    /// bound must not be able to destroy.
+    /// is the point. Its inputs are [`Self::attestations`] and
+    /// [`Self::fidelities`], both pinned before the first row was pulled; how
+    /// deep a caller then read changes which streams are still open, never
+    /// whether an index was whole or whether a producer's search was
+    /// exhaustive. A caller that reads a trailer, certifies more rows and reads
+    /// another gets a different set of statuses and the same exactness — which
+    /// is exactly the invariance a read bound must not be able to destroy.
     pub exactness: ScoreExactness,
     /// The pinned plan the fused rows came from, when one is attached.
     pub plan_id: Option<PlanId>,
@@ -568,6 +828,26 @@ pub struct FusionTrailer {
     ///
     /// Derived from the attestation map alone, so it is as immovable across
     /// repeated [`FusionStream::trailer`] calls as that map is.
+    ///
+    /// # Why [`Self::fidelities`] is deliberately NOT folded in
+    ///
+    /// The omission is a decision, not an oversight, and it follows the split
+    /// this crate already draws between the two legs a producer fact travels on.
+    /// An attestation is a fact about *this run* — which generation answered,
+    /// whether that generation was whole — and it is exactly what this identity
+    /// exists to pin, because two answers over two different index states must
+    /// not share it.
+    ///
+    /// A fidelity is a *declaration*: a standing property of the producer, fixed
+    /// when it was registered and identical on every invocation. It reaches
+    /// identity through the other door —
+    /// `RankedDeclaration::canonical_description` feeds the registry's content
+    /// fingerprint, which feeds [`Self::plan_id`] — so a plan drawn from
+    /// producers that approximate already differs from one drawn from producers
+    /// that do not. Folding it here as well would pin one fact in two
+    /// identities, and make an evidence digest move on something no run
+    /// observed. [`Self::domains`], a declaration by the same reasoning, is
+    /// absent for the same reason.
     pub evidence_id: EvidenceId,
     /// What each stream's rank resolution cost this fusion, keyed by stratum.
     ///
@@ -650,6 +930,16 @@ pub struct FusionTrailer {
     /// not counted here, and `false` is not evidence it does not exist. `false`
     /// is therefore not proof the final place was earned on relevance.
     ///
+    /// There is a third class this flag cannot see at all, and it is not a live
+    /// rival but an absent one. A stratum that declared
+    /// [`Completeness::Lossy`](crate::Completeness::Lossy) may simply never have
+    /// named a candidate that would have tied with — or beaten — the emitted
+    /// row, and no amount of reading further would surface it, because not
+    /// naming things is precisely what such a search does. Where
+    /// [`Self::exactness`] is [`ScoreExactness::Estimated`], `false` is
+    /// therefore silent about rivals that were never offered, as well as about
+    /// rivals that were still live.
+    ///
     /// This is what the field means, not a shortfall standing in for a stronger
     /// one. Settling every live rival would require pulling at least one row
     /// past the top-k, and how deep this fusion read is itself reported — as
@@ -657,6 +947,54 @@ pub struct FusionTrailer {
     /// further to sharpen this field would falsify that one, so the flag is
     /// defined over what the bounded read had already settled.
     pub cut_on_a_tie: bool,
+    /// The highest true score any candidate this fusion did **not** emit could
+    /// have, or `None` where no finite such bound exists.
+    ///
+    /// It is the term that turns [`Self::certain_prefix`] from a statement about
+    /// the rows in hand into a statement about membership. A row's own
+    /// [`ScoreInterval`] bounds what the degraded strata could have done to *it*;
+    /// this bounds what they could have done for a candidate the answer never
+    /// names, which is the other half of "this row keeps its place".
+    ///
+    /// # Why it is on the trailer rather than recomputed from the rows
+    ///
+    /// Because it is not a function of the rows. Every term of it is a fact of
+    /// the fusion that produced them — what each open stream was still offering
+    /// when reading stopped, what the profile awards a rank-one row in each
+    /// degraded stratum, and how far the candidates left in the frontier had
+    /// already accumulated. None of that survives into a [`FusedRow`], and a
+    /// holder of the rows alone could not derive it at any cost.
+    ///
+    /// # What it covers
+    ///
+    /// Two populations, and the bound is the larger of the two:
+    ///
+    /// * a candidate **no stream ever named** — bounded by the fusion's own
+    ///   unseen-item threshold, plus the rank-one contribution of every degraded
+    ///   stratum, since a stratum that could have missed a candidate entirely
+    ///   could have missed it at rank one;
+    /// * a candidate **named but never certified**, still in the frontier when
+    ///   reading stopped — bounded by what it had already accumulated plus the
+    ///   same per-candidate deficit [`FusedRow::interval`] reports for an
+    ///   emitted row.
+    ///
+    /// # What it does NOT claim
+    ///
+    /// Nothing about *which* candidate that would be: knowing what a degraded
+    /// stratum failed to name would mean knowing what it did not look at, which
+    /// nobody has. It is a bound on a score and never a name.
+    ///
+    /// It speaks for the reads this trailer describes, not for reads that were
+    /// never performed. A producer stopped at its plan depth, or one that could
+    /// not run at all, states that shortfall in [`Self::statuses`] — the same
+    /// division [`Self::exactness`] makes, and for the same reason: a shortfall
+    /// a status already reports is not restated here as a number.
+    ///
+    /// `None` is the refusal [`ScoreInterval::Unbounded`] makes, in the same
+    /// voice: where a stratum declared a perturbed order, an emitted rank bounds
+    /// nothing, so no finite ceiling on an unemitted candidate exists and none is
+    /// invented. The responsible strata are named in [`Self::exactness`].
+    pub unemitted_ceiling: Option<Fixed>,
 }
 
 // Canonical discriminators for the evidence encoding. One tag space per enum,
@@ -777,6 +1115,174 @@ impl FusionTrailer {
             self.statuses.entry(stratum).or_insert(status);
         }
         self
+    }
+
+    /// How many leading rows of `rows` are **certainly** in the answer.
+    ///
+    /// The longest prefix in which every row's lowest possible score still beats
+    /// both of the things that could displace it: every later row's highest
+    /// possible score, and [`Self::unemitted_ceiling`] — the highest possible
+    /// score of any candidate this answer does not contain. Those rows keep
+    /// their places whatever the degraded strata did or did not find; past the
+    /// prefix, two rows' intervals overlap and their relative order is an
+    /// artefact of what the producers happened to return.
+    ///
+    /// # What this is for
+    ///
+    /// It is the answer to the question a consumer with a completeness
+    /// obligation actually has. Told only that a stratum was approximate, its
+    /// sole safe move is to downgrade the whole answer. Told which prefix is
+    /// certain, it can present that prefix as settled and mark the rest — which
+    /// is both more useful and more honest than either extreme.
+    ///
+    /// # Both terms are needed, and only one of them is about the rows
+    ///
+    /// The pairwise term settles the rows against each other. On its own it
+    /// would settle nothing: a lossy stratum's whole failure mode is not naming
+    /// things, so the candidate that displaces an emitted row is the one that is
+    /// not in `rows` at all, and no comparison among the rows in hand can see
+    /// it. [`Self::unemitted_ceiling`] is that missing term, and it is a fact of
+    /// the fusion rather than of the rows — which is why it is carried on this
+    /// trailer rather than recomputed here.
+    ///
+    /// A **degraded** stratum is charged its **rank-one** contribution there. A
+    /// stratum that could have missed a candidate entirely could have missed it
+    /// at rank one, and the profile's rank-one award is the supremum of what a
+    /// row it never emitted could have been worth. The charge is therefore the
+    /// largest one that stratum can justify, which is what makes the prefix
+    /// under-claim rather than over-claim when the declarations are vague.
+    ///
+    /// # What it does NOT claim
+    ///
+    /// Membership, not order within a tie, and not exclusion past the prefix:
+    ///
+    /// * which of two *exactly* tied rows comes first is not settled here — it
+    ///   is decided by the engine's total tie-break (best rank, then canonical
+    ///   term order), replayably, and reported for the last emitted row as
+    ///   [`Self::cut_on_a_tie`];
+    /// * a row **past** the prefix is *possible*, never excluded. The prefix
+    ///   ending at three says the first three keep their places, not that the
+    ///   fourth has lost its own;
+    /// * no candidate is named. Knowing *which* row a degraded stratum failed to
+    ///   find would mean knowing what it did not look at, which nobody has. The
+    ///   unemitted term bounds such a candidate's score without identifying it.
+    ///
+    /// It speaks for the reads this trailer describes. A producer stopped at its
+    /// plan depth, or one that could not run at all, states that shortfall in
+    /// [`Self::statuses`] rather than in any bound — the division
+    /// [`Self::exactness`] already makes — so a consumer that needs the answer
+    /// over reads that were never performed reads the statuses beside this
+    /// number.
+    ///
+    /// # The degenerate cases, and why they are what they are
+    ///
+    /// * Every stratum exhaustive ([`ScoreExactness::Exact`]) ⇒ the prefix is
+    ///   the whole of `rows`, which is the answer this engine always gave. Every
+    ///   interval is zero-width, so the pairwise term is the emitted order
+    ///   itself; and nothing outside `rows` can reach them either, because a row
+    ///   is certified only over a threshold that bounds every candidate still to
+    ///   come and that threshold only falls as reading proceeds. Taken as a
+    ///   short-circuit because it is both the common case and the one answer no
+    ///   arithmetic can improve on.
+    /// * Any row carrying [`ScoreInterval::Unbounded`] ⇒ `0`. An unbounded row
+    ///   could outscore anything, so nothing above it is safe either, and a
+    ///   prefix "certain except for one unbounded rival" is not certain.
+    /// * [`Self::unemitted_ceiling`] of `None` ⇒ `0`, for the same reason about
+    ///   the candidates this answer never named.
+    /// * `rows` empty ⇒ `0`.
+    ///
+    /// # Why the comparison admits equality
+    ///
+    /// The test is `floor(i) >= ceiling(j)`, not `>`, and the difference is not
+    /// a rounding convenience — it is what keeps the common case from reading
+    /// as uncertain. Two rows with the *same* score are ordinary: fixed-point
+    /// reciprocal-rank decay quantizes adjacent ranks to one value routinely,
+    /// and an exhaustive fusion with a tie in it has zero-width intervals on
+    /// every row. Under a strict comparison that answer would report a certain
+    /// prefix ending at the tie, claiming doubt where there is none.
+    ///
+    /// Equality is sound because the intervals still order the true scores:
+    /// `true(i) >= floor(i) >= ceiling(j) >= true(j)`.
+    ///
+    /// # One backward pass
+    ///
+    /// "Beats every later row" is asked of every row, and asking it row by row
+    /// would walk the suffix each time — quadratic in the answer, on the default
+    /// path of every fused search. The suffix maximum of `ceiling` is carried
+    /// backwards instead, so each row is judged against one number and the whole
+    /// function is linear in `rows` with no allocation.
+    ///
+    /// `rows` is assumed to be in this fusion's emitted order, which is the
+    /// order [`FusionStream::next`] yields and the order
+    /// [`FusionResult`](crate::FusionResult) stores.
+    #[must_use]
+    pub fn certain_prefix(&self, rows: &[FusedRow]) -> usize {
+        // One unbounded row poisons the whole ranking: it could be worth
+        // anything, so no row can be certain of outranking it.
+        if rows
+            .iter()
+            .any(|row| matches!(row.interval, ScoreInterval::Unbounded { .. }))
+        {
+            return 0;
+        }
+        // And an absentee nothing bounds poisons it the same way: `None` is the
+        // identical refusal, made about the candidates this answer never named.
+        let Some(unemitted) = self.unemitted_ceiling else {
+            return 0;
+        };
+        // See the degenerate cases above: an exhaustive answer is certain in
+        // whole, and this is the path that does not pay to re-derive it.
+        if matches!(self.exactness, ScoreExactness::Exact) {
+            return rows.len();
+        }
+
+        // The inflation term is a sum of contributions that are themselves
+        // summands of `score`, so it cannot exceed it and this subtraction
+        // cannot underflow. The fallback is stated anyway, and it is chosen to
+        // fail in the direction that cannot mislead: a lower floor makes a row
+        // harder to certify, so a broken invariant would SHORTEN the prefix and
+        // under-claim. The opposite fallback would lengthen it and assert
+        // certainty this engine had not established.
+        let floor = |row: &FusedRow| match &row.interval {
+            ScoreInterval::Bounded { inflation, .. } => {
+                row.score.checked_sub(*inflation).unwrap_or(Fixed::ZERO)
+            }
+            ScoreInterval::Unbounded { .. } => Fixed::ZERO,
+        };
+        let ceiling = |row: &FusedRow| match &row.interval {
+            ScoreInterval::Bounded { deficit, .. } => row.score.checked_add(*deficit).ok(),
+            ScoreInterval::Unbounded { .. } => None,
+        };
+
+        // Walked from the back so that "beats every later row" is a comparison
+        // against one carried number. `suffix_ceiling` is the highest ceiling
+        // strictly after the row being judged — `None` at the last row, whose
+        // suffix is empty — and `suffix_unbounded` records a later row whose
+        // ceiling overflowed, which no row can be proved to beat.
+        let mut certain = rows.len();
+        let mut suffix_ceiling: Option<Fixed> = None;
+        let mut suffix_unbounded = false;
+        for (position, row) in rows.iter().enumerate().rev() {
+            let mine = floor(row);
+            let settled = !suffix_unbounded
+                && suffix_ceiling.is_none_or(|rival| mine >= rival)
+                && mine >= unemitted;
+            if !settled {
+                // Going backwards, every write is to a smaller position than the
+                // last, so the final write is the EARLIEST unsettled row — and
+                // the prefix is exactly what lies before it.
+                certain = position;
+            }
+            match ceiling(row) {
+                Some(reach) => {
+                    if suffix_ceiling.is_none_or(|best| reach > best) {
+                        suffix_ceiling = Some(reach);
+                    }
+                }
+                None => suffix_unbounded = true,
+            }
+        }
+        certain
     }
 }
 
@@ -1002,6 +1508,50 @@ impl EmittedTable {
     }
 }
 
+/// What a fusion holding at least one degraded stream needs on its row loop,
+/// derived once before a row is pulled.
+///
+/// Every field is a pure function of facts [`FusionStream::new`] has already
+/// pinned — the producers' declarations, their indices' attestations, and the
+/// profile — and none of them can move once reading starts. They are held
+/// because [`FusionStream::score_interval`] asks all three **per emitted row**:
+/// re-deriving them there recomputed a `BTreeMap` lookup, a fixed-point
+/// division and a linear scan over the streams, once per contribution, for
+/// answers that were settled before row one.
+struct Degradation {
+    /// Whether each stream may have failed to name a row that was due: it
+    /// declared a lossy search, or the index behind it attested it was short.
+    ///
+    /// Indexed by stream, like `heads` and `domains`, because that is how it is
+    /// asked. At least one entry is `true` — a fusion with none holds no
+    /// [`Degradation`] at all.
+    degraded: Vec<bool>,
+    /// The contribution each stream would award a rank-one row, or `None` where
+    /// the profile's arithmetic refused to produce one.
+    ///
+    /// `None` is **not** a value and is never read as one. It records only that
+    /// the precomputation refused; the refusal itself is deliberately not
+    /// stored. A [`FusionError`] is not `Clone`, and a cached one would in any
+    /// case be a refusal raised at construction rather than at the call that
+    /// asked — so [`FusionStream::rank_one_contribution`] re-derives on that
+    /// arm, and a caller sees the same error, from the same operands, at the
+    /// same point in the read as it always has.
+    rank_one: Vec<Option<Fixed>>,
+    /// The stream index serving each stratum.
+    ///
+    /// First entry wins, exactly as the linear scan it replaces did: a caller
+    /// driving [`FusionStream`] directly may hand it two streams tagged with one
+    /// stratum, and no answer may move because a lookup changed shape.
+    stratum_index: BTreeMap<Iri, usize>,
+}
+
+impl Degradation {
+    /// The stream index serving `stratum`, if this fusion was handed one.
+    fn index_of(&self, stratum: &Iri) -> Option<usize> {
+        self.stratum_index.get(stratum).copied()
+    }
+}
+
 /// The NRA fusion engine over a set of verified ranked streams.
 ///
 /// `FusionStream` is generic over the stream type and produces [`FusedRow`]s on
@@ -1054,6 +1604,35 @@ pub struct FusionStream<S: RankedStream> {
     /// the whole fusion, and a second read at the end would be a read of
     /// whatever state a bounded stop left the stream in.
     attestations: BTreeMap<Iri, PfAttestation>,
+    /// What every handed stream declared about the rows it can name, read in
+    /// [`Self::new`] before a single row was pulled and never read again.
+    ///
+    /// Held for the same reason the attestations beside it are, and the reason
+    /// is sharper here: a fidelity declaration is a standing fact about the
+    /// producer, true from the moment it was registered and unchanged by how
+    /// deep this fusion reads. Asking the stream again at the end would ask it
+    /// in whatever state a bounded stop left it -- and a stream a
+    /// [`TopK`](crate::TopK) stopped never reports again at all, so the answer
+    /// would go missing in exactly the runs where the bound made the
+    /// approximation matter most.
+    fidelities: Vec<RankFidelity>,
+    /// The per-stream invariants the interval arithmetic reads, or `None` for a
+    /// fusion in which **no** stream declared itself degraded.
+    ///
+    /// The absence is the point, exactly as it is for `seen_items` above: every
+    /// term this table feeds is zero over undegraded streams, so a fusion none
+    /// of whose producers disclosed a shortfall has nothing for it to hold, and
+    /// [`Self::score_interval`]'s inflation loop is skipped rather than run to
+    /// accumulate zeroes. It also keeps the whole of this precomputation off
+    /// the ordinary exhaustive fusion's working set, which `tests/
+    /// fusion_frontier_alloc.rs` measures.
+    ///
+    /// Boxed for the same reason it is optional. The three tables are cold —
+    /// read only where a producer disclosed a shortfall — and this engine is
+    /// held across an `await`, so carrying them inline would widen every
+    /// fusion's state by the width of three collections whether or not any of
+    /// them exists.
+    degradation: Option<Box<Degradation>>,
     statuses: BTreeMap<Iri, ProducerStatus>,
     frontier: BTreeMap<CandidateId, CandidateState>,
     /// Every candidate that has left the frontier by being certified, and the
@@ -1161,6 +1740,15 @@ impl<S: RankedStream> FusionStream<S> {
                 DuplicatePolicy::Allowed => Some(BTreeSet::new()),
             })
             .collect();
+        // Indexed by stream, exactly as `domains` below is, and for the same
+        // reason: every question asked of it during the read is shaped *per
+        // stream* -- can stream `s` still withhold from this candidate, did
+        // stream `s` over-contribute to it. The trailer re-keys it by stratum
+        // at the end, where a caller reads it by name instead.
+        let fidelities: Vec<RankFidelity> = contracts
+            .iter()
+            .map(|contract| contract.fidelity.clone())
+            .collect();
         let domains: Vec<CandidateDomains> = contracts
             .into_iter()
             .map(|contract| contract.domains)
@@ -1170,10 +1758,48 @@ impl<S: RankedStream> FusionStream<S> {
         // streams tagged with one stratum — `fuse` refuses that before pulling
         // — and both maps collapse such a pair the same way rather than
         // disagreeing about how many producers there were.
-        let attestations = streams
+        let attestations: BTreeMap<Iri, PfAttestation> = streams
             .iter()
             .map(|(stratum, stream)| (stratum.clone(), stream.attestation()))
             .collect();
+        // The three per-stream invariants the interval arithmetic reads,
+        // derived here because they are decided here. Each is a pure function of
+        // facts this constructor has already pinned -- the declarations, the
+        // attestations and the profile -- and none of them can move once a row
+        // is pulled, so deriving them per row would recompute a constant on the
+        // one path that runs per emitted row.
+        //
+        // Held only where something actually declared a shortfall. Over
+        // undegraded streams every term they feed is zero, so an ordinary
+        // exhaustive fusion carries none of this rather than a table of
+        // falsehoods and unread numbers.
+        let degraded: Vec<bool> = (0..count)
+            .map(|index| {
+                fidelities[index].may_omit()
+                    || attestations
+                        .get(&streams[index].0)
+                        .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
+            })
+            .collect();
+        let degradation = degraded.contains(&true).then(|| {
+            // First entry wins, which is what the `position` scan this replaces
+            // did.
+            let mut stratum_index: BTreeMap<Iri, usize> = BTreeMap::new();
+            for (index, (stratum, _)) in streams.iter().enumerate() {
+                stratum_index.entry(stratum.clone()).or_insert(index);
+            }
+            Box::new(Degradation {
+                degraded,
+                // The refusal is *recorded* rather than carried: see
+                // `Degradation::rank_one` for why a stored error would be the
+                // wrong error.
+                rank_one: streams
+                    .iter()
+                    .map(|(stratum, _)| Self::rank_one_under(&profile, stratum).ok())
+                    .collect(),
+                stratum_index,
+            })
+        });
         Self {
             streams,
             profile,
@@ -1187,7 +1813,9 @@ impl<S: RankedStream> FusionStream<S> {
             collisions_observed: vec![0; count],
             seen_items,
             domains,
+            fidelities,
             attestations,
+            degradation,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
             emitted: EmittedTable::default(),
@@ -1243,6 +1871,9 @@ impl<S: RankedStream> FusionStream<S> {
                 // term to the caller — one clone per row *emitted*, which is
                 // the same unit the map itself is charged in, and not a clone
                 // on the per-row-pulled path.
+                // Computed before the state is dismantled: it reads
+                // `seen_streams`, which is moved out immediately below.
+                let interval = self.score_interval(&state)?;
                 let CandidateState {
                     lower_bound,
                     mut contributions,
@@ -1266,6 +1897,7 @@ impl<S: RankedStream> FusionStream<S> {
                     entity: id,
                     score: lower_bound,
                     contributions,
+                    interval,
                     threshold_witness: self.threshold,
                 }));
             }
@@ -1359,24 +1991,56 @@ impl<S: RankedStream> FusionStream<S> {
             })
             .collect();
 
-        // Derived from the attestations pinned at construction, never from the
+        // Derived from the two facts pinned at construction -- what each index
+        // attested and what each producer declared -- and never from the
         // statuses just written. A stream stopped at a bound has a bounded
-        // status and may still have served from a short index; those are two
-        // facts and this is the second one, so nothing about how deep this
-        // fusion read may reach this derivation.
-        let short_strata: BTreeSet<Iri> = self
-            .attestations
-            .iter()
-            .filter(|(_, attestation)| {
-                matches!(attestation.service, ServiceLevel::Incomplete { .. })
-            })
-            .map(|(stratum, _)| stratum.clone())
-            .collect();
-        let exactness = if short_strata.is_empty() {
+        // status and may still have served from a short index or an approximate
+        // search; those are separate facts and these are the separate ones, so
+        // nothing about how deep this fusion read may reach this derivation.
+        //
+        // A stratum is degraded when its shortfall is NOT already described by
+        // its own status. A depth- or ceiling-stopped stream states what it left
+        // unread in the status itself, so it is absent here; a lossy search and
+        // a short index announce nothing there and report `Exhausted` like
+        // anything else, so they are named here or nowhere.
+        let attested_short = |stratum: &Iri| {
+            self.attestations
+                .get(stratum)
+                .is_some_and(|a| matches!(a.service, ServiceLevel::Incomplete { .. }))
+        };
+        let mut deficit = BTreeSet::new();
+        let mut unbounded = BTreeSet::new();
+        for (index, (stratum, _)) in self.streams.iter().enumerate() {
+            let fidelity = &self.fidelities[index];
+            if fidelity.may_omit() || attested_short(stratum) {
+                deficit.insert(stratum.clone());
+            }
+            if fidelity.order_is_unbounded() {
+                unbounded.insert(stratum.clone());
+            }
+        }
+        // An index attested short by a stratum that never declared a fidelity --
+        // a caller driving `FusionStream` directly can hand such a stream --
+        // still degrades the answer, so the attestation map is swept too rather
+        // than trusted to be a subset of the declarations.
+        for (stratum, attestation) in &self.attestations {
+            if matches!(attestation.service, ServiceLevel::Incomplete { .. }) {
+                deficit.insert(stratum.clone());
+            }
+        }
+        // The same strata, by construction: a stratum that omits a row promotes
+        // every row behind it, so loss produces both effects at once. They are
+        // carried as two sets because a later cause need not -- a stratum
+        // stopped early withholds without promoting -- and a consumer that read
+        // one set as the whole story would then be wrong in one direction.
+        let inflation = deficit.clone();
+        let exactness = if deficit.is_empty() && unbounded.is_empty() {
             ScoreExactness::Exact
         } else {
-            ScoreExactness::LowerBounds {
-                strata: short_strata,
+            ScoreExactness::Estimated {
+                deficit,
+                inflation,
+                unbounded,
             }
         };
 
@@ -1388,6 +2052,12 @@ impl<S: RankedStream> FusionStream<S> {
             // from two encodings that drifted apart.
             evidence_id: EvidenceId::from_canonical(&evidence_canonical_bytes(&self.attestations)),
             attestations: self.attestations.clone(),
+            fidelities: self
+                .streams
+                .iter()
+                .enumerate()
+                .map(|(index, (stratum, _))| (stratum.clone(), self.fidelities[index].clone()))
+                .collect(),
             exactness,
             plan_id: self.plan_id,
             profile_id: self.profile.id(),
@@ -1403,7 +2073,98 @@ impl<S: RankedStream> FusionStream<S> {
                 .map(|(index, (stratum, _))| (stratum.clone(), self.domains[index].clone()))
                 .collect(),
             cut_on_a_tie: self.last_row_won_a_tie,
+            // Computed here because every term of it is a fact of the fusion --
+            // the open heads, the profile's rank-one awards, the frontier -- and
+            // none of them survives into a row. The trailer is the last moment
+            // any of it can be read.
+            unemitted_ceiling: self.unemitted_ceiling()?,
         })
+    }
+
+    /// The highest true score a candidate this fusion has **not** emitted could
+    /// have, or `None` where no finite such bound exists.
+    ///
+    /// The term [`FusionTrailer::certain_prefix`] cannot derive from the rows,
+    /// because it is about the candidates that are not among them. Two
+    /// populations, and the answer is the larger of the two bounds, since a
+    /// bound over a union is the maximum of the bounds over its parts:
+    ///
+    /// * **never named by any stream.** [`Self::compute_threshold`] is already
+    ///   this engine's own bound on such a candidate — it is asked of no
+    ///   particular candidate and maximizes over every block one could lie in —
+    ///   and what it cannot see is the strata that may have failed to name it at
+    ///   all. Each degraded stratum is therefore charged its rank-one
+    ///   contribution on top, whether it is open or exhausted: a stratum that
+    ///   could have missed the candidate could have missed it at rank one. A
+    ///   degraded stream that is also open is charged twice over, which is a
+    ///   looser bound and not a wrong one — and so is a degraded stream that
+    ///   declared a narrow domain, because the licence [`Self::could_name`]
+    ///   takes needs a candidate to narrow by and there is no candidate here.
+    /// * **named, and never certified** — still in the frontier when reading
+    ///   stopped, either because the caller's [`TopK`](crate::TopK) was
+    ///   satisfied or because nothing settled it. This is the population an
+    ///   unseen-item threshold says nothing about, because such a candidate has
+    ///   already accumulated score the threshold does not describe. Its ceiling
+    ///   is what it has plus what it is still owed, which is exactly
+    ///   [`Self::score_interval`]'s deficit — the same term
+    ///   [`FusedRow::interval`] reports for an emitted row, read here for a row
+    ///   that was never emitted.
+    ///
+    /// # Why the frontier term is not optional
+    ///
+    /// Without it the claim is false on the ordinary bounded search. A top-k
+    /// fusion leaves behind exactly the candidates that lost to the last emitted
+    /// row, and a rival that lost by a hair while a lossy stratum had never
+    /// named it is precisely the rival whose true score exceeds the emitted
+    /// row's floor. The threshold cannot bound it: the threshold bounds what an
+    /// *unseen* item could still collect, and this one is not unseen.
+    ///
+    /// # The refusal
+    ///
+    /// A perturbed order means an emitted rank bounds nothing, so nothing bounds
+    /// what such a stratum could have contributed to a candidate this fusion did
+    /// not certify. [`ScoreInterval::Unbounded`] makes that refusal for a row
+    /// such a stratum named; `None` is the same refusal for the rows it did not,
+    /// and the strata responsible are already named in
+    /// [`FusionTrailer::exactness`].
+    ///
+    /// # Cost
+    ///
+    /// One pass over the frontier, once, at the end of a fusion — not on the row
+    /// loop. [`Self::score_interval`] is the same read the emission path already
+    /// performs per row, and it allocates nothing on the bounded path.
+    fn unemitted_ceiling(&self) -> Result<Option<Fixed>, FusionError> {
+        if self.fidelities.iter().any(RankFidelity::order_is_unbounded) {
+            return Ok(None);
+        }
+
+        let mut ceiling = self.compute_threshold()?;
+        for index in 0..self.streams.len() {
+            if self.is_degraded(index) {
+                ceiling = ceiling
+                    .checked_add(self.rank_one_contribution(index)?)
+                    .map_err(|_| FusionError::Overflow)?;
+            }
+        }
+
+        for state in self.frontier.values() {
+            let ScoreInterval::Bounded { deficit, .. } = self.score_interval(state)? else {
+                // Unreachable under the guard above -- an interval is unbounded
+                // only where a namer declared a perturbed order -- and answered
+                // as the refusal it would be rather than by a bound that assumed
+                // it away.
+                return Ok(None);
+            };
+            let reach = state
+                .lower_bound
+                .checked_add(deficit)
+                .map_err(|_| FusionError::Overflow)?;
+            if reach > ceiling {
+                ceiling = reach;
+            }
+        }
+
+        Ok(Some(ceiling))
     }
 
     /// Pull the first head of every stream.
@@ -1883,6 +2644,155 @@ impl<S: RankedStream> FusionStream<S> {
                     .all(|namer| self.domains[*namer].admits(tag))
             }),
         }
+    }
+
+    /// Where `x`'s true score lies, given what its producers declared.
+    ///
+    /// Reads the same three terms [`Self::upper_bound`] reads — which streams
+    /// named `x`, which of the rest could still name it under `Dom(x)`, and what
+    /// each is currently offering — and computes no new ones. It decides
+    /// nothing: the certified order, the threshold and the top-k bound are all
+    /// settled before this is called, and calling it cannot change them.
+    ///
+    /// # The two terms, and why one of them is not obvious
+    ///
+    /// The deficit is the familiar direction: a stratum that has not named `x`
+    /// and could still do so may yet add to its score. The inflation is the
+    /// direction a one-sided reading misses, and it exists because
+    /// reciprocal-rank fusion scores by **rank** alone. When a lossy stratum
+    /// fails to name a row, every row behind it takes a better rank than it
+    /// earned and collects a larger contribution. So for a candidate a lossy
+    /// stratum *did* name, that stratum's whole contribution is suspect: the
+    /// true rank is at least the emitted one, so the true contribution lies in
+    /// `[0, emitted]`.
+    ///
+    /// # The refusal is propagated, never rendered as a zero bound
+    ///
+    /// Reporting `Fixed::ZERO` where the arithmetic gave out would say "nothing
+    /// was withheld" at exactly the moment nothing is known — a bound on the
+    /// read silently becoming a value, which is the fault this whole protocol
+    /// exists to remove.
+    fn score_interval(&self, state: &CandidateState) -> Result<ScoreInterval, FusionError> {
+        // A perturbed order breaks the inequality every term below rests on, so
+        // it is checked first and short-circuits: there is no number to report.
+        let perturbed: BTreeSet<Iri> = state
+            .seen_streams
+            .iter()
+            .filter(|index| self.fidelities[**index].order_is_unbounded())
+            .map(|index| self.streams[*index].0.clone())
+            .collect();
+        if !perturbed.is_empty() {
+            return Ok(ScoreInterval::Unbounded { perturbed });
+        }
+
+        let mut deficit = Fixed::ZERO;
+        for index in 0..self.streams.len() {
+            if state.seen_streams.contains(&index) {
+                continue;
+            }
+            // The same licence `upper_bound` and `is_final` take, and it must be
+            // taken here too: a stream that provably cannot name `x` withheld
+            // nothing from it, so charging it would bound the answer by a
+            // contribution that was never possible.
+            if !self.could_name(index, &state.seen_streams) {
+                continue;
+            }
+            let residual = if self.is_degraded(index) {
+                // A row this stream never found could have been due at any
+                // rank, including the first, so the rank-one contribution is
+                // the supremum of what it could have held back. This is charged
+                // whether or not the stream is still open: an exhausted lossy
+                // stream has stopped offering rows and has not stopped having
+                // missed them.
+                self.rank_one_contribution(index)?
+            } else if let Some(head) = self.heads[index].as_ref() {
+                // An exhaustive stream withholds only what it has not yet
+                // offered, and its head is the most that can now be.
+                head.contribution
+            } else {
+                // Exhaustive, closed, and it never named `x`. It owes nothing.
+                Fixed::ZERO
+            };
+            deficit = deficit
+                .checked_add(residual)
+                .map_err(|_| FusionError::Overflow)?;
+        }
+
+        let mut inflation = Fixed::ZERO;
+        // Skipped whole where nothing declared a shortfall: every summand would
+        // be a contribution from a stream that promised to have missed nothing,
+        // so the loop could only accumulate zero. The table it reads to decide
+        // that does not exist for such a fusion, which is the same fact stated
+        // in storage.
+        if let Some(degradation) = self.degradation.as_ref() {
+            for (stratum, _, contribution) in &state.contributions {
+                let Some(index) = degradation.index_of(stratum) else {
+                    continue;
+                };
+                if degradation.degraded[index] {
+                    inflation = inflation
+                        .checked_add(*contribution)
+                        .map_err(|_| FusionError::Overflow)?;
+                }
+            }
+        }
+
+        Ok(ScoreInterval::Bounded { deficit, inflation })
+    }
+
+    /// Whether stream `index` may have failed to name a row that was due: it
+    /// declared a lossy search, or the index behind it attested it was short.
+    ///
+    /// The two arrive by different routes and have opposite remedies, and they
+    /// stay separately *reported* for that reason — but their effect on a score
+    /// is identical, so the bound reads them together.
+    ///
+    /// Both inputs are pinned before the first pull, so the answer is decided
+    /// once in [`Self::new`] and read here. See [`Degradation::degraded`]; a
+    /// fusion none of whose streams declared a shortfall holds no table at all,
+    /// and the honest answer for every index of it is `false`.
+    fn is_degraded(&self, index: usize) -> bool {
+        self.degradation
+            .as_ref()
+            .is_some_and(|degradation| degradation.degraded[index])
+    }
+
+    /// The contribution stream `index` would award a rank-one row.
+    ///
+    /// Read from the profile rather than from any row, because the row in
+    /// question is precisely one that never arrived — which is also why it is
+    /// invariant for the whole fusion and is precomputed in [`Self::new`].
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`contribution_under`](crate::contribution_under) refuses under
+    /// this profile's decay rule at rank one. The refusal is raised *here*, on
+    /// the call that asked, rather than being cached at construction: the
+    /// precomputed table records only that the arithmetic gave out, and this
+    /// re-derives the error so that a caller sees the same variant, from the
+    /// same operands, at the same point in the read as it always has.
+    fn rank_one_contribution(&self, index: usize) -> Result<Fixed, FusionError> {
+        self.degradation
+            .as_ref()
+            .and_then(|degradation| degradation.rank_one[index])
+            .map_or_else(
+                || Self::rank_one_under(&self.profile, &self.streams[index].0),
+                Ok,
+            )
+    }
+
+    /// The contribution `profile` awards a rank-one row of `stratum`.
+    ///
+    /// Free of `self` so [`Self::new`] can fill the precomputed table with the
+    /// very function [`Self::rank_one_contribution`] falls back to, leaving one
+    /// definition of the value and one definition of its refusal.
+    fn rank_one_under(profile: &FusionProfile, stratum: &Iri) -> Result<Fixed, FusionError> {
+        let Some(weight) = profile.weight(stratum) else {
+            // A stratum the profile does not weight contributes nothing to any
+            // score, so it can withhold nothing either.
+            return Ok(Fixed::ZERO);
+        };
+        crate::reciprocal_rank::contribution_under(profile.decay(), weight, 1)
     }
 
     /// `U(x)`: `L(x)` plus the current head of every stream that could still

@@ -2198,13 +2198,15 @@ class slice:
 #
 # * `incompleteness` is the host's own reason the index was not whole ("shard 3 of
 #   4 is still rebuilding"). `search` reports it verbatim under
-#   `["attestations"][stratum]["incomplete"]` and reports
-#   `["exactness"] == {"exact": False, "lower_bounds_for": [stratum, ...]}`: every
-#   score in that answer is a LOWER BOUND on the score a whole index would have
-#   produced, the rows are still real rows in the fusion's own certified order,
-#   and what does not follow is that a row absent from the answer would have
-#   stayed absent. It is reported rather than refused because this answer has a
-#   slot to say it in.
+#   `["attestations"][stratum]["incomplete"]` and names that stratum under BOTH
+#   `["exactness"]["deficit"]` and `["exactness"]["inflation"]`: every score in
+#   that answer is an ESTIMATE rather than a value, and the error runs in both
+#   directions, because fusion scores by rank and a row the short index never
+#   named is summed too low while every row behind it moved up a rank and is
+#   summed too high. The rows are still real rows in the fusion's own certified
+#   order, and what does not follow is that a row absent from the answer would
+#   have stayed absent. It is reported rather than refused because this answer
+#   has a slot to say it in.
 # * `generation` is the host's own name for the index version that answered. It
 #   appears under `["attestations"][stratum]["generation"]` and is NOT a shortfall
 #   — an answer whose producers named only generations is still exact. It REPLACES
@@ -2246,11 +2248,55 @@ class slice:
 #             )
 #         },
 #         ...,
-#     )["exactness"]  # {"exact": False, "lower_bounds_for": [".../stratum/lexical"]}
+#     )["exactness"]  # {"exact": False, "deficit": [".../stratum/lexical"],
+#                      #  "inflation": [".../stratum/lexical"], "unbounded": []}
+# What a producer's own SEARCH promises about the rows it can name, on two
+# independent axes: `(completeness, order)`. Shaped like `_Attestation` beside it
+# and read on the same terms — each member is a `str` or `None`, `None` is
+# SILENCE on that axis, and a string is that axis declared degraded with the
+# host's own words carried verbatim. Nothing parses either string; the member's
+# POSITION is what says which axis it is about, so there is no tag to spell and
+# no whitespace to lose.
+#
+# The two say different things about different objects. An attestation is about
+# the INDEX — which version answered, and whether that version was whole. A
+# fidelity is about the SEARCH over it — whether it names every row that was due
+# (`completeness`), and whether a row it names arrives at a rank no better than
+# it earned (`order`). Only the second breaks a score bound, which is why a
+# perturbed order is what makes an interval `{"bounded": False}`.
+#
+# Silence on both is the top of the lattice, and it is a FACT here rather than a
+# fabricated default: this binding builds the index in the same call, out of the
+# document it was handed, and BM25 over it scores every document carrying a query
+# term with no pruning and compares nothing in an approximated space. What it
+# cannot see is whether that document is the whole of what the host means — a
+# sample, one partition, a snapshot that has fallen behind, or text that was
+# transliterated or machine-translated before it arrived. That is what a member
+# is for, and the host is the only party who knows it.
+#
+#     purrdf.retrieval.search(
+#         ...,
+#         text_producers={
+#             "https://example.org/pf/search": (
+#                 "https://example.org/stratum/lexical",
+#                 "https://example.org/note",
+#                 "any",
+#                 None,
+#                 (None, None),
+#                 ("a 10% sample of the corpus", None),
+#             )
+#         },
+#         ...,
+#     )["fidelities"]["https://example.org/stratum/lexical"]
+#     # {"completeness": "lossy",
+#     #  "completeness_evidence": "a 10% sample of the corpus",
+#     #  "order": "faithful"}
+_Fidelity: TypeAlias = tuple[str | None, str | None]
 _TextProducerSpec: TypeAlias = (
     tuple[str, str, str]
     | tuple[str, str, str, list[str] | None]
     | tuple[str, str, str, list[str] | None, _Attestation]
+    | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity]
 )
 
 class retrieval:
@@ -2451,9 +2497,12 @@ class retrieval:
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
     # `"status"` string has exactly seven spellings. `"exhausted"` (with
-    # `"rows_emitted"`: int) is the ONLY completeness claim among them — that
-    # producer emitted every row it had. The other six each name who stopped the
-    # read and where, and none may be read as "that was all of it":
+    # `"rows_emitted"`: int) is the only one that names no stopper — that producer
+    # emitted every row ITS SEARCH PRODUCED. On its own that is not a claim that
+    # everything matching was returned, which is why it is read beside the
+    # stratum's `"fidelities"` entry and never instead of it. The other six each
+    # name who stopped the read and where, and none may be read as "that was all
+    # of it":
     # `"depth_reached"` (with `"rank"`: int) is the producer stopping at the depth
     # the plan gave it, verified against the rows fusion pulled, so ranks one
     # through `"rank"` were read and nothing below was looked at;
@@ -2512,18 +2561,60 @@ class retrieval:
     # relation would otherwise attest; a declared incompleteness is added beside it
     # and leaves it alone.
     #
-    # `"exactness"` is `{"exact": bool, "lower_bounds_for": list[str]}`, derived
-    # from those attestations alone and therefore unmoved by how deep this call
-    # read. `True` says no stratum in this fusion declared itself short — the
-    # narrow true thing, not a certificate that every index was whole. When
-    # `"exact"` is `False`, every score in the answer is a LOWER BOUND on the
-    # score a whole index would have produced; the rows are still real rows in
-    # this fusion's own certified order, and what does NOT follow is that a row
-    # absent from the answer would have stayed absent, or that the emitted order
-    # would have survived the missing contributions. `"lower_bounds_for"` names
-    # exactly the strata that attested an incomplete index, in canonical order,
-    # and each one's verbatim reason is under the same key in `"attestations"` —
-    # so it is the list of indexes to rebuild rather than a flag to shrug at.
+    # `"fidelities"` maps a stratum to what its producer declared about the rows
+    # it can name, on two independent axes. `"completeness"` is `"complete"` or
+    # `"lossy"`; `"order"` is `"faithful"` or `"perturbed"`. Where an axis is
+    # degraded, `"completeness_evidence"` / `"order_evidence"` carries that
+    # producer's OWN words for it, verbatim — never parsed here, never re-worded.
+    # The evidence key is absent, not `None`, when the axis is not degraded:
+    # silence is the thing this surface exists to stop a caller interpreting.
+    #
+    # It is read WITH `"statuses"`, never instead of it. A status says how the
+    # read ENDED; a fidelity says whether the rows that ended it were all the
+    # rows that were DUE. `"exhausted"` beside a `"lossy"` declaration is neither
+    # a contradiction nor a completeness claim: the producer emitted every row
+    # its search produced, and the declaration says the search does not produce
+    # every row there was.
+    #
+    # `"exactness"` is `{"exact": bool, "deficit": list[str],
+    # "inflation": list[str], "unbounded": list[str]}`, derived from those
+    # declarations and attestations alone and therefore unmoved by how deep this
+    # call read. `True` says no stratum in this fusion declared itself degraded —
+    # the narrow true thing, not a certificate that every index was whole and
+    # every search exhaustive.
+    #
+    # When `"exact"` is `False`, every score is an ESTIMATE rather than a value,
+    # and the error runs in BOTH directions — which is why there is no
+    # `"lower_bounds_for"` key. Fusion scores by RANK and nothing else, so a
+    # stratum that fails to name a row does not merely withhold that row's
+    # contribution: every row behind the missing one moves up a rank and collects
+    # a larger one than it earned. A candidate the degraded stratum missed is
+    # summed too LOW; one it named is summed too HIGH. `"deficit"` and
+    # `"inflation"` name the strata responsible on each side, and `"unbounded"`
+    # names strata whose declared ORDER is perturbed, for which no finite bound
+    # exists at all. The rows are still real rows in this fusion's own certified
+    # order; what does NOT follow is that a row absent from the answer would have
+    # stayed absent.
+    #
+    # Each row's `"interval"` carries the size of its own error: `{"bounded":
+    # True, "deficit": str, "inflation": str}` in the same fixed-point lexical as
+    # `"score"`, or `{"bounded": False, "perturbed": list[str]}` where no finite
+    # bound exists. `"certain_prefix"` is how many LEADING rows keep their places
+    # whatever the degraded strata did or did not find — the answer a caller with
+    # a completeness obligation actually has, since without it the only safe move
+    # is to downgrade the whole answer. It claims membership and never absence: a
+    # row PAST the prefix is possible rather than excluded.
+    #
+    # `"unemitted_ceiling"` is the evidence that verdict rests on, in the same
+    # fixed-point lexical as `"score"`: the most any candidate outside the answer
+    # could be worth, counting both the candidates no stream ever named and the
+    # ones a bounded read abandoned. A leading row is certain exactly when its own
+    # floor clears it, which is what lets the prefix speak about candidates no
+    # producer named -- a bound over only the rows in hand would be a claim about
+    # the ranking rather than about the answer. It is `None` where a stratum
+    # declared a perturbed order, because that breaks the one inequality every
+    # bound here rests on and no finite ceiling exists; `"certain_prefix"` is then
+    # `0`.
     #
     # `"domains"` maps a stratum to the candidate-domain declaration its stream
     # fused under: `None` where the producer promised only that it may name

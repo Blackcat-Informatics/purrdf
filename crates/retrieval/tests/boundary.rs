@@ -41,10 +41,11 @@ use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
     ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
     Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
-    ProducerStatus, ProtocolError, RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl,
-    ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult,
-    Statistics, StatisticsSnapshot, StratumUnit, StreamContract, StreamEnding, Term, TopK,
-    UnitError, UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream, RankedStreamAdapter,
+    RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness,
+    SearchError, SearchResult, Statistics, StatisticsSnapshot, StratumUnit, StreamContract,
+    StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm, compile, contribution,
+    execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,
@@ -141,6 +142,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory,
@@ -154,7 +156,11 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
 /// not part of it — that law holds for every stream and is checked rank by rank
 /// rather than declared.
 fn unique_items() -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted)
+    StreamContract::new(
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    )
 }
 
 fn lexical_term() -> RequestTerm {
@@ -833,8 +839,8 @@ fn start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims() {
     // And the run the fourth dimension was worth catching for: a hand-built unit at
     // depth three over a producer holding NINE rows. The read is cut by the depth and
     // says so. This is the observation a caller-written `LIMIT 3` destroyed — the
-    // probe slot vanished, no row could arrive past the depth, and the layer's
-    // strongest completeness claim was reported for a read with six rows behind it.
+    // probe slot vanished, no row could arrive past the depth, and the one ending
+    // that names no stopper was reported for a read with six rows behind it.
     let nine = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 1_000, 9);
     let nine_stats = single_statistics(&ex("stratum/hand"), 1_000);
     let nine_env = AdmissionEnvironment {

@@ -156,8 +156,9 @@ NOTE_DOMAIN = f"{EX}domain/notes"
 TITLE_DOMAIN = f"{EX}domain/titles"
 
 # The seven spellings a terminal status may carry, and nothing else may appear.
-# Only the first is a completeness claim; the other six each name who stopped
-# the read and where.
+# Only the first names no stopper; the other six each name who stopped the read
+# and where. Naming no stopper is not on its own a completeness claim -- that is
+# what the stratum's ``"fidelities"`` entry says beside it.
 STATUS_SPELLINGS = frozenset(
     {
         "exhausted",
@@ -410,7 +411,12 @@ def test_an_attestation_has_two_independently_absent_axes() -> None:
     # Exactness is derived from exactly those attestations, and no producer here
     # declared a short index — which is the narrow true thing, not a certificate
     # that every index was whole.
-    assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
+    assert answer["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }
 
 
 # ── what only the HOST can attest about the index behind a producer ──────────
@@ -498,16 +504,24 @@ def test_an_attested_incompleteness_makes_that_stratums_scores_lower_bounds() ->
         "recorded verbatim: an operator acts on the shard and the phase, and "
         "nothing here parses or summarises either"
     )
-    assert short["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}, (
-        "every score in this answer is a LOWER BOUND on the score a whole index "
-        "would have produced, and the list names which index to rebuild"
+    assert short["exactness"] == {
+        "exact": False,
+        "deficit": [NOTE_STRATUM],
+        "inflation": [NOTE_STRATUM],
+        "unbounded": [],
+    }, (
+        "every score in this answer is an ESTIMATE rather than a value, and the "
+        "error runs both ways: a row the short index never named is summed too "
+        "low, and every row behind it moved up a rank and is summed too high. "
+        "The lists name which index to rebuild, on each side"
     )
 
     # Per stratum, not per answer: the producer that said nothing still says
     # nothing, and its silence is not upgraded to a shortfall by its neighbour's.
     assert short["attestations"][TITLE_STRATUM]["incomplete"] is None
-    assert NOTE_STRATUM in short["exactness"]["lower_bounds_for"]
-    assert TITLE_STRATUM not in short["exactness"]["lower_bounds_for"]
+    for side in ("deficit", "inflation"):
+        assert NOTE_STRATUM in short["exactness"][side], side
+        assert TITLE_STRATUM not in short["exactness"][side], side
 
     # The rows are untouched — a short answer is still a real answer in this
     # fusion's own certified order — and so is the generation the relation
@@ -556,9 +570,12 @@ def test_a_declared_generation_is_reported_and_is_not_a_shortfall() -> None:
         "generation": INDEX_GENERATION,
         "incomplete": None,
     }, "the host's own spelling, verbatim, and no shortfall declared beside it"
-    assert named["exactness"] == {"exact": True, "lower_bounds_for": []}, (
-        "naming which index answered says nothing about whether it was short"
-    )
+    assert named["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }, "naming which index answered says nothing about whether it was short"
     assert _ranking(named) == _ranking(silent)
 
     assert named["attestations"][NOTE_STRATUM]["generation"] != (
@@ -606,7 +623,12 @@ def test_a_producer_that_declares_no_attestation_is_unchanged() -> None:
         assert _ranking(answer) == _ranking(omitted)
         assert answer["attestations"] == omitted["attestations"]
         assert answer["evidence_id"] == omitted["evidence_id"]
-        assert answer["exactness"] == {"exact": True, "lower_bounds_for": []}
+        assert answer["exactness"] == {
+            "exact": True,
+            "deficit": [],
+            "inflation": [],
+            "unbounded": [],
+        }
         assert answer["domains"] == omitted["domains"]
 
     # And what a producer declares to the PLANNER is untouched by what it attests
@@ -649,7 +671,12 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
         "generation": INDEX_GENERATION,
         "incomplete": REBUILDING,
     }
-    assert accepted["exactness"] == {"exact": False, "lower_bounds_for": [NOTE_STRATUM]}
+    assert accepted["exactness"] == {
+        "exact": False,
+        "deficit": [NOTE_STRATUM],
+        "inflation": [NOTE_STRATUM],
+        "unbounded": [],
+    }
 
     # A member of the wrong type names the member, because both are recorded
     # verbatim and neither has a spelling this binding could coerce one into.
@@ -701,7 +728,9 @@ def test_a_malformed_attestation_is_refused_and_its_neighbours_are_not() -> None
 def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -> None:
     """Three of the seven endings, executed — and the suite says which three those are.
 
-    ``"exhausted"`` says the producer emitted every row it had. The other six
+    ``"exhausted"`` says the producer emitted every row its SEARCH produced --
+    not that everything matching was returned, which is what the stratum's
+    ``"fidelities"`` entry says beside it. The other six
     each name who stopped the read: ``"depth_reached"`` the producer stopping at
     the depth the plan gave it, ``"row_bound_reached"`` the producer stopping at
     the row count it declared it can serve per invocation — a read whose ending
@@ -738,7 +767,7 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
     emitted value and the payload each spelling owes.
     """
     # ``"exhausted"``: a corpus small enough that this query drains it, so the
-    # producer really did emit every row it had.
+    # producer's search really did run out of rows.
     exhausted = retrieval.search(
         DATA,
         [_lexical("quick fox", NOTE)],
@@ -792,7 +821,8 @@ def test_a_terminal_status_carries_one_of_the_three_spellings_reachable_here() -
     for entry in (exhausted, bounded, *stopped.values()):
         assert entry["status"] in STATUS_SPELLINGS, entry
         assert ("rows_emitted" in entry) == (entry["status"] == "exhausted"), (
-            "a row count is the completeness claim, and only it carries one"
+            "only the ending that names no stopper carries a row count; every "
+            "other spelling names its stopper instead"
         )
 
     # And the coverage this test does and does not have, stated rather than
@@ -876,7 +906,12 @@ def test_a_declared_domain_changes_the_reading_and_not_the_answer() -> None:
 
     # The shorter read is still an exact one: nothing here attested a short
     # index, so the scores are sums of every contribution that was due.
-    assert declared["exactness"] == {"exact": True, "lower_bounds_for": []}
+    assert declared["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }
 
 
 def test_a_bounded_request_reads_a_flat_prefix_of_each_disjoint_stratum() -> None:
@@ -1468,8 +1503,8 @@ def test_a_probe_row_is_emitted_even_where_the_declaration_leaves_no_room() -> N
 
     With no statistic to narrow it, the depth is already the producer's whole
     declared row bound. A read that stopped exactly there could not tell a producer
-    that ran out from one the bound cut, so it would report the strongest
-    completeness claim this layer has on the strength of a number nobody checked.
+    that ran out from one the bound cut, so it would report the one ending that
+    names no stopper on the strength of a number nobody checked.
     The unit asks for one row more instead: if that row arrives the producer
     contradicted its own registration and the read is refused by name, and if it
     does not, the exhaustion is verified rather than believed.
@@ -2319,6 +2354,465 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
             f"{decay}, raw {raw}: the reported depth is never the one a "
             "'separated from both neighbours' reading would predict"
         )
+
+
+# ---------------------------------------------------------------------------
+# What each producer promises about its own rows, and what an answer may be
+# read to claim because of it.
+#
+# The fidelity term is host-supplied for the reason ``domains`` is: BM25 over
+# the index the relation holds is exhaustive, and whether that index covers what
+# the host means by its corpus is a fact the relation cannot see. A host that
+# indexed a sample says so here or nowhere.
+# ---------------------------------------------------------------------------
+
+LOSS = "approximate: a 10% sample of the corpus; an empty result proves nothing"
+
+# The other axis. Only a producer comparing APPROXIMATED values ranks a row
+# better than it earned, and the shipped text relation never does -- BM25 over
+# the document this call was handed compares exact scores. A host whose text was
+# transliterated or machine-translated before it arrived is the party who knows
+# otherwise, and this is the only place it can say so.
+PERTURBATION = "machine-translated before indexing; ranks compare glosses"
+
+
+def _is_zero(lexical: str) -> bool:
+    """Whether a rendered fixed-point value is zero.
+
+    Compared numerically rather than as text: a `Fixed` renders in its full
+    decimal lexical (`"0.000000000000"`), and pinning the spelling here would
+    make this test fail if the scale ever changed, which is not what it is about.
+    """
+    return float(lexical) == 0.0
+
+
+def _with_fidelity(
+    *entries: tuple[str, str, str, tuple[str | None, str | None]],
+) -> dict[str, tuple[Any, ...]]:
+    """``(producer, stratum, predicate, (completeness, order))`` as the map.
+
+    The six-element spelling, with ``domains`` left unrestricted and the
+    attestation left silent so the fidelity term is the only thing under test.
+
+    Fidelity is the SIXTH position, not the fifth. The fifth is an attestation,
+    and the two are about different objects: an attestation says which version
+    of an index answered and whether that version was whole, while a fidelity
+    says whether the producer's own search over it names every row it should and
+    ranks them as they were due. A host can be silent on one and explicit on the
+    other, which is why neither position can stand in for the other.
+    """
+    return {
+        producer: (stratum, predicate, "any", None, (None, None), fidelity)
+        for producer, stratum, predicate, fidelity in entries
+    }
+
+
+def _answer(producers: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """One fused answer over ``producers``, with the fixture's usual inputs."""
+    kwargs: dict[str, Any] = {
+        "text_producers": producers,
+        "weights": {NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "decay": TRUNCATED,
+        "top_k": 10,
+    }
+    kwargs.update(overrides)
+    return retrieval.search(
+        DATA,
+        [_lexical("quick fox", NOTE), _lexical("quick", TITLE)],
+        **kwargs,
+    )
+
+
+def test_every_stratum_reports_its_fidelity_on_both_axes() -> None:
+    answer = _answer(BOTH)
+    assert set(answer["fidelities"]) == set(answer["attestations"]), (
+        "keyed like the maps beside it: every stream fusion was handed, and "
+        "nothing else"
+    )
+    for stratum, fidelity in answer["fidelities"].items():
+        assert fidelity["completeness"] == "complete", stratum
+        assert fidelity["order"] == "faithful", stratum
+        # Absent, not null. A `None` would be a third state to interpret, which
+        # is the ambiguity this surface exists to remove.
+        assert "completeness_evidence" not in fidelity, stratum
+        assert "order_evidence" not in fidelity, stratum
+
+
+def test_an_exhaustive_answer_is_exact_and_wholly_certain() -> None:
+    answer = _answer(BOTH)
+    assert answer["exactness"] == {
+        "exact": True,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [],
+    }
+    for row in answer["rows"]:
+        assert row["interval"]["bounded"] is True
+        assert _is_zero(row["interval"]["deficit"])
+        assert _is_zero(row["interval"]["inflation"])
+    assert answer["certain_prefix"] == len(answer["rows"]), (
+        "nothing was withheld and nothing was promoted, so every row keeps its "
+        "place -- which is the answer this engine always gave"
+    )
+
+
+def test_a_declared_loss_reaches_the_answer_verbatim_and_on_both_sides() -> None:
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
+        )
+    )
+
+    degraded = answer["fidelities"][NOTE_STRATUM]
+    assert degraded["completeness"] == "lossy"
+    assert degraded["completeness_evidence"] == LOSS, (
+        "the string the host published is the string a consumer reads: not a "
+        "boolean derived downstream, not a summary, not a re-wording"
+    )
+    assert degraded["order"] == "faithful", (
+        "a partial index still ranks what it holds truly; only a producer "
+        "comparing approximated values is order-perturbed"
+    )
+
+    # The neighbour that must not be swept up with it.
+    assert answer["fidelities"][TITLE_STRATUM]["completeness"] == "complete"
+
+    # Named on BOTH sides, and only the responsible stratum.
+    assert answer["exactness"]["exact"] is False
+    assert answer["exactness"]["deficit"] == [NOTE_STRATUM]
+    assert answer["exactness"]["inflation"] == [NOTE_STRATUM], (
+        "fusion scores by rank, so a stratum that misses a row also promotes "
+        "every row behind it -- the error runs in both directions"
+    )
+    assert answer["exactness"]["unbounded"] == []
+
+
+def test_a_status_alone_is_not_a_completeness_claim() -> None:
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
+        )
+    )
+    # The status is exactly what an exhaustive producer reports. That is the
+    # whole problem, and why the fidelity has to sit beside it.
+    assert answer["statuses"][NOTE_STRATUM]["status"] in STATUS_SPELLINGS
+    assert answer["fidelities"][NOTE_STRATUM]["completeness"] == "lossy"
+
+
+def test_a_declared_loss_bounds_each_row_and_can_shorten_the_certain_prefix() -> None:
+    exhaustive = _answer(BOTH)
+    degraded = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
+        )
+    )
+
+    named = [
+        row
+        for row in degraded["rows"]
+        if any(c["stratum"] == NOTE_STRATUM for c in row["contributions"])
+    ]
+    assert named, "the fixture has rows the degraded stratum named"
+    for row in named:
+        assert row["interval"]["inflation"] != "0", (
+            "a row the lossy stratum named may have been promoted by a row it "
+            "missed, so its whole contribution from that stratum is suspect"
+        )
+
+    # Both directions, and the evidence behind them. `degraded <= exhaustive`
+    # alone is satisfied by `0 <= n` for ANY implementation -- including one that
+    # always answered zero -- so it is the exhaustive side that has to be pinned
+    # to a real number for the comparison to mean anything.
+    assert exhaustive["certain_prefix"] == len(exhaustive["rows"]), (
+        "nothing was withheld and nothing was promoted, so every row keeps its "
+        "place and the whole answer is certain"
+    )
+    assert degraded["certain_prefix"] < exhaustive["certain_prefix"], (
+        "and a declared loss really does cost certainty rather than being "
+        "recorded and ignored"
+    )
+
+    # The bound the verdict rests on, on both answers. Exhaustive: every stream
+    # ran out and none could have missed a row, so nothing outside the answer
+    # can be worth anything at all. Degraded: the lossy stratum could have owed
+    # an unnamed candidate a rank-one contribution, so the ceiling is a real
+    # number and that is exactly what shortens the prefix.
+    assert _is_zero(exhaustive["unemitted_ceiling"]), (
+        "no candidate outside an exhaustive answer can be worth anything"
+    )
+    assert not _is_zero(degraded["unemitted_ceiling"]), (
+        "a lossy stratum's whole failure mode is not naming things, so a "
+        "candidate it never named is owed the most it could have held back"
+    )
+
+    assert _ranking(degraded) == _ranking(exhaustive), (
+        "and the rows are identical either way: a declaration changes what the "
+        "answer may be read to claim, never what the answer is"
+    )
+
+
+def test_an_empty_evidence_is_refused_on_either_axis_and_its_neighbours_are_not() -> (
+    None
+):
+    """A degradation with nothing behind it is refused; real prose is not.
+
+    The refusal is per AXIS, because the two fail independently and a host may
+    know about one and not the other. Both sides are executed: over-refusal is
+    the mirror of the silent-drop bug and it hides perfectly, since a test that
+    only checks the refusals passes for an implementation that refuses
+    everything.
+    """
+
+    def search(fidelity: tuple[Any, Any]) -> dict[str, Any]:
+        return _answer(
+            _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, fidelity)),
+            weights={NOTE_STRATUM: retrieval.SCALE},
+        )
+
+    # Refused, on either axis: a declared degradation that discloses nothing
+    # reports a degraded stratum while saying nothing a reader can act on, and
+    # is indistinguishable in a rendered answer from one that declared none.
+    for empty in ("", "    ", "\n\t "):
+        with pytest.raises(ValueError, match="`completeness` but supplies no evidence"):
+            search((empty, None))
+        with pytest.raises(ValueError, match="`order` but supplies no evidence"):
+            search((None, empty))
+
+    # Refused: a member that is not a string names the axis it was written for.
+    with pytest.raises(TypeError, match="`completeness` must be a str or None"):
+        search((7, None))
+    with pytest.raises(TypeError, match="`order` must be a str or None"):
+        search((None, 7))
+
+    # Refused: a bare string is NOT destructured into its own two characters.
+    # `"ab"` extracts as a well-formed two-member sequence, so accepting it would
+    # report `"a"` back as completeness evidence the host never wrote.
+    with pytest.raises(TypeError, match="a fidelity is the sixth"):
+        search("ab")  # type: ignore[arg-type]
+    # As is a sequence of the wrong width: three axes is not this declaration.
+    with pytest.raises(TypeError, match="a fidelity is the sixth"):
+        search((LOSS, None, None))  # type: ignore[arg-type]
+
+    # ── the neighbours that must still work, which is the point of the test ──
+    silent = search((None, None))["fidelities"][NOTE_STRATUM]
+    assert silent == {"completeness": "complete", "order": "faithful"}, (
+        "silence on both axes is the top of the lattice, and it is reported "
+        "rather than left absent"
+    )
+
+    lossy = search((LOSS, None))["fidelities"][NOTE_STRATUM]
+    assert lossy["completeness"] == "lossy"
+    assert lossy["completeness_evidence"] == LOSS
+    assert lossy["order"] == "faithful", "one axis degraded is not both"
+
+    # The order axis, which no shipped producer can reach on its own: a host
+    # whose text was transliterated or machine-translated before it arrived is
+    # ranking over approximations of the values the ranking is meant to be over.
+    perturbed = search((None, PERTURBATION))["fidelities"][NOTE_STRATUM]
+    assert perturbed["order"] == "perturbed"
+    assert perturbed["order_evidence"] == PERTURBATION
+    assert perturbed["completeness"] == "complete", "and the other way round"
+
+    both = search((LOSS, PERTURBATION))["fidelities"][NOTE_STRATUM]
+    assert both == {
+        "completeness": "lossy",
+        "completeness_evidence": LOSS,
+        "order": "perturbed",
+        "order_evidence": PERTURBATION,
+    }
+
+
+def test_a_perturbed_order_leaves_every_score_it_touched_without_a_finite_bound() -> (
+    None
+):
+    """The axis that breaks the bound, end to end on the shipped surface.
+
+    Every score bound this engine computes rests on one inequality: a row a
+    producer NAMED has a true rank at least as bad as the rank it was emitted
+    at. A producer comparing approximated values breaks exactly that -- it can
+    rank a row it found BETTER than the row was due -- so there is no number to
+    report, and reporting one anyway would be the fabrication this channel
+    exists to prevent.
+
+    So the interval says so instead of guessing, and it says it per row: only
+    rows the perturbed stratum actually named lose their bound. The strata
+    responsible are named, in both places, so the fact stays actionable.
+    """
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (None, PERTURBATION)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
+        )
+    )
+
+    assert answer["fidelities"][NOTE_STRATUM] == {
+        "completeness": "complete",
+        "order": "perturbed",
+        "order_evidence": PERTURBATION,
+    }, "a perturbed order is not a completeness claim, and is not derived from one"
+
+    # The answer-level verdict names it under `unbounded` and NOT under the two
+    # finite sides: this producer names every row that was due, so nothing is
+    # withheld and nothing is promoted by absence. It is the ORDER that is wrong.
+    assert answer["exactness"] == {
+        "exact": False,
+        "deficit": [],
+        "inflation": [],
+        "unbounded": [NOTE_STRATUM],
+    }
+
+    named = [
+        row
+        for row in answer["rows"]
+        if any(c["stratum"] == NOTE_STRATUM for c in row["contributions"])
+    ]
+    assert named, "the fixture has rows the perturbed stratum named"
+    for row in named:
+        assert row["interval"] == {"bounded": False, "perturbed": [NOTE_STRATUM]}, (
+            "no finite bound exists for a row whose rank a perturbed producer "
+            "decided, and the responsible stratum is named rather than implied"
+        )
+
+    # The neighbour: a faithful stratum's declaration is untouched, and a row
+    # only the faithful stratum named keeps a finite bound.
+    assert answer["fidelities"][TITLE_STRATUM]["order"] == "faithful"
+    for row in answer["rows"]:
+        if row not in named:
+            assert row["interval"]["bounded"] is True
+
+    assert answer["certain_prefix"] == 0, (
+        "and nothing is certain: a prefix is a claim about relative order, and "
+        "a perturbed stratum is precisely a producer whose order is not evidence"
+    )
+
+
+def test_the_evidence_a_host_writes_is_the_evidence_a_consumer_reads() -> None:
+    """Byte for byte, on both axes, through the whole ladder.
+
+    The string is the host's disclosure and a consumer acts on it, so anything
+    this layer does to it -- trimming, tagging, re-wrapping -- is the layer
+    editing a statement it did not make. The characters here are the ones a
+    delimiter scheme or a `strip()` would corrupt: leading and trailing
+    whitespace, a colon, a semicolon, a control character, and a newline. The
+    Rust leg is proved against the same shapes, and this is the claim that the
+    Python leg is not weaker.
+    """
+    awkward = "  lossy: 10% sample; seethe note\nand the second line  "
+    answer = _answer(
+        _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, (awkward, awkward))),
+        weights={NOTE_STRATUM: retrieval.SCALE},
+    )
+    declared = answer["fidelities"][NOTE_STRATUM]
+    assert declared["completeness_evidence"] == awkward, (
+        "not trimmed, not parsed, not re-worded -- the bytes the host published"
+    )
+    assert declared["order_evidence"] == awkward
+    # And in particular the surrounding whitespace survived, which is the part a
+    # `.trim()` would silently take and no other assertion here would notice.
+    assert declared["completeness_evidence"].startswith("  ")
+    assert declared["completeness_evidence"].endswith("  ")
+
+
+def test_the_four_producer_spellings_agree_where_they_overlap() -> None:
+    """Every accepted width, saying the same thing, answers the same thing.
+
+    There are four: the bare triple, plus a ``domains`` position, plus an
+    attestation position, plus a fidelity position. Each added position has a
+    value that means SILENCE, and a spec that writes the silent value must be
+    indistinguishable from one that stops short of the position entirely —
+    otherwise writing a position down would itself be a declaration, and a host
+    that spelled out a default would get a different answer from one that did
+    not.
+    """
+    common: dict[str, Any] = {"weights": {NOTE_STRATUM: retrieval.SCALE}}
+    three = _answer(NOTE_ONLY, **common)
+    four = _answer(_declared((NOTE_PRODUCER, NOTE_STRATUM, NOTE, None)), **common)
+    five = _answer(
+        {NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "any", None, (None, None))}, **common
+    )
+    six = _answer(
+        _with_fidelity((NOTE_PRODUCER, NOTE_STRATUM, NOTE, (None, None))), **common
+    )
+
+    widths = (three, four, five, six)
+    for answer in widths[1:]:
+        assert _ranking(answer) == _ranking(three), (
+            "the same declaration, four ways to write it, one ranking"
+        )
+        assert answer["fidelities"] == three["fidelities"], (
+            "the shorter spellings are the same declaration, so they declare the "
+            "same thing: omitting the term means exhaustive, not unstated"
+        )
+        assert answer["exactness"] == three["exactness"]
+        assert answer["attestations"] == three["attestations"], (
+            "a written-out silence is silence, not a declaration"
+        )
+    # Not `plan_id`: a plan identity folds the registry's per-process INSTANCE
+    # id alongside its content, so two separately built registries never share
+    # one even when they declare identically. The content is what these three
+    # spellings share, and `canonical_description`'s injectivity test in
+    # `crates/sparql-eval` is where that is pinned.
+
+
+def test_the_shipped_docstring_teaches_the_channel_it_actually_returns() -> None:
+    """``help(retrieval.search)`` is the only spec most hosts will ever read.
+
+    A docstring is not decoration on this surface: it ships inside the wheel, it
+    is what ``help()`` prints, and it is the only description of the answer a
+    host has at the interpreter. One that names a key the function does not
+    return is worse than one that says nothing, because a reader acts on it --
+    and the key this replaced, ``lower_bounds_for``, taught the one-sided reading
+    the two-sided interval exists to correct. A consumer that believed it would
+    treat every score as a floor and be confidently wrong in the one direction
+    the name told it not to look.
+
+    So the prose is pinned against the dict the function really builds, rather
+    than reviewed. Both halves matter: the stale key must be gone, and every key
+    a caller must know about must be named. Checking only the first would pass
+    for a docstring that had been emptied.
+    """
+    doc = retrieval.search.__doc__
+    assert doc, "the shipped function carries its own documentation"
+    flat = " ".join(doc.split())
+
+    assert "LOWER BOUND" not in doc, (
+        "the one-sided reading is gone: a score is an estimate whose error runs "
+        "both ways, and a floor is the wrong shape for it"
+    )
+    # The key may be NAMED, but only to deny it. A reader who learned the old
+    # shape elsewhere needs to be told it is gone, so the disclaimer earns its
+    # place -- but it must be the only mention, or the denial sits beside a
+    # promise of the same key.
+    assert flat.count("lower_bounds_for") == 1, (
+        "the only mention of the retired key is the sentence retiring it"
+    )
+    assert 'there is no `"lower_bounds_for"` key' in flat, (
+        "and that sentence says outright that it does not exist, rather than "
+        "leaving a reader to notice its absence"
+    )
+
+    # Every key the answer really carries for this channel, named where a host
+    # can find it. Derived from a real answer rather than transcribed, so a key
+    # that is renamed without the prose following fails here.
+    answer = _answer(
+        _with_fidelity(
+            (NOTE_PRODUCER, NOTE_STRATUM, NOTE, (LOSS, None)),
+            (TITLE_PRODUCER, TITLE_STRATUM, TITLE, (None, None)),
+        )
+    )
+    for key in ("fidelities", "certain_prefix", "exactness", "statuses"):
+        assert key in answer, f"the fixture does not exercise {key}"
+        assert f'"{key}"' in doc, f"`{key}` is returned but never documented"
+    for key in ("deficit", "inflation", "unbounded"):
+        assert key in answer["exactness"], f"the fixture does not exercise {key}"
+        assert f'"{key}"' in doc, f"`exactness[{key}]` is returned but undocumented"
+    assert "interval" in answer["rows"][0], "the fixture does not exercise interval"
+    assert '"interval"' in doc, "a per-row interval is returned but undocumented"
 
 
 # ── the declarations a call is assembled from ──────────────────────────────────

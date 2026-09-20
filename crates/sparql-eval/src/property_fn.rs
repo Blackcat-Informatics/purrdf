@@ -578,6 +578,242 @@ impl DuplicatePolicy {
     }
 }
 
+/// Whether a producer names every row that was due to it, above the boundary it
+/// read to.
+///
+/// The first of the two axes of [`RankFidelity`]. It answers *did you find
+/// everything*, and it is the axis an approximate index fails: an HNSW beam that
+/// does not visit a node cannot emit the row that node holds, however good that
+/// row was.
+///
+/// # There is no `Unknown`, and the reason is structural
+///
+/// Unlike [`ServiceLevel`], which needs [`ServiceLevel::Undeclared`] because
+/// [`PfCursor::service_level`] has a default and a relation may honestly stay
+/// silent, this axis has no silence available: it is a required field of
+/// [`RankedDeclaration`], a bare-field struct with no builder and no `Default`,
+/// so every producer that registers states it. "Declared no loss" and "is
+/// complete" are therefore the same state, and naming it [`Self::Complete`]
+/// reports the true thing rather than an unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Completeness {
+    /// The producer's search is exhaustive over its own corpus: every row that
+    /// ranks above the boundary it read to is emitted.
+    Complete,
+    /// The producer's search may omit rows that were due, and states why in its
+    /// own words.
+    Lossy {
+        /// The producer's own evidence, recorded verbatim and never parsed.
+        ///
+        /// An `Arc<str>` rather than a `String` because it is immutable,
+        /// producer-owned, and identical across every stream that producer
+        /// serves, while the contract carrying it is cloned once per stream per
+        /// fusion — the same reason the text relations hold their generation
+        /// this way.
+        evidence: Arc<str>,
+    },
+}
+
+/// Whether a producer's emitted rank is a lower bound on the row's true rank.
+///
+/// The second axis of [`RankFidelity`], independent of [`Completeness`], and
+/// **the precondition for any finite bound on a fused score**.
+///
+/// # Why this is a separate axis and not a shade of the first
+///
+/// Under [`Self::Faithful`] the emitted sequence is a *subsequence* of the true
+/// ranking: rows may be missing, but those that arrive arrive in true order, so
+/// a row's true rank is at least its emitted rank and its true contribution is
+/// therefore at most the contribution its emitted rank earns. That inequality is
+/// the whole of what makes a consumer's upper bound computable.
+///
+/// Under [`Self::Perturbed`] it does not hold. A producer that compares
+/// *approximated* values — quantized vectors, a sketched score — can rank a row
+/// it did find **better** than that row was due, so no finite bound on its
+/// contribution exists at all. A consumer must be told that rather than handed a
+/// number, and an answer containing such a stratum says so instead of inventing
+/// one.
+///
+/// HNSW is [`Self::Faithful`]: it computes exact distances for every candidate
+/// it visits and fails only to visit. A product-quantized index is
+/// [`Self::Perturbed`]. The two are both "approximate" in ordinary speech and
+/// differ in exactly the property that decides whether an answer can be bounded,
+/// which is why one flag cannot carry both.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OrderFidelity {
+    /// Rows arrive in true relative order: an emitted rank is a lower bound on
+    /// the row's true rank.
+    Faithful,
+    /// A row may be emitted at a better rank than it was due, and the producer
+    /// states why in its own words.
+    Perturbed {
+        /// The producer's own evidence, recorded verbatim and never parsed.
+        evidence: Arc<str>,
+    },
+}
+
+/// What a producer promises about the rows it emits, on two independent axes.
+///
+/// [`Completeness`] answers *did you find every row that was due*;
+/// [`OrderFidelity`] answers *are the rows you did find in true relative order*.
+/// The product is a four-element lattice ordered by strength, with
+/// [`Self::EXACT`] (`Complete` × `Faithful`) at the top, and a fused answer's own
+/// guarantee is the **meet** over the streams it was handed.
+///
+/// | Producer | Class |
+/// |---|---|
+/// | BM25 over a full inverted index | `Complete` × `Faithful` |
+/// | an exhaustive kNN scan | `Complete` × `Faithful` |
+/// | an HNSW graph | `Lossy` × `Faithful` |
+/// | a product-quantized index | `Lossy` × `Perturbed` |
+///
+/// # Why two axes rather than one `approximate` flag
+///
+/// Because the two failures have different consequences for a consumer and only
+/// one of them is boundable. Loss alone deflates a missed candidate's score and
+/// — because reciprocal-rank fusion scores by **rank** and nothing else —
+/// simultaneously *inflates* the score of every row behind the missing one,
+/// which moves up a rank and collects more than it earned. Both effects are
+/// bounded under `Faithful`. Under `Perturbed` neither is.
+///
+/// # There is no silence here, and that is what lets `Complete` mean `Complete`
+///
+/// A consumer reads an absent declaration as *exact*, which is only honest if a
+/// producer cannot fail to declare one. It cannot: [`RankedDeclaration`] is a
+/// bare-field struct with no builder and no `Default`, so a literal that omits
+/// the field does not compile —
+///
+/// ```compile_fail
+/// # use purrdf_sparql_eval::{RankedDeclaration, DuplicatePolicy, CandidateDomains};
+/// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
+/// // No `fidelity`. This is a compile error, not a silent default.
+/// let _ = RankedDeclaration {
+///     stratum,
+///     accepted_terms: Vec::new(),
+///     depth_placement: None,
+///     candidate_position: 0,
+///     duplicates: DuplicatePolicy::Unique,
+///     domains: CandidateDomains::Unrestricted,
+///     block_position: None,
+///     mandatory: false,
+/// };
+/// ```
+///
+/// — while the same literal supplying it does. The pair is what proves the
+/// point: a `compile_fail` block alone passes for *any* error, including a typo,
+/// so the twin that differs only in the field under test is the half that shows
+/// the field is the reason.
+///
+/// ```
+/// # use purrdf_sparql_eval::{RankedDeclaration, RankFidelity, DuplicatePolicy, CandidateDomains};
+/// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
+/// let declaration = RankedDeclaration {
+///     stratum,
+///     accepted_terms: Vec::new(),
+///     depth_placement: None,
+///     candidate_position: 0,
+///     duplicates: DuplicatePolicy::Unique,
+///     fidelity: RankFidelity::EXACT,
+///     domains: CandidateDomains::Unrestricted,
+///     block_position: None,
+///     mandatory: false,
+/// };
+/// assert_eq!(declaration.fidelity, RankFidelity::EXACT);
+/// ```
+///
+/// And there is no `Default` to reach for instead:
+///
+/// ```compile_fail
+/// # use purrdf_sparql_eval::RankFidelity;
+/// let _: RankFidelity = Default::default();
+/// ```
+///
+/// [`Self::EXACT`] is the value a host spells when it has nothing to disclose,
+/// and spelling it is the point.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RankFidelity {
+    /// Whether every row that was due is named.
+    pub completeness: Completeness,
+    /// Whether a named row's emitted rank is a lower bound on its true rank.
+    pub order: OrderFidelity,
+}
+
+impl RankFidelity {
+    /// Complete and order-faithful: the top of the lattice.
+    ///
+    /// A named constant the caller must spell, deliberately **not** a `Default`.
+    /// The value is a promise about the producer's own search, and only the host
+    /// knows it — the same refusal [`RankedDeclaration::domains`] already makes,
+    /// and the same discipline [`PfAttestation::UNDECLARED`] follows.
+    pub const EXACT: Self = Self {
+        completeness: Completeness::Complete,
+        order: OrderFidelity::Faithful,
+    };
+
+    /// The evidence this producer published, if it declared any loss on either
+    /// axis, in axis order.
+    ///
+    /// Carried verbatim. A consumer renders these; nothing in this workspace
+    /// parses them.
+    pub fn evidence(&self) -> impl Iterator<Item = &Arc<str>> {
+        let completeness = match &self.completeness {
+            Completeness::Complete => None,
+            Completeness::Lossy { evidence } => Some(evidence),
+        };
+        let order = match &self.order {
+            OrderFidelity::Faithful => None,
+            OrderFidelity::Perturbed { evidence } => Some(evidence),
+        };
+        completeness.into_iter().chain(order)
+    }
+
+    /// Whether this producer may have failed to name a row that was due.
+    ///
+    /// True for [`Completeness::Lossy`]. A consumer reads it to decide whether a
+    /// stratum's terminal status is, on its own, a completeness claim — it is
+    /// not when this is true.
+    #[must_use]
+    pub const fn may_omit(&self) -> bool {
+        matches!(self.completeness, Completeness::Lossy { .. })
+    }
+
+    /// Whether this producer may have named a row at a better rank than it was
+    /// due, which is the case in which **no finite score bound exists**.
+    #[must_use]
+    pub const fn order_is_unbounded(&self) -> bool {
+        matches!(self.order, OrderFidelity::Perturbed { .. })
+    }
+
+    /// Append this fidelity's canonical, injective description to `out`.
+    ///
+    /// Each axis contributes a length-framed discriminant followed by an
+    /// explicit present/absent evidence byte, so an absent evidence and an empty
+    /// one stay distinguishable — the framing discipline the rest of this
+    /// module's canonical encoding uses, with no escaping anywhere.
+    fn push_canonical(&self, out: &mut String) {
+        match &self.completeness {
+            Completeness::Complete => {
+                push_canonical_field(out, "complete");
+                push_canonical_option(out, None);
+            }
+            Completeness::Lossy { evidence } => {
+                push_canonical_field(out, "lossy");
+                push_canonical_option(out, Some(evidence));
+            }
+        }
+        match &self.order {
+            OrderFidelity::Faithful => {
+                push_canonical_field(out, "faithful");
+                push_canonical_option(out, None);
+            }
+            OrderFidelity::Perturbed { evidence } => {
+                push_canonical_field(out, "perturbed");
+                push_canonical_option(out, Some(evidence));
+            }
+        }
+    }
+}
+
 /// One caller-named block of the candidate universe.
 ///
 /// A domain tag is an IRI the **caller** chooses — `documents`, `people`,
@@ -959,6 +1195,18 @@ pub struct RankedDeclaration {
     pub candidate_position: usize,
     /// The producer's duplicate handling.
     pub duplicates: DuplicatePolicy,
+    /// What this producer promises about the rows it emits: whether it names
+    /// every row that was due, and whether a named row's rank is a lower bound
+    /// on its true rank.
+    ///
+    /// The third promise a producer makes about its own rows, and the one that
+    /// decides whether a consumer may read a terminal status as a completeness
+    /// claim. A [`Completeness::Lossy`] producer that runs out of rows has run
+    /// out of rows its *search* found, which is a different statement from the
+    /// one an exhaustive producer makes with the same status — see
+    /// [`RankFidelity`] for why the two axes are independent and why only one of
+    /// them admits a finite bound.
+    pub fidelity: RankFidelity,
     /// Which blocks of the candidate universe this producer may name.
     ///
     /// The second promise a producer makes about its own rows. A consumer
@@ -1042,11 +1290,15 @@ impl RankedDeclaration {
         out.push('r');
         push_canonical_field(&mut out, self.stratum.as_str());
         push_canonical_field(&mut out, self.duplicates.as_str());
-        // Beside the duplicate policy, because the two are the same kind of
+        // Beside the duplicate policy, because the three are the same kind of
         // fact: a promise the producer makes about its own rows that a consumer
-        // holds it to. Both must reach the registry's content fingerprint, or
+        // holds it to. All must reach the registry's content fingerprint, or
         // two registries that fuse differently could share a digest and a plan
-        // admitted against one would run against the other.
+        // admitted against one would run against the other. Fidelity in
+        // particular: a plan whose producers approximate is a different plan
+        // from one whose producers do not, and the answers differ in what they
+        // may be read to claim.
+        self.fidelity.push_canonical(&mut out);
         self.domains.push_canonical(&mut out);
         push_canonical_field(&mut out, &self.candidate_position.to_string());
         // Beside the domains for the same reason they are beside the duplicate
@@ -1893,6 +2145,42 @@ fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
              CandidateDomains::Unrestricted, which is the honest statement that it may name \
              anything"
         );
+    }
+    // A declaration of loss that says nothing is the mirror of the empty domain
+    // set above: it spends the consumer's trust without buying it anything. The
+    // consumer is told a stratum may be short and told nothing it can act on or
+    // render, and a blank string is indistinguishable in a rendered answer from
+    // a producer that declared no loss at all — so the one field whose entire
+    // purpose is to be read verbatim would arrive empty. Refused where it is
+    // committed, and distinctly from `Completeness::Complete`, which is one line
+    // away and is what a producer with nothing to disclose actually means.
+    for (axis, evidence) in [
+        (
+            "completeness",
+            match &decl.fidelity.completeness {
+                Completeness::Complete => None,
+                Completeness::Lossy { evidence } => Some(evidence),
+            },
+        ),
+        (
+            "order",
+            match &decl.fidelity.order {
+                OrderFidelity::Faithful => None,
+                OrderFidelity::Perturbed { evidence } => Some(evidence),
+            },
+        ),
+    ] {
+        if let Some(evidence) = evidence {
+            assert!(
+                !evidence.trim().is_empty(),
+                "ranked declaration for <{iri}> declares a loss on its {axis} axis but supplies \
+                 no evidence for it; a consumer carries this string into its answer verbatim, so \
+                 an empty one reports a degraded stratum while saying nothing a reader can act \
+                 on. State what the producer does not promise — the measurement, its limit, and \
+                 what an empty result does not prove — or declare the exhaustive variant, which \
+                 is the honest statement that there is nothing to disclose"
+            );
+        }
     }
     assert!(
         decl.candidate_position < total,

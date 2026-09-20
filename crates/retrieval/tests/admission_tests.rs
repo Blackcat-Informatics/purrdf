@@ -19,8 +19,9 @@ use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, BoundMode, CompiledRetrieval, DecayRule, Fixed,
     FusionError, FusionProfile, Iri, Metric, MonotoneDepth, Plan, PlanOrigin, ProducerDecision,
-    ProducerStatus, RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics,
-    StratumUnit, Term, UnitError, UnservedReason, UnservedTerm, compile, contribution, execute,
+    ProducerStatus, RankFidelity, RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest,
+    Statistics, StratumUnit, Term, UnitError, UnservedReason, UnservedTerm, compile, contribution,
+    execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -85,6 +86,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory,
@@ -2035,7 +2037,7 @@ fn a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling() 
     // emitted one row deeper than its depth so the executor can tell a read the
     // bound cut from a read that ran out; at the top of the 32-bit rank range that
     // row is not expressible, the emitted bound would equal the depth, and the read
-    // would be reported `Exhausted` — this layer's strongest completeness claim —
+    // would be reported `Exhausted` — the one ending that names no stopper —
     // for a stratum the `LIMIT` may well have cut. The registry is not what refuses
     // it: this producer declares four billion rows, so its bound has room for
     // either depth below.
@@ -2352,6 +2354,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         depth_placement: None,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
         mandatory,

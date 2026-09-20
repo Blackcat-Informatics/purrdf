@@ -41,7 +41,7 @@
 //! is taken as one, but what follows from it is the shallowest read there is,
 //! not the absence of a read. A depth of zero would compile to `LIMIT 0`, invoke
 //! no relation at all, and then report the stratum exhausted with no rows, which
-//! is the strongest completeness claim this layer can make and would have been
+//! is the one ending that names no stopper and would have been
 //! minted from an estimate rather than from data. Emptiness is the producer's to
 //! report, in the receipt fusion verifies against the rows it actually pulled,
 //! so the planner's job is to ask the shallowest honest question and let the

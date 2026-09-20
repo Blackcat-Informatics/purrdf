@@ -46,9 +46,9 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_retrieval::{
-    CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile, FusionStream,
-    Iri, ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract, Term,
-    contribution,
+    CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile,
+    FusionStream, Iri, OrderFidelity, ProducerReceipt, ProtocolError, RankFidelity, RankedRow,
+    RankedStream, RowBlock, ScoreInterval, StreamContract, Term, contribution,
 };
 
 // ---------------------------------------------------------------------------
@@ -178,6 +178,15 @@ struct LazyStream {
     /// is unbounded without a declaration, because no confirmation from
     /// another stratum is ever coming.
     block: Option<usize>,
+    /// What this producer declares about the rows it emits.
+    ///
+    /// [`RankFidelity::EXACT`] for every phase that is not about the interval.
+    /// A stratum declaring anything else puts the whole per-row score-interval
+    /// arithmetic on the certifying path — the deficit charged to strata that
+    /// did not name a row, the inflation charged to the degraded strata that
+    /// did — which is otherwise never measured here, because nothing in an
+    /// undegraded fusion reaches it.
+    fidelity: RankFidelity,
 }
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
@@ -236,9 +245,14 @@ impl RankedStream for LazyStream {
     /// does draw from one block, and says so.
     fn contract(&self) -> StreamContract {
         match self.block {
-            None => StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted),
+            None => StreamContract::new(
+                DuplicatePolicy::Unique,
+                self.fidelity.clone(),
+                CandidateDomains::Unrestricted,
+            ),
             Some(block) => StreamContract::new(
                 DuplicatePolicy::Unique,
+                self.fidelity.clone(),
                 CandidateDomains::within([
                     DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs")
                 ]),
@@ -247,11 +261,31 @@ impl RankedStream for LazyStream {
     }
 }
 
-/// The profile and its three streams, each `total` rows long.
+/// The profile and its three streams, each `total` rows long, every one of them
+/// declaring the top of the fidelity lattice.
 fn fixture(
     total: u64,
     pulls: &Arc<AtomicUsize>,
     weight: Fixed,
+) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
+    fixture_declaring(
+        total,
+        pulls,
+        weight,
+        &[
+            RankFidelity::EXACT,
+            RankFidelity::EXACT,
+            RankFidelity::EXACT,
+        ],
+    )
+}
+
+/// The same fixture with each stratum declaring `fidelities[i]` about itself.
+fn fixture_declaring(
+    total: u64,
+    pulls: &Arc<AtomicUsize>,
+    weight: Fixed,
+    fidelities: &[RankFidelity; STRATA.len()],
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
     let weights: BTreeMap<Iri, Fixed> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
     let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
@@ -269,6 +303,7 @@ fn fixture(
                     pulls: Arc::clone(pulls),
                     weight,
                     block: None,
+                    fidelity: fidelities[stream_index].clone(),
                 },
             )
         })
@@ -320,6 +355,103 @@ fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) {
     );
 }
 
+/// A lossy but order-faithful declaration: what an HNSW graph is, and the only
+/// shape that reaches the *bounded* interval arithmetic.
+fn lossy() -> RankFidelity {
+    RankFidelity {
+        completeness: Completeness::Lossy {
+            evidence: Arc::from("approximate: beam search, recall unmeasured"),
+        },
+        order: OrderFidelity::Faithful,
+    }
+}
+
+/// A declaration for which no finite bound on the error exists, which is the
+/// branch that short-circuits instead.
+fn perturbed() -> RankFidelity {
+    RankFidelity {
+        completeness: Completeness::Lossy {
+            evidence: Arc::from("approximate: beam search, recall unmeasured"),
+        },
+        order: OrderFidelity::Perturbed {
+            evidence: Arc::from("quantized: distances compared in 8-bit space"),
+        },
+    }
+}
+
+/// The same fusion with one stratum declaring `fidelity`, so every certified row
+/// is priced through the per-row score interval.
+///
+/// # Why this phase exists
+///
+/// Every other phase in this file fuses strata that all declare
+/// [`RankFidelity::EXACT`], and for such a fusion the interval is zero-width by
+/// construction: no stratum can have withheld a contribution and none can have
+/// been promoted, so the arithmetic that computes those two terms is skipped
+/// whole. That leaves the per-emitted-row work the interval actually costs
+/// entirely unmeasured — which is the one thing worth reporting about it,
+/// because it runs on the certifying path of every fused search rather than at
+/// the end of one.
+///
+/// The two declarations reach *different* branches and both are reported:
+///
+/// * a **lossy, order-faithful** stratum takes the bounded path, charging a
+///   deficit to every stratum that could still have named the row and an
+///   inflation to every degraded stratum that did;
+/// * a **perturbed** stratum takes the short-circuit, because an emitted rank
+///   bounds nothing under it and there is no number to compute.
+///
+/// Report-only, like every phase above. Nothing here asserts a time, a ratio or
+/// a bound: this machine is not quiet, and a threshold would be noise wearing a
+/// gate's clothes.
+fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity) {
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let (profile, streams) = fixture_declaring(
+        total,
+        &pulls,
+        Fixed::ONE,
+        // One of the three, so the fusion holds degraded and undegraded strata
+        // at once: the deficit loop then has both a stratum to charge a
+        // rank-one contribution to and strata to charge only their open heads.
+        &[fidelity.clone(), RankFidelity::EXACT, RankFidelity::EXACT],
+    );
+    let mut fusion = FusionStream::new(streams, profile);
+
+    let rss_before = rss_kb();
+    let window = WholeProcessWindow::open();
+    let mut fused = 0usize;
+    let mut contributions = 0usize;
+    // Counted, not asserted: a phase that reported on the interval path without
+    // ever reaching it would look identical to one that did.
+    let mut bounded = 0usize;
+    let mut unbounded = 0usize;
+    while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
+        let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
+            break;
+        };
+        contributions += row.contributions.len();
+        match &row.interval {
+            ScoreInterval::Bounded { .. } => bounded += 1,
+            ScoreInterval::Unbounded { .. } => unbounded += 1,
+        }
+        fused += 1;
+    }
+    let peak = window.close().peak_working_bytes;
+    let rss_after = rss_kb();
+    let pulled = pulls.load(Ordering::Relaxed);
+    drop(fusion);
+
+    black_box(contributions);
+    report(
+        &format!(
+            "{label} fused={fused}/{rows} pulled={pulled} bounded={bounded} unbounded={unbounded}"
+        ),
+        peak,
+        rss_before,
+        rss_after,
+    );
+}
+
 /// The caller-named block each stratum of the disjoint fixture draws from, in
 /// [`STRATA`]'s own order. Nothing here mints them.
 const BLOCKS: [&str; 3] = [
@@ -353,6 +485,7 @@ fn disjoint_fixture(
                     pulls: Arc::clone(pulls),
                     weight: Fixed::ONE,
                     block: Some(stream_index),
+                    fidelity: RankFidelity::EXACT,
                 },
             )
         })
@@ -443,6 +576,36 @@ fn main() {
             &format!("strata=3 rows=32 stream={total} disjoint"),
             total,
             32,
+        );
+    }
+    // The score-interval path, which every phase above leaves unmeasured: one
+    // stratum declares a shortfall, so each certified row is priced rather than
+    // handed a zero-width interval. Both branches are reported — a lossy,
+    // order-faithful stratum takes the bounded arithmetic, a perturbed one takes
+    // the short-circuit — because they cost different things and only one of
+    // them sums anything.
+    println!(
+        "[fusion_frontier_alloc] --- one lossy stratum (bounded interval), rows fused fixed at 32 ---"
+    );
+    let lossy = lossy();
+    for total in [1_000_u64, 10_000, 100_000, 1_000_000] {
+        degraded_phase(
+            &format!("strata=3 rows=32 stream={total} lossy"),
+            total,
+            32,
+            &lossy,
+        );
+    }
+    println!(
+        "[fusion_frontier_alloc] --- one perturbed stratum (unbounded interval), rows fused fixed at 32 ---"
+    );
+    let perturbed = perturbed();
+    for total in [1_000_u64, 10_000, 100_000, 1_000_000] {
+        degraded_phase(
+            &format!("strata=3 rows=32 stream={total} perturbed"),
+            total,
+            32,
+            &perturbed,
         );
     }
 }

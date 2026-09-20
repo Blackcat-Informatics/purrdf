@@ -40,7 +40,7 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DuplicatePolicy, EvalError,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity,
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
@@ -299,6 +299,11 @@ fn registry(
             },
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            // This mock answers from a list it holds entire: its search names
+            // every row that was due to it and ranks them by the order it was
+            // given, so the exhaustive declaration is the true one. It is
+            // stated rather than left out, because there is no default.
+            fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,
@@ -897,6 +902,11 @@ fn registry_declaring(
             },
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
+            // This mock answers from a list it holds entire: its search names
+            // every row that was due to it and ranks them by the order it was
+            // given, so the exhaustive declaration is the true one. It is
+            // stated rather than left out, because there is no default.
+            fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
             mandatory: false,
