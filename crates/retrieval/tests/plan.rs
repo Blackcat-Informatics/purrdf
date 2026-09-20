@@ -1912,3 +1912,284 @@ fn every_plan_refusal_has_its_own_pinned_name() {
         "every refusal above contributes its own name"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The bytes themselves, written out by hand
+// ---------------------------------------------------------------------------
+
+/// A complete plan, small enough that every byte of its encoding is spelled out
+/// below.
+///
+/// Every number in it is distinct, so a byte read off the wrong field fails on
+/// the value rather than passing under a coincidence: the declaration is eight
+/// rows, the measured cardinality four, the licensed prefix three, the recorded
+/// depth two, the request's bound three, the registry counter seven. The
+/// selectivity is half a part in two — `500_000` parts per million, `0x0007_a120`
+/// — which is the one multi-byte value here and so the one that would expose a
+/// byte order written the wrong way round.
+///
+/// It carries, deliberately, every shape the pinned literal has to cover: a
+/// stratum whose cardinality is **present**, a second statistics subject whose
+/// cardinality is **absent**, a present selectivity with a non-empty
+/// `selectivity_terms` run beside it, an absent selectivity with an empty run,
+/// and one stratum derivation. It certifies: the depth of two is what
+/// `depth_from` derives from the inputs recorded beside it, and the stratum's
+/// snapshot row is the projection of that derivation.
+fn pinned_plan() -> Plan {
+    let subject = iri("http://example.org/s");
+    let mut stratum_depths = HashMap::new();
+    stratum_depths.insert(subject.clone(), 2);
+    let mut stratum_derivations = BTreeMap::new();
+    stratum_derivations.insert(
+        subject.clone(),
+        DepthInputs {
+            declared: 8,
+            cardinality: Some(4),
+            selectivity_ppm: Some(500_000),
+            selectivity_terms: vec![0],
+            licensed_prefix: Some(3),
+        },
+    );
+
+    Plan {
+        version: Plan::VERSION,
+        request_terms: vec![RequestTerm::Lexical {
+            text: "q".to_owned(),
+            language: None,
+            predicate: Some(iri("http://example.org/p")),
+        }],
+        read_bound: ReadBound::Bounded(TopK::new(3)),
+        producer_bindings: vec![ProducerBinding {
+            producer: "http://example.org/pf".to_owned(),
+            stratum: subject.clone(),
+            request_terms: vec![0],
+        }],
+        producer_decisions: vec![ProducerDecision::Selected {
+            producer: "http://example.org/pf".to_owned(),
+            stratum: subject,
+        }],
+        unserved_terms: Vec::new(),
+        stratum_depths,
+        stratum_derivations,
+        statistics_snapshot: StatisticsSnapshot {
+            source: "host".to_owned(),
+            revision: "r1".to_owned(),
+            entries: StatisticsEntries::new(vec![
+                // The request predicate: consulted, and the provider said
+                // nothing about it in either dimension.
+                StatisticsEntry {
+                    subject: "http://example.org/p".to_owned(),
+                    cardinality: None,
+                    selectivity_ppm: None,
+                    selectivity_terms: Vec::new(),
+                },
+                // The stratum: the projection of the derivation above.
+                StatisticsEntry {
+                    subject: "http://example.org/s".to_owned(),
+                    cardinality: Some(4),
+                    selectivity_ppm: Some(500_000),
+                    selectivity_terms: vec![0],
+                },
+            ])
+            .expect("the pinned plan names each subject once"),
+        },
+        registry_instance_id: RegistryId::from_raw(7),
+        registry_content_fingerprint: "f".to_owned(),
+        origin: PlanOrigin::SameProcess,
+    }
+}
+
+/// [`pinned_plan`]'s canonical encoding, byte for byte, written by hand.
+///
+/// # Why this is written out rather than compared against itself
+///
+/// A plan's identity is the digest of these bytes, so the bytes are the
+/// artefact: two builds that disagree about them mint two identities for one
+/// plan, and a caller comparing identities across the disagreement is told two
+/// identical reads are different ones. Nothing else in this file can catch that.
+/// The encode/decode round trip above cannot: a codec that writes a field wrongly
+/// and reads it back the same wrong way round-trips perfectly. The version header
+/// pin cannot: it covers two bytes out of four hundred and seventy-six.
+///
+/// So the literal is transcribed, annotated, and asserted against — never
+/// regenerated. A helper that re-derived it from the encoder would be comparing
+/// the encoder with itself, which is the property that is already free. The
+/// price is that a deliberate layout change has to be re-transcribed by hand,
+/// and that price is the point: it is the moment a reader is made to see how
+/// much of the encoding moved, and to move `PLAN_VERSION` with it.
+///
+/// # What moved when the layout became version 4
+///
+/// Four things, each marked `NEW IN v4` below, and nothing else:
+///
+/// 1. the version value itself, `3` to `4`, in the first two bytes;
+/// 2. the whole **derivations** section, inserted between the depths and the
+///    statistics;
+/// 3. a **presence tag** before every statistics entry's cardinality, which in
+///    version 3 was a bare `u64` that could not say "absent";
+/// 4. a length-framed **`selectivity_terms`** run after every statistics entry's
+///    selectivity.
+///
+/// Every other segment is version 3's, carried forward unchanged and marked
+/// `v3` — which is the second half of what a reader needs: not only that the
+/// layout moved, but that it moved exactly this far.
+const PINNED_CANONICAL_BYTES: &[u8] = &[
+    // ===== header =====
+    // NEW IN v4: `PLAN_VERSION`, u16 LE. Version 3 wrote `03 00` here. It is the
+    // FIRST field, so no version can share an encoding with another — which is
+    // why "the same plan serializes identically across a version bump" is not a
+    // property any layout can have, and why these bytes are pinned instead.
+    0x04, 0x00, // layout version: 4
+    // ===== request terms (v3, unchanged) =====
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 1 term
+    0x00, // term 0 tag: TERM_LEXICAL
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // text length: 1
+    0x71, // text: "q"
+    0x00, // language: absent
+    0x01, // predicate: present
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // predicate length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x70, // "/p"
+    // ===== producer bindings (v3, unchanged) =====
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 1 binding
+    0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // producer length: 21
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x70, 0x66, // "/pf"
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // stratum length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x73, // "/s"
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // bound request terms: 1
+    0x00, 0x00, 0x00, 0x00, // request term index 0, u32 LE
+    // ===== producer decisions (v3, unchanged) =====
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 1 decision
+    0x00, // decision tag: DECISION_SELECTED
+    0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // producer length: 21
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x70, 0x66, // "/pf"
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // stratum length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x73, // "/s"
+    // ===== stratum depths (v3, unchanged) =====
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 1 stratum
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // stratum length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x73, // "/s"
+    0x02, 0x00, 0x00, 0x00, // depth: 2, u32 LE
+    // ===== stratum derivations: NEW IN v4, the whole section =====
+    // Version 3 wrote nothing here at all. It sits BETWEEN the depths above and
+    // the statistics below, so a version-3 document read under this layout would
+    // take the statistics source's length frame for a derivation count — which
+    // is why the section's arrival moved the version rather than appending a tag.
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 1 derivation
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // stratum length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x73, // "/s"
+    0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // declared: 8 rows, u64 LE
+    0x01, // cardinality: PRESENT
+    0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // cardinality: 4, u64 LE
+    0x01, // selectivity: PRESENT
+    0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, // selectivity: 500_000 ppm
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // selectivity terms: 1 index
+    0x00, 0x00, 0x00, 0x00, // request term index 0, u32 LE
+    0x01, // licensed prefix: PRESENT
+    0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // licensed prefix: 3 rows
+    // ===== statistics snapshot (v3 frame, v4 entry fields) =====
+    0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // source length: 4
+    0x68, 0x6f, 0x73, 0x74, // "host"
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // revision length: 2
+    0x72, 0x31, // "r1"
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 2 entries, ascending
+    // --- entry 1: the request predicate, measured in neither dimension ---
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // subject length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x70, // "/p"
+    // NEW IN v4: the presence tag. Version 3 wrote a bare `u64` here, so it had
+    // no spelling for "the provider reported nothing" and the absence below
+    // could only have gone out as a zero — a measurement the provider never
+    // made. This ONE byte is the whole of that fix.
+    0x00, // cardinality: ABSENT — and no value follows it
+    0x00, // selectivity: ABSENT (v3 already spelled this one)
+    // NEW IN v4: the selectivity's term domain, length-framed. Empty here,
+    // because an absent selectivity has no contributing terms.
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // selectivity terms: 0 indices
+    // --- entry 2: the stratum, the projection of the derivation above ---
+    0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // subject length: 20
+    0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, // "http://"
+    0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x6f, 0x72, 0x67, // "example.org"
+    0x2f, 0x73, // "/s"
+    0x01, // NEW IN v4: cardinality PRESENT
+    0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // cardinality: 4, u64 LE
+    0x01, // selectivity: PRESENT
+    0x20, 0xa1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, // selectivity: 500_000 ppm
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // NEW IN v4: 1 index
+    0x00, 0x00, 0x00, 0x00, // request term index 0, u32 LE
+    // ===== registry identities (v3, unchanged) =====
+    0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // instance counter: 7, u64 LE
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // fingerprint length: 1
+    0x66, // "f"
+    // ===== unserved terms (v3, unchanged) =====
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // count: 0 — every term served
+    // ===== read bound (v3, unchanged) =====
+    0x01, // bound tag: BOUND_BOUNDED
+    0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // top-k: 3 rows, u64 LE
+];
+
+/// The encoder writes [`PINNED_CANONICAL_BYTES`] and nothing else.
+///
+/// The comparison is byte by byte before it is whole-slice, so a failure names
+/// the offset that moved rather than printing four hundred and seventy-six bytes
+/// twice and leaving a reader to diff them.
+#[test]
+fn the_canonical_encoding_is_the_bytes_written_out_by_hand() {
+    let plan = pinned_plan();
+    plan.certify()
+        .expect("the pinned plan's depth follows from its own recorded inputs");
+    let encoded = plan.canonical_bytes();
+
+    for (offset, (written, pinned)) in encoded.iter().zip(PINNED_CANONICAL_BYTES).enumerate() {
+        assert_eq!(
+            written, pinned,
+            "byte {offset}: the encoder wrote {written:#04x} where the pinned \
+             literal spells {pinned:#04x}"
+        );
+    }
+    assert_eq!(
+        encoded.len(),
+        PINNED_CANONICAL_BYTES.len(),
+        "the encoding changed length, so a field was added, dropped or reframed"
+    );
+    assert_eq!(encoded, PINNED_CANONICAL_BYTES);
+
+    // The literal is a plan, not just a string of bytes: it decodes to the plan
+    // it was transcribed from. Without this a transcription error that happened
+    // to keep the length would be indistinguishable from an encoder change.
+    let decoded =
+        Plan::from_canonical_bytes(PINNED_CANONICAL_BYTES).expect("the pinned literal decodes");
+    assert_eq!(decoded, plan);
+    assert_eq!(decoded.id(), plan.id());
+}
+
+/// The version this build writes is the version the pinned literal begins with.
+///
+/// Stated separately because the two are different claims. The literal above
+/// pins what *these* bytes are; this pins that they are the bytes of the version
+/// this build declares — so a `PLAN_VERSION` moved without re-transcribing the
+/// literal fails here, by name, instead of failing as an anonymous byte-0
+/// mismatch.
+#[test]
+fn the_pinned_literal_begins_with_this_builds_plan_version() {
+    assert_eq!(
+        PINNED_CANONICAL_BYTES[..2],
+        PLAN_VERSION.to_le_bytes(),
+        "the literal was transcribed under a different layout version"
+    );
+    assert_eq!(PLAN_VERSION, 4);
+}
