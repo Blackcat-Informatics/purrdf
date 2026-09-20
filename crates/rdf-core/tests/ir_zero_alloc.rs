@@ -4,75 +4,30 @@
 //! Gate 1 (C1): `RdfDataset::quads()` performs **zero allocations** and never
 //! clones or formats a term, and `quad_refs()` resolves terms without allocating.
 //!
-//! The proof is operational, not a slogan: this test installs a process-global
-//! counting allocator that increments an atomic counter on every `alloc` /
-//! `realloc`. It snapshots the counter immediately before the iteration loop and
-//! immediately after, and asserts the delta is exactly `0`. Because the allocator is
-//! `#[global_allocator]`, it observes every heap allocation any code in the loop body
-//! would make — there is nowhere for a hidden allocation to hide.
+//! The proof is operational, not a slogan: this test installs the workspace's
+//! shared counting allocator and brackets the iteration loop in a measurement
+//! window, then asserts the window saw exactly `0` allocations. Because the
+//! allocator is `#[global_allocator]`, it observes every heap allocation any code
+//! in the loop body would make — there is nowhere for a hidden allocation to hide.
 
 // Rich colored line-diffs on assert_eq! failure; shadows the std macro
 // for this file. Identical behaviour on pass; insta snapshots are unaffected.
 use pretty_assertions::assert_eq;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::hash::{Hash, Hasher};
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::{BlankScope, QuadIds, QuadRef, RdfDatasetBuilder, RdfLiteral, TermRef};
 
-// A THREAD-LOCAL allocation counter, not a process-global atomic: `cargo test` runs
-// every test in the binary concurrently on separate threads sharing one process and
-// one `#[global_allocator]`, so a process-global counter would be contaminated by a
-// sibling test thread's allocations between the before/after snapshots. A thread-local
-// `Cell<usize>` counts only the measuring thread's own allocations, isolating the
-// measurement regardless of how the harness schedules tests. (`Cell<usize>` is `Copy`
-// and never heap-allocates, so the counter itself adds no allocations.)
-thread_local! {
-    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
-}
-
-/// A pass-through allocator that counts allocations on the current thread.
-/// Deallocations are ignored: we only care that the hot iteration path allocates
-/// nothing new.
-struct CountingAllocator;
-
-/// Record one allocation on the current thread, tolerating TLS-init re-entrancy by
-/// silently skipping the count when the thread-local is not yet available.
-fn bump() {
-    let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + 1));
-}
-
-// SAFETY: every method forwards to the system allocator with the same layout; the
-// only added behavior is a thread-local counter increment on allocation paths.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe {
-            bump();
-            System.alloc(layout)
-        }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe {
-            System.dealloc(ptr, layout);
-        }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        unsafe {
-            bump();
-            System.realloc(ptr, layout, new_size)
-        }
-    }
-}
-
+// A CURRENT-THREAD window, not a whole-process one: `cargo test` runs every test in
+// the binary concurrently on separate threads sharing one process and one
+// `#[global_allocator]`, so a process-wide counter would be contaminated by a
+// sibling test thread's allocations between the before/after snapshots. The
+// per-thread window counts only the measuring thread's own allocations, isolating
+// the measurement regardless of how the harness schedules tests. Nothing measured
+// here fans out over worker threads, which is the one situation in which that
+// choice would be the wrong one.
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
-
-/// Snapshot of the current thread's allocation counter.
-fn allocations() -> usize {
-    ALLOCATIONS.with(Cell::get)
-}
 
 /// Build a non-trivial frozen dataset: many quads across the default graph and named
 /// graphs, with IRIs, blanks, literals (typed + language-tagged + directional), and a
@@ -120,7 +75,7 @@ fn quads_iteration_allocates_zero() {
     }
     std::hint::black_box(warm.finish());
 
-    let before = allocations();
+    let window = CurrentThreadWindow::open();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for q in ds.quads() {
         // Consume the Copy QuadIds purely by value — no formatting, no clone, no
@@ -128,12 +83,11 @@ fn quads_iteration_allocates_zero() {
         let q: QuadIds = q;
         fold(&mut hasher, &q);
     }
-    let after = allocations();
+    let measured = window.close();
     std::hint::black_box(hasher.finish());
 
     assert_eq!(
-        after - before,
-        0,
+        measured.allocations, 0,
         "RdfDataset::quads() must perform zero allocations (Gate 1)"
     );
 }
@@ -149,19 +103,18 @@ fn quad_refs_resolution_allocates_zero() {
     }
     std::hint::black_box(warm);
 
-    let before = allocations();
+    let window = CurrentThreadWindow::open();
     let mut acc: usize = 0;
     for q in ds.quad_refs() {
         // Resolve every position to a borrowed view and touch borrowed &str content
         // without copying it (sum byte lengths) — proves no allocation on resolve.
         acc = acc.wrapping_add(quad_ref_len(&q));
     }
-    let after = allocations();
+    let measured = window.close();
     std::hint::black_box(acc);
 
     assert_eq!(
-        after - before,
-        0,
+        measured.allocations, 0,
         "RdfDataset::quad_refs() must resolve terms without allocating (Gate 1)"
     );
 }

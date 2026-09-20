@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-alloc-probe"
+description = "The workspace's shared counting allocator and its two measurement windows: per-thread for concurrent test binaries, whole-process for rayon-parallel phases, reporting allocation count, requested bytes, retained bytes and peak live bytes separately"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "allocator", "memory", "benchmark"]
+categories = ["development-tools::profiling"]
+publish = false
+
+[lints]
+workspace = true
+
+# No dependencies, and none is wanted: the instrument is `std::alloc` plus four
+# counters. A probe that pulled a crate in would be measuring that crate too.

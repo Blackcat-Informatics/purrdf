@@ -137,7 +137,7 @@
 //!
 //! # Row 10 is a digest over a body the product CARRIES
 //!
-//! `crate::engine::ClassCatalog` is a derivation of the shape tree: a cycle-safe
+//! `crate::plan::ClassCatalog` is a derivation of the shape tree: a cycle-safe
 //! walk that collects every reachable `sh:class` / `sh:targetClass` /
 //! `shnex:instancesOf` IRI and assigns each a position. The product carries that
 //! walk's RESULT — in the AST section, as field 7 (`super::ast`) — and row 10 pins
@@ -203,8 +203,8 @@ use purrdf_sparql_eval::{
     property_function_content_fingerprint, user_fn,
 };
 
-use crate::engine::ClassCatalog;
 use crate::model::BoxRoleVocab;
+use crate::plan::ClassCatalog;
 use crate::shapes::Shapes;
 
 use super::error::{ProductDimension, ShapesProductError};
@@ -420,7 +420,7 @@ const CLASS_CATALOG_DOMAIN: &str = "purrdf-shapes/product/class-catalog";
 /// closes.
 ///
 /// The position is folded in, not just the IRI set: the position is what a
-/// `ValidationPlan` indexes its resolved-`TermId` row by, so two catalogs over the
+/// a dataset binding indexes its resolved-`TermId` class row by, so two catalogs over the
 /// same classes with different assignments are different analyses.
 pub(crate) fn class_catalog_digest(catalog: &ClassCatalog) -> ContentDigest {
     let mut bytes = Vec::new();
@@ -924,9 +924,12 @@ mod tests {
 
     use purrdf_core::artifact::identity::{Identity, IdentityComponent};
 
+    use std::fmt::Write as _;
+
     use super::{COMPONENTS, PROFILE_ID, build_identity, check_identity, class_catalog_digest};
-    use crate::engine::{ClassCatalog, PreparedShapes, parse_shapes};
+    use crate::engine::{PreparedShapes, parse_shapes};
     use crate::model::BoxRoleVocab;
+    use crate::plan::ClassCatalog;
     use crate::product::dataset::{certify_dataset, encode_dataset};
     use crate::product::error::ProductDimension;
     use crate::shapes::{Shapes, from_dataset_with_config_and_graph};
@@ -1746,6 +1749,57 @@ mod tests {
     }
 
     // ── The class-catalog digest ────────────────────────────────────────────────
+
+    /// The class-catalog digest of [`PLAIN_SHAPES`], as lowercase hex.
+    ///
+    /// Pinned as a constant for the same reason `STAGE_ID` and `GOLDEN_LEN` are:
+    /// this digest must NOT move. It is a fingerprint of the class walk's OUTPUT —
+    /// the `(class, position)` pairs — under a domain separator, and it does not
+    /// incorporate the stage id. The stage id is free to move whenever the walk's
+    /// SOURCE changes, because that is what it is for; this one may only move when
+    /// the walk reaches a different set of classes or ranks them differently, which
+    /// is a semantic change to what a prepared product carries and never a
+    /// re-pinning.
+    ///
+    /// A re-derivation check cannot state that. [`class_catalog_digest_matches_rederived`]
+    /// computes both of its operands from the same call in the same process, so it
+    /// proves DETERMINISM and would pass unchanged if the digest were altered
+    /// completely. Only a committed value is stable across a code change, so here
+    /// one is.
+    const PLAIN_SHAPES_CLASS_CATALOG_DIGEST: &str =
+        "eaa6b85267318d663007f5c7435b56ab6194a2b70631dd5ff5599c9a4e4182cc";
+
+    /// **The class-catalog digest has not moved.**
+    ///
+    /// If this fails, the walk has changed WHAT IT COLLECTS — a class it no longer
+    /// reaches, one it now reaches, or a different position for one it always had.
+    /// Every one of those is a semantic regression in the analysis a prepared
+    /// product carries, and every product ever minted disagrees with this build
+    /// about it. Diagnose the walk. Do not re-pin the constant.
+    ///
+    /// The value is not merely whatever this build happened to produce when the
+    /// constant was written. It was checked out of the tree as it stood BEFORE
+    /// the walk was rewritten, built there, and computed: that build emits this
+    /// same hex. So the constant records what the walk produced beforehand, and
+    /// the rewrite is measured against it rather than described as equal to it.
+    #[test]
+    fn class_catalog_digest_matches_committed_constant() {
+        let digest = class_catalog_digest(&catalog_of(&shapes_of(PLAIN_SHAPES)));
+        let hex: String =
+            digest
+                .as_bytes()
+                .iter()
+                .fold(String::with_capacity(64), |mut out, byte| {
+                    let _ = write!(out, "{byte:02x}");
+                    out
+                });
+        assert_eq!(
+            hex, PLAIN_SHAPES_CLASS_CATALOG_DIGEST,
+            "the class-catalog digest moved, so the class walk now reaches a different set of \
+             classes or ranks them differently; this is a semantic change to the analysis a \
+             prepared product carries, not a constant to update"
+        );
+    }
 
     #[test]
     fn class_catalog_digest_matches_rederived() {

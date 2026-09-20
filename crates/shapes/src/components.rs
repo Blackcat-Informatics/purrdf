@@ -19,6 +19,7 @@ use std::sync::OnceLock;
 use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{FastMap, FastSet};
+use purrdf_sparql_eval::Prebinding;
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs, sh, xsd};
@@ -274,24 +275,51 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
         return Err("expected ASK validator, got SELECT".to_owned());
     };
     let mut results = Vec::with_capacity(value_nodes.len());
-    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(2 + bindings.len());
+    // Every substitution but `$value` is a constant of this component invocation:
+    // the focus node, the parameter bindings, and the shape context. So is every
+    // NAME, `$value`'s included — the names are shape text, not data. The whole
+    // list is therefore built ONCE and only the one varying cell is overwritten per
+    // value node; rebuilding it per value node re-allocated `"this"`, `"value"` and
+    // every parameter name, plus their term values, for every value in the set.
+    const VALUE_SLOT: usize = 1;
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(4 + bindings.len());
+    subs.push(Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    });
+    subs.push(Prebinding {
+        variable: "value",
+        value: TermValue::Iri(String::new()),
+    });
+    for (name, value) in bindings {
+        subs.push(Prebinding {
+            variable: name.as_str(),
+            value: value.to_term_value(),
+        });
+    }
+    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
+    // The violating branch's template buffer, hoisted for the same reason: its
+    // parameter half does not vary, so it is filled once and only the trailing
+    // `value` entry is replaced.
+    let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+        let mut buffer = Vec::with_capacity(bindings.len() + 1);
+        buffer.extend_from_slice(bindings);
+        buffer.push(("value".to_owned(), focus.clone()));
+        buffer
+    } else {
+        Vec::new()
+    };
     for v in value_nodes {
-        subs.clear();
-        subs.push(("this".to_owned(), focus.to_term_value()));
-        subs.push(("value".to_owned(), v.to_term_value()));
-        for (name, value) in bindings {
-            subs.push((name.clone(), value.to_term_value()));
-        }
-        let conforms = run_ask_with_shacl_prebinding_view(
-            dataset,
-            ask,
-            &subs,
-            shapes_graph_iri,
-            current_shape,
-        )?;
+        subs[VALUE_SLOT].value = v.to_term_value();
+        let conforms = run_ask_with_shacl_prebinding_view(dataset, ask, &subs)?;
         if !conforms {
-            let mut template_bindings: Vec<(String, Term)> = bindings.to_vec();
-            template_bindings.push(("value".to_owned(), v.clone()));
+            let message = message.map(|m| {
+                let slot = template_bindings
+                    .last_mut()
+                    .expect("the template buffer is non-empty whenever a message is present");
+                slot.1 = v.clone();
+                substitute_message_templates(m, &template_bindings)
+            });
             results.push(ValidationResult {
                 focus_node: focus.clone(),
                 result_path: path.map(path::path_to_term),
@@ -300,7 +328,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
                 source_constraint_component: component.clone(),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message: message.map(|m| substitute_message_templates(m, &template_bindings)),
+                message,
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
@@ -335,82 +363,90 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
     let ComponentValidator::Select { select } = validator else {
         return Err("expected SELECT validator, got ASK".to_owned());
     };
-    let mut subs: Vec<(String, TermValue)> = Vec::with_capacity(1 + bindings.len());
-    subs.push(("this".to_owned(), focus.to_term_value()));
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3 + bindings.len());
+    subs.push(Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    });
     for (name, value) in bindings {
-        subs.push((name.clone(), value.to_term_value()));
+        subs.push(Prebinding {
+            variable: name.as_str(),
+            value: value.to_term_value(),
+        });
     }
+    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
     let query = crate::constraints::substitute_path_placeholder(select, path);
-    let (variables, rows) = run_select_with_shacl_prebinding_view(
-        dataset,
-        &query,
-        &subs,
-        shapes_graph_iri,
-        current_shape,
-    )?;
-
-    let this_index = variables.iter().position(|v| v == "this");
-    let path_index = variables.iter().position(|v| v == "path");
-    let value_index = variables.iter().position(|v| v == "value");
 
     let path_term = path.map(path::path_to_term);
     let path_structure = path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
 
-    let mut results = Vec::with_capacity(rows.len());
-    let mut row_bindings: Vec<(String, Term)> = Vec::with_capacity(variables.len());
-    let mut template_bindings: Vec<(String, Term)> =
-        Vec::with_capacity(variables.len() + bindings.len());
-    for row in &rows {
-        row_bindings.clear();
-        row_bindings.extend(variables.iter().zip(row.iter()).filter_map(|(var, cell)| {
-            cell.as_ref()
-                .map(|tv| (var.clone(), term_value_to_native(tv)))
-        }));
+    run_select_with_shacl_prebinding_view(dataset, &query, &subs, |solutions| {
+        let this_index = solutions.column("this");
+        let path_index = solutions.column("path");
+        let value_index = solutions.column("value");
 
-        let focus_node = this_index
-            .and_then(|i| row.get(i))
-            .and_then(Option::as_ref)
-            .map_or_else(|| focus.clone(), term_value_to_native);
-
-        let (result_path, result_path_structure) = if let Some(i) = path_index {
-            if let Some(Some(tv)) = row.get(i) {
-                (Some(term_value_to_native(tv)), None)
-            } else {
-                (path_term.clone(), path_structure.clone())
-            }
+        let mut results = Vec::with_capacity(solutions.len());
+        // §5.3.3 message templating is the ONLY reader of the row's other columns,
+        // so the buffer is allocated — and the columns are converted — only when
+        // there is a message to render. A validator with none reads exactly the
+        // three columns it maps onto the result.
+        let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+            Vec::with_capacity(solutions.variables().len() + bindings.len())
         } else {
-            (path_term.clone(), path_structure.clone())
+            Vec::new()
         };
+        for row in solutions.rows() {
+            let focus_node = this_index
+                .and_then(|i| solutions.cell(row, i))
+                .as_ref()
+                .map_or_else(|| focus.clone(), term_value_to_native);
 
-        let value = value_index
-            .and_then(|i| row.get(i))
-            .and_then(Option::as_ref)
-            .map(term_value_to_native);
+            let (result_path, result_path_structure) =
+                match path_index.and_then(|i| solutions.cell(row, i)) {
+                    Some(value) => (Some(term_value_to_native(&value)), None),
+                    None => (path_term.clone(), path_structure.clone()),
+                };
 
-        template_bindings.clear();
-        template_bindings.extend_from_slice(&row_bindings);
-        for (name, value) in bindings {
-            if !template_bindings.iter().any(|(n, _)| n == name) {
-                template_bindings.push((name.clone(), value.clone()));
-            }
+            let value = value_index
+                .and_then(|i| solutions.cell(row, i))
+                .as_ref()
+                .map(term_value_to_native);
+
+            let message = message.map(|m| {
+                // The row's own bindings first, so a projected variable outranks a
+                // parameter of the same name — the precedence this has always had.
+                template_bindings.clear();
+                for (index, var) in solutions.variables().iter().enumerate() {
+                    if let Some(value) = solutions.cell(row, index) {
+                        template_bindings
+                            .push((var.as_str().to_owned(), term_value_to_native(&value)));
+                    }
+                }
+                for (name, value) in bindings {
+                    if !template_bindings.iter().any(|(n, _)| n == name) {
+                        template_bindings.push((name.clone(), value.clone()));
+                    }
+                }
+                substitute_message_templates(m, &template_bindings)
+            });
+
+            results.push(ValidationResult {
+                focus_node,
+                result_path,
+                path_structure: result_path_structure,
+                value,
+                source_constraint_component: component.clone(),
+                source_shape: source_shape.clone(),
+                severity: severity.clone(),
+                message,
+                source_box_roles: vec![],
+                path_box_roles: vec![],
+                result_box_roles: vec![],
+                attributions: vec![],
+            });
         }
-
-        results.push(ValidationResult {
-            focus_node,
-            result_path,
-            path_structure: result_path_structure,
-            value,
-            source_constraint_component: component.clone(),
-            source_shape: source_shape.clone(),
-            severity: severity.clone(),
-            message: message.map(|m| substitute_message_templates(m, &template_bindings)),
-            source_box_roles: vec![],
-            path_box_roles: vec![],
-            result_box_roles: vec![],
-            attributions: vec![],
-        });
-    }
-    Ok(results)
+        Ok(results)
+    })
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

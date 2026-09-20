@@ -76,12 +76,20 @@
  * recompiled once for all of them; splitting would have broken the same consumer four
  * times for one reason.
  *
- * # `0.7.0` → `0.8.0`: eight added symbols and an appended status
+ * # `0.7.0` → `0.8.0`: nine added symbols and an appended status
  *
  * The prepared-shapes-product surface exports eight new entry points —
  * `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
  * `_rebuild_expecting`, `_certify` and `_error_dimension` — and APPENDS
- * `PurrdfStatus::ShapesProductError = 11`.
+ * `PurrdfStatus::ShapesProductError = 11`. The SHACL change path exports a ninth,
+ * `purrdf_shacl_validate_changes_to_sarif`, with its own `PurrdfShaclChangeScopeKind`
+ * discriminant.
+ *
+ * The ninth rides this SAME unreleased bump rather than a tenth one, exactly as the
+ * `0.6.0` → `0.7.0` breaks were bundled: `0.8.0` has shipped in nothing, so there is
+ * no library answering it that exports a different surface, and splitting would make a
+ * consumer recompile twice for one reason. A symbol added AFTER `0.8.0` ships is a
+ * different question, and the paragraph below is the answer to it.
  *
  * Every one of those is additive: no existing prototype was retyped, reordered,
  * removed or given a parameter, and no discriminant was renumbered. A host built
@@ -90,7 +98,7 @@
  *
  * It bumps anyway, and the reason is the sentence at the top of this comment rather
  * than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
- * `2.0.0`, `2.0.1` and `2.0.2` libraries, which export eight fewer symbols than this
+ * `2.0.0`, `2.0.1` and `2.0.2` libraries, which export nine fewer symbols than this
  * one does. Leaving the triple still would mean two different shippable libraries
  * answering `purrdf_abi_version` identically while exporting different surfaces, so a
  * host that compiled against this header and loaded the older library would be told
@@ -593,6 +601,39 @@ enum PurrdfPartialKind
 typedef enum PurrdfPartialKind PurrdfPartialKind;
 #else
 typedef int32_t PurrdfPartialKind;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * Which question a change-path report answered, written to
+ * `purrdf_shacl_validate_changes_to_sarif`'s `out_scope`.
+ *
+ * Append-only, like every other discriminant this ABI exports: never renumber a
+ * variant. It is carried as an `int32_t` out-parameter rather than as this enum
+ * type so a C caller writing an out-of-range value cannot produce an invalid
+ * discriminant, exactly as the governed query/update outcomes are carried.
+ */
+enum PurrdfShaclChangeScopeKind
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * The change's footprint was bounded: the report covers the affected focus
+     * nodes, and `conforms` means THIS CHANGE introduced no violation.
+     */
+    PURRDF_SHACL_CHANGE_SCOPE_KIND_BOUNDED = 0,
+    /**
+     * No bounded footprint exists for this shapes graph: the report covers the
+     * whole mutated graph, and `conforms` means THE GRAPH conforms.
+     */
+    PURRDF_SHACL_CHANGE_SCOPE_KIND_EVERYTHING = 1,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfShaclChangeScopeKind PurrdfShaclChangeScopeKind;
+#else
+typedef int32_t PurrdfShaclChangeScopeKind;
 #endif // __STDC_VERSION__ >= 202311L
 #endif // __cplusplus
 
@@ -2490,6 +2531,66 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
                                        const char *data_nt,
                                        PurrdfBuffer **out_buffer,
                                        PurrdfError **out_error);
+
+/**
+ * Validate a CHANGE to a data graph (N-Triples) against a shapes graph (Turtle),
+ * writing the SARIF 2.1.0 report bytes to `*out_buffer` and the scope that report
+ * describes to `*out_scope`, `*out_focus_nodes` and `*out_reason`.
+ *
+ * The incremental twin of `purrdf_shacl_validate_to_sarif`. `added_nt` and
+ * `removed_nt` are the two halves of the delta — rows joining and rows leaving
+ * `data_nt` — and each may be NULL for "nothing on this half". Both halves are
+ * real: a verdict moves when a row leaves the graph as readily as when one joins,
+ * and one parameter would be half a delta. Additions apply before removals, so a
+ * change set naming the same row on both halves settles on *removed*. A removal
+ * naming a row `data_nt` does not carry retracts nothing rather than failing: a
+ * change set describes what moved, it does not assert what the base contained.
+ *
+ * `shapes_base_iri` carries the same meaning it does on
+ * `purrdf_shacl_validate_to_sarif` — the shapes document's own base IRI, nullable.
+ * The three N-Triples documents need no counterpart; N-Triples admits no relative
+ * IRI by grammar.
+ *
+ * # Read the scope before the report
+ *
+ * `*out_scope` is a `PurrdfShaclChangeScopeKind` and it decides what the SARIF log
+ * MEANS. On `PURRDF_SHACL_CHANGE_SCOPE_KIND_BOUNDED` the log covers the focus
+ * nodes the change could move — for those nodes it is identical, results and
+ * ordering alike, to a full validation of the mutated graph — and is silent about
+ * a pre-existing violation the change cannot reach, so an empty log means *this
+ * change introduced no violation*. On
+ * `PURRDF_SHACL_CHANGE_SCOPE_KIND_EVERYTHING` the shapes graph reads through
+ * SPARQL query text, no bounded footprint exists for it, the call fell back to a
+ * FULL validation of the mutated graph, and an empty log means *the graph
+ * conforms*. The fallback is not optional, and a caller that cannot tell the two
+ * apart has been handed the more dangerous of the two readings.
+ *
+ * `*out_focus_nodes` is how many focus nodes a bounded expansion named. It is
+ * written `0` on the `EVERYTHING` arm, where it is NOT a node count: "every focus
+ * node in the graph" is not a number, so branch on the kind, never on this.
+ *
+ * `*out_reason` is a `PurrdfBuffer` of UTF-8 prose naming the construct that made
+ * the footprint unbounded — actionable rather than decorative, because it names
+ * what to change to get incremental validation back. It is NULL — never an empty
+ * buffer — on the `BOUNDED` arm. Free a non-NULL one with `purrdf_buffer_free`,
+ * exactly as `*out_buffer` is freed.
+ *
+ * # Safety
+ * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+ * `shapes_base_iri`, `added_nt` and `removed_nt` must be null or NUL-terminated C
+ * strings; `out_buffer`, `out_scope`, `out_focus_nodes` and `out_reason` must be
+ * writable pointers; `out_error` must be null or writable.
+ */
+int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
+                                               const char *shapes_base_iri,
+                                               const char *data_nt,
+                                               const char *added_nt,
+                                               const char *removed_nt,
+                                               PurrdfBuffer **out_buffer,
+                                               int32_t *out_scope,
+                                               size_t *out_focus_nodes,
+                                               PurrdfBuffer **out_reason,
+                                               PurrdfError **out_error);
 
 /**
  * Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the

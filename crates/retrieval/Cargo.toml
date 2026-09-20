@@ -48,6 +48,10 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# The workspace's shared counting allocator, for `tests/fusion_frontier_alloc.rs`.
+# Path-only and unpublished, so it is stripped from the packaged manifest;
+# std-only and dependency-free, so it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
 # Colored line-diffs on assert_eq! failure (repo convention).
 pretty_assertions.workspace = true
 # A document format for the serde round-trip test.

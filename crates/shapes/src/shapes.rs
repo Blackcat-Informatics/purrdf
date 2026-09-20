@@ -309,7 +309,7 @@ pub enum Constraint {
         /// and cloning the shapes per constraint would be pure waste. The
         /// `OnceLock` is filled once, at the end of the shapes-graph parse, so a
         /// shape carrying this constraint can itself appear in the table.
-        shapes: Arc<OnceLock<FastMap<String, Shape>>>,
+        shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
         /// Optional per-constraint message override (from `sh:message` on the
         /// expression node).
         message: Option<String>,
@@ -675,7 +675,7 @@ pub(crate) struct Parser<'s> {
     /// any shape is parsed is what makes the arrangement re-entrant: a shape that
     /// carries a `sh:nodeByExpression` is itself in the index, and a map built
     /// eagerly during its own parse would recurse forever.
-    node_shape_index: Arc<OnceLock<FastMap<String, Shape>>>,
+    node_shape_index: Arc<OnceLock<FastMap<Term, Shape>>>,
     /// Every custom node-expression function the shapes graph declares
     /// (SHACL 1.2 Node Expressions §6), populated before any shape is parsed so a
     /// call site inside a shape can resolve to the interned declaration.
@@ -994,7 +994,7 @@ impl<'s> Parser<'s> {
             return Ok(());
         };
         for (shape_id, named) in &self.node_by_expr_constants {
-            if !index.contains_key(&named.to_string()) {
+            if !index.contains_key(named) {
                 return Err(format!(
                     "sh:nodeByExpression on shape {shape_id} names {named}, which is not a shape \
                      of this shapes graph; the constraint would resolve it only when a value node \
@@ -1012,7 +1012,7 @@ impl<'s> Parser<'s> {
     /// Taking a handle is also what tells [`Self::parse`] the index is wanted: a
     /// shapes graph with no such constraint never calls this, so the index is never
     /// built.
-    pub(crate) fn share_node_shape_index(&self) -> Arc<OnceLock<FastMap<String, Shape>>> {
+    pub(crate) fn share_node_shape_index(&self) -> Arc<OnceLock<FastMap<Term, Shape>>> {
         Arc::clone(&self.node_shape_index)
     }
 
@@ -1532,7 +1532,14 @@ impl<'s> Parser<'s> {
         }
         let mut reifier_shapes = Vec::new();
         for node in reifier_shape_nodes {
-            reifier_shapes.push(self.parse_node_shape(node)?);
+            // A reifier shape is a SHAPE, and a shape carrying `sh:path` is a
+            // property shape whose constraints scope to that path's value nodes —
+            // here, the reifier's. Parsing it as a node shape would drop the path
+            // and re-read the constraints against the reifier itself, which is a
+            // SILENT DROP rather than a wrong answer: `sh:minCount 1` over the one
+            // value node `$this` always holds, so the reifier shape would check
+            // nothing and every reifier would pass.
+            reifier_shapes.push(self.parse_inline_shape(node)?);
         }
 
         Ok(PropertyShape {

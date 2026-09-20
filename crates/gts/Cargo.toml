@@ -73,6 +73,10 @@ sha1 = { workspace = true, default-features = true }
 aes-gcm = { workspace = true }
 
 [dev-dependencies]
+# The workspace's shared counting allocator, for the `authoring` bench probes.
+# Path-only and unpublished, so it is stripped from the packaged manifest;
+# std-only and dependency-free, so it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
 # Authoring hot-path regression watch. Defaults off like sibling crates so the
 # bench lane stays lightweight and report-only.
 criterion = { workspace = true }
