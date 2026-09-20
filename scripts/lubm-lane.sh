@@ -394,10 +394,12 @@ conv_ms=$(($(now_ms) - conv_start))
   die "converted ${converted} of ${owl_count} files; refusing to report a partial dataset"
 
 DATA="${ARENA_ROOT}/lubm-data.nq"
-# `sort` fixes the concatenation order so the dataset is byte-reproducible. LUBM's
-# instance data contains no blank nodes, so concatenating separately converted
-# files cannot collide labels -- a property this lane checks below rather than
-# assumes.
+# `sort` fixes the concatenation order so the dataset is byte-reproducible -- but
+# only because `lane-common.sh` pins `LC_ALL=C`, which makes that sort bytewise.
+# An unpinned collation reorders `University0_1.owl` against `University0_10.owl`
+# and silently rewrites the digest published below. LUBM's instance data contains
+# no blank nodes, so concatenating separately converted files cannot collide
+# labels -- a property this lane checks below rather than assumes.
 mapfile -t nq_files < <(find "${NQ}" -maxdepth 1 -name '*.nq' | sort)
 ((${#nq_files[@]} > 0)) ||
   die "no .nq files under ${NQ} after ${converted} conversion(s) reported success"
@@ -462,14 +464,19 @@ lane_require_nquads "${ONTO_NQ}" "the converted univ-bench ontology"
 
 data_sha=$(python3 -c '
 import hashlib, sys
-print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as handle:
+    for chunk in iter(lambda: handle.read(1 << 20), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
 ' "${DATA}")
 
 echo "data:     ${data_rows} rows, ${data_bytes} bytes, converted in ${conv_ms} ms"
 echo "ontology: ${onto_rows} rows"
 echo "sha256(lubm-data.nq) = ${data_sha}"
 echo "  ^ this digest is the determinism check: the same LUBM_UNIVERSITIES/INDEX/SEED"
-echo "    and the same LUBM_DOC_BASE must reproduce it byte for byte."
+echo "    and the same LUBM_DOC_BASE must reproduce it byte for byte. Collation is"
+echo "    the fourth input and is pinned to LC_ALL=C by the lane, not by the caller."
 
 # ── 6. Normalise the queries ────────────────────────────────────────────────────
 

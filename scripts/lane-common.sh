@@ -49,6 +49,26 @@
 : "${LANE:?lane-common.sh requires LANE to be set to the name of the lane}"
 : "${LANE_BINARY:?lane-common.sh requires LANE_BINARY to name the kind of executable the lane runs}"
 
+# COLLATION IS AN INPUT TO EVERY DIGEST A LANE PUBLISHES, so it is pinned here
+# rather than left to the caller's environment.
+#
+# A lane that prints `sha256(...)` and calls it the determinism check promises
+# that the inputs it names, and nothing else, reproduce those bytes. `sort(1)`
+# obeys `LC_COLLATE`, and it is the input nobody writes down because a tool
+# supplies it. Under `LC_ALL=C` the comparison is bytewise, so `.` (0x2E)
+# precedes `0` (0x30) and `University0_1.owl` sorts before `University0_10.owl`;
+# under a UTF-8 collation punctuation is ignorable at the primary level and the
+# two reverse. A lane concatenating in `find | sort` order therefore builds a
+# different corpus, publishes a different digest, and picks a different file as
+# its smallest rung on two hosts that differ only in their environment -- while
+# every knob the lane enumerates as reproducing that digest is identical.
+#
+# This also pins the locale of every tool a lane runs, the generator included,
+# so a decimal separator or a case-folding rule cannot reach generated output
+# either. The certificate is only worth as much as the enumeration behind it,
+# and the cheapest way to enumerate collation is to remove it as a variable.
+export LC_ALL=C
+
 die() {
   echo "${LANE}: $*" >&2
   exit 1
