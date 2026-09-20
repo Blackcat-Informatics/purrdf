@@ -452,6 +452,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **sparql-eval:** The forked row loop's per-chunk harvest no longer allocates below
+  the parallel threshold. Harvesting a worker's relation witness came back as a `Vec`
+  of one element on the sequential path — a heap allocation per `FILTER` or `BIND`
+  evaluation whose whole content was one, almost always empty, witness. On the
+  per-focus-node SHACL path, whose allocation count per focus node is pinned exactly,
+  that was one to two allocations per focus node over the pin; the harvest now rides
+  inline in a one-slot small vector and the pins hold again.
+
 - **sparql-eval, shapes:** The borrowed governed lane — the per-focus-node entry SHACL
   validation drives — carries the relation witness, and a validation over an index
   that declared itself not whole is refused. Two governed egresses build their own
