@@ -237,6 +237,89 @@ fn mixed_registry() -> PropertyFunctionRegistry {
     registry
 }
 
+/// Four strata whose statistics land in four different cells of the recording
+/// law, plus the request's own predicate.
+///
+/// `mixed_registry` cannot express this: a selectivity bounds a stratum only
+/// where that stratum's producer actually **receives** the term, so the two
+/// strata a selectivity is asserted over here declare placing patterns, while
+/// the two it must not reach are catch-alls that receive nothing.
+///
+/// Declared row counts are distinct and are chosen so the four derived depths
+/// are distinct too (25, 30, 100, 50). A test that mis-maps one stratum's record
+/// onto another therefore fails on the number rather than passing on a
+/// coincidence.
+fn transcript_registry() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    let literal_pattern = TermPattern {
+        kind: TermKind::Literal,
+        datatype: None,
+        language: Some("en".to_owned()),
+        predicate: Some(ex("body")),
+    };
+    for (name, stratum, patterns, rows) in [
+        // Receives the lexical term, so a selectivity reported for it applies.
+        (
+            ex("pf/t-selective"),
+            ex("transcript/selectivity-only"),
+            vec![literal_pattern],
+            100_u64,
+        ),
+        // Receives the seed term, so a selectivity reported for it applies.
+        (
+            ex("pf/t-both"),
+            ex("transcript/both"),
+            vec![TermPattern::of_kind(TermKind::Iri)],
+            200,
+        ),
+        // Catch-alls: matched by everything, receiving nothing, so no
+        // selectivity can bound them and only a cardinality can.
+        (
+            ex("pf/t-counted"),
+            ex("transcript/cardinality-only"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            500,
+        ),
+        (
+            ex("pf/t-silent"),
+            ex("transcript/silent"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            50,
+        ),
+    ] {
+        registry.register_ranked(name, relation(rows), ranked(&stratum, patterns, false));
+    }
+    registry
+}
+
+/// The provider for [`transcript_registry`], reporting a different combination
+/// for each stratum — and one cardinality for a subject nothing consults.
+///
+/// That last row is the control. `never/consulted` is neither a stratum nor a
+/// request predicate, so the provider is *willing* to speak about it and the
+/// plan must still not name it. Without a subject the provider answers for, a
+/// test asserting absence cannot tell "correctly not consulted" from "recorded
+/// nothing at all".
+fn transcript_statistics() -> MockStatistics {
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&ex("transcript/cardinality-only")), 100);
+    cardinalities.insert(iri(&ex("transcript/both")), 100);
+    cardinalities.insert(iri(&ex("never/consulted")), 9_999);
+    MockStatistics {
+        source: "transcript-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+        selectivities: vec![
+            (
+                iri(&ex("transcript/selectivity-only")),
+                lexical_term(),
+                250_000,
+            ),
+            (iri(&ex("transcript/both")), seed_term(), 300_000),
+        ],
+    }
+}
+
 /// The mock statistics: cardinalities for the strata and the request predicate,
 /// and one reported selectivity.
 fn fixture_statistics() -> MockStatistics {
@@ -1359,8 +1442,10 @@ fn a_reported_stratum_selectivity_bounds_that_stratum_and_only_that_stratum() {
         .get(&iri(&ex("stratum/universal")))
         .expect("the untouched stratum records its derivation too");
     assert_eq!(untouched_inputs.selectivity_ppm, None);
-    assert!(untouched_inputs.selectivity_terms.is_empty());
-    untouched.certify().expect("the plan derives its own depths");
+    assert_eq!(untouched_inputs.selectivity_terms, [] as [u32; 0]);
+    untouched
+        .certify()
+        .expect("the plan derives its own depths");
 }
 
 /// The bound is rounded up and clamped at unity, because the failure mode of
@@ -1519,4 +1604,399 @@ fn the_planner_redeclares_no_seam_declaration_and_reads_no_ambient_state() {
             "planner.rs reaches for ambient state (`{ambient}`); planning must be pure"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 9. The derivation record: every consulted statistic, and only those
+// ---------------------------------------------------------------------------
+
+/// The request both transcript tests plan: one lexical term and one seed, so
+/// the two placing producers each receive exactly one of them.
+fn transcript_request() -> RetrievalRequest {
+    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
+}
+
+/// A provider that reports a selectivity and no cardinality narrows the depth,
+/// so the plan must record the statistic it was narrowed by.
+///
+/// This is the whole of the defect: the depth moved and the evidence did not.
+/// Both halves are asserted together, because either alone passes over a
+/// different bug — the depth alone is what a plan already got right, and the
+/// record alone would pass for a build that recorded a statistic it never
+/// applied.
+#[test]
+fn a_selectivity_only_stratum_is_recorded_and_narrows_the_depth() {
+    let stratum = iri(&ex("transcript/selectivity-only"));
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    assert_eq!(
+        planned.stratum_depths[&stratum], 25,
+        "a quarter of the declared 100 rows; the selectivity narrowed the read"
+    );
+    let inputs = planned
+        .stratum_derivations
+        .get(&stratum)
+        .expect("a consulted stratum records its derivation");
+    assert_eq!(
+        inputs.cardinality, None,
+        "the provider reported no cardinality, and absent is not zero"
+    );
+    assert_eq!(
+        inputs.selectivity_ppm,
+        Some(250_000),
+        "the statistic that narrowed the depth is the statistic recorded"
+    );
+    assert_eq!(
+        inputs.selectivity_terms,
+        vec![0],
+        "the lexical term is term 0"
+    );
+    assert_eq!(inputs.declared, 100);
+    planned
+        .certify()
+        .expect("the depth follows from the inputs recorded beside it");
+    assert_eq!(
+        planned.explain_depth(&stratum),
+        Some(DepthCause::Selectivity)
+    );
+}
+
+/// A stratum the planner consulted and the provider said nothing about is named
+/// with both inputs absent.
+///
+/// Absent from the record and "recorded as absent" are different facts: the
+/// first cannot distinguish a subject never asked about from one that answered
+/// nothing, and a replay against a provider that later speaks would not notice.
+#[test]
+fn a_consulted_but_silent_stratum_records_both_statistics_absent() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+    let inputs = planned
+        .stratum_derivations
+        .get(&iri(&ex("transcript/silent")))
+        .expect("a consulted stratum is recorded even when the provider is silent");
+
+    assert_eq!(inputs.cardinality, None);
+    assert_eq!(inputs.selectivity_ppm, None);
+    assert_eq!(inputs.selectivity_terms, [] as [u32; 0]);
+    assert_eq!(
+        inputs.declared, 50,
+        "the declaration is recorded whether or not the provider spoke"
+    );
+    assert_eq!(
+        planned.stratum_depths[&iri(&ex("transcript/silent"))],
+        50,
+        "a provider that measured nothing narrows nothing"
+    );
+    assert_eq!(
+        planned.explain_depth(&iri(&ex("transcript/silent"))),
+        Some(DepthCause::Declaration)
+    );
+}
+
+/// A subject the provider reports and the planner never consults stays out of
+/// the plan.
+///
+/// The control has a real oracle: `never/consulted` carries a cardinality of
+/// 9999, so the provider is willing to speak about it. A build that recorded
+/// every subject it could reach rather than every subject it asked about would
+/// name it here. The other four are asserted present in the same test, so this
+/// cannot pass by recording nothing.
+#[test]
+fn a_subject_the_provider_reports_but_nothing_consults_is_absent() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    let never = ex("never/consulted");
+    assert!(
+        !planned
+            .stratum_derivations
+            .keys()
+            .any(|stratum| stratum.as_str() == never),
+        "an unconsulted subject is not a derivation"
+    );
+    assert!(
+        !planned
+            .statistics_snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.subject == never),
+        "nor an ancillary entry"
+    );
+
+    for stratum in [
+        "transcript/selectivity-only",
+        "transcript/both",
+        "transcript/cardinality-only",
+        "transcript/silent",
+    ] {
+        assert!(
+            planned.stratum_derivations.contains_key(&iri(&ex(stratum))),
+            "{stratum} was consulted, so it is recorded; \
+             without this the absence above would pass for a plan recording nothing"
+        );
+    }
+}
+
+/// The recorded subjects are exactly the ones planning consulted: every stratum
+/// it derived a depth for, and every predicate the request named.
+///
+/// Both expectations are built from the request and the registry rather than
+/// read back out of the plan, so the test states the law instead of restating
+/// the output.
+#[test]
+fn the_record_names_exactly_the_consulted_subjects() {
+    let planned = plan(
+        &transcript_request(),
+        &transcript_registry(),
+        &transcript_statistics(),
+    )
+    .expect("plans");
+
+    let derived: Vec<&str> = planned
+        .stratum_derivations
+        .keys()
+        .map(Iri::as_str)
+        .collect();
+    let depths: BTreeMap<&str, u32> = planned
+        .stratum_depths
+        .iter()
+        .map(|(stratum, depth)| (stratum.as_str(), *depth))
+        .collect();
+    assert_eq!(
+        derived,
+        depths.keys().copied().collect::<Vec<&str>>(),
+        "a derivation for every depth and a depth for every derivation"
+    );
+
+    // The lexical term names a predicate; the seed term names none. So the
+    // ancillary entries are exactly one subject.
+    assert_eq!(
+        planned
+            .statistics_snapshot
+            .entries
+            .iter()
+            .map(|entry| entry.subject.as_str())
+            .collect::<Vec<&str>>(),
+        vec![ex("body").as_str()],
+        "the request's predicates, and nothing a depth was derived for"
+    );
+    planned.certify().expect("every depth derives");
+}
+
+/// An unbounded stratum never reaches the selectivity step, so a selectivity
+/// reported for it must not be recorded as though it had applied.
+///
+/// A fraction of an unmeasured total is not a measurement, which is why
+/// `depth_from` returns before consulting it. Recording one anyway would be a
+/// plan stating a derivation that did not happen — the same defect this work
+/// closes, pointing the other way.
+#[test]
+fn an_unbounded_stratum_records_no_applied_selectivity() {
+    let mut registry = PropertyFunctionRegistry::new();
+    let literal_pattern = TermPattern {
+        kind: TermKind::Literal,
+        datatype: None,
+        language: Some("en".to_owned()),
+        predicate: Some(ex("body")),
+    };
+    registry.register_ranked(
+        ex("pf/unbounded"),
+        relation(u64::MAX),
+        ranked(&ex("transcript/unbounded"), vec![literal_pattern], false),
+    );
+
+    let stratum = iri(&ex("transcript/unbounded"));
+    let statistics = MockStatistics {
+        source: "transcript-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        // No cardinality, so the bound stays the unbounded declaration.
+        cardinalities: BTreeMap::new(),
+        // A selectivity the provider is perfectly willing to report.
+        selectivities: vec![(stratum.clone(), lexical_term(), 250_000)],
+    };
+
+    let planned = plan(&lexical_request(), &registry, &statistics).expect("plans");
+    let inputs = planned
+        .stratum_derivations
+        .get(&stratum)
+        .expect("the stratum is consulted");
+
+    assert_eq!(inputs.declared, u64::MAX);
+    assert_eq!(inputs.cardinality, None);
+    assert_eq!(
+        inputs.selectivity_ppm, None,
+        "the derivation returned before the selectivity step, so none was applied"
+    );
+    assert_eq!(
+        inputs.selectivity_terms,
+        [] as [u32; 0],
+        "and no term contributed to a value that was never taken"
+    );
+    planned
+        .certify()
+        .expect("the recorded depth follows from the recorded inputs");
+    assert_eq!(
+        planned.explain_depth(&stratum),
+        Some(DepthCause::Unbounded),
+        "an unbounded declaration with no licensed prefix reads at the ceiling"
+    );
+}
+
+/// Every plan the golden corpus pins derives its own depths, and those depths
+/// are the ones version 3 recorded.
+///
+/// The second half is the no-semantic-drift check. The literals are the depths
+/// transcribed from the committed version-3 fixtures before they were
+/// regenerated, so this compares the new arithmetic against the old behaviour
+/// rather than against its own output.
+#[test]
+fn every_golden_plan_certifies_at_the_depths_version_three_recorded() {
+    for (request, registry, expected) in [
+        (
+            mixed_request(),
+            mixed_registry(),
+            vec![
+                (ex("stratum/graph"), 50_u32),
+                (ex("stratum/text"), 100),
+                (ex("stratum/universal"), 200),
+            ],
+        ),
+        (
+            lexical_request(),
+            mixed_registry(),
+            vec![(ex("stratum/text"), 100), (ex("stratum/universal"), 200)],
+        ),
+    ] {
+        let planned = plan(&request, &registry, &fixture_statistics()).expect("plans");
+        planned
+            .certify()
+            .expect("a golden plan derives its own depths");
+        let recorded: Vec<(String, u32)> = expected
+            .iter()
+            .map(|(stratum, _)| (stratum.clone(), planned.stratum_depths[&iri(stratum)]))
+            .collect();
+        assert_eq!(
+            recorded, expected,
+            "the depths are the ones version 3 recorded; the record grew, the plan did not move"
+        );
+    }
+}
+
+/// Every value a version-3 plan recorded is still recorded.
+///
+/// The expected literals are transcribed from the committed version-3 golden
+/// before regeneration: `body` 500/500000 as a request predicate, and the three
+/// strata's cardinalities. Where they live changed; what they say did not.
+#[test]
+fn a_cardinality_carrying_plan_records_every_value_version_three_did() {
+    let planned = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
+
+    let body = planned
+        .statistics_snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.subject == ex("body"))
+        .expect("the request predicate is recorded");
+    assert_eq!(body.cardinality, Some(500));
+    assert_eq!(body.selectivity_ppm, Some(500_000));
+
+    for (stratum, cardinality) in [
+        (ex("stratum/graph"), 50_u64),
+        (ex("stratum/text"), 100),
+        (ex("stratum/universal"), 1000),
+    ] {
+        let inputs = planned
+            .stratum_derivations
+            .get(&iri(&stratum))
+            .expect("every stratum records its derivation");
+        assert_eq!(
+            inputs.cardinality,
+            Some(cardinality),
+            "{stratum}'s cardinality is the one version 3 recorded"
+        );
+        assert_eq!(
+            inputs.selectivity_ppm, None,
+            "{stratum} carried no selectivity in version 3 either"
+        );
+    }
+}
+
+/// A missing row declaration is never defaulted into a measurement.
+///
+/// `place` admits an invocation only where some declared mode subsumes it, and
+/// `declared_row_bound` reads the declaration by filtering on that same
+/// predicate — so a placement that succeeded has already proved the bound
+/// exists, and `PlanError::UndeclaredRowBound` is unreachable against a registry
+/// that did not move. This executes that guard rather than assuming it.
+///
+/// The value matters because it is an input every depth is derived from. A
+/// default of zero floors the read to one probing row — a plan quietly asking a
+/// producer for a single row — while `u64::MAX` declares an unbounded relation.
+/// Neither is a thing the registry said.
+///
+/// Both halves run, because a refusal is a claim too: the producer whose
+/// declared mode subsumes nothing is refused, and its neighbour — the same
+/// registry with a mode that does subsume the invocation — plans, and records
+/// the declaration it really made rather than `declared: 0` at `depth: 1`.
+#[test]
+fn an_undeclared_row_bound_is_not_a_declaration_of_zero_rows() {
+    let stratum = ex("transcript/undeclared");
+    let plan_with = |mode: BindingPattern| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            ex("pf/mode"),
+            Arc::new(MockProducer {
+                arity: PfArity::new(1, 1),
+                mode,
+                rows: 10,
+            }),
+            ranked(&stratum, vec![TermPattern::of_kind(TermKind::Any)], false),
+        );
+        plan(&lexical_request(), &registry, &transcript_statistics())
+    };
+
+    // The `Any` pattern declares no placement, so the invocation leaves every
+    // argument free. A producer declaring only the fully-bound mode subsumes it
+    // nowhere.
+    let refused = plan_with(BindingPattern::from_bools([true, true]));
+    assert!(
+        matches!(refused, Err(PlanError::NoApplicableProducers)),
+        "placement refuses before a row bound is ever read, which is what makes \
+         an absent declaration unreachable at the derivation: {refused:?}"
+    );
+
+    // The neighbour: a producer whose all-free mode does subsume that same
+    // invocation plans, and its declaration reaches the record intact.
+    let planned = plan_with(PfArity::new(1, 1).all_free_mode()).expect("the neighbour plans");
+    let inputs = planned
+        .stratum_derivations
+        .get(&iri(&stratum))
+        .expect("the stratum records its derivation");
+    assert_eq!(
+        inputs.declared, 10,
+        "the declaration the registry made is the one recorded"
+    );
+    assert_ne!(
+        (inputs.declared, planned.stratum_depths[&iri(&stratum)]),
+        (0, 1),
+        "a missing declaration defaulted to zero would floor this read to one row"
+    );
+    assert_eq!(planned.stratum_depths[&iri(&stratum)], 10);
+    planned
+        .certify()
+        .expect("the depth derives from the declaration");
 }

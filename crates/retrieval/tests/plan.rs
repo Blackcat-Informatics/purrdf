@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin,
-    ProducerBinding, ProducerDecision, ReadBound, RegistryId, RejectionReason, RequestTerm,
-    StatisticsEntry, StatisticsSnapshot, Term, TopK, UnservedReason, UnservedTerm,
+    DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
+    ProducerDecision, ReadBound, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
+    StatisticsSnapshot, Term, TopK, UnservedReason, UnservedTerm,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
@@ -905,4 +905,215 @@ fn a_declared_candidate_domain_moves_the_plan_identity() {
         plan_against(&other_block).id(),
         "the blocks are part of the declaration, so they are part of the identity"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The derivation record: round trip, identity sensitivity, and certification
+// ---------------------------------------------------------------------------
+
+/// An absent cardinality survives the encoding as an absence.
+///
+/// "The provider measured nothing" and "the provider measured zero" are
+/// different facts about the data, and a decoder that read the first as the
+/// second would turn silence into a claim that no row matches. Both are
+/// executed, because a codec that collapsed them would still round-trip one of
+/// them correctly.
+#[test]
+fn a_plan_round_trips_an_absent_cardinality() {
+    for (label, recorded) in [
+        ("absent", None),
+        ("a measured zero", Some(0)),
+        ("a count", Some(7)),
+    ] {
+        let mut plan = baseline();
+        plan.statistics_snapshot.entries[0].cardinality = recorded;
+        plan.stratum_derivations
+            .get_mut(&stratum())
+            .expect("the baseline records a derivation")
+            .cardinality = recorded;
+
+        let decoded =
+            Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical decode");
+        assert_eq!(
+            decoded.statistics_snapshot.entries[0].cardinality, recorded,
+            "{label} survives the entry encoding"
+        );
+        assert_eq!(
+            decoded.stratum_derivations[&stratum()].cardinality,
+            recorded,
+            "{label} survives the derivation encoding"
+        );
+        assert_eq!(
+            decoded.canonical_bytes(),
+            plan.canonical_bytes(),
+            "{label}: encode, decode and encode again is byte-identical"
+        );
+    }
+}
+
+/// An absent cardinality and a measured zero are different plans.
+///
+/// The distinction is only worth drawing if it reaches the identity: two plans
+/// built against different evidence that shared one id would let a caller
+/// comparing ids be told two different reads were the same one. This was not
+/// expressible before the field could be absent.
+#[test]
+fn an_absent_cardinality_and_a_measured_zero_are_different_plans() {
+    let mut absent = baseline();
+    absent
+        .stratum_derivations
+        .get_mut(&stratum())
+        .expect("derivation")
+        .cardinality = None;
+
+    let mut measured = absent.clone();
+    measured
+        .stratum_derivations
+        .get_mut(&stratum())
+        .expect("derivation")
+        .cardinality = Some(0);
+
+    assert_ne!(
+        absent.id(),
+        measured.id(),
+        "a provider that measured nothing and one that measured no rows are \
+         different evidence, so they are different plans"
+    );
+}
+
+/// Two plans whose selectivity aggregates are equal but came from different
+/// terms are different plans.
+///
+/// The aggregate is a sum, so the total alone cannot distinguish them — which
+/// is the same silent-drift failure the derivation record exists to close, one
+/// level down. Recording the domain is what makes the move detectable.
+#[test]
+fn equal_selectivity_sums_over_different_terms_are_different_plans() {
+    let mut left = baseline();
+    {
+        let inputs = left
+            .stratum_derivations
+            .get_mut(&stratum())
+            .expect("derivation");
+        inputs.selectivity_ppm = Some(300_000);
+        inputs.selectivity_terms = vec![0];
+    }
+
+    let mut right = left.clone();
+    right
+        .stratum_derivations
+        .get_mut(&stratum())
+        .expect("derivation")
+        .selectivity_terms = vec![1];
+
+    assert_eq!(
+        left.stratum_derivations[&stratum()].selectivity_ppm,
+        right.stratum_derivations[&stratum()].selectivity_ppm,
+        "the aggregates are equal, which is the whole point"
+    );
+    assert_ne!(
+        left.id(),
+        right.id(),
+        "a provider that moved the same total onto another term measured \
+         something else, and the plan says so"
+    );
+}
+
+/// The encoding is a pure function of the entries, not of the order a caller
+/// built them in — and one subject twice is refused rather than sorted into an
+/// arbitrary winner.
+#[test]
+fn statistics_entries_encode_by_subject_and_refuse_a_duplicate() {
+    let second = StatisticsEntry {
+        subject: "http://example.org/q".to_owned(),
+        cardinality: Some(3),
+        selectivity_ppm: None,
+        selectivity_terms: Vec::new(),
+    };
+
+    let mut ascending = baseline();
+    ascending.statistics_snapshot.entries.push(second.clone());
+    let mut descending = baseline();
+    descending.statistics_snapshot.entries.insert(0, second);
+
+    assert_eq!(
+        ascending.canonical_bytes(),
+        descending.canonical_bytes(),
+        "a hand-built snapshot must not give one plan many identities"
+    );
+    assert_eq!(ascending.id(), descending.id());
+
+    // Two rows for one subject are two answers to one question, and sorting
+    // cannot pick between them.
+    let mut duplicated = baseline();
+    let repeat = duplicated.statistics_snapshot.entries[0].clone();
+    duplicated.statistics_snapshot.entries.push(repeat);
+    let error = Plan::from_canonical_bytes(&duplicated.canonical_bytes())
+        .expect_err("a repeated subject is refused");
+    assert!(
+        matches!(error, PlanError::DuplicateStatisticsSubject { .. }),
+        "refused by name, not by a decode failure: {error:?}"
+    );
+}
+
+/// A plan whose recorded depth does not follow from its recorded inputs is
+/// refused, and one that does is admitted.
+///
+/// Both halves run. A checker that refused everything would pass the first
+/// assertion alone, which is the mirror of the silent-drop bug: a refusal that
+/// looks like strictness and rejects honest plans.
+#[test]
+fn certify_refuses_a_depth_its_inputs_do_not_derive() {
+    baseline()
+        .certify()
+        .expect("the baseline's inputs derive its depth");
+
+    let mut edited = baseline();
+    edited.stratum_depths.insert(stratum(), 11);
+    match edited.certify().expect_err("an edited depth is refused") {
+        PlanError::DepthNotDerivable {
+            recorded, derived, ..
+        } => {
+            assert_eq!(recorded, 11);
+            assert_eq!(derived, 10, "the inputs still derive the honest depth");
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // A depth with no derivation, and a derivation with no depth, are different
+    // edits and are refused separately.
+    let mut orphan_depth = baseline();
+    orphan_depth.stratum_derivations.clear();
+    assert!(matches!(
+        orphan_depth.certify(),
+        Err(PlanError::DepthWithoutDerivation { .. })
+    ));
+
+    let mut orphan_derivation = baseline();
+    orphan_derivation.stratum_depths.clear();
+    assert!(matches!(
+        orphan_derivation.certify(),
+        Err(PlanError::DerivationWithoutDepth { .. })
+    ));
+}
+
+/// A version-3 document is refused by name rather than reinterpreted under the
+/// version-4 layout.
+#[test]
+fn a_version_three_document_is_refused_by_name() {
+    let mut bytes = baseline().canonical_bytes();
+    assert_eq!(
+        &bytes[0..2],
+        &PLAN_VERSION.to_le_bytes(),
+        "the version is the encoding's first field, which is why a bump moves every plan"
+    );
+    bytes[0..2].copy_from_slice(&3u16.to_le_bytes());
+
+    match Plan::from_canonical_bytes(&bytes).expect_err("version 3 is refused") {
+        PlanError::VersionMismatch { found, expected } => {
+            assert_eq!(found, 3);
+            assert_eq!(expected, PLAN_VERSION);
+        }
+        other => panic!("a stale layout must be refused by name, not by a parse error: {other:?}"),
+    }
 }

@@ -39,13 +39,13 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
-    ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream,
-    DepthInputs, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding,
-    ProducerReceipt,
-    ProducerStatus, ProtocolError, RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl,
-    ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult,
-    Statistics, StatisticsSnapshot, StratumUnit, StreamContract, StreamEnding, Term, TopK,
-    UnitError, UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    DepthInputs, ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult,
+    FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankedRow, RankedStream, RankedStreamAdapter,
+    RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness,
+    SearchError, SearchResult, Statistics, StatisticsSnapshot, StratumUnit, StreamContract,
+    StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm, compile, contribution,
+    execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,

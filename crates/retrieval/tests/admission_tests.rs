@@ -1237,6 +1237,51 @@ fn admission_rejects_stale_statistics() {
     }
 }
 
+/// **A plan naming subjects the provider answered nothing for still admits.**
+///
+/// The derivation record grew: a plan now names every stratum planning
+/// consulted, including ones the provider was silent about, and carries the
+/// inputs each depth came from. Growing what a plan *records* must not change
+/// what admission *accepts* — a refusal is a claim too, and one that rejected a
+/// plan for recording more evidence would be the mirror of the silent-drop bug,
+/// invisible because every existing test would still pass.
+///
+/// Both halves run, so the test can tell "admits everything" from "admits
+/// correctly": the plan whose evidence is unchanged is admitted, and the same
+/// plan against a moved revision is still refused by name.
+#[test]
+fn a_plan_recording_unanswered_subjects_still_admits() {
+    let registry = fixture_registry();
+    let planned = statistics("r1");
+    let plan = fresh_plan(&registry, &planned);
+
+    plan.certify()
+        .expect("the planner's own output derives its own depths");
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &planned,
+        fusion_profile: None,
+    };
+    compile(&plan, &env).expect("evidence in force admits, however much of it the plan records");
+
+    // The neighbour that must still be refused, so the acceptance above is a
+    // decision rather than the absence of one.
+    let moved = statistics("r2");
+    let moved_env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &moved,
+        fusion_profile: None,
+    };
+    assert!(
+        matches!(
+            compile(&plan, &moved_env),
+            Err(AdmissionError::StaleStatistics { .. })
+        ),
+        "a moved revision is still refused by name"
+    );
+}
+
 /// **A plan whose layout version this build does not write is refused, and the
 /// version this build does write is admitted.**
 ///
