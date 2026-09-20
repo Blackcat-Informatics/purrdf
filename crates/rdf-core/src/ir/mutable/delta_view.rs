@@ -301,11 +301,17 @@ impl DeltaDatasetView {
     ///
     /// A consumer that reads [`DatasetView::quads`] ALONE, without the
     /// statement tables, sees a narrower surface than this set describes, and for
-    /// that consumer a demotion does look like a disappearance. No such consumer
-    /// exists today — the incremental SHACL change path, the only caller, reads the
-    /// projected union — and one introduced later needs this stream extended with
-    /// the reclassified rows rather than a filter downstream, because a change set
-    /// that is short by a row cannot be told from a graph that did not change.
+    /// that consumer a demotion does look like a disappearance. The only caller
+    /// today is the incremental SHACL change path, and it reads the projected
+    /// union — not by happy accident but because it REFUSES to expand a change
+    /// otherwise: its data view carries a statement-projection predicate and its
+    /// expansion entry point hard-fails a delta binding that answers `false`,
+    /// naming the projecting constructor to use instead. That guard is what keeps
+    /// this paragraph true, since the narrow view is constructible through a
+    /// public argument. A consumer introduced later that genuinely wants the
+    /// narrow surface needs this stream extended with the reclassified rows rather
+    /// than a filter downstream, because a change set that is short by a row
+    /// cannot be told from a graph that did not change.
     /// `changed_quads_names_every_row_the_rdf12_overlay_moves_on_or_off_the_surface`
     /// holds the line as stated.
     pub fn changed_quads(&self) -> impl Iterator<Item = QuadIds<DeltaViewId>> + '_ {

@@ -231,6 +231,14 @@ impl ShaclDatasetView {
     }
 
     /// Read an admitted mutation snapshot, retaining its shared immutable base.
+    /// `projected` selects SHACL's graph-union and statement projection.
+    ///
+    /// An unprojected delta view is a legitimate graph-scoped read of the
+    /// snapshot, but it is NOT a carrier the incremental change path can be sound
+    /// over: that path's guarantee is stated over the projected union, so
+    /// `PreparedValidator::affected_focus_node_ids` refuses a binding whose
+    /// [`Self::statements_projected`] answers `false`. Use
+    /// `PreparedShapes::bind_delta_with_shapes_graph` for the change path.
     ///
     /// # Errors
     /// Refuses a validation-local handle mapping exceeding the supplied limits.
@@ -241,6 +249,21 @@ impl ShaclDatasetView {
     ) -> Result<Self, String> {
         let dense = Dense::new(source, |source| source.term_ids().collect(), limits)?;
         Ok(Self::new(Source::Delta(dense), projected))
+    }
+
+    /// Whether reads through this view union the RDF 1.2 statement tables onto
+    /// the plain stream — SHACL's statement projection.
+    ///
+    /// This is a property of the view, not of the carrier: a reifier or
+    /// annotation row is READ here when this answers `true`, and is invisible to
+    /// [`Self::quads_for_pattern_with_plan`] when it answers `false`. Exposed
+    /// because it decides how wide this view's read surface is, and a consumer
+    /// whose correctness argument is stated over that surface — the incremental
+    /// change path is the one in this crate — has to be able to CHECK it rather
+    /// than assume the constructor it was handed chose the wide one.
+    #[must_use]
+    pub const fn statements_projected(&self) -> bool {
+        self.statements_projected
     }
 
     pub(crate) fn with_statement_projection(mut self) -> Self {

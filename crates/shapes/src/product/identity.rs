@@ -1776,6 +1776,12 @@ mod tests {
     /// Every one of those is a semantic regression in the analysis a prepared
     /// product carries, and every product ever minted disagrees with this build
     /// about it. Diagnose the walk. Do not re-pin the constant.
+    ///
+    /// The value is not merely whatever this build happened to produce when the
+    /// constant was written. It was checked out of the tree as it stood BEFORE
+    /// the walk was rewritten, built there, and computed: that build emits this
+    /// same hex. So the constant records what the walk produced beforehand, and
+    /// the rewrite is measured against it rather than described as equal to it.
     #[test]
     fn class_catalog_digest_matches_committed_constant() {
         let digest = class_catalog_digest(&catalog_of(&shapes_of(PLAIN_SHAPES)));

@@ -49,6 +49,12 @@
 //! [`a_shapes_graph_of_forward_paths_stays_bounded`] and
 //! [`a_sparql_constraint_reports_an_unreadable_footprint`].
 //!
+//! The expansion's precondition on the READ SURFACE carries its own pair, for the
+//! same reason: [`expanding_a_change_on_an_unprojected_delta_binding_is_refused`]
+//! is the refusal, and
+//! [`expanding_a_change_on_a_projected_delta_binding_still_answers`] is the
+//! neighbouring case a guard that refused every delta binding would break.
+//!
 //! Fixture IRIs are under `example.org`: PurRDF mints no vocabulary IRIs.
 
 #![allow(clippy::too_many_lines)]
@@ -958,9 +964,16 @@ ex:ParentageShape a sh:NodeShape ;
 /// the same predicate: it changed tables, it did not leave the graph, and no verdict
 /// can move because of it. This test asserts BOTH halves — the demotion really
 /// happens, and validation really is unmoved by it — because either half alone is
-/// consistent with a silent drop. If the statement projection is ever switched off
-/// for the change path, the second half fails here and this seam must be reopened:
-/// the change set would then owe its consumer the demoted row itself.
+/// consistent with a silent drop.
+///
+/// The statement projection is therefore load-bearing, and it is ENFORCED rather
+/// than assumed: `ShaclDatasetView::delta` takes the projection as a public
+/// argument, so an unprojected delta binding is constructible through
+/// `PreparedShapes::bind_view`, and `affected_focus_node_ids` refuses exactly that
+/// binding — see
+/// `expanding_a_change_on_an_unprojected_delta_binding_is_refused`. If that guard
+/// is ever removed, this seam must be reopened: the change set would then owe its
+/// consumer the demoted row itself.
 #[test]
 fn a_reclassifying_delta_moves_no_verdict_because_statements_are_projected() {
     use purrdf::prelude::{DatasetView, GraphMatch};
@@ -1227,6 +1240,143 @@ ex:PersonShape a sh:NodeShape ;
     assert!(
         error.contains("not bound to a mutation snapshot"),
         "the refusal must name the missing precondition, got {error:?}"
+    );
+}
+
+// ── The read surface the change set is stated over ──────────────────────────────
+
+/// The shapes graph both halves of the projection pair are bound against.
+const PROJECTION_PAIR_SHAPES: &str = r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+";
+
+/// A base, a one-row mutation that gains `ex:mallory` a violation, and the shapes
+/// both halves of the projection pair share. The snapshot is the SAME value in both
+/// halves, so the only thing that differs between them is the view mode.
+fn projection_pair_fixture() -> (PreparedShapes, Arc<purrdf::ir::DeltaDatasetView>) {
+    let parsed = Arc::new(
+        parse_shapes(&format!("{PREFIXES}{PROJECTION_PAIR_SHAPES}"), None)
+            .expect("fixture shapes must parse"),
+    );
+    let base = parse_ntriples_to_dataset(TYPED_ALICE).expect("fixture data must parse");
+    let mut mutation = MutableDataset::new(base);
+    assert!(
+        mutation
+            .insert(quad(("mallory", RDF_TYPE, Obj::Ex("Person"))))
+            .expect("insert")
+    );
+    let snapshot = Arc::new(mutation.snapshot_view().expect("snapshot"));
+    (PreparedShapes::new(parsed), snapshot)
+}
+
+/// REFUSED: a delta binding that does not project the RDF 1.2 statement layer
+/// cannot be expanded, because the change set is not stated over the surface it
+/// reads.
+///
+/// `ShaclDatasetView::delta` takes the projection as a public argument and
+/// `PreparedShapes::bind_view` applies none of its own, so composing the two public
+/// functions yields a delta-backed validator reading the plain table ALONE. The
+/// change set names every row that joins or leaves the union of the plain and both
+/// statement tables; it deliberately does NOT name a row the overlay merely
+/// reclassifies, because a reclassified row never leaves that union. Read the plain
+/// table alone and a demotion IS a disappearance, so the expansion would be short by
+/// exactly the focus nodes that row moves — and a short expansion reports `conforms`
+/// about a node nobody re-checked.
+///
+/// The binding is refused HERE rather than silently under-approximating, and the
+/// refusal is scoped to the expansion: this same binding still validates, because
+/// validation promises only to check the nodes it is handed under the view's own
+/// semantics. That scoping is asserted below, and it is what keeps the narrow view a
+/// legitimate mode rather than a broken one.
+#[test]
+fn expanding_a_change_on_an_unprojected_delta_binding_is_refused() {
+    use purrdf_shapes::data_view::ShaclDatasetView;
+
+    let (prepared, snapshot) = projection_pair_fixture();
+    let view = Arc::new(
+        ShaclDatasetView::delta(Arc::clone(&snapshot), false, ViewLimits::default())
+            .expect("an unprojected delta view is a legitimate carrier and must build"),
+    );
+    // Both directions of the predicate, on the same carrier: it reads the mode it
+    // was constructed with rather than answering a constant, which is the only
+    // reason a guard written on it means anything.
+    assert!(
+        !view.statements_projected(),
+        "the fixture is only about this defect if the view really reads the narrow surface"
+    );
+    assert!(
+        ShaclDatasetView::delta(Arc::clone(&snapshot), true, ViewLimits::default())
+            .expect("a projected delta view over the same snapshot must build")
+            .statements_projected(),
+        "the same carrier constructed projected must answer the other way, or the predicate is \
+         not reporting the view mode at all"
+    );
+    let validator = prepared
+        .bind_view(Arc::clone(&view))
+        .expect("binding an unprojected delta view is legal; only EXPANDING it is not");
+
+    let error = validator
+        .affected_focus_node_ids(&snapshot)
+        .expect_err("a delta binding that reads the plain table alone must be refused");
+    assert!(
+        error.contains("does not project the RDF 1.2 statement layer"),
+        "the refusal must name the precondition that failed, got {error:?}"
+    );
+    assert!(
+        error.contains("bind_delta_with_shapes_graph"),
+        "the refusal must name the constructor that satisfies the precondition, got {error:?}"
+    );
+
+    // The refusal is the EXPANSION's, not the binding's: the narrow view is still a
+    // view, and a guard that took validation down with it would have refused a mode
+    // this crate deliberately supports.
+    validator
+        .validate()
+        .expect("an unprojected delta binding still validates under its own read semantics");
+}
+
+/// ACCEPTED: the projecting constructor still binds, still expands, and still
+/// returns the focus node the change moved.
+///
+/// The neighbouring case to the refusal above, executed because a guard that refused
+/// every delta binding would pass that test and destroy incremental validation. Both
+/// halves use the SAME snapshot and the SAME shapes graph, so the only difference
+/// between a refusal and an answer is the read surface — which is precisely the
+/// distinction the guard claims to draw.
+#[test]
+fn expanding_a_change_on_a_projected_delta_binding_still_answers() {
+    let (prepared, snapshot) = projection_pair_fixture();
+    let validator = prepared
+        .bind_delta_with_shapes_graph(Arc::clone(&snapshot), None, ViewLimits::default())
+        .expect("delta bind");
+
+    // This is also the tripwire on the constructor itself: `bind_delta_with_shapes_graph`
+    // builds its core view projected, and if that is ever switched off the guard turns
+    // this `expect` into a failure rather than letting the change path go quietly
+    // unsound.
+    let expansion = validator
+        .affected_focus_node_ids(&snapshot)
+        .expect("the projecting constructor's binding must expand");
+    let ids: BTreeSet<TermId> = expansion
+        .ids()
+        .expect("this shapes graph is readable, so the expansion must be bounded")
+        .iter()
+        .copied()
+        .map(FocusId::term_id)
+        .collect();
+
+    // Non-vacuity: the node whose verdict the change actually moved is IN the answer,
+    // so the guard is not merely letting an empty set through.
+    let mallory = validator
+        .term_id(&ex_term("mallory"))
+        .expect("the delta interned ex:mallory")
+        .term_id();
+    assert!(
+        ids.contains(&mallory),
+        "ex:mallory gained a violation, so the expansion owes the caller that focus node; got \
+         {ids:?}"
     );
 }
 

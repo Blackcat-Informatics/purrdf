@@ -1340,6 +1340,14 @@ impl PreparedShapes {
 
     /// Bind a complete immutable SHACL carrier, retaining its exact identity.
     ///
+    /// The view's own read semantics are honoured as given, including a view
+    /// built without graph union or without statement projection. That makes this
+    /// the general door and [`Self::bind_delta_with_shapes_graph`] the specific
+    /// one: the incremental change path needs the projected surface its soundness
+    /// argument is written over, so a delta view bound here without statement
+    /// projection validates normally but is refused by
+    /// [`PreparedValidator::affected_focus_node_ids`].
+    ///
     /// # Errors
     /// Returns an error when a target cannot be evaluated.
     pub fn bind_view(&self, view: Arc<ShaclDatasetView>) -> Result<PreparedValidator, String> {
@@ -1832,6 +1840,22 @@ impl PreparedValidator {
     /// would be perfectly valid indices into another dataset's table and would
     /// name the wrong nodes without any lookup ever failing.
     ///
+    /// The binding must ALSO read the RDF 1.2 statement projection, and that is
+    /// checked here too rather than left to the constructor a caller happened to
+    /// reach for. [`ShaclDatasetView::delta`] is public and takes the projection
+    /// as an argument, so a delta-backed binding that reads the plain table alone
+    /// is reachable through [`PreparedShapes::bind_view`]. The change set is
+    /// stated over the whole RDF surface — plain rows and both statement tables —
+    /// so on a narrower view a row the overlay demotes off the plain table leaves
+    /// the reads while appearing in no change stream, and this answer would be
+    /// short by exactly the focus nodes that row moves. Refused, because a short
+    /// answer here cannot be told from a clean bill of health.
+    /// [`Self::validate_focus_node_ids`] carries no such check and needs none: it
+    /// promises nothing about completeness, it validates the nodes it is handed
+    /// under whatever read surface the binding has — the same surface
+    /// [`Self::validate`] would use — and the only focus set that could be short
+    /// is one minted here, which now cannot be minted at all.
+    ///
     /// # What it guarantees
     ///
     /// The answer is a SUPERSET of the focus nodes whose validation outcome the
@@ -1862,9 +1886,11 @@ impl PreparedValidator {
     ///
     /// # Errors
     ///
-    /// Returns an error when `delta` is not the snapshot this binding reads, and
-    /// when a changed row names a term this binding's own view does not map —
-    /// which is a defect in this crate rather than in a caller's data.
+    /// Returns an error when this validator is not bound to a mutation snapshot,
+    /// when that binding does not project the RDF 1.2 statement layer, when
+    /// `delta` is not the snapshot this binding reads, and when a changed row
+    /// names a term this binding's own view does not map — which is a defect in
+    /// this crate rather than in a caller's data.
     pub fn affected_focus_node_ids(
         &self,
         delta: &::purrdf::ir::DeltaDatasetView,
@@ -1875,6 +1901,27 @@ impl PreparedValidator {
              has no change to expand; bind through PreparedShapes::bind_delta_with_shapes_graph"
                 .to_owned()
         })?;
+        // The third precondition, and the one that is a property of the BINDING
+        // rather than of the argument: the change set names every row that joins
+        // or leaves the RDF 1.2 surface — plain rows and both statement tables
+        // together — so an expansion derived from it is a superset only for a
+        // reader of that same surface. A delta view built without statement
+        // projection reads the plain table alone, and the overlay demotes rows
+        // off that table without touching the surface (`base_quad_is_ordinary`),
+        // so such a row leaves this view's reads while appearing in no added and
+        // no suppressed stream. The expansion would be short by exactly it, and a
+        // short answer here is indistinguishable from "nothing changed".
+        if !core.statements_projected() {
+            return Err(
+                "affected_focus_node_ids: this validator is bound to a mutation snapshot through a \
+                 view that does not project the RDF 1.2 statement layer, so it reads the plain \
+                 table alone; a row the overlay demotes onto the annotation table would leave that \
+                 read surface without appearing in the change set, and the expansion would silently \
+                 omit the focus nodes it moves; bind through \
+                 PreparedShapes::bind_delta_with_shapes_graph, which projects statements"
+                    .to_owned(),
+            );
+        }
         if !std::ptr::eq(Arc::as_ptr(bound), std::ptr::from_ref(delta)) {
             return Err(
                 "affected_focus_node_ids: the supplied mutation snapshot is not the one this \
