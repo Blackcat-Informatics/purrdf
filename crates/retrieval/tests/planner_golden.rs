@@ -14,8 +14,8 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DepthCause, DepthInputs, Iri, Metric, Plan, PlanError, RankFidelity, RegistryId,
-    RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm,
-    depth_cause, depth_from, plan,
+    RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, TopK, UnservedReason,
+    UnservedTerm, depth_cause, depth_from, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
@@ -2651,4 +2651,269 @@ fn every_stratum_records_the_row_bound_its_own_producer_declared() {
     planned
         .certify()
         .expect("each depth follows from the inputs recorded beside it");
+}
+
+// ---------------------------------------------------------------------------
+// The request's licensed prefix, through the planner
+// ---------------------------------------------------------------------------
+
+/// The stratum the licensed-prefix fixtures below plan over.
+const PREFIX_STRATUM: &str = "stratum/prefix";
+
+/// A registry of one producer at [`PREFIX_STRATUM`], declaring `declared` rows
+/// per invocation under `duplicates`.
+///
+/// One stratum, so the disjointness premise the merge argument needs is vacuous
+/// and the duplicate policy alone decides whether the request's bound licenses a
+/// prefix. That makes the policy the fixture's single switch: `Unique` licenses
+/// it, `Allowed` does not, and nothing else about the declaration changes
+/// between the two.
+///
+/// The accepted pattern is the placing one rather than the catch-all, because a
+/// selectivity bounds a stratum only where that stratum's producer actually
+/// **receives** the term — a producer matched by `TermKind::Any` declares no
+/// placement and so is handed nothing, which would leave the selectivity leg of
+/// the derivation out of the fixture entirely.
+fn prefix_registry(declared: u64, duplicates: DuplicatePolicy) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/prefix"),
+        relation(declared),
+        RankedDeclaration {
+            duplicates,
+            ..ranked(
+                &ex(PREFIX_STRATUM),
+                vec![TermPattern {
+                    kind: TermKind::Literal,
+                    datatype: None,
+                    language: Some("en".to_owned()),
+                    predicate: Some(ex("body")),
+                }],
+                false,
+            )
+        },
+    );
+    registry
+}
+
+/// A provider reporting `cardinality` rows for [`PREFIX_STRATUM`] and a
+/// selectivity of `ppm` for the lexical term over it.
+fn prefix_statistics(cardinality: u64, ppm: u64) -> MockStatistics {
+    let mut cardinalities = BTreeMap::new();
+    cardinalities.insert(iri(&ex(PREFIX_STRATUM)), cardinality);
+    MockStatistics {
+        source: "prefix-statistics".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities,
+        selectivities: vec![(iri(&ex(PREFIX_STRATUM)), lexical_term(), ppm)],
+    }
+}
+
+/// A plan the real entry point produced for a request at `bound` over that
+/// fixture, with its depth, its recorded prefix and its cause read off it.
+fn prefix_plan(bound: Option<u32>, duplicates: DuplicatePolicy) -> (u32, Option<u64>, DepthCause) {
+    let terms = vec![lexical_term()];
+    let request = match bound {
+        Some(rows) => RetrievalRequest::bounded(terms, TopK::new(rows as usize)),
+        None => RetrievalRequest::complete(terms),
+    };
+    // Declared 100, measured 50, half of two-fifths of that: every leg of the
+    // derivation lands on its own number.
+    let planned = plan(
+        &request,
+        &prefix_registry(100, duplicates),
+        &prefix_statistics(50, 400_000),
+    )
+    .expect("the fixture plans");
+    planned
+        .certify()
+        .expect("the recorded depth follows from the recorded inputs");
+    let stratum = iri(&ex(PREFIX_STRATUM));
+    let inputs = planned
+        .stratum_derivations
+        .get(&stratum)
+        .expect("the stratum records its derivation");
+    assert_eq!(
+        inputs.declared, 100,
+        "the registry's declaration reaches the record intact"
+    );
+    assert_eq!(
+        inputs.cardinality,
+        Some(50),
+        "and so does the provider's measurement"
+    );
+    assert_eq!(inputs.selectivity_ppm, Some(400_000));
+    assert_eq!(inputs.selectivity_terms, vec![0]);
+    (
+        planned.stratum_depths[&stratum],
+        inputs.licensed_prefix,
+        planned
+            .explain_depth(&stratum)
+            .expect("the stratum records a derivation to explain"),
+    )
+}
+
+/// A bounded request's licensed prefix reaches a plan the PLANNER produced, is
+/// recorded there, and is named as the leg that bound the depth.
+///
+/// # Why this is a planner test and not another `depth_from` case
+///
+/// The arithmetic was already covered, by cases that hand-build a `DepthInputs`
+/// and call [`depth_cause`] on it. What was not covered is the road to it: no
+/// plan this crate's planner had ever produced recorded a licensed prefix at
+/// all — every golden carries a null one — so the leg the recorded derivation
+/// exists to explain had never executed end to end. An engine proved correct
+/// behind a production path nothing exercises is the same silence as a depth
+/// nothing checks.
+///
+/// # The numbers are mutually distinguishable, on purpose
+///
+/// Four legs, four different numbers: the registry declares **100** rows, the
+/// provider measures **50**, the selectivity of 400_000 parts per million
+/// narrows that to **20**, and the request licenses **7**. So a planner that
+/// dropped the prefix records 20 and fails on the number; one that read the
+/// prefix where the cardinality goes records 7 as a measurement and fails on
+/// that; one that applied the prefix before the selectivity would scale 7 down
+/// to 3 and fail on both.
+#[test]
+fn a_bounded_request_records_its_licensed_prefix_and_names_it_as_the_cause() {
+    let (depth, prefix, cause) = prefix_plan(Some(7), DuplicatePolicy::Unique);
+    assert_eq!(
+        prefix,
+        Some(7),
+        "the request's bound is licensed by the declaration and is recorded as such"
+    );
+    assert_eq!(
+        depth, 7,
+        "and it is the narrowest input, so it is the depth — not the 20 the \
+         selectivity allowed, nor the 50 the provider measured, nor the 100 the \
+         registry declared"
+    );
+    assert_eq!(cause, DepthCause::LicensedPrefix);
+
+    // THE CONTROL, same registry and same statistics: a request that licenses
+    // nothing reads exactly as deep as the selectivity allows. A planner that
+    // ignored the prefix would record this row's numbers for the row above.
+    let (complete_depth, complete_prefix, complete_cause) =
+        prefix_plan(None, DuplicatePolicy::Unique);
+    assert_eq!(
+        complete_prefix, None,
+        "a complete request licenses no narrowing, so there is no prefix to record"
+    );
+    assert_eq!(complete_depth, 20, "the selectivity's own number");
+    assert_eq!(complete_cause, DepthCause::Selectivity);
+
+    // A prefix WIDER than the derivation is still recorded, and still is not the
+    // cause. The record is of what the request licensed, never of what happened
+    // to bind — a plan recording only the binding input could not be replayed
+    // against a provider whose statistics had moved.
+    let (wide_depth, wide_prefix, wide_cause) = prefix_plan(Some(30), DuplicatePolicy::Unique);
+    assert_eq!(
+        wide_prefix,
+        Some(30),
+        "recorded because the request licensed it, not because it bound anything"
+    );
+    assert_eq!(
+        wide_depth, 20,
+        "the selectivity is still the narrowest input"
+    );
+    assert_eq!(wide_cause, DepthCause::Selectivity);
+
+    // And the case where the declaration does NOT license the bound: a producer
+    // that may repeat a candidate makes a count of ranks something other than a
+    // count of candidates, so the request's bound narrows nothing and the plan
+    // records no prefix at all. Same request, same statistics, one changed
+    // declaration — so `Some(7)` above is the declaration's licence and not an
+    // unconditional echo of the request.
+    let (repeating_depth, repeating_prefix, repeating_cause) =
+        prefix_plan(Some(7), DuplicatePolicy::Allowed);
+    assert_eq!(
+        repeating_prefix, None,
+        "the bound was asked for and not licensed, which is an absence and not a 7"
+    );
+    assert_eq!(repeating_depth, 20);
+    assert_eq!(repeating_cause, DepthCause::Selectivity);
+}
+
+/// A depth the read ceiling cut is reachable from a request, and the plan the
+/// planner produced names the ceiling as its cause.
+///
+/// The ceiling arrives through the DECLARATION here, and that is the only road a
+/// request has to it: the licensed prefix cannot reach it, because a bound above
+/// the ceiling is refused at the boundary by name
+/// ([`PlanError::ReadBoundBeyondDepthRange`]) rather than being planned and then
+/// clamped. The neighbour below proves that refusal is exactly one row wide — a
+/// bound AT the ceiling plans, and is named as the prefix it is.
+#[test]
+fn a_declaration_deeper_than_a_read_can_reach_is_explained_as_the_ceiling() {
+    let ceiling = u32::MAX - 1;
+    let planned_at = |declared: u64| {
+        let planned = plan(
+            &lexical_request(),
+            &prefix_registry(declared, DuplicatePolicy::Unique),
+            &no_stratum_cardinality(),
+        )
+        .expect("a declaration larger than a read can reach is planned, not refused");
+        planned.certify().expect("and it certifies");
+        let stratum = iri(&ex(PREFIX_STRATUM));
+        (
+            planned.stratum_depths[&stratum],
+            planned
+                .explain_depth(&stratum)
+                .expect("the stratum records a derivation"),
+        )
+    };
+
+    // One row past the deepest a read can go.
+    assert_eq!(
+        planned_at(u64::from(u32::MAX)),
+        (ceiling, DepthCause::ReadCeiling),
+        "the declaration named one row more than the read can reach, so the \
+         ceiling is what fixed the depth"
+    );
+    // The valid neighbour: the deepest declaration a read serves whole is served
+    // whole, and the declaration is still what bound it. A fix that answered
+    // `ReadCeiling` here would be over-attribution, which is the mirror of the
+    // silence this test exists for.
+    assert_eq!(
+        planned_at(u64::from(ceiling)),
+        (ceiling, DepthCause::Declaration),
+        "nothing cut this one, so the declaration is the cause even though the \
+         depth is the same number"
+    );
+
+    // The prefix leg cannot reach the ceiling, because the bound that would is
+    // refused at the boundary. Both sides of that refusal, one row apart.
+    let bounded_at = |rows: usize| {
+        plan(
+            &RetrievalRequest::bounded(vec![lexical_term()], TopK::new(rows)),
+            &prefix_registry(u64::MAX, DuplicatePolicy::Unique),
+            &no_stratum_cardinality(),
+        )
+    };
+    match bounded_at(ceiling as usize + 1) {
+        Err(PlanError::ReadBoundBeyondDepthRange {
+            requested,
+            ceiling: reported,
+        }) => {
+            assert_eq!(requested, ceiling as usize + 1);
+            assert_eq!(reported, u64::from(ceiling));
+        }
+        other => panic!("a bound past the ceiling is refused by name: {other:?}"),
+    }
+    let at_ceiling = bounded_at(ceiling as usize).expect("a bound AT the ceiling plans");
+    at_ceiling.certify().expect("and certifies");
+    let stratum = iri(&ex(PREFIX_STRATUM));
+    assert_eq!(
+        at_ceiling.stratum_derivations[&stratum].licensed_prefix,
+        Some(u64::from(ceiling)),
+        "the deepest bound a request can ask for is licensed and recorded"
+    );
+    assert_eq!(at_ceiling.stratum_depths[&stratum], ceiling);
+    assert_eq!(
+        at_ceiling.explain_depth(&stratum),
+        Some(DepthCause::LicensedPrefix),
+        "an unbounded declaration cut to the deepest readable depth by the \
+         REQUEST is the request's narrowing, not the ceiling's"
+    );
 }
