@@ -502,6 +502,7 @@ def scrape_candidates(
         declared,
         {prefixed: tuple(values) for prefixed, values in by_type.items()},
         "This is a FRESH scrape, so the disagreement is with the dataset itself.",
+        "scraped",
     )
 
     # Canonical order, by UTF-8 bytes. The selection must not depend on the order
@@ -524,18 +525,28 @@ def write_candidates(candidates: Candidates, path: Path) -> None:
 
 
 def check_against_census(
-    declared: dict[str, int], by_type: dict[str, tuple[str, ...]], remedy: str
+    declared: dict[str, int],
+    by_type: dict[str, tuple[str, ...]],
+    remedy: str,
+    observed_as: str,
 ) -> None:
     """Refuse unless every declared type's candidate count matches the census.
 
     ONE implementation, called from both the fresh scrape and the cache-hit path.
     They were two, with two messages that had already drifted apart, and two
     copies of a rule are two rules -- the drift this lane's shared law file was
-    created to end. *remedy* is the only thing that genuinely differs: what the
-    operator should do about it, which is not the same advice in both places.
+    created to end.
+
+    Two things genuinely differ between the call sites and are therefore
+    parameters rather than a second copy: *remedy*, the advice, which is not the
+    same for a fresh scrape as for a cache that may have been edited; and
+    *observed_as*, the verb for where the counts came from. "scraped" is a lie on
+    the cache path, where nothing was scraped, and "have" throws away the one word
+    that tells an operator whether to suspect the dataset or the cache.
     """
     problems = [
-        f"    {prefixed}: have {len(by_type.get(prefixed, ()))}, census declares {expected}"
+        f"    {prefixed}: {observed_as} {len(by_type.get(prefixed, ()))}, "
+        f"census declares {expected}"
         for prefixed, expected in sorted(declared.items())
         if len(by_type.get(prefixed, ())) != expected
     ]
@@ -1540,6 +1551,7 @@ def main() -> int:
         declared,
         candidates.by_type,
         f"Delete {args.candidates} to force a fresh scrape.",
+        "have",
     )
 
     queries = build(templates, args.seed, candidates, namespaces)
