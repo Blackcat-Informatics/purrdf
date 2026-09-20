@@ -678,7 +678,15 @@ fn report(result: &SearchResult) {
     println!("\nmay these scores be read as values?");
     match &result.trailer.exactness {
         ScoreExactness::Exact => {
-            println!("  yes: every stratum was exhaustive and whole");
+            // The narrower true claim, and deliberately not "every index was
+            // whole": a producer attests nothing about wholeness unless it is
+            // short, so silence is what most of them offer, and reading `Exact`
+            // as a certificate would put words in the mouth of every producer
+            // that stayed silent.
+            println!(
+                "  yes: no stratum in this fusion declared itself degraded on either axis, \
+                 so every score is the whole sum of the contributions that were due"
+            );
         }
         ScoreExactness::Estimated {
             deficit,

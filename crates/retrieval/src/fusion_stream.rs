@@ -429,9 +429,10 @@ pub struct FusedRow {
     /// one is the very fault this protocol exists to prevent — a bound on the
     /// read silently becoming a value. Two fields say which reading applies.
     /// [`FusionTrailer::exactness`] says it once for the answer:
-    /// [`ScoreExactness::Exact`] when every stratum was exhaustive and whole,
-    /// [`ScoreExactness::Estimated`] naming the responsible strata on each side
-    /// otherwise. [`Self::interval`] says it for this row, with numbers. This
+    /// [`ScoreExactness::Exact`] when no stratum declared itself degraded on
+    /// either axis — the narrower true thing, and not a certificate that every
+    /// index was whole — [`ScoreExactness::Estimated`] naming the responsible
+    /// strata on each side otherwise. [`Self::interval`] says it for this row, with numbers. This
     /// is the same refusal to overstate that the row list itself already makes:
     /// a returned row is never a completeness claim, and the trailer is where
     /// completeness is asserted.
