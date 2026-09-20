@@ -142,6 +142,86 @@ pub enum PlanError {
         /// The number of unconsumed bytes.
         extra: usize,
     },
+
+    /// A producer that placement accepted declares no row bound at the mode it
+    /// will be invoked under.
+    ///
+    /// Unreachable against a registry that did not move under the plan, and
+    /// refused rather than defaulted for exactly that reason.
+    /// [`place`](crate::matching) admits an invocation only when some declared
+    /// mode subsumes it, and the declared row bound is read by filtering on that
+    /// same predicate — so a placement that succeeded has already proved the
+    /// filter is non-empty.
+    ///
+    /// The alternative was a default, and every available default is a lie about
+    /// a number the depth is derived from: zero declares an empty relation and
+    /// floors the read to a single probing row, while
+    /// [`u64::MAX`] declares an unbounded one. A missing declaration can refuse
+    /// nothing and a zero is a measurement, so the absence is reported here
+    /// rather than resolved into either.
+    #[error(
+        "producer {producer} was placed on stratum {stratum} but declares no row bound at the mode it is invoked under; the registry moved under the plan"
+    )]
+    UndeclaredRowBound {
+        /// The stratum whose declaration went missing.
+        stratum: String,
+        /// The producer that was placed without one.
+        producer: String,
+    },
+
+    /// A statistics snapshot named one subject twice.
+    ///
+    /// The snapshot is a record of what a provider reported about a subject, so
+    /// two rows for one subject are two answers to one question with nothing
+    /// saying which was used. The encoding sorts by subject, so a duplicate is
+    /// also the one shape under which sorting does not make the bytes a pure
+    /// function of the entries.
+    #[error("statistics snapshot names subject {subject} more than once")]
+    DuplicateStatisticsSubject {
+        /// The repeated subject, as its recorded text.
+        subject: String,
+    },
+
+    /// A recorded depth is not the depth its own recorded inputs derive.
+    ///
+    /// Raised only by [`Plan::certify`](crate::Plan::certify). A plan records
+    /// every input its depths were derived from precisely so this is a checkable
+    /// claim rather than an asserted one; a mismatch means the plan was edited,
+    /// forged, or written by a build whose arithmetic differed, and in all three
+    /// cases the depth beside the inputs describes a read the inputs do not
+    /// license.
+    #[error(
+        "stratum {stratum} records depth {recorded}, but its recorded inputs derive depth {derived}"
+    )]
+    DepthNotDerivable {
+        /// The stratum whose depth does not follow from its inputs.
+        stratum: String,
+        /// The depth the plan records.
+        recorded: u32,
+        /// The depth the plan's own recorded inputs derive.
+        derived: u32,
+    },
+
+    /// A stratum carries a recorded depth with no recorded derivation.
+    ///
+    /// An unrecorded input cannot be checked, so a depth without its inputs is
+    /// exactly the unverifiable claim the derivation record exists to abolish.
+    #[error("stratum {stratum} records a depth with no recorded derivation")]
+    DepthWithoutDerivation {
+        /// The stratum whose derivation is missing.
+        stratum: String,
+    },
+
+    /// A stratum carries a recorded derivation with no recorded depth.
+    ///
+    /// The mirror of [`DepthWithoutDerivation`](Self::DepthWithoutDerivation),
+    /// and refused separately because it is a different edit: inputs for a
+    /// stratum the plan does not read at all.
+    #[error("stratum {stratum} records a derivation with no recorded depth")]
+    DerivationWithoutDepth {
+        /// The stratum whose depth is missing.
+        stratum: String,
+    },
 }
 
 /// A failure raised while building a profile or fusing ranked streams.

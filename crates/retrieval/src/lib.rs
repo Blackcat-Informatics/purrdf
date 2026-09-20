@@ -413,10 +413,10 @@ pub use id::{
 };
 pub use iri::{Iri, Term};
 pub use plan::{
-    Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
-    StatisticsSnapshot, UnservedReason, UnservedTerm,
+    DepthCause, DepthInputs, Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason,
+    StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
-pub use planner::plan;
+pub use planner::{depth_cause, depth_from, plan};
 pub use ranked_stream::{
     ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract,
 };
