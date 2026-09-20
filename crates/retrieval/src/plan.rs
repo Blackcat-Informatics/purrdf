@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use purrdf_sparql_eval::RegistryId;
 use purrdf_text::Fixed;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::canonical::{Reader, Writer};
 use crate::error::{PlanError, StatisticsDimension};
@@ -414,6 +414,122 @@ pub struct StatisticsEntry {
     pub selectivity_terms: Vec<u32>,
 }
 
+/// The entries of a [`StatisticsSnapshot`]: ascending by subject, each subject
+/// named once.
+///
+/// # The order is the type's law, not the encoder's
+///
+/// A plan's identity is a digest of its canonical bytes, and [`Plan`] documents
+/// that two plans are equal iff their canonical bytes are equal iff their ids
+/// are. A bare `Vec` cannot hold that up: comparing two snapshots compares their
+/// vectors position by position, so a snapshot built descending is *unequal* to
+/// its ascending twin — while an encoder that sorted before writing would give
+/// the two identical bytes and therefore one identity. That is the biconditional
+/// broken in the middle, and it is broken for exactly as long as the ordering
+/// law lives in the encoder rather than in the value.
+///
+/// So the law lives here, where [`Plan::stratum_derivations`] already keeps its
+/// own: order is established on construction, every read is of an ordered
+/// sequence, and the encoder writes what it is given. Two constructions from the
+/// same entries in any order are the same value, byte for byte and field for
+/// field.
+///
+/// # Order is established; a duplicate is refused
+///
+/// The two are treated differently because they carry different amounts of
+/// information. The order a caller happened to build its entries in says nothing
+/// about the data — the snapshot is a set of rows keyed by subject, so
+/// establishing the ascending order loses nothing a reader could have wanted.
+///
+/// A repeated subject is not like that. Two rows for one subject are two answers
+/// to one question, and nothing in the value says which the plan was planned
+/// against: keeping the first, the last, or the wider of them would be inventing
+/// a rule the data does not carry. It is refused by name with
+/// [`PlanError::DuplicateStatisticsSubject`], on every path in — including
+/// serde's, so a hand-written JSON document is held to the same law as a caller
+/// with a `Vec`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "Vec<StatisticsEntry>")]
+pub struct StatisticsEntries(Vec<StatisticsEntry>);
+
+impl StatisticsEntries {
+    /// The entries of `entries`, ordered ascending by subject.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::DuplicateStatisticsSubject`] when two entries name one
+    /// subject.
+    pub fn new(mut entries: Vec<StatisticsEntry>) -> Result<Self, PlanError> {
+        entries.sort_unstable_by(|left, right| left.subject.cmp(&right.subject));
+        if let Some(pair) = entries
+            .windows(2)
+            .find(|pair| pair[0].subject == pair[1].subject)
+        {
+            return Err(PlanError::DuplicateStatisticsSubject {
+                subject: pair[0].subject.clone(),
+            });
+        }
+        Ok(Self(entries))
+    }
+
+    /// The row this snapshot records for `subject`, or `None` when it records
+    /// none.
+    ///
+    /// A binary search rather than a scan, which the ascending order makes
+    /// exact. [`Plan::certify`] asks this once per stratum, so a scan would make
+    /// certifying a plan quadratic in a plan's own size — over a value that
+    /// arrives from wherever a plan arrives from.
+    #[must_use]
+    pub fn get_subject(&self, subject: &str) -> Option<&StatisticsEntry> {
+        self.0
+            .binary_search_by(|entry| entry.subject.as_str().cmp(subject))
+            .ok()
+            .map(|index| &self.0[index])
+    }
+}
+
+impl core::ops::Deref for StatisticsEntries {
+    type Target = [StatisticsEntry];
+
+    /// Read-only slice access: iteration, indexing, `len`, `to_vec`.
+    ///
+    /// Read-only is the point. A `&mut` view would let a caller move one
+    /// subject's text and leave the sequence unordered or doubled, which is the
+    /// state this type exists to make unrepresentable; an edit goes through
+    /// [`Self::new`], which re-establishes the law over the whole sequence.
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a StatisticsEntries {
+    type Item = &'a StatisticsEntry;
+    type IntoIter = core::slice::Iter<'a, StatisticsEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl TryFrom<Vec<StatisticsEntry>> for StatisticsEntries {
+    type Error = PlanError;
+
+    /// The conversion serde's `try_from` runs, so a deserialized snapshot is
+    /// held to [`StatisticsEntries::new`]'s law rather than admitted around it.
+    fn try_from(entries: Vec<StatisticsEntry>) -> Result<Self, Self::Error> {
+        Self::new(entries)
+    }
+}
+
+impl Serialize for StatisticsEntries {
+    /// Serialized as the bare sequence of its entries, so the serde document is
+    /// a JSON **array** of rows — the shape the Python surface reads as a list
+    /// and the planner goldens pin.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
 /// The statistics a plan was planned against, for every subject planning
 /// consulted.
 ///
@@ -443,13 +559,14 @@ pub struct StatisticsSnapshot {
     pub revision: String,
     /// The snapshot's entries, ascending by subject.
     ///
-    /// The planner emits them in that order and the encoding sorts them again
-    /// before writing, so the bytes — and therefore the plan's identity — are a
-    /// pure function of the entries rather than of the order a caller happened
-    /// to build them in. A snapshot naming one subject twice is refused by
-    /// [`Plan::from_canonical_bytes`] rather than sorted into an arbitrary
-    /// winner, because two rows for one subject are two answers to one question.
-    pub entries: Vec<StatisticsEntry>,
+    /// A [`StatisticsEntries`] rather than a `Vec`, so that order is a property
+    /// of the value and not of the encoder that writes it: the bytes — and
+    /// therefore the plan's identity — are a pure function of the entries, and
+    /// so is equality, which is what makes [`Plan`]'s biconditional true rather
+    /// than nearly true. A snapshot naming one subject twice is refused at
+    /// construction rather than ordered into an arbitrary winner, because two
+    /// rows for one subject are two answers to one question.
+    pub entries: StatisticsEntries,
 }
 
 /// A retrieval plan: pure data, versioned and content-addressed.
@@ -1349,11 +1466,7 @@ fn reconcile(
     inputs: &DepthInputs,
     snapshot: &StatisticsSnapshot,
 ) -> Result<(), PlanError> {
-    let Some(entry) = snapshot
-        .entries
-        .iter()
-        .find(|entry| entry.subject == stratum.as_str())
-    else {
+    let Some(entry) = snapshot.entries.get_subject(stratum.as_str()) else {
         return Err(PlanError::DerivationWithoutStatisticsEntry {
             stratum: stratum.as_str().to_owned(),
         });
@@ -1453,20 +1566,18 @@ fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs
 /// entry's subject, optional cardinality, optional selectivity and that
 /// selectivity's term domain.
 ///
-/// **The entries are sorted here**, by the subject's canonical text, for the
-/// reason [`write_depths`] sorts: every field of a plan is public and a decoded
-/// plan preserves whatever order it was handed, so a hand-built or edited
-/// snapshot carrying the same entries in a different order would otherwise
-/// encode differently and give one plan many identities — breaking the
-/// biconditional [`Plan`] documents. The planner already emits them ascending;
-/// sorting again costs a plan nothing and closes the hand-built case.
+/// **The entries are not sorted here.** They arrive ascending because
+/// [`StatisticsEntries`] establishes that on construction, which is where the
+/// law belongs: a sort at the encoder makes the *bytes* a pure function of the
+/// entries while leaving the *value* order-sensitive, so a descending snapshot
+/// and its ascending twin would share an identity and compare unequal. The
+/// encoder writes the sequence it is given, exactly as it does for
+/// [`write_derivations`]'s [`BTreeMap`].
 fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
     writer.string(&snapshot.source);
     writer.string(&snapshot.revision);
-    let mut entries: Vec<&StatisticsEntry> = snapshot.entries.iter().collect();
-    entries.sort_by(|left, right| left.subject.cmp(&right.subject));
-    writer.u64(entries.len() as u64);
-    for entry in entries {
+    writer.u64(snapshot.entries.len() as u64);
+    for entry in &snapshot.entries {
         writer.string(&entry.subject);
         writer.option_u64(entry.cardinality);
         writer.option_u64(entry.selectivity_ppm);
@@ -1482,32 +1593,26 @@ fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
 /// That now holds for the cardinality as well as the selectivity — the two are
 /// one rule, written once.
 ///
-/// A repeated subject is refused by name. The encoder sorts, so a duplicate is
-/// precisely the shape under which sorting stops making the bytes a pure
-/// function of the entries.
+/// A repeated subject is refused by name, by the same construction law a caller
+/// with a `Vec` is held to: two rows for one subject are two answers to one
+/// question, and the decoder has no more basis for picking between them than the
+/// constructor does.
 fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
     let source = reader.string("statistics source")?;
     let revision = reader.string("statistics revision")?;
     let count = reader.count()?;
     let mut entries: Vec<StatisticsEntry> = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
-        let subject = reader.string("statistics subject")?;
-        let entry = StatisticsEntry {
-            subject,
+        entries.push(StatisticsEntry {
+            subject: reader.string("statistics subject")?,
             cardinality: reader.option_u64("statistics cardinality presence")?,
             selectivity_ppm: reader.option_u64("statistics selectivity presence")?,
             selectivity_terms: reader.u32_slice()?,
-        };
-        if entries.iter().any(|seen| seen.subject == entry.subject) {
-            return Err(PlanError::DuplicateStatisticsSubject {
-                subject: entry.subject,
-            });
-        }
-        entries.push(entry);
+        });
     }
     Ok(StatisticsSnapshot {
         source,
         revision,
-        entries,
+        entries: StatisticsEntries::new(entries)?,
     })
 }

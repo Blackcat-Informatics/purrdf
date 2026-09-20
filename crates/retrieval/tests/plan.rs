@@ -11,8 +11,8 @@ use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DepthInputs, Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
     ProducerDecision, RankFidelity, ReadBound, RegistryId, RejectionReason, RequestTerm,
-    StatisticsDimension, StatisticsEntry, StatisticsSnapshot, Term, TopK, UnservedReason,
-    UnservedTerm,
+    StatisticsDimension, StatisticsEntries, StatisticsEntry, StatisticsSnapshot, Term, TopK,
+    UnservedReason, UnservedTerm,
 };
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, MemoryRelation, PropertyFunctionRegistry,
@@ -21,6 +21,63 @@ use purrdf_sparql_eval::{
 
 fn iri(text: &str) -> Iri {
     Iri::parse(text).expect("fixture IRIs are valid")
+}
+
+/// Rewrite a plan's snapshot rows through the entries' own construction law.
+///
+/// [`StatisticsEntries`] offers no mutable view, deliberately: an edit that
+/// moved one row's subject would leave the sequence unordered or doubled, which
+/// is the state the type exists to make unrepresentable. So an edit here is a
+/// re-construction, and every fixture below is held to the same law a caller is.
+fn edit_rows(plan: &mut Plan, edit: impl FnOnce(&mut Vec<StatisticsEntry>)) {
+    let mut rows = plan.statistics_snapshot.entries.to_vec();
+    edit(&mut rows);
+    plan.statistics_snapshot.entries =
+        StatisticsEntries::new(rows).expect("the edited rows name each subject once");
+}
+
+/// The canonical bytes of `plan` with its statistics entries written in `order`
+/// — including orders and repetitions no [`StatisticsEntries`] can hold.
+///
+/// [`Plan::canonical_bytes`] cannot produce these, which is exactly why the
+/// decoder's refusals have to be driven by bytes rather than by a value: the
+/// value type establishes the order and refuses a repeated subject, so a forged
+/// document is the only remaining way in.
+///
+/// The splice is layout-agnostic rather than a hand-written encoding. The entry
+/// sequence is located by encoding the same plan with no rows and with one: the
+/// two agree up to the framed count and differ there, which names the count's
+/// offset and hence the suffix. Each row's block is then cut out of a one-row
+/// encoding of the same plan. Nothing here knows the plan's field order, so a
+/// later field added anywhere leaves it correct.
+fn forge_statistics_entries(plan: &Plan, order: &[StatisticsEntry]) -> Vec<u8> {
+    let encode_with = |rows: Vec<StatisticsEntry>| {
+        let mut forged = plan.clone();
+        forged.statistics_snapshot.entries =
+            StatisticsEntries::new(rows).expect("each spliced encoding carries at most one row");
+        forged.canonical_bytes()
+    };
+    let empty = encode_with(Vec::new());
+    let single = encode_with(vec![order.first().expect("an order names a row").clone()]);
+    let count_offset = empty
+        .iter()
+        .zip(&single)
+        .position(|(left, right)| left != right)
+        .expect("the framed entry count differs between no rows and one");
+    let suffix = &empty[count_offset + 8..];
+
+    let mut bytes = empty[..count_offset].to_vec();
+    bytes.extend_from_slice(
+        &u64::try_from(order.len())
+            .expect("a fixture order fits a u64")
+            .to_le_bytes(),
+    );
+    for entry in order {
+        let block = encode_with(vec![entry.clone()]);
+        bytes.extend_from_slice(&block[count_offset + 8..block.len() - suffix.len()]);
+    }
+    bytes.extend_from_slice(suffix);
+    bytes
 }
 
 fn stratum() -> Iri {
@@ -114,7 +171,7 @@ fn baseline() -> Plan {
         statistics_snapshot: StatisticsSnapshot {
             source: "example-statistics".to_owned(),
             revision: "r1".to_owned(),
-            entries: vec![
+            entries: StatisticsEntries::new(vec![
                 StatisticsEntry {
                     subject: "http://example.org/p".to_owned(),
                     cardinality: Some(42),
@@ -127,7 +184,8 @@ fn baseline() -> Plan {
                     selectivity_ppm: None,
                     selectivity_terms: Vec::new(),
                 },
-            ],
+            ])
+            .expect("the baseline names each subject once"),
         },
         registry_instance_id: RegistryId::from_raw(7),
         registry_content_fingerprint: "example-fingerprint".to_owned(),
@@ -550,7 +608,7 @@ fn digest_is_sensitive_to_every_field() {
     assert_ne!(changed.id(), base_id, "statistics revision");
 
     let mut changed = base.clone();
-    changed.statistics_snapshot.entries[0].cardinality = Some(43);
+    edit_rows(&mut changed, |rows| rows[0].cardinality = Some(43));
     assert_ne!(changed.id(), base_id, "statistics entry");
 
     // A statistic the plan was built against that the plan does not carry into
@@ -559,7 +617,7 @@ fn digest_is_sensitive_to_every_field() {
     // selectivity, whose aggregate alone would be identical under a provider that
     // moved the same number to a different term.
     let mut changed = base.clone();
-    changed.statistics_snapshot.entries[0].selectivity_terms = vec![1];
+    edit_rows(&mut changed, |rows| rows[0].selectivity_terms = vec![1]);
     assert_ne!(changed.id(), base_id, "statistics selectivity term domain");
 
     for (label, mutate) in [
@@ -942,7 +1000,7 @@ fn a_plan_round_trips_an_absent_cardinality() {
         ("a count", Some(7)),
     ] {
         let mut plan = baseline();
-        plan.statistics_snapshot.entries[0].cardinality = recorded;
+        edit_rows(&mut plan, |rows| rows[0].cardinality = recorded);
         plan.stratum_derivations
             .get_mut(&stratum())
             .expect("the baseline records a derivation")
@@ -1035,22 +1093,34 @@ fn equal_selectivity_sums_over_different_terms_are_different_plans() {
     );
 }
 
-/// The encoding is a pure function of the entries, not of the order a caller
-/// built them in — and one subject twice is refused rather than sorted into an
-/// arbitrary winner.
+/// A snapshot's entries are ordered by the **value**, so two plans built from
+/// the same rows in different orders are one plan: equal bytes, equal id, and
+/// equal to each other.
+///
+/// The last of those three is the assertion an encoder-side sort could not
+/// support, and its absence was the biconditional [`Plan`] documents being false
+/// in the middle — equal bytes and equal ids over values that compared unequal.
 #[test]
-fn statistics_entries_encode_by_subject_and_refuse_a_duplicate() {
-    let second = StatisticsEntry {
+fn statistics_entries_are_ordered_by_the_value_not_by_the_encoder() {
+    // A row that sorts BETWEEN the baseline's two, so a construction that merely
+    // reversed or appended would land it somewhere the ascending order does not
+    // put it.
+    let between = StatisticsEntry {
         subject: "http://example.org/q".to_owned(),
         cardinality: Some(3),
         selectivity_ppm: None,
         selectivity_terms: Vec::new(),
     };
+    let rows = baseline().statistics_snapshot.entries.to_vec();
 
     let mut ascending = baseline();
-    ascending.statistics_snapshot.entries.push(second.clone());
+    edit_rows(&mut ascending, |rows| rows.push(between.clone()));
+
     let mut descending = baseline();
-    descending.statistics_snapshot.entries.insert(0, second);
+    edit_rows(&mut descending, |rows| {
+        rows.push(between.clone());
+        rows.sort_by(|left, right| right.subject.cmp(&left.subject));
+    });
 
     assert_eq!(
         ascending.canonical_bytes(),
@@ -1058,17 +1128,154 @@ fn statistics_entries_encode_by_subject_and_refuse_a_duplicate() {
         "a hand-built snapshot must not give one plan many identities"
     );
     assert_eq!(ascending.id(), descending.id());
+    assert_eq!(
+        ascending, descending,
+        "and the two values are equal, not merely identical in their bytes: the \
+         order is the type's law, so there is no order left for equality to see"
+    );
 
-    // Two rows for one subject are two answers to one question, and sorting
-    // cannot pick between them.
-    let mut duplicated = baseline();
-    let repeat = duplicated.statistics_snapshot.entries[0].clone();
-    duplicated.statistics_snapshot.entries.push(repeat);
-    let error = Plan::from_canonical_bytes(&duplicated.canonical_bytes())
-        .expect_err("a repeated subject is refused");
+    // The order is ascending rather than merely agreed-upon, and every row
+    // survived it.
+    let subjects: Vec<&str> = ascending
+        .statistics_snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.subject.as_str())
+        .collect();
+    assert_eq!(
+        subjects,
+        vec![
+            "http://example.org/p",
+            "http://example.org/q",
+            stratum().as_str(),
+        ]
+    );
+    assert_eq!(
+        ascending.statistics_snapshot.entries.len(),
+        rows.len() + 1,
+        "establishing the order is not an excuse to lose a row"
+    );
+}
+
+/// One subject twice is refused at construction, by name — and a snapshot that
+/// merely grows by a **distinct** subject is not.
+///
+/// Both halves run. A constructor that refused every second row would pass the
+/// first assertion alone, and the second row below carries the first row's own
+/// measurements under another subject, so a construction that dropped or merged
+/// it fails on the number rather than on the shape.
+#[test]
+fn a_repeated_subject_is_refused_at_construction_and_a_distinct_one_is_not() {
+    let rows = baseline().statistics_snapshot.entries.to_vec();
+
+    let mut repeated = rows.clone();
+    repeated.push(rows[0].clone());
+    match StatisticsEntries::new(repeated).expect_err("a repeated subject is refused") {
+        PlanError::DuplicateStatisticsSubject { subject } => {
+            assert_eq!(subject, rows[0].subject, "the refusal names the subject");
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The neighbour: the identical row under a subject nothing else names.
+    let mut twin = rows[0].clone();
+    twin.subject = "http://example.org/q".to_owned();
+    let mut distinct = rows.clone();
+    distinct.push(twin);
+    let entries = StatisticsEntries::new(distinct).expect("distinct subjects are admitted");
+    assert_eq!(entries.len(), rows.len() + 1);
+    assert_eq!(
+        entries.get_subject("http://example.org/q"),
+        Some(&StatisticsEntry {
+            subject: "http://example.org/q".to_owned(),
+            cardinality: rows[0].cardinality,
+            selectivity_ppm: rows[0].selectivity_ppm,
+            selectivity_terms: rows[0].selectivity_terms.clone(),
+        }),
+        "and the admitted row keeps every measurement it arrived with"
+    );
+    assert_eq!(
+        entries.get_subject("http://example.org/absent"),
+        None,
+        "a subject the snapshot does not name is absent rather than nearest"
+    );
+}
+
+/// A canonical document that names one subject twice is refused by name.
+///
+/// No [`StatisticsEntries`] can hold such a snapshot, so the bytes are forged:
+/// the decoder reads a document a caller controls, and "the value type cannot
+/// express it" is not a check the decoder is entitled to skip.
+#[test]
+fn a_canonical_document_naming_one_subject_twice_is_refused() {
+    let plan = baseline();
+    let rows = plan.statistics_snapshot.entries.to_vec();
+
+    let forged = forge_statistics_entries(&plan, &[rows[0].clone(), rows[0].clone()]);
+    match Plan::from_canonical_bytes(&forged).expect_err("a repeated subject is refused") {
+        PlanError::DuplicateStatisticsSubject { subject } => {
+            assert_eq!(subject, rows[0].subject);
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    }
+
+    // The neighbour: the same splice, with the plan's own two distinct rows in
+    // ascending order, decodes to the plan the splice was cut from.
+    let spliced = forge_statistics_entries(&plan, &rows);
+    assert_eq!(
+        spliced,
+        plan.canonical_bytes(),
+        "the splice reproduces the encoder's own bytes, so the refusal above is \
+         about the duplicate rather than about the forging"
+    );
+    let decoded = Plan::from_canonical_bytes(&spliced).expect("an honest document decodes");
+    assert_eq!(decoded, plan);
+}
+
+/// A hand-written serde document is held to the entries' construction law: a
+/// repeated subject is refused, and an unordered one is ordered.
+///
+/// The two halves are the law's two clauses. Order carries no information the
+/// snapshot did not already have, so an unordered document is admitted and
+/// canonicalised — and it must land on the *same identity* as the ordered one,
+/// or serde would be a way to mint a second id for one plan. A duplicate is
+/// information the value cannot hold at all, so it is refused wherever it
+/// arrives.
+#[test]
+fn serde_holds_a_hand_written_snapshot_to_the_entries_law() {
+    let plan = baseline();
+    let mut document: serde_json::Value =
+        serde_json::to_value(&plan).expect("a plan serializes to a document");
+
+    let entries = document["statistics_snapshot"]["entries"]
+        .as_array()
+        .expect("the snapshot's entries are a JSON array")
+        .clone();
+    assert_eq!(entries.len(), 2, "the baseline names two subjects");
+
+    let mut reversed = entries.clone();
+    reversed.reverse();
+    document["statistics_snapshot"]["entries"] = serde_json::Value::Array(reversed.clone());
+    let decoded: Plan =
+        serde_json::from_value(document.clone()).expect("an unordered document is ordered");
+    assert_eq!(
+        decoded.statistics_snapshot.entries,
+        plan.statistics_snapshot.entries
+    );
+    assert_eq!(
+        decoded.id(),
+        plan.id(),
+        "serde is not a second way to mint an identity for one plan"
+    );
+
+    let mut duplicated = entries.clone();
+    duplicated.push(entries[0].clone());
+    document["statistics_snapshot"]["entries"] = serde_json::Value::Array(duplicated);
+    let error = serde_json::from_value::<Plan>(document)
+        .expect_err("a document naming one subject twice is refused");
     assert!(
-        matches!(error, PlanError::DuplicateStatisticsSubject { .. }),
-        "refused by name, not by a decode failure: {error:?}"
+        error.to_string().contains("more than once"),
+        "the serde failure carries the construction law's own refusal: {error}"
     );
 }
 
@@ -1141,20 +1348,31 @@ fn certify_refuses_a_snapshot_row_that_contradicts_its_derivation() {
     // The derivation records `None`, `None` and `[]`, so every replacement below
     // is a different statement about what the provider said.
     let mut wrong_cardinality = baseline();
-    wrong_cardinality.statistics_snapshot.entries[stratum_row].cardinality = Some(7);
+    edit_rows(&mut wrong_cardinality, |rows| {
+        rows[stratum_row].cardinality = Some(7);
+    });
     let mut wrong_selectivity = baseline();
-    wrong_selectivity.statistics_snapshot.entries[stratum_row].selectivity_ppm = Some(250_000);
+    edit_rows(&mut wrong_selectivity, |rows| {
+        rows[stratum_row].selectivity_ppm = Some(250_000);
+    });
     let mut wrong_terms = baseline();
-    wrong_terms.statistics_snapshot.entries[stratum_row].selectivity_terms = vec![0, 2];
+    edit_rows(&mut wrong_terms, |rows| {
+        rows[stratum_row].selectivity_terms = vec![0, 2];
+    });
 
     // The neighbours: the identical three edits, to the request predicate's row.
     let mut ancillary_cardinality = baseline();
-    ancillary_cardinality.statistics_snapshot.entries[predicate_row].cardinality = Some(7);
+    edit_rows(&mut ancillary_cardinality, |rows| {
+        rows[predicate_row].cardinality = Some(7);
+    });
     let mut ancillary_selectivity = baseline();
-    ancillary_selectivity.statistics_snapshot.entries[predicate_row].selectivity_ppm =
-        Some(250_000);
+    edit_rows(&mut ancillary_selectivity, |rows| {
+        rows[predicate_row].selectivity_ppm = Some(250_000);
+    });
     let mut ancillary_terms = baseline();
-    ancillary_terms.statistics_snapshot.entries[predicate_row].selectivity_terms = vec![0, 2];
+    edit_rows(&mut ancillary_terms, |rows| {
+        rows[predicate_row].selectivity_terms = vec![0, 2];
+    });
 
     for (forged, ancillary, dimension, expected_snapshot, expected_derivation) in [
         (
@@ -1229,7 +1447,9 @@ fn certify_refuses_a_snapshot_row_that_contradicts_its_derivation() {
 fn certify_refuses_a_stratum_the_snapshot_does_not_name() {
     let stratum_row = row_of(&baseline(), stratum().as_str());
     let mut missing = baseline();
-    missing.statistics_snapshot.entries.remove(stratum_row);
+    edit_rows(&mut missing, |rows| {
+        rows.remove(stratum_row);
+    });
     match missing
         .certify()
         .expect_err("a derivation with no snapshot row is refused")
@@ -1244,7 +1464,9 @@ fn certify_refuses_a_stratum_the_snapshot_does_not_name() {
     // derived from it, so nothing is left unexplained and the plan certifies.
     let predicate_row = row_of(&baseline(), "http://example.org/p");
     let mut thinner = baseline();
-    thinner.statistics_snapshot.entries.remove(predicate_row);
+    edit_rows(&mut thinner, |rows| {
+        rows.remove(predicate_row);
+    });
     thinner
         .certify()
         .expect("a snapshot without an ancillary row still explains every depth");
@@ -1252,7 +1474,7 @@ fn certify_refuses_a_stratum_the_snapshot_does_not_name() {
     // And an empty snapshot is refused for the stratum, not waved through as
     // "nothing to compare against".
     let mut empty = baseline();
-    empty.statistics_snapshot.entries.clear();
+    edit_rows(&mut empty, Vec::clear);
     assert!(matches!(
         empty.certify(),
         Err(PlanError::DerivationWithoutStatisticsEntry { .. })
@@ -1285,7 +1507,7 @@ fn certify_names_the_first_disagreement_in_stratum_order() {
         let mut plan = baseline();
         plan.stratum_depths.clear();
         plan.stratum_derivations.clear();
-        plan.statistics_snapshot.entries.clear();
+        let mut rows: Vec<StatisticsEntry> = Vec::new();
         for index in 0..32_u32 {
             let stratum = iri(&format!("http://example.org/stratum/{index:02}"));
             // Distinct declarations, so each stratum's honest depth is its own
@@ -1304,13 +1526,14 @@ fn certify_names_the_first_disagreement_in_stratum_order() {
             let depth = u32::try_from(declared).expect("the fixture declarations fit a rank");
             plan.stratum_depths
                 .insert(stratum.clone(), if honest { depth } else { depth + 1 });
-            plan.statistics_snapshot.entries.push(StatisticsEntry {
+            rows.push(StatisticsEntry {
                 subject: stratum.as_str().to_owned(),
                 cardinality: None,
                 selectivity_ppm: None,
                 selectivity_terms: Vec::new(),
             });
         }
+        edit_rows(&mut plan, |existing| *existing = rows);
         plan
     };
 

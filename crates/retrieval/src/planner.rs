@@ -348,7 +348,7 @@ use crate::iri::Iri;
 use crate::matching::{carries_content, pattern_matches, place};
 use crate::plan::{
     DepthCause, DepthInputs, Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason,
-    StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
+    StatisticsEntries, StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
 use crate::request::{ReadBound, RequestTerm, RetrievalRequest};
 use crate::statistics::Statistics;
@@ -653,7 +653,7 @@ pub fn plan(
     //    the predicates the request named. The derivations keep the per-depth
     //    binding; this names, in one place, every subject an answer to this plan
     //    depended on a provider for.
-    let statistics_snapshot = capture_statistics(request, statistics, &stratum_derivations);
+    let statistics_snapshot = capture_statistics(request, statistics, &stratum_derivations)?;
 
     // 7. Record both registry identities.
     Ok(Plan {
@@ -1330,11 +1330,18 @@ fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
 /// selectivity aggregates over the **whole request** rather than over the terms
 /// some binding carried — there is no binding to consult, and the provider
 /// decides which `(subject, term)` pairs it can answer.
+/// # Errors
+///
+/// [`PlanError::DuplicateStatisticsSubject`] if the rows below ever named one
+/// subject twice. They are keyed by subject, so they cannot — and the snapshot
+/// is built through [`StatisticsEntries::new`] anyway rather than around it,
+/// because a constructor the planner is exempt from is a law the planner's own
+/// output is not held to.
 fn capture_statistics(
     request: &RetrievalRequest,
     statistics: &impl Statistics,
     derivations: &BTreeMap<Iri, DepthInputs>,
-) -> StatisticsSnapshot {
+) -> Result<StatisticsSnapshot, PlanError> {
     // Keyed rather than pushed, so "one row per subject" is the container's law
     // instead of a rule this function has to remember, and the ascending order
     // the snapshot promises falls out of the key type.
@@ -1377,9 +1384,9 @@ fn capture_statistics(
         );
     }
 
-    StatisticsSnapshot {
+    Ok(StatisticsSnapshot {
         source: statistics.source().to_owned(),
         revision: statistics.revision().to_owned(),
-        entries: rows.into_values().collect(),
-    }
+        entries: StatisticsEntries::new(rows.into_values().collect())?,
+    })
 }

@@ -43,9 +43,9 @@ use purrdf_retrieval::{
     FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding,
     ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
     RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock,
-    ScoreExactness, SearchError, SearchResult, Statistics, StatisticsSnapshot, StratumUnit,
-    StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm, compile,
-    contribution, execute, fuse, plan, search,
+    ScoreExactness, SearchError, SearchResult, Statistics, StatisticsEntries, StatisticsSnapshot,
+    StratumUnit, StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm,
+    compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, NativeSparqlEngine,
@@ -611,7 +611,7 @@ fn start_at_compile_hand_built_plan() {
         statistics_snapshot: StatisticsSnapshot {
             source: stats.source().to_owned(),
             revision: stats.revision().to_owned(),
-            entries: Vec::new(),
+            entries: StatisticsEntries::default(),
         },
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: registry.content_fingerprint().expect("fingerprint"),

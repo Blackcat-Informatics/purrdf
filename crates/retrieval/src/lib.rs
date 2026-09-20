@@ -423,7 +423,7 @@ pub use id::{
 pub use iri::{Iri, Term};
 pub use plan::{
     DepthCause, DepthInputs, Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason,
-    StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
+    StatisticsEntries, StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
 pub use planner::{depth_cause, depth_from, plan};
 pub use ranked_stream::{
