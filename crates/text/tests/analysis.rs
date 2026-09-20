@@ -495,6 +495,14 @@ fn the_scratch_form_agrees_and_borrows_every_token() {
 /// produce which terms, so the whole term dictionary and both index
 /// fingerprints are functions of them, and a change to any of them has to be
 /// seen rather than absorbed.
+///
+/// The `core` table is the one exception to a single number, and not to
+/// exactness: it is the standard library's own and moves with the toolchain,
+/// which this repository floats, so it is pinned to the exact set of vintages
+/// the crate has measured the fold skew under (see
+/// `the_case_folding_skew_is_confined_to_where_it_is_measured` in the crate's
+/// unit tests). A vintage outside that set is a table that moved before its
+/// cost was measured, and fails here by name.
 #[test]
 fn the_reported_unicode_versions_are_the_pinned_tables() {
     let versions = unicode_versions();
@@ -504,8 +512,17 @@ fn the_reported_unicode_versions_are_the_pinned_tables() {
         "the answer must be a constant"
     );
 
+    const MEASURED_CORE: [&str; 2] = ["17.0.0", "18.0.0"];
+    let core = versions.core.to_string();
+    assert!(
+        MEASURED_CORE.contains(&core.as_str()),
+        "the core (std) table moved to {core}, a vintage whose fold skew this crate has not \
+         measured. Run the crate's unit tests on this toolchain — the skew test prints the runs \
+         it measured — confirm the golden token vectors and fingerprints did not move, then pin \
+         the vintage here and there."
+    );
+
     for (name, version, expected) in [
-        ("core (std)", versions.core, "17.0.0"),
         ("normalization", versions.normalization, "17.0.0"),
         ("case folding", versions.case_folding, "16.0.0"),
         ("segmentation", versions.segmentation, "17.0.0"),

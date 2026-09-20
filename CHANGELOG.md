@@ -617,6 +617,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   toolkit mints no vocabulary to guess one. A `GraphSelector::Named` holding a
   non-IRI is still refused at configuration time.
 
+- **text:** The case-folding skew is measured per standard-library Unicode vintage
+  instead of against one. The crate carries a fold table (`caseless`, 16.0.0)
+  that trails the standard library's case-mapping tables, and pins the exact set
+  of code points the two disagree on so that a table moving is seen rather than
+  absorbed -- but the standard library's tables move with the toolchain, which
+  this repository floats, and the pin named one vintage. The day the nightly
+  picked up Unicode 18.0.0 the skew grew from 57 code points to 98 (four IPA and
+  Latin Extended-E letters that gained capitals, their capitals, sixteen new Latin
+  Extended-G case pairs and one new ligature) and the suite went red on a table
+  the crate had measured nothing about. The skew test and the version pin now key
+  on `char::UNICODE_VERSION`: 17.0.0 and 18.0.0 are each pinned as an exact set, a
+  vintage outside them fails by name, and every failure prints the runs it
+  measured so one run on a new toolchain is the measurement. The guarantee the
+  skew rests on is restated precisely: a text containing no character the
+  standard-library release itself introduced analyzes to the token vector it
+  always did -- the four pre-existing lowercase letters still fold to themselves,
+  and only their newly minted capitals fail to reach them.
+
 - **text:** A text index can now be built before the documents it will hold have
   landed. A configured predicate the dataset has not interned contributes no rows
   instead of failing the build, and so does a `GraphSelector::Named` graph the

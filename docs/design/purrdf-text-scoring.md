@@ -264,9 +264,14 @@ library's own tables track the toolchain. All four versions are reported
 individually rather than summarized into a single number, because summarizing
 would require picking one, and picking would hide precisely this situation.
 
-Answers remain deterministic regardless, because the lockfile pins every one of
-those tables: a given checkout links a fixed set, and a fixed set analyzes a
-given literal to a fixed token vector on every target.
+Answers remain deterministic regardless, because the lockfile pins three of
+those tables and the toolchain fixes the fourth: a given checkout on a given
+toolchain links a fixed set, and a fixed set analyzes a given literal to a fixed
+token vector on every target. The standard library's table is the one the
+lockfile cannot hold, and this repository floats its toolchain, so the crate
+measures the fold table's distance from it **per vintage** — 17.0.0 and 18.0.0
+as of this writing — and a vintage it has not measured fails the suite by name
+rather than being carried unmeasured.
 
 The real risk is therefore not the skew itself but a **dependency bump**. None of
 these tables is under this repository's control, and a bump can change what a
