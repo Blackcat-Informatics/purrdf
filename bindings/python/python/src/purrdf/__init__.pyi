@@ -604,6 +604,26 @@ class UpdateOutcome:
     @property
     def evidence(self) -> GovernorEvidence: ...
 
+# A SPARQL query parsed and admitted once, run many times with different bindings.
+# Built by `Store.prepare`. Holds a SNAPSHOT of the store taken when it was prepared;
+# a later mutation on that store is not visible to it.
+#
+# Not thread-safe, and deliberately so: a run borrows this object uniquely, because a
+# query body can re-enter the evaluator and a handle reachable a second time while a
+# run is in flight is a handle two evaluations could disagree about.
+class PreparedQuery:
+    # The declared parameter names, in declaration order.
+    @property
+    def parameters(self) -> list[str]: ...
+    # Bind every declared parameter and run, returning the results exactly as
+    # `Store.query` does. Each keyword names a declared parameter; an unknown keyword
+    # raises, and so does a parameter left unbound — an unbound focus would answer
+    # over every subject, which is a silently wider answer rather than a visible
+    # mistake.
+    def run(
+        self, **bindings: _Term
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
+
 # ── Store / Dataset ─────────────────────────────────────────────────────────────
 
 class QuadIter:
@@ -647,6 +667,18 @@ class Store:
     # `shapes.PreparedShapes.validate_store_changes` expands, readable without
     # validating anything.
     def change_size(self) -> tuple[int, int]: ...
+    # Prepare a SPARQL query once, to be bound and run many times: `query` parses and
+    # admits its text on every call, so a caller running one query per row pays that
+    # cost per row for the same plan. `parameters` names the variables `run` will
+    # bind, without the `?`/`$` sigil — each behaves exactly as a `query`
+    # `substitutions` entry, so a parameter reaches inside `OPTIONAL`, `MINUS`,
+    # `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    #
+    # The returned `PreparedQuery` holds a SNAPSHOT of this store taken now; a later
+    # mutation is not visible to it, and it is not thread-safe — see `PreparedQuery`.
+    def prepare(
+        self, query: str, *, parameters: list[str] | None = ...
+    ) -> PreparedQuery: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF
     # by default), `property_fn_namespaces` does the same for property-function
