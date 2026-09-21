@@ -346,7 +346,7 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
 ///
 /// A SPARQL query fails 1, 3 and 4; `--manifest` fails 1, 2 and 3.
 const STAND_IN_GUARD: &str = r#"
-if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9 (stand-in)'; exit 0; fi
+if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9'; exit 0; fi
 if [ "$1" != "convert" ]; then
   echo "stand-in: '$1' writes no file; only convert does" >&2
   exit 0

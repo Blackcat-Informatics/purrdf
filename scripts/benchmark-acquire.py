@@ -464,6 +464,45 @@ WORKLOAD_PINS: dict[str, str] = {
 }
 
 
+# ── The one construction of a pin key's version suffix ────────────────────────
+#
+# A version-keyed pin name ends with `.purrdf-<version>`, and that suffix was built
+# in THREE places: here in the self-test (from `Cargo.toml`), and in each lane as
+# `${PURRDF_VERSION// /-}` where `PURRDF_VERSION` is the WHOLE stdout of
+# `purrdf --version`. Nothing asserted the constructions agree, and nothing pinned
+# the shape of `--version`.
+#
+# That is a switch, not a nuisance. If a release adds a git hash or a second banner
+# line, every one of the 22 version-keyed pins becomes unreachable and the WatDiv
+# lane prints "NOT checked against pins" and EXITS 0 while LUBM reports no corpus
+# pin -- one environment change silently disabling the entire apparatus, with no
+# gate reddening. The branch's own stand-in already proves the shape is
+# unconstrained: it prints `purrdf 9.9.9 (stand-in)`, which becomes
+# `purrdf-9.9.9-(stand-in)`.
+#
+# So the suffix has one definition, the lanes ASK for it rather than deriving it,
+# and the derivation from a `--version` line is checked rather than assumed.
+
+
+def pin_version_suffix(version_line: str) -> str:
+    """The pin-key suffix for a binary that reported *version_line*.
+
+    Refuses anything that is not exactly `<name> <semver>`, because a suffix built
+    from an unexpected banner names a pin nobody recorded -- which reads as "no pin
+    for this binary" and is indistinguishable from a pass.
+    """
+    match = re.fullmatch(r"([a-z0-9-]+) (\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)", version_line.strip())
+    if match is None:
+        sys.exit(
+            f"FAIL: cannot build a pin-key suffix from {version_line.strip()!r}.\n"
+            "  A version-keyed pin name ends with `.<name>-<semver>`, so an unexpected\n"
+            "  --version banner would name a pin nobody recorded -- which a lane reports as\n"
+            "  'no pin for this binary' and exits 0 on. That is every pin silently off.\n"
+            "  Expected exactly `<name> <semver>`, for example `purrdf 2.0.2`."
+        )
+    return f"{match.group(1)}-{match.group(2)}"
+
+
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1271,7 +1310,7 @@ def self_test() -> int:
     elif workspace_version is None:
         print("SELF-TEST FAIL: could not read the workspace version to check the pin key")
         ok = False
-    elif not all(key.endswith(f".purrdf-{workspace_version}") for key in version_keyed):
+    elif not all(key.endswith(f".{pin_version_suffix(f'purrdf {workspace_version}')}") for key in version_keyed):
         print(
             f"SELF-TEST FAIL: version-keyed pin(s) {version_keyed} do not name the workspace "
             f"version {workspace_version}, so the lane will report no pin for the binary it built"
@@ -1463,6 +1502,15 @@ def main() -> int:
         help="print the pinned count of published LUBM queries and exit",
     )
     parser.add_argument(
+        "--pin-version-suffix",
+        metavar="VERSION_LINE",
+        help=(
+            "print the pin-key suffix for a binary that reported VERSION_LINE, and exit. "
+            "The lanes call this instead of transforming the line themselves, so the suffix "
+            "has one definition rather than three."
+        ),
+    )
+    parser.add_argument(
         "--workload-pin",
         metavar="NAME",
         help="print the recorded value of a workload pin and exit",
@@ -1493,6 +1541,9 @@ def main() -> int:
         return 0
     if args.lubm_query_count:
         print(LUBM_PUBLISHED_QUERIES)
+        return 0
+    if args.pin_version_suffix is not None:
+        print(pin_version_suffix(args.pin_version_suffix))
         return 0
     if args.workload_pin is not None:
         value = WORKLOAD_PINS.get(args.workload_pin)

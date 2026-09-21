@@ -223,6 +223,19 @@ validate_purrdf_bin() {
     "A binary that says nothing is not the purrdf CLI, and this lane records what it
   printed beside every number in the report as the provenance of that number."
   PURRDF_VERSION="${LANE_PROBE_OUT}"
+  # THE PIN-KEY SUFFIX HAS ONE DEFINITION, and it is not here. This used to be
+  # `${PURRDF_VERSION// /-}` in each lane while the self-test built the same suffix
+  # from `Cargo.toml` -- three constructions, none compared. A release adding a git
+  # hash or a second banner line would make every version-keyed pin unreachable, and
+  # an unreachable pin reads as "no pin for this binary" and exits 0. One environment
+  # change, every pin silently off. Asking for the suffix also validates the shape:
+  # the derivation refuses anything that is not `<name> <semver>` by name.
+  PURRDF_PIN_SUFFIX="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --pin-version-suffix "${PURRDF_VERSION}")" ||
+    die "the binary reported a version line no pin key can be built from:
+  '${PURRDF_VERSION}'
+  Every version-keyed pin would be unreachable, which a lane reports as 'no pin
+  recorded' and exits 0 on -- so this is refused rather than carried."
 
   # One triple, in the reserved documentation domain this repository's fixtures
   # use. It exercises the same `--from rdfxml --to nquads --base` path step 5
@@ -591,7 +604,7 @@ if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
   # lookup crashed or the flag was renamed" one observable -- both a silent skip, and a
   # skip is indistinguishable from a pass. The lookup exits 2 for "recorded nowhere" and
   # anything else is itself broken, so only the first is branched on.
-  corpus_pin_key="lubm.1.0.seed0.corpus.sha256.${PURRDF_VERSION// /-}"
+  corpus_pin_key="lubm.1.0.seed0.corpus.sha256.${PURRDF_PIN_SUFFIX}"
   corpus_pin_status=0
   expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
     --workload-pin "${corpus_pin_key}")" || corpus_pin_status=$?

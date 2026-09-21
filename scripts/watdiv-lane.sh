@@ -182,6 +182,19 @@ validate_purrdf_bin() {
     "A binary that says nothing is not the purrdf CLI, and this lane records what it
   printed as half of the stamp that lets a later run reuse this run's pack."
   PURRDF_VERSION="${LANE_PROBE_OUT}"
+  # THE PIN-KEY SUFFIX HAS ONE DEFINITION, and it is not here. This used to be
+  # `${PURRDF_VERSION// /-}` in each lane while the self-test built the same suffix
+  # from `Cargo.toml` -- three constructions, none compared. A release adding a git
+  # hash or a second banner line would make every version-keyed pin unreachable, and
+  # an unreachable pin reads as "no pin for this binary" and exits 0. One environment
+  # change, every pin silently off. Asking for the suffix also validates the shape:
+  # the derivation refuses anything that is not `<name> <semver>` by name.
+  PURRDF_PIN_SUFFIX="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --pin-version-suffix "${PURRDF_VERSION}")" ||
+    die "the binary reported a version line no pin key can be built from:
+  '${PURRDF_VERSION}'
+  Every version-keyed pin would be unreachable, which a lane reports as 'no pin
+  recorded' and exits 0 on -- so this is refused rather than carried."
 
   # One triple, in the reserved documentation domain this repository's fixtures
   # use. It exercises the same `--from ntriples --to pack` path step 5 uses on the
@@ -815,7 +828,7 @@ fi
 # a reported result, not an abandoned run" compatible with asserting every answer the
 # run actually produced.
 answers_pin_stem="watdiv.${SCALE}.seed${SEED}.rows"
-answers_pin_suffix="${PURRDF_VERSION// /-}"
+answers_pin_suffix="${PURRDF_PIN_SUFFIX}"
 pinned=0
 unpinned=()
 for id in "${IDS[@]}"; do
