@@ -2,13 +2,17 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Refuse tracked paths that a shell cannot safely pass to a command.
+"""Refuse a tracked path that misrepresents itself to the tools that read it.
 
-A path is not just a name: it is an argument. Most of this repository's tooling —
-its own scripts, `make` recipes, and whatever an operator types — reaches files
-through globs, and a glob expands to a bare argument list with no marker saying
-"this is a path". So a tracked file whose name begins with ``-`` is read as a
-FLAG by every command it reaches.
+Two distinct hazards, with two distinct mechanisms, because the first version of
+this file collapsed them into one justification that did not survive being
+measured — it refused leading whitespace and accepted an interior space on
+argument-splitting grounds, and argument splitting does not distinguish them that
+way. A refusal is a claim; these are the measurements behind each one.
+
+**A component beginning with ``-`` is read as a FLAG.** Most of this repository's
+tooling reaches files through globs, and a glob expands to a bare argument list
+with no marker saying "this is a path".
 
 This is not hypothetical. A test stand-in wrote its payload to the last argument
 it was given, was pointed at a lane whose final argument is ``--manifest``, and
@@ -16,13 +20,35 @@ deposited a 71-byte file called ``--manifest`` at the repository root. It was
 committed. At that point ``wc -l *`` in the root died with "unrecognized option",
 ``head -n1 *`` exited non-zero, and ``tar cf … *`` refused — every one of them
 blaming a flag nobody typed. Roughly thirty hygiene scripts swept the tree and
-none of them noticed, because they all walk a file list rather than a glob.
+none noticed, because they all walk a file list rather than a glob.
 
-The rule is therefore about the shape of the NAME, independent of contents:
+**A name containing a newline, tab, or carriage return renders differently from
+what it is.** A newline makes one path two entries in any line-oriented tool; a
+tab splits a field in any tab-separated one; a carriage return makes the DISPLAYED
+name differ from the real one — a file called ``has\\rcr`` prints as ``hascr``, so
+a reviewer cannot see what they are approving. ``\\t`` was refused here and
+``\\r`` was not, which had no basis.
 
-* a path component may not begin with ``-``;
-* nor may it begin or end with whitespace, or contain a newline or a tab, which
-  break argument splitting and line-oriented tooling the same way.
+**Leading or trailing whitespace is refused for INVISIBILITY, not for splitting.**
+Measured in a directory holding ``' lead'``, ``'mid space'`` and ``'trail '``:
+
+* a glob passes all three intact, as three arguments — so globbing justifies no
+  whitespace rule at all, and the original derivation was wrong about its own
+  central mechanism;
+* unquoted ``$(ls)`` and default ``xargs`` turn those three names into four
+  words: ``' lead'`` and ``'trail '`` merely lose their space and stay ONE word,
+  while ``'mid space'`` SPLITS. The splitting hazard is the interior space, which
+  this gate accepts.
+
+So splitting cannot justify either rule, and is not claimed to. What leading and
+trailing whitespace really cost is that two distinct tracked paths render
+identically in every listing, diff and review, and that a tool round-tripping the
+name through word splitting silently addresses a different file.
+
+**An interior space is accepted**, deliberately. It is visible, and the splitting
+hazard it poses is real — the answer to unquoted command substitution is to quote
+it, not to forbid spaces in filenames. A gate that refused ordinary names would be
+removed, and then none of the above would be enforced either.
 
 ``--`` would end option parsing for a well-written caller, and most callers here
 are well written. The point is that a repository should not require every future
@@ -63,11 +89,20 @@ def offences(paths: list[str]) -> list[str]:
                 found.append(f"{path!r}: component {component!r} begins with '-', so a glob "
                             f"expanding to it is read as a FLAG")
                 break
-            if component != component.strip():
-                found.append(f"{path!r}: component {component!r} begins or ends with whitespace")
+            misrendering = {"\n": "a newline", "\t": "a tab", "\r": "a carriage return"}
+            hit = next((name for char, name in misrendering.items() if char in component), None)
+            if hit is not None:
+                found.append(
+                    f"{path!r}: component {component!r} contains {hit}, so the name a tool "
+                    f"reads or displays is not the name on disk"
+                )
                 break
-            if "\n" in component or "\t" in component:
-                found.append(f"{path!r}: component {component!r} contains a newline or tab")
+            if component != component.strip():
+                found.append(
+                    f"{path!r}: component {component!r} begins or ends with whitespace, so it "
+                    f"renders identically to a different path and word splitting silently "
+                    f"addresses that other one"
+                )
                 break
     return found
 
@@ -85,6 +120,10 @@ def self_test() -> int:
         "trailing-space ",
         "has\nnewline",
         "has\ttab",
+        # `\r` was ACCEPTED here while `\t` was refused, with no basis for the
+        # difference. It is the worst of the three for review: `has\rcr` prints as
+        # `hascr`, so the rendered name is not the name.
+        "has\rcr",
     ]
     for path in refused:
         if not offences([path]):
@@ -103,6 +142,14 @@ def self_test() -> int:
         "a-file-with-hyphens.txt",
         "dir-with-hyphens/inner-file.rs",
         "Cargo.toml",
+        # AN INTERIOR SPACE IS ACCEPTED, and this is the neighbour that keeps the
+        # whitespace rule honest: it is the shape that actually SPLITS under unquoted
+        # command substitution, so a gate refusing leading whitespace on splitting
+        # grounds would have to refuse this too. It does not, because the answer to
+        # unquoted substitution is to quote it.
+        "docs/design/a file with spaces.md",
+        # A hyphen inside a component is not a leading one.
+        "crates/rdf-core/src/dataset_view.rs",
     ]
     wrongly = [path for path in accepted if offences([path])]
     if wrongly:
@@ -131,7 +178,15 @@ def main() -> int:
             + "\n  A glob expanding to one of these is read as a flag or split wrongly by "
             "every\n  command it reaches. Rename or remove them."
         )
-    print(f"OK: all {len(paths)} tracked paths are safe to pass as arguments")
+    # WHAT WAS INSPECTED, not a broader claim about safety. The previous message read
+    # "safe to pass as arguments", which asserts far more than three name-shape rules
+    # can establish — an interior space is accepted here and is not safe to pass
+    # unquoted. A gate that overstates its own scope is how a reader comes to believe a
+    # surface is covered when it is not, which is the failure this file exists inside.
+    print(
+        f"OK: none of the {len(paths)} tracked paths begins a component with '-', contains a "
+        "newline, tab or carriage return, or begins or ends a component with whitespace"
+    )
     return 0
 
 

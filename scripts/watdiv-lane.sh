@@ -853,6 +853,12 @@ if ((${#unpinned[@]} == 0)); then
   echo "answers: every one of the ${pinned} queries matched its recorded row count"
   echo "  (${answers_pin_stem}.<id>.${answers_pin_suffix}), ${total_rows} rows in total"
 elif ((pinned == 0)); then
+  # A MISSING PIN IS REPORTED HERE AND IS FATAL IN THE SIBLING LANE, and that difference
+  # is deliberate rather than drift. LUBM's Q1 and Q14 are answers LUBM ITSELF PUBLISHES
+  # for LUBM(1, 0) seed 0: they exist unconditionally, so their absence means the lookup
+  # or the table is broken and dying is right. These are REGRESSION pins -- this engine's
+  # own measurements, keyed on the binary version -- so absence is the expected state the
+  # first time a new version runs, and dying would make every release bump a lane failure.
   echo "answers: ${total_rows} rows across ${executed} queries, NOT checked against pins:"
   echo "  none is recorded under ${answers_pin_stem}.<id>.${answers_pin_suffix}. A"
   echo "  different scale, seed or binary is a different workload, and this binary's"
