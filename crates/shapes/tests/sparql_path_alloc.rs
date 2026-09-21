@@ -70,7 +70,7 @@
 //! a clone of the prepared plan in place so a visited node costs no fresh `Box`;
 //! the empty variable schema, a constant reached on every execution, became a
 //! process-wide shared one; a variable schema narrower than nine columns stopped
-//! building a hash index it can answer by scanning; and the `Variable` for a
+//! building a hash index it can answer by scanning; the `Variable` for a
 //! pre-binding name, which is shape text and constant across every focus node in a
 //! run, is interned per worker instead of rebuilt from a borrow twice over; and a
 //! column layout, which is a plan constant reached through a node that is a fresh
@@ -803,23 +803,6 @@ impl<'ast> syn::visit::Visit<'ast> for TestFns {
     }
 }
 
-/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
-/// statement of its body.**
-///
-/// This file's own documentation states that rule; this is what enforces it. A
-/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
-/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
-/// allocates without holding the lock — whether or not it takes a measurement of
-/// its own — can land its traffic inside a sibling test's open window and shift
-/// a pinned constant nondeterministically. A future test that omits the lock is
-/// exactly the contamination source this file exists to rule out, so it must
-/// fail loudly and name itself rather than show up as an occasional,
-/// unattributed shift in someone else's figure.
-///
-/// A source scan rather than a runtime check: nothing observable at runtime
-/// distinguishes "this test forgot to take the lock" from "this test never
-/// needed it", so the only place the distinction is visible is the source
-/// itself.
 /// `text` with comment markers and line breaks flattened away, so a claim that
 /// wraps across lines is one searchable string.
 fn flattened(text: &str) -> String {
@@ -894,6 +877,23 @@ fn every_claim_about_these_figures_quotes_the_measured_ones() {
     );
 }
 
+/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
+/// statement of its body.**
+///
+/// This file's own documentation states that rule; this is what enforces it. A
+/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
+/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
+/// allocates without holding the lock — whether or not it takes a measurement of
+/// its own — can land its traffic inside a sibling test's open window and shift
+/// a pinned constant nondeterministically. A future test that omits the lock is
+/// exactly the contamination source this file exists to rule out, so it must
+/// fail loudly and name itself rather than show up as an occasional,
+/// unattributed shift in someone else's figure.
+///
+/// A source scan rather than a runtime check: nothing observable at runtime
+/// distinguishes "this test forgot to take the lock" from "this test never
+/// needed it", so the only place the distinction is visible is the source
+/// itself.
 #[test]
 fn every_test_in_this_binary_takes_the_measure_lock_first() {
     let _guard = measure_lock();

@@ -183,7 +183,7 @@ time and re-measuring, and they are exactly additive:
   with the seed built around the pushdown's result so it still cannot come between
   the core and the peephole that is stated about it.
 
-Two more have since been taken against the decomposition above.
+Six more have since been taken against the decomposition above.
 
 The first: the SHACL rewrite grounded every pre-bound value **twice**: once into the `GroundTerm` the `VALUES`
 seed carries, and again into the constant its expression-position walk writes into
