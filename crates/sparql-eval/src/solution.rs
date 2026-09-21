@@ -200,6 +200,83 @@ impl VarSchema {
     }
 }
 
+/// How many distinct column layouts one worker keeps interned.
+///
+/// A layout is a plan constant — the projected variable list of a `SELECT`, the
+/// variables of a `VALUES` block — so a workload's whole vocabulary of layouts is
+/// small and bounded by the queries it runs. Reaching the cap clears rather than
+/// evicts, because the table memoizes a pure function of the variable list and
+/// losing it costs one reconstruction rather than a wrong answer.
+const INTERNED_SCHEMA_CAP: usize = 1_024;
+
+/// [`INTERNED_SCHEMAS`]' table: each entry is the column list a layout was built
+/// from, beside the layout itself.
+type InternedLayouts = hashbrown::HashTable<(Box<[Variable]>, Arc<VarSchema>)>;
+
+thread_local! {
+    /// Column layouts, interned per worker and keyed by their CONTENT.
+    ///
+    /// A `VarSchema` is a pure function of its variable list, and that list is a
+    /// plan constant — but the node it belongs to is a fresh heap temporary on every
+    /// execution, so a memo keyed by node address would be reading an address that a
+    /// later allocation can reuse. Keying by content sidesteps that entirely: the
+    /// question "what is the layout for these columns" has the same answer forever,
+    /// whoever asks and from whichever node.
+    ///
+    /// A `hashbrown::HashTable` rather than a `HashMap` so the probe can hash the
+    /// caller's BORROWED slice and compare against the stored layout's columns —
+    /// owning a key to look one up would be the allocation this exists to remove.
+    static INTERNED_SCHEMAS: std::cell::RefCell<InternedLayouts> =
+        const { std::cell::RefCell::new(hashbrown::HashTable::new()) };
+}
+
+/// The hash of a column layout, as [`INTERNED_SCHEMAS`] keys it.
+fn layout_hash(vars: &[Variable]) -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = crate::DetHasher::default().build_hasher();
+    hasher.write_usize(vars.len());
+    for var in vars {
+        hasher.write(var.as_str().as_bytes());
+        hasher.write_u8(0xff);
+    }
+    hasher.finish()
+}
+
+impl VarSchema {
+    /// The shared [`VarSchema`] for the column layout `vars`, interned per worker.
+    ///
+    /// Building one costs a `Vec`, an `Arc`, and — above the index threshold — a hash
+    /// table, at every `Project` and `VALUES` node, on every execution. The layout is
+    /// a plan constant, so on a path that runs one query per focus node that is the
+    /// same three allocations repeated per focus node for an identical answer.
+    ///
+    /// The layout is stored beside the column list it was built from, and the probe
+    /// compares against THAT rather than against the layout's own columns.
+    /// [`Self::from_vars`] drops later duplicates, so a request for `?s ?s` yields a
+    /// one-column layout — which does not equal the two-column list it was asked
+    /// for. Comparing against the stored request keeps such a lookup a hit instead
+    /// of a permanent miss that re-inserts on every call. `SELECT ?s ?s` is legal
+    /// and the crate has a test for it, so this is a real case and not a defensive
+    /// one.
+    pub fn interned(vars: &[Variable]) -> Arc<Self> {
+        let hash = layout_hash(vars);
+        INTERNED_SCHEMAS.with(|table| {
+            let mut table = table.borrow_mut();
+            if let Some((_, schema)) = table.find(hash, |(key, _)| &**key == vars) {
+                return Arc::clone(schema);
+            }
+            if table.len() >= INTERNED_SCHEMA_CAP {
+                table.clear();
+            }
+            let schema = Arc::new(Self::from_vars(vars.iter().cloned()));
+            table.insert_unique(hash, (Box::from(vars), Arc::clone(&schema)), |(key, _)| {
+                layout_hash(key)
+            });
+            schema
+        })
+    }
+}
+
 impl<I: ViewTermId> SolutionSeq<I> {
     /// An empty sequence over `schema` (zero solutions).
     pub fn empty(schema: Arc<VarSchema>) -> Self {

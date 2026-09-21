@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 74 |
-| custom `sh:ask` component | 148 |
-| custom `sh:select` component | 86 |
-| `sh:expression` function call | 172 |
+| `sh:sparql` constraint | 70 |
+| custom `sh:ask` component | 144 |
+| custom `sh:select` component | 82 |
+| `sh:expression` function call | 164 |
 
 The term is flat in the size of the data graph, so it is the price of executing a
 query once per focus node, not a scan. That distinction matters: a scan would be
@@ -84,7 +84,7 @@ evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
 and the slopes cannot be differenced. Figures are against the baseline of
 96 / 214 / 116 / 194 that held when the decomposition was taken; the reductions
-described in the next section have since moved them to 74 / 148 / 86 / 172, by
+described in the next section have since moved them to 70 / 144 / 82 / 164, by
 emptying part of the term-materialization row and most of the rebuild cost inside
 the pushdown, seed and expression-walk rows.
 
@@ -239,6 +239,23 @@ rewrite was re-owning it one layer down. Names are now interned per worker in a 
 keyed by `Box<str>` and probed by `&str`, so a hit hashes the borrowed name and
 allocates nothing and only a first sighting owns a copy — the same borrowed-probe
 shape the plan cache's key buffer uses. That took the term to 74 / 148 / 86 / 172.
+
+The sixth: a `VarSchema` is a pure function of its variable list, and that list is
+a plan constant — but the node it belongs to is a fresh heap temporary on every
+execution, so every `Project` and `VALUES` rebuilt the layout from scratch each
+time. A memo keyed by node address would read an address a later allocation can
+reuse, which is the hazard this crate documents for its other node-keyed caches.
+Keying by CONTENT sidesteps it: what the layout for a given column list is has the
+same answer forever, whoever asks and from whichever node. Layouts are now interned
+per worker in a `hashbrown::HashTable` probed by hashing the caller's borrowed
+slice, so a hit is an `Arc` clone and owning a key to look one up — the allocation
+this removes — never happens. That took the term to 70 / 144 / 82 / 164.
+
+The stored layout is compared against the column list it was BUILT FROM, not
+against its own columns, because `from_vars` drops later duplicates: `SELECT ?s ?s`
+is legal, the crate has a test for it, and a one-column layout does not equal the
+two-column request it answered. A debug assertion written on the assumption that
+projected lists are duplicate-free found that test within one run.
 
 One candidate was declined rather than taken. The single allocation left in
 constructing an evaluation context is the expression barrier's shared cell, and it

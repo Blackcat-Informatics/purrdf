@@ -55,15 +55,15 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 74 | 1,277,672 | 5,771 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 148 | 16,156 | 11,220 |
-//! | custom `sh:select` component | 2,738 | 86 | 1,278,972 | 6,633 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 172 | 13,393 | 10,853 |
+//! | `sh:sparql` constraint | 2,695 | 70 | 1,277,672 | 5,499 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 144 | 16,156 | 10,948 |
+//! | custom `sh:select` component | 2,738 | 82 | 1,278,972 | 6,361 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 164 | 13,393 | 10,309 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
-//! cheaper, and the pins move with it. The four surfaces last dropped by 22, 66,
-//! 30 and 22 allocations respectively (from 96, 214, 116 and 194) through five
+//! cheaper, and the pins move with it. The four surfaces last dropped by 26, 70,
+//! 34 and 30 allocations respectively (from 96, 214, 116 and 194) through six
 //! changes: the pre-binding rewrite stopped grounding every pre-bound value twice,
 //! once for the `VALUES` seed and again for the expression-position walk; it
 //! stopped rebuilding the algebra in order to rewrite it, both halves now mutating
@@ -72,7 +72,9 @@
 //! process-wide shared one; a variable schema narrower than nine columns stopped
 //! building a hash index it can answer by scanning; and the `Variable` for a
 //! pre-binding name, which is shape text and constant across every focus node in a
-//! run, is interned per worker instead of rebuilt from a borrow twice over.
+//! run, is interned per worker instead of rebuilt from a borrow twice over; and a
+//! column layout, which is a plan constant reached through a node that is a fresh
+//! heap temporary, is interned per worker by its CONTENT rather than rebuilt.
 //!
 //! # The two big rows and the two small ones are two different findings
 //!
@@ -326,7 +328,7 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 74,
+        per_focus_node: 70,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -343,7 +345,7 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 148,
+        per_focus_node: 144,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -364,7 +366,7 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 86,
+        per_focus_node: 82,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -379,7 +381,7 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 172,
+        per_focus_node: 164,
         results_per_violation: 1,
     },
 ];
