@@ -60,9 +60,9 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 96 |
-| custom `sh:ask` component | 214 |
-| custom `sh:select` component | 116 |
+| `sh:sparql` constraint | 90 |
+| custom `sh:ask` component | 184 |
+| custom `sh:select` component | 105 |
 | `sh:expression` function call | 194 |
 
 The term is flat in the size of the data graph, so it is the price of executing a
@@ -82,8 +82,10 @@ The decomposition below was taken by inserting **one extra, discarded copy** of
 each slice into the live path and differencing against the baseline, with the
 evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
-and the slopes cannot be differenced. Figures are against the current baseline of
-96 / 214 / 116 / 194.
+and the slopes cannot be differenced. Figures are against the baseline of
+96 / 214 / 116 / 194 that held when the decomposition was taken; the reduction
+described in the next section has since moved three of them to 90 / 184 / 105,
+by removing part of the term-materialization row.
 
 Slices that nest are differenced against each other rather than summed, so no
 allocation is counted twice: an extra `apply_shacl_prebinding` contains an extra
@@ -179,6 +181,19 @@ time and re-measuring, and they are exactly additive:
   with the seed built around the pushdown's result so it still cannot come between
   the core and the peephole that is stated about it.
 
+A fourth has since been taken against the decomposition above. The SHACL rewrite
+grounded every pre-bound value **twice**: once into the `GroundTerm` the `VALUES`
+seed carries, and again into the constant its expression-position walk writes into
+the pattern. The second conversion allocated, once per pre-bound value, per focus
+node — and it was unnecessary, because the algebra's `NamedNode` and `Literal` are
+both `Arc<str>`-backed, so lifting an already-grounded term into an expression is a
+refcount bump. The rewrite now grounds each value once and shares it, which took
+the term to 90 / 184 / 105 / 194. The same change gives the rewrite the early
+return it was missing for an empty pre-binding list, where it had been paying for a
+full walk-and-rebuild of the algebra to change nothing in it. `sh:expression` is
+unmoved because it reaches the plain substitution lane, which has no
+expression-position walk to feed.
+
 One candidate was declined rather than taken. The single allocation left in
 constructing an evaluation context is the expression barrier's shared cell, and it
 is load-bearing: workers forked for a parallel evaluation clone it, and the
@@ -188,11 +203,16 @@ optional and allocating only when governed would convert a documented, deliberat
 ungoverned fallback into a silently dropped truncation. One allocation per query
 is the cheaper side of that trade.
 
-What remains is the evaluator's per-query execution setup, which is where the
-measurement says the value now is. It is a larger piece of work than the pre-binding
-path it was mistaken for, and it belongs to `purrdf-sparql-eval` rather than to the
-validator: the plan-cache probe, the evaluation context, the variable schema, the
-solution sequence, and the intermediates a query allocates by running once.
+What remains belongs to `purrdf-sparql-eval` rather than to the validator, and the
+decomposition above says which part. Not the plan-cache probe, which is already
+free on a hit, and not the evaluation context, which allocates exactly once. What
+is left is the **tree minted for one focus node and dropped at the end of it**: the
+rewrite that builds it, the seed `VALUES` node it plants, the join onto that node,
+and the `VarSchema` every `Project` and `Bgp` rebuilds because the node it belongs
+to is a fresh heap temporary rather than a stable one. Those are one problem, not
+five, and the shape that answers it is a reusable execution artifact — the
+substituted shape decided once per query and per pre-bound variable name, with only
+the values written per focus node.
 
 ## The instrument's blind spot
 

@@ -108,13 +108,7 @@ pub(crate) fn apply_substitutions(
     query: Query,
     substitutions: Prebindings<'_>,
 ) -> Result<Query, RdfDiagnostic> {
-    let mut probes = Vec::with_capacity(substitutions.len());
-    for (name, value) in substitutions.iter() {
-        probes.push((
-            Variable::new(name.to_owned()),
-            ground_term_from_value(value)?,
-        ));
-    }
+    let probes = build_probes(substitutions)?;
     if probes.is_empty() {
         // Nothing to push and nothing to seed. [`push_probe_constants`] returns its
         // argument untouched for an empty probe list and a `map_core_pattern` whose
@@ -122,6 +116,38 @@ pub(crate) fn apply_substitutions(
         // here would be a walk with no rewrite in it.
         return Ok(query);
     }
+    Ok(apply_probes(query, probes))
+}
+
+/// Ground every pre-binding once: one [`Variable`] per name, one [`GroundTerm`] per
+/// value.
+///
+/// Separate from [`apply_probes`] because [`apply_shacl_prebinding`] needs the
+/// grounded values for its expression-position rewrite as well as for the seed, and
+/// deriving them twice from the same [`TermValue`]s was a measured per-focus-node
+/// cost: the conversion allocates, and SHACL runs it once per focus node, per value
+/// node, or per argument tuple.
+///
+/// # Errors
+///
+/// As [`apply_substitutions`]: a datatype IRI that is not a valid IRI, or a language
+/// tag the concrete syntaxes would not have lexed.
+fn build_probes(
+    substitutions: Prebindings<'_>,
+) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
+    let mut probes = Vec::with_capacity(substitutions.len());
+    for (name, value) in substitutions.iter() {
+        probes.push((
+            Variable::new(name.to_owned()),
+            ground_term_from_value(value)?,
+        ));
+    }
+    Ok(probes)
+}
+
+/// [`apply_substitutions`]'s rewrite, over probes that are already grounded and
+/// already known to be non-empty.
+fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     // ONE seed carrying every pre-binding, not one seed per pre-binding.
     //
     // `Query::substitute_variable` joins a single-row `VALUES` binding ONE variable
@@ -145,7 +171,7 @@ pub(crate) fn apply_substitutions(
         for (var, ground) in probes {
             query = query.substitute_variable(&var, ground);
         }
-        return Ok(query);
+        return query;
     }
     // ONE descent doing both rewrites, in the order the two separate descents ran
     // them.
@@ -161,7 +187,7 @@ pub(crate) fn apply_substitutions(
     // (`push_probes` maps every arm onto its own variant, and `at_core_root`
     // suppresses the restoring `Values` there), so the second descent could only
     // ever have stopped where the first one did.
-    Ok(query.map_core_pattern(move |core| {
+    query.map_core_pattern(move |core| {
         let core = push_probe_constants(core, &probes);
         let mut variables = Vec::with_capacity(probes.len());
         let mut row = Vec::with_capacity(probes.len());
@@ -176,7 +202,7 @@ pub(crate) fn apply_substitutions(
             }),
             right: Box::new(core),
         }
-    }))
+    })
 }
 
 /// Whether any variable is pre-bound twice, which is the one shape the combined
@@ -472,14 +498,27 @@ pub(crate) fn apply_shacl_prebinding(
     query: Query,
     substitutions: Prebindings<'_>,
 ) -> Result<Query, RdfDiagnostic> {
-    let query = apply_substitutions(query, substitutions)?;
+    let probes = build_probes(substitutions)?;
+    if probes.is_empty() {
+        // Both halves are the identity over an empty pre-binding list, and the
+        // expression walk below is a full walk-and-REBUILD of every pattern in the
+        // query — so without this the no-substitution case paid for a complete copy
+        // of the algebra to change nothing in it.
+        return Ok(query);
+    }
 
-    let mut entries = Vec::with_capacity(substitutions.len());
-    for (name, value) in substitutions.iter() {
-        entries.push((name, expression_from_term_value(value)?));
+    // The expression-position constants come from the SAME grounded values the seed
+    // is about to carry, not from a second conversion of the same `TermValue`s.
+    // `NamedNode`, `Literal` and `Variable` are all `Arc<str>`-backed, so lifting one
+    // out of a probe is a refcount bump; re-grounding it is a fresh allocation, once
+    // per pre-bound value, per focus node.
+    let mut entries = Vec::with_capacity(probes.len());
+    for ((name, _), (_, ground)) in substitutions.iter().zip(probes.iter()) {
+        entries.push((name, expression_from_ground(ground)));
     }
     let expr_subs = ExprSubs(entries);
 
+    let query = apply_probes(query, probes);
     Ok(map_patterns_in_query(query, |pattern| {
         substitute_in_graph_pattern(pattern, &expr_subs)
     }))
@@ -522,14 +561,18 @@ impl ExprSubs<'_> {
     }
 }
 
-/// Convert a dataset-independent [`TermValue`] to an [`Expression`] when it is an
-/// IRI or literal; return `None` for blank nodes or quoted triples, which must be
-/// handled via the VALUES-join path.
-fn expression_from_term_value(value: &TermValue) -> Result<Option<Expression>, RdfDiagnostic> {
-    match ground_term_from_value(value)? {
-        GroundTerm::NamedNode(node) => Ok(Some(Expression::NamedNode(node))),
-        GroundTerm::Literal(lit) => Ok(Some(Expression::Literal(lit))),
-        GroundTerm::BlankNode(_) | GroundTerm::Triple(_) => Ok(None),
+/// Lift an already-grounded pre-binding into an [`Expression`] when it is an IRI or
+/// literal; `None` for a blank node or quoted triple, which has no expression form
+/// and rides the `VALUES` join instead.
+///
+/// Takes the [`GroundTerm`] rather than the [`TermValue`] it came from precisely so
+/// the conversion is not repeated: the probe list already holds it, and both
+/// `NamedNode` and `Literal` are `Arc<str>`-backed, so this clone allocates nothing.
+fn expression_from_ground(ground: &GroundTerm) -> Option<Expression> {
+    match ground {
+        GroundTerm::NamedNode(node) => Some(Expression::NamedNode(node.clone())),
+        GroundTerm::Literal(lit) => Some(Expression::Literal(lit.clone())),
+        GroundTerm::BlankNode(_) | GroundTerm::Triple(_) => None,
     }
 }
 

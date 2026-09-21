@@ -2433,7 +2433,7 @@ type SiblingCoverageEntry = (
 /// instead.
 ///
 /// This is a recorded COST, not a permanent exemption, but the cost has been
-/// decomposed against the 96/214/116/194 the sibling file pins and it is not one
+/// decomposed against a term of 96/214/116/194 and it is not one
 /// thing. Per focus node the pre-binding rewrite — the algebra clone, the term
 /// materialization, the pushdown, the seed and the expression walk together — is
 /// 27% to 51% of the charge depending on the surface, and the algebra clone
