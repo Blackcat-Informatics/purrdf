@@ -287,10 +287,16 @@ impl PyStore {
     /// [`query`](Self::query), so a parameter stays projectable and reaches inside
     /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation.
     ///
-    /// The returned object holds a **snapshot** of this store taken now. Later
-    /// mutations are not visible to it; prepare again to see them. Re-reading the
-    /// store per run would make two runs of one prepared query disagree for a reason
-    /// the caller never asked about.
+    /// What is prepared here is the PLAN, not the data: the returned object holds a
+    /// reference to THIS store and re-reads its current contents on every
+    /// [`run`](super::prepared::PyPreparedQuery::run), rather than freezing a
+    /// snapshot once now. A mutation made after `prepare` — including one made
+    /// between two `run` calls on the SAME handle — is visible to the next run. This
+    /// is what a rule fixpoint or an incremental SHACL revalidation needs: both
+    /// mutate their store every round and re-run the same plan against what the
+    /// mutation just produced, so a handle that answered over a one-time snapshot
+    /// would make that use case impossible — refusing staleness by refusing the
+    /// feature.
     ///
     /// A prepared query must not be shared between threads: a run borrows it
     /// uniquely, because a query body can re-enter the evaluator and a handle
@@ -329,8 +335,7 @@ impl PyStore {
                   as on `query`"
     )]
     fn prepare(
-        &self,
-        py: Python<'_>,
+        slf: &Bound<'_, Self>,
         query: &str,
         parameters: Option<Vec<String>>,
         extension_namespaces: Option<Vec<String>>,
@@ -341,6 +346,7 @@ impl PyStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
+        let py = slf.py();
         let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         // Carried forward to the returned object for `run` to rebuild an engine
         // under (see [`super::prepared::PyPreparedQuery`]) — `config` below moves
@@ -353,11 +359,19 @@ impl PyStore {
             standpoint_predicates,
         };
         let parameters = parameters.unwrap_or_default();
-        let inner = &self.inner;
+        // A cheap owning handle to THIS store, taken under the GIL, for `run` to
+        // re-read on every call (see `Self::prepare`'s doc comment and
+        // `super::prepared::PyPreparedQuery::store`) — distinct from `guard` below,
+        // which only borrows `inner` for the ADMISSION-TIME freeze this call itself
+        // needs (building the relation registry and parsing/admitting the plan
+        // against a snapshot of what the store holds right now).
+        let store_handle: Py<Self> = slf.clone().unbind();
+        let guard = slf.borrow();
+        let inner = &guard.inner;
         // Snapshot + engine build + admission run detached (GIL released), exactly as
         // `query` does: this does the same freeze, registry build and parse/admit
         // work `query` does on every call, just once instead of per run.
-        py.detach(move || {
+        let result = py.detach(move || {
             let dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
@@ -365,7 +379,7 @@ impl PyStore {
             let aggregates = build_aggregates(aggregate_namespace);
             let engine = build_engine(config);
             super::prepared::prepare(
-                dataset,
+                store_handle,
                 &engine,
                 query,
                 &parameters,
@@ -373,7 +387,9 @@ impl PyStore {
                 aggregates,
                 standpoint_for_run,
             )
-        })
+        });
+        drop(guard);
+        result
     }
 
     /// Run a SPARQL query under caller-supplied execution governors, returning a
@@ -995,6 +1011,28 @@ impl PyStore {
 }
 
 impl PyStore {
+    /// Freeze this store's CURRENT contents into an immutable `Arc<RdfDataset>`
+    /// snapshot.
+    ///
+    /// Called fresh by [`PyPreparedQuery::run`](super::prepared::PyPreparedQuery::run)
+    /// on every run, rather than once at prepare time, so a prepared query's answer
+    /// reflects the store as it stands right now — the same freeze `query` and
+    /// `prepare` already do, exposed here so a held `Py<PyStore>` can repeat it. The
+    /// freeze itself (a real copy on a mutated store) runs with the GIL released;
+    /// only the borrow that reaches `self.inner` needs it held.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the store cannot be frozen.
+    pub(crate) fn freeze_snapshot(&self, py: Python<'_>) -> PyResult<Arc<RdfDataset>> {
+        let inner = &self.inner;
+        py.detach(|| {
+            inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))
+        })
+    }
+
     /// An immutable snapshot of this store's copy-on-write DELTA — the base, the
     /// rows added on top of it, and the rows suppressed from it, read through one
     /// view rather than copied.

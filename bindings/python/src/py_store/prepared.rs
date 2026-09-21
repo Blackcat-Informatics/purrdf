@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::TermValue;
 use purrdf_sparql_eval::{
     AggregateRegistry, InternedOutcome, NativeSparqlEngine, PreparedExecution,
     PropertyFunctionRegistry, StandpointPredicates,
@@ -39,6 +39,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use super::PyStore;
 use super::query::{borrowed_options, materialize_results};
 use super::term::{extract_term, rdf_term_to_value};
 
@@ -49,13 +50,16 @@ use super::term::{extract_term, rdf_term_to_value};
 pub(crate) struct PyPreparedQuery {
     /// The admitted plan and its parameter slots.
     execution: PreparedExecution,
-    /// The snapshot this query runs against.
+    /// The store this query was prepared against.
     ///
-    /// Taken once, when the query is prepared. A prepared query therefore answers
-    /// over the store **as it was at prepare time**, which is stated on `prepare` —
-    /// re-reading the store per run would make two runs of one prepared query
-    /// silently disagree for a reason the caller never asked about.
-    dataset: Arc<RdfDataset>,
+    /// [`run`](Self::run) re-reads and re-freezes this store's CURRENT contents on
+    /// every call rather than holding a snapshot taken once at prepare time — what
+    /// is prepared is the PLAN, not the data. `Store.prepare`'s own module doc names
+    /// "SHACL validation, a rule fixpoint" as the motivating use case, and a
+    /// fixpoint mutates its store every round by definition: refusing a run whose
+    /// store has advanced since `prepare` would make that use case impossible,
+    /// which would be satisfying the feature by refusing it.
+    store: Py<PyStore>,
     /// The property-function registry `execution`'s plan was admitted under —
     /// `None` when `prepare` declared none.
     ///
@@ -103,8 +107,23 @@ impl PyPreparedQuery {
     /// Each keyword names a declared parameter. An unknown keyword raises, and so
     /// does a parameter left unbound: an unbound focus would answer over every
     /// subject, which is a silently wider answer rather than a visible mistake.
+    ///
+    /// A keyword-argument call reads as TOTAL: every slot is reset to unbound
+    /// before this call's keywords are applied, so `run(this=X)` means "these are
+    /// the bindings", never "these, plus whatever an earlier call left behind". A
+    /// bare `run()` after a prior `run(this=X)` is refused exactly as it would be
+    /// on a handle nothing had ever bound — it does not silently re-answer for `X`.
     #[pyo3(signature = (**bindings))]
     fn run(&mut self, py: Python<'_>, bindings: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {
+        // Every slot goes back to unbound before this call's own keywords are
+        // applied, so a parameter an EARLIER call bound but this call does not
+        // (re)mention is `None` again here — not a stale value left over from that
+        // earlier call. That is what makes a keyword-argument call read as TOTAL:
+        // `run(this=X)` means "these are the bindings", never "these, plus whatever
+        // a prior call left behind". See `PreparedExecution::unbind_all`'s own doc
+        // for why this is the engine's job rather than a second bookkeeping layer
+        // here.
+        self.execution.unbind_all();
         if let Some(bindings) = bindings {
             for (name, value) in bindings {
                 let name: String = name.extract()?;
@@ -114,6 +133,21 @@ impl PyPreparedQuery {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
             }
         }
+        // No unbound check here: a slot this call left unmentioned is `None` after
+        // `unbind_all` above, and `NativeSparqlEngine::execute` below already
+        // refuses any still-`None` slot with its own diagnostic — the one place
+        // that decides what "still unbound" means and what it says.
+
+        // Re-read the owning store FRESH for this run (see `PyPreparedQuery::store`)
+        // rather than a snapshot taken once at prepare time, so a fixpoint's mutation
+        // between rounds is visible to the next round's run. Frozen while the GIL is
+        // held (a cheap borrow), then the heavy freeze work itself runs detached
+        // inside `freeze_snapshot`.
+        let dataset = {
+            let store = self.store.bind(py).borrow();
+            store.freeze_snapshot(py)?
+        };
+
         // Built from direct field accesses (not through a `&self` method) so this
         // borrow of `property_functions` / `aggregates` stays disjoint from the
         // `&mut self.execution` borrow just below — both are held live across the
@@ -121,7 +155,6 @@ impl PyPreparedQuery {
         let options = borrowed_options(self.property_functions.as_ref(), self.aggregates.as_ref());
         let standpoint_predicates = self.standpoint_predicates.clone();
         let execution = &mut self.execution;
-        let dataset = &self.dataset;
         // The engine is built HERE rather than held, because it is deliberately
         // `!Sync` — its plan cache is a `RefCell` — so it cannot live in a Python
         // object at all. Nothing is lost that this class exists to keep: the plan is
@@ -144,7 +177,7 @@ impl PyPreparedQuery {
                     .with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
             }
             engine
-                .execute(execution, &**dataset, options, |outcome| {
+                .execute(execution, &*dataset, options, |outcome| {
                     materialize_interned(&outcome)
                 })
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
@@ -191,12 +224,14 @@ fn materialize_interned<D: purrdf_core::DatasetView + Sync>(
     }
 }
 
-/// Build a prepared query over `dataset`, admitting it against `property_functions` /
-/// `aggregates` — the SAME registries [`PyPreparedQuery::run`] must later evaluate
-/// under, which is why both are stored on the returned object rather than dropped once
-/// admission succeeds.
+/// Build a prepared query admitted against `property_functions` / `aggregates` —
+/// the SAME registries [`PyPreparedQuery::run`] must later evaluate under, which is
+/// why both are stored on the returned object rather than dropped once admission
+/// succeeds. `store` is the owning `Store`, held so `run` can re-read its CURRENT
+/// contents on every call rather than a one-time snapshot (see
+/// [`PyPreparedQuery::store`]).
 pub(super) fn prepare(
-    dataset: Arc<RdfDataset>,
+    store: Py<PyStore>,
     engine: &NativeSparqlEngine,
     query: &str,
     parameters: &[String],
@@ -211,7 +246,7 @@ pub(super) fn prepare(
         .map_err(|e| PyValueError::new_err(format!("query preparation failed: {e}")))?;
     Ok(PyPreparedQuery {
         execution,
-        dataset,
+        store,
         property_functions,
         aggregates,
         standpoint_predicates,

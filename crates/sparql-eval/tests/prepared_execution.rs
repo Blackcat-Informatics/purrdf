@@ -158,6 +158,62 @@ fn running_with_a_parameter_unbound_is_refused() {
 }
 
 #[test]
+fn unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value() {
+    let _guard = measure_lock();
+    let ds = dataset(4);
+    let engine = NativeSparqlEngine::new();
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+
+    // Bind and run: s1 answers o1. o0 and o1 differ (see `dataset`/`iri`), so this
+    // execution's rows are the oracle for which subject it actually ran under.
+    execution.bind(0, iri(1)).expect("bind");
+    let rows = engine
+        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+            let InternedOutcome::Solutions(solutions) = outcome else {
+                panic!("expected solutions");
+            };
+            let row = &solutions.rows()[0];
+            format!("{:?}", solutions.cell(row, 0).expect("bound cell"))
+        })
+        .expect("a bound execution must run");
+    assert!(rows.contains("http://example.org/o1"), "got {rows}");
+
+    // THE INVALID CASE: after clearing, running with nothing re-bound is refused —
+    // exactly as it would be on an execution nothing had ever bound. If `unbind_all`
+    // left the slot's old value in place, this run would silently re-answer for s1
+    // instead of failing here.
+    execution.unbind_all();
+    let refused = engine.execute(&mut execution, &*ds, QueryOptions::EMPTY, |_| ());
+    let error = refused.expect_err("a cleared parameter must be refused, not re-answered stale");
+    assert!(
+        error.to_string().contains("unbound"),
+        "the diagnostic must name the problem: {error}"
+    );
+
+    // THE NEIGHBOURING VALID CASE: binding again after the clear makes it answer,
+    // and it must answer for the NEW value (s2 -> o2), never the stale s1 -> o1 the
+    // clear was meant to erase. A test that only checked `is_err()` above could not
+    // tell "honoured the clear" from "silently dropped the whole execution".
+    execution.bind(0, iri(2)).expect("bind after clearing");
+    let rows = engine
+        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+            let InternedOutcome::Solutions(solutions) = outcome else {
+                panic!("expected solutions");
+            };
+            let row = &solutions.rows()[0];
+            format!("{:?}", solutions.cell(row, 0).expect("bound cell"))
+        })
+        .expect("a re-bound execution must run");
+    assert!(
+        rows.contains("http://example.org/o2"),
+        "must answer the NEW binding (o2), not the cleared one (o1): got {rows}"
+    );
+    assert!(!rows.contains("http://example.org/o1"), "got {rows}");
+}
+
+#[test]
 fn binding_a_name_that_was_not_declared_is_refused() {
     let _guard = measure_lock();
     let engine = NativeSparqlEngine::new();

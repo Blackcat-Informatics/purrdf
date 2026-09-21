@@ -33,6 +33,19 @@ built so that outcome and the honoured one are DIFFERENT IN CONTENT, not merely
 different in row count, per the repository's rule that a valid-neighbour assertion
 over a fixture that cannot distinguish "honoured" from "silently dropped" is
 laundering.
+
+A fifth and sixth promise cover ``run``'s own statefulness:
+
+* **A binding does not outlive the call that made it.** ``run`` reads as total: a
+  keyword-argument call means "these are the bindings", not "these, plus whatever an
+  earlier call left behind". A bare ``run()`` after a prior ``run(this=X)`` must be
+  refused exactly as an initially-unbound handle is, not silently re-answer for
+  ``X``.
+* **``run`` reads the owning store fresh, every call.** What ``prepare`` admits is
+  the PLAN, not the data: a mutation made after ``prepare`` — including one made
+  between two ``run`` calls on the SAME handle — must be visible to the next run.
+  This is the fixpoint / incremental-SHACL contract the surface exists for, and a
+  fixpoint mutates its store every round by definition.
 """
 
 from __future__ import annotations
@@ -208,6 +221,35 @@ def test_an_unbound_parameter_is_refused_but_a_bound_one_runs() -> None:
     )
 
 
+def test_a_prior_binding_does_not_survive_into_a_later_unbound_call() -> None:
+    """`run` reads as total: it must not silently re-answer a bare `run()` with a
+    value an EARLIER call bound.
+
+    `prepared.run(this=X)` binds the engine's `this` slot to `X`. Because
+    `PreparedExecution` has no public way to unbind that slot, a naive `run` that
+    only applies the keywords it is GIVEN would leave the slot at `X` forever, and a
+    later bare `run()` would silently re-answer for `X` instead of being refused —
+    exactly the same silently-wider answer the initially-unbound case is refused
+    for. `o0` and `o1` differ, so a leaked `X` binding is distinguishable from a
+    correct refusal.
+    """
+    store = _store()
+    prepared = store.prepare(QUERY, parameters=["this"])
+
+    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s0"))) == purrdf.NamedNode(
+        f"{EX}o0"
+    )
+
+    with pytest.raises(ValueError, match="unbound"):
+        prepared.run()
+
+    # The neighbour: a second bound run for a DIFFERENT value answers for THAT
+    # value, not the one the first call bound.
+    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s1"))) == purrdf.NamedNode(
+        f"{EX}o1"
+    )
+
+
 def test_an_undeclared_parameter_name_is_refused() -> None:
     store = _store()
     prepared = store.prepare(QUERY, parameters=["this"])
@@ -232,18 +274,26 @@ def test_declaring_one_parameter_twice_is_refused() -> None:
     assert prepared.parameters == ["this", "other"]
 
 
-def test_a_prepared_query_answers_over_its_snapshot() -> None:
+def test_a_prepared_query_reads_the_owning_store_fresh_on_every_run() -> None:
+    """What `prepare` admits is the PLAN, not the data: a mutation made after
+    `prepare` — even between two `run` calls on the SAME handle — must be visible to
+    the next `run`.
+
+    This is the fixpoint / incremental-SHACL contract `Store.prepare`'s module doc
+    names as the motivating use case, and a fixpoint mutates its store every round
+    by definition. The control below (`s0`, asserted BEFORE the mutation) is what
+    keeps this test from passing vacuously: a handle that answered nothing, or that
+    answered everything regardless of the mutation, would fail it too.
+    """
     store = _store(subjects=2)
     prepared = store.prepare(QUERY, parameters=["this"])
+
+    # Control: the pre-mutation answer, over what the store already held.
     assert len(prepared.run(this=purrdf.NamedNode(f"{EX}s0"))) == 1
 
-    # A statement added after preparing is not visible to the prepared query — it
-    # holds the snapshot it was built from, which `prepare` states.
+    # A statement added after preparing — and after this SAME handle already ran —
+    # must be visible to the next run on it.
     store.load(f"<{EX}s9> <{EX}p> <{EX}o9> .", purrdf.RdfFormat.N_TRIPLES)
-    assert len(prepared.run(this=purrdf.NamedNode(f"{EX}s9"))) == 0
-    # But a freshly prepared one sees it, so the snapshot is the reason rather than
-    # a lost write.
-    reprepared = store.prepare(QUERY, parameters=["this"])
-    assert _first(reprepared.run(this=purrdf.NamedNode(f"{EX}s9"))) == purrdf.NamedNode(
+    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s9"))) == purrdf.NamedNode(
         f"{EX}o9"
     )

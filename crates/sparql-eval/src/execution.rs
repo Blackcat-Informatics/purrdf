@@ -124,6 +124,34 @@ impl PreparedExecution {
         Ok(())
     }
 
+    /// Return every parameter to unbound.
+    ///
+    /// `bind` and `bind_named` only ever write `Some`, so without this there is no
+    /// way to make a slot forget a value it was once given. That is exactly the gap
+    /// a caller whose bindings must be TOTAL per call falls into: a Python
+    /// `PreparedQuery.run(**bindings)`, say, where each call's keyword arguments are
+    /// meant to be the whole story. Such a caller applies only the parameters a
+    /// given call actually names, so a parameter one call bound and a LATER call
+    /// omits would otherwise keep answering with that earlier call's value forever
+    /// — not a crash, not a wrong-looking result, just a query silently answering a
+    /// question one fewer (or one different) argument than the caller actually
+    /// asked. That is the same shape of failure an unbound parameter is already
+    /// refused for, except here the parameter only *looks* bound, because this
+    /// execution's own bookkeeping cannot tell "bound this call" from "bound three
+    /// calls ago and never touched since".
+    ///
+    /// The fix is to call `unbind_all` at the top of every such call, before
+    /// applying that call's own bindings: every slot goes back to `None`, so a
+    /// parameter the call does not (re)bind is `None` when `execute` checks, and is
+    /// refused by the engine's own unbound check exactly as if this execution had
+    /// just been prepared. There is deliberately no partial `unbind(slot)` — nothing
+    /// in this crate needs to forget one parameter while keeping the rest, and
+    /// adding one would only invite a second, narrower way to get the total-call
+    /// semantics wrong.
+    pub fn unbind_all(&mut self) {
+        self.values.fill(None);
+    }
+
     /// The declared parameters, for a diagnostic.
     fn parameter_list(&self) -> String {
         if self.parameters.is_empty() {
