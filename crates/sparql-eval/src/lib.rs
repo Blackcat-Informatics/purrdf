@@ -97,6 +97,7 @@ pub mod eval;
 #[cfg(test)]
 mod exists_admission_gate;
 mod expr;
+pub mod extension_env;
 mod fallible;
 mod governed;
 pub mod governor;
@@ -154,6 +155,7 @@ pub use error::{EvalError, UnsupportedKind};
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
+pub use extension_env::ExtensionEnv;
 pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 pub use governed::{
     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,

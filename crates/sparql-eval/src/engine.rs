@@ -347,6 +347,73 @@ impl PlanCache {
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
             .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+        self.prepare_keyed(
+            query,
+            base_iri,
+            options,
+            relations,
+            aggregates,
+            &fingerprint,
+            &agg_fingerprint,
+        )
+    }
+
+    /// [`Self::prepare_with_relations`] against an already-derived
+    /// [`ExtensionEnv`], which is the same request with nothing recomputed.
+    ///
+    /// The environment derived its effective [`ParserOptions`] and both
+    /// instance-tier registry fingerprints once, at construction. The
+    /// registry-taking entry above must derive them per call because it is handed
+    /// loose registries and has nowhere to have cached anything — and a SHACL
+    /// validation issues one query per focus node, so that per-call derivation is a
+    /// full `describe()` walk and digest per focus node, on a path whose scratch
+    /// buffer exists precisely so a cache hit allocates nothing. A caller holding an
+    /// environment pays neither.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::prepare_with_relations`].
+    pub fn prepare_in_env(
+        &mut self,
+        query: &str,
+        base_iri: Option<&str>,
+        env: &crate::extension_env::ExtensionEnv,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        self.prepare_keyed(
+            query,
+            base_iri,
+            env.parser_options(),
+            env.relations(),
+            env.aggregates(),
+            env.relations_fingerprint(),
+            env.aggregates_fingerprint(),
+        )
+    }
+
+    /// The one parse-memoize-admit body both prepare entries share, given the
+    /// registry fingerprints already in hand.
+    ///
+    /// Taking them as parameters rather than deriving them is what lets
+    /// [`Self::prepare_in_env`] reuse an environment's precomputed values while
+    /// [`Self::prepare_with_relations`] derives its own, without the two lanes
+    /// growing separate copies of the key construction, the probe, the admission,
+    /// or the eviction accounting.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "every parameter is a distinct component of the cache key or of \
+                  admission; bundling them into a struct would reintroduce the \
+                  hand-assembled grouping ExtensionEnv exists to remove"
+    )]
+    fn prepare_keyed(
+        &mut self,
+        query: &str,
+        base_iri: Option<&str>,
+        options: &ParserOptions,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
+        aggregates: &crate::agg_fn::AggregateRegistry,
+        fingerprint: &str,
+        agg_fingerprint: &str,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         // The key is built into the cache's own reusable buffer and probed as a
         // borrowed slice, so a hit costs no allocation at all. The buffer is moved
         // out for the duration of the build (the probe needs `&mut self.entries`)
@@ -359,8 +426,8 @@ impl PlanCache {
             query,
             base_iri,
             options,
-            &fingerprint,
-            &agg_fingerprint,
+            fingerprint,
+            agg_fingerprint,
         );
         if let Some(prepared) = self.entries.get(scratch.as_slice()) {
             self.key_scratch = scratch;
@@ -380,8 +447,8 @@ impl PlanCache {
         let planned = admit_algebra(&parsed, relations, aggregates)?;
         let prepared = Arc::new(PreparedQuery::admitted(
             planned.unwrap_or(parsed),
-            fingerprint,
-            agg_fingerprint,
+            fingerprint.to_owned(),
+            agg_fingerprint.to_owned(),
             &self.memory,
         ));
         let bytes = key
@@ -1453,28 +1520,13 @@ impl NativeSparqlEngine {
     /// Parse and feasibility-order one request against the property-function registry
     /// that will be in scope for its evaluation.
     ///
-    /// **The single point where a registry becomes parse configuration.** A relation is
-    /// reachable from SPARQL only if the parser lowered its predicate IRI to a call
-    /// node, and the parser does that only for an IRI under a configured
-    /// [`ParserOptions::property_fn_namespaces`] entry OR an entry of
-    /// [`ParserOptions::property_fn_iris`]. Deriving [`ParserOptions::property_fn_iris`]
-    /// here, from the very registry the evaluation will resolve against, is what keeps
-    /// the two from drifting: a host cannot register a relation the parser does not
-    /// recognize, and cannot configure an IRI whose call resolves against a different
-    /// table.
-    ///
-    /// Registered IRIs go into [`ParserOptions::property_fn_iris`] — EXACT match — and
-    /// deliberately never into [`ParserOptions::property_fn_namespaces`] — PREFIX
-    /// match. A registry's keys are exact IRIs, not namespaces: folding
-    /// `https://example.org/rel/a` in as a prefix would reclassify the unrelated,
-    /// merely-same-prefixed data predicate `https://example.org/rel/ab` as a call to
-    /// an unregistered relation, which then hard-errors — a previously-working query
-    /// breaking with a diagnostic that names the wrong cause. A host that wants a
-    /// whole namespace recognized — including IRIs it has deliberately left
-    /// unregistered, so that spelling one is a hard error rather than a silent data
-    /// triple — still declares that namespace through [`Self::with_parser_options`];
-    /// the two sets (caller-declared namespaces, registry-derived exact IRIs) are
-    /// unioned, never conflated.
+    /// The registry becomes parse configuration through
+    /// [`crate::extension_env::derive_parser_options`], which is the one
+    /// implementation of that derivation in this crate — see its doc comment and
+    /// [`ExtensionEnv::new`](crate::extension_env::ExtensionEnv::new) for why the
+    /// union is EXACT-match on [`ParserOptions::property_fn_iris`] and never PREFIX
+    /// on [`ParserOptions::property_fn_namespaces`]. A host that wants a whole
+    /// namespace recognized declares it through [`Self::with_parser_options`].
     ///
     /// No registry (or an empty one) contributes nothing, so a query on a host that has
     /// not configured the seam parses under exactly the options it always did.
@@ -1491,11 +1543,13 @@ impl NativeSparqlEngine {
             .prepare_with_relations(query, base_iri, &options, relations, aggregates)
     }
 
-    /// This engine's [`ParserOptions`], augmented with `registry`'s exact predicate
-    /// IRIs (EXACT match — [`ParserOptions::property_fn_iris`] — never PREFIX; see
-    /// [`Self::prepare_for`]'s doc comment for why folding a registered IRI in as a
-    /// namespace prefix would hijack an unrelated, merely-same-prefixed data
-    /// predicate).
+    /// This engine's [`ParserOptions`] run through
+    /// [`crate::extension_env::derive_parser_options`], the one implementation of
+    /// the registry-to-parse-configuration derivation in this crate. That function's
+    /// doc comment owns the rationale — EXACT match on
+    /// [`ParserOptions::property_fn_iris`], never PREFIX; `describe()`'s IRI sort
+    /// making the derived set a pure function of contents rather than registration
+    /// order; and the untouched, unallocated return for an empty registry.
     ///
     /// Shared by [`Self::prepare_for`] (the query lane) and [`Self::parse_update`]
     /// (the UPDATE lane) so a registered relation's predicate is recognized as a
@@ -1504,11 +1558,11 @@ impl NativeSparqlEngine {
     /// registry that can drive one but not the other is a registry with two
     /// meanings depending on which clause spelled the predicate.
     ///
-    /// `describe()` is IRI-sorted, so the derived set is a pure function of the
-    /// registry's contents rather than of its registration order. Returns the
-    /// engine's own options unmodified — no clone, no allocation — when `registry`
-    /// is absent or empty, which is every request on a host that has not
-    /// configured the seam.
+    /// A caller that already holds an
+    /// [`ExtensionEnv`](crate::extension_env::ExtensionEnv) reads
+    /// [`ExtensionEnv::parser_options`](crate::extension_env::ExtensionEnv::parser_options)
+    /// instead, which is the same derivation performed once at construction rather
+    /// than per request.
     ///
     /// # Errors
     ///
@@ -1518,19 +1572,8 @@ impl NativeSparqlEngine {
         &self,
         registry: &crate::property_fn::PropertyFunctionRegistry,
     ) -> Result<Cow<'_, ParserOptions>, RdfDiagnostic> {
-        if registry.is_empty() {
-            return Ok(Cow::Borrowed(&self.parser_options));
-        }
-        let mut options = self.parser_options.clone();
-        let described = registry
-            .describe()
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
-        for descriptor in described {
-            if !options.property_fn_iris.contains(&descriptor.iri) {
-                options.property_fn_iris.push(descriptor.iri);
-            }
-        }
-        Ok(Cow::Owned(options))
+        crate::extension_env::derive_parser_options(&self.parser_options, registry)
+            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))
     }
 
     /// Build the per-query evaluation context, threading the engine-level
