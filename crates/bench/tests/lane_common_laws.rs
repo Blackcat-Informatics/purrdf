@@ -370,6 +370,72 @@ fn a_uint_knob_refuses_what_is_not_an_unsigned_integer_and_quotes_it_back() {
     }
 }
 
+// A DIGIT STRING BASH CANNOT CARRY IS REFUSED, NOT SILENTLY REPLACED.
+//
+// `$((10#${value}))` is base-10-explicit, which is the right answer to the octal reading of
+// `007` and says nothing about the other way a digit string fails to survive arithmetic: bash
+// integers are signed 64-bit and wrap without a word. `9223372036854775808` became
+// `-9223372036854775808` — a NEGATIVE seed out of an all-digits knob — and
+// `18446744073709551617` became `1`, so `SCALE_QUADS` at that value published a one-quad corpus
+// as the run the operator asked for. Every one of those passes `^[0-9]+$`, so validation could
+// not see it; the substitution happened in the normalisation that was supposed to make the
+// published label and the consumed value the same number.
+#[test]
+fn a_uint_knob_refuses_a_value_bash_would_wrap_rather_than_substituting_a_different_number() {
+    for (bad, wrapped_to) in [
+        ("9223372036854775808", "-9223372036854775808"),
+        ("18446744073709551617", "1"),
+        ("99999999999999999999", "7766279631452241919"),
+    ] {
+        let (code, out) = in_lane_common(&format!(
+            "BIG='{bad}'\nlane_require_uint PROBE_SEED BIG\necho \"published=${{BIG}}\""
+        ));
+        assert_ne!(
+            code, 0,
+            "PROBE_SEED='{bad}' wraps to {wrapped_to} in bash arithmetic and must be refused \
+             rather than carried; output:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("'{bad}'")),
+            "the refusal must quote the value the operator actually set; output:\n{out}"
+        );
+        assert!(
+            !out.contains(&format!("published={wrapped_to}")),
+            "the wrapped value {wrapped_to} must never reach a caller; output:\n{out}"
+        );
+    }
+}
+
+#[test]
+fn a_uint_knob_accepts_the_largest_value_it_can_carry_intact() {
+    // THE NEIGHBOUR, and it is the boundary itself rather than a comfortable distance from it:
+    // a bound written one too tight refuses a legal value, which is the mirror of the bug above
+    // and just as invisible — the refusal looks like correct strictness. 2^63-1 is representable,
+    // so it must be accepted and must come back unchanged.
+    let (code, out) = in_lane_common(
+        "MAX=9223372036854775807\nlane_require_uint PROBE_SEED MAX\necho \"carried=${MAX}\"\n\
+         NEAR=9223372036854775806\nlane_require_uint PROBE_SEED NEAR\necho \"near=${NEAR}\"\n\
+         PADDED=000000000000000000009\nlane_require_uint PROBE_SEED PADDED\n\
+         echo \"padded=${PADDED}\"",
+    );
+    assert_eq!(
+        code, 0,
+        "2^63-1 is representable and must not be refused; output:\n{out}"
+    );
+    assert!(
+        out.contains("carried=9223372036854775807"),
+        "the largest carriable value must come back byte-identical; output:\n{out}"
+    );
+    assert!(out.contains("near=9223372036854775806"), "output:\n{out}");
+    // A padded value LONGER than the bound's own digit count is still small: the range check
+    // must run on the stripped text, not on the string the operator typed. Written the other
+    // way round, this 21-character `9` would be refused for its length.
+    assert!(
+        out.contains("padded=9"),
+        "leading zeros are stripped before the range is judged; output:\n{out}"
+    );
+}
+
 #[test]
 fn a_positive_knob_refuses_zero_and_accepts_one() {
     let (code, out) = in_lane_common("N=0\nlane_require_positive PROBE_COUNT N");

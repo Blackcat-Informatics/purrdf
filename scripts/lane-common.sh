@@ -208,13 +208,45 @@ lane_require_nonempty_file() {
 # the offending value from its message). They take the knob's NAME and the
 # VARIABLE's name, so normalisation happens where validation does and no caller
 # can have one without the other.
+#
+# THE NORMALISATION ITSELF WAS THE SECOND HALF OF THE SAME BUG. It read
+# `$((10#${value}))`, which is base-10-explicit -- correct against the octal
+# reading, and silent about the other way a digit string fails to survive
+# arithmetic. Bash integers are SIGNED 64-BIT and wrap without a word:
+#
+#   9223372036854775808  -> -9223372036854775808   (a negative seed, from digits)
+#   18446744073709551617 ->                    1
+#   99999999999999999999 ->  7766279631452241919
+#
+# Every one of those passes `^[0-9]+$`, and the substituted value was then handed
+# to the generator, printed in the SUMMARY as the requested run, and folded into
+# the pin key -- the exact shape this helper exists to prevent, one layer down.
+# `SCALE_QUADS=18446744073709551617` published a ONE-QUAD corpus as the run the
+# operator asked for.
+#
+# So the range is checked BEFORE any arithmetic happens, and leading zeros are
+# stripped as TEXT. The bound is bash's own representable maximum rather than a
+# lane policy: a value this helper cannot carry to its caller intact must be
+# refused by name, not quietly replaced by a different number.
 lane_require_uint() {
   local name="$1"
   local -n _lane_uint_value="$2"
   [[ "${_lane_uint_value}" =~ ^[0-9]+$ ]] ||
     die "${name} must be a decimal unsigned integer (got '${_lane_uint_value}')"
-  # Base 10 explicitly: a leading zero would otherwise be read as octal.
-  _lane_uint_value=$((10#${_lane_uint_value}))
+  # The leading run of zeros, removed textually. `${value%%[!0]*}` is that run;
+  # an all-zero value leaves nothing behind, which is the one case that needs a
+  # floor.
+  local stripped="${_lane_uint_value#"${_lane_uint_value%%[!0]*}"}"
+  [[ -n "${stripped}" ]] || stripped="0"
+  local max="9223372036854775807"
+  if ((${#stripped} > ${#max})) ||
+    { ((${#stripped} == ${#max})) && [[ "${stripped}" > "${max}" ]]; }; then
+    die "${name} must be at most ${max} (got '${_lane_uint_value}').
+  Bash arithmetic is signed 64-bit and wraps silently, so accepting this would
+  substitute a different number -- possibly a negative one -- and then publish it
+  as the value you asked for."
+  fi
+  _lane_uint_value="${stripped}"
 }
 
 lane_require_positive() {
