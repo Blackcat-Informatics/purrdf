@@ -174,7 +174,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 7, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 8, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -2831,4 +2831,70 @@ fn a_spaced_sha3_hyphen_is_an_error_over_the_c_abi() {
         purrdf_error_free(error);
         purrdf_dataset_free(dataset);
     }
+}
+
+/// The status enum is APPEND-ONLY, and this match is what makes that a compile-time
+/// fact rather than a comment.
+///
+/// Every variant is listed with no `_` arm and its discriminant asserted, so the two
+/// ways of breaking a C consumer both stop the build rather than shipping:
+///
+/// - **Renumbering or removing a variant** changes a value a host compiled against the
+///   previous header already baked into its own `switch`. That host does not fail to
+///   link; it silently takes the wrong branch. The equality assertions below are the
+///   only thing standing between that and a release, because the header check compares
+///   PROTOTYPES and never sees an enumerator's value move.
+/// - **Adding a variant** stops this file compiling. That is deliberate and is not an
+///   obstacle: a new status is a new outcome every exhaustive C `switch` in the wild
+///   now falls through, so it must be a decision someone makes on purpose, recorded in
+///   the ABI ledger, rather than a line that slipped in behind a wildcard.
+///
+/// Appending is the sanctioned change; the compile error asks for confirmation, not for
+/// the variant to be taken back out.
+#[test]
+fn the_status_enum_is_append_only() {
+    // Wildcard-free ON PURPOSE. Do not add `_ =>` to make this compile.
+    fn discriminant(status: PurrdfStatus) -> i32 {
+        match status {
+            PurrdfStatus::Ok => 0,
+            PurrdfStatus::NullPointer => 1,
+            PurrdfStatus::InvalidUtf8 => 2,
+            PurrdfStatus::InvalidArgument => 3,
+            PurrdfStatus::UnsupportedFormat => 4,
+            PurrdfStatus::ParseError => 5,
+            PurrdfStatus::SerializeError => 6,
+            PurrdfStatus::QueryError => 7,
+            PurrdfStatus::FreezeError => 8,
+            PurrdfStatus::CursorExhausted => 9,
+            PurrdfStatus::GtsError => 10,
+            PurrdfStatus::ShapesProductError => 11,
+            PurrdfStatus::Panic => 100,
+        }
+    }
+
+    // Each variant's own `as i32` must equal the value the match pins, so a renumbering
+    // fails here even though both sides moved together in the source.
+    for (status, expected) in [
+        (PurrdfStatus::Ok, 0),
+        (PurrdfStatus::NullPointer, 1),
+        (PurrdfStatus::InvalidUtf8, 2),
+        (PurrdfStatus::InvalidArgument, 3),
+        (PurrdfStatus::UnsupportedFormat, 4),
+        (PurrdfStatus::ParseError, 5),
+        (PurrdfStatus::SerializeError, 6),
+        (PurrdfStatus::QueryError, 7),
+        (PurrdfStatus::FreezeError, 8),
+        (PurrdfStatus::CursorExhausted, 9),
+        (PurrdfStatus::GtsError, 10),
+        (PurrdfStatus::ShapesProductError, 11),
+        (PurrdfStatus::Panic, 100),
+    ] {
+        assert_eq!(status as i32, expected, "a status discriminant moved");
+        assert_eq!(discriminant(status), expected, "the pinned match disagrees");
+    }
+
+    // `Ok` is the one value the whole surface tests against; pin it separately so a
+    // reader does not have to trust the table above for the only value with a contract
+    // stated in prose ("Ok == 0").
+    assert_eq!(PurrdfStatus::Ok as i32, 0);
 }

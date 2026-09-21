@@ -34,6 +34,7 @@
 //! of its budget on a query that could never have run. A caller's ceiling is for the
 //! work its query does, not for discovering that the query is misconfigured.
 
+use purrdf_core::ContentDigest;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, Literal, NamedNodePattern,
@@ -47,6 +48,7 @@ use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::modifier::is_numeric_xsd;
 use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
+use crate::registry_id::append_framed_part;
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
 ///
@@ -1116,6 +1118,16 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 /// still be treated as two distinct configurations — sharing a cache entry between them
 /// would be silent only until one relation actually depended on sequential evaluation.
 ///
+/// # The content half is [`content_fingerprint`], rendered
+///
+/// Everything after the instance id is [`content_fingerprint`]'s digest in hex, not a
+/// second walk over the same declarations. One fold means the two tiers can never come
+/// to disagree about which declared fields matter: a field added to the durable digest
+/// is, in the same edit, a field this fingerprint separates plans on. It also makes the
+/// join unambiguous by construction — a hex digest is a fixed-width alphabet that cannot
+/// contain the delimiter, so no registry's declarations can forge the boundary between
+/// the two halves.
+///
 /// Derived from [`PropertyFunctionRegistry::describe`], which is already IRI-sorted, so
 /// the content half of the fingerprint is a pure function of the registry's contents
 /// rather than of its construction order (the instance id half is, by construction, a
@@ -1141,65 +1153,155 @@ pub(crate) fn registry_fingerprint(
     let mut out = String::new();
     out.push_str(&relations.instance_id().stable_encoding().to_string());
     out.push('\u{5}');
-    out.push_str(&content_fingerprint(relations)?);
+    out.push_str(&content_fingerprint(relations)?.to_hex());
     Ok(out)
 }
 
-/// The content half of [`registry_fingerprint`]: every registered IRI's arity,
-/// declared volatility, and declared modes with their row bounds, IRI-sorted —
-/// and nothing else.
+/// The domain separator every property-function content fingerprint opens with, so
+/// a digest of this registry kind can never equal a digest of another kind that
+/// happens to fold a structurally identical field sequence (an empty
+/// property-function registry and an empty aggregate registry would otherwise
+/// collide, and a caller binding both would be unable to tell which it had).
+const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
+
+/// The schema version of the field sequence this fingerprint folds.
 ///
-/// This is the durable, instance-independent half. It deliberately omits the
-/// [`RegistryId`](crate::registry_id::RegistryId) that [`registry_fingerprint`]
-/// prepends, so two independently constructed registries that declare the same
-/// relations produce the identical digest across processes and instances. It is
-/// exposed to hosts through [`PropertyFunctionRegistry::content_fingerprint`],
-/// which is exactly the "do these declare the same shape?" question; the plan
-/// cache and governed receipts must keep using the instance-bearing
-/// [`registry_fingerprint`], because a plan admitted under one registry must never
-/// run under a different one that merely describes itself identically.
+/// The domain separator above keeps a property-function digest from colliding
+/// with *another kind* of registry's digest. It does nothing about a collision
+/// between two *versions of this one*, and that is a real gap: the fields below
+/// are length-framed, which makes each version's encoding self-delimiting and
+/// injective **within** a version, but says nothing across versions. A field
+/// added between two existing ones shifts every byte after it, and there is no
+/// argument that the resulting string cannot equal some older declaration's —
+/// only the observation that nobody has found a pair. A digest that two
+/// different schemas can produce is a digest a caller cannot rely on, so the
+/// version is folded in and the question stops being open.
+///
+/// Bumped to 2 when a ranked declaration gained its fidelity term: what a
+/// producer promises about the completeness and order of its own rows now
+/// changes the registry's identity, because a plan drawn from producers that
+/// approximate is not the plan drawn from producers that do not.
+const CONTENT_VERSION: u16 = 2;
+
+/// A **content-only** fingerprint of `relations`: every registered IRI's subject
+/// and object arity, its declared volatility, its declared modes with their row
+/// bounds, and its ranked-retrieval declaration, IRI-sorted — with the registry's
+/// instance id **omitted**, digested as a [`ContentDigest`].
+///
+/// This is the one fold of a property-function registry's declarations in this
+/// crate. The crate-internal plan-cache fingerprint renders it in hex behind the
+/// instance id rather than walking the descriptors a second time, and
+/// [`PropertyFunctionRegistry::content_fingerprint`] hands hosts the same hex, so
+/// "which declared fields make two registries different?" has exactly one answer
+/// and cannot drift into two.
+///
+/// # Why a second fingerprint rather than a change to the first
+///
+/// `registry_fingerprint` leads with the registry's
+/// `RegistryId` (`crate::registry_id::RegistryId`), and must keep doing so: that id
+/// is the only thing that can tell apart two registries which declare identically
+/// but resolve an IRI to two different implementations, and it is what stops a plan
+/// prepared against one registry from silently running against another. But the id
+/// is a process-lifetime counter. Written into a persisted artifact and read back in
+/// another process, it compares two readings of two unrelated sequences — a
+/// comparison whose outcome is meaningless in both directions. So an artifact that
+/// must name the host registries it requires, and have that requirement checked
+/// somewhere else, cannot use `registry_fingerprint` at all; it needs a value that
+/// is a pure function of declarations. The two answer different questions and both
+/// remain: this one is additive and changes nothing about the first.
+///
+/// # What it binds, and what it deliberately does not
+///
+/// It binds **declarations**, not implementations. Two independently built
+/// registries that declare the same IRIs with the same arities, volatilities,
+/// modes and ranked-retrieval declarations produce the same digest even when their
+/// [`PropertyFunction`](crate::property_fn::PropertyFunction) implementations return
+/// entirely different rows — exactly the hole the instance id closes in-process, and
+/// one no content-derived value can close, because a trait object exposes no content
+/// to digest. A caller crossing a process boundary must therefore pair this digest
+/// with whatever separately identifies the implementations behind the declarations,
+/// and must not read a match as proof that two registries compute the same answers.
+///
+/// # The rejected alternative: a hash of the instance id's persisted rendering
+///
+/// Persisting `RegistryId::stable_encoding` and comparing it on restore was rejected
+/// outright. It does not merely fail to help — it fails in the shape that is hardest
+/// to see: the restoring process's registries carry ids drawn from a counter that
+/// restarted at `1`, so a bare `2` may match a completely unrelated registry
+/// (accepting an artifact that should be refused) while an identically-declared
+/// rebuild of the exact registry the artifact was produced against gets a different
+/// id and is refused (refusing one that should be accepted). Both failures are silent
+/// and neither is reproducible.
+///
+/// # Encoding
+///
+/// Framed through `append_framed_part` (`crate::registry_id::append_framed_part`),
+/// whose length-prefixing makes the byte sequence injective, then digested. An empty
+/// registry is not special-cased: it digests the domain separator alone, so
+/// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY)
+/// and any other empty registry agree, exactly as they do under
+/// `registry_fingerprint`'s empty-string short circuit.
 ///
 /// # Errors
 ///
 /// [`EvalError::Function`] if a registered relation's declaration methods panic —
-/// [`PropertyFunctionRegistry::describe`]'s own failure, propagated unchanged.
-/// Never raised when `relations` is empty: that case returns before any
-/// relation's declaration is read at all.
-pub(crate) fn content_fingerprint(
+/// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)'s
+/// own failure, propagated unchanged.
+pub fn content_fingerprint(
     relations: &PropertyFunctionRegistry,
-) -> Result<String, EvalError> {
-    if relations.is_empty() {
-        return Ok(String::new());
-    }
-    let mut out = String::new();
+) -> Result<ContentDigest, EvalError> {
+    let mut bytes = Vec::new();
+    append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
+    append_framed_part(&mut bytes, "version", &CONTENT_VERSION.to_be_bytes());
     for descriptor in relations.describe()? {
-        out.push_str(&descriptor.iri);
-        out.push('\u{2}');
-        out.push_str(&descriptor.subject_arity.to_string());
-        out.push(',');
-        out.push_str(&descriptor.object_arity.to_string());
-        out.push('\u{2}');
-        out.push_str(descriptor.volatility.label());
+        append_framed_part(&mut bytes, "iri", descriptor.iri.as_bytes());
+        append_framed_part(
+            &mut bytes,
+            "subject-arity",
+            &(descriptor.subject_arity as u64).to_be_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "object-arity",
+            &(descriptor.object_arity as u64).to_be_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "volatility",
+            descriptor.volatility.label().as_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "mode-count",
+            &(descriptor.modes.len() as u64).to_be_bytes(),
+        );
         for mode in &descriptor.modes {
-            out.push('\u{3}');
-            out.push_str(&mode.code);
-            out.push(':');
-            out.push_str(&mode.rows_per_invocation.to_string());
+            append_framed_part(&mut bytes, "mode-code", mode.code.as_bytes());
+            append_framed_part(
+                &mut bytes,
+                "mode-rows",
+                &mode.rows_per_invocation.to_be_bytes(),
+            );
         }
-        // The ranked-retrieval declaration the host supplied at registration: a
-        // producer's participation in fusion is a declaration a prepared plan's
-        // identity must cover, exactly as arity, volatility and modes are. A
-        // relation registered without one contributes the fixed one-byte
-        // `NOT_RANKED_CANONICAL` description, so a producer that does not fuse
-        // cannot perturb the digest of one that does.
-        out.push('\u{5}');
-        match descriptor.ranked.as_ref() {
-            None => out.push_str(NOT_RANKED_CANONICAL),
-            Some(declaration) => out.push_str(&declaration.canonical_description()),
-        }
-        out.push('\u{4}');
+        // The ranked-retrieval declaration the host supplied at registration. A
+        // producer's participation in fusion is a declaration exactly as arity,
+        // volatility and modes are: it decides whether a request can draw ranked
+        // candidates from this IRI at all, and under which stratum, ordering and
+        // duplicate guarantee they arrive. A relation registered without one
+        // contributes the fixed `NOT_RANKED_CANONICAL` description rather than
+        // nothing, so a producer that does not fuse still occupies the field and
+        // cannot be confused with one whose declaration was simply not read.
+        append_framed_part(
+            &mut bytes,
+            "ranked",
+            match descriptor.ranked.as_ref() {
+                None => NOT_RANKED_CANONICAL.to_owned(),
+                Some(declaration) => declaration.canonical_description(),
+            }
+            .as_bytes(),
+        );
     }
-    Ok(out)
+    Ok(ContentDigest::of(&bytes))
 }
 
 #[cfg(test)]
@@ -1309,6 +1411,380 @@ mod registry_fingerprint_tests {
             registry_fingerprint(&cloned).expect("ok"),
             "a clone shares the source's actual implementations, so it is the same \
              registry instance for fingerprint purposes"
+        );
+    }
+}
+
+#[cfg(test)]
+mod content_fingerprint_tests {
+    use std::sync::Arc;
+
+    use purrdf_core::binding_pattern::BindingPattern;
+
+    use super::{content_fingerprint, registry_fingerprint};
+    use crate::error::EvalError;
+    use crate::property_fn::{
+        CandidateDomains, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+        PropertyFunctionRegistry, RankFidelity, RankedDeclaration,
+    };
+    use crate::user_fn::Volatility;
+
+    const EX_REL: &str = "http://example.org/ns#rel";
+    const EX_OTHER: &str = "http://example.org/ns#other";
+    const EX_STRATUM: &str = "http://example.org/stratum/a";
+    const EX_STRATUM_B: &str = "http://example.org/stratum/b";
+
+    /// A relation that declares exactly what its constructor was handed and nothing
+    /// else, so a test can vary ONE declared field at a time and watch the content
+    /// fingerprint move. Never dispatched — these fixtures exist to be described.
+    #[derive(Debug)]
+    struct DeclaredRelation {
+        arity: PfArity,
+        volatility: Volatility,
+        modes: [BindingPattern; 1],
+    }
+
+    impl DeclaredRelation {
+        fn new(subject: usize, object: usize, volatility: Volatility) -> Self {
+            let arity = PfArity::new(subject, object);
+            Self {
+                arity,
+                volatility,
+                modes: [arity.all_free_mode()],
+            }
+        }
+    }
+
+    /// The empty cursor [`DeclaredRelation::open`] hands out.
+    struct EmptyCursor;
+
+    impl PfCursor for EmptyCursor {
+        fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    impl PropertyFunction for DeclaredRelation {
+        fn volatility(&self) -> Volatility {
+            self.volatility
+        }
+
+        fn arity(&self) -> PfArity {
+            self.arity
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    /// A registry holding one [`DeclaredRelation`] under `iri`.
+    fn one(
+        iri: &str,
+        subject: usize,
+        object: usize,
+        volatility: Volatility,
+    ) -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            iri,
+            Arc::new(DeclaredRelation::new(subject, object, volatility)),
+        );
+        registry
+    }
+
+    /// A minimal, valid ranked declaration claiming `stratum` and nothing else —
+    /// no accepted terms, no depth placement, and its candidate at position `0`,
+    /// which every relation registered through [`one_ranked`] declares (both
+    /// arguments are always present). The only field a test varies across two
+    /// calls is `stratum`, passed explicitly.
+    fn minimal_ranked_declaration(stratum: &str) -> RankedDeclaration {
+        RankedDeclaration {
+            stratum: purrdf_core::parse_iri(stratum).expect("fixture IRI"),
+            accepted_terms: Vec::new(),
+            depth_placement: None,
+            candidate_position: 0,
+            duplicates: DuplicatePolicy::Unique,
+            // The fixture producer is an in-memory table read end to end.
+            fidelity: RankFidelity::EXACT,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
+            mandatory: false,
+        }
+    }
+
+    /// A registry holding one [`DeclaredRelation`] under `iri`, wired up as a
+    /// ranked producer under `stratum` — the ranked counterpart to [`one`], built
+    /// from the SAME relation constructor so only the ranked declaration differs.
+    fn one_ranked(
+        iri: &str,
+        subject: usize,
+        object: usize,
+        volatility: Volatility,
+        stratum: &str,
+    ) -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            iri,
+            Arc::new(DeclaredRelation::new(subject, object, volatility)),
+            minimal_ranked_declaration(stratum),
+        );
+        registry
+    }
+
+    /// A relation like [`DeclaredRelation`] but with an explicit, caller-chosen
+    /// mode list and row bound, so a test can vary the declared MODES (or their
+    /// row bounds) alone while the IRI, arity and volatility stay fixed. Never
+    /// dispatched, exactly like [`DeclaredRelation`].
+    #[derive(Debug)]
+    struct ModedRelation {
+        arity: PfArity,
+        modes: Vec<BindingPattern>,
+        rows_per_invocation: u64,
+    }
+
+    impl ModedRelation {
+        fn new(arity: PfArity, modes: Vec<BindingPattern>, rows_per_invocation: u64) -> Self {
+            Self {
+                arity,
+                modes,
+                rows_per_invocation,
+            }
+        }
+    }
+
+    impl PropertyFunction for ModedRelation {
+        fn volatility(&self) -> Volatility {
+            Volatility::Stable
+        }
+
+        fn arity(&self) -> PfArity {
+            self.arity
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            self.rows_per_invocation
+        }
+
+        fn open(
+            &self,
+            _args: &PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    /// A registry holding one [`ModedRelation`] under `iri`.
+    fn one_moded(
+        iri: &str,
+        arity: PfArity,
+        modes: Vec<BindingPattern>,
+        rows_per_invocation: u64,
+    ) -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            iri,
+            Arc::new(ModedRelation::new(arity, modes, rows_per_invocation)),
+        );
+        registry
+    }
+
+    /// The whole point of the content tier: two registries built INDEPENDENTLY — two
+    /// distinct instances, two distinct `RegistryId`s — that declare the same thing
+    /// must produce the SAME content fingerprint, so a consumer process can reproduce
+    /// a producer's value from a rebuilt registry.
+    ///
+    /// The second half is what proves this function is not merely a rename of
+    /// `registry_fingerprint`: over the very same pair, the instance-bearing
+    /// fingerprint must still DIFFER, because the guarantee it makes in-process is
+    /// unchanged by the addition of the content tier.
+    #[test]
+    fn content_fingerprint_is_stable_across_registry_instances() {
+        let a = one(EX_REL, 1, 1, Volatility::Stable);
+        let b = one(EX_REL, 1, 1, Volatility::Stable);
+
+        assert_eq!(
+            content_fingerprint(&a).expect("ok"),
+            content_fingerprint(&b).expect("ok"),
+            "the content fingerprint must be a pure function of declarations, so two \
+             independently built registries declaring the same thing agree"
+        );
+        assert_ne!(
+            registry_fingerprint(&a).expect("ok"),
+            registry_fingerprint(&b).expect("ok"),
+            "the instance-bearing fingerprint must still tell the same two registries \
+             apart — the content tier is additive, not a replacement"
+        );
+    }
+
+    /// Registration order must not reach the digest: the fold reads
+    /// `describe()`, which is IRI-sorted.
+    #[test]
+    fn content_fingerprint_ignores_registration_order() {
+        let mut a = PropertyFunctionRegistry::new();
+        a.register(
+            EX_REL,
+            Arc::new(DeclaredRelation::new(1, 1, Volatility::Stable)),
+        );
+        a.register(
+            EX_OTHER,
+            Arc::new(DeclaredRelation::new(2, 1, Volatility::Volatile)),
+        );
+        let mut b = PropertyFunctionRegistry::new();
+        b.register(
+            EX_OTHER,
+            Arc::new(DeclaredRelation::new(2, 1, Volatility::Volatile)),
+        );
+        b.register(
+            EX_REL,
+            Arc::new(DeclaredRelation::new(1, 1, Volatility::Stable)),
+        );
+
+        assert_eq!(
+            content_fingerprint(&a).expect("ok"),
+            content_fingerprint(&b).expect("ok")
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_iri() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_OTHER, 1, 1, Volatility::Stable)).expect("ok"),
+            "two registries declaring DIFFERENT IRIs must never share a digest"
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_arity() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 1, 2, Volatility::Stable)).expect("ok"),
+            "object arity is a declared field and must reach the digest"
+        );
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 2, 1, Volatility::Stable)).expect("ok"),
+            "subject arity is a declared field and must reach the digest"
+        );
+        // The framing is injective across the two arity fields: (1, 2) and (2, 1)
+        // have the same total, and must still differ.
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 2, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 2, 1, Volatility::Stable)).expect("ok"),
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_volatility() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Volatile)).expect("ok"),
+            "volatility decides whether a call may run on a fork-join worker, so two \
+             registries that disagree about it are two configurations"
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_ranked() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one_ranked(EX_REL, 1, 1, Volatility::Stable, EX_STRATUM))
+                .expect("ok"),
+            "a relation's ranked-retrieval declaration decides whether a request can draw \
+             ranked candidates from it at all, so a plainly registered relation and the SAME \
+             relation wired up as a ranked producer must never share a digest"
+        );
+        assert_ne!(
+            content_fingerprint(&one_ranked(EX_REL, 1, 1, Volatility::Stable, EX_STRATUM))
+                .expect("ok"),
+            content_fingerprint(&one_ranked(EX_REL, 1, 1, Volatility::Stable, EX_STRATUM_B))
+                .expect("ok"),
+            "two ranked declarations that differ only in the stratum they claim must still \
+             produce different digests: the whole declaration is folded, not merely its \
+             presence"
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_modes() {
+        let arity = PfArity::new(1, 1);
+        let all_free = arity.all_free_mode();
+        let subject_bound = BindingPattern::from_bound_positions(arity.total(), [0]);
+
+        assert_ne!(
+            content_fingerprint(&one_moded(EX_REL, arity, vec![all_free], 0)).expect("ok"),
+            content_fingerprint(&one_moded(EX_REL, arity, vec![subject_bound], 0)).expect("ok"),
+            "two relations declaring the SAME arity and volatility but DIFFERENT access \
+             patterns must never share a digest"
+        );
+        assert_ne!(
+            content_fingerprint(&one_moded(EX_REL, arity, vec![all_free], 0)).expect("ok"),
+            content_fingerprint(&one_moded(EX_REL, arity, vec![all_free], 5)).expect("ok"),
+            "a mode's declared row bound is folded independently of its code, so two \
+             relations serving the SAME access pattern with different declared bounds must \
+             never share a digest"
+        );
+    }
+
+    /// The empty registry's digest is pinned to a literal, because it is the value a
+    /// consumer in another process computes for a registry it never received — if it
+    /// ever moves, every previously persisted artifact silently stops matching.
+    ///
+    /// The canonical `EMPTY` constant and a freshly built empty registry agree, the
+    /// same way they do under `registry_fingerprint`'s empty-string short circuit.
+    ///
+    /// # Why this literal moved, and why that is the mechanism working
+    ///
+    /// "Silently" is the word the paragraph above is really about, and it is what
+    /// `CONTENT_VERSION` exists to remove. The digest folds a *schema* — a fixed
+    /// sequence of framed fields — and when a field is added to that sequence every
+    /// digest under it changes whether or not the new field carries a value; an empty
+    /// registry has no declarations at all and still moves, because what moved is the
+    /// schema, not the contents. Before the version was folded in there was nothing to
+    /// distinguish "computed under an older schema" from "computed over different
+    /// declarations", and a stale artifact could only ever present as the second.
+    /// Bumping the constant is the deliberate, visible act that invalidates the old
+    /// value; a literal here that never moved across a schema change would mean the
+    /// schema change had gone unrecorded.
+    ///
+    /// The re-pin is therefore expected on any release that changes the field
+    /// sequence, and it is not licence to re-pin one that changes only behaviour: a
+    /// digest that moves without a version bump beside it is a defect.
+    #[test]
+    fn content_fingerprint_empty_registry_is_pinned() {
+        let empty = content_fingerprint(&PropertyFunctionRegistry::EMPTY).expect("ok");
+        assert_eq!(
+            content_fingerprint(&PropertyFunctionRegistry::new()).expect("ok"),
+            empty,
+            "every empty registry resolves every IRI to None, so all of them agree"
+        );
+        assert_eq!(
+            empty.to_hex(),
+            "d73476de4655573c5093e8c6a85b5653d03b7562d9bbcd8846b9d5c7b930c62a",
+            "the empty property-function registry digest is a persisted constant"
+        );
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            empty,
+            "a non-empty registry must never digest as the empty one"
         );
     }
 }

@@ -105,7 +105,7 @@ use std::sync::Arc;
 use purrdf_core::{DatasetView, GraphMatch, TermValue, ViewTermId};
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
-    OrderExpression, Variable,
+    OrderExpression, PropertyPathExpression, Variable,
 };
 use purrdf_xsd::{
     BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
@@ -400,6 +400,177 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
     }
 }
 
+/// Whether `path` can be satisfied ONLY by traversing at least one edge, so a graph
+/// holding no rows at all matches it nowhere.
+///
+/// `*`, `?`, and `{0,n}` answer `false` unconditionally, because a zero-length match
+/// binds a term to itself without reading any edge: `<a> :p? ?o` yields `?o = <a>`
+/// over a graph with no rows in it, and `?s :p* ?o` ranges over the graph's own terms.
+/// Whether a particular spelling of those could still be proven row-free is a question
+/// this predicate declines to answer — it reports only what it can prove, and an
+/// unproven path is simply evaluated.
+fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
+    match path {
+        // One hop over a named predicate, over ANY predicate, or over any predicate
+        // outside a named set: each reads exactly one row.
+        PropertyPathExpression::NamedNode(_)
+        | PropertyPathExpression::NegatedPropertySet(_)
+        | PropertyPathExpression::Wildcard { .. } => true,
+        // Direction and "at least once" both preserve the sub-path's own answer.
+        PropertyPathExpression::Reverse(inner) | PropertyPathExpression::OneOrMore(inner) => {
+            path_needs_an_edge(inner)
+        }
+        // A sequence traverses BOTH sides, so one edge-requiring side suffices.
+        PropertyPathExpression::Sequence(left, right) => {
+            path_needs_an_edge(left) || path_needs_an_edge(right)
+        }
+        // An alternative traverses EITHER side, so both sides must require an edge.
+        PropertyPathExpression::Alternative(left, right) => {
+            path_needs_an_edge(left) && path_needs_an_edge(right)
+        }
+        // A bounded repetition needs an edge only when it forbids zero repetitions.
+        PropertyPathExpression::Range { inner, min, max: _ } => {
+            *min >= 1 && path_needs_an_edge(inner)
+        }
+        PropertyPathExpression::ZeroOrMore(_) | PropertyPathExpression::ZeroOrOne(_) => false,
+    }
+}
+
+/// Whether `pattern` provably yields ZERO solutions when the active graph holds no
+/// rows at all — no base quad, no reifier row, no annotation row.
+///
+/// This is the soundness condition for skipping a named graph inside `GRAPH ?g { ... }`
+/// instead of evaluating `pattern` under it: a graph the predicate clears, and which the
+/// dataset reports row-free, contributes nothing, so not evaluating it is not a silent
+/// drop. The predicate is deliberately one-sided — `false` means "not proven", never
+/// "proven to produce rows" — because the cost of a wrong `false` is one ordinary
+/// evaluation while the cost of a wrong `true` is a missing answer.
+///
+/// # What is proven, and what is not
+///
+/// * A NON-EMPTY `Bgp` and an edge-requiring `Path` each need at least one row from the
+///   active graph, whether that row comes from the quad table or from the RDF 1.2
+///   statement layer (the BGP matcher folds reifier and annotation rows in as virtual
+///   quads — see [`crate::statement_layer`]), which is why the emptiness test that pairs
+///   with this predicate covers all three streams and not just the quad table.
+/// * The structural operators propagate it exactly as their algebra allows: `Join` is
+///   empty if EITHER side is, `Union` only if BOTH are, and the one-sided operators
+///   (`LeftJoin`, `Minus`, `Lateral`) follow their left operand, which alone decides
+///   whether any row survives.
+/// * The row-shaping operators — `Filter`, `Extend`, `Unfold`, `Project`, `Distinct`,
+///   `Reduced`, `OrderBy`, `Slice` — can never turn zero rows into some, so they inherit
+///   their inner pattern's answer.
+///
+/// Four shapes deliberately answer `false` even though they look empty-ish, because each
+/// can produce a row with no data underneath it:
+///
+/// * an EMPTY `Bgp` is the empty group pattern `{}`, whose answer is the one-row identity
+///   table — `GRAPH ?g {}` binds `?g` to every named graph, empty ones included;
+/// * `Group` with NO grouping key is the whole-input aggregate, and `COUNT(*)` over zero
+///   rows is one row holding `0`, so only a keyed `Group` is admitted here;
+/// * a nested `Graph` reads a DIFFERENT graph than the one being tested, and `Service`
+///   reads another endpoint entirely;
+/// * `Values` carries its rows inline and `PropertyFunction` invokes a registered
+///   relation, neither of which touches the active graph's rows at all.
+fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bool {
+    match pattern {
+        GraphPattern::Bgp { patterns } => !patterns.is_empty(),
+        GraphPattern::Path {
+            subject: _,
+            path,
+            object: _,
+        } => path_needs_an_edge(path),
+        GraphPattern::Join { left, right } => {
+            yields_nothing_without_rows_in_the_active_graph(left)
+                || yields_nothing_without_rows_in_the_active_graph(right)
+        }
+        GraphPattern::Union { left, right } => {
+            yields_nothing_without_rows_in_the_active_graph(left)
+                && yields_nothing_without_rows_in_the_active_graph(right)
+        }
+        GraphPattern::LeftJoin {
+            left,
+            right: _,
+            expression: _,
+        }
+        | GraphPattern::Lateral { left, right: _ }
+        | GraphPattern::Minus { left, right: _ } => {
+            yields_nothing_without_rows_in_the_active_graph(left)
+        }
+        GraphPattern::Filter { expr: _, inner }
+        | GraphPattern::Extend {
+            inner,
+            variable: _,
+            expression: _,
+        }
+        | GraphPattern::Unfold {
+            inner,
+            expression: _,
+            element: _,
+            companion: _,
+        }
+        | GraphPattern::Project {
+            inner,
+            variables: _,
+        }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::OrderBy {
+            inner,
+            expression: _,
+        }
+        | GraphPattern::Slice {
+            inner,
+            start: _,
+            length: _,
+        } => yields_nothing_without_rows_in_the_active_graph(inner),
+        GraphPattern::Group {
+            inner,
+            variables,
+            aggregates: _,
+        } => !variables.is_empty() && yields_nothing_without_rows_in_the_active_graph(inner),
+        GraphPattern::Values {
+            variables: _,
+            bindings,
+        } => bindings.is_empty(),
+        GraphPattern::Graph { name: _, inner: _ }
+        | GraphPattern::Service {
+            name: _,
+            inner: _,
+            silent: _,
+        }
+        | GraphPattern::PropertyFunction(_) => false,
+    }
+}
+
+/// Whether `dataset` holds NO row of any kind in named graph `g` — no base quad, no
+/// reifier row, no annotation row.
+///
+/// All three streams are asked because all three are readable from inside a `GRAPH`
+/// block: RDF 1.2 reifier and annotation rows live in side tables outside the quad
+/// table, and a pattern can match through them alone, so "no base quads in `g`" would
+/// be the wrong question and would skip a graph that does have answers.
+///
+/// Each probe stops at its FIRST row, and each is asked in its graph-narrowed form —
+/// `quads_for_pattern` under [`GraphMatch::Named`] and the two `_in_graph` side-table
+/// walks — so a backend with a graph-to-storage-unit index (a paged dataset's per-page
+/// graph postings) answers without materializing anything for a graph it holds nothing
+/// for, and a backend without one degrades to the scan it would have run anyway.
+///
+/// The keyed side-table walks a bound subject takes instead
+/// ([`DatasetView::reifier_quads_of`] / [`DatasetView::annotations_of_with_graph`]) are
+/// per-reifier slices of these same two tables, so a table with no row in `g` at all has
+/// no row in `g` for any particular reifier either.
+fn graph_holds_no_rows<D: DatasetView>(dataset: &D, g: D::Id) -> bool {
+    let scope = GraphMatch::Named(g);
+    dataset
+        .quads_for_pattern(None, None, None, scope)
+        .next()
+        .is_none()
+        && dataset.reifier_quads_in_graph(scope).next().is_none()
+        && dataset.annotation_quads_in_graph(scope).next().is_none()
+}
+
 /// `GRAPH ?g { ... }`: evaluate the inner pattern once per named graph, binding `?g`
 /// to the graph IRI, and union the results.
 ///
@@ -410,6 +581,19 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
 /// (e.g. an outer `VALUES (?g ?t) { ... }` nested inside the `GRAPH ?g { }` block,
 /// or any other pre-binding), each candidate graph must be JOINED against that
 /// existing binding — kept only when compatible — rather than blindly overwritten.
+///
+/// # Graph-major iteration
+///
+/// The loop is driven graph by graph, and each graph's inner evaluation runs under
+/// `GraphMatch::Named(g)` — so a backend that indexes its storage units by graph reads
+/// only the units owning `g`, and the whole loop costs one pass over the dataset rather
+/// than one pass PER named graph. On top of that, a graph the dataset reports row-free
+/// is passed over without evaluating the inner pattern at all, whenever the pattern's
+/// shape proves it would yield nothing there
+/// ([`yields_nothing_without_rows_in_the_active_graph`]). Neither step changes what `?g`
+/// ranges over: a declared-empty named graph and a graph named only by a reifier or
+/// annotation row still enumerate, exactly as SPARQL 1.1 §8.3/§18.6 requires — they just
+/// stop costing a full algebra evaluation each.
 ///
 /// # Under a truncated child
 ///
@@ -433,6 +617,13 @@ fn eval_graph_var<D: DatasetView + Sync>(
         .filter(|g| ctx.active_dataset.named_allows(*g))
         .collect();
 
+    // Whether a graph the dataset reports row-free can be passed over instead of driven
+    // through a full inner evaluation. Decided ONCE from the pattern's shape — it cannot
+    // vary per graph — so a pattern this does not admit (`{}`, a bare `VALUES`, an
+    // unkeyed aggregate, a nested `GRAPH`/`SERVICE`, a property function) costs one
+    // boolean here and nothing else.
+    let skippable_when_row_free = yields_nothing_without_rows_in_the_active_graph(inner);
+
     let saved = ctx.active_graph;
     // Held as a plain `VarSchema` across the per-graph loop and wrapped in `Arc` ONCE
     // after it (the last graph's schema wins either way): one allocation, not one per
@@ -440,7 +631,19 @@ fn eval_graph_var<D: DatasetView + Sync>(
     let mut out_schema: Option<VarSchema> = None;
     let mut rows = Vec::new();
     let mut truncated = false;
+    // Whether any graph was passed over below, which is the one case the schema fallback
+    // must NOT answer by re-evaluating the inner pattern (see the `match` after the loop).
+    let mut passed_over_a_graph = false;
     for g in graphs {
+        // The graph-major narrowing. A graph that holds no row of any kind cannot
+        // contribute a solution to an inner pattern that needs one, so it is passed over
+        // for the price of a short-circuiting emptiness probe rather than a whole inner
+        // algebra evaluation. `?g` still ranges over exactly the same graph set — this
+        // decides only whether a graph's (provably empty) block is computed or known.
+        if skippable_when_row_free && graph_holds_no_rows(ctx.dataset, g) {
+            passed_over_a_graph = true;
+            continue;
+        }
         ctx.active_graph = GraphMatch::Named(g);
         let inner_seq = match eval_evaluated(inner, ctx) {
             Ok(Evaluated::Complete(seq)) => seq,
@@ -493,7 +696,11 @@ fn eval_graph_var<D: DatasetView + Sync>(
     // No named graphs (or none matched): still produce the right schema with no rows.
     // A truncation already in hand means the inner pattern must NOT be evaluated again
     // (that would be a fresh scan after the budget is spent), so the schema is taken
-    // from the partial result instead.
+    // from the partial result instead. Likewise when every graph was passed over as
+    // row-free: re-evaluating the inner pattern purely for its column list would reach
+    // OUTSIDE this node's scope (`active_graph` is restored above) and undo the very
+    // work the narrowing saved, so the syntactic schema answers instead — the same
+    // answer the `GRAPH <iri>` arm already gives an empty named-graph result.
     let schema = match out_schema {
         Some(s) => Arc::new(s),
         None if truncated => lift.absorbed_schema().map_or_else(
@@ -508,6 +715,11 @@ fn eval_graph_var<D: DatasetView + Sync>(
                 Arc::new(schema)
             },
         ),
+        None if passed_over_a_graph => {
+            let mut schema = (*crate::eval::syntactic_schema(inner)).clone();
+            schema.push(var.clone());
+            Arc::new(schema)
+        }
         None => {
             let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
                 return Ok(lift.withheld());
@@ -1021,7 +1233,10 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
-        let minted = crate::parallel::par_chunk_try_map_init(
+        // Harvesting, for `crate::expr::eval_filter`'s reason: an aggregate's argument
+        // expression can reach a property function through an embedded `EXISTS`, and
+        // the per-group worker's attestation must reach the parent's receipt.
+        let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
             &groups,
             || ctx.fork_for_worker(),
             |child, acc, (_, key, idxs)| {
@@ -1035,7 +1250,9 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 Ok(())
             },
+            |child| core::mem::take(&mut child.witness),
         )?;
+        ctx.absorb_worker_witnesses(witnesses);
         minted
             .into_iter()
             .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))

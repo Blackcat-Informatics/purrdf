@@ -46,6 +46,11 @@ inference** (parity with pySHACL `inference="none"`); combine with
   its adopted reading and pins it with a frozen corpus — see the
   [SHACL-AF section of docs/CONFORMANCE.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md#shacl-af-node-expressions-normative-surface-vs-owned-extensions).
 
+A parsed shapes graph can also be compiled once and written out as a
+deterministic, authenticated byte artifact, so a later process restores a
+prepared validator instead of re-parsing Turtle — see
+[Prepared Shapes Products](shapes-products.md).
+
 ## `owl:imports` in a shapes graph
 
 A shapes document may carry an `owl:Ontology` header that `owl:imports` other

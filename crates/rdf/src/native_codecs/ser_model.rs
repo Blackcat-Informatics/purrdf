@@ -537,7 +537,12 @@ fn write_term<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, 
 /// Append one term's N-Triples surface to `out` with every IRI spelled ABSOLUTELY,
 /// whatever base the graph carries. This is the canonical-ordering key (see
 /// [`SerGraph::sort_canonical`]), never an output spelling.
-fn write_term_absolute<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut W) {
+fn write_term_absolute<W: TextOut + ?Sized>(
+    g: &SerGraph,
+    ix: &ReifierIndex,
+    tid: usize,
+    out: &mut W,
+) {
     write_term_in(g, ix, tid, out, None);
 }
 
@@ -1085,7 +1090,11 @@ mod tests {
         let refs: Vec<&str> = iris.iter().map(String::as_str).collect();
         let mut g = graph_of(&refs, &[]);
         for i in 0..200_u32 {
-            let slot = if i % 3 == 0 { None } else { Some(3 + (i as usize % 2)) };
+            let slot = if i % 3 == 0 {
+                None
+            } else {
+                Some(3 + (i as usize % 2))
+            };
             g.quads.push((0, 1, 2, slot));
         }
         g.sort_canonical();
@@ -1192,7 +1201,10 @@ mod tests {
 
             let mut nquads = String::new();
             write_nquads(&g, &mut nquads);
-            assert_eq!(nquads, "", "N-Quads emitted a statement for an empty document");
+            assert_eq!(
+                nquads, "",
+                "N-Quads emitted a statement for an empty document"
+            );
         }
     }
 

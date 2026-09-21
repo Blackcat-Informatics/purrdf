@@ -76,11 +76,8 @@ pub(super) trait RdfCodec {
     /// Implementors MUST append. `out` may already hold a document's worth of text, and
     /// a codec that cleared it or assumed it began empty would corrupt a caller writing
     /// more than one graph into one buffer.
-    fn serialize_into(
-        &self,
-        graph: &SerGraph,
-        out: &mut TextSink<'_>,
-    ) -> Result<(), RdfDiagnostic>;
+    fn serialize_into(&self, graph: &SerGraph, out: &mut TextSink<'_>)
+    -> Result<(), RdfDiagnostic>;
 }
 
 /// The shared implementor for the four line/Turtle-family formats, keyed by the wrapped

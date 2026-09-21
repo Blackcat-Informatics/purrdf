@@ -47,12 +47,12 @@
 //! `"its:dir"` on directional-literal bindings, and [`crate::json_read`] prefers
 //! that spelling on read.
 
-use purrdf_core::sink::TextOut;
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::graph::dataset_to_nquads;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_core::sink::TextOut;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
@@ -292,7 +292,6 @@ const fn json_trigger_byte(b: u8) -> bool {
 
 /// Append a JSON-escaped string literal (including the surrounding quotes).
 fn json_string<W: TextOut + ?Sized>(value: &str, out: &mut W) {
-
     out.push('"');
     let mut rest = value;
     while !rest.is_empty() {
@@ -327,7 +326,6 @@ fn json_string<W: TextOut + ?Sized>(value: &str, out: &mut W) {
 /// The original per-`char` escaper, kept as the oracle for [`json_string`].
 #[cfg(test)]
 fn json_string_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
-
     out.push('"');
     for ch in value.chars() {
         match ch {

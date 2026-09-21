@@ -24,7 +24,9 @@ fn solutions(variables: &[&str], rows: Vec<Vec<Option<TermValue>>>) -> SparqlRes
     SparqlResult::Solutions {
         variables: variables.iter().map(|v| (*v).to_owned()).collect(),
         rows,
-        aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset"),
+        aux: RdfDatasetBuilder::new()
+            .freeze()
+            .expect("empty aux dataset"),
     }
 }
 
@@ -51,12 +53,21 @@ fn tsv_refuses_an_unescapable_variable_name_and_spares_its_neighbour() {
     }
 
     // The neighbour: names carrying every other character class the scan sees.
-    for good in ["plain", "with_underscore", "with.dot", "\u{4e2d}\u{6587}", "s1"] {
+    for good in [
+        "plain",
+        "with_underscore",
+        "with.dot",
+        "\u{4e2d}\u{6587}",
+        "s1",
+    ] {
         let result = solutions(&[good], vec![vec![iri("https://example.org/a")]]);
         let outcome = to_tsv(&result, &provenance)
             .unwrap_or_else(|e| panic!("variable name {good:?} is representable in TSV: {e}"));
         let text = String::from_utf8(outcome.bytes).expect("utf-8");
-        assert!(text.starts_with(&format!("?{good}\n")), "header for {good:?}");
+        assert!(
+            text.starts_with(&format!("?{good}\n")),
+            "header for {good:?}"
+        );
     }
 }
 
@@ -92,7 +103,10 @@ fn tabular_writers_refuse_an_over_wide_row_and_spare_the_exact_and_short_ones() 
     // The neighbours: exactly-wide, short, and empty rows all remain valid. The
     // boundary is `>`, and a scan that had drifted to `>=` would fail here.
     for rows in [
-        vec![vec![iri("https://example.org/1"), iri("https://example.org/2")]],
+        vec![vec![
+            iri("https://example.org/1"),
+            iri("https://example.org/2"),
+        ]],
         vec![vec![iri("https://example.org/1")]],
         vec![vec![]],
         vec![],
@@ -150,9 +164,12 @@ fn srx_refuses_a_graph_and_spares_the_kinds_it_defines() {
 
     // The neighbours, on the far side of the hoisted check.
     let ask = SparqlResult::Boolean(true);
-    let ask_text =
-        String::from_utf8(to_xml(&ask, &provenance, None).expect("ASK is defined in SRX").bytes)
-            .expect("utf-8");
+    let ask_text = String::from_utf8(
+        to_xml(&ask, &provenance, None)
+            .expect("ASK is defined in SRX")
+            .bytes,
+    )
+    .expect("utf-8");
     assert!(ask_text.contains("<boolean>true</boolean>"));
     assert!(ask_text.starts_with("<?xml version=\"1.0\"?>\n"));
 
@@ -195,7 +212,10 @@ fn streamed_results_are_byte_identical_to_eager() {
         ("boolean-true", SparqlResult::Boolean(true)),
         ("boolean-false", SparqlResult::Boolean(false)),
         ("empty-vars", solutions(&[], vec![])),
-        ("one-row", solutions(&["a"], vec![vec![iri("https://example.org/1")]])),
+        (
+            "one-row",
+            solutions(&["a"], vec![vec![iri("https://example.org/1")]]),
+        ),
         ("wide", wide),
     ];
 
@@ -214,8 +234,7 @@ fn streamed_results_are_byte_identical_to_eager() {
                 let provenance = ResultProvenance::default();
                 let eager = serialize(result, format, &provenance, ns);
                 let mut streamed_bytes: Vec<u8> = Vec::new();
-                let streamed =
-                    serialize_into(result, format, &provenance, ns, &mut streamed_bytes);
+                let streamed = serialize_into(result, format, &provenance, ns, &mut streamed_bytes);
                 let label = format!("{name} / {format:?} / {ns_label}");
 
                 match (eager, streamed) {

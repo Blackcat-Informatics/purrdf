@@ -55,7 +55,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, RdfDataset, TermValue};
+use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
 use purrdf_sparql_algebra::Query;
 
 use crate::DetHashMap;
@@ -63,6 +63,7 @@ use crate::error::EvalError;
 use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
 };
+use crate::registry_id::append_framed_part;
 
 /// The result form of a function body: a `sh:select` returns the first projected
 /// value of the first solution; a `sh:ask` returns an `xsd:boolean`.
@@ -625,6 +626,243 @@ impl UserFunctionRegistry {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The content fingerprint, and the population it covers
+// ---------------------------------------------------------------------------
+
+/// Which of a [`UserFunctionRegistry`]'s two populations a
+/// [`content_fingerprint`] covers.
+///
+/// The registry holds three maps, but only two POPULATIONS, and the split is not
+/// the same split as the three kinds:
+///
+/// - **`fns`** (SPARQL-bodied, via [`UserFunctionRegistry::insert`]) is filled by the
+///   SHACL shapes parser from every `sh:SPARQLFunction`/`sh:Function` node in the
+///   shapes graph. Each entry is pure data — ordered parameters, required count,
+///   parsed body, return constraint — read out of that graph. → [`Declared`](Self::Declared).
+///
+/// - **`exprs`** (expression-bodied, via [`UserFunctionRegistry::register_expr`])
+///   holds `Arc<dyn Fn>` closures, and that is exactly why the split cannot be made
+///   on "is the body a closure". The ONLY producer of these entries is the shapes
+///   parser itself: it mints one closure per `sh:ListParameterExpressionFunction`
+///   declared IN the shapes graph, capturing nothing but that parsed declaration
+///   (SHACL 1.2 SPARQL Extensions §7.3 asks an engine to register exactly this
+///   class). Their existence and their declared arity are functions of the graph's
+///   content, so a consumer re-parsing the same graph rebuilds them with no host
+///   cooperation whatsoever. → [`Declared`](Self::Declared).
+///
+/// - **`native`** (via [`UserFunctionRegistry::register_native`]) holds `Arc<dyn Fn>`
+///   closures that no shapes graph can describe and no parser path ever writes — a
+///   host hands them in directly (the geospatial function table is the motivating
+///   caller). Nothing but host wiring can reproduce one.
+///   → [`Injected`](Self::Injected).
+///
+/// # Why this is a structural partition and not a heuristic
+///
+/// The three maps are separate fields with disjoint insertion paths — `insert`,
+/// `register_expr` and `register_native` each write exactly one of them and no other
+/// code reaches their contents — and the cross-kind collision guards on all three
+/// mean one IRI lives in exactly one map. So "which population is this entry in" is
+/// read off the data structure, never inferred from the entry's shape.
+///
+/// # The failure this prevents
+///
+/// Over-refusal. A producer fingerprints a registry the shapes parser built, which
+/// necessarily contains the parser's own `exprs` closures. If those were counted as
+/// host-injected, the consumer's requirement check would demand that its host supply
+/// entries the parser is about to create anyway, and a perfectly valid restore would
+/// be refused — the mirror of a silent drop, and the harder of the two to notice,
+/// because a refusal reads as correct strictness and every test still passes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FnPopulation {
+    /// Entries derivable from a shapes graph's own content: the SPARQL-bodied
+    /// functions and the parser-created expression-bodied functions. Rebuildable at
+    /// restore by re-parsing that graph, with no host cooperation.
+    Declared,
+    /// Entries only a host can supply: the native (host-Rust closure) functions.
+    /// Nothing in a shapes graph produces one, so a consumer that lacks them cannot
+    /// obtain them by re-parsing anything.
+    Injected,
+}
+
+impl FnPopulation {
+    /// A stable, machine-facing label for this population — folded into the
+    /// fingerprint so the two populations of one registry can never digest alike.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Declared => "declared",
+            Self::Injected => "injected",
+        }
+    }
+}
+
+/// The domain separator every user-function content fingerprint opens with — see
+/// `crate::property_fn_plan`'s constant of the same name for why each registry kind
+/// needs its own.
+const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/user-function-registry";
+
+/// A **content-only** fingerprint of one [`FnPopulation`] of `functions`: every
+/// entry's IRI, kind, declared arity and declared type constraints, IRI-sorted,
+/// digested as a [`ContentDigest`].
+///
+/// # Why this registry gets two digests where the others get one
+///
+/// [`UserFunctionRegistry`] carries no
+/// `RegistryId` (`crate::registry_id::RegistryId`) at all — a function registry is
+/// not part of a prepared plan's in-process identity — so unlike
+/// `crate::property_fn_plan::content_fingerprint` and
+/// `crate::agg_fn::content_fingerprint` this is not the instance-free twin of an
+/// existing fingerprint. It exists for the other half of the same job: an artifact
+/// that must name the host registries it requires, and have that requirement checked
+/// in another process.
+///
+/// That job needs the populations kept APART. A restoring process re-parses the
+/// shapes graph, which rebuilds every [`Declared`](FnPopulation::Declared) entry on
+/// its own; what it cannot rebuild, and what the artifact must therefore state as a
+/// requirement its host has to satisfy, is the
+/// [`Injected`](FnPopulation::Injected) half. One digest over the merged registry
+/// could serve neither side: it would be unreproducible for the consumer (it embeds
+/// host natives the consumer has not wired yet, refusing a valid restore) and
+/// unusable as a requirement statement (it cannot say WHICH entries the host owes).
+/// See [`FnPopulation`] for which map lands in which population and why that
+/// assignment is structural.
+///
+/// # What it binds, and what it deliberately does not
+///
+/// Declarations only. The `Arc<dyn Fn>` body of an expression-bodied or native
+/// function has no content to digest, and a SPARQL-bodied function's parsed body is
+/// deliberately not folded either: the only stable byte form available for it is the
+/// algebra serializer's rendering, and making that load-bearing would turn a cosmetic
+/// wording change in an unrelated module into a silent invalidation of every
+/// persisted artifact (the same trap `Arity::stable_encoding` exists to avoid for
+/// `Display`). The binding that DOES cover bodies is the shapes graph itself: every
+/// [`Declared`](FnPopulation::Declared) entry is a function of that graph's content,
+/// so a caller pairs this digest with the graph's own content digest and gets both
+/// halves. A caller must not read a [`Declared`](FnPopulation::Declared) match alone
+/// as proof that two registries' function bodies agree.
+///
+/// # Errors
+///
+/// Returns [`Result`] for uniformity with the two sibling `content_fingerprint`
+/// functions, whose `describe()` calls can fail when a host's declaration methods
+/// panic. This registry reads plain struct fields and has no such failure mode, so
+/// the `Err` arm is unreachable today; the shape is kept so a caller folding all
+/// three digests writes one error path rather than three.
+pub fn content_fingerprint(
+    functions: &UserFunctionRegistry,
+    part: FnPopulation,
+) -> Result<ContentDigest, EvalError> {
+    let mut bytes = Vec::new();
+    append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
+    append_framed_part(&mut bytes, "population", part.label().as_bytes());
+    match part {
+        FnPopulation::Declared => {
+            for (iri, func) in iri_sorted(&functions.fns) {
+                append_framed_part(&mut bytes, "iri", iri.as_bytes());
+                append_framed_part(&mut bytes, "kind", b"sparql-bodied");
+                append_framed_part(
+                    &mut bytes,
+                    "required",
+                    &(func.required as u64).to_be_bytes(),
+                );
+                append_framed_part(
+                    &mut bytes,
+                    "param-count",
+                    &(func.params.len() as u64).to_be_bytes(),
+                );
+                for param in &func.params {
+                    append_framed_part(&mut bytes, "param-var", param.var.as_bytes());
+                    append_constraint(&mut bytes, "param", &param.constraint);
+                }
+                append_framed_part(
+                    &mut bytes,
+                    "body-form",
+                    body_form_label(func.kind).as_bytes(),
+                );
+                append_constraint(&mut bytes, "return", &func.return_constraint);
+            }
+            for (iri, func) in iri_sorted(&functions.exprs) {
+                append_framed_part(&mut bytes, "iri", iri.as_bytes());
+                append_framed_part(&mut bytes, "kind", b"expression-bodied");
+                append_framed_part(&mut bytes, "arity", func.arity.stable_encoding().as_bytes());
+            }
+        }
+        FnPopulation::Injected => {
+            for (iri, func) in iri_sorted(&functions.native) {
+                append_framed_part(&mut bytes, "iri", iri.as_bytes());
+                append_framed_part(&mut bytes, "kind", b"native");
+                append_framed_part(&mut bytes, "arity", func.arity.stable_encoding().as_bytes());
+                append_framed_part(&mut bytes, "volatility", func.volatility.label().as_bytes());
+            }
+        }
+    }
+    Ok(ContentDigest::of(&bytes))
+}
+
+/// One registry map's entries in IRI order — the fingerprint reads this rather than
+/// the map's iteration order, exactly as
+/// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)
+/// does, so the digest is a function of the registry's contents and not of the order
+/// a host happened to register them in.
+fn iri_sorted<V>(map: &DetHashMap<String, V>) -> Vec<(&str, &V)> {
+    let mut out: Vec<(&str, &V)> = map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    out.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    out
+}
+
+/// Fold a parameter's or return value's [`TypeConstraint`] in under `role`.
+///
+/// `role` is framed as a VALUE rather than spliced into the label so the two call
+/// sites cannot produce overlapping label spellings, and every field is emitted
+/// unconditionally (absent ones as a zero presence byte) so an absent constraint and
+/// a present-but-empty one stay distinguishable.
+fn append_constraint(out: &mut Vec<u8>, role: &str, constraint: &TypeConstraint) {
+    append_framed_part(out, "constraint-role", role.as_bytes());
+    append_optional_part(
+        out,
+        "constraint-datatype",
+        constraint.datatype.as_deref().map(str::as_bytes),
+    );
+    append_optional_part(
+        out,
+        "constraint-node-kind",
+        constraint.node_kind.map(node_kind_label).map(str::as_bytes),
+    );
+}
+
+/// Append an optional field: always a one-byte presence flag under `label`, then the
+/// value under the same label when present. Emitting the flag unconditionally is what
+/// keeps the framing injective across a field that may or may not be there.
+fn append_optional_part(out: &mut Vec<u8>, label: &str, value: Option<&[u8]>) {
+    append_framed_part(out, label, &[u8::from(value.is_some())]);
+    if let Some(value) = value {
+        append_framed_part(out, label, value);
+    }
+}
+
+/// A stable, machine-facing label for a `sh:nodeKind` constraint — deliberately
+/// independent of [`Debug`], which is free to change wording.
+const fn node_kind_label(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Iri => "iri",
+        NodeKind::BlankNode => "blank-node",
+        NodeKind::Literal => "literal",
+        NodeKind::BlankNodeOrIri => "blank-node-or-iri",
+        NodeKind::BlankNodeOrLiteral => "blank-node-or-literal",
+        NodeKind::IriOrLiteral => "iri-or-literal",
+    }
+}
+
+/// A stable, machine-facing label for a function body's result form — same rationale
+/// as [`node_kind_label`].
+const fn body_form_label(kind: UserFnBody) -> &'static str {
+    match kind {
+        UserFnBody::Select => "select",
+        UserFnBody::Ask => "ask",
+    }
+}
+
 /// Whether `value`'s node kind satisfies `nk`.
 fn matches_node_kind(value: &TermValue, nk: NodeKind) -> bool {
     let (is_iri, is_blank, is_literal) = match value {
@@ -708,8 +946,11 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     let Some(mut child) = ctx.child_for_user_fn()? else {
         return Ok(None);
     };
-    let substituted = crate::substitute::apply_substitutions((*func.body).clone(), &substitutions)
-        .map_err(|d| EvalError::function(d.to_string()))?;
+    let substituted = crate::substitute::apply_substitutions(
+        (*func.body).clone(),
+        crate::substitute::Prebindings::Owned(&substitutions),
+    )
+    .map_err(|d| EvalError::function(d.to_string()))?;
     let outcome = match evaluate_query_evaluated(&substituted, &mut child)? {
         EvaluatedOutcome::Complete(outcome) => outcome,
         EvaluatedOutcome::Truncated { certificate, .. } => {
@@ -723,6 +964,10 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             child.expression_barrier.record(certificate.tripped());
             ctx.bnode_counter = child.bnode_counter;
             ctx.rng_state = child.rng_state;
+            // The body's attestations survive the truncation for the same reason the
+            // minted identity state does: a relation the body invoked really did serve
+            // this query, and the caller's receipt is the only place that fact can land.
+            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
             return Ok(None);
         }
     };
@@ -765,6 +1010,10 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     ctx.bnode_counter = child.bnode_counter;
     ctx.rng_state = child.rng_state;
     ctx.constructed.append(&mut child.constructed);
+    // And the body's relation attestations: a SHACL-AF function body is SPARQL like any
+    // other and may invoke a registered relation, so what that relation attested belongs
+    // on the CALLING query's receipt — there is no second receipt for a function body.
+    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
 
     // `sh:returnType` is informational (SHACL-AF §5.3): it documents/casts the
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
@@ -2334,6 +2583,285 @@ mod tests {
         assert_eq!(
             first, second,
             "the parallel-path result must be deterministic across runs"
+        );
+    }
+}
+
+#[cfg(test)]
+mod content_fingerprint_tests {
+    use std::sync::Arc;
+
+    use purrdf_core::TermValue;
+    use purrdf_sparql_algebra::{Query, SparqlParser};
+
+    use super::{
+        Arity, ExprFnCall, FnPopulation, NodeKind, TypeConstraint, UserFnBody, UserFnParam,
+        UserFunction, UserFunctionRegistry, Volatility, content_fingerprint,
+    };
+
+    const EX_FN: &str = "http://example.org/ns#fn";
+    const EX_OTHER: &str = "http://example.org/ns#other";
+    const EX_NATIVE: &str = "http://example.org/ns#native";
+    const EX_EXPR: &str = "http://example.org/ns#expr";
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+    fn parse(body: &str) -> Arc<Query> {
+        Arc::new(
+            SparqlParser::new()
+                .parse_query(body)
+                .expect("parse function body"),
+        )
+    }
+
+    /// A SPARQL-bodied function with `required` leading required parameters out of
+    /// `params` total, each unconstrained.
+    fn sparql_bodied(required: usize, params: usize) -> UserFunction {
+        UserFunction {
+            params: (0..params)
+                .map(|i| UserFnParam {
+                    var: format!("p{i}"),
+                    constraint: TypeConstraint::default(),
+                })
+                .collect(),
+            required,
+            body: parse("SELECT (1 AS ?result) WHERE {}"),
+            kind: UserFnBody::Select,
+            return_constraint: TypeConstraint::default(),
+        }
+    }
+
+    /// A native closure that answers nothing — these fixtures exist to be DECLARED.
+    fn null_native() -> super::NativeFnBody {
+        Arc::new(|_args: &[&TermValue]| Ok(None))
+    }
+
+    /// An expression-bodied closure that answers nothing, standing in for one the
+    /// shapes parser would have minted from a `sh:ListParameterExpressionFunction`.
+    fn null_expr() -> super::ExprFnBody {
+        Arc::new(|_call: &ExprFnCall<'_>| Ok(None))
+    }
+
+    /// A registry holding a single SPARQL-bodied function — the declared population.
+    fn declared_only() -> UserFunctionRegistry {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(EX_FN, sparql_bodied(1, 1));
+        registry
+    }
+
+    /// Two independently built registries with equal declarations agree.
+    ///
+    /// This registry type carries no instance id at all, so there is no
+    /// instance-bearing twin to contrast against here — the contrast that proves the
+    /// content tier earns its keep lives in `crate::property_fn_plan` and
+    /// `crate::agg_fn`, which do have one.
+    #[test]
+    fn content_fingerprint_is_stable_across_registry_instances() {
+        for part in [FnPopulation::Declared, FnPopulation::Injected] {
+            assert_eq!(
+                content_fingerprint(&declared_only(), part).expect("ok"),
+                content_fingerprint(&declared_only(), part).expect("ok"),
+            );
+        }
+    }
+
+    #[test]
+    fn content_fingerprint_separates_iri() {
+        let mut other = UserFunctionRegistry::new();
+        other.insert(EX_OTHER, sparql_bodied(1, 1));
+        assert_ne!(
+            content_fingerprint(&declared_only(), FnPopulation::Declared).expect("ok"),
+            content_fingerprint(&other, FnPopulation::Declared).expect("ok"),
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_arity() {
+        let mut two_params = UserFunctionRegistry::new();
+        two_params.insert(EX_FN, sparql_bodied(1, 2));
+        assert_ne!(
+            content_fingerprint(&declared_only(), FnPopulation::Declared).expect("ok"),
+            content_fingerprint(&two_params, FnPopulation::Declared).expect("ok"),
+            "a second parameter changes the accepted call arity and must reach the digest"
+        );
+
+        // The native population's declared `Arity` separates the same way.
+        let mut exact = UserFunctionRegistry::new();
+        exact.register_native(
+            EX_NATIVE,
+            Arity::Exact(1),
+            Volatility::Stable,
+            null_native(),
+        );
+        let mut at_least = UserFunctionRegistry::new();
+        at_least.register_native(
+            EX_NATIVE,
+            Arity::AtLeast(1),
+            Volatility::Stable,
+            null_native(),
+        );
+        assert_ne!(
+            content_fingerprint(&exact, FnPopulation::Injected).expect("ok"),
+            content_fingerprint(&at_least, FnPopulation::Injected).expect("ok"),
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_volatility() {
+        let mut stable = UserFunctionRegistry::new();
+        stable.register_native(
+            EX_NATIVE,
+            Arity::Exact(1),
+            Volatility::Stable,
+            null_native(),
+        );
+        let mut volatile = UserFunctionRegistry::new();
+        volatile.register_native(
+            EX_NATIVE,
+            Arity::Exact(1),
+            Volatility::Volatile,
+            null_native(),
+        );
+        assert_ne!(
+            content_fingerprint(&stable, FnPopulation::Injected).expect("ok"),
+            content_fingerprint(&volatile, FnPopulation::Injected).expect("ok"),
+            "volatility pins a call to sequential evaluation, so it is a declaration",
+        );
+    }
+
+    /// A declared parameter's type constraint reaches the digest, and an ABSENT
+    /// constraint stays distinguishable from a present one — the presence byte
+    /// `append_optional_part` always emits is what guarantees that.
+    #[test]
+    fn content_fingerprint_separates_parameter_constraints() {
+        let mut typed = UserFunctionRegistry::new();
+        typed.insert(
+            EX_FN,
+            UserFunction {
+                params: vec![UserFnParam {
+                    var: "p0".to_owned(),
+                    constraint: TypeConstraint {
+                        datatype: Some(XSD_INTEGER.to_owned()),
+                        node_kind: None,
+                    },
+                }],
+                ..sparql_bodied(1, 1)
+            },
+        );
+        let mut kinded = UserFunctionRegistry::new();
+        kinded.insert(
+            EX_FN,
+            UserFunction {
+                params: vec![UserFnParam {
+                    var: "p0".to_owned(),
+                    constraint: TypeConstraint {
+                        datatype: None,
+                        node_kind: Some(NodeKind::Iri),
+                    },
+                }],
+                ..sparql_bodied(1, 1)
+            },
+        );
+        let unconstrained =
+            content_fingerprint(&declared_only(), FnPopulation::Declared).expect("ok");
+        let typed = content_fingerprint(&typed, FnPopulation::Declared).expect("ok");
+        let kinded = content_fingerprint(&kinded, FnPopulation::Declared).expect("ok");
+        assert_ne!(unconstrained, typed);
+        assert_ne!(unconstrained, kinded);
+        assert_ne!(typed, kinded);
+    }
+
+    /// The partition, end to end.
+    ///
+    /// A registry holding BOTH populations must yield two different digests, and —
+    /// the half that matters most — the `Declared` digest must be UNCHANGED by adding
+    /// an injected native. A consumer rebuilds the declared half by re-parsing the
+    /// shapes graph; if a host's own native registrations leaked into that digest, a
+    /// perfectly valid restore would be refused for a reason the consumer could never
+    /// act on.
+    #[test]
+    fn content_fingerprint_partitions_declared_from_injected() {
+        let mut both = UserFunctionRegistry::new();
+        both.insert(EX_FN, sparql_bodied(1, 1));
+        both.register_expr(EX_EXPR, Arity::Exact(1), null_expr());
+
+        let declared_before = content_fingerprint(&both, FnPopulation::Declared).expect("ok");
+        let injected_before = content_fingerprint(&both, FnPopulation::Injected).expect("ok");
+        assert_ne!(
+            declared_before, injected_before,
+            "the two populations of one registry must never digest alike"
+        );
+
+        both.register_native(
+            EX_NATIVE,
+            Arity::Exact(1),
+            Volatility::Stable,
+            null_native(),
+        );
+        assert_eq!(
+            content_fingerprint(&both, FnPopulation::Declared).expect("ok"),
+            declared_before,
+            "adding a host-injected native must NOT move the declared digest"
+        );
+        assert_ne!(
+            content_fingerprint(&both, FnPopulation::Injected).expect("ok"),
+            injected_before,
+            "...and it must move the injected one, or the requirement it states is empty"
+        );
+    }
+
+    /// The parser-created `exprs` entries belong to the DECLARED population, not the
+    /// injected one, even though their bodies are `Arc<dyn Fn>` closures exactly like
+    /// a native's. Registering one must move the declared digest and leave the
+    /// injected digest alone — the exact opposite of a native registration.
+    #[test]
+    fn content_fingerprint_counts_expression_bodied_as_declared() {
+        let base = declared_only();
+        let declared_before = content_fingerprint(&base, FnPopulation::Declared).expect("ok");
+        let injected_before = content_fingerprint(&base, FnPopulation::Injected).expect("ok");
+
+        let mut with_expr = declared_only();
+        with_expr.register_expr(EX_EXPR, Arity::Exact(1), null_expr());
+        assert_ne!(
+            content_fingerprint(&with_expr, FnPopulation::Declared).expect("ok"),
+            declared_before,
+            "an expression-bodied function is derivable from the shapes graph, so it \
+             is part of what a consumer rebuilds and must be bound as declared"
+        );
+        assert_eq!(
+            content_fingerprint(&with_expr, FnPopulation::Injected).expect("ok"),
+            injected_before,
+            "no host wiring is required to rebuild it, so it states no requirement"
+        );
+    }
+
+    /// Both populations of an empty registry are pinned — these are the values a
+    /// consumer computes for a registry it never received, and they must differ from
+    /// each other so an empty declared half is never mistaken for an empty injected
+    /// one.
+    #[test]
+    fn content_fingerprint_empty_registry_is_pinned() {
+        let empty_declared =
+            content_fingerprint(&UserFunctionRegistry::EMPTY, FnPopulation::Declared).expect("ok");
+        let empty_injected =
+            content_fingerprint(&UserFunctionRegistry::EMPTY, FnPopulation::Injected).expect("ok");
+        assert_eq!(
+            content_fingerprint(&UserFunctionRegistry::new(), FnPopulation::Declared).expect("ok"),
+            empty_declared
+        );
+        assert_eq!(
+            content_fingerprint(&UserFunctionRegistry::new(), FnPopulation::Injected).expect("ok"),
+            empty_injected
+        );
+        assert_ne!(empty_declared, empty_injected);
+        assert_eq!(
+            empty_declared.to_hex(),
+            "ab87d27763fb403dcd791e76af34dd0852147cf50282a1f1af8ccc87c79cf607",
+            "the empty declared-population digest is a persisted constant"
+        );
+        assert_eq!(
+            empty_injected.to_hex(),
+            "895304d147d2ab36372ed70cb611cdfa25b621ce374b655bd06b77a708da405b",
+            "the empty injected-population digest is a persisted constant"
         );
     }
 }

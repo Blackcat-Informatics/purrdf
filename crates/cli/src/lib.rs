@@ -3,7 +3,7 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as twelve subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as thirteen subcommands:
 //!
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
@@ -25,6 +25,12 @@
 //!   digest. This is the SAME unconditional verification every read/reason path
 //!   already performs when it opens a pack, surfaced as an explicit standalone verb —
 //!   additive, never a substitute for that on-open check.
+//! * `shacl` — write, corroborate and read back a PREPARED SHACL shapes product: the
+//!   parse-and-compile work `validate` performs on every run, done once and written to a
+//!   digest-chained container that `validate --shapes-product` restores. `pack` writes
+//!   one, `verify` runs the codec's cold-path canonical certification over one, and
+//!   `explain` decodes what one says it was compiled from without admitting it — see
+//!   [`shacl`] for why an untrusted product is an admission boundary rather than a cache.
 //!
 //! `reason` and `entails` are the two halves of entailment and neither is the
 //! other: `reason` computes a CLOSURE, which is what a caller wants who will go on
@@ -89,6 +95,8 @@ mod projection;
 mod query;
 mod reason;
 mod report;
+mod shacl;
+mod shapes_source;
 mod shex;
 mod sink;
 mod source;
@@ -106,7 +114,7 @@ use std::io::Read as _;
 use clap::Parser as _;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
-use crate::cli::{Cli, Command, PackCommand, ReportTarget};
+use crate::cli::{Cli, Command, PackCommand, ReportTarget, ShaclCommand};
 use crate::error::{CliError, CliOutcome};
 use crate::governors::GovernorFlags;
 
@@ -343,11 +351,18 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         ),
         Command::Validate {
             shapes,
+            shapes_product,
+            expect_identity,
+            rebuild,
             shapes_from,
             shapes_graph,
             import,
+            box_role_vocab,
             from,
             base,
+            changes,
+            changes_removed,
+            changes_from,
             format,
             fuel,
             deadline,
@@ -360,10 +375,17 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             &validate::ValidateOptions {
                 input,
                 output,
-                shapes,
+                changes: changes.as_deref(),
+                changes_removed: changes_removed.as_deref(),
+                changes_from: *changes_from,
+                shapes: shapes.as_deref(),
+                shapes_product: shapes_product.as_deref(),
+                expect_identity: expect_identity.as_deref(),
+                rebuild: *rebuild,
                 shapes_from: *shapes_from,
                 shapes_graph: shapes_graph.as_deref(),
                 imports: import,
+                box_role_vocab: box_role_vocab.as_deref(),
                 from: *from,
                 base: base.as_deref(),
                 format: *format,
@@ -466,6 +488,27 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         .map(|()| CliOutcome::Complete),
         Command::Pack { command } => match command {
             PackCommand::Verify { input } => pack::verify(input),
+        }
+        .map(|()| CliOutcome::Complete),
+        Command::Shacl { command } => match command {
+            ShaclCommand::Pack {
+                shapes,
+                base,
+                import,
+                shapes_graph,
+                box_role_vocab,
+                out,
+            } => shacl::pack(
+                shapes,
+                base.as_deref(),
+                import,
+                shapes_graph.as_deref(),
+                box_role_vocab.as_deref(),
+                out,
+            ),
+            ShaclCommand::Verify { input } => shacl::verify(input),
+            ShaclCommand::Explain { input } => shacl::explain(input),
+            ShaclCommand::Diff { a, b } => shacl::diff(a, b),
         }
         .map(|()| CliOutcome::Complete),
     }

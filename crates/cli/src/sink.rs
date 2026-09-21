@@ -121,9 +121,7 @@ impl OutTarget {
         // Only a REGULAR file may be unlinked on failure. A FIFO, a device node or
         // `/dev/stdout` would otherwise be removed by an error path, and a symlink
         // would lose the LINK while its target kept the half-written bytes.
-        let unlink_on_abandon = file
-            .metadata()
-            .is_ok_and(|meta| meta.file_type().is_file());
+        let unlink_on_abandon = file.metadata().is_ok_and(|meta| meta.file_type().is_file());
         Ok(Self::File {
             file,
             path,
@@ -138,7 +136,13 @@ impl OutTarget {
 
     /// Whether a downstream reader closed the pipe during this write.
     const fn hung_up(&self) -> bool {
-        matches!(self, Self::Stdout { saw_hangup: true, .. })
+        matches!(
+            self,
+            Self::Stdout {
+                saw_hangup: true,
+                ..
+            }
+        )
     }
 
     /// Flush and close.

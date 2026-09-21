@@ -98,8 +98,14 @@ getrandom = { workspace = true }
 js-sys = { workspace = true }
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention). Pure Rust, and the one
-# dev-dependency that compiles on every target this crate is tested on.
+# The workspace's shared counting allocator, for the `prepared_reuse_counters`
+# example. Path-only and unpublished, so it is stripped from the packaged
+# manifest; std-only and dependency-free, so like `pretty_assertions` below it
+# compiles on every target this crate is tested on and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
+# Colored line-diffs on assert_eq! failure (repo convention). Pure Rust, and —
+# with the allocator probe above — one of the two dev-dependencies that compile
+# on every target this crate is tested on.
 pretty_assertions = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
@@ -211,6 +217,15 @@ harness = false
 
 [[bench]]
 name = "construct_builder"
+harness = false
+
+[[bench]]
+# What one property-function invocation allocates: attesting a shared index
+# generation vs copying it per invocation, and the same relation on a lane that
+# can carry a witness vs one that cannot. Reports allocation COUNTS (a property
+# of the code, not of the machine) and peak bytes — no timing, no threshold.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "relation_attestation_alloc"
 harness = false
 
 [[bench]]

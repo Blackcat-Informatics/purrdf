@@ -240,6 +240,40 @@ pub enum EvalError {
     /// distinct from [`EvalError::Data`]: nothing is malformed, the value is
     /// simply too large to exist.
     CompositeBound(String),
+
+    /// A relation declared that the index behind it was **not** whole, on an execution
+    /// whose entry point has nowhere to carry that declaration.
+    ///
+    /// # Witnessed or fatal
+    ///
+    /// A relation that serves an invocation from a partial index returns fewer rows than
+    /// the query asked about. There are exactly three things an engine can do with that,
+    /// and two of them are wrong. Failing the query outright overstates what happened —
+    /// nothing broke, the relation answered, it simply answered from less than all of its
+    /// data. Returning the short bag unlabelled is worse: it is a complete answer to a
+    /// question nobody asked, indistinguishable from the true complete answer, and is
+    /// precisely the silent degradation the hard-fail doctrine exists to forbid (see this
+    /// module's header).
+    ///
+    /// The third is to return the rows **with the declaration attached**, which is what
+    /// [`RelationWitness`](crate::RelationWitness) on a governed receipt does: a short bag
+    /// whose receipt says which relation was short, and why, is not short — it is
+    /// labelled, and a caller can act on it. So the rule is not a caller flag and cannot
+    /// be one; it follows from the entry point's own return type. An entry that carries a
+    /// witness reports the incompleteness as evidence beside its rows. An entry that
+    /// does not — the ungoverned query lane, and the UPDATE lane, whose outcome types
+    /// have no slot for evidence about a relation — cannot label the bag, so it refuses
+    /// rather than hand back an unreadable receipt.
+    ///
+    /// Carries the relation's registered IRI and its own verbatim reason, because
+    /// "something was incomplete" is not actionable and "shard 3 is still rebuilding on
+    /// `<iri>`" is.
+    RelationIncomplete {
+        /// The registered IRI of the relation that declared the incompleteness.
+        iri: String,
+        /// The relation's own description of what was missing, verbatim.
+        reason: String,
+    },
 }
 
 impl EvalError {
@@ -284,6 +318,28 @@ impl EvalError {
             | Self::ExistsScopeCollision { .. }
             | Self::Config(_)
             | Self::CompositeBound(_) => None,
+            Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
+        }
+    }
+
+    /// The stable, machine-readable diagnostic code
+    /// [`Self::RelationIncomplete`] maps to at the `SparqlEngine` boundary.
+    ///
+    /// Named as a constant rather than written inline at the one `match` arm because it
+    /// is the string a CALLER matches on — a host that must tell "a relation was short"
+    /// apart from every other evaluation failure reads
+    /// [`purrdf_core::RdfDiagnostic::code`] and compares it against this, never against
+    /// `Display` prose, which is free to be reworded at any time. Spelled in the same
+    /// `native-sparql-…` family as [`UnsupportedKind::code`]'s entries, so the whole
+    /// code space stays one vocabulary.
+    pub const RELATION_INCOMPLETE_CODE: &'static str = "native-sparql-relation-incomplete";
+
+    /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
+    /// own reason.
+    pub(crate) fn relation_incomplete(iri: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::RelationIncomplete {
+            iri: iri.into(),
+            reason: reason.into(),
         }
     }
 
@@ -353,6 +409,12 @@ impl core::fmt::Display for EvalError {
             Self::CompositeBound(msg) => write!(
                 f,
                 "the composite value this query asked for exceeds a SEP-0009 resource bound: {msg}"
+            ),
+            Self::RelationIncomplete { iri, reason } => write!(
+                f,
+                "property function <{iri}> served this query from an index it declares was \
+                 not whole ({reason}); this entry point carries no witness to label the \
+                 shortfall with, so the query is refused rather than answered short"
             ),
         }
     }

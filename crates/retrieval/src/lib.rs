@@ -22,10 +22,19 @@
 //! fuse(streams, profile, k)           -> the top k of one ordered answer
 //! ```
 //!
+//! The `k` at the end is the caller's, and it arrives at the **start**: a request
+//! states how much of the answer it is for ([`ReadBound`]), because that is what
+//! each stratum's depth is derived from. Over strata whose producers declare
+//! disjoint candidate blocks the depth is the bound itself, so the compiled unit
+//! reads a prefix rather than a corpus — see [`plan`] for the rule and its proof.
+//! [`search`] therefore takes no bound of its own, and [`fuse`], which a caller
+//! reaches with streams it assembled itself, refuses a bound the streams were not
+//! planned for.
+//!
 //! This build ships all four stages. [`plan`] is the pure planner, with the
 //! stage's value ([`Plan`]), the typed request lattice ([`RetrievalRequest`],
-//! [`RequestTerm`]), the statistics input planning consults ([`Statistics`]),
-//! and the plan's canonical identity ([`PlanId`]). [`compile`] is the semantic
+//! [`RequestTerm`], [`ReadBound`]), the statistics input planning consults
+//! ([`Statistics`]), and the plan's canonical identity ([`PlanId`]). [`compile`] is the semantic
 //! admission waist ([`AdmissionEnvironment`], [`AdmissionError`]) that emits the
 //! per-stratum SPARQL units a caller can run directly ([`CompiledRetrieval`],
 //! [`StratumUnit`]). [`execute`] runs those units independently through
@@ -45,6 +54,15 @@
 //! to fuse resumes through the same exported bridge `search` itself uses,
 //! [`RankedStreamAdapter`], so the two compositions cannot drift.
 //!
+//! Every number in the answer those stages assemble is a function of what the
+//! producers said about themselves, so what a producer owes this layer is
+//! written down in one place: [`producer_contract`]. Sixteen obligations, each
+//! with the failure it prevents and with whether this layer *checks* it — a
+//! breach is a named refusal — or *believes* it, in which case the entry names
+//! the test that proves the shipped producers keep the promise. A host wiring up
+//! its own ranked relation reads that before it writes a
+//! [`RankedDeclaration`](purrdf_sparql_eval::RankedDeclaration).
+//!
 //! # Nothing is lost between the stages
 //!
 //! Each stage knows something the next one structurally cannot, and the answer
@@ -59,16 +77,98 @@
 //! contribution bound the fused top-k stopped reading it at.
 //!
 //! That includes what each producer declared about its *own* rows. A ranked
-//! producer states its rank ordering and its duplicate handling where it is
-//! registered, and fusion is the consumer both declarations were written for, so
-//! they are carried from the registry to that consumer as a [`StreamContract`] —
-//! read at the admission waist into [`StratumUnit`], tagged onto every
-//! [`StratumStream`], reported through [`RankedStream::contract`]. A producer
-//! that declared [`DuplicatePolicy::Allowed`] is de-duplicated, which is what
-//! that policy says its consumer must do; one that declared
-//! [`DuplicatePolicy::Unique`] is believed and costs no per-stream identity set
-//! at all. A [`RankOrdering::StrictlyDescending`] stream is held to strict
-//! descent and a [`RankOrdering::NonIncreasing`] one is not.
+//! producer states its duplicate handling, and which blocks of the candidate
+//! universe it may name, where it is registered; fusion is the consumer both
+//! declarations were written for, so they are carried from the registry to that
+//! consumer as a [`StreamContract`] — read at the admission waist into
+//! [`StratumUnit`], tagged onto every [`StratumStream`], reported through
+//! [`RankedStream::contract`]. A producer that declared
+//! [`DuplicatePolicy::Allowed`] is de-duplicated, which is what that policy says
+//! its consumer must do; one that declared [`DuplicatePolicy::Unique`] costs no
+//! per-stream identity set at all, and is held to its declaration rather than
+//! taken on trust — a repeat is refused as
+//! [`ProtocolError::DuplicateItem`], naming the entity and the stratum, for
+//! however long the fusion runs.
+//!
+//! A [`CandidateDomains`] declaration is what makes a bounded read bounded in
+//! *rows pulled* as well as in rows returned. Without one, a candidate cannot
+//! certify until every open stream has named it, so strata whose candidates do
+//! not overlap are read to their ends however small the caller's top-k; with
+//! one, fusion skips exactly the streams that provably cannot name the
+//! candidate in hand. The scores do not move — the declaration changes how much
+//! is read, never what is returned — and a producer that names a candidate its
+//! declaration cannot reach is refused as
+//! [`ProtocolError::OutsideDeclaredDomain`] rather than quietly merged.
+//!
+//! The same declaration is read one stage earlier, by [`plan`], and there it
+//! bounds how much is *materialized* rather than how much of a materialized
+//! stream is walked. Over strata whose declared blocks are pairwise disjoint the
+//! recorded depth is the request's own bound, so the emitted `LIMIT` is that bound
+//! plus its probe row and the work is flat in the corpus. The two readings answer
+//! different questions — how deep the unit reads, and how far the fusion walks
+//! what it read — and neither changes an answer.
+//!
+//! Neither declaration can put the same entity in an answer twice. That is the
+//! one property here that is not a producer's to negotiate: a fused answer's
+//! entities are pairwise distinct, for every stream set, every policy and every
+//! [`TopK`]. What the declaration chooses is only how a repeat is dealt with —
+//! silently removed under `Allowed`, refused under `Unique`, because a producer
+//! that broke a promise about its index has a stream whose ranks a consumer
+//! needs to be told about rather than quietly served from.
+//!
+//! The same route carries what the *index* behind those rows attested. A
+//! relation's cursor is the only party that knows which generation of its index
+//! answered and whether that generation was whole, and neither fact is visible
+//! in the dataset snapshot, the query text or the registry fingerprint — an
+//! index can rebuild with every one of those unchanged. So [`execute`] reads it
+//! off the governed receipt of the run that produced the rows, tags every
+//! [`StratumStream`] with it, and [`FusionStream`] reads it through
+//! [`RankedStream::attestation`] *before* pulling a row. It reaches the answer
+//! three ways: verbatim in [`FusionTrailer::attestations`], as
+//! [`FusionTrailer::exactness`] — which says whether a fused score may be read
+//! as a number or only as an estimate — and digested into
+//! [`SearchResult::evidence_id`], so two answers assembled from differently-aged
+//! indexes are distinguishable even when every other identity matches.
+//!
+//! Neither is the depth a read was cut at. A unit is emitted one row deeper than
+//! its stratum reads, and that probe row is what separates
+//! [`ProducerStatus::DepthReached`] from [`ProducerStatus::Exhausted`] — the
+//! difference between "the plan stopped me" and "this is all there is". The
+//! probe is a read and never a value: no plan field, identity or resolution
+//! number moves by one because of it. Where the row is past the registry's
+//! declared bound rather than merely past the depth, the producer contradicted
+//! its own declaration and the run is refused
+//! ([`ExecutionError::RowBoundBreached`]) rather than reported as either
+//! ending.
+//!
+//! One producer shape cannot be asked for that row at all — one that takes its
+//! depth as an argument and was planned at a depth already on its declared row
+//! bound, because raising the argument past the declaration would ask the producer
+//! to breach its own registration. Such a read has an ending nobody can observe, so
+//! it reports neither of the two above: [`ProducerStatus::RowBoundReached`] names
+//! the producer's declared bound as the stopper and claims nothing about what lies
+//! below it.
+//!
+//! A unit running a query text a *caller* supplied rather than one [`compile`]
+//! rendered is the other read this layer will not certify. It bounds only the outside
+//! of such a text, and a bound inside it — a `LIMIT` on a sub-`SELECT`, a pattern
+//! matching less than the producer holds — decides the read where this layer cannot
+//! see it. So that read ends [`ProducerStatus::SuppliedQueryEnded`], which names the
+//! caller's own text as the stopper. It still runs, still ranks, still reports
+//! `DepthReached` when a row past the depth really did arrive, and still refuses a
+//! producer that beat its own declaration; what it cannot carry is the completeness
+//! claim.
+//!
+//! Rank order is not carried there, because it is not a per-producer variable.
+//! Every ranked stream owes its consumer the same law — 1-based, contiguous,
+//! ascending ranks — and [`FusionStream`] enforces it row by row against the
+//! next rank it expects from that stream, refusing a lower rank as
+//! [`ProtocolError::OutOfOrderRanks`] and a higher one as
+//! [`ProtocolError::NonContiguousRanks`]. The only other quantity fusion can
+//! observe is the contribution, which it computes itself and refuses on
+//! mismatch, so the producer supplies no term of it; a rank claim read in
+//! contribution space would instead refuse conforming streams for the
+//! consumer's own quantization.
 //!
 //! # Fusion is a law, not a knob
 //!
@@ -78,7 +178,7 @@
 //! surface at most once per stratum. Weights are read as ratios and never as
 //! absolute quantities, so a map built with two different [`Fixed`]
 //! constructors is a silent factor-of-`10^12` error that refuses nothing — see
-//! [`FusionProfile::new`] before writing one.
+//! [`FusionProfile::with_decay`] before writing one.
 //! It is content-addressed, so an answer names exactly which law produced it.
 //! Contributions are exact [`Fixed`] values computed with checked arithmetic;
 //! an intermediate that does not fit is a loud [`FusionError::Overflow`], never
@@ -88,11 +188,12 @@
 //! depth are one coupled quantity: past a depth those first three decide,
 //! adjacent ranks stop producing distinct contributions and the fused score
 //! stops separating them. Nothing errors there and nothing becomes
-//! nondeterministic — it simply stops being rank-ordered, which is exactly the
-//! kind of quiet degradation this crate refuses to leave unsaid.
-//! [`FusionProfile::monotone_depth`] reports the exact bound, and admission
-//! refuses a depth beyond it whenever the environment names the profile the
-//! answer will be fused under.
+//! nondeterministic — the declared tie-break is total, so the order simply falls
+//! through to its later keys — which is exactly the kind of quiet degradation
+//! this crate refuses to leave unsaid. It is said rather than refused:
+//! [`FusionProfile::monotone_depth`] reports the exact bound before a plan runs,
+//! and the fused trailer reports, per stratum, how deep the answer in hand was
+//! actually read against it.
 //!
 //! Which rule a profile names decides how much depth a weight can buy.
 //! [`DecayRule::ReciprocalRank`] truncates the reciprocal before applying the
@@ -101,9 +202,9 @@
 //! the same quantity, one exactly-rounded division instead of two truncations —
 //! and its bound runs to roughly `10^6 · sqrt(w)`, so a stratum that must be
 //! read fourteen million ranks deep is admissible at a weight of two hundred.
-//! Read in reverse, that relation is a requirement: under the weighted rule a
-//! deep stratum *needs* a heavy enough weight, and a profile that underweights
-//! one has its plans refused rather than silently unordered. See
+//! Read in reverse, that relation is a design calculus: under the weighted rule
+//! a deep stratum *needs* a heavy enough weight, and a profile that underweights
+//! one answers at a coarser rank resolution, which it reports. See
 //! [`FusionProfile`] for the derivation in both directions.
 //!
 //! # A composition outside the kernel
@@ -182,6 +283,58 @@
 //! serde document or a `Hash`. The encoding sorts map entries, so it is a pure
 //! function of the plan's fields and is byte-identical on every target.
 //!
+//! A fused answer carries **three** such identities, and they answer three
+//! different questions about it. [`PlanId`] names the question that was asked;
+//! [`FusionProfileId`] names the law the rows were fused under; and
+//! [`EvidenceId`] names the index generations that answered, digested over the
+//! per-stratum attestation map in [`FusionTrailer::attestations`]. The third
+//! exists because the first two are derived from configuration, and
+//! configuration is exactly what does not change when an index is rebuilt
+//! underneath a running system: the same plan under the same law over a rebuilt
+//! index returns different rows while both other identities stay byte-identical.
+//! Two answers are comparable iff all three agree — one equality comparison over
+//! a triple, rather than a map diff each caller would write differently.
+//!
+//! The third moves for a reason a producer has to supply, so it is the one
+//! identity a misconfigured registry can silently flatten: an index that attests
+//! nothing makes every answer over every generation of it carry one
+//! [`EvidenceId`]. What a generation owes — that it move exactly when the rows
+//! that can be returned move, and that the producer say whether it is a
+//! content-derived digest or a host-scoped label — is A13 of
+//! [`producer_contract`].
+//!
+//! What an index attested is a different kind of fact from how a read ended, and
+//! it is kept apart from one deliberately. A producer's terminal
+//! [`ProducerStatus`] says who stopped the read — the planned depth, the producer's
+//! own declared row bound, a caller's own query text, fusion's contribution bound, the
+//! producer's refusal of the terms, or a failed run —
+//! and only [`ProducerStatus::Exhausted`] claims a stratum's rows ran out. An
+//! incomplete *index* is none of those: it is true from the instant the stream
+//! opened and stays true however the read ends, so it is read from
+//! [`RankedStream::attestation`] before the first row is pulled. Held as a
+//! terminal status it would be overwritten by a bounded stop — a stream a top-k
+//! stopped never returns a receipt — and would vanish exactly in the runs where
+//! the bound mattered. Held as an attestation, a stratum that was both stopped
+//! and short reports both facts.
+//!
+//! That is also what keeps a fused score honest. A stratum serving from a short
+//! index omits whatever its missing shard held, so a candidate that shard would
+//! have named is summed one contribution light. Labelling that "exact" would be
+//! a bound on the read becoming a value, and labelling it a *lower bound* would
+//! be worse: this layer scores by rank, so the omission also promotes every row
+//! behind the missing one into a rank it did not earn, and a one-sided name is
+//! right about the first direction and wrong about the second.
+//! [`FusionTrailer::exactness`] says which reading applies —
+//! [`ScoreExactness::Exact`], or [`ScoreExactness::Estimated`] naming the
+//! responsible strata on each side — [`FusedRow::interval`] carries the size of
+//! each for one row, and the rows are returned either way, because a degraded
+//! stratum still produced real rows in a real order.
+//!
+//! The same applies, for the same reason, to a producer whose *search* is
+//! approximate rather than whose index was short: rows that were due did not
+//! arrive. What that producer declared about itself is carried to the answer
+//! beside the attestation, in [`FusionTrailer::fidelities`].
+//!
 //! # No float is ever computed with
 //!
 //! Every number this layer derives — a stratum weight, a reciprocal-rank
@@ -234,27 +387,51 @@ mod request;
 mod search;
 mod statistics;
 
-pub use admission::{AdmissionEnvironment, AdmissionError};
-pub use compile::{CompiledRetrieval, StratumUnit, compile};
+/// The sixteen obligations a ranked producer owes this layer, and who holds it
+/// to each one.
+///
+/// Documentation only — this module declares no item. It is the crate's
+/// `PRODUCER-CONTRACT.md` rendered here so that a host writing a
+/// [`purrdf_sparql_eval::PropertyFunction`] reads the contract beside the types
+/// that enforce it, rather than in a file it has to go and find.
+///
+/// Every entry states the obligation, the failure it prevents, and whether the
+/// layer *checks* it — a breach is a named refusal — or *believes* it, in which
+/// case a breach is a wrong answer and the entry names the test that proves the
+/// shipped producers keep the promise.
+#[doc = include_str!("../PRODUCER-CONTRACT.md")]
+pub mod producer_contract {}
+
+pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
+pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, UnitError, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
-pub use error::{FusionError, PlanError};
-pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
+pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
+pub use execute::{
+    ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, StreamEnding, execute,
+};
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
-pub use fusion_stream::{CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus};
+pub use fusion_stream::{
+    CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus, ScoreExactness,
+    ScoreInterval, StratumResolution,
+};
 pub use id::{
-    FUSION_PROFILE_ID_BYTES, FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId,
-    PLAN_ID_BYTES, PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,
+    EVIDENCE_ID_BYTES, EVIDENCE_ID_DOMAIN, EVIDENCE_VERSION, EvidenceId, FUSION_PROFILE_ID_BYTES,
+    FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId, PLAN_ID_BYTES,
+    PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,
 };
 pub use iri::{Iri, Term};
 pub use plan::{
-    Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
-    StatisticsSnapshot, UnservedReason, UnservedTerm,
+    DepthCause, DepthInputs, Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason,
+    StatisticsEntries, StatisticsEntry, StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
-pub use planner::plan;
-pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+pub use planner::{depth_cause, depth_from, plan};
+pub use ranked_stream::{
+    ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract,
+};
+pub use reciprocal_rank::{ClassWidth, MonotoneDepth, ToleratedDepth};
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
-pub use request::{Metric, RequestTerm, RetrievalRequest};
+pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
 pub use statistics::Statistics;
 
@@ -268,7 +445,27 @@ pub use purrdf_text::SCALE_DIGITS;
 // reason: `Plan::registry_instance_id` is a value a caller compares against a
 // live Registry.
 pub use purrdf_sparql_eval::RegistryId;
-// The two halves of a producer's declared stream contract. Re-exported because
-// `StreamContract` is built from them and a caller assembling a stream of its
-// own must be able to name them without depending on the evaluator crate.
-pub use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering};
+// The producer's declared stream contract. Re-exported because `StreamContract`
+// is built from it and a caller assembling a stream of its own must be able to
+// name it without depending on the evaluator crate.
+pub use purrdf_sparql_eval::DuplicatePolicy;
+// Which blocks of the candidate universe a ranked producer may name, and the
+// caller-named tag one block is identified by. Re-exported for the same reason
+// `DuplicatePolicy` is: `StreamContract` carries one, `FusionTrailer` reports a
+// map of them, and a caller assembling a stream of its own — or auditing an
+// answer — must be able to name the type without depending on the evaluator
+// crate.
+pub use purrdf_sparql_eval::{CandidateDomains, DomainTag};
+// What a producer attests about the index behind its rows. Re-exported for the
+// same reason: `RankedStream::attestation` returns one and `FusionTrailer`
+// reports a map of them, so a caller implementing a stream or reading a trailer
+// must be able to name these types — and match on `ServiceLevel::Incomplete` —
+// without taking a dependency on the evaluator crate itself.
+pub use purrdf_sparql_eval::{IndexGeneration, PfAttestation, ServiceLevel};
+// What a producer promises about the rows it can name. Re-exported for the same
+// reason again, and with one of its own: a caller reading an answer has to be
+// able to `match` on `Completeness::Lossy` and `OrderFidelity::Perturbed` to get
+// at the producer's verbatim evidence, and the second of those is the only way
+// to learn that a score carries no finite bound at all. A consumer that can read
+// the verdict but cannot name the types in it has been handed half a seam.
+pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity};

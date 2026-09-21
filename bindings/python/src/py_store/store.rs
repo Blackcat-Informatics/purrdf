@@ -142,6 +142,44 @@ impl PyStore {
         Ok(())
     }
 
+    /// Fold everything mutated so far into this store's BASE, leaving the
+    /// copy-on-write delta empty. The store's contents are unchanged.
+    ///
+    /// This is what makes "what did my last change break?" a question with an
+    /// answer. A `Store` records mutations as a delta over a frozen base, and a
+    /// freshly constructed store has an EMPTY base — so without this, the delta of
+    /// a store you loaded a million triples into is those million triples, and
+    /// `purrdf.shapes.PreparedShapes.validate_store_changes` would dutifully
+    /// re-validate the whole graph. Checkpoint after loading, mutate, and the delta
+    /// is exactly the mutation.
+    ///
+    /// Cheap to call once after a bulk load and expensive to call in a tight
+    /// mutation loop: it is a real compaction (the COW base is rebuilt), which is
+    /// why it is an explicit act rather than something `add` does behind your back.
+    ///
+    /// Raises `ValueError` if the store cannot be frozen.
+    fn checkpoint(&mut self, py: Python<'_>) -> PyResult<()> {
+        let inner = &mut self.inner;
+        // A real compaction over the whole base — run it detached (GIL released).
+        py.detach(move || {
+            let base = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store checkpoint failed: {e}")))?;
+            *inner = MutableDataset::new(base);
+            Ok(())
+        })
+    }
+
+    /// The number of quads this store has ADDED since the last
+    /// [`checkpoint`](Self::checkpoint), and the number it has REMOVED, as a pair.
+    ///
+    /// The size of the change `validate_store_changes` expands, so a caller can see
+    /// whether a checkpoint is due (or whether the mutation they believe they made
+    /// actually landed) without validating anything.
+    fn change_size(&self) -> (usize, usize) {
+        (self.inner.added_len(), self.inner.suppressed_len())
+    }
+
     /// Run a SPARQL query. Returns `QuerySolutions` (SELECT), `QueryTriples`
     /// (CONSTRUCT/DESCRIBE), or `QueryBoolean` (ASK). Optional `substitutions`
     /// is a `{Variable: term}` mapping applied natively (never string-spliced).
@@ -862,6 +900,27 @@ impl PyStore {
 }
 
 impl PyStore {
+    /// An immutable snapshot of this store's copy-on-write DELTA — the base, the
+    /// rows added on top of it, and the rows suppressed from it, read through one
+    /// view rather than copied.
+    ///
+    /// The change-path counterpart of [`store_capsule`](Self::store_capsule), and
+    /// deliberately not a capsule: that protocol hands out a frozen
+    /// `Arc<RdfDataset>` with the change already flattened away, which is the one
+    /// thing an incremental validation needs. This is Rust-side and `pub(crate)`
+    /// because the consumer (`crate::shacl`) is in this crate, and because a
+    /// `DeltaDatasetView` names this store's own interners — there is no honest way
+    /// to hand one across a language boundary.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` when the snapshot exceeds the view's retention limits.
+    pub(crate) fn change_snapshot(&self) -> PyResult<purrdf_core::ir::DeltaDatasetView> {
+        self.inner
+            .snapshot_view()
+            .map_err(|e| PyValueError::new_err(format!("store change snapshot failed: {e}")))
+    }
+
     /// The next per-load blank scope ordinal (monotonic, wrapping past 1).
     fn next_load_scope(&self) -> u64 {
         self.next_load_scope.fetch_add(1, Ordering::Relaxed)
@@ -1141,155 +1200,4 @@ fn collapse_synthetic_datatype(
             .then(|| datatype.to_owned());
     }
     (datatype != XSD_STRING).then(|| datatype.to_owned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn iri(s: &str) -> RdfTerm {
-        RdfTerm::iri(s)
-    }
-
-    #[test]
-    fn scoping_keeps_iris_and_literals_verbatim() {
-        let quad = RdfQuad::new(
-            iri("https://e/s"),
-            "https://e/p",
-            RdfTerm::literal(RdfLiteral::simple("v")),
-        );
-        let values = rdf_quad_to_values_scoped(&quad, BlankScope(7));
-        let back = values_to_rdf_quad(&values);
-        assert_eq!(back, quad, "no blank node: the quad is unchanged");
-    }
-
-    #[test]
-    fn same_label_different_scopes_yields_distinct_nodes() {
-        // The regression guard: the SAME document-local blank label loaded
-        // under two different scopes (two `Store::load` calls) MUST become two
-        // distinct nodes once surfaced.
-        let quad = RdfQuad::new(RdfTerm::blank_node("b0"), "https://e/p", iri("https://e/o"));
-        let a = values_to_rdf_quad(&rdf_quad_to_values_scoped(&quad, BlankScope(1)));
-        let b = values_to_rdf_quad(&rdf_quad_to_values_scoped(&quad, BlankScope(2)));
-        assert_ne!(a.subject, b.subject);
-        // …but the same label within one scope is the SAME node (intra-document joins).
-        let a2 = values_to_rdf_quad(&rdf_quad_to_values_scoped(&quad, BlankScope(1)));
-        assert_eq!(a.subject, a2.subject);
-    }
-
-    #[test]
-    fn scoping_recurses_into_quoted_triple_terms() {
-        let quad = RdfQuad::new(
-            RdfTerm::blank_node("r"),
-            "https://e/p",
-            RdfTerm::triple(RdfTriple::new(
-                RdfTerm::blank_node("s"),
-                "https://e/q",
-                RdfTerm::blank_node("o"),
-            )),
-        );
-        let values = rdf_quad_to_values_scoped(&quad, BlankScope(5));
-        let back = values_to_rdf_quad(&values);
-        let RdfTerm::Triple(t) = &back.object else {
-            panic!("object must stay a quoted triple");
-        };
-        // Both the reifier subject and the inner triple's blanks carry the scope.
-        assert!(matches!(&back.subject, RdfTerm::BlankNode(l) if l.contains('5')));
-        assert!(matches!(&t.subject, RdfTerm::BlankNode(l) if l.contains('5')));
-        assert!(matches!(&t.object, RdfTerm::BlankNode(l) if l.contains('5')));
-    }
-
-    #[test]
-    fn plain_literal_round_trips_without_synthetic_datatype() {
-        let values = QuadValues {
-            s: TermValue::Iri("https://e/s".to_owned()),
-            p: TermValue::Iri("https://e/p".to_owned()),
-            o: TermValue::Literal {
-                lexical_form: "hi".to_owned(),
-                datatype: XSD_STRING.to_owned(),
-                language: None,
-                direction: None,
-            },
-            g: None,
-        };
-        let quad = values_to_rdf_quad(&values);
-        let RdfTerm::Literal(lit) = &quad.object else {
-            panic!("expected a literal");
-        };
-        assert_eq!(lit.datatype, None, "plain literal stays datatype-less");
-    }
-
-    // ── capsule boundary ─────────────────────────────────────────────
-    //
-    // These tests pin the `_store_capsule` contract WITHOUT a Python interpreter:
-    // they exercise the same snapshot → `Box<Arc<RdfDataset>>` → raw-address →
-    // borrow lifecycle the capsule producer/consumer use across the FFI boundary.
-    // The capsule's `#[pymethods]` are thin wrappers over exactly this logic.
-
-    /// Build a [`MutableDataset`] seeded with `n` distinct default-graph triples.
-    fn mutable_with(n: usize) -> MutableDataset {
-        let mut m = empty_mutable().expect("empty");
-        for i in 0..n {
-            m.insert(rdf_quad_to_values(&RdfQuad::new(
-                iri(&format!("https://e/s{i}")),
-                "https://e/p",
-                iri("https://e/o"),
-            )))
-            .expect("fixture IRIs are absolute");
-        }
-        m
-    }
-
-    /// Freeze the snapshot exactly as `_store_capsule` does (a frozen `Arc`), box it
-    /// for a stable address, read the pointee back by raw address, and assert the
-    /// boxed Arc round-trips. Dropping the box drops exactly ONE strong ref — no
-    /// double-free (the destructor closure owns the single `keepalive` box).
-    #[test]
-    fn capsule_snapshot_round_trips_by_address_without_double_free() {
-        let store = mutable_with(2);
-        let snapshot: Arc<RdfDataset> = store.freeze().expect("freeze");
-        assert_eq!(Arc::strong_count(&snapshot), 1);
-
-        // Mirror `_store_capsule`: box the Arc so its address is stable, hand out the
-        // address, then read the Arc back through the raw pointer (as the consumer
-        // does after `pointer_checked`).
-        let boxed: Box<Arc<RdfDataset>> = Box::new(snapshot);
-        let addr = (&raw const *boxed) as usize;
-        // SAFETY: `addr` is the live address of the Arc owned by `boxed` (test-local).
-        let borrowed: &Arc<RdfDataset> = unsafe { &*(addr as *const Arc<RdfDataset>) };
-        assert_eq!(borrowed.quad_count(), 2);
-        // The consumer may clone the Arc to extend its lifetime; that is a second
-        // strong ref over the SAME dataset, dropped before the box is.
-        let consumer_clone = Arc::clone(borrowed);
-        assert_eq!(Arc::strong_count(borrowed), 2);
-        drop(consumer_clone);
-        assert_eq!(Arc::strong_count(borrowed), 1);
-        // The capsule destructor drops the box exactly once → one strong ref freed.
-        drop(boxed);
-    }
-
-    /// Snapshot-vs-mutation aliasing: a consumer holding the frozen snapshot Arc must
-    /// see a STABLE dataset after the producing store mutates (the capsule hands out
-    /// an immutable frozen snapshot, not a live view).
-    #[test]
-    fn capsule_snapshot_is_unaffected_by_later_store_mutation() {
-        let mut store = mutable_with(1);
-        let snapshot: Arc<RdfDataset> = store.freeze().expect("freeze");
-        assert_eq!(snapshot.quad_count(), 1);
-
-        // The store mutates AFTER the snapshot was taken (a later `Store.add`).
-        store
-            .insert(rdf_quad_to_values(&RdfQuad::new(
-                iri("https://e/s-new"),
-                "https://e/p",
-                iri("https://e/o"),
-            )))
-            .expect("fixture IRIs are absolute");
-        let after = store.freeze().expect("freeze again");
-
-        // The earlier snapshot the consumer holds is UNCHANGED…
-        assert_eq!(snapshot.quad_count(), 1, "held snapshot must stay stable");
-        // …while a fresh snapshot reflects the mutation.
-        assert_eq!(after.quad_count(), 2, "fresh snapshot sees the new quad");
-    }
 }

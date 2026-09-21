@@ -36,11 +36,10 @@
 //! its "index-build cost" is already folded into the build group); this is noted in
 //! the build group rather than benched as a separate index pass.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     TermId, TermRef, TermValue,
@@ -50,104 +49,24 @@ use purrdf_core::{
 // Counting allocator — operational metrics beyond quads/sec.
 // ---------------------------------------------------------------------------
 //
-// Mirrors `crates/rdf/tests/ir_zero_alloc.rs`: a pass-through `#[global_allocator]`
-// that records every `alloc`/`realloc` on the *current thread* (thread-local, so a
-// sibling criterion thread cannot contaminate the snapshot). Beyond the bare count
-// the zero-alloc test keeps, this also tracks total bytes requested and a high-water
-// mark of net live bytes so the bench can report allocated-bytes + count + peak.
-
-thread_local! {
-    static ALLOC_COUNT: Cell<u64> = const { Cell::new(0) };
-    static ALLOC_BYTES: Cell<u64> = const { Cell::new(0) };
-    static LIVE_BYTES: Cell<i64> = const { Cell::new(0) };
-    static PEAK_BYTES: Cell<i64> = const { Cell::new(0) };
-}
-
-struct CountingAllocator;
-
-/// Record one allocation of `size` bytes on the current thread, tolerating TLS-init
-/// re-entrancy by silently skipping when the thread-local is not yet available.
-fn on_alloc(size: usize) {
-    let _ = ALLOC_COUNT.try_with(|c| c.set(c.get() + 1));
-    let _ = ALLOC_BYTES.try_with(|c| c.set(c.get() + size as u64));
-    let _ = LIVE_BYTES.try_with(|live| {
-        let now = live.get() + size as i64;
-        live.set(now);
-        let _ = PEAK_BYTES.try_with(|peak| {
-            if now > peak.get() {
-                peak.set(now);
-            }
-        });
-    });
-}
-
-/// Record one deallocation of `size` bytes (only the live/peak tracking cares).
-fn on_dealloc(size: usize) {
-    let _ = LIVE_BYTES.try_with(|live| live.set(live.get() - size as i64));
-}
-
-// SAFETY: every method forwards to the system allocator with the same layout; the
-// only added behavior is thread-local counter bookkeeping on alloc/dealloc paths.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe {
-            on_alloc(layout.size());
-            System.alloc(layout)
-        }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe {
-            on_dealloc(layout.size());
-            System.dealloc(ptr, layout);
-        }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        unsafe {
-            // A realloc frees the old block and hands back a (possibly) larger one.
-            on_dealloc(layout.size());
-            on_alloc(new_size);
-            System.realloc(ptr, layout, new_size)
-        }
-    }
-}
+// The workspace's shared instrument, in the window that counts the *current
+// thread* only, so a sibling criterion thread cannot contaminate the region under
+// measurement. The same window backs `crates/rdf-core/tests/ir_zero_alloc.rs`;
+// beyond the bare count that test keeps, the measurement also carries total bytes
+// requested and a high-water mark of net live bytes, so the bench can report
+// allocated-bytes + count + peak.
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// A snapshot of the current thread's allocation counters.
-#[derive(Clone, Copy)]
-struct AllocSnapshot {
-    count: u64,
-    bytes: u64,
-    peak: i64,
-}
-
-fn snapshot() -> AllocSnapshot {
-    AllocSnapshot {
-        count: ALLOC_COUNT.with(Cell::get),
-        bytes: ALLOC_BYTES.with(Cell::get),
-        peak: PEAK_BYTES.with(Cell::get),
-    }
-}
-
-/// Reset the high-water mark to the current live level so the next measured region's
-/// peak is measured relative to its own start, not a stale historical maximum.
-fn reset_peak_to_live() {
-    LIVE_BYTES.with(|live| {
-        PEAK_BYTES.with(|peak| peak.set(live.get()));
-    });
-}
-
 /// Print the allocation deltas for one measured region as `total allocated bytes +
 /// allocation count + peak`, satisfying the RFC's "report metrics beyond quads/sec".
-fn report(label: &str, before: AllocSnapshot, after: AllocSnapshot) {
-    let count = after.count - before.count;
-    let bytes = after.bytes - before.bytes;
+fn report(label: &str, measured: Measurement) {
+    let count = measured.allocations;
+    let bytes = measured.requested_bytes;
     // Peak is the high-water mark of net-live bytes reached *during* the region,
-    // relative to the live level at entry (the harness reset it at `before`).
-    let peak_delta = (after.peak - before.peak).max(0);
+    // relative to the live level at entry (where the window pinned it).
+    let peak_delta = measured.peak_working_bytes;
     println!(
         "[ir_layout] {label:28} allocations={count:>8}  allocated_bytes={bytes:>10}  \
          peak_live_bytes={peak_delta:>10}"
@@ -334,11 +253,9 @@ fn term_len(t: TermRef<'_>) -> usize {
 /// reports time; these `println!`s carry the alloc story alongside it.
 fn print_alloc_metrics() {
     // Build cost: interning + pushing + freeze.
-    reset_peak_to_live();
-    let before = snapshot();
+    let window = CurrentThreadWindow::open();
     let ds = build_dataset();
-    let after = snapshot();
-    report("build (intern+push+freeze)", before, after);
+    report("build (intern+push+freeze)", window.close());
     println!(
         "[ir_layout] dataset: quads={} terms={}",
         ds.quad_count(),
@@ -347,41 +264,37 @@ fn print_alloc_metrics() {
 
     // One full AoS iteration over the frozen dataset — the hot path. This must be a
     // zero-allocation region (proven by tests/ir_zero_alloc.rs); the report shows it.
-    reset_peak_to_live();
-    let before = snapshot();
+    let window = CurrentThreadWindow::open();
     let mut acc = 0u64;
     for q in ds.quads() {
         acc = acc.wrapping_add(consume_ids(q));
     }
-    let after = snapshot();
+    let measured = window.close();
     std::hint::black_box(acc);
-    report("iterate AoS quads()", before, after);
+    report("iterate AoS quads()", measured);
 
     // One full resolution pass — borrows every term without copying.
-    reset_peak_to_live();
-    let before = snapshot();
+    let window = CurrentThreadWindow::open();
     let mut acc = 0usize;
     for q in ds.quads() {
         acc = acc.wrapping_add(resolve_len(&ds, q));
     }
-    let after = snapshot();
+    let measured = window.close();
     std::hint::black_box(acc);
-    report("resolve quad_refs()/resolve()", before, after);
+    report("resolve quad_refs()/resolve()", measured);
 
     // Build cost of each measurement shim, so the AoS-vs-alternatives comparison
     // reports memory as well as time.
-    reset_peak_to_live();
-    let before = snapshot();
+    let window = CurrentThreadWindow::open();
     let soa = SoaQuads::from_dataset(&ds);
-    let after = snapshot();
-    report("build SoA columns (shim)", before, after);
+    let measured = window.close();
+    report("build SoA columns (shim)", measured);
     std::hint::black_box(soa.s.len());
 
-    reset_peak_to_live();
-    let before = snapshot();
+    let window = CurrentThreadWindow::open();
     let adj = PredicateAdjacency::from_dataset(&ds);
-    let after = snapshot();
-    report("build pred-adjacency (shim)", before, after);
+    let measured = window.close();
+    report("build pred-adjacency (shim)", measured);
     std::hint::black_box(adj.buckets.len());
 
     println!(

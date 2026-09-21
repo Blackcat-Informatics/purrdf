@@ -53,6 +53,12 @@ jobs:
       - name: Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
         run: python3 scripts/check-iri-resolver-singleton.py
 
+      - name: Check the PyO3-extension test-module gate can still fail
+        run: python3 scripts/check-python-binding-tests.py --self-test
+
+      - name: Check no Rust test module hides in the PyO3 extension crate
+        run: python3 scripts/check-python-binding-tests.py
+
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
@@ -103,6 +109,9 @@ jobs:
 
       - name: Check the conclusion-directed entailment surface reaches all four hosts
         run: python3 scripts/check-entailment-surface.py
+
+      - name: Check every PyO3 member the extension exposes is declared in the shipped type stub
+        run: python3 scripts/check-python-stub-parity.py
 
       - name: Check every scraped conformance row is RED without its scoreboard line
         run: python3 scripts/conformance-matrix.py --self-test
@@ -294,6 +303,10 @@ jobs:
         uses: ./.github/actions/wasm-toolchain
 
       - name: Build release crates on wasm32
+        # `purrdf-bench` is unpublished tooling, and it is on this list because
+        # its library half documents itself as portable. Only the library is
+        # built (`--lib`); the `bench-corpus` binary is std-only and stays out.
+        # This list mirrors the `wasm` target in the Makefile.
         run: |
           cargo build --locked --release --target wasm32-unknown-unknown --lib \
             -p purrdf-events \
@@ -320,7 +333,8 @@ jobs:
             -p purrdf-retrieval \
             -p purrdf-validate \
             -p purrdf \
-            -p purrdf-wasm
+            -p purrdf-wasm \
+            -p purrdf-bench
 
       - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
         # purrdf-geo claims that every geometric answer is the same on both

@@ -13,6 +13,7 @@ use ::purrdf::{
     BlankScope, DatasetView, FastMap, FastSet, GraphMatch, QuadIds, QuadRef, RdfDataset,
     RdfDatasetBuilder, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef, TermValue,
 };
+use smallvec::SmallVec;
 
 /// Native term lookup used by SHACL traversal, without an owned RDF row boundary.
 /// Implementations preserve one validation-local `TermId` namespace.
@@ -194,6 +195,10 @@ pub struct ShaclDatasetView {
     source: Source,
     projected: bool,
     statements_projected: bool,
+    /// Whether this source can put the SAME projected row on the wire twice, and
+    /// therefore whether a probe has to dedup at all. Decided once, here, from
+    /// facts about the carrier; see [`Self::source_can_duplicate`].
+    source_can_duplicate: bool,
     materialized: OnceLock<Arc<RdfDataset>>,
     materializations: AtomicUsize,
 }
@@ -226,6 +231,14 @@ impl ShaclDatasetView {
     }
 
     /// Read an admitted mutation snapshot, retaining its shared immutable base.
+    /// `projected` selects SHACL's graph-union and statement projection.
+    ///
+    /// An unprojected delta view is a legitimate graph-scoped read of the
+    /// snapshot, but it is NOT a carrier the incremental change path can be sound
+    /// over: that path's guarantee is stated over the projected union, so
+    /// `PreparedValidator::affected_focus_node_ids` refuses a binding whose
+    /// [`Self::statements_projected`] answers `false`. Use
+    /// `PreparedShapes::bind_delta_with_shapes_graph` for the change path.
     ///
     /// # Errors
     /// Refuses a validation-local handle mapping exceeding the supplied limits.
@@ -238,19 +251,69 @@ impl ShaclDatasetView {
         Ok(Self::new(Source::Delta(dense), projected))
     }
 
+    /// Whether reads through this view union the RDF 1.2 statement tables onto
+    /// the plain stream — SHACL's statement projection.
+    ///
+    /// This is a property of the view, not of the carrier: a reifier or
+    /// annotation row is READ here when this answers `true`, and is invisible to
+    /// [`Self::quads_for_pattern_with_plan`] when it answers `false`. Exposed
+    /// because it decides how wide this view's read surface is, and a consumer
+    /// whose correctness argument is stated over that surface — the incremental
+    /// change path is the one in this crate — has to be able to CHECK it rather
+    /// than assume the constructor it was handed chose the wide one.
+    #[must_use]
+    pub const fn statements_projected(&self) -> bool {
+        self.statements_projected
+    }
+
     pub(crate) fn with_statement_projection(mut self) -> Self {
         self.statements_projected = true;
         self
     }
 
     fn new(source: Source, projected: bool) -> Self {
+        let source_can_duplicate = Self::source_can_duplicate(&source);
         Self {
             source,
             projected,
             statements_projected: projected,
+            source_can_duplicate,
             materialized: OnceLock::new(),
             materializations: AtomicUsize::new(0),
         }
+    }
+
+    /// Whether the statement projection over `source` can yield one row twice.
+    ///
+    /// There are exactly three ways it can, and a carrier that admits none of
+    /// them needs no dedup — which matters because dedup is not free: a set that
+    /// must hold a whole probe's rows is an allocation on the first row and a
+    /// reallocation every time it doubles, charged to EVERY probe, and SHACL
+    /// probes once per focus node per path step.
+    ///
+    /// 1. **The graph union.** Projection drops each row's graph slot, so one
+    ///    triple asserted in two graphs collapses onto one row twice. Impossible
+    ///    with no named graph.
+    /// 2. **The RDF 1.2 overlay stream.** Reifier and annotation quads are
+    ///    chained onto the base probe and may restate a row it already produced.
+    ///    Impossible with no reifier and no annotation quad.
+    /// 3. **The carrier itself.** A native [`RdfDataset`] answers a pattern from
+    ///    an index over a deduplicated quad set, so its rows are distinct by
+    ///    construction. A composite or delta carrier unions several bases, and
+    ///    whether those bases overlap is not this adapter's fact to assume — so
+    ///    those keep deduping unconditionally.
+    ///
+    /// Evaluated once per view, against the RAW source: [`Self::named_graphs`]
+    /// and [`Self::reifier_quads`] are already projected (they answer empty under
+    /// projection), so asking THEM would answer the wrong question and quietly
+    /// switch dedup off for the carriers that need it most.
+    fn source_can_duplicate(source: &Source) -> bool {
+        let Source::Native(native) = source else {
+            return true;
+        };
+        native.named_graphs().next().is_some()
+            || native.reifier_quads().next().is_some()
+            || native.annotation_quads().next().is_some()
     }
 
     /// Return an immutable owned dataset at an explicit compatibility boundary.
@@ -273,6 +336,28 @@ impl ShaclDatasetView {
             self.materializations.fetch_add(1, Ordering::Relaxed);
             dataset
         })
+    }
+
+    /// The mutation snapshot this view reads, when it reads one.
+    ///
+    /// Exposed so the incremental change path can prove the delta a caller hands
+    /// it is the delta this binding was built over. The alternative — trusting the
+    /// caller — would answer with ids from one dataset about changes in another,
+    /// and every one of those ids would be a valid index into the wrong table.
+    pub(crate) fn delta_source(&self) -> Option<&Arc<DeltaDatasetView>> {
+        match &self.source {
+            Source::Delta(dense) => Some(&dense.source),
+            Source::Native(_) | Source::Composite(_) => None,
+        }
+    }
+
+    /// This view's own handle for a snapshot term, or `None` when the term is not
+    /// one this view maps.
+    pub(crate) fn local_delta_id(&self, id: ::purrdf::ir::DeltaViewId) -> Option<TermId> {
+        match &self.source {
+            Source::Delta(dense) => dense.local_ids.get(&id).copied(),
+            Source::Native(_) | Source::Composite(_) => None,
+        }
     }
 
     /// Retained handle mapping and explicit materialization work.
@@ -308,7 +393,8 @@ impl ShaclDatasetView {
             .then(|| self.raw_overlay_probe(s, p, o, source_graph))
             .into_iter()
             .flatten();
-        let mut seen = FastSet::default();
+        let dedup = self.statements_projected && self.source_can_duplicate;
+        let mut seen = ProjectionDedup::default();
         self.raw_probe(*plan, s, p, o, source_graph)
             .chain(overlays)
             .filter_map(move |mut q| {
@@ -318,7 +404,7 @@ impl ShaclDatasetView {
                 if self.projected {
                     q.g = None;
                 }
-                if self.statements_projected && !seen.insert(q) {
+                if dedup && !seen.insert(q) {
                     return None;
                 }
                 Some(q)
@@ -418,6 +504,61 @@ impl ShaclDatasetView {
                 dense.source.annotation_quads().map(|q| dense.quad(q)),
             )),
         }
+    }
+}
+
+/// First-seen membership over the rows one projected probe has already yielded,
+/// allocation-free while that row set is small.
+///
+/// The statement projection has to dedup: the graph union collapses the same
+/// triple asserted in two graphs onto one row, and the RDF 1.2 overlay stream can
+/// restate a row the base probe already produced. A `HashSet` is the right shape
+/// for that, and it is also one heap allocation on its FIRST insert — charged to
+/// every probe that matches even a single quad. SHACL evaluates a path and a
+/// class membership per focus node, so that was one allocation per probe per
+/// focus node for a set that almost always holds one or two rows.
+///
+/// So membership is answered by a linear scan over an inline row buffer until it
+/// reaches [`Self::LINEAR_MAX`], and only a probe that really is wide pays for a
+/// table. Both regimes answer the same question in the same order, so the rows a
+/// probe yields and the order it yields them in are unchanged; the asymptotics
+/// are unchanged too, because the scanned regime is bounded by a constant.
+#[derive(Default)]
+struct ProjectionDedup {
+    /// The rows admitted so far, while the scan is still the cheaper answer.
+    inline: SmallVec<[QuadIds; Self::LINEAR_MAX]>,
+    /// The hashed set, once the row set has outgrown the scan. `None` until then,
+    /// and a `None` here has never allocated.
+    hashed: Option<FastSet<QuadIds>>,
+}
+
+impl ProjectionDedup {
+    /// The row count past which probing switches from a linear scan to a hash
+    /// lookup. A scan of this many 16-byte `Copy` rows is a few cache lines and
+    /// beats hashing one; past it the scan would cost more than the allocation it
+    /// avoids.
+    const LINEAR_MAX: usize = 16;
+
+    /// Whether `quad` is the first occurrence of that row in this probe.
+    fn insert(&mut self, quad: QuadIds) -> bool {
+        if let Some(set) = &mut self.hashed {
+            return set.insert(quad);
+        }
+        if self.inline.contains(&quad) {
+            return false;
+        }
+        if self.inline.len() < Self::LINEAR_MAX {
+            self.inline.push(quad);
+            return true;
+        }
+        let mut set: FastSet<QuadIds> = FastSet::with_capacity_and_hasher(
+            self.inline.len() * 2,
+            ::purrdf::FastHasher::default(),
+        );
+        set.extend(self.inline.iter().copied());
+        let fresh = set.insert(quad);
+        self.hashed = Some(set);
+        fresh
     }
 }
 

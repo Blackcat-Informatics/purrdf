@@ -40,6 +40,36 @@
 //! [`FallibleDatasetView`](crate::FallibleDatasetView). Only its final ready status is
 //! a completeness certificate; iterator exhaustion alone is not.
 //!
+//! # Page admission (G10)
+//!
+//! A page is materialized only when it can PROVABLY contribute a row, and the
+//! decision is made from sealed metadata before any provider call. Each page's
+//! [`PageTranslation`] carries an exact summary — per-term occurrence counts for the
+//! base-quad subject, predicate and object positions and for each side table's
+//! reifier column, plus per-graph row counts for all three composed streams — keyed
+//! in that page's own LOCAL [`TermId`] space. Local keying is what makes the summary
+//! invariant under [`compact`](PagedDataset::compact), which renumbers only the
+//! global side.
+//!
+//! `admission::admit_pattern` applies the law and reports a named reason when it
+//! refuses, so a refusal can be asserted against the clause that produced it. Each
+//! clause is EXACT — it refuses only when no base quad on that page can match that
+//! axis — and their conjunction is a sound but not complete filter: an admitted page
+//! may still yield nothing, which is correct. Graph-constrained reads additionally
+//! walk a dataset-level graph-to-page index rather than every page; that index is
+//! derived at every constructor and never persisted, so page and global renumbering
+//! are both picked up automatically.
+//!
+//! The summary authorizes SKIPPING, so an under-reporting one would skip a page that
+//! holds matching rows and return a short answer wrapped in a completeness
+//! certificate. Every page that is materialized is therefore certified as it is
+//! admitted, in EVERY build profile, by comparing the `O(1)` digest sealed into its
+//! `PageSummary` against the digest re-derived from the materialized content; a
+//! drift in either direction changes that digest and is refused as typed invalid
+//! data. [`PagedDataset::verify_parts`] remains the explicitly paid pass: it reaches
+//! the pages a pruning decision would have skipped, and it re-derives the whole
+//! summary so it can name the field that disagrees.
+//!
 //! # Determinism
 //!
 //! Pages iterate in ascending [`PageId`] order and each page yields in its frozen
@@ -47,10 +77,15 @@
 //! annotation views) is deterministic. Pages are quad-disjoint (G3, enforced at
 //! freeze), so no cross-page dedup is needed. A [`PagedQueryView`] additionally
 //! records first page requests in evaluation order and charges each admitted page
-//! exactly once.
+//! exactly once. Cardinality estimation reads the same sealed counts on both
+//! surfaces and never consults page residency, so plan choice — and therefore the
+//! recorded request sequence — is a function of the snapshot and the pattern alone.
 
+pub(crate) mod admission;
+pub(crate) mod graph_index;
 pub mod provider;
 pub mod query;
+pub(crate) mod summary;
 pub mod translation;
 
 use std::collections::{BTreeSet, HashMap};
@@ -60,6 +95,9 @@ use std::sync::{Arc, OnceLock};
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
+use admission::PageAdmission;
+use graph_index::GraphPageIndex;
+use summary::{PageStream, PageSummary};
 
 pub use provider::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
@@ -72,7 +110,7 @@ pub use translation::PageTranslation;
 /// [`PageTranslation`] built at seal time, and a lazily-cached resident
 /// [`RdfDataset`] (empty after the seal pass; filled on first query-time access).
 #[derive(Debug)]
-struct PageSlot {
+pub(crate) struct PageSlot {
     /// The page's dense ordinal (equals its index in `PagedDataset::pages`).
     id: PageId,
     /// The seal-time local↔global term-id map for this page.
@@ -123,6 +161,25 @@ pub enum PagedFreezeError {
     /// seal refuses rather than collapse the duplicate. Boxed to keep the enum (and
     /// therefore the seal `Result`) small.
     QuadOverlap(Box<PagedQuadOverlap>),
+    /// A page's freshly re-derived `PageSummary` disagrees with the one it was
+    /// sealed with — its materialized content has drifted since certification.
+    ///
+    /// The pruning law (the `admit_pattern` law, over the dataset-level
+    /// graph-to-page index) trusts the sealed summary to authorize SKIPPING a page
+    /// without materializing it. A page that IS materialized has its sealed summary
+    /// digest re-checked as it is admitted, in every build profile, and reports the
+    /// drift on its own surface ([`PageFault::invalid_data`] or
+    /// [`PagedQueryError::InvalidData`]); this variant is the freeze-time surface's
+    /// counterpart, raised by [`PagedDataset::verify_parts`] — which materializes
+    /// every page unconditionally and so also reaches the pages a pruning decision
+    /// would have skipped — and by [`PagedDataset::from_provider`] when a page cannot
+    /// be summarized honestly at all.
+    SummaryDrift {
+        /// The page whose materialized content no longer matches its sealed summary.
+        page: PageId,
+        /// Diagnostic detail describing the disagreement.
+        message: String,
+    },
 }
 
 /// Which composed quad stream a [`PagedFreezeError::QuadOverlap`] refusal came from.
@@ -205,6 +262,11 @@ impl std::fmt::Display for PagedFreezeError {
                 o.object,
                 o.graph
             ),
+            Self::SummaryDrift { page, message } => write!(
+                f,
+                "page {}'s materialized content disagrees with its sealed summary: {message}",
+                page.0
+            ),
         }
     }
 }
@@ -215,7 +277,8 @@ impl std::error::Error for PagedFreezeError {
             Self::Page(fault) => Some(fault),
             Self::GenerationMismatch { .. }
             | Self::PageCountMismatch { .. }
-            | Self::QuadOverlap(_) => None,
+            | Self::QuadOverlap(_)
+            | Self::SummaryDrift { .. } => None,
         }
     }
 }
@@ -271,6 +334,12 @@ pub struct PagedDataset {
     /// The total quad count, summed at seal time so [`len_hint`](DatasetView::len_hint)
     /// never materializes a page.
     total_quads: usize,
+    /// The dataset-level "which pages carry graph G" index, DERIVED (never
+    /// persisted) from the completed `pages` in every constructor — see
+    /// [`GraphPageIndex::derive`]. Read via [`graph_index`](Self::graph_index) by
+    /// the page-admission candidate selection (`admission::candidate_pages`) in
+    /// both `quads_for_pattern` and `cardinality_estimate` below.
+    graph_index: GraphPageIndex,
 }
 
 impl std::fmt::Debug for PagedDataset {
@@ -357,7 +426,13 @@ impl PagedDataset {
             // This must happen for every page before any query so the dictionary is
             // complete (value lookups are correct for terms on not-yet-requeried
             // pages).
-            let translation = PageTranslation::build(&page, &mut dictionary);
+            let translation =
+                PageTranslation::try_build(&page, &mut dictionary).map_err(|defect| {
+                    PagedFreezeError::SummaryDrift {
+                        page: id,
+                        message: defect.to_string(),
+                    }
+                })?;
             let page_caps = page.capabilities();
             let page_quads = page.quad_count();
             // G3: map each of this page's quads (primary + side tables) to the shared id
@@ -426,13 +501,19 @@ impl PagedDataset {
                 provider: current_page_count,
             });
         }
+        let pages = pages.into_boxed_slice();
+        // Derived from the FINAL, densely-numbered `pages` slice, after every page id
+        // is assigned — the sole producer, per page-set, of the dataset-level graph
+        // index.
+        let graph_index = GraphPageIndex::derive(&pages);
         Ok(Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider,
             generation,
             caps,
             total_quads,
+            graph_index,
         })
     }
 
@@ -459,6 +540,23 @@ impl PagedDataset {
     /// exists to avoid. The caller warrants that `parts` came from a previously-sealed
     /// dataset (e.g. [`to_parts`](Self::to_parts)) whose pages were disjoint; the read
     /// path relies on that invariant exactly as `from_provider`'s output does.
+    ///
+    /// # Summary drift on a warm restart
+    ///
+    /// The same applies to the sealed per-page summaries, and it is the reason this
+    /// constructor is where the caveat belongs. Every page this dataset actually READS
+    /// is certified as it is admitted: its content is re-digested and a disagreement is
+    /// refused as invalid data. But the summaries also authorize SKIPPING a page, and a
+    /// skipped page is never materialized, so nothing on the read path can observe that
+    /// it drifted. An under-reporting summary on a page no query touches therefore still
+    /// produces a short answer under a Ready status — a completeness certificate over
+    /// missing rows.
+    ///
+    /// A caller reconstituting parts it produced itself carries no new risk. A caller
+    /// reconstituting parts it does NOT control, and that wants the guarantee to cover
+    /// the pages it never reads, must call [`verify_parts`](Self::verify_parts) once:
+    /// it materializes every page regardless of what a pruning decision would have done,
+    /// which is the only way to reach a skipped page. Clause G10 states this split.
     ///
     /// # Errors
     ///
@@ -502,13 +600,19 @@ impl PagedDataset {
                 byte_len: part.byte_len,
             });
         }
+        let pages = pages.into_boxed_slice();
+        // Derived from `slot.translation.summary()` alone (already carried by each
+        // `PagePart`), so this reads no page — the warm-restart cost stays
+        // O(page count), never O(page count × page size).
+        let graph_index = GraphPageIndex::derive(&pages);
         Ok(Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider,
             generation,
             caps,
             total_quads,
+            graph_index,
         })
     }
 
@@ -572,13 +676,21 @@ impl PagedDataset {
             });
         }
         let indices: Vec<PageId> = keep.to_vec();
+        let pages = pages.into_boxed_slice();
+        // Each retained page's PageSummary is keyed in that page's own LOCAL TermId
+        // space, which subsetting never touches, so it carries over unchanged inside
+        // `slot.translation` above. The graph INDEX, however, is keyed by GLOBAL id
+        // and by PageId — and page ids are renumbered densely here — so it must be
+        // rebuilt from the final `pages` slice rather than carried over.
+        let graph_index = GraphPageIndex::derive(&pages);
         Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider: Arc::new(SubsetPageProvider::new(self.provider.clone(), indices)),
             generation: self.generation,
             caps,
             total_quads,
+            graph_index,
         }
     }
 
@@ -668,13 +780,21 @@ impl PagedDataset {
                 byte_len: slot.byte_len,
             })
             .collect();
+        let pages = pages.into_boxed_slice();
+        // Each page's PageSummary is keyed in that page's own LOCAL TermId space,
+        // which compaction never touches (only the global side moves — see
+        // `PageTranslation::remap`), so it carries over unchanged. The graph INDEX is
+        // keyed by GLOBAL id, which compaction DOES renumber, so it must be rebuilt
+        // from the completed `pages` slice rather than remapped in place.
+        let graph_index = GraphPageIndex::derive(&pages);
         Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider: self.provider.clone(),
             generation: self.generation,
             caps: self.caps,
             total_quads: self.total_quads,
+            graph_index,
         }
     }
 
@@ -703,6 +823,131 @@ impl PagedDataset {
     pub fn translation(&self, id: PageId) -> Option<&PageTranslation> {
         let index = usize::try_from(id.0).ok()?;
         self.pages.get(index).map(|slot| &slot.translation)
+    }
+
+    /// The dataset-level "which pages carry graph G" index (read-only). See
+    /// [`GraphPageIndex`] — derived at every constructor, never persisted.
+    #[must_use]
+    pub(crate) fn graph_index(&self) -> &GraphPageIndex {
+        &self.graph_index
+    }
+
+    /// The ascending [`PageId`]s the `admit_pattern` page-admission law admits for
+    /// the global `(s, p, o, g)` pattern — the pre-execution footprint of that
+    /// pattern, computed entirely from sealed `PageSummary` metadata. Materializes
+    /// NOTHING.
+    ///
+    /// This is the prediction that pairs with [`PagedQueryEvidence::requested_pages`]:
+    /// a query run over [`PagedQueryLimits::UNBOUNDED`] against the same pattern on
+    /// the same snapshot requests exactly this page set (in this ascending order),
+    /// because both this method and `quads_for_pattern`/`PagedQueryView::quads_for_pattern`
+    /// apply the identical `admit_pattern` law to the identical candidate page set
+    /// before any materialization. The admission law is SOUND but not COMPLETE: an
+    /// admitted page may still yield zero matching rows once actually scanned, so
+    /// this is an upper bound on rows touched, not a promise every listed page
+    /// contributes a row.
+    #[must_use]
+    pub fn pages_for_pattern(
+        &self,
+        s: Option<GlobalTermId>,
+        p: Option<GlobalTermId>,
+        o: Option<GlobalTermId>,
+        g: GraphMatch<GlobalTermId>,
+    ) -> Vec<PageId> {
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages(self.graph_index(), page_count, g)
+            .filter(|&page_id| {
+                let index = usize::try_from(page_id.0).expect("page id fits usize");
+                let slot = &self.pages[index];
+                matches!(
+                    admission::admit_pattern(&slot.translation, s, p, o, g),
+                    PageAdmission::Admit(_)
+                )
+            })
+            .collect()
+    }
+
+    /// The ascending [`PageId`]s owning at least one base-quad row in named graph
+    /// `g`, computed from the dataset-level graph-to-page index alone (itself
+    /// derived from sealed per-page `PageSummary` metadata). Materializes NOTHING.
+    /// Equivalent to (and implemented via)
+    /// `pages_for_pattern(None, None, None, GraphMatch::Named(g))`.
+    #[must_use]
+    pub fn pages_for_graph(&self, g: GlobalTermId) -> Vec<PageId> {
+        self.pages_for_pattern(None, None, None, GraphMatch::Named(g))
+    }
+
+    /// Produce a variant retaining only the pages that KNOW named graph `g`, evicting
+    /// the rest — the graph-scoped page-eviction primitive, built on
+    /// [`pages_for_graph`](Self::pages_for_graph) and
+    /// [`with_pages`](Self::with_pages).
+    ///
+    /// "Knows `g`" is deliberately wider than "holds a row in `g`", and the gap is the
+    /// whole correctness argument:
+    ///
+    /// * *Rows in any stream.* The base quads [`pages_for_graph`](Self::pages_for_graph)
+    ///   names, PLUS the RDF 1.2 reifier and annotation side tables, whose rows carry
+    ///   their own graph slot and are data in their own right. A page whose only content
+    ///   in `g` is a reifier or annotation row — with no base quad there at all — is
+    ///   RETAINED; evicting it on the base-quad answer alone would silently drop rows.
+    /// * *Declaration without rows.* A graph declared empty is a key with NO stream
+    ///   postings, so the three answers above are all empty for it and retaining on
+    ///   them alone would evict every page and delete the graph outright — the call
+    ///   would erase exactly what it was asked to keep. When no page holds a row in
+    ///   `g`, the pages that DECLARE it are retained instead. A declaring page is still
+    ///   evicted when some other page holds rows in `g`, because those pages keep `g` a
+    ///   key on their own and the declaration is then redundant — eviction stays as
+    ///   aggressive as it can soundly be.
+    ///
+    /// Retention is a SUPERSET of `g`, not a projection onto it: a retained page keeps
+    /// every row it holds, including its rows in OTHER graphs. What this method
+    /// guarantees is the eviction direction — `retain_graph(g)` answers every read
+    /// scoped to `g` exactly as the original did, **including enumeration**:
+    /// `retain_graph(g).named_graphs()` contains `g` whenever the original's did, so
+    /// `GRAPH ?g` still binds a graph that was declared empty, as SPARQL requires.
+    /// There is deliberately no drop-shaped twin: a page carrying `g` usually carries
+    /// other graphs too, so "drop the pages of `g`" would destroy unrelated rows.
+    ///
+    /// Materializes NOTHING: page selection reads sealed metadata only, and
+    /// [`with_pages`](Self::with_pages) copies seal-time state. The result keeps the
+    /// original (now possibly oversized) dictionary, exactly as
+    /// [`with_pages`](Self::with_pages) does; [`compact`](Self::compact) reclaims the
+    /// evicted pages' dead ids. A `g` that names no graph this dataset knows carries
+    /// nothing anywhere, so the result has no pages.
+    #[must_use]
+    pub fn retain_graph(&self, g: GlobalTermId) -> Self {
+        // `BTreeSet<PageId>`: ascending and deduplicated by construction, so the
+        // retained order is the ascending `PageId` order every other page-set surface
+        // egresses — no hash iteration reaches the result.
+        let mut keep: BTreeSet<PageId> = self.pages_for_graph(g).into_iter().collect();
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        for stream in [PageStream::Reifier, PageStream::Annotation] {
+            keep.extend(admission::candidate_pages_for_stream(
+                self.graph_index(),
+                page_count,
+                GraphMatch::Named(g),
+                stream,
+            ));
+        }
+        // The stream postings above answer "which pages hold rows in `g`". For a graph
+        // declared EMPTY they are all empty — a declared-empty graph is a key with no
+        // postings — so stopping here would evict every page and delete the graph this
+        // call was asked to retain.
+        //
+        // Falling back only when nothing holds a row keeps both properties at once. A
+        // page that merely declares `g` while some other page holds rows in it is still
+        // evicted, because those row-holding pages keep `g` a key on their own: the
+        // retained dataset enumerates `g` either way, so the declaration is redundant
+        // and eviction stays as aggressive as it can soundly be. When NO page holds a
+        // row, the declaration is the only thing `g` has, and dropping it is the
+        // difference between an empty graph and no graph.
+        if keep.is_empty() {
+            keep.extend(self.graph_index().pages_declaring_named(g).iter().copied());
+        }
+        let keep: Vec<PageId> = keep.into_iter().collect();
+        // Every id came from this dataset's own page list, so `with_pages`'s
+        // out-of-range assertion cannot fire here.
+        self.with_pages(&keep)
     }
 
     /// The cached, fallible per-page getter: fast-path the resident [`OnceLock`],
@@ -757,51 +1002,146 @@ impl PagedDataset {
                 "page capabilities changed after sealing",
             ));
         }
+        // UNCONDITIONAL certification, in every build profile: recompute the page's
+        // O(1) summary digest from the freshly materialized content and compare it to
+        // the digest sealed for this slot. The checks above compare only totals, so
+        // they see just the harmless OVER-reporting direction; the digest is mixed
+        // over every per-term and per-graph count the summary holds, so a page that
+        // now carries MORE rows for a term or a graph than its summary claims — the
+        // under-reporting drift that authorizes skipping real rows — changes it too.
+        // What this reaches is exactly the pages that are READ: every page admitted is
+        // certified as it is admitted. It cannot speak for a page the pruning law
+        // SKIPPED, because a skipped page is never materialized and nothing here ever
+        // observes it — so an under-reporting summary on a skipped page still yields a
+        // short answer under a Ready status. Closing that needs the cold pass, which
+        // materializes every page regardless of what a pruning decision would have
+        // done; see `verify_parts` and clause G10. This is a typed fault, never an
+        // assertion — the content is provider-supplied, exactly like the four checks
+        // above.
+        let digest = PageSummary::digest_of(&materialization.dataset)
+            .map_err(|defect| PageFault::invalid_data(id, defect.to_string()))?;
+        if digest != slot.translation.summary().digest() {
+            return Err(PageFault::invalid_data(
+                id,
+                summary_drift_message(slot.translation.summary(), digest, &materialization.dataset),
+            ));
+        }
         let _ = slot.resident.set(materialization.dataset);
         Ok(slot
             .resident
             .get()
             .expect("resident cell set immediately above"))
     }
+
+    /// Materialize EVERY page through the provider and certify each one's freshly
+    /// re-derived `PageSummary` against the summary it was sealed with — the
+    /// explicitly-paid, cold certification pass.
+    ///
+    /// The pruning law never materializes a page it decides to skip, so an
+    /// UNDER-reporting sealed summary (one that claims fewer rows, or rows in fewer
+    /// graphs, than the page actually holds) can silently authorize skipping a page
+    /// that in fact holds matching rows — the worst failure mode in this codebase,
+    /// because the short answer still comes wrapped in a completeness certificate.
+    /// Every page a read actually TOUCHES is already certified as it is admitted, in
+    /// every build profile, by the `O(1)` sealed-digest comparison the cached per-page
+    /// getter runs; what `verify_parts` adds is reach and detail. Reach,
+    /// because it reads every page regardless of what any pruning decision would have
+    /// done, so it also certifies the pages a query would have skipped. Detail,
+    /// because it re-derives the whole summary and can therefore NAME the field that
+    /// disagrees rather than only reporting that the digests do.
+    ///
+    /// Call this once, out of band, when a consumer reloads a persisted warm-restart
+    /// index via [`from_parts`](Self::from_parts) and wants the whole reloaded index
+    /// proven honest up front — rather than paying an `O(all pages)` scan on every
+    /// ordinary restart. Contrast with
+    /// [`from_provider`](Self::from_provider), which already certifies every page's
+    /// summary AS it seals (each page is materialized once there specifically to
+    /// build its summary), so a dataset built that way never needs this pass.
+    ///
+    /// # Errors
+    ///
+    /// [`PagedFreezeError::Page`] if the provider cannot materialize a page;
+    /// [`PagedFreezeError::GenerationMismatch`] if a materialization reports a
+    /// different generation than this dataset's certified one; or
+    /// [`PagedFreezeError::SummaryDrift`], naming the first page whose freshly
+    /// re-derived summary disagrees with the one it was sealed with.
+    pub fn verify_parts(&self) -> Result<(), PagedFreezeError> {
+        for slot in &self.pages {
+            let materialization = self.provider.materialize(slot.id)?;
+            if materialization.generation != self.generation {
+                return Err(PagedFreezeError::GenerationMismatch {
+                    expected: self.generation,
+                    actual: materialization.generation,
+                });
+            }
+            let fresh = PageSummary::seal(&materialization.dataset).map_err(|defect| {
+                PagedFreezeError::SummaryDrift {
+                    page: slot.id,
+                    message: defect.to_string(),
+                }
+            })?;
+            let sealed = slot.translation.summary();
+            if let Some(field) = sealed.first_disagreeing_field(&fresh) {
+                return Err(PagedFreezeError::SummaryDrift {
+                    page: slot.id,
+                    message: format!(
+                        "page {}: the summary sealed at construction time does not match the \
+                         summary re-derived from the page's current materialized content — the \
+                         fields disagree first at `{field}`, and a pruning decision trusting the \
+                         sealed summary could skip or misroute rows this page actually holds",
+                        slot.id.0
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
-/// Translate a whole `(s, p, o, g)` global pattern to this page's local id space, or
-/// `None` if ANY bound id (including a `Named` graph) is absent on the page — in which
-/// case the page cannot match and is skipped. An unbound axis (`None`) stays unbound;
-/// a bound axis present on the page becomes its local `TermId`.
-#[allow(clippy::type_complexity)]
-fn translate_pattern(
-    translation: &PageTranslation,
-    s: Option<GlobalTermId>,
-    p: Option<GlobalTermId>,
-    o: Option<GlobalTermId>,
-    g: GraphMatch<GlobalTermId>,
-) -> Option<(
-    Option<TermId>,
-    Option<TermId>,
-    Option<TermId>,
-    GraphMatch<TermId>,
-)> {
-    // For each bound axis, `?` short-circuits to `None` (skip the page) when the term
-    // is absent; an unbound axis passes through as `None`.
-    let s = match s {
-        None => None,
-        Some(global) => Some(translation.to_local(global)?),
-    };
-    let p = match p {
-        None => None,
-        Some(global) => Some(translation.to_local(global)?),
-    };
-    let o = match o {
-        None => None,
-        Some(global) => Some(translation.to_local(global)?),
-    };
-    let g = match g {
-        GraphMatch::Any => GraphMatch::Any,
-        GraphMatch::Default => GraphMatch::Default,
-        GraphMatch::Named(gid) => GraphMatch::Named(translation.to_local(gid)?),
-    };
-    Some((s, p, o, g))
+/// The diagnostic for an admission-time summary-drift refusal: always the two
+/// digests, plus — when the build can afford the full re-derive — the name of the
+/// first field that moved.
+///
+/// Both halves are shared verbatim by the two admission surfaces
+/// ([`PagedDataset::page`] and [`PagedQueryView`]'s materialization validator) so the
+/// same drift reads the same way whichever one catches it.
+pub(crate) fn summary_drift_message(
+    sealed: &PageSummary,
+    observed: u64,
+    page: &RdfDataset,
+) -> String {
+    let mut message = format!(
+        "materialized content no longer matches the summary it was sealed with: the sealed \
+         summary digests to {:#018x}, the materialized page to {observed:#018x}",
+        sealed.digest()
+    );
+    if let Some(field) = disagreeing_field(sealed, page) {
+        message.push_str(" (the summaries disagree first at `");
+        message.push_str(field);
+        message.push_str("`)");
+    }
+    message
+}
+
+/// Name the first summary field the materialized `page` disagrees with `sealed` on.
+///
+/// The gate compiles with `debug-assertions = on` at opt-level 3 (see `AGENTS.md`
+/// section 4), so this richer `O(page size)` re-derive runs across the whole test and
+/// conformance surface; a release build skips it and keeps the digests alone. It is a
+/// DIAGNOSTIC refinement only — the refusal itself is already decided by the digest
+/// comparison, which runs in every build profile, so a release build loses the field
+/// name and never the check.
+///
+/// Gated with `cfg!`, not `#[cfg]`: the body is then type-checked in every profile,
+/// so a release build cannot break on code a debug build never compiled, and the
+/// constant-false branch folds away at opt-level 3 exactly as an attribute would.
+fn disagreeing_field(sealed: &PageSummary, page: &RdfDataset) -> Option<&'static str> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    PageSummary::seal(page)
+        .ok()
+        .and_then(|fresh| sealed.first_disagreeing_field(&fresh))
 }
 
 /// Map a page-local [`QuadIds`] back to the shared global id space.
@@ -855,20 +1195,27 @@ impl DatasetView for PagedDataset {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        // Stream across pages, skipping any page that cannot match a bound id (incl. a
-        // Named graph) BEFORE it is materialized: `translate_pattern` returning `None`
-        // yields an empty inner iterator, so `self.page` — the only materialization —
-        // never runs for a skipped page (the lazy hook is preserved by construction).
-        self.pages.iter().flat_map(move |slot| {
-            translate_pattern(&slot.translation, s, p, o, g)
-                .into_iter()
-                .flat_map(move |(ls, lp, lo, lg)| {
-                    let page = self
-                        .page(slot.id)
-                        .expect("sealed page must re-materialize deterministically");
-                    page.quads_for_pattern_indexed(ls, lp, lo, lg)
-                        .map(move |q| map_quad_to_global(&slot.translation, q))
-                })
+        // Narrow the candidate page set from the graph axis first (zero allocation:
+        // either every page, or a graph-index posting list — both ascending), then
+        // apply the full per-axis admission law to each candidate BEFORE it is
+        // materialized: a `Skip` verdict yields an empty inner iterator, so `self.page`
+        // — the only materialization — never runs for a skipped page (the lazy hook is
+        // preserved by construction).
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages(self.graph_index(), page_count, g).flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let admitted = match admission::admit_pattern(&slot.translation, s, p, o, g) {
+                PageAdmission::Skip(_) => None,
+                PageAdmission::Admit(local) => Some(local),
+            };
+            admitted.into_iter().flat_map(move |local| {
+                let page = self
+                    .page(slot.id)
+                    .expect("sealed page must re-materialize deterministically");
+                page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
+                    .map(move |q| map_quad_to_global(&slot.translation, q))
+            })
         })
     }
 
@@ -913,17 +1260,37 @@ impl DatasetView for PagedDataset {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> usize {
-        // The Merge-scope summation: Σ over non-skipped pages of each page's own
-        // O(log n) estimate on the translated pattern.
+        // The Merge-scope summation: Σ over admitted pages of
+        // `admission::estimate_admitted_page`'s minimum-axis count, read from that
+        // page's sealed `PageSummary` alone — NO page is materialized, here or
+        // transitively. The candidate page set narrows on the graph axis exactly as
+        // in `quads_for_pattern`.
+        //
+        // This is a pure function of `(snapshot, pattern)`: it never depends on
+        // whether a page happens to be resident. A residency-dependent estimate
+        // would make plan choice — and therefore the `requested_pages` evidence
+        // sequence a G-clause treats as proof of what a query actually touched —
+        // depend on incidental cache state rather than on the snapshot and the
+        // pattern alone, so two runs of the identical query against the identical
+        // snapshot could pick different plans. For a pattern with exactly one bound
+        // axis the per-page contribution is EXACT (see `estimate_admitted_page`),
+        // not merely an upper bound.
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
         let mut total = 0usize;
-        for slot in &self.pages {
-            let Some((ls, lp, lo, lg)) = translate_pattern(&slot.translation, s, p, o, g) else {
+        for page_id in admission::candidate_pages(self.graph_index(), page_count, g) {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let PageAdmission::Admit(local) =
+                admission::admit_pattern(&slot.translation, s, p, o, g)
+            else {
                 continue;
             };
-            let page = self
-                .page(slot.id)
-                .expect("sealed page must re-materialize deterministically");
-            total += page.cardinality_estimate(ls, lp, lo, lg);
+            let estimate = admission::estimate_admitted_page(
+                slot.translation.summary(),
+                local,
+                slot.quad_count,
+            );
+            total = total.saturating_add(estimate);
         }
         total
     }
@@ -955,15 +1322,19 @@ impl DatasetView for PagedDataset {
         &self,
         reifier: GlobalTermId,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        // Per-page narrowing, exactly like `annotations_of_with_graph`: a page whose
-        // translation lacks the reifier owns no row for it, so it is skipped BEFORE
-        // materialization; a page that has it addresses its contiguous run in `O(log n)`
-        // (`RdfDataset::reifier_quads_of`). Page order and within-page frozen order are
-        // both unchanged, so this is row-for-row identical to the trait default's filter
-        // over `reifier_quads`.
+        // Per-page narrowing, exactly like `annotations_of_with_graph`: a page is
+        // skipped BEFORE materialization unless its sealed `PageSummary` proves it
+        // owns at least one REIFIER row for this term (`reifier_rows(local) > 0`) —
+        // role-agnostic term-table presence (`to_local` alone) is not enough, because
+        // a page can mention a term only in its base-quad table and never as a
+        // reifier. A page that clears the check addresses its contiguous run in
+        // `O(log n)` (`RdfDataset::reifier_quads_of`). Page order and within-page
+        // frozen order are both unchanged, so this is row-for-row identical to the
+        // trait default's filter over `reifier_quads`.
         self.pages.iter().flat_map(move |slot| {
             slot.translation
                 .to_local(reifier)
+                .filter(|&local| slot.translation.summary().reifier_rows(local) > 0)
                 .into_iter()
                 .flat_map(move |local_reifier| {
                     let page = self
@@ -990,11 +1361,14 @@ impl DatasetView for PagedDataset {
         &self,
         reifier: GlobalTermId,
     ) -> impl Iterator<Item = (GlobalTermId, GlobalTermId, Option<GlobalTermId>)> + '_ {
-        // A page whose translation lacks the reifier is skipped BEFORE materialization
-        // (empty inner iterator), exactly as in `quads_for_pattern`.
+        // A page is skipped BEFORE materialization (empty inner iterator) unless its
+        // sealed `PageSummary` proves it owns at least one ANNOTATION row for this
+        // term (`annotation_rows(local) > 0`) — see `reifier_quads_of` above for why
+        // mere `to_local` presence is not enough.
         self.pages.iter().flat_map(move |slot| {
             slot.translation
                 .to_local(reifier)
+                .filter(|&local| slot.translation.summary().annotation_rows(local) > 0)
                 .into_iter()
                 .flat_map(move |local_reifier| {
                     let page = self
@@ -1010,5 +1384,98 @@ impl DatasetView for PagedDataset {
                         })
                 })
         })
+    }
+
+    /// Narrows the candidate page set to the REIFIER stream's graph postings BEFORE
+    /// any page is materialized — see [`DatasetView::reifier_quads_in_graph`] for the
+    /// contract this satisfies (an optimization seam, not a new obligation). A page
+    /// absent from `g`'s reifier posting list is proven empty for that graph and is
+    /// never touched; a page that IS admitted may still hold rows in other graphs, so
+    /// the per-row filter still runs after materialization.
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // An override, not a new obligation (see the trait's doc comment): narrows the
+        // candidate page set to the REIFIER stream's graph postings BEFORE any page is
+        // materialized, exactly as `quads_for_pattern` narrows on the base-quad
+        // postings. Soundness: a page absent from `g`'s reifier posting list has zero
+        // reifier rows in that graph (per `GraphPageIndex::derive`), so it can
+        // contribute nothing. A listed page may also hold reifier rows in OTHER
+        // graphs, so the per-row `g.matches` filter still runs after materialization —
+        // narrowing chooses pages, it does not replace the row predicate.
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages_for_stream(
+            self.graph_index(),
+            page_count,
+            g,
+            PageStream::Reifier,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let page = self
+                .page(slot.id)
+                .expect("sealed page must re-materialize deterministically");
+            page.reifier_quads()
+                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .filter(move |q| g.matches(q.g))
+        })
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same page-postings narrowing, over the ANNOTATION stream instead.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // See `reifier_quads_in_graph` above: same narrowing, over the ANNOTATION
+        // stream's graph postings instead.
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages_for_stream(
+            self.graph_index(),
+            page_count,
+            g,
+            PageStream::Annotation,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let page = self
+                .page(slot.id)
+                .expect("sealed page must re-materialize deterministically");
+            page.annotation_quads()
+                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .filter(move |q| g.matches(q.g))
+        })
+    }
+
+    /// Every named graph any page declares, including ones a page leaves empty or
+    /// names only from a reifier/annotation row — see [`DatasetView::named_graphs`]
+    /// for why this membership widening over the trait default matters for `GRAPH
+    /// ?g`. Materializes no page: the answer is folded from each page's sealed
+    /// `PageSummary` alone, ascending by [`GlobalTermId`] intern order.
+    fn named_graphs(&self) -> impl Iterator<Item = GlobalTermId> + '_ {
+        // O(1) charge, no page materialized: `GraphPageIndex::keys` is already every
+        // named graph any page knows about (declared-empty graphs included), ascending
+        // by `GlobalTermId` and deduplicated, folded from each page's sealed
+        // `PageSummary` alone.
+        //
+        // Order: ascending `GlobalTermId`, which is INTERN order — page-arrival order,
+        // then within-page local order — not canonical `TermValue` order. The two
+        // coincide only after `compact()` (clause G2). This matches what the trait
+        // default already produced here (it collected the same ids into a
+        // `BTreeSet<Self::Id>`), so this override changes MEMBERSHIP, not order.
+        //
+        // Membership is a deliberate fix, not a side effect: SPARQL 1.1 §8.3 and §18.6
+        // range `GRAPH ?g` over every named graph in the active dataset, including ones
+        // with no matching triples. The default derives graphs only from `quads()`, so
+        // it misses a graph a page declares but leaves empty, or one named only by a
+        // reifier or annotation side-table row. Each page's own
+        // `RdfDataset::named_graphs()` already unions declared graphs with the graph
+        // slots of quads, reifiers, and annotations; this override brings the composed
+        // paged surface into line with that per-page answer, and with
+        // `RdfDataset`/`CompositeDatasetView`.
+        self.graph_index().keys().iter().copied()
     }
 }

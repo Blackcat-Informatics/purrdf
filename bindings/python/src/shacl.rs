@@ -19,11 +19,15 @@
 use std::sync::Arc;
 
 use ::purrdf::RdfDataset;
+use pyo3::create_exception;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyCapsule, PyCapsuleMethods, PyDict, PyList};
+use pyo3::types::{PyAny, PyBytes, PyCapsule, PyCapsuleMethods, PyDict, PyList, PyTuple};
 
 use purrdf_shapes::engine;
 use purrdf_shapes::report::ValidationReport;
+use purrdf_validate::ShapesProductRefusal;
+
+use crate::py_store::PyStore;
 
 /// Validate a data graph (N-Triples) against a shapes graph (Turtle).
 ///
@@ -186,20 +190,52 @@ impl PyShapes {
         Ok(PyValidationReport::new(report))
     }
 
+    /// Analyze this shape tree once, without inspecting any data, returning a
+    /// reusable `PreparedShapes`.
+    ///
+    /// The step that makes a prepared PRODUCT possible: a `PreparedShapes` is what
+    /// `to_product()` writes out, and what admitting a product hands back.
+    fn prepare(&self, py: Python<'_>) -> PyPreparedShapes {
+        let shapes = self.inner.clone();
+        PyPreparedShapes {
+            inner: py.detach(|| engine::PreparedShapes::new(Arc::new(shapes))),
+        }
+    }
+
     /// Validate a borrowed native dataset against these parsed shapes.
     ///
-    /// `data` must be an object (typically `purrdf_validate.ValidationStore`) that
-    /// exposes an internal `_store_capsule()` method returning a capsule borrowing a
-    /// frozen `Arc<RdfDataset>` snapshot. This avoids serialising the store to
-    /// N-Triples for each validation phase.
+    /// `data` is any object exposing the internal snapshot protocol — a
+    /// `_store_capsule()` method returning a capsule that carries a frozen
+    /// `Arc<RdfDataset>` — which on the Python surface is `purrdf.Store`,
+    /// `purrdf.MutableDataset` and `purrdf_validate.ValidationStore`. Validating
+    /// through the capsule is what avoids serialising the data to N-Triples and
+    /// parsing it back for each validation phase.
     ///
     /// # Errors
     ///
-    /// Returns `AttributeError` if `data` has no `_store_capsule` method, and
-    /// `ValueError` if the capsule cannot be read.
+    /// Returns `TypeError` naming the argument's type if it does not implement that
+    /// protocol: a missing private attribute is not a diagnosis, so the refusal says
+    /// what the protocol is and which types satisfy it rather than letting an
+    /// `AttributeError` about `_store_capsule` escape to a caller who never wrote
+    /// that name. Returns `ValueError` if the capsule is present but cannot be read.
     fn validate_store(&self, data: &Bound<'_, PyAny>) -> PyResult<PyValidationReport> {
+        if !data.hasattr("_store_capsule")? {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "validate_store: a {} exposes no `_store_capsule()`, the internal protocol this \
+                 call reads a frozen dataset snapshot through, so there is no data graph here to \
+                 validate. Pass a purrdf.Store or a purrdf.MutableDataset — both hand the snapshot \
+                 over directly, with no serialization — or, for a document you hold as text, call \
+                 validate_nt with its N-Triples",
+                data.get_type().name()?
+            )));
+        }
         let capsule = data.call_method0("_store_capsule")?;
-        let capsule = capsule.cast::<PyCapsule>()?;
+        let capsule = capsule.cast::<PyCapsule>().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "validate_store: `_store_capsule()` returned something other than a capsule, so \
+                 the snapshot protocol was not honoured and no dataset can be read from it",
+            )
+        })?;
         let ptr = capsule
             .pointer_checked(Some(c"purrdf-validation-dataset"))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -305,6 +341,554 @@ impl PyValidationReport {
     }
 }
 
+// ── Prepared shapes products ────────────────────────────────────────────────
+
+create_exception!(
+    shacl,
+    ShapesProductError,
+    pyo3::exceptions::PyValueError,
+    "A refusal from the prepared-shapes-product admission boundary.\n\
+     \n\
+     Carries a `.dimension` attribute: one of the codec's pinned kebab-case labels \
+     (`magic`, `format-version`, `stage-id`, `profile`, `truncated`, `trailer`, \
+     `section-digest`, `container-digest`, `dataset-identity`, `shapes-graph`, \
+     `prefixes`, `base`, `vocabulary`, `function-registry`, `aggregate-registry`, \
+     `property-function-registry`, `class-catalog`, `unsupported-capability`, \
+     `depth-limit`, `malformed`), or `None` when the failure happened before any \
+     product existed — a shapes or data document that did not parse was never \
+     admitted, and naming a dimension for it would claim a product was inspected \
+     when none was.\n\
+     \n\
+     Branch on `.dimension`, never on `str(exc)`: the label is a pinned contract and \
+     the message is prose that may be reworded. A `stage-id` refusal means re-pack \
+     or restore with `rebuild()`; `container-digest` means the bytes are corrupt in \
+     place; `function-registry` means the caller's own configuration differs from \
+     the one the product was prepared against, which re-packing will not fix.\n\
+     \n\
+     Subclasses `ValueError`, so code that already catches the SHACL surface's \
+     `ValueError` keeps working."
+);
+
+/// Raise a product refusal as [`ShapesProductError`], with `.dimension` always
+/// present.
+///
+/// Always present — `None` rather than absent when there is no dimension — because an
+/// attribute that sometimes exists forces every caller to write `getattr(exc,
+/// "dimension", None)`, and the one who forgets gets an `AttributeError` from their
+/// own error handler.
+fn product_error(py: Python<'_>, refusal: &ShapesProductRefusal) -> PyErr {
+    let error = ShapesProductError::new_err(refusal.to_string());
+    let dimension = refusal.dimension_label().map_or_else(
+        || py.None(),
+        |label| {
+            label
+                .into_pyobject(py)
+                .map_or_else(|_| py.None(), |bound| bound.into_any().unbind())
+        },
+    );
+    // A failure to set the attribute would mean the exception object refused an
+    // ordinary `setattr`, which cannot happen for a Python-level exception class;
+    // it is ignored rather than replacing a precise refusal with a vaguer one.
+    let _ = error.value(py).setattr("dimension", dimension);
+    error
+}
+
+/// An immutable shape preparation: the parse-and-analyze work done once, reusable
+/// across independent data graphs and writable as a prepared PRODUCT.
+///
+/// Obtain one with `Shapes(...).prepare()`, or by admitting a product with
+/// `ShapesProduct.open(data).admit()`.
+#[pyclass(name = "PreparedShapes")]
+#[derive(Debug)]
+pub struct PyPreparedShapes {
+    inner: engine::PreparedShapes,
+}
+
+#[pymethods]
+impl PyPreparedShapes {
+    /// Write this preparation out as a prepared product, returning its bytes.
+    ///
+    /// Byte-deterministic: no clock, no randomness and no hash-iteration order reach
+    /// the writer, so two calls over equal preparations return identical bytes and a
+    /// content-addressed cache key over them is stable.
+    ///
+    /// The product carries the compiled model AND the shapes dataset it came from,
+    /// under a per-section SHA-256 and a whole-container digest, plus the binding of
+    /// every input it was compiled against.
+    ///
+    /// Raises `ShapesProductError` when the shapes graph declares something the
+    /// product format cannot carry.
+    fn to_product<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let prepared = &self.inner;
+        let bytes = py
+            .detach(|| purrdf_validate::prepared_to_product(prepared))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+
+    /// Where this preparation came from, as one deterministic token — `parsed`,
+    /// `restored-admitted <identity_digest>` or `restored-rebuilt <identity_digest>`.
+    ///
+    /// TOTAL: every preparation has an answer and none of them means "we forgot to
+    /// record it". An authenticated artifact whose output cannot be attributed to it
+    /// answers only half the question — `admit()` establishes that this process MAY
+    /// execute a product, and this establishes WHICH product a report came out of,
+    /// which is the half a caller needs after the fact.
+    ///
+    /// The digest is the same 64 hexadecimal digits `identity_digest()` returns for
+    /// the product, so a value read off a validation log can be handed straight back
+    /// to `admit_expecting()` without editing. The two restore tokens are distinct
+    /// because the identity means different things on each: admitted means the
+    /// product's binding was checked against this process, rebuilt means it was
+    /// recorded from the artifact and deliberately not checked (see `rebuild()`).
+    fn provenance(&self) -> String {
+        self.inner.provenance().to_string()
+    }
+
+    /// **The incremental lane.** Validate only what `store`'s PENDING CHANGE can
+    /// move, rather than the whole graph.
+    ///
+    /// A `Store` records its mutations as a copy-on-write delta over a frozen base
+    /// (`add` / `remove` / `load` edit that delta), so a store that has been mutated
+    /// already holds the one thing incremental validation needs: a description of
+    /// what moved. This reads that delta, asks the engine which focus nodes the
+    /// change can move, and re-validates exactly those.
+    ///
+    /// ```python
+    /// store = purrdf.Store()
+    /// store.load(base_ttl, "turtle")
+    /// store.checkpoint()          # everything loaded so far is now the BASE
+    /// store.add(quad)             # ... and this is the change
+    ///
+    /// outcome = shapes.prepare().validate_store_changes(store)
+    /// if not outcome.report.conforms:
+    ///     ...                     # what THIS change broke
+    /// ```
+    ///
+    /// Call `Store.checkpoint()` first or the "change" is the whole store: a fresh
+    /// `Store` has an empty base, so everything ever loaded into it is in the delta.
+    /// `Store.change_size()` reports how large the pending change is.
+    ///
+    /// # What the returned report describes
+    ///
+    /// `ChangeValidation.bounded` is `True` when the engine could bound the change's
+    /// footprint. The report then covers the AFFECTED focus nodes — for those nodes
+    /// it is identical, results and order alike, to what a full validation of the
+    /// mutated graph reports about them — and says nothing about a pre-existing
+    /// violation the change cannot reach. `conforms` therefore means "this change
+    /// introduced no violation", not "the graph conforms".
+    ///
+    /// `bounded` is `False` when the shapes graph reads through SPARQL query text
+    /// (`sh:sparql`, a SPARQL target, a component's `sh:ask`/`sh:select` validator, a
+    /// `sh:SPARQLFunction` call, a SPARQL node expression). No bounded footprint
+    /// exists for such a graph, so this falls back to a FULL validation of the
+    /// mutated graph and `ChangeValidation.reason` names the construct responsible.
+    /// The fallback is not optional: an under-approximated change set is
+    /// indistinguishable from a clean bill of health.
+    ///
+    /// A `sh:shapesGraph` the shapes document declares is honoured, exactly as it is
+    /// on every other validation route here.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` when the store cannot be snapshotted, when the snapshot exceeds
+    /// the view's retention limits, or when constraint evaluation hard-fails.
+    fn validate_store_changes(
+        &self,
+        py: Python<'_>,
+        store: &Bound<'_, PyStore>,
+    ) -> PyResult<PyChangeValidation> {
+        // Taken under the GIL (it borrows the store), then owned — so the expansion
+        // and the validation below run detached with nothing py-bound in hand.
+        let snapshot = Arc::new(store.borrow().change_snapshot()?);
+        let prepared = &self.inner;
+        let validation = py.detach(|| {
+            let validator = prepared
+                .bind_delta_with_shapes_graph(
+                    Arc::clone(&snapshot),
+                    None,
+                    ::purrdf::ir::ViewLimits::default(),
+                )
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            // The engine's own expand-then-validate entry point, which is what the
+            // command line, the C ABI and the WebAssembly guest all drive: one
+            // implementation of the loop, so no surface can answer a question the
+            // others would not.
+            engine::validate_change(&validator, &snapshot)
+                .map_err(pyo3::exceptions::PyValueError::new_err)
+        })?;
+        Ok(PyChangeValidation {
+            report: Py::new(py, PyValidationReport::new(validation.report))?,
+            scope: validation.scope,
+        })
+    }
+
+    /// Validate an N-Triples data graph against this preparation.
+    ///
+    /// The same verdict `Shapes.validate_nt` reaches, through the same engine entry
+    /// point — which is the property a restored product is only useful if it has.
+    fn validate_nt(&self, py: Python<'_>, data_nt: &str) -> PyResult<PyValidationReport> {
+        let prepared = &self.inner;
+        let report = py.detach(|| {
+            let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
+                .map_err(|errors| pyo3::exceptions::PyValueError::new_err(errors.join("\n")))?;
+            engine::validate_dataset(data.as_ref(), prepared.shapes())
+                .map_err(pyo3::exceptions::PyValueError::new_err)
+        })?;
+        Ok(PyValidationReport::new(report))
+    }
+}
+
+/// The outcome of `PreparedShapes.validate_store_changes`: the report, plus the
+/// SCOPE the report describes.
+///
+/// Two facts rather than one, because a `ValidationReport` alone cannot say which
+/// question it answered. An incremental run reports about the focus nodes the change
+/// could move; a run whose change footprint could not be bounded reports about the
+/// whole graph. Both are honest answers and they are not the same answer, so a caller
+/// reading `conforms` is told which one they have rather than left to assume.
+///
+/// Returning the scope beside the report is the same choice `UpdateOutcome` makes for
+/// a governed update: the outcome carries the evidence of how it was reached, and an
+/// attribute that is sometimes absent would force every caller to `getattr`.
+#[pyclass(name = "ChangeValidation")]
+#[derive(Debug)]
+pub struct PyChangeValidation {
+    /// The report, built once here rather than on each `report` read, so two reads
+    /// cannot hand back two independently-constructed objects.
+    report: Py<PyValidationReport>,
+    /// Which question the report answered, carried as the engine's own two-armed
+    /// answer rather than re-spelled as a pair of `Option`s here. A pair admits a
+    /// fourth state — neither set — that the engine cannot produce, and this class
+    /// would then have to render something for it.
+    scope: engine::ChangeScope,
+}
+
+#[pymethods]
+impl PyChangeValidation {
+    /// The SHACL validation report. See `bounded` for what it describes.
+    #[getter]
+    fn report(&self, py: Python<'_>) -> Py<PyValidationReport> {
+        self.report.clone_ref(py)
+    }
+
+    /// Whether the change's footprint could be bounded.
+    ///
+    /// `True`: the report describes the AFFECTED focus nodes only, and `conforms`
+    /// means this change introduced no violation. `False`: no bounded footprint
+    /// exists for this shapes graph, the run fell back to a FULL validation of the
+    /// mutated graph, and `conforms` means the whole graph conforms.
+    #[getter]
+    const fn bounded(&self) -> bool {
+        self.scope.is_bounded()
+    }
+
+    /// How many focus nodes the change was expanded into, or `None` when the
+    /// footprint could not be bounded and the whole graph was validated.
+    ///
+    /// `None` rather than the graph's node count on the fallback path: "every focus
+    /// node in the graph" and a number are different statements, and collapsing them
+    /// would make a fallback indistinguishable from a large bounded expansion.
+    #[getter]
+    const fn focus_nodes(&self) -> Option<usize> {
+        self.scope.focus_nodes()
+    }
+
+    /// Which construct made this shapes graph's change footprint unbounded, or
+    /// `None` when it was bounded.
+    ///
+    /// Actionable rather than decorative: it names what to change to get incremental
+    /// validation back.
+    #[getter]
+    const fn reason(&self) -> Option<&'static str> {
+        self.scope.reason()
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let conforms = self.report.borrow(py).inner.conforms;
+        match self.scope {
+            engine::ChangeScope::Bounded { focus_nodes } => {
+                format!("<ChangeValidation bounded focus_nodes={focus_nodes} conforms={conforms}>")
+            }
+            engine::ChangeScope::Everything { reason } => {
+                format!("<ChangeValidation everything reason={reason} conforms={conforms}>")
+            }
+        }
+    }
+}
+
+/// A prepared product whose envelope has been verified and whose self-description has
+/// been decoded — but which has NOT been admitted.
+///
+/// Holding one is a statement about framing and integrity, never about fitness: the
+/// bytes are a well-formed product of this format, and nothing has yet claimed they
+/// are a product this build may execute. That separation is what makes
+/// `identity_components()` useful — read what a product says it was compiled from in
+/// order to decide what to do about it, without any of it reaching a validator.
+///
+/// This value OWNS the bytes it was opened from. The Rust view borrows its input, and
+/// a Python object cannot hold a borrow of a `bytes` it does not own, so each method
+/// re-opens the owned buffer. Re-opening costs the container's cheap integrity tier —
+/// the framing and the section digests — never the canonicalization `certify()`
+/// performs.
+#[pyclass(name = "ShapesProduct")]
+#[derive(Debug)]
+pub struct PyShapesProduct {
+    bytes: Vec<u8>,
+}
+
+#[pymethods]
+impl PyShapesProduct {
+    /// Open `data` as a prepared product: verify the envelope and decode the
+    /// product's self-description, admitting nothing.
+    ///
+    /// Raises `ShapesProductError` with a structural `.dimension` when the bytes are
+    /// not a well-formed product of this format.
+    #[staticmethod]
+    fn open(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
+        // Opened here and discarded: this is the eager check that makes holding a
+        // `ShapesProduct` mean something. Every later method re-opens the owned copy.
+        py.detach(|| purrdf_validate::explain_shapes_product(data))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(Self {
+            bytes: data.to_vec(),
+        })
+    }
+
+    /// The product's own bytes, exactly as opened.
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.bytes)
+    }
+
+    /// Everything the product says about itself, as deterministic `key value` lines:
+    /// the container format version, the preparation stage id and whether this build
+    /// knows it, the identity digest and every labelled identity component, then the
+    /// recorded base, `sh:shapesGraph` IRI and prefix map.
+    ///
+    /// This is what makes a named refusal actionable: a restore refused on
+    /// `prefixes` is answered by reading which prefix map the product actually
+    /// carries, not by guessing.
+    fn explain(&self, py: Python<'_>) -> PyResult<String> {
+        let bytes = &self.bytes;
+        py.detach(|| purrdf_validate::explain_shapes_product(bytes))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))
+    }
+
+    /// The container format version these bytes were written under.
+    fn format_version(&self, py: Python<'_>) -> PyResult<u32> {
+        self.explain_field(py, "format-version")?
+            .parse()
+            .map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "this build rendered a non-numeric product format version",
+                )
+            })
+    }
+
+    /// The 32-byte preparation stage id the product declares, as lowercase hex.
+    fn stage_id(&self, py: Python<'_>) -> PyResult<String> {
+        self.explain_field(py, "stage-id")
+    }
+
+    /// Whether this build knows the product's preparation stage.
+    ///
+    /// `False` says `admit()` will refuse these bytes and `rebuild()` is the path
+    /// that still restores them — the memo was written against a model this build no
+    /// longer has, and the shapes dataset the product carries is what rescues it.
+    fn stage_known(&self, py: Python<'_>) -> PyResult<bool> {
+        Ok(self.explain_field(py, "stage-known")? == "true")
+    }
+
+    /// The SHA-256 digest of the product's input binding, as lowercase hex.
+    fn identity_digest(&self, py: Python<'_>) -> PyResult<String> {
+        self.explain_field(py, "identity-digest")
+    }
+
+    /// The ordered, labelled components of the product's input binding as
+    /// `(label, rendered_value)` pairs — which inputs it was compiled from.
+    ///
+    /// The ORDER is the identity, not the labels: two components may share a label
+    /// and still be different components, so this is a list of pairs rather than a
+    /// dict.
+    fn identity_components<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let rendered = self.explain(py)?;
+        let out = PyList::empty(py);
+        for line in rendered.lines() {
+            let Some(rest) = line.strip_prefix("identity ") else {
+                continue;
+            };
+            // `splitn(2, …)` rather than a split on every space: an identity label is a
+            // kebab-case constant and never contains one, but a rendered VALUE may, so
+            // everything after the first space is the value.
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            out.append(PyTuple::new(py, parts)?)?;
+        }
+        Ok(out)
+    }
+
+    /// **The common path.** Restore the preparation from the product's memo,
+    /// re-deriving nothing expensive.
+    ///
+    /// The product's stage id, profile and complete input binding are checked before
+    /// any of it reaches a validator. Raises `ShapesProductError` — read
+    /// `.dimension` to decide what to do: `stage-id` means try `rebuild()`, an
+    /// identity dimension means this process's configuration is not the one the
+    /// product was prepared against.
+    fn admit(&self, py: Python<'_>) -> PyResult<PyPreparedShapes> {
+        let bytes = &self.bytes;
+        let inner = py
+            .detach(|| purrdf_validate::admit_shapes_product(bytes))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(PyPreparedShapes { inner })
+    }
+
+    /// **The common path, bound to the product you MEANT.** Restore exactly as
+    /// `admit()` does, but only after confirming the product's input binding is
+    /// `expected_identity`.
+    ///
+    /// Everything `admit()` checks is a question about this PROCESS — its build, its
+    /// registries, its class analysis. None of them asks whether these are the bytes
+    /// the caller wanted, because nothing in a product states which product was
+    /// meant. Admitting a cache entry, a downloaded artifact or a path built from a
+    /// configuration string without saying which one it must be is how a validator
+    /// returns a well-formed report about a shapes graph nobody asked about.
+    ///
+    /// `expected_identity` is the 64 hexadecimal digits `identity_digest()` returns
+    /// for the product you intend — one spelling, readable off the artifact itself,
+    /// so the selector can be pinned in a test or a deployment manifest.
+    ///
+    /// Raises `ShapesProductError` with `.dimension == "shapes-graph"` when the
+    /// product carries a different binding, and `ValueError` when
+    /// `expected_identity` is not 64 hexadecimal digits — no product was inspected in
+    /// that case, so no dimension names it.
+    fn admit_expecting(
+        &self,
+        py: Python<'_>,
+        expected_identity: &str,
+    ) -> PyResult<PyPreparedShapes> {
+        let expected = purrdf_validate::parse_identity_digest(expected_identity)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let bytes = &self.bytes;
+        let inner = py
+            .detach(|| purrdf_validate::admit_shapes_product_expecting(bytes, &expected))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(PyPreparedShapes { inner })
+    }
+
+    /// **The forward-compatibility path.** Ignore the memo and re-derive the
+    /// preparation from the shapes dataset the product carries.
+    ///
+    /// Not a Turtle fallback: no RDF text is parsed and no file is read. The dataset
+    /// travels inside the product under the envelope's own digests, and this
+    /// re-derives the shapes from it under the product's recorded parse inputs.
+    fn rebuild(&self, py: Python<'_>) -> PyResult<PyPreparedShapes> {
+        let bytes = &self.bytes;
+        let inner = py
+            .detach(|| purrdf_validate::rebuild_shapes_product(bytes))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(PyPreparedShapes { inner })
+    }
+
+    /// **The forward-compatibility path, bound to the product you MEANT.**
+    /// Re-derive the preparation exactly as `rebuild()` does, but only after
+    /// confirming the product's input binding is `expected_identity`.
+    ///
+    /// The rescue `rebuild()` performs is not a reason to stop asking whether
+    /// this is the artifact the caller wanted: a cache entry from another
+    /// build, or a product a deployment placed on disk under a stage id this
+    /// build does not recognize, is still just a file that could be the wrong
+    /// one. The same 32-byte comparison `admit_expecting()` runs FIRST also runs
+    /// first here, ahead of the re-derivation, for the identical reason.
+    ///
+    /// `expected_identity` carries the same meaning it does on
+    /// `admit_expecting()` — the 64 hexadecimal digits `identity_digest()`
+    /// returns for the product you intend.
+    ///
+    /// Raises `ShapesProductError` with `.dimension == "shapes-graph"` when the
+    /// product carries a different binding, and `ValueError` when
+    /// `expected_identity` is not 64 hexadecimal digits — no product was
+    /// inspected in that case, so no dimension names it.
+    fn rebuild_expecting(
+        &self,
+        py: Python<'_>,
+        expected_identity: &str,
+    ) -> PyResult<PyPreparedShapes> {
+        let expected = purrdf_validate::parse_identity_digest(expected_identity)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let bytes = &self.bytes;
+        let inner = py
+            .detach(|| purrdf_validate::rebuild_shapes_product_expecting(bytes, &expected))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(PyPreparedShapes { inner })
+    }
+
+    /// **The cold path.** Independently corroborate the shapes dataset's canonical
+    /// identity against the one this product's binding claims.
+    ///
+    /// Canonicalization is a graph-isomorphism computation over the shapes graph's
+    /// blank nodes and can cost more than the shapes parse a product exists to
+    /// eliminate, so it is never on a restore path. Call it from a build step, a
+    /// conformance harness or a test — not before every validation.
+    fn certify(&self, py: Python<'_>) -> PyResult<()> {
+        let bytes = &self.bytes;
+        py.detach(|| purrdf_validate::certify_shapes_product(bytes))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))
+    }
+}
+
+impl PyShapesProduct {
+    /// The value of the first `key value` line in the shared rendering whose key is
+    /// `key`.
+    ///
+    /// Every scalar accessor reads the ONE rendering rather than opening the product
+    /// a second way, so this class cannot report two independently-derived answers
+    /// about one product.
+    fn explain_field(&self, py: Python<'_>, key: &str) -> PyResult<String> {
+        let rendered = self.explain(py)?;
+        rendered
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix(key)
+                    .and_then(|rest| rest.strip_prefix(' '))
+                    .map(ToOwned::to_owned)
+            })
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "this product's rendering carries no `{key}` line; that is a defect in \
+                     this build rather than in the product"
+                ))
+            })
+    }
+}
+
+/// Compile a Turtle shapes graph into a prepared product in one call.
+///
+/// The composition of `Shapes(shapes_ttl, base=shapes_base).prepare().to_product()`,
+/// offered because packing a document is the common case and the three-step spelling
+/// is a preparation nobody keeps.
+///
+/// `shapes_base` is the base IRI the shapes document's relative IRI references
+/// resolve against, RECORDED in the product so a restore resolves them identically
+/// without the document.
+///
+/// Raises `ShapesProductError`; `.dimension` is `None` when the shapes document
+/// itself did not parse.
+#[pyfunction]
+#[pyo3(signature = (shapes_ttl, *, shapes_base=None))]
+fn pack_product<'py>(
+    py: Python<'py>,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let bytes = py
+        .detach(|| purrdf_validate::pack_shapes_product(shapes_ttl, shapes_base))
+        .map_err(|refusal| product_error(py, &refusal))?;
+    Ok(PyBytes::new(py, &bytes))
+}
+
 /// Register the `purrdf-shapes` surface on a Python module.
 ///
 /// Exposes the legacy `validate(shapes_ttl, data_nt)` function, the SHACL-AF
@@ -315,7 +899,15 @@ impl PyValidationReport {
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(entail, m)?)?;
+    m.add_function(wrap_pyfunction!(pack_product, m)?)?;
     m.add_class::<PyShapes>()?;
     m.add_class::<PyValidationReport>()?;
+    m.add_class::<PyPreparedShapes>()?;
+    m.add_class::<PyChangeValidation>()?;
+    m.add_class::<PyShapesProduct>()?;
+    m.add(
+        "ShapesProductError",
+        m.py().get_type::<ShapesProductError>(),
+    )?;
     Ok(())
 }

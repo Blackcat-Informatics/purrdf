@@ -204,6 +204,149 @@ impl<'a> PfArgs<'a> {
 /// filter, and echoing the input is simply the case where nothing is ever dropped.
 pub type PfRow = Vec<TermValue>;
 
+// ---------------------------------------------------------------------------
+// What a cursor attests about the index behind it
+// ---------------------------------------------------------------------------
+
+/// Which version of a relation's backing index answered one invocation.
+///
+/// # Why the engine cannot mint this
+///
+/// A relation is host code over host state. Two runs of the same query, over the same
+/// dataset, under the same registry, can legitimately give different rows because the
+/// index behind a relation was rebuilt between them — and nothing the evaluator can
+/// observe changes. The query text is the same, the dataset snapshot is the same, the
+/// registry fingerprint (`crate::property_fn_plan::registry_fingerprint`) is the same,
+/// because a rebuild changes no declaration. The one party that knows a rebuild
+/// happened is the cursor, so the generation has to travel from there or not at all.
+///
+/// # Caller-declared, recorded verbatim
+///
+/// [`Self::Declared`] carries the host's own spelling of its generation, byte-for-byte,
+/// and the engine never parses, orders by meaning, or interprets it. It is emphatically
+/// **not** minted here from a clock, a wall time, a counter, or an RNG: a value this
+/// crate invented would be a different number on every run and on every machine, which
+/// would make every receipt disagree with every other one and prove nothing. It would
+/// also be untrue — the engine has no idea when the index was built. (`purrdf-retrieval`
+/// has a sibling notion in its `Statistics::revision`, and the relationship is
+/// deliberately one of analogy only: this crate takes no dependency on that one, and a
+/// host that has such a revision passes its spelling in here itself.)
+///
+/// # Why `Undeclared` is a first-class value
+///
+/// Most relations are not index-backed at all — an in-memory table, a computation over
+/// its arguments, a walk over the dataset already being queried. Asking those to invent
+/// a generation would be asking them to fabricate evidence. [`Self::Undeclared`] is the
+/// honest absence, and it is what the default [`PfCursor::generation`] returns, so a
+/// relation written before this seam existed keeps saying the true thing.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IndexGeneration {
+    /// The relation declared no generation: it is not index-backed, or its index is
+    /// unversioned. An absence, never a claim that the index was current.
+    Undeclared,
+    /// The relation's own spelling of the generation that answered, recorded verbatim.
+    ///
+    /// A shared `Arc<str>` rather than an owned `String` because of where this value is
+    /// built. [`PfCursor::generation`] is asked once per invocation, and a relation over a
+    /// frozen index knows its generation *before the first invocation* — it renders the
+    /// spelling once at construction and hands every cursor a pointer to it. With an
+    /// owned `String` here, attesting that already-known constant would copy it on every
+    /// invocation, in the per-driving-row seam; with a shared pointer, attesting is a
+    /// refcount bump. Nothing about the value changes: it is still the host's own bytes,
+    /// still recorded verbatim, still never parsed, and `Ord`/`Hash` still compare the
+    /// spelling and not the pointer, so two relations that rendered the same generation
+    /// into two separate allocations remain the same set member.
+    Declared(Arc<str>),
+}
+
+impl IndexGeneration {
+    /// [`Self::Declared`] over anything that can become a shared string — a `&str`, a
+    /// `String`, or an `Arc<str>` a relation already holds.
+    ///
+    /// The `Arc<str>` form is the one that costs nothing: it clones a pointer. The
+    /// `&str`/`String` forms allocate once, here, which is the right price for a
+    /// generation genuinely computed per invocation and the wrong one for a constant of
+    /// the relation — a relation over a frozen index should intern its spelling at
+    /// construction and pass the `Arc` in.
+    #[must_use]
+    pub fn declared(value: impl Into<Arc<str>>) -> Self {
+        Self::Declared(value.into())
+    }
+}
+
+/// Whether a relation served an invocation from a WHOLE index, said so far as it can
+/// say anything: the one fact only the relation knows, and the one it is asked for.
+///
+/// # Why there is no `Whole` variant, and never will be
+///
+/// The obvious third variant — a relation certifying that its index was complete — is
+/// absent by design, because the seam that would carry it cannot distinguish the two
+/// situations it would have to distinguish.
+///
+/// The first is the module header's argument: "I stopped early" and "I am exhausted"
+/// are the same empty cursor. Nothing the engine sees on the way out of a drained
+/// invocation tells it which of the two happened, which is exactly why the row ceiling
+/// [`PropertyFunction::open`] receives is documented as a licence and not a contract
+/// (see [`PropertyFunction`]'s "The ceiling is a licence, not a contract"). A relation
+/// that stopped at the engine's ceiling is **not** incomplete — it answered the
+/// question it was licensed to answer, in full — so it must not be recorded as such;
+/// and it equally could not honestly certify wholeness, because it never looked at the
+/// rows it was licensed to skip.
+///
+/// So the seam asks the narrower question, the one with an honest answer on every path:
+/// *was your index NOT whole?* A shard that failed to load, a segment still being
+/// rebuilt, a replica that has not caught up — those are facts the relation holds
+/// directly and can state without inspecting anything it skipped.
+///
+/// # `Undeclared` is silence, not a completeness claim
+///
+/// [`Self::Undeclared`] means the relation said nothing, and a reader must not upgrade
+/// it to "the index was whole". It is the default for every relation that never
+/// overrides [`PfCursor::service_level`], which is every relation written before this
+/// seam existed — reading silence as certification would retroactively put a claim in
+/// each of their mouths that none of them made.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ServiceLevel {
+    /// The relation declared nothing about its index's wholeness. The default, and an
+    /// absence rather than a certificate of completeness.
+    Undeclared,
+    /// The relation declares that its index was **not** whole when it served this
+    /// invocation, and states why in its own words.
+    Incomplete {
+        /// The relation's own description of what was missing — a shard name, a
+        /// rebuild phase, a replica lag. Recorded verbatim and never parsed, for the
+        /// same reason [`IndexGeneration::Declared`]'s string is.
+        reason: String,
+    },
+}
+
+/// The pair of facts one invocation attests about the index behind it: which version
+/// answered, and whether that version was whole.
+///
+/// Carried as one value rather than two loose fields because the two are read at
+/// different instants of the same invocation (see [`PfCursor::generation`] and
+/// [`PfCursor::service_level`]) and are only meaningful together: a generation without
+/// a service level says which index answered but not whether it was all there, and a
+/// service level without a generation says an index was short without saying which one
+/// a caller would have to rebuild.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PfAttestation {
+    /// The generation read immediately after the cursor opened.
+    pub generation: IndexGeneration,
+    /// The service level read when the invocation ended.
+    pub service: ServiceLevel,
+}
+
+impl PfAttestation {
+    /// The attestation of a relation that declared neither fact — what every cursor
+    /// that overrides neither method attests, named once so the "said nothing" value
+    /// has one spelling everywhere instead of being re-assembled at each site.
+    pub const UNDECLARED: Self = Self {
+        generation: IndexGeneration::Undeclared,
+        service: ServiceLevel::Undeclared,
+    };
+}
+
 /// The row stream of one invocation, drained by the engine.
 ///
 /// A cursor is opened, drained, and dropped inside a single invocation, so it never
@@ -280,6 +423,59 @@ pub trait PfCursor {
     /// buy the same execution.
     fn take_work(&mut self) -> u64 {
         0
+    }
+
+    /// Which version of the backing index is answering this invocation.
+    ///
+    /// Read by the evaluator **immediately after [`open_contained`] returns**, and at most
+    /// once per invocation. That instant is not an implementation convenience: an
+    /// index-backed relation pins its snapshot when it opens, so "which generation is
+    /// answering" is true from that moment and stays true for every row this cursor goes
+    /// on to emit. Reading it later would let a rebuild that landed mid-drain be reported
+    /// as the generation that produced rows it did not produce.
+    ///
+    /// # Asked only where the answer can be carried
+    ///
+    /// *At most* once, because an entry point whose return type has no
+    /// [`RelationWitness`](crate::RelationWitness) slot — every ungoverned query and
+    /// update — never asks at all. There is nowhere for the answer to go on that lane, and
+    /// asking anyway would charge every invocation for a value the caller provably cannot
+    /// read. The consequence a host should know about is that this method's side effects,
+    /// its cost and its panics are observable only on the governed lane; the OTHER
+    /// attested fact is not like this, because [`ServiceLevel::Incomplete`] governs a
+    /// refusal ([`EvalError::RELATION_INCOMPLETE_CODE`](crate::EvalError::RELATION_INCOMPLETE_CODE))
+    /// and so [`Self::service_level`] is read on every lane, witnessed or not.
+    ///
+    /// # Default
+    ///
+    /// [`IndexGeneration::Undeclared`] — the same defaulting precedent
+    /// [`Self::take_work`] set, and for the same reason: every relation written before
+    /// this method existed keeps compiling, keeps answering, and says the one true thing
+    /// about itself rather than being made to invent a version it does not have. See
+    /// [`IndexGeneration`] for why this value is never minted engine-side.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Undeclared
+    }
+
+    /// Whether the index behind this cursor was **not** whole while it served this
+    /// invocation.
+    ///
+    /// Read by the evaluator when the invocation **ENDS** — after this cursor has
+    /// returned `Ok(None)`, and equally when the engine stopped pulling at its own row
+    /// ceiling, at a governor trip, or at a stop signal. The end, not the beginning,
+    /// because a shard discovered missing on the four-hundredth pull is exactly the case
+    /// this channel exists for, and a reading taken at `open` would have no way to carry
+    /// it. A cursor that knew at `open` that it was short simply answers the same way at
+    /// both instants; one that learns late still has somewhere to say so.
+    ///
+    /// # Default
+    ///
+    /// [`ServiceLevel::Undeclared`], by the same defaulting precedent as
+    /// [`Self::take_work`] and [`Self::generation`]. Note carefully what the default is
+    /// NOT: it is silence, not a certificate that the index was whole — see
+    /// [`ServiceLevel`] for why no such certificate is askable at this seam at all.
+    fn service_level(&self) -> ServiceLevel {
+        ServiceLevel::Undeclared
     }
 }
 
@@ -362,32 +558,6 @@ impl TermPattern {
     }
 }
 
-/// A ranked producer's ordering guarantee over the rows of one invocation.
-///
-/// The evaluator already treats emission order as part of a relation's
-/// contract (see [`PfCursor`]); this declaration names the *rank* half of that
-/// contract so a fusion stage can rely on it without inspecting rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RankOrdering {
-    /// Rows are emitted in strictly descending score order under a declared
-    /// total tie-break, so every row has an unambiguous 1-based rank.
-    StrictlyDescending,
-    /// Rows are emitted in non-increasing score order; equal scores may appear
-    /// in any order, so ranks within a tie are interchangeable.
-    NonIncreasing,
-}
-
-impl RankOrdering {
-    /// The stable spelling used in the canonical description.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::StrictlyDescending => "strictly-descending",
-            Self::NonIncreasing => "non-increasing",
-        }
-    }
-}
-
 /// A ranked producer's duplicate handling within one invocation's stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DuplicatePolicy {
@@ -405,6 +575,480 @@ impl DuplicatePolicy {
             Self::Unique => "unique",
             Self::Allowed => "allowed",
         }
+    }
+}
+
+/// Whether a producer names every row that was due to it, above the boundary it
+/// read to.
+///
+/// The first of the two axes of [`RankFidelity`]. It answers *did you find
+/// everything*, and it is the axis an approximate index fails: an HNSW beam that
+/// does not visit a node cannot emit the row that node holds, however good that
+/// row was.
+///
+/// # There is no `Unknown`, and the reason is structural
+///
+/// Unlike [`ServiceLevel`], which needs [`ServiceLevel::Undeclared`] because
+/// [`PfCursor::service_level`] has a default and a relation may honestly stay
+/// silent, this axis has no silence available: it is a required field of
+/// [`RankedDeclaration`], a bare-field struct with no builder and no `Default`,
+/// so every producer that registers states it. "Declared no loss" and "is
+/// complete" are therefore the same state, and naming it [`Self::Complete`]
+/// reports the true thing rather than an unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Completeness {
+    /// The producer's search is exhaustive over its own corpus: every row that
+    /// ranks above the boundary it read to is emitted.
+    Complete,
+    /// The producer's search may omit rows that were due, and states why in its
+    /// own words.
+    Lossy {
+        /// The producer's own evidence, recorded verbatim and never parsed.
+        ///
+        /// An `Arc<str>` rather than a `String` because it is immutable,
+        /// producer-owned, and identical across every stream that producer
+        /// serves, while the contract carrying it is cloned once per stream per
+        /// fusion — the same reason the text relations hold their generation
+        /// this way.
+        evidence: Arc<str>,
+    },
+}
+
+/// Whether a producer's emitted rank is a lower bound on the row's true rank.
+///
+/// The second axis of [`RankFidelity`], independent of [`Completeness`], and
+/// **the precondition for any finite bound on a fused score**.
+///
+/// # Why this is a separate axis and not a shade of the first
+///
+/// Under [`Self::Faithful`] the emitted sequence is a *subsequence* of the true
+/// ranking: rows may be missing, but those that arrive arrive in true order, so
+/// a row's true rank is at least its emitted rank and its true contribution is
+/// therefore at most the contribution its emitted rank earns. That inequality is
+/// the whole of what makes a consumer's upper bound computable.
+///
+/// Under [`Self::Perturbed`] it does not hold. A producer that compares
+/// *approximated* values — quantized vectors, a sketched score — can rank a row
+/// it did find **better** than that row was due, so no finite bound on its
+/// contribution exists at all. A consumer must be told that rather than handed a
+/// number, and an answer containing such a stratum says so instead of inventing
+/// one.
+///
+/// HNSW is [`Self::Faithful`]: it computes exact distances for every candidate
+/// it visits and fails only to visit. A product-quantized index is
+/// [`Self::Perturbed`]. The two are both "approximate" in ordinary speech and
+/// differ in exactly the property that decides whether an answer can be bounded,
+/// which is why one flag cannot carry both.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OrderFidelity {
+    /// Rows arrive in true relative order: an emitted rank is a lower bound on
+    /// the row's true rank.
+    Faithful,
+    /// A row may be emitted at a better rank than it was due, and the producer
+    /// states why in its own words.
+    Perturbed {
+        /// The producer's own evidence, recorded verbatim and never parsed.
+        evidence: Arc<str>,
+    },
+}
+
+/// What a producer promises about the rows it emits, on two independent axes.
+///
+/// [`Completeness`] answers *did you find every row that was due*;
+/// [`OrderFidelity`] answers *are the rows you did find in true relative order*.
+/// The product is a four-element lattice ordered by strength, with
+/// [`Self::EXACT`] (`Complete` × `Faithful`) at the top, and a fused answer's own
+/// guarantee is the **meet** over the streams it was handed.
+///
+/// | Producer | Class |
+/// |---|---|
+/// | BM25 over a full inverted index | `Complete` × `Faithful` |
+/// | an exhaustive kNN scan | `Complete` × `Faithful` |
+/// | an HNSW graph | `Lossy` × `Faithful` |
+/// | a product-quantized index | `Lossy` × `Perturbed` |
+///
+/// # Why two axes rather than one `approximate` flag
+///
+/// Because the two failures have different consequences for a consumer and only
+/// one of them is boundable. Loss alone deflates a missed candidate's score and
+/// — because reciprocal-rank fusion scores by **rank** and nothing else —
+/// simultaneously *inflates* the score of every row behind the missing one,
+/// which moves up a rank and collects more than it earned. Both effects are
+/// bounded under `Faithful`. Under `Perturbed` neither is.
+///
+/// # There is no silence here, and that is what lets `Complete` mean `Complete`
+///
+/// A consumer reads an absent declaration as *exact*, which is only honest if a
+/// producer cannot fail to declare one. It cannot: [`RankedDeclaration`] is a
+/// bare-field struct with no builder and no `Default`, so a literal that omits
+/// the field does not compile —
+///
+/// ```compile_fail
+/// # use purrdf_sparql_eval::{RankedDeclaration, DuplicatePolicy, CandidateDomains};
+/// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
+/// // No `fidelity`. This is a compile error, not a silent default.
+/// let _ = RankedDeclaration {
+///     stratum,
+///     accepted_terms: Vec::new(),
+///     depth_placement: None,
+///     candidate_position: 0,
+///     duplicates: DuplicatePolicy::Unique,
+///     domains: CandidateDomains::Unrestricted,
+///     block_position: None,
+///     mandatory: false,
+/// };
+/// ```
+///
+/// — while the same literal supplying it does. The pair is what proves the
+/// point: a `compile_fail` block alone passes for *any* error, including a typo,
+/// so the twin that differs only in the field under test is the half that shows
+/// the field is the reason.
+///
+/// ```
+/// # use purrdf_sparql_eval::{RankedDeclaration, RankFidelity, DuplicatePolicy, CandidateDomains};
+/// # let stratum = purrdf_core::parse_iri("http://example.org/s").unwrap();
+/// let declaration = RankedDeclaration {
+///     stratum,
+///     accepted_terms: Vec::new(),
+///     depth_placement: None,
+///     candidate_position: 0,
+///     duplicates: DuplicatePolicy::Unique,
+///     fidelity: RankFidelity::EXACT,
+///     domains: CandidateDomains::Unrestricted,
+///     block_position: None,
+///     mandatory: false,
+/// };
+/// assert_eq!(declaration.fidelity, RankFidelity::EXACT);
+/// ```
+///
+/// And there is no `Default` to reach for instead:
+///
+/// ```compile_fail
+/// # use purrdf_sparql_eval::RankFidelity;
+/// let _: RankFidelity = Default::default();
+/// ```
+///
+/// [`Self::EXACT`] is the value a host spells when it has nothing to disclose,
+/// and spelling it is the point.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RankFidelity {
+    /// Whether every row that was due is named.
+    pub completeness: Completeness,
+    /// Whether a named row's emitted rank is a lower bound on its true rank.
+    pub order: OrderFidelity,
+}
+
+impl RankFidelity {
+    /// Complete and order-faithful: the top of the lattice.
+    ///
+    /// A named constant the caller must spell, deliberately **not** a `Default`.
+    /// The value is a promise about the producer's own search, and only the host
+    /// knows it — the same refusal [`RankedDeclaration::domains`] already makes,
+    /// and the same discipline [`PfAttestation::UNDECLARED`] follows.
+    pub const EXACT: Self = Self {
+        completeness: Completeness::Complete,
+        order: OrderFidelity::Faithful,
+    };
+
+    /// The evidence this producer published, if it declared any loss on either
+    /// axis, in axis order.
+    ///
+    /// Carried verbatim. A consumer renders these; nothing in this workspace
+    /// parses them.
+    pub fn evidence(&self) -> impl Iterator<Item = &Arc<str>> {
+        let completeness = match &self.completeness {
+            Completeness::Complete => None,
+            Completeness::Lossy { evidence } => Some(evidence),
+        };
+        let order = match &self.order {
+            OrderFidelity::Faithful => None,
+            OrderFidelity::Perturbed { evidence } => Some(evidence),
+        };
+        completeness.into_iter().chain(order)
+    }
+
+    /// Whether this producer may have failed to name a row that was due.
+    ///
+    /// True for [`Completeness::Lossy`]. A consumer reads it to decide whether a
+    /// stratum's terminal status is, on its own, a completeness claim — it is
+    /// not when this is true.
+    #[must_use]
+    pub const fn may_omit(&self) -> bool {
+        matches!(self.completeness, Completeness::Lossy { .. })
+    }
+
+    /// Whether this producer may have named a row at a better rank than it was
+    /// due, which is the case in which **no finite score bound exists**.
+    #[must_use]
+    pub const fn order_is_unbounded(&self) -> bool {
+        matches!(self.order, OrderFidelity::Perturbed { .. })
+    }
+
+    /// Append this fidelity's canonical, injective description to `out`.
+    ///
+    /// Each axis contributes a length-framed discriminant followed by an
+    /// explicit present/absent evidence byte, so an absent evidence and an empty
+    /// one stay distinguishable — the framing discipline the rest of this
+    /// module's canonical encoding uses, with no escaping anywhere.
+    fn push_canonical(&self, out: &mut String) {
+        match &self.completeness {
+            Completeness::Complete => {
+                push_canonical_field(out, "complete");
+                push_canonical_option(out, None);
+            }
+            Completeness::Lossy { evidence } => {
+                push_canonical_field(out, "lossy");
+                push_canonical_option(out, Some(evidence));
+            }
+        }
+        match &self.order {
+            OrderFidelity::Faithful => {
+                push_canonical_field(out, "faithful");
+                push_canonical_option(out, None);
+            }
+            OrderFidelity::Perturbed { evidence } => {
+                push_canonical_field(out, "perturbed");
+                push_canonical_option(out, Some(evidence));
+            }
+        }
+    }
+}
+
+/// One caller-named block of the candidate universe.
+///
+/// A domain tag is an IRI the **caller** chooses — `documents`, `people`,
+/// `places`, `chunks-of-the-2019-corpus`. Nothing here mints one, and nothing
+/// here interprets one: the tag is compared for equality against other tags and
+/// is otherwise opaque data, exactly as a stratum label is.
+///
+/// # A tag names a block of a partition, not a label an item may collect
+///
+/// The whole arithmetic value of a declared domain rests on this reading, so it
+/// is stated rather than implied: the tags a host uses **partition** the
+/// candidate universe, and a candidate lies in exactly one block. That is what
+/// lets a consumer bound the score of an item it has not seen yet by the best
+/// single block rather than by every stream at once — an unseen item cannot
+/// collect contributions from two disjoint blocks, because it is not in two
+/// blocks.
+///
+/// A host that tags one entity into two blocks has not made the declaration
+/// weaker, it has made it false, and the consumer says so rather than quietly
+/// scoring it: `purrdf-retrieval`'s fusion refuses a stream that names a
+/// candidate its declared domains cannot reach. A host whose entity really does
+/// belong to two categories declares a producer over **both** tags
+/// ([`CandidateDomains::Within`] takes a set) or declares
+/// [`CandidateDomains::Unrestricted`], and both of those are honest.
+///
+/// # Why this is a newtype rather than a bare [`Iri`]
+///
+/// A set of tags has to be ordered to be a set, to be compared, and to be
+/// encoded injectively into a registry's fingerprint, and the kernel's [`Iri`]
+/// is a parsed value with neither an `Ord` nor a `Hash` impl — deliberately, as
+/// the ring-fenced leaf it is. So the ordering lives here, over the IRI's text,
+/// which is the same thing `purrdf-retrieval`'s plan-facing IRI wrapper does
+/// and for the same reason. Ordering by text is what makes the canonical
+/// encoding a pure function of the value rather than of the order a host
+/// happened to insert its tags in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainTag(Iri);
+
+impl DomainTag {
+    /// Carry `iri` as a domain tag.
+    #[must_use]
+    pub const fn new(iri: Iri) -> Self {
+        Self(iri)
+    }
+
+    /// Parse and validate `text` as a domain tag.
+    ///
+    /// # Errors
+    ///
+    /// The parser's own [`IriError`](purrdf_core::IriError) when `text` is not
+    /// a valid IRI. Nothing is guessed or repaired: a tag that is not an IRI is
+    /// refused where it is written.
+    pub fn parse(text: &str) -> Result<Self, purrdf_core::IriError> {
+        purrdf_core::parse_iri(text).map(Self)
+    }
+
+    /// The tag's IRI text, verbatim.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// The tag's underlying IRI.
+    #[must_use]
+    pub const fn as_iri(&self) -> &Iri {
+        &self.0
+    }
+}
+
+impl From<Iri> for DomainTag {
+    fn from(iri: Iri) -> Self {
+        Self(iri)
+    }
+}
+
+impl core::fmt::Display for DomainTag {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
+impl PartialOrd for DomainTag {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DomainTag {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.as_str().cmp(other.0.as_str())
+    }
+}
+
+impl core::hash::Hash for DomainTag {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_str().hash(state);
+    }
+}
+
+/// Which blocks of the candidate universe a ranked producer may name.
+///
+/// This is the second promise a producer makes about its own rows, beside
+/// [`DuplicatePolicy`], and like that one it is host-supplied configuration
+/// read at registration rather than anything a consumer infers. It exists
+/// because a consumer fusing several ranked streams has exactly one way to
+/// learn that a stream will *not* name a candidate — read that stream to its
+/// end — and over strata whose candidate sets do not overlap that is every row
+/// of every stream, however small the caller's top-k.
+///
+/// # What it buys, stated as the arithmetic it licenses
+///
+/// A fused score is exact only when every stream that could still name the
+/// candidate has named it. With no declaration, "could still name it" is true
+/// of every open stream, so a candidate in one stratum waits for a stratum that
+/// was never going to mention it — the fusion drains, the frontier grows with
+/// the input, and the terminal report says `Exhausted` about streams that were
+/// emptied rather than bounded. With a declaration, the consumer may skip the
+/// streams that *provably* cannot name the candidate, and only those. The
+/// consumer's finality test does not get weaker; its quantifier gets smaller.
+///
+/// # [`Self::Unrestricted`] is the wider promise, not the weaker one
+///
+/// It says "this producer may name anything", which is a statement about the
+/// producer that happens to license the consumer to assume nothing. It is
+/// today's behaviour exactly, it is the honest value for a host that does not
+/// know how its indexes partition, and a fusion whose every stream declares it
+/// computes precisely the numbers it computed before this existed — the same
+/// rows, the same scores, the same provenance, and the same reading cost.
+///
+/// # Nothing is defaulted from a stratum or from a graph
+///
+/// The tags come from the **host**, because the host is the only party that
+/// knows whether its text index and its vector index name the same entities. A
+/// consumer deriving a tag per stratum would hand two producers over one entity
+/// space a pair of tags it reads as disjoint, and there is no safe way for that
+/// to be wrong: the pair either makes the consumer refuse a query that was
+/// valid, or lets it certify a score that is missing a contribution the other
+/// stream was about to make. A wrong guess here is a wrong answer, so there is
+/// no guess.
+///
+/// # What verification can and cannot reach
+///
+/// A consumer verifies this declaration only over the rows it actually pulls: a
+/// stream that names a candidate another stream's declaration has already
+/// placed elsewhere is refused, and nothing else is checkable. A false
+/// declaration that no pulled row contradicts produces a score that declaration
+/// made wrong. That is the same trust the seam already places in
+/// [`DuplicatePolicy::Unique`], whose breach is likewise detected only when the
+/// repeat is actually read, and it is stated here rather than dressed up: a
+/// declaration is a promise, and the consumer checks the promises it is in a
+/// position to check.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CandidateDomains {
+    /// The producer may name any candidate at all.
+    Unrestricted,
+    /// Every candidate this producer names lies in one of these blocks.
+    ///
+    /// Never empty. A producer that promises to name nothing has not restricted
+    /// its domain, it has described a producer that should not be registered,
+    /// and
+    /// [`register_ranked`](PropertyFunctionRegistry::register_ranked) refuses
+    /// it where it is written.
+    Within(std::collections::BTreeSet<DomainTag>),
+}
+
+impl CandidateDomains {
+    /// A restriction to the tags `tags` yields, in any order.
+    ///
+    /// A convenience over building the set, and it is deliberately **not** the
+    /// place the empty case is refused: this is plain data with public
+    /// variants, so a host can spell an empty restriction either way and the
+    /// one refusal that matters is the one at registration, where the
+    /// declaration is committed.
+    pub fn within<I: IntoIterator<Item = DomainTag>>(tags: I) -> Self {
+        Self::Within(tags.into_iter().collect())
+    }
+
+    /// Whether some candidate could satisfy both restrictions at once.
+    ///
+    /// [`Self::Unrestricted`] intersects everything, including itself: it is
+    /// "any block", so there is always a block in common. Two restricted
+    /// declarations intersect exactly when they name a block in common —
+    /// because a candidate lies in exactly one block ([`DomainTag`]), so a
+    /// candidate both could name must be in a block both declared.
+    ///
+    /// Allocates nothing: the set intersection is the lazy iterator's first
+    /// step and no result set is built.
+    #[must_use]
+    pub fn intersects(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Unrestricted, _) | (_, Self::Unrestricted) => true,
+            (Self::Within(left), Self::Within(right)) => left.intersection(right).next().is_some(),
+        }
+    }
+
+    /// Whether a candidate in block `tag` could be named under this
+    /// declaration.
+    #[must_use]
+    pub fn admits(&self, tag: &DomainTag) -> bool {
+        match self {
+            Self::Unrestricted => true,
+            Self::Within(tags) => tags.contains(tag),
+        }
+    }
+
+    /// The blocks this declaration names, or `None` when it names no
+    /// restriction at all.
+    #[must_use]
+    pub const fn tags(&self) -> Option<&std::collections::BTreeSet<DomainTag>> {
+        match self {
+            Self::Unrestricted => None,
+            Self::Within(tags) => Some(tags),
+        }
+    }
+
+    /// Append this declaration's canonical, injective description to `out`.
+    ///
+    /// A present/absent discriminant, then — for a restriction — the tag count
+    /// and every tag length-framed in canonical order. The count is what makes
+    /// a set of two tags unreadable as a set of one followed by whatever came
+    /// next, and the `BTreeSet`'s own order is what makes the bytes a function
+    /// of the value rather than of the host's insertion order.
+    fn push_canonical(&self, out: &mut String) {
+        match self {
+            Self::Unrestricted => out.push('0'),
+            Self::Within(tags) => {
+                out.push('1');
+                out.push_str(&tags.len().to_string());
+                out.push(':');
+                for tag in tags {
+                    push_canonical_field(out, tag.as_str());
+                }
+            }
+        }
+        out.push(';');
     }
 }
 
@@ -519,6 +1163,22 @@ pub struct DepthPlacement {
 /// `Clone + PartialEq + Eq + Debug` and has a canonical description; there is
 /// deliberately no function pointer anywhere in this type. It is not `Hash`
 /// because [`Iri`] is not.
+///
+/// # The rank law is single and unconditional
+///
+/// A declaration says nothing about rank order because there is nothing to say:
+/// one law holds for every ranked producer without exception. The ranks of one
+/// invocation's rows are 1-based, contiguous and ascending — rank 1, then 2,
+/// then 3, with no gap, no repeat and no step backwards. A producer emits rows
+/// best-first and numbers them as it goes, and rows that a producer considers
+/// equally good still receive distinct consecutive ranks under whatever total
+/// tie-break it applies.
+///
+/// The law is enforced on the consuming side, per row, as the rows arrive: the
+/// fusion engine in `purrdf-retrieval` holds the next expected rank for every
+/// stream it reads and refuses a lower rank as `OutOfOrderRanks` and a higher
+/// one as `NonContiguousRanks`. Because it is checked rather than believed, it
+/// is not a field a registration can vary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RankedDeclaration {
     /// The caller-supplied stratum label these rows are ranked within. No
@@ -533,10 +1193,82 @@ pub struct RankedDeclaration {
     pub depth_placement: Option<DepthPlacement>,
     /// The flattened argument position the ranked candidate is projected from.
     pub candidate_position: usize,
-    /// The producer's ordering guarantee.
-    pub ordering: RankOrdering,
     /// The producer's duplicate handling.
     pub duplicates: DuplicatePolicy,
+    /// What this producer promises about the rows it emits: whether it names
+    /// every row that was due, and whether a named row's rank is a lower bound
+    /// on its true rank.
+    ///
+    /// The third promise a producer makes about its own rows, and the one that
+    /// decides whether a consumer may read a terminal status as a completeness
+    /// claim. A [`Completeness::Lossy`] producer that runs out of rows has run
+    /// out of rows its *search* found, which is a different statement from the
+    /// one an exhaustive producer makes with the same status — see
+    /// [`RankFidelity`] for why the two axes are independent and why only one of
+    /// them admits a finite bound.
+    pub fidelity: RankFidelity,
+    /// Which blocks of the candidate universe this producer may name.
+    ///
+    /// The second promise a producer makes about its own rows. A consumer
+    /// fusing several ranked streams reads it to learn which streams *cannot*
+    /// name a given candidate, which is the only way it can certify a score
+    /// before reading a stream to its end — see [`CandidateDomains`] for the
+    /// whole argument, including why [`CandidateDomains::Unrestricted`] is the
+    /// wider promise rather than the weaker one, and why nothing derives a tag
+    /// from a stratum or a graph on a host's behalf.
+    pub domains: CandidateDomains,
+    /// The flattened argument position each row's **block** is projected from,
+    /// or `None` when this producer names no block per row.
+    ///
+    /// [`Self::domains`] is a promise about every row this producer will ever
+    /// emit. This is where an individual row backs it.
+    ///
+    /// # What the per-row block is for
+    ///
+    /// The whole arithmetic value of a restricted declaration rests on one
+    /// axiom: the tags **partition** the candidate universe, so a candidate lies
+    /// in exactly one block ([`DomainTag`]). A consumer cannot derive that — it
+    /// is a fact about the host's corpus — but it can hold the rows it pulls to
+    /// it, and it can only do so if the rows say which block they came from.
+    /// Two streams that name one candidate from two different blocks have
+    /// proven the axiom false for that candidate, and a consumer that could not
+    /// see the blocks would instead publish an order computed from it. That is
+    /// what this position carries, and it is the only channel on the seam that
+    /// can carry it: the depth and the accepted terms are inputs, and
+    /// [`Self::candidate_position`] names the entity rather than the block it
+    /// was drawn from.
+    ///
+    /// # When the declaration already answers, and when it cannot
+    ///
+    /// A [`CandidateDomains::Within`] declaration naming exactly **one** block
+    /// needs nothing here. It has already said that every candidate this
+    /// producer names lies in that block, so the per-row fact is *entailed* by
+    /// the declaration and a consumer reads it straight off the declaration —
+    /// `purrdf-retrieval`'s executor does exactly that, and no host has to
+    /// repeat itself per row.
+    ///
+    /// A declaration naming **several** blocks has not said which of them any
+    /// given row is in, and a consumer may not choose on the host's behalf. So
+    /// a producer that can say declares the position here, and a producer that
+    /// cannot leaves this `None` and is held to the consequence rather than
+    /// believed: the consumer refuses a restriction no row backs, instead of
+    /// certifying an order on an axiom nothing checked. A host in that position
+    /// has two honest exits, both one line long — declare
+    /// [`CandidateDomains::Unrestricted`], which restricts nothing and costs
+    /// only the early certification a narrower claim would have bought, or
+    /// register one producer per block, each with the single tag its rows really
+    /// lie in.
+    ///
+    /// # It is admitted under `Unrestricted` too, and honoured there
+    ///
+    /// An unrestricted producer *owes* no block: it counts in every block's
+    /// bound already, so it tightens no consumer arithmetic and there is no
+    /// promise for a row to back. It may still name one, and a consumer that is
+    /// handed one uses it — a block named by an unrestricted stream is evidence
+    /// about the **candidate**, and it falsifies the axiom exactly as a
+    /// restricted stream's block does. Refusing the combination would throw away
+    /// evidence a host volunteered and corrupt nothing.
+    pub block_position: Option<usize>,
     /// Whether a request that reaches this producer must actually be served by
     /// it. Declared by the host, never inferred by a consumer: admission
     /// enforces whatever the registry declared and adds nothing of its own.
@@ -557,9 +1289,30 @@ impl RankedDeclaration {
         let mut out = String::new();
         out.push('r');
         push_canonical_field(&mut out, self.stratum.as_str());
-        push_canonical_field(&mut out, self.ordering.as_str());
         push_canonical_field(&mut out, self.duplicates.as_str());
+        // Beside the duplicate policy, because the three are the same kind of
+        // fact: a promise the producer makes about its own rows that a consumer
+        // holds it to. All must reach the registry's content fingerprint, or
+        // two registries that fuse differently could share a digest and a plan
+        // admitted against one would run against the other. Fidelity in
+        // particular: a plan whose producers approximate is a different plan
+        // from one whose producers do not, and the answers differ in what they
+        // may be read to claim.
+        self.fidelity.push_canonical(&mut out);
+        self.domains.push_canonical(&mut out);
         push_canonical_field(&mut out, &self.candidate_position.to_string());
+        // Beside the domains for the same reason they are beside the duplicate
+        // policy: this position decides whether a consumer can hold the
+        // restriction to the rows it pulls, so two registries that verify
+        // differently must not share a digest. An explicit present/absent
+        // discriminant rather than an omitted field, because "no block column"
+        // is a declaration and not a gap in one.
+        push_canonical_option(
+            &mut out,
+            self.block_position
+                .map(|position| position.to_string())
+                .as_deref(),
+        );
         out.push(if self.mandatory { '1' } else { '0' });
         out.push(';');
         match self.depth_placement.as_ref() {
@@ -597,7 +1350,12 @@ impl RankedDeclaration {
 }
 
 /// Append a length-framed canonical field to `out`.
-fn push_canonical_field(out: &mut String, value: &str) {
+///
+/// `pub(crate)` rather than private because [`crate::witness`] encodes its own
+/// canonical record with the identical framing: one length-framed-field discipline for
+/// the whole crate means two encodings written years apart cannot come to disagree
+/// about what "framed" means.
+pub(crate) fn push_canonical_field(out: &mut String, value: &str) {
     out.push_str(&value.len().to_string());
     out.push(':');
     out.push_str(value);
@@ -803,6 +1561,44 @@ pub fn take_work_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<u64, 
     }
 }
 
+/// Read `cursor`'s [`PfCursor::generation`] with the host call contained.
+///
+/// The fourth member of the [`open_contained`]/[`next_contained`]/[`take_work_contained`]
+/// family, for the fourth thing a cursor can be asked. A generation read is host code
+/// exactly as `next` is — a lazily-formatted version string that indexes a slice out of
+/// bounds, an assertion left in by mistake — and it runs on whichever worker drove the
+/// invocation, so it crosses the same boundary. The message is fixed and payload-free
+/// for the determinism reason the shared containment helper states: a query's reported
+/// text must not depend on which thread panicked.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the declared generation.
+pub fn generation_contained(
+    cursor: &dyn PfCursor,
+    iri: &str,
+) -> Result<IndexGeneration, EvalError> {
+    declaration_contained(iri, "index generation", || cursor.generation())
+}
+
+/// Read `cursor`'s [`PfCursor::service_level`] with the host call contained.
+///
+/// The [`generation_contained`] twin, for the other attested fact and the other instant
+/// it is read at (the end of the invocation rather than its start — see
+/// [`PfCursor::service_level`]). Same containment, same fixed payload-free message
+/// shape, for the same reason.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the declared service
+/// level.
+pub fn service_level_contained(
+    cursor: &dyn PfCursor,
+    iri: &str,
+) -> Result<ServiceLevel, EvalError> {
+    declaration_contained(iri, "service level", || cursor.service_level())
+}
+
 /// Read one of a relation's DECLARATIONS — `arity`, `modes`, `volatility`, or
 /// `rows_per_invocation` — with the panic contained.
 ///
@@ -997,6 +1793,14 @@ impl PropertyFunctionRegistry {
     ///   one position renders one value.
     /// * `decl.candidate_position` is also a placement or depth target: a
     ///   position filled with a constant cannot also be the projected candidate.
+    /// * `decl.block_position` binds outside `relation`'s positions, or targets
+    ///   the candidate, a term placement or the depth — one position projects or
+    ///   renders one value, and a block a row names cannot be read out of a
+    ///   position holding something else.
+    /// * `decl.domains` is an empty [`CandidateDomains::Within`] — a promise to
+    ///   name nothing is not a narrow domain, it is a producer that should not
+    ///   be registered; a host that does not want to restrict its candidates
+    ///   declares [`CandidateDomains::Unrestricted`].
     /// * `decl.stratum` is already claimed by another registered producer — one
     ///   stratum carries one producer, because a rank means something only inside
     ///   the list that assigned it. The panic message carries the whole argument:
@@ -1092,7 +1896,8 @@ impl PropertyFunctionRegistry {
 
     /// A durable, instance-independent fingerprint of this registry's *declared*
     /// contents: every registered IRI's subject/object arity, its declared
-    /// volatility, and each declared mode with its row bound, IRI-sorted.
+    /// volatility, each declared mode with its row bound, and its ranked-retrieval
+    /// declaration, IRI-sorted — rendered as the lowercase hex of a SHA-256 digest.
     ///
     /// # Durable and cross-process, unlike [`Self::instance_id`]
     ///
@@ -1110,29 +1915,42 @@ impl PropertyFunctionRegistry {
     ///
     /// This is a pure function of [`Self::describe`]'s output, which is already
     /// IRI-sorted, so it does not depend on registration order. It captures the
-    /// declarations a plan's rewrite and an execution's parallel-safety depend on.
-    /// It does **not** capture which trait-object implementation answers an IRI —
-    /// two registries registering the same IRI to different implementations with
-    /// identical declarations share a content fingerprint by design, and only
+    /// declarations a plan's rewrite and an execution's parallel-safety depend on,
+    /// plus the ranked-retrieval declaration that decides whether a request may
+    /// draw fused candidates from an IRI at all. It does **not** capture which
+    /// trait-object implementation answers an IRI — two registries registering the
+    /// same IRI to different implementations with identical declarations share a
+    /// content fingerprint by design, and only
     /// `property_fn_plan::registry_fingerprint` (which folds the instance id in
     /// ahead of this content digest, and is what the plan cache and governed
     /// receipts use) can tell them apart.
     ///
+    /// # Compare it, do not parse it
+    ///
+    /// The value is a digest rendering, not a description: it answers "do these two
+    /// registries declare the same shape?" by equality and nothing else. Nothing in
+    /// it can be read back, and a caller must not try — the declared contents are
+    /// available in structured form from [`Self::describe`], which is what this
+    /// digests.
+    ///
     /// # The empty registry
     ///
-    /// Returns the empty string when no relation is registered — matching
-    /// `property_fn_plan::registry_fingerprint`'s own empty short-circuit, so the
-    /// canonical [`Self::EMPTY`] and a freshly built [`Self::new`] registry
-    /// fingerprint identically (they are observationally interchangeable; see
-    /// [`RegistryId`](crate::registry_id::RegistryId)).
+    /// A registry with no relations is not special-cased: it digests the
+    /// property-function domain separator alone, so the canonical [`Self::EMPTY`]
+    /// and a freshly built [`Self::new`] registry fingerprint identically (they are
+    /// observationally interchangeable; see
+    /// [`RegistryId`](crate::registry_id::RegistryId)). The value is a fixed
+    /// constant rather than an empty string, which is what lets a consumer
+    /// distinguish "this registry declares nothing" from "no fingerprint was
+    /// recorded".
     ///
     /// # Errors
     ///
     /// [`EvalError::Function`] if any registered relation's declaration methods
     /// panic — [`Self::describe`]'s own failure, propagated unchanged. Never
-    /// raised for an empty registry, which returns before any declaration is read.
+    /// raised for an empty registry, which has no declaration to read.
     pub fn content_fingerprint(&self) -> Result<String, EvalError> {
-        crate::property_fn_plan::content_fingerprint(self)
+        Ok(crate::property_fn_plan::content_fingerprint(self)?.to_hex())
     }
 
     /// Describe every registered relation, sorted by IRI.
@@ -1309,6 +2127,61 @@ fn assert_stratum_unclaimed(
 /// See [`PropertyFunctionRegistry::register_ranked`] for the full list.
 fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
     let total = arity.total();
+    // An empty restriction is not a narrow producer, it is a producer that
+    // promised to name nothing. Read literally by a consumer it is a stream
+    // whose every row contradicts its own declaration, so the first row it
+    // emitted would be refused and the registration would have bought a
+    // configuration that cannot answer. Refused where it is committed, like
+    // every other declaration a relation cannot honour — and distinctly from
+    // `CandidateDomains::Unrestricted`, which is one line away and is what a
+    // host that does not want to restrict its candidates actually means.
+    if let CandidateDomains::Within(tags) = &decl.domains {
+        assert!(
+            !tags.is_empty(),
+            "ranked declaration for <{iri}> restricts its candidates to an empty set of \
+             domains, which promises that this producer names nothing at all; a consumer \
+             holds a producer to this declaration row by row, so every row it emitted would \
+             contradict it. Name the domains this producer really draws from, or declare \
+             CandidateDomains::Unrestricted, which is the honest statement that it may name \
+             anything"
+        );
+    }
+    // A declaration of loss that says nothing is the mirror of the empty domain
+    // set above: it spends the consumer's trust without buying it anything. The
+    // consumer is told a stratum may be short and told nothing it can act on or
+    // render, and a blank string is indistinguishable in a rendered answer from
+    // a producer that declared no loss at all — so the one field whose entire
+    // purpose is to be read verbatim would arrive empty. Refused where it is
+    // committed, and distinctly from `Completeness::Complete`, which is one line
+    // away and is what a producer with nothing to disclose actually means.
+    for (axis, evidence) in [
+        (
+            "completeness",
+            match &decl.fidelity.completeness {
+                Completeness::Complete => None,
+                Completeness::Lossy { evidence } => Some(evidence),
+            },
+        ),
+        (
+            "order",
+            match &decl.fidelity.order {
+                OrderFidelity::Faithful => None,
+                OrderFidelity::Perturbed { evidence } => Some(evidence),
+            },
+        ),
+    ] {
+        if let Some(evidence) = evidence {
+            assert!(
+                !evidence.trim().is_empty(),
+                "ranked declaration for <{iri}> declares a loss on its {axis} axis but supplies \
+                 no evidence for it; a consumer carries this string into its answer verbatim, so \
+                 an empty one reports a degraded stratum while saying nothing a reader can act \
+                 on. State what the producer does not promise — the measurement, its limit, and \
+                 what an empty result does not prove — or declare the exhaustive variant, which \
+                 is the honest statement that there is nothing to disclose"
+            );
+        }
+    }
     assert!(
         decl.candidate_position < total,
         "ranked declaration for <{iri}> projects its candidate from position {} but the relation \
@@ -1331,6 +2204,41 @@ fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
             placement.facet.as_str(),
             placement.position
         );
+    }
+    // The block column is the candidate column's sibling: both are positions the
+    // consumer *reads*, so both must exist and neither may share a position with
+    // a value the invocation writes. A host that mixed them up would hand a
+    // consumer the needle as the block a row lies in, and the consumer would
+    // measure a perfectly good corpus against it.
+    if let Some(block) = decl.block_position {
+        assert!(
+            block < total,
+            "ranked declaration for <{iri}> projects each row's block from position {block} but \
+             the relation declares only {total} argument position(s) ({arity})"
+        );
+        assert!(
+            block != decl.candidate_position,
+            "ranked declaration for <{iri}> projects both its candidate and each row's block \
+             from position {block}; one position projects one value, and a candidate is not the \
+             block it was drawn from"
+        );
+        for placement in decl.placements() {
+            assert!(
+                placement.position != block,
+                "ranked declaration for <{iri}> binds the {} facet of an accepted term at \
+                 position {block} and also projects each row's block from there; a position \
+                 filled with a request value cannot also be read back as the row's block",
+                placement.facet.as_str()
+            );
+        }
+        if let Some(depth) = decl.depth_placement.as_ref() {
+            assert!(
+                depth.position != block,
+                "ranked declaration for <{iri}> binds its per-stratum depth at position {block} \
+                 and also projects each row's block from there; a position filled with the depth \
+                 cannot also be read back as the row's block"
+            );
+        }
     }
     if let Some(depth) = decl.depth_placement.as_ref() {
         assert!(

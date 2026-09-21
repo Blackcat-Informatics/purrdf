@@ -12,8 +12,16 @@
 # A crate present in one copy and absent from another is what made the preflight
 # necessary in the first place; there is now only one copy.
 #
-# `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`
-# and `purrdf-envelope-probe` are deliberately NOT here — see docs/RELEASE.md.
+# `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`,
+# `purrdf-envelope-probe`, `purrdf-bench` and `purrdf-alloc-probe` are
+# deliberately NOT here — see docs/RELEASE.md.
+#
+# `purrdf-alloc-probe` is the one of those that published crates DEPEND ON, as a
+# dev-dependency. That is safe only because its entry in the root
+# `[workspace.dependencies]` carries a path and NO `version`: cargo strips a
+# versionless path dev-dependency from the manifest it uploads, so the
+# verification step below never looks for it on a registry it will never be on.
+# Give it a version and every dependent's publish breaks.
 #
 # ORDERING CONTRACT, enforced by scripts/check-publish-order.py on every
 # `make check`. This list must be a topological order of BOTH edge kinds:

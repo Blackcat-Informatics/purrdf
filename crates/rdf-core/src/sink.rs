@@ -598,7 +598,11 @@ mod tests {
                     );
                 }
                 let finished = sink.finish().expect("recorder never fails");
-                assert_eq!(finished.bytes, [] as [u8; 0], "a draining sink yields no document");
+                assert_eq!(
+                    finished.bytes,
+                    [] as [u8; 0],
+                    "a draining sink yields no document"
+                );
                 assert_eq!(finished.written, (push_len * pushes) as u64);
                 assert_eq!(
                     recorder.total,
@@ -634,7 +638,10 @@ mod tests {
         for fragment in fragments {
             streamed.push_str(fragment);
         }
-        assert_eq!(streamed.finish().expect("collect never fails").bytes, [] as [u8; 0]);
+        assert_eq!(
+            streamed.finish().expect("collect never fails").bytes,
+            [] as [u8; 0]
+        );
 
         assert_eq!(eager, collected);
     }
@@ -656,7 +663,10 @@ mod tests {
             for fragment in fragments {
                 sink.push_str(fragment);
             }
-            assert_eq!(sink.finish().expect("measure never fails").bytes, [] as [u8; 0]);
+            assert_eq!(
+                sink.finish().expect("measure never fails").bytes,
+                [] as [u8; 0]
+            );
         }
         assert_eq!(measure.bytes(), document.len() as u64);
     }
@@ -692,7 +702,10 @@ mod tests {
             let mut tee = Tee(&mut measure_a, &mut measure_b);
             let mut sink = TextSink::to_drain(&mut tee);
             sink.push_str(&"t".repeat(150_000));
-            assert_eq!(sink.finish().expect("measures never fail").bytes, [] as [u8; 0]);
+            assert_eq!(
+                sink.finish().expect("measures never fail").bytes,
+                [] as [u8; 0]
+            );
         }
         assert_eq!(measure_a.bytes(), 150_000);
         assert_eq!(measure_b.bytes(), measure_a.bytes());
@@ -717,7 +730,10 @@ mod tests {
             sink.push_str(&"a".repeat(DRAIN_BUFFER_BYTES - 1));
             sink.push('\u{4e2d}');
             sink.push_bytes(b"tail");
-            assert_eq!(sink.finish().expect("collect never fails").bytes, [] as [u8; 0]);
+            assert_eq!(
+                sink.finish().expect("collect never fails").bytes,
+                [] as [u8; 0]
+            );
         }
         let mut expected = "a".repeat(DRAIN_BUFFER_BYTES - 1).into_bytes();
         expected.extend_from_slice("\u{4e2d}".as_bytes());

@@ -102,7 +102,7 @@ executes that example against the generated shared library and committed header.
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.7.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.8.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -129,6 +129,14 @@ executes that example against the generated shared library and committed header.
   before `out_error`. Recompile against the new header; there is no `_v2` alias,
   because two entry points for one job is the duplication this library exists to
   avoid.
+  `0.7.0` → `0.8.0` carries no break at all: it adds eight prepared-shapes-product
+  entry points plus `purrdf_shacl_validate_changes_to_sarif` (the SHACL change
+  path) and appends one status discriminant, touching no existing prototype
+  and renumbering nothing. It bumps because `0.7.0` is the ABI of the released
+  `2.0.x` libraries, which export nine fewer symbols — leaving the triple still
+  would have two shippable libraries answering `purrdf_abi_version` identically
+  while offering different surfaces, and telling a host they agree right before it
+  fails to resolve a symbol is the one thing this number exists to prevent.
 
 ## Base IRIs across the surface
 

@@ -41,8 +41,11 @@
 //!   native engine's results into owned `Vec`s before returning, so a borrow of the
 //!   store never escapes into a `'static` `#[pyclass]`.
 //! * **Pure-Rust cores** — [`parse_quads`] and [`canonicalize_quads`] hold the
-//!   load-bearing logic and are unit-tested without a Python interpreter; the
-//!   `#[pymethods]` are thin wrappers over them.
+//!   load-bearing logic and stay PyO3-free; the `#[pymethods]` are thin wrappers
+//!   over them. Their coverage lives in `bindings/python/tests`, because this
+//!   crate builds no Rust test target: it is a PyO3 `extension-module`, so an
+//!   ordinary test executable has no interpreter to resolve the CPython API
+//!   against and fails at link (see this crate's `Cargo.toml`).
 //! * **Faithful object model** — the term/result classes mirror the slice of the
 //!   `pyoxigraph` API the codebase relies on, so the Python migration is a
 //!   mechanical import swap rather than a rewrite of ~150 call sites.
@@ -57,6 +60,14 @@ mod term;
 mod xsd;
 
 pub(crate) use io::{PyRdfFormat, parse_quads};
+/// The mutable quad store itself, re-exported for the SHACL surface.
+///
+/// `purrdf.shapes`'s incremental lane takes a `Store` and reads the copy-on-write
+/// DELTA out of it (see [`store::PyStore::change_snapshot`]), which it cannot do
+/// through the Python object protocol: a delta is a Rust view over this store's own
+/// interners, not something expressible as a capsule of a frozen snapshot the way
+/// `_store_capsule` is.
+pub(crate) use store::PyStore;
 
 use pyo3::prelude::*;
 
@@ -94,7 +105,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<query::PyQueryOutcome>()?;
     m.add_class::<query::PyEntailmentQueryOutcome>()?;
     m.add_class::<query::PyUpdateOutcome>()?;
-    m.add_class::<store::PyStore>()?;
+    m.add_class::<PyStore>()?;
     m.add_class::<store::PyDataset>()?;
     m.add_class::<mutable::PyMutableDataset>()?;
     m.add_class::<store::PyQuadIter>()?;

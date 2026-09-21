@@ -23,10 +23,29 @@
 //!
 //! An unknown cardinality is not a zero one. Returning `Option` lets the
 //! planner distinguish "the provider measured nothing" from "the provider
-//! measured empty": the former falls back to the producer's declared row bound
-//! (except where that bound is genuinely unbounded — see
-//! [`PlanError::StatisticsUnavailable`](crate::PlanError::StatisticsUnavailable)),
-//! the latter caps the stratum at zero.
+//! measured empty": the former falls back to the producer's declared row bound —
+//! at the deepest depth a read can be taken to, where that bound is larger than a
+//! read can reach or is the genuinely unbounded `u64::MAX` — while the latter
+//! narrows the stratum as far as a statistic is allowed to narrow
+//! anything, which is to one row and no further.
+//!
+//! So a provider that measures nothing is never why a plan is refused. It leaves
+//! the declaration standing, and a declaration past the read range is recorded at
+//! the ceiling with the probe row one past it, so the read's own ending names the
+//! planned depth as the stopper — see [`plan`](crate::plan).
+//!
+//! # A statistic narrows a read; it never eliminates one
+//!
+//! Every bound derived here is floored at one. A measurement of zero — a
+//! cardinality of zero, a selectivity of zero, or both — is an honest report and
+//! is taken as one, but what follows from it is the shallowest read there is,
+//! not the absence of a read. A depth of zero would compile to `LIMIT 0`, invoke
+//! no relation at all, and then report the stratum exhausted with no rows, which
+//! is the one ending that names no stopper and would have been
+//! minted from an estimate rather than from data. Emptiness is the producer's to
+//! report, in the receipt fusion verifies against the rows it actually pulled,
+//! so the planner's job is to ask the shallowest honest question and let the
+//! producer answer it.
 //!
 //! # Why selectivity is an integer, in parts per million
 //!
@@ -41,9 +60,12 @@
 //! Parts per million rather than `Fixed` because that is the resolution the
 //! plan actually records
 //! ([`StatisticsEntry::selectivity_ppm`](crate::StatisticsEntry::selectivity_ppm)):
-//! a provider's value is written into the snapshot **verbatim**, with no
-//! rounding step between what was reported and what was recorded, so the
-//! snapshot explains the depth the planner derived from it exactly. It also
+//! a provider's value reaches the record with no rounding step between what was
+//! reported and what was recorded. Where several terms reach one subject the
+//! recorded number is their **aggregate** rather than any single reported value
+//! — clamped per term at unity, summed, and clamped again — so what the record
+//! explains is the aggregate the depth was actually derived from, and the
+//! request-term indices that aggregate came from are recorded beside it. It also
 //! closes the last arithmetic path a float could have entered by — the crate
 //! root denies `clippy::float_arithmetic`, so none can.
 
@@ -75,6 +97,13 @@ pub trait Statistics {
     /// The planner consults this for each stratum it places: a measured
     /// cardinality may lower the depth below the producer's declared row bound,
     /// never raise it.
+    /// The option travels: a cardinality the provider declines to report is
+    /// recorded as absent rather than as zero, in
+    /// [`StatisticsEntry::cardinality`](crate::StatisticsEntry::cardinality) for
+    /// every subject that was consulted and additionally in
+    /// [`DepthInputs::cardinality`](crate::DepthInputs::cardinality) for a
+    /// stratum, beside the depth it produced. An unknown cardinality is not a
+    /// zero one at the boundary or in either record.
     fn cardinality(&self, subject: &Iri) -> Option<u64>;
 
     /// The selectivity the provider reports for `term` under `subject`, in
@@ -95,10 +124,34 @@ pub trait Statistics {
     /// raises one — and it is rounded **up**, so a bound derived from a ratio
     /// can never fall below the row count the ratio describes.
     ///
+    /// Zero is where that rounding stops helping, so the derived depth is also
+    /// floored at one. Reporting zero is not a provider fault: it is the correct
+    /// answer for a provider that measured no matching rows, and the plan records
+    /// that zero whether or not the provider also reported a cardinality for the
+    /// same subject. What the planner declines to do is
+    /// turn it into a depth of zero, because that depth compiles to `LIMIT 0`,
+    /// which hands back no row whatever the index holds, and then reports the
+    /// stratum exhausted having emitted nothing — an emptiness claim the
+    /// provider's estimate would have made on the producer's behalf. The
+    /// relation is still opened; what it is never allowed to do is answer. So the
+    /// exhaustion is the bound's claim rather than the data's, and it is
+    /// indistinguishable in every trailer field from an honestly empty answer.
+    /// Floored at one, the relation is asked, and its answer is the thing that
+    /// says whether anything was there.
+    ///
     /// A provider is free to report under a request predicate instead, or as
-    /// well; a plan records every selectivity it was told, whatever the subject
-    /// (see [`StatisticsSnapshot`](crate::StatisticsSnapshot)). Only a stratum's
-    /// own selectivity bounds a stratum's own depth, because only that one is a
-    /// statement about the rows the depth counts.
+    /// well; a plan records every selectivity it was asked for and told, whatever
+    /// the subject. Only a stratum's own selectivity bounds a stratum's own
+    /// depth, because only that one is a statement about the rows the depth
+    /// counts — so a stratum's lands in [`DepthInputs`](crate::DepthInputs)
+    /// beside the depth it produced, and is projected from there onto
+    /// [`StatisticsSnapshot`](crate::StatisticsSnapshot), which names every
+    /// subject that was consulted at all. A request predicate's, which produces
+    /// nothing, lands in the snapshot alone, as context.
+    ///
+    /// The one selectivity a plan does **not** record is the one it never asked
+    /// for: an unbounded stratum has no row count for a ratio to be a fraction
+    /// of, so the derivation returns before consulting this at all. Recording a
+    /// value there would describe a derivation that did not happen.
     fn selectivity_ppm(&self, subject: &Iri, term: &RequestTerm) -> Option<u64>;
 }

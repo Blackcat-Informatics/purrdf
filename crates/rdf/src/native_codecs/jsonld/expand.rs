@@ -86,9 +86,7 @@ pub(super) fn document_base(
     Ok(base)
 }
 
-pub(super) fn carrier_to_dataset(
-    mut document: Document,
-) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+pub(super) fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     // The reserved-label pre-pass reads the whole carrier, and has to: a minted
     // list node must not collide with a blank label used ANYWHERE in the document,
     // which is not knowable from one node. But what it retains is labels — an

@@ -16,7 +16,11 @@
 //! [`engine::validate_graphs`]: purrdf_shapes::engine::validate_graphs
 //! [`ValidationReport`]: purrdf_shapes::report::ValidationReport
 
-use purrdf_shapes::engine;
+use std::sync::Arc;
+
+use purrdf_core::DatasetMut;
+use purrdf_core::ir::{MutableDataset, ViewLimits};
+use purrdf_shapes::engine::{self, ChangeScope, PreparedShapes};
 
 use crate::{SarifOptions, report_to_sarif_string};
 
@@ -60,6 +64,125 @@ pub fn validate_to_sarif_string(
 ) -> Result<String, String> {
     let report = engine::validate_graphs(data_nt, shapes_ttl, shapes_base)?;
     Ok(report_to_sarif_string(&report, options))
+}
+
+/// Validate a CHANGE to `data_nt` against `shapes_ttl`, rendering the resulting
+/// SHACL report to SARIF 2.1.0 and returning it beside the [`ChangeScope`] it
+/// describes.
+///
+/// `added_nt` and `removed_nt` are the two halves of the delta — rows joining and
+/// rows leaving the data graph — each an N-Triples document or `None`. Both
+/// halves, because a verdict moves when a row leaves the graph as readily as when
+/// one joins, and one flag would be half a delta. Additions are applied before
+/// removals, so a change set naming the same row on both halves settles on
+/// *removed*: the order a replayed insert-then-delete reaches. A removal naming a
+/// row the data graph does not carry retracts nothing, which is the `remove`
+/// contract everywhere else in PurRDF — a change set describes what moved, it does
+/// not assert what the base contained.
+///
+/// # What the returned report describes
+///
+/// The scope is not decoration. [`ChangeScope::Bounded`] means the report covers
+/// the affected focus nodes — for those nodes it is identical, results and
+/// ordering alike, to a full validation of the mutated graph — and says nothing
+/// about a pre-existing violation the change cannot reach, so `conforms` there
+/// means *this change introduced no violation*. [`ChangeScope::Everything`] means
+/// no bounded footprint exists for this shapes graph (its constraints read through
+/// SPARQL query text), the run fell back to a full validation of the mutated
+/// graph, and `conforms` means *the graph conforms*. A caller handed the report
+/// alone cannot tell those apart, and the weaker reading is the dangerous one.
+///
+/// The loop itself is [`engine::validate_change`] — the same call the command
+/// line and the Python bindings drive. This adds the string boundary: parsing the
+/// three documents, branching the base into a copy-on-write mutation, and
+/// rendering the report.
+///
+/// # Errors
+///
+/// Returns the engine's own error string when the shapes graph (Turtle) or any of
+/// the three N-Triples documents fails to parse, when a change row cannot be
+/// admitted, or when constraint evaluation hard-fails.
+///
+/// # Examples
+///
+/// ```
+/// use purrdf_shapes::engine::ChangeScope;
+/// use purrdf_validate::{SarifOptions, validate_changes_to_sarif_string};
+///
+/// let shapes = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+///     @prefix ex: <http://example.org/> .\n\
+///     @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+///     ex:PersonShape a sh:NodeShape ;\n\
+///       sh:targetClass ex:Person ;\n\
+///       sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n";
+/// let data = "<http://example.org/alice> \
+///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+/// let added = "<http://example.org/alice> <http://example.org/age> \"nope\" .\n";
+///
+/// let (sarif, scope) = validate_changes_to_sarif_string(
+///     shapes,
+///     None,
+///     data,
+///     Some(added),
+///     None,
+///     &SarifOptions::default(),
+/// )
+/// .expect("the change validates");
+/// assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
+/// assert!(sarif.contains("DatatypeConstraintComponent"));
+/// ```
+pub fn validate_changes_to_sarif_string(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+    added_nt: Option<&str>,
+    removed_nt: Option<&str>,
+    options: &SarifOptions,
+) -> Result<(String, ChangeScope), String> {
+    let base = parse_ntriples(data_nt)?;
+    let mut mutation = MutableDataset::new(base);
+    if let Some(added) = added_nt {
+        for row in parse_ntriples(added)?.flat_default_graph_quads() {
+            mutation
+                .insert(row)
+                .map_err(|error| error.diagnostic_code().to_owned())?;
+        }
+    }
+    if let Some(removed) = removed_nt {
+        for row in parse_ntriples(removed)?.flat_default_graph_quads() {
+            mutation.remove(&row);
+        }
+    }
+    let snapshot = Arc::new(
+        mutation
+            .snapshot_view()
+            .map_err(|error| error.to_string())?,
+    );
+
+    let shapes = Arc::new(engine::parse_shapes(shapes_ttl, shapes_base)?);
+    let validator = PreparedShapes::new(shapes).bind_delta_with_shapes_graph(
+        Arc::clone(&snapshot),
+        None,
+        ViewLimits::default(),
+    )?;
+    let validation = engine::validate_change(&validator, &snapshot)?;
+    Ok((
+        report_to_sarif_string(&validation.report, options),
+        validation.scope,
+    ))
+}
+
+/// Parse one N-Triples document, joining its per-line diagnostics the way every
+/// other entry point in this module reports a failed parse.
+///
+/// The whole RDF 1.2 surface of the parsed document is read back out with
+/// `flat_default_graph_quads` at the call sites above, so a change document
+/// carrying a reifier declaration or an annotation contributes those rows too. A
+/// change set short by a row cannot be told from a graph that did not change.
+/// Nothing is dropped by flattening: N-Triples has no named graph to drop.
+fn parse_ntriples(document: &str) -> Result<Arc<purrdf_core::RdfDataset>, String> {
+    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(document)
+        .map_err(|errors| errors.join("\n"))
 }
 
 #[cfg(test)]
@@ -257,6 +380,182 @@ mod tests {
                 },
             );
         }
+    }
+
+    /// The base graph both change cases start from: Alice is a person with a
+    /// well-typed age, so the base CONFORMS and every violation below is the
+    /// change's doing.
+    const CHANGE_BASE: &str = "<http://example.org/alice> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
+        <http://example.org/alice> <http://example.org/age> \"41\"\
+        ^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
+
+    /// A shapes graph whose constraint reads through SPARQL query text, so no
+    /// bounded footprint exists for it and the change path must fall back.
+    const SPARQL_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:PersonShape a sh:NodeShape ;\n\
+          sh:targetClass ex:Person ;\n\
+          sh:sparql [ a sh:SPARQLConstraint ;\n\
+            sh:message \"every person needs a name\" ;\n\
+            sh:select \"\"\"SELECT $this WHERE { FILTER NOT EXISTS \
+              { $this <http://example.org/name> ?n } }\"\"\" ] .\n";
+
+    /// An ADDED row that introduces a violation is reported, the scope says the
+    /// report is about the focus nodes the change reached, and the SARIF is the
+    /// report a full validation of the merged graph produces.
+    #[test]
+    fn an_added_row_is_validated_against_the_graph_it_joins() {
+        let added = "<http://example.org/bob> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
+            <http://example.org/bob> <http://example.org/age> \"nope\" .\n";
+        let options = SarifOptions::default();
+        let (sarif, scope) = validate_changes_to_sarif_string(
+            SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(added),
+            None,
+            &options,
+        )
+        .expect("the change validates");
+
+        assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
+        // The merged graph conforms about Alice and violates about Bob, so a full
+        // validation of it is the same log the bounded run produced: the change
+        // path is a cheaper route to one answer, never a second answer.
+        let merged = format!("{CHANGE_BASE}{added}");
+        assert_eq!(
+            sarif,
+            validate_to_sarif_string(SHAPES, None, &merged, &options).expect("full validation"),
+        );
+        assert!(sarif.contains("DatatypeConstraintComponent"));
+    }
+
+    /// The retract half is a real half: a removal that takes a required value away
+    /// moves the verdict exactly as an addition does, and matches a full
+    /// validation of the REDUCED graph.
+    #[test]
+    fn a_removed_row_moves_the_verdict_too() {
+        const MIN_COUNT_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:PersonShape a sh:NodeShape ;\n\
+              sh:targetClass ex:Person ;\n\
+              sh:property [ sh:path ex:age ; sh:minCount 1 ] .\n";
+        let removed = "<http://example.org/alice> <http://example.org/age> \"41\"\
+            ^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
+        let options = SarifOptions::default();
+
+        let (sarif, scope) = validate_changes_to_sarif_string(
+            MIN_COUNT_SHAPES,
+            None,
+            CHANGE_BASE,
+            None,
+            Some(removed),
+            &options,
+        )
+        .expect("the retraction validates");
+
+        assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
+        assert!(sarif.contains("MinCountConstraintComponent"), "{sarif}");
+        let reduced = CHANGE_BASE.replace(removed, "");
+        assert_eq!(
+            sarif,
+            validate_to_sarif_string(MIN_COUNT_SHAPES, None, &reduced, &options)
+                .expect("full validation of the reduced graph"),
+        );
+    }
+
+    /// The fallback is not optional. A shapes graph reading through query text has
+    /// no bounded footprint, so the run validates the WHOLE mutated graph, names
+    /// the construct responsible, and reaches the full validation's own log.
+    #[test]
+    fn an_unbounded_footprint_falls_back_to_a_full_validation_and_says_so() {
+        let added = "<http://example.org/bob> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+        let options = SarifOptions::default();
+        let (sarif, scope) = validate_changes_to_sarif_string(
+            SPARQL_SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(added),
+            None,
+            &options,
+        )
+        .expect("the change validates");
+
+        assert!(!scope.is_bounded(), "{scope:?}");
+        assert_eq!(scope.focus_nodes(), None, "a fallback covers no COUNT");
+        assert!(scope.reason().is_some_and(|reason| !reason.is_empty()));
+
+        let merged = format!("{CHANGE_BASE}{added}");
+        assert_eq!(
+            sarif,
+            validate_to_sarif_string(SPARQL_SHAPES, None, &merged, &options)
+                .expect("full validation"),
+            "the fallback report must BE the full validation's report",
+        );
+        // Both Alice and Bob lack a name, so the fallback genuinely reported on
+        // the untouched node too — which is what makes it a full validation.
+        assert!(sarif.contains("alice") && sarif.contains("bob"), "{sarif}");
+    }
+
+    /// An empty change expands to nothing rather than quietly re-validating
+    /// everything, and the neighbouring case — a change that does move a node —
+    /// still reports one. Zero and "everything" are opposite instructions.
+    #[test]
+    fn an_empty_change_expands_to_nothing() {
+        let options = SarifOptions::default();
+        let (sarif, scope) =
+            validate_changes_to_sarif_string(SHAPES, None, CHANGE_BASE, None, None, &options)
+                .expect("an empty change validates");
+        assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 0 });
+        assert!(!sarif.contains("\"level\": \"error\""), "{sarif}");
+
+        let added = "<http://example.org/bob> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+        let (_, moved) = validate_changes_to_sarif_string(
+            SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(added),
+            None,
+            &options,
+        )
+        .expect("a real change validates");
+        assert_eq!(moved, ChangeScope::Bounded { focus_nodes: 1 });
+    }
+
+    /// Every document on this route is parsed, and a failure in any of the three
+    /// is reported rather than silently treated as an empty change — while the
+    /// neighbouring well-formed call still succeeds.
+    #[test]
+    fn a_malformed_document_on_any_leg_is_an_error() {
+        let options = SarifOptions::default();
+        for (shapes, data, added, removed) in [
+            ("@@@ not turtle", CHANGE_BASE, None, None),
+            (SHAPES, "@@@ not n-triples", None, None),
+            (SHAPES, CHANGE_BASE, Some("@@@ not n-triples"), None),
+            (SHAPES, CHANGE_BASE, None, Some("@@@ not n-triples")),
+        ] {
+            assert!(
+                validate_changes_to_sarif_string(shapes, None, data, added, removed, &options)
+                    .is_err(),
+                "a malformed document must not validate",
+            );
+        }
+        validate_changes_to_sarif_string(
+            SHAPES,
+            None,
+            CHANGE_BASE,
+            Some("<http://example.org/bob> <http://example.org/age> \"7\" .\n"),
+            Some(
+                "<http://example.org/alice> <http://example.org/age> \"41\"\
+                ^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+            ),
+            &options,
+        )
+        .expect("well-formed documents on every leg still validate");
     }
 
     #[test]

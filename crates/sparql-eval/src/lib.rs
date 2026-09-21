@@ -100,6 +100,7 @@ mod expr;
 mod fallible;
 mod governed;
 pub mod governor;
+pub mod interned;
 /// Nearest-neighbour retrieval over a PURREMB embedding space, reachable from SPARQL
 /// through the property-function seam under caller-supplied IRIs.
 pub mod knn;
@@ -132,6 +133,9 @@ mod substitute;
 mod template;
 pub mod update;
 pub mod user_fn;
+// The per-query record of what the relations a query invoked attested about the
+// indexes behind them — which generation answered, and whether it was whole.
+pub mod witness;
 
 // The custom-aggregate seam: the fold-algebra trait a host implements, the
 // accumulator trait its `init` hands out, and the registry `AGG(<iri>, …)`
@@ -161,6 +165,12 @@ pub use governor::{
     ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity, QueryExplanation,
     QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
 };
+// The interned query egress: a result visited inside its own evaluation, so a
+// caller that reads two columns of a wide row does not pay for the other twenty.
+// Additive beside `SparqlResult`, never a replacement for it.
+pub use interned::{
+    InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
+};
 pub use plan_cache::{CacheLimits, CacheStats};
 pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};
 // The value-level entry points to the ORDER BY comparator and the built-in
@@ -188,10 +198,21 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // relation into the engine without naming the module path.
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
 pub use property_fn::{
-    AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PfArgs, PfArity, PfCursor,
-    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankOrdering,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DomainTag, DuplicatePolicy,
+    IndexGeneration, MemoryRelation, OrderFidelity, PfArgs, PfArity, PfAttestation, PfCursor,
+    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity,
+    RankedDeclaration, RequestFacet, ServiceLevel, TermKind, TermPattern, TermPlacement,
+    generation_contained, service_level_contained,
 };
+// The property-function registry's CONTENT-only identity. It lives in the private
+// planning module beside the instance-bearing fingerprint, which renders it rather
+// than re-walking the declarations: one fold means the durable identity and the
+// plan-cache key can never come to disagree about which declared fields matter. A
+// caller binding a persisted artifact to the registries it requires needs to reach
+// the digest itself, so it is re-exported here under a name that says which registry
+// kind it covers. Its two siblings need no re-export: `agg_fn` and `user_fn` are
+// already public modules.
+pub use property_fn_plan::content_fingerprint as property_function_content_fingerprint;
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries
 // apart even when they declare identically (`PropertyFunctionRegistry::instance_id`),
@@ -224,6 +245,10 @@ pub use user_fn::{
     Arity, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody, NativeFunction, NodeKind,
     TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
+// The evidence channel the relation seam feeds: what each invoked relation attested,
+// carried out on the governed receipt's `RelationIdentity`. Re-exported beside the
+// receipt itself, because a field a caller cannot name is a field it cannot read.
+pub use witness::{RelationAttestations, RelationWitness};
 
 /// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).
 ///

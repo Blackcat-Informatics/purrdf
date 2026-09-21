@@ -40,6 +40,7 @@ use crate::governor::lift::{Evaluated, ExpressionBarrier, Truncation};
 use crate::governor::soundness::CapPushdown;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
+use crate::witness::RelationWitness;
 use crate::{DetHashMap, DetHashSet};
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
@@ -731,6 +732,38 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// outputs printed beside an estimate that predicts only one of them — see
     /// [`crate::expr::SubstitutionSource`]'s doc.
     pub(crate) ledger_counts_rows: bool,
+    /// What the relations this execution invoked attested about the indexes behind them
+    /// — see [`crate::witness`] for the record and why it is a set-and-count ledger.
+    ///
+    /// OWNED, not shared behind a lock. A fork gives its child an EMPTY witness and the
+    /// child's is merged back after the join, which is sound because
+    /// [`RelationWitness::merge`] is commutative and associative; putting a `Mutex` here
+    /// instead would mean taking a lock once per driving row, inside the parallel row
+    /// loop, to protect data that needs no ordering — exactly the contention
+    /// [`Self::fork_for_worker`] exists to avoid.
+    pub(crate) witness: RelationWitness,
+    /// Whether this execution's entry point has somewhere to PUT [`Self::witness`].
+    ///
+    /// Not a caller preference and not a verbosity setting: it is a fact about the
+    /// return type the execution will be materialized into. The governed query lane
+    /// returns a [`RelationIdentity`](crate::RelationIdentity), which carries the
+    /// witness, so it sets this. The ungoverned query lane returns a bare
+    /// `SparqlResult`, and the UPDATE lanes return an outcome with no relation evidence
+    /// on it at all, so they leave it `false`.
+    ///
+    /// What it arms is the refusal in `crate::property_fn_eval`: a relation that
+    /// declares its index was NOT whole can be *reported* when there is a receipt to
+    /// report it on, and must be *refused* when there is not — see
+    /// [`EvalError::RelationIncomplete`](crate::EvalError::RelationIncomplete) for why
+    /// handing back an unlabelled short bag is the one option that is never available.
+    ///
+    /// It also gates the WORK of witnessing, not only its effect. While this is `false`
+    /// the property-function seam neither asks a cursor for its
+    /// [`generation`](crate::PfCursor::generation) nor folds anything into
+    /// [`Self::witness`], because both would be paid once per driving row for a ledger
+    /// that dies with this context unread. The service-level read is deliberately NOT
+    /// gated: the refusal above depends on it, so it happens on every lane.
+    pub(crate) witnessing: bool,
 }
 
 /// The maximum SHACL-AF function call depth. A function body that calls another
@@ -865,6 +898,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             ledger: None,
             ledger_node: ChargeLedger::root_ordinal(),
             ledger_counts_rows: true,
+            witness: RelationWitness::default(),
+            // A directly-built context is not a governed entry: it has no outcome type
+            // carrying a witness, so it refuses an incomplete relation rather than
+            // returning rows nothing can label. Every governed entry sets this itself.
+            witnessing: false,
         }
     }
 
@@ -980,16 +1018,34 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// surfaced alongside a SELECT/ASK result. The common empty-buffer case yields an
     /// empty (but valid) dataset.
     pub(crate) fn constructed_dataset(&self, rows: &[Vec<Option<TermValue>>]) -> Arc<RdfDataset> {
-        let mut builder = purrdf_core::RdfDatasetBuilder::new();
-        for (s, p, o) in self.reachable_constructed(rows) {
-            let s = builder.intern_value(&s);
-            let p = builder.intern_value(&p);
-            let o = builder.intern_value(&o);
-            builder.push_quad(s, p, o, None);
+        freeze_constructed(&self.reachable_constructed(rows))
+    }
+
+    /// [`Self::constructed_dataset`], seeded from an interned solution bag rather
+    /// than from materialized rows — the same auxiliary graph, for the egress that
+    /// never builds the owned rows.
+    ///
+    /// The two are the same graph by construction, not by coincidence: the walk is
+    /// seeded with the terms bound in the surviving rows either way, the interned
+    /// bag's rows ARE the rows [`materialize_solutions`] would copy, and they are
+    /// visited in the same row-major order, so the forest walk pops in the same
+    /// order and emits the same cells. Only the copy is skipped.
+    ///
+    /// The constructed buffer is consulted FIRST. A query that invented no cells —
+    /// which is every query with no list constructor in it, the SHACL egress
+    /// included — resolves not one cell out of the id space and yields the empty
+    /// dataset, so the borrowed door is never charged a row walk for a graph that
+    /// has no quads in it.
+    pub(crate) fn constructed_dataset_of(&self, seq: &SolutionSeq<D::Id>) -> Arc<RdfDataset> {
+        if self.constructed.is_empty() {
+            return freeze_constructed(&[]);
         }
-        builder
-            .freeze()
-            .expect("constructed list cells are positionally valid by construction")
+        let seed = seq
+            .rows
+            .iter()
+            .flat_map(|row| row.iter().copied().flatten())
+            .map(|term| self.scratch.value_of(self.dataset, term));
+        freeze_constructed(&self.reachable_from(seed))
     }
 
     /// The constructed cells (see [`Self::constructed`]) reachable, via
@@ -1008,7 +1064,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return Vec::new();
         }
         // Seed the walk with every term bound in a surviving row.
-        let mut worklist: Vec<TermValue> = rows.iter().flatten().filter_map(Clone::clone).collect();
+        self.reachable_from(rows.iter().flatten().filter_map(Clone::clone))
+    }
+
+    /// [`Self::reachable_constructed`]'s forest walk, over an explicit seed
+    /// sequence — the shared body of the owned and interned auxiliary-graph doors,
+    /// which differ only in how a surviving row's bound terms are spelled.
+    fn reachable_from(
+        &self,
+        seed: impl Iterator<Item = TermValue>,
+    ) -> Vec<(TermValue, TermValue, TermValue)> {
+        let mut worklist: Vec<TermValue> = seed.collect();
         let mut visited: Vec<TermValue> = Vec::new();
         let mut out: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
         while let Some(node) = worklist.pop() {
@@ -1742,6 +1808,28 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
     }
 
+    /// Fold every forked child's relation witness back into this context's own.
+    ///
+    /// The MERGE half of the fork/merge pair [`Self::witness`] documents: a fork hands
+    /// its child an EMPTY witness, and the join site that collected the child's rows
+    /// hands the child's attestations back here. Every join site owes this call —
+    /// attestations a worker collected and nobody folded back are evidence that
+    /// silently depends on whether the row happened to land on a worker, which is the
+    /// one thing this record must never be a function of.
+    ///
+    /// Takes the harvests as a `Vec` rather than one at a time because that is the shape
+    /// `crate::parallel::par_chunk_try_map_init` hands back, and because the
+    /// fold is commutative and associative ([`RelationWitness::merge`]) — so the order
+    /// this walks them in cannot change the result, and no site has to think about it.
+    pub(crate) fn absorb_worker_witnesses(
+        &mut self,
+        witnesses: impl IntoIterator<Item = RelationWitness>,
+    ) {
+        for witness in witnesses {
+            self.witness.merge(witness);
+        }
+    }
+
     /// Replace the evaluation options for this context. Used by the engine to thread
     /// its configured options into each per-query context, and by tests that need to
     /// flip a measurement seam.
@@ -1897,6 +1985,17 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
             ledger_counts_rows: self.ledger_counts_rows,
+            // EMPTY, then merged back by the join site that collected this child's rows:
+            // the fork/merge pair is what keeps the record lock-free (see the field's own
+            // doc and [`RelationWitness::merge`]). Cloning the parent's would double-count
+            // every invocation the parent had already recorded when the merge folded it
+            // back in.
+            witness: RelationWitness::default(),
+            // COPIED: a worker is evaluating part of its parent's execution, which will be
+            // materialized into its parent's return type. A child that decided this for
+            // itself would refuse an incomplete relation the parent was entitled to
+            // report, purely because the row it was handed landed on a worker.
+            witnessing: self.witnessing,
         }
     }
 
@@ -2087,6 +2186,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
             ledger_counts_rows: self.ledger_counts_rows,
+            // EMPTY and merged back by `crate::user_fn::eval_user_function` alongside the
+            // other child state that must survive the return boundary: a function body is
+            // SPARQL like any other and can invoke a relation, so its attestations belong
+            // to the calling query's receipt.
+            witness: RelationWitness::default(),
+            // INHERITED, for `fork_for_worker`'s reason: a body called from inside a
+            // governed query is part of that query's execution, and its relations are
+            // reported on the same receipt.
+            witnessing: self.witnessing,
         }))
     }
 
@@ -3006,6 +3114,25 @@ pub fn evaluate_query<D: DatasetView + Sync>(
             certificate.describe()
         ))),
     }
+}
+
+/// Freeze constructed `(s, p, o)` cells into a standalone dataset.
+///
+/// The one place the auxiliary graph is built, so the owned and interned doors
+/// cannot differ in how they spell it. An empty slice — the common case, and the
+/// only case for a query with no list constructor in it — yields an empty but
+/// positionally valid dataset rather than an error or an absent graph.
+fn freeze_constructed(cells: &[(TermValue, TermValue, TermValue)]) -> Arc<RdfDataset> {
+    let mut builder = purrdf_core::RdfDatasetBuilder::new();
+    for (s, p, o) in cells {
+        let s = builder.intern_value(s);
+        let p = builder.intern_value(p);
+        let o = builder.intern_value(o);
+        builder.push_quad(s, p, o, None);
+    }
+    builder
+        .freeze()
+        .expect("constructed list cells are positionally valid by construction")
 }
 
 /// Materialize a [`SolutionSeq`] into dataset-independent egress form: the

@@ -142,9 +142,8 @@ pub use purrdf_gts::transport::{
 
 pub use native_codecs::{
     GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseOptions, ParseOutcome,
-    SerializeOptions, SerializeOutcome, SerializeReport, SourceFormat, SpanTable,
-    StatementLayer, classify,
-    classify_source, parse_dataset, parse_dataset_from_reader, parse_dataset_with,
+    SerializeOptions, SerializeOutcome, SerializeReport, SourceFormat, SpanTable, StatementLayer,
+    classify, classify_source, parse_dataset, parse_dataset_from_reader, parse_dataset_with,
     serialize_dataset, serialize_dataset_to_format,
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer,
     serialize_dataset_to_writer_with, serialize_dataset_with,

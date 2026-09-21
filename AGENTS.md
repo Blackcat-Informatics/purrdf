@@ -60,6 +60,8 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
 | `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
+| `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
+| `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -92,7 +94,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 24 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 25 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -141,8 +143,19 @@ make check      # the full local gate: fmt, clippy, build, tests, hygiene
 make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
+make scale-corpus  # generate the deterministic scale corpus (streams; stores nothing by default)
+make lubm       # the LUBM comparison workload, per entailment regime (report-only; network + JRE)
+make watdiv     # the WatDiv comparison workload over a frozen dataset (report-only; network)
 make build-profile-hygiene  # prove the gate is compiled the way it claims
 ```
+
+`scale-corpus`, `lubm` and `watdiv` are the three comparison lanes. None is a
+gate and none runs in `make check`: `lubm` needs a JRE and fetches a
+GPL-2.0-or-later generator, `watdiv` fetches a 58 MB frozen dataset that expands
+past a gigabyte, and neither vendors a byte. They share one implementation of
+the laws that make their numbers evidence — `scripts/lane-common.sh` — so a
+repair to one is a repair to all three. `docs/BENCHMARKS.md` owns the
+parameters, the knobs and the comparison rules.
 
 Toolchain: `rust-toolchain.toml` names a **floating nightly** for development and
 for every CI gate. That is an analysis decision, not a licence: nightly clippy
@@ -231,11 +244,16 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (24 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (25 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Five members never reach
+is single-sourced in `[workspace.package]`. Seven members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
-`purrdf-envelope-probe`, and `purrdf-python` (PyPI via maturin instead).
+`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`, and
+`purrdf-python` (PyPI via maturin instead). `purrdf-alloc-probe` is a
+dev-dependency of published crates, so its root `[workspace.dependencies]` entry
+is path-only with **no `version`** — cargo then strips it from the packaged
+manifest, which is the only way `cargo publish`'s dev-dependency-resolving
+verification step can succeed.
 
 ## 7. Provenance
 

@@ -1342,14 +1342,7 @@ fn write_rdfxml<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<()
                     )?;
                 }
                 PropertyItem::Reifies(s, p, o) => {
-                    write_reifies(
-                        out,
-                        "    ",
-                        graph,
-                        &reifier_index,
-                        (s, p, o),
-                        &namespaces,
-                    )?;
+                    write_reifies(out, "    ", graph, &reifier_index, (s, p, o), &namespaces)?;
                 }
             }
         }

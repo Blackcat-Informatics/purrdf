@@ -37,16 +37,61 @@
 //! Completeness belongs to the producers, and every producer's own terminal
 //! status is in the trailer.
 //!
-//! # The bound is a bound on the reading, not only on the rows
+//! # How far the bound reaches into the reading
 //!
-//! Reaching `k` stops the reading. Every stream that still holds rows is closed
-//! at the contribution it was read down to —
+//! Reaching `k` stops the reading *from that point on*: every stream that still
+//! holds rows is closed at the contribution it was read down to —
 //! [`ProducerStatus::CeilingReached`](crate::ProducerStatus::CeilingReached) —
 //! rather than drained to make it say `Exhausted`. Draining would read every
 //! row of every stream to produce a report, which is precisely the memory bound
 //! §7 says fused enumeration exists to keep, and it would report each stratum as
 //! complete when the answer deliberately was not. Every producer still gets a
 //! status; the status is just the true one.
+//!
+//! What that leaves open is how much reading it took to *reach* `k`, and the
+//! honest answer depends on what the producers declared, so it is stated here
+//! rather than promised away.
+//!
+//! A fused score is exact only once every stream that could still name a
+//! candidate has named it, and this engine has no random access: a
+//! [`RankedStream`] offers `next` and `receipt`, so the only way to learn that
+//! a stream will not name `x` is to read that stream until it does or until it
+//! ends. Where the strata overlap — the case a fused answer is usually wanted
+//! for — the confirmations arrive early and `k` rows cost a few rows per
+//! stratum. Where they do not overlap, and nothing has been declared, they
+//! never arrive: every candidate waits on a stratum that was never going to
+//! mention it, and the reading runs to the end of the streams even though the
+//! *rows* are still bounded by `k`. That is not a defect of the bound, it is
+//! the price of an exact score over a protocol with no random access.
+//!
+//! The way out is the producers' own declaration.
+//! [`StreamContract::domains`](crate::StreamContract::domains) — supplied by
+//! the host at registration, carried with the stream — says which blocks of the
+//! candidate universe a producer may name, and fusion skips exactly the streams
+//! that provably cannot name the candidate it is certifying. Under such
+//! declarations the reading is bounded by the same argument as the rows: `k`
+//! rows plus the lookahead the threshold needs, per stratum, however long the
+//! streams are. Under [`CandidateDomains`](crate::CandidateDomains)'s
+//! `Unrestricted` — the honest default-shaped value, and the widest promise —
+//! nothing is skipped and the reading is whatever the confirmations cost.
+//!
+//! The scores are identical either way. A declaration changes how much is read,
+//! never what is returned.
+//!
+//! # The bound that reaches here has already been spent
+//!
+//! Everything above is about how much of a *materialized* stream a bound reads.
+//! How much gets materialized in the first place is a different question, and it
+//! is not this stage's to answer: the same declarations let the **planner** derive
+//! each stratum's depth from the caller's bound, so a top-five request over
+//! disjoint strata compiles to a `LIMIT` of five per stratum rather than to the
+//! declaration's own row count. See [`plan`](crate::plan) for the rule and its
+//! proof. `k` still bounds the reading here, over a read that is already the size
+//! the answer needs.
+//!
+//! That is also why `top_k` is checked against what the streams were planned for.
+//! A stream whose depth was narrowed to five rows cannot answer a fusion for six,
+//! and the rows give no sign of it.
 
 use core::fmt;
 use std::collections::BTreeSet;
@@ -80,7 +125,14 @@ const MAX_PREALLOCATED_ROWS: usize = 1024;
 /// A bound of zero is admitted, not refused: "certify no rows and tell me how
 /// every producer ended" is a coherent request, and the trailer it returns is
 /// the whole answer to it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// It is serializable because it is part of a request
+/// ([`ReadBound`](crate::ReadBound)) and therefore part of a plan, and a plan is
+/// a value a caller stores, ships and hands back. The wire form is the row count
+/// itself.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct TopK(usize);
 
 impl TopK {
@@ -170,19 +222,28 @@ impl<T> fmt::Debug for FusionResult<T> {
 /// Streams that name *different* plans are refused, because one answer cannot
 /// honestly carry two provenances.
 ///
+/// # The bound the streams were planned for travels with them too
+///
+/// A stream that names the row bound its depth was derived for
+/// ([`RankedStream::fused_bound`](crate::RankedStream::fused_bound)) is held to
+/// it: `top_k` must be that bound, or the fusion is refused
+/// ([`FusionError::ReadBoundMismatch`]). This is the lower-level entry, so it
+/// still takes the bound as an argument — a caller assembling its own streams has
+/// no plan to read one from — but a caller resuming from a planned, compiled,
+/// executed bundle cannot silently fuse it at a depth the read cannot serve.
+/// Streams that name no bound fuse at whatever `top_k` says.
+///
 /// # Errors
 ///
 /// [`FusionError::DuplicateStratum`] when two streams share a stratum;
 /// [`FusionError::UnknownStratum`] when a stream's stratum has no declared
 /// weight; [`FusionError::PlanIdMismatch`] when two streams name different
-/// pinned plans; [`FusionError::Protocol`] when a stream violates the input
+/// pinned plans; [`FusionError::ReadBoundMismatch`] when a stream was planned for
+/// a different bound than `top_k`; [`FusionError::Protocol`] when a stream violates the input
 /// protocol; [`FusionError::Overflow`] when a checked sum leaves the fixed-point
 /// range; [`FusionError::MaxContributionsExceeded`] when a candidate is
 /// contributed to more times than there are strata, which this entry point's
-/// own duplicate-stratum refusal makes unreachable from a conforming stream;
-/// and
-/// [`FusionError::CeilingExceeded`] when a candidate's accumulated score
-/// leaves the profile's declared ceiling.
+/// own duplicate-stratum refusal makes unreachable from a conforming stream.
 pub async fn fuse<S, T>(
     streams: Vec<(Iri, S)>,
     profile: &FusionProfile,
@@ -221,6 +282,18 @@ where
                 });
             }
             (Some(_), Some(_)) => {}
+        }
+        // A stream that says what bound its depth was derived for is held to it,
+        // before a row is pulled and for the reason the plan identity is: the
+        // depth behind these rows is honest for one bound only. A stream that says
+        // nothing is bounded by nothing and fuses at whatever the caller named.
+        if let Some(planned) = stream.fused_bound()
+            && planned != top_k
+        {
+            return Err(FusionError::ReadBoundMismatch {
+                planned,
+                requested: top_k,
+            });
         }
     }
     let pinned = if unpinned { None } else { pinned };

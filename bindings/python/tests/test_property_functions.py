@@ -349,6 +349,331 @@ def test_a_governed_query_over_a_from_graph_relation_returns_rows() -> None:
     assert len(outcome.result) == 3  # type: ignore[arg-type]
 
 
+# ── what a relation attested about the index behind it ───────────────────────────
+#
+# Two facts can change a query's answer while every input the engine can see stays
+# identical: WHICH version of the host's index answered, and whether that index was
+# WHOLE. Neither is in the rows, the query text or the dataset snapshot — only the host
+# knows, so a relation declaration may carry one trailing `(generation, incompleteness)`
+# attestation, and a governed outcome hands it back on `relation_witness`.
+#
+# The rule the tests below pin is "witnessed or fatal", and it is decided by the entry
+# point's own return type rather than by any keyword: a lane whose outcome has a slot for
+# the declaration REPORTS it beside the rows; a lane whose outcome has no such slot
+# REFUSES, because a short bag offered as a complete answer is indistinguishable from the
+# true complete answer.
+
+#: The host's own name for the index version that produced the rows, verbatim.
+INDEX_GENERATION = "members-index-7"
+
+#: The host's own reason its index was not whole, verbatim — a shard name and a phase,
+#: because that is what an operator can act on and `True` is not.
+REBUILDING = "shard 3 of 4 is still rebuilding"
+
+#: The diagnostic code the kernel raises on a lane with nowhere to carry the
+#: declaration. Matched instead of the prose, which is free to be reworded.
+INCOMPLETE_CODE = "native-sparql-relation-incomplete"
+
+
+def _incomplete_relations() -> dict[str, Any]:
+    """`memberOf`, attested as served from a named index that was NOT whole."""
+    return {MEMBER_OF: (1, 1, _member_rows(), (INDEX_GENERATION, REBUILDING))}
+
+
+def _whole_relations() -> dict[str, Any]:
+    """The neighbour that must keep working: same table, same named index, nothing short.
+
+    Identical to `_incomplete_relations()` except that the incompleteness half is `None`
+    — which is silence, not a certificate that the index was whole.
+    """
+    return {MEMBER_OF: (1, 1, _member_rows(), (INDEX_GENERATION, None))}
+
+
+def test_an_attested_incompleteness_is_refused_where_nothing_can_carry_it() -> None:
+    """`query` and `update` have no witness slot, so they refuse rather than answer short.
+
+    The refusal is the whole justification for the governed lane's witness: the engine
+    will not hand back rows from an index the host has declared partial unless the
+    outcome it hands them back in can say so.
+    """
+    store = purrdf.Store()
+
+    with pytest.raises(ValueError, match=INCOMPLETE_CODE):
+        store.query(SELECT_MEMBERS, relations=_incomplete_relations())
+
+    with pytest.raises(ValueError, match=INCOMPLETE_CODE):
+        store.update(
+            f"INSERT {{ ?person <{EX}team> ?team }} WHERE {{ ?person <{MEMBER_OF}> ?team }}",
+            relations=_incomplete_relations(),
+        )
+
+    # Nothing was applied on the way to the refusal: a partial mutation from a partial
+    # index is the silent corruption both halves of this rule exist to prevent.
+    assert len(store.query(f"SELECT ?p WHERE {{ ?p <{EX}team> ?t }}")) == 0  # type: ignore[arg-type]
+
+
+def test_the_governed_lane_answers_and_hands_the_reason_back() -> None:
+    """The same relation, on the lane that CAN label the bag: rows plus the reason.
+
+    This is the pairing the refusal above points at. A host with a mid-rebuild index is
+    neither refused on both lanes nor answered blind on one: it gets the rows, the
+    generation that produced them, and the producer's own words for what was missing.
+    """
+    outcome = purrdf.Store().query_governed(
+        SELECT_MEMBERS, relations=_incomplete_relations()
+    )
+
+    assert outcome.is_complete
+    assert _pairs(outcome.result) == [
+        ("ada", "alpha"),
+        ("brian", "alpha"),
+        ("chen", "beta"),
+    ]
+    assert outcome.relation_witness == {
+        MEMBER_OF: {
+            "invocations": 1,
+            "generations": [INDEX_GENERATION],
+            "incompleteness": [REBUILDING],
+        }
+    }
+
+
+def test_a_relation_declaring_nothing_short_is_unaffected_on_both_lanes() -> None:
+    """The valid neighbour, executed on BOTH lanes: a declared generation refuses nothing.
+
+    A refusal is only evidence about the case it excludes if the neighbouring case is
+    executed too. A relation that declares which index answered and declares no shortfall
+    must answer on the ungoverned lane exactly as an undeclared one does, and its witness
+    must carry an EMPTY `incompleteness` — present and empty, which is the true statement
+    that nobody declared a shortfall, and never a claim that the index was whole.
+    """
+    expected = [("ada", "alpha"), ("brian", "alpha"), ("chen", "beta")]
+
+    plain = purrdf.Store().query(SELECT_MEMBERS, relations=_whole_relations())
+    assert _pairs(plain) == expected
+
+    outcome = purrdf.Store().query_governed(
+        SELECT_MEMBERS, relations=_whole_relations()
+    )
+    assert outcome.is_complete
+    assert _pairs(outcome.result) == expected
+    assert outcome.relation_witness == {
+        MEMBER_OF: {
+            "invocations": 1,
+            "generations": [INDEX_GENERATION],
+            "incompleteness": [],
+        }
+    }
+
+
+def test_a_relation_that_declares_nothing_is_listed_as_having_said_nothing() -> None:
+    """Ran-and-said-nothing and never-ran are different facts, and stay different.
+
+    A relation declared without the trailing position — every relation every other test
+    in this file declares — still appears in the witness, with its invocation count and a
+    single `None` generation. `None` is an ABSENCE: it says those invocations declared no
+    version, and a reader must not upgrade it to "the index was current".
+    """
+    outcome = purrdf.Store().query_governed(
+        SELECT_MEMBERS, relations=_member_relations()
+    )
+
+    assert outcome.relation_witness == {
+        MEMBER_OF: {"invocations": 1, "generations": [None], "incompleteness": []}
+    }
+
+
+def test_a_governed_query_invoking_no_relation_has_a_present_empty_witness() -> None:
+    """An empty witness is a fact, and it is reported as one rather than as an absence.
+
+    `{}` says no relation attested anything — here because the query invoked none. It is
+    never `None`, never a missing attribute, and specifically NOT a claim that an index
+    was whole: there is no seam at which wholeness can be certified at all.
+    """
+    outcome = purrdf.Store().query_governed("SELECT ?s WHERE { ?s ?p ?o }")
+
+    assert outcome.relation_witness == {}
+
+
+def test_the_witness_is_keyed_in_iri_order_whatever_order_it_was_declared_in() -> None:
+    """Deterministic on every machine and every run, so a logged receipt is comparable.
+
+    The kernel's record is ordered by IRI; a Python `dict` preserves insertion order, so
+    writing the entries in the order they are read carries that across. Declared in
+    reverse to prove the order is the VALUES' and not the caller's.
+    """
+    outcome = purrdf.Store().query_governed(
+        f"SELECT ?person ?team WHERE {{ ?person <{MEMBER_OF}> ?team . "
+        f"() <{SEEDS}> ?team }}",
+        relations={
+            SEEDS: (0, 1, [[_node("alpha")]], ("seeds-gen-1", None)),
+            MEMBER_OF: (1, 1, _member_rows(), (INDEX_GENERATION, REBUILDING)),
+        },
+    )
+
+    assert list(outcome.relation_witness) == sorted([MEMBER_OF, SEEDS])
+    assert outcome.relation_witness[SEEDS]["generations"] == ["seeds-gen-1"]
+    assert outcome.relation_witness[MEMBER_OF]["incompleteness"] == [REBUILDING]
+
+
+def test_the_attestation_position_reaches_all_three_relation_kinds() -> None:
+    """One trailing position, admitted on every spelling — and executed on each.
+
+    "All three" is a completeness claim, so all three are driven: the table read out of
+    the dataset and the traversal declaration are as likely to have come from a partial
+    index as a table handed over as tuples, and a surface wired into one spelling only
+    would satisfy a test that drove only that one.
+    """
+    graph_store = _store_with(MEMBER_TABLE_TTL)
+    from_graph = graph_store.query_governed(
+        SELECT_MEMBERS,
+        relations_from_graph={
+            MEMBER_OF: (_node("memberTable"), 1, 1, (INDEX_GENERATION, REBUILDING))
+        },
+    )
+    assert len(from_graph.result) == 3  # type: ignore[arg-type]
+    assert from_graph.relation_witness[MEMBER_OF]["incompleteness"] == [REBUILDING]
+    assert from_graph.relation_witness[MEMBER_OF]["generations"] == [INDEX_GENERATION]
+
+    chain_store = _store_with(CHAIN_TTL)
+    walked = chain_store.query_governed(
+        WALK_QUERY,
+        path_relations={
+            WALK: (
+                [(_node("p"), "forward")],
+                1,
+                4,
+                1024,
+                100_000,
+                "walk",
+                (INDEX_GENERATION, REBUILDING),
+            )
+        },
+    )
+    assert len(walked.result) == 6  # type: ignore[arg-type]
+    assert walked.relation_witness[WALK]["incompleteness"] == [REBUILDING]
+
+    # And both refuse on the lane that cannot carry the declaration, for the same reason
+    # the tuple spelling does.
+    with pytest.raises(ValueError, match=INCOMPLETE_CODE):
+        graph_store.query(
+            SELECT_MEMBERS,
+            relations_from_graph={
+                MEMBER_OF: (_node("memberTable"), 1, 1, (INDEX_GENERATION, REBUILDING))
+            },
+        )
+
+
+def test_an_attestation_member_of_the_wrong_type_names_the_field() -> None:
+    """Both halves are recorded verbatim, so both must be a `str` or `None`."""
+    with pytest.raises(TypeError, match="`incompleteness` must be a str or None"):
+        purrdf.Store().query(
+            SELECT_MEMBERS,
+            relations={MEMBER_OF: (1, 1, _member_rows(), (INDEX_GENERATION, 7))},
+        )
+
+    with pytest.raises(TypeError, match="`generation` must be a str or None"):
+        purrdf.Store().query(
+            SELECT_MEMBERS,
+            relations={MEMBER_OF: (1, 1, _member_rows(), (7, REBUILDING))},
+        )
+
+
+def test_a_two_character_string_is_not_an_attestation() -> None:
+    """A `str` is a sequence of its own characters, and that must not be read as one.
+
+    `"ab"` extracts as a perfectly well-formed two-member sequence, so accepting any
+    two-member sequence would have read a stray trailing string as `generation="a"`,
+    `incompleteness="b"` — a misconfiguration accepted in silence and then reported back
+    on the receipt as though the host had said it. It is refused as a shape error, exactly
+    as any other value in a position this kind does not have.
+    """
+    with pytest.raises(TypeError, match="must be declared as"):
+        purrdf.Store().query(
+            SELECT_MEMBERS,
+            relations={MEMBER_OF: (1, 1, _member_rows(), "ab")},
+        )
+
+
+def test_an_attestation_of_two_nones_is_silence_and_changes_nothing() -> None:
+    """Declaring the position without declaring anything in it attests nothing.
+
+    The witness entry is identical to the one a relation declared with NO trailing
+    position gets, which is what makes `None` genuinely silence rather than a third
+    declaration with a meaning of its own.
+    """
+    outcome = purrdf.Store().query_governed(
+        SELECT_MEMBERS,
+        relations={MEMBER_OF: (1, 1, _member_rows(), (None, None))},
+    )
+
+    assert _pairs(outcome.result) == [
+        ("ada", "alpha"),
+        ("brian", "alpha"),
+        ("chen", "beta"),
+    ]
+    assert (
+        outcome.relation_witness
+        == purrdf.Store()
+        .query_governed(SELECT_MEMBERS, relations=_member_relations())
+        .relation_witness
+    )
+
+
+def test_a_tripped_governor_still_reports_what_the_relations_attested() -> None:
+    """The witness rides BOTH governed paths, because both need it.
+
+    A truncated execution's relations attested exactly as much as a complete one's did,
+    and a caller deciding whether to retry with a larger budget has to know whether the
+    rows already in hand came from an index that declared itself short — otherwise raising
+    the ceiling just buys more rows from the same partial index.
+    """
+    outcome = purrdf.Store().query_governed(
+        SELECT_MEMBERS, relations=_incomplete_relations(), max_answers=1
+    )
+
+    assert not outcome.is_complete
+    assert outcome.tripped is not None
+    assert outcome.result is None
+    assert outcome.relation_witness == {
+        MEMBER_OF: {
+            "invocations": 1,
+            "generations": [INDEX_GENERATION],
+            "incompleteness": [REBUILDING],
+        }
+    }
+
+
+def test_the_entailment_lane_carries_the_witness_through() -> None:
+    """The regime-aware governed lane is a governed lane, so it reports the same receipt.
+
+    Its outcome nests an ordinary `QueryOutcome`, and a relation registered for a closure
+    query is as likely to have come from a partial index as one registered for a plain
+    query. A witness reachable on one governed entry and not the other would make the
+    refusal on the ungoverned lane a dead end for exactly the callers who use this one.
+    """
+    entailed = purrdf.Store().query_entailment_governed(
+        SELECT_MEMBERS, "rdfs", relations=_incomplete_relations()
+    )
+
+    assert entailed.phase == "answered"
+    assert entailed.outcome is not None
+    assert entailed.outcome.relation_witness[MEMBER_OF]["incompleteness"] == [REBUILDING]
+
+
+def test_mutable_dataset_carries_the_attestation_surface_too() -> None:
+    """The compat shim's store must not be the weaker one here either: both lanes."""
+    dataset = purrdf.MutableDataset()
+
+    with pytest.raises(ValueError, match=INCOMPLETE_CODE):
+        dataset.query(SELECT_MEMBERS, relations=_incomplete_relations())
+
+    outcome = dataset.query_governed(
+        SELECT_MEMBERS, relations=_incomplete_relations()
+    )
+    assert outcome.relation_witness[MEMBER_OF]["incompleteness"] == [REBUILDING]
+
+
 # ── UPDATE ───────────────────────────────────────────────────────────────────────
 
 
@@ -1135,3 +1460,65 @@ ex:a ex:p ex:b .
     )
     assert walked.outcome is not None
     assert _walk_rows(walked.outcome.result) == [("b", 1, 1, "b")]
+
+
+def test_every_relation_refusal_names_the_relation_it_is_about() -> None:
+    """A ``relations`` map holds several, so the message has to say which to fix.
+
+    The kernel's arity and list diagnostics describe the DEFECT — "row 0 has 1
+    value(s)", "not an rdf:List" — and say nothing about which declaration
+    produced it. The boundary adds the relation IRI, and that prefix is the only
+    thing turning a correct diagnosis into an actionable one when a host declared
+    four relations and one of them is wrong. Nothing else asserts the prefix, so
+    deleting it would leave every refusal test here green.
+
+    The valid relation declared alongside the broken one is deliberate: it is what
+    makes "which one" a real question, and it is the neighbour that must not be
+    swept into the refusal.
+    """
+    with pytest.raises(ValueError) as refused:
+        purrdf.Store().query(
+            SELECT_MEMBERS,
+            relations={
+                MEMBER_OF: (1, 1, [[_node("ada")]]),
+                f"{REL}wellFormed": (1, 1, [[_node("ada"), _node("blue")]]),
+            },
+        )
+    message = str(refused.value)
+    assert f"<{MEMBER_OF}>" in message, (
+        f"the refusal names the relation that was misconfigured: {message}"
+    )
+    assert f"{REL}wellFormed" not in message, (
+        f"…and not the one that was fine: {message}"
+    )
+
+    # The same prefix on the dataset-read spelling, whose defect text names a
+    # table head rather than a row width.
+    with pytest.raises(ValueError) as refused:
+        purrdf.Store().query(
+            SELECT_MEMBERS,
+            relations_from_graph={MEMBER_OF: (_node("noSuchTable"), 1, 1)},
+        )
+    assert f"<{MEMBER_OF}>" in str(refused.value), str(refused.value)
+
+    # …and on the path spelling, whose defect text names an envelope field.
+    with pytest.raises(ValueError) as refused:
+        purrdf.Store().query(
+            WALK_QUERY,
+            path_relations={WALK: ([(_node("p"), "forward")], 0, 4, 8, 64, "walk")},
+        )
+    assert f"<{WALK}>" in str(refused.value), str(refused.value)
+
+    # The neighbouring well-formed declarations still answer, so none of the three
+    # refusals above is over-refusal of a valid map.
+    assert _pairs(purrdf.Store().query(SELECT_MEMBERS, relations=_member_relations())) == [
+        ("ada", "alpha"),
+        ("brian", "alpha"),
+        ("chen", "beta"),
+    ]
+    assert _walk_rows(
+        _store_with(CHAIN_TTL).query(
+            WALK_QUERY,
+            path_relations={WALK: ([(_node("p"), "forward")], 1, 4, 8, 64, "walk")},
+        )
+    )

@@ -82,8 +82,8 @@ pub use stream::parse_dataset_from_reader;
 #[doc(hidden)]
 pub use parse::parse_dataset_forced_sequential;
 pub use serialize::{
-    SerializeOptions, SerializeOutcome, StatementLayer, serialize_dataset,
-    SerializeReport, serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    SerializeOptions, SerializeOutcome, SerializeReport, StatementLayer, serialize_dataset,
+    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
     serialize_dataset_to_writer, serialize_dataset_to_writer_with, serialize_dataset_with,
     serialize_dataset_with_jsonld_options,
 };

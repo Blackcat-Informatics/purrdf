@@ -17,14 +17,15 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionError,
-    FusionProfile, Iri, Metric, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
-    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
-    UnservedReason, UnservedTerm, compile, contribution, execute,
+    AdmissionEnvironment, AdmissionError, BoundMode, CompiledRetrieval, DecayRule, Fixed,
+    FusionError, FusionProfile, Iri, Metric, MonotoneDepth, Plan, PlanOrigin, ProducerDecision,
+    ProducerStatus, RankFidelity, RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest,
+    Statistics, StratumUnit, Term, UnitError, UnservedReason, UnservedTerm, compile, contribution,
+    execute,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
+    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
     TermKind, TermPattern, TermPlacement, Volatility,
 };
 
@@ -84,8 +85,10 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         accepted_terms: accepted(patterns),
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
+        domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -113,7 +116,7 @@ fn seed_term() -> RequestTerm {
 }
 
 fn mixed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), vector_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), vector_term(), seed_term()])
 }
 
 /// A mock ranked producer that declares `rows` and emits `emitted`.
@@ -260,11 +263,12 @@ fn registry_with_different_declaration() -> PropertyFunctionRegistry {
 
 /// A ranked producer that declares **no access mode at all**.
 ///
-/// A host can register a relation that reports no invocation pattern — an index
-/// that is not built yet, a relation gated on configuration the host has not
-/// supplied. Such a producer declares no worst-case row count either, because a
-/// row count is declared per mode, and "declared nothing" is not "declared
-/// zero": zero is a promise that nothing ranks there.
+/// A host can register a relation that reports no invocation pattern — a relation
+/// gated on configuration the host has not supplied. Such a producer declares no
+/// worst-case row count either, because a row count is declared per mode, and
+/// "declared nothing" is not "declared zero": a declared zero is a measurement of
+/// the producer's data, and it is read at the floored depth of one so the producer
+/// reports the emptiness itself.
 struct NoModeProducer {
     arity: PfArity,
 }
@@ -321,6 +325,58 @@ fn registry_with_a_modeless_producer() -> PropertyFunctionRegistry {
             &ex("stratum/modeless"),
             vec![TermPattern::of_kind(TermKind::Any)],
             false,
+        ),
+    );
+    registry
+}
+
+/// The fixture's mandatory catch-all producer, plus a producer whose one declared
+/// access mode promises **zero rows** under a stratum of its own.
+///
+/// This is the shape of a host whose index is built but empty — no document
+/// landed yet, or no triple carries the configured predicate. The registry's
+/// declaration is honest and the relation is perfectly invocable; it simply has
+/// nothing to return, which is a fact only the relation can report.
+fn registry_with_an_empty_producer() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/any"),
+        producer(200, "universal/", 3),
+        ranked(
+            &ex("stratum/universal"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
+    );
+    registry.register_ranked(
+        ex("pf/empty"),
+        producer(0, "empty/", 0),
+        ranked(
+            &ex("stratum/empty"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            false,
+        ),
+    );
+    registry
+}
+
+/// One mandatory catch-all producer that declares more rows per invocation than
+/// any depth can be read to.
+///
+/// The declaration is what this fixture is for: a plan over it can hold a depth at
+/// the top of the 32-bit rank range without the registry's own row bound refusing
+/// it first, which is the only way to reach the ceiling dimension at the waist. The
+/// relation still emits three rows, because what is being tested is the bound the
+/// text carries and not the corpus behind it.
+fn registry_with_a_deep_producer() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/deep"),
+        producer(u64::from(u32::MAX), "deep/", 3),
+        ranked(
+            &ex("stratum/deep"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
         ),
     );
     registry
@@ -418,15 +474,15 @@ fn admission_accepts_fresh_plan() {
     assert_eq!(compiled.units.len(), 3, "one unit per declared stratum");
     for unit in &compiled.units {
         assert!(
-            unit.sparql.starts_with("SELECT ?candidate WHERE"),
+            unit.sparql().starts_with("SELECT ?candidate WHERE"),
             "unit for {} is a SELECT over the common candidate variable: {}",
             unit.stratum,
-            unit.sparql
+            unit.sparql()
         );
         assert!(
-            unit.sparql.contains("( ?c0 ) <"),
+            unit.sparql().contains("( ?c0 ) <"),
             "the subject argument list is parenthesized even at arity one: {}",
-            unit.sparql
+            unit.sparql()
         );
     }
     let universal = compiled
@@ -434,7 +490,7 @@ fn admission_accepts_fresh_plan() {
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/universal")))
         .expect("the mandatory producer's stratum emits a unit");
-    assert!(universal.sparql.contains(&ex("pf/any")));
+    assert!(universal.sparql().contains(&ex("pf/any")));
     // The seed producer receives the seed itself as a rendered constant, which is
     // what "the request is in the text" means.
     let graph = compiled
@@ -442,15 +498,32 @@ fn admission_accepts_fresh_plan() {
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/graph")))
         .expect("the seed stratum emits a unit");
+    // The bound is fifty-one against a depth of fifty: this producer declares
+    // fifty rows and the measured cardinality is fifty too, so the depth sits
+    // exactly at the declaration — the one depth where an emitted bound equal to
+    // the depth would make `Exhausted` a guess about the bound rather than a
+    // report about the data. The probe row is emitted there like everywhere else.
+    // Only the text moved: `compiled.plan_id` is asserted equal to the identity
+    // the plan itself carries, above, and the recorded depth is checked below.
     assert_eq!(
-        graph.sparql,
+        graph.sparql(),
         format!(
             "SELECT ?candidate WHERE {{\n  \
-             {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( <{}> ) }} LIMIT 50 }}\n\
-             }}\nLIMIT 50",
+             {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( <{}> ) }} LIMIT 51 }}\n\
+             }}\nLIMIT 51",
             ex("pf/iri"),
             ex("seed")
         )
+    );
+    assert_eq!(
+        graph.depth(),
+        50,
+        "the recorded depth is the fifty the plan holds and does not move with the emitted bound"
+    );
+    assert_eq!(
+        graph.declared_rows(),
+        Some(50),
+        "and the unit carries the declaration the probe row is read against"
     );
 }
 
@@ -607,25 +680,37 @@ fn admission_rejects_depth_bound_violation() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/universal")));
             assert_eq!(declared, 200);
             assert_eq!(requested, 201);
+            assert!(
+                matches!(mode, BoundMode::Invoked { .. }),
+                "this producer declares one mode and is invoked under it, so the \
+                 refused number was read where the call is made: {mode:?}"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
 }
 
 // ---------------------------------------------------------------------------
-// 4b. Depth against the fusion profile's own arithmetic
+// 4b. Depth against the fusion profile's own arithmetic — measured, not refused
 //
 // The registry's row bound answers "can this many rows be produced". It says
-// nothing about whether the profile can still tell them apart once they are, and
-// the failure to tell them apart is silent: no error, no nondeterminism, just
-// rows that stop being ordered by the ranks their producers assigned. The three
-// tests below pin the refusal, the exact bound it is drawn at, and — because a
-// bound off by one in the strict direction would refuse legitimate profiles —
-// that a depth sitting exactly on the bound is admitted and still orders.
+// nothing about whether the profile can still tell them apart once they are.
+// That second question is real, but its answer is not a defect: past the
+// separating depth the fused score stops parting adjacent ranks and the declared
+// tie-break — total — orders them by best stratum rank and then canonical term.
+// The answer is correct and deterministic at a coarser resolution.
+//
+// So admission reports it instead of refusing it. Refusing rejected plans that
+// order perfectly well for the caller's purpose, and it did so on a property of
+// the *consumer's* arithmetic that no producer supplied a term of. The three
+// tests below pin the measurement: a depth past the bound is admitted and
+// carries its resolution, a depth exactly on the bound is admitted and fully
+// separated, and a stratum the profile does not weight is reported on at all.
 // ---------------------------------------------------------------------------
 
 /// The smoothing constant the monotone-range fixtures use. One, so the bound is
@@ -637,31 +722,33 @@ const MONOTONE_K: u32 = 1;
 /// declared row bound of two hundred.
 ///
 /// A weight of `10^-9` puts the first colliding rank in the tens. That is a
-/// perfectly legitimate weight — `FusionProfile::new` asks only that a weight be
-/// strictly positive — which is exactly the point: nothing about the profile
-/// itself is malformed, and only the coupling with the depth is.
+/// perfectly legitimate weight — `FusionProfile::with_decay` asks only that a
+/// weight be strictly positive — which is exactly the point: nothing about the
+/// profile itself is malformed, and only the coupling with the depth is.
 ///
 /// `Fixed::from_raw(1_000)` is deliberate here and is *not* the constructor a
 /// whole-number weight wants: raw units are `10^-12` each, so this is `10^-9`,
 /// which is the sub-unit weight this fixture is about. A weight meaning the
 /// number one is `Fixed::ONE` or `Fixed::from_integer(1)`.
 fn shallow_profile() -> FusionProfile {
-    FusionProfile::new(
+    FusionProfile::with_decay(
         BTreeMap::from([(iri(&ex("stratum/universal")), Fixed::from_raw(1_000))]),
-        MONOTONE_K,
+        DecayRule::ReciprocalRank { k: MONOTONE_K },
     )
     .expect("a strictly positive weight is a valid profile")
 }
 
 #[test]
-fn admission_rejects_a_depth_beyond_the_profiles_monotone_range() {
+fn a_depth_beyond_the_profiles_monotone_range_is_admitted_and_records_its_resolution() {
     let registry = fixture_registry();
     let stats = statistics("r1");
     let profile = shallow_profile();
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this fixture collides inside the expressible range");
     assert!(
         monotone < 200,
         "the fixture must collide inside the registry's row bound, got {monotone}"
@@ -675,22 +762,28 @@ fn admission_rejects_a_depth_beyond_the_profiles_monotone_range() {
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    let error = compile(&plan, &env).expect_err("a depth past the monotone range is refused");
-    match error {
-        AdmissionError::DepthBeyondMonotoneRange {
-            stratum: named,
-            monotone: reported,
-            requested: asked,
-        } => {
-            assert_eq!(*named, stratum, "the refusal names the stratum");
-            assert_eq!(reported, monotone, "and the bound it was drawn at");
-            assert_eq!(asked, requested);
-        }
-        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
-    }
+
+    // The criterion. This plan reads one rank past the depth its profile still
+    // separates, and that is not a defect to refuse: the answer is correct and
+    // deterministic there, merely coarser. It is admitted.
+    let compiled = compile(&plan, &env).expect("a depth past the monotone range is admitted");
+
+    // And it is not admitted silently. The caller learns, before executing
+    // anything, exactly what the depth costs in rank resolution.
+    let recorded = compiled
+        .resolution
+        .get(&stratum)
+        .copied()
+        .expect("a weighted stratum's resolution is recorded");
     assert_eq!(
-        compile(&plan, &env).expect_err("still refused").dimension(),
-        "depth_beyond_monotone_range"
+        recorded.separation,
+        MonotoneDepth::SeparatesTo(monotone),
+        "the evidence names the bound it was measured against"
+    );
+    assert_eq!(recorded.requested_depth, requested);
+    assert!(
+        !recorded.fully_separated(),
+        "reading past the bound is reported as not fully separated"
     );
 }
 
@@ -705,7 +798,9 @@ fn a_depth_exactly_at_the_monotone_bound_is_admitted_and_still_orders_by_rank() 
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this fixture collides inside the expressible range");
 
     let mut plan = fresh_plan(&registry, &stats);
     plan.stratum_depths.insert(
@@ -717,7 +812,15 @@ fn a_depth_exactly_at_the_monotone_bound_is_admitted_and_still_orders_by_rank() 
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    compile(&plan, &env).expect("a depth exactly at the bound is admitted");
+    let compiled = compile(&plan, &env).expect("a depth exactly at the bound is admitted");
+    assert!(
+        compiled
+            .resolution
+            .get(&stratum)
+            .expect("a weighted stratum's resolution is recorded")
+            .fully_separated(),
+        "a depth exactly on the bound is reported as fully separated"
+    );
 
     // Admitted *and* ordered: every adjacent pair of ranks the admitted depth
     // covers produces a strictly smaller contribution than the one before it.
@@ -764,7 +867,9 @@ fn a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range() {
         u32::try_from(
             profile
                 .monotone_depth(&iri(&ex("stratum/universal")))
-                .expect("weighted"),
+                .expect("weighted")
+                .rank()
+                .expect("this fixture collides inside the expressible range"),
         )
         .expect("the fixture bound is small"),
     );
@@ -773,7 +878,13 @@ fn a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range() {
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    compile(&admitted, &env).expect("an unweighted stratum's depth is not this profile's business");
+    let compiled = compile(&admitted, &env)
+        .expect("an unweighted stratum's depth is not this profile's business");
+    assert!(
+        !compiled.resolution.contains_key(&iri(&ex("stratum/text"))),
+        "a stratum the profile does not weight contributes nothing to this fusion, so there is \
+         nothing to report about how deep it was planned"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -835,7 +946,9 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this weight collides inside the expressible range");
     assert!(
         monotone >= u64::from(REQUIRED_DEPTH),
         "a weight of {DEEP_WEIGHT_UNITS} must order {REQUIRED_DEPTH} ranks, got {monotone}"
@@ -850,17 +963,29 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     };
     let compiled = compile(&plan, &env).expect("a depth of fourteen million is admitted");
     assert_eq!(compiled.units.len(), 1, "one unit for the one deep stratum");
+    // The emitted bound is the depth plus the probe row, because this registry
+    // declares far more rows than the plan reads: the extra row is what lets the
+    // executor say `DepthReached` instead of claiming a fourteen-million-row
+    // stratum was exhausted. The depth the plan recorded is unchanged, and the
+    // assertion below says so.
     assert!(
-        compiled.units[0].sparql.contains("LIMIT 14000000"),
-        "the admitted depth reaches the emitted text: {}",
-        compiled.units[0].sparql
+        compiled.units[0].sparql().contains("LIMIT 14000001"),
+        "the admitted depth, plus its probe row, reaches the emitted text: {}",
+        compiled.units[0].sparql()
+    );
+    assert_eq!(
+        compiled.units[0].depth(),
+        REQUIRED_DEPTH,
+        "and the unit still records the depth the plan recorded, not the probe"
     );
 
-    // The same plan under the same weight on the *first* rule is refused, which
-    // is what makes the rule the load-bearing choice rather than the weight.
+    // The same plan under the same weight on the *first* rule answers at a much
+    // coarser resolution, which is what makes the rule the load-bearing choice
+    // rather than the weight. Both are admitted; only one of them still tells
+    // fourteen million ranks apart, and the evidence says which.
     let truncated = FusionProfile::with_decay(
         BTreeMap::from([(
-            stratum,
+            stratum.clone(),
             Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable"),
         )]),
         DecayRule::ReciprocalRank { k: 1 },
@@ -871,30 +996,48 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
         statistics: &stats,
         fusion_profile: Some(&truncated),
     };
-    assert_eq!(
-        compile(&plan, &shallow_env)
-            .expect_err("the truncated rule cannot order fourteen million ranks")
-            .dimension(),
-        "depth_beyond_monotone_range"
+    let coarse = compile(&plan, &shallow_env).expect("the truncated rule still answers");
+    let recorded = coarse
+        .resolution
+        .get(&stratum)
+        .copied()
+        .expect("a weighted stratum's resolution is recorded");
+    assert!(
+        !recorded.fully_separated(),
+        "the truncated rule cannot separate fourteen million ranks at any weight"
+    );
+    // And it stops near `sqrt(S) = 10^6` rather than anywhere the weight chose:
+    // the inner truncation is a ceiling two hundred times the weight cannot lift.
+    let bound = recorded
+        .separation
+        .rank()
+        .expect("the truncated rule always collides inside the expressible range");
+    assert!(
+        (1_000_000..1_100_000).contains(&bound),
+        "the truncated rule's bound is set by the scale, not by the weight, got {bound}"
     );
 }
 
 #[test]
-fn a_depth_past_the_weighted_profiles_own_range_is_still_refused() {
-    // The neighbouring refusal. Buying depth with weight must not become "any
-    // depth at all": one rank past this profile's exact range is refused, by
-    // name, reporting the stratum and the bound it was drawn at.
+fn a_depth_past_the_weighted_profiles_own_range_reports_a_coarser_resolution() {
+    // Buying depth with weight does not become "any depth at all" — it becomes a
+    // number the caller can read. One rank past this profile's exact range is
+    // admitted and reported as not fully separated; the rank exactly on it is
+    // admitted and reported as separated. The pair is the whole claim: the
+    // boundary is still measured exactly, it is simply no longer a refusal.
     let registry = deep_registry();
     let stats = statistics("r1");
     let profile = deep_profile();
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this weight collides inside the expressible range");
     let requested = u32::try_from(monotone + 1).expect("the bound is inside a u32");
     assert!(
         u64::from(requested) <= 20_000_000,
-        "the refusal must come from the profile, not from the registry's row bound"
+        "the measurement must come from the profile, not from the registry's row bound"
     );
 
     let mut plan = fresh_plan(&registry, &stats);
@@ -904,40 +1047,51 @@ fn a_depth_past_the_weighted_profiles_own_range_is_still_refused() {
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    match compile(&plan, &env).expect_err("a depth past the range is refused") {
-        AdmissionError::DepthBeyondMonotoneRange {
-            stratum: named,
-            monotone: reported,
-            requested: asked,
-        } => {
-            assert_eq!(*named, stratum, "the refusal names the stratum");
-            assert_eq!(reported, monotone, "and the bound it was drawn at");
-            assert_eq!(asked, requested);
-        }
-        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
-    }
+    let compiled = compile(&plan, &env).expect("a depth past the range is admitted");
+    let recorded = compiled
+        .resolution
+        .get(&stratum)
+        .copied()
+        .expect("a weighted stratum's resolution is recorded");
+    assert_eq!(recorded.separation, MonotoneDepth::SeparatesTo(monotone));
+    assert_eq!(recorded.requested_depth, requested);
+    assert!(
+        !recorded.fully_separated(),
+        "one rank past the range is reported as coarser"
+    );
 
-    // And the neighbour that must still pass: the depth exactly on the bound.
+    // The neighbour, one rank down, at the exact boundary.
     let mut admitted = plan;
     admitted.stratum_depths.insert(
-        stratum,
+        stratum.clone(),
         u32::try_from(monotone).expect("the bound is inside a u32"),
     );
-    compile(&admitted, &env).expect("a depth exactly at the bound is admitted");
+    let compiled = compile(&admitted, &env).expect("a depth exactly at the bound is admitted");
+    assert!(
+        compiled
+            .resolution
+            .get(&stratum)
+            .expect("recorded")
+            .fully_separated(),
+        "the bound is the last fully separated depth, not one short of it"
+    );
 }
 
 #[test]
-fn an_environment_that_names_no_profile_checks_no_monotone_range() {
-    // The dimension is checked against a law, and an environment that names no
-    // law has none to check against. A caller that plans and compiles before
-    // choosing how to fuse is not refused for not having chosen.
+fn an_environment_that_names_no_profile_reports_no_resolution() {
+    // Resolution is measured against a law, and an environment that names no law
+    // has none to measure against. A caller that plans and compiles before
+    // choosing how to fuse is not refused for not having chosen — and is handed
+    // no fabricated evidence either.
     let registry = fixture_registry();
     let stats = statistics("r1");
     let profile = shallow_profile();
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this fixture collides inside the expressible range");
     let mut plan = fresh_plan(&registry, &stats);
     plan.stratum_depths.insert(
         stratum,
@@ -948,7 +1102,11 @@ fn an_environment_that_names_no_profile_checks_no_monotone_range() {
         statistics: &stats,
         fusion_profile: None,
     };
-    compile(&plan, &env).expect("no profile named, so no profile arithmetic to violate");
+    let compiled = compile(&plan, &env).expect("no profile named, so nothing to measure against");
+    assert!(
+        compiled.resolution.is_empty(),
+        "an unnamed law reports nothing rather than a default"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -967,8 +1125,11 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
 
     // The criterion: a non-positive weight cannot participate in the §5 sum, so
     // no profile carrying one can be built. A plan therefore cannot present one.
-    let error = FusionProfile::new(BTreeMap::from([(stratum.clone(), Fixed::ZERO)]), 60)
-        .expect_err("a zero weight cannot fuse");
+    let error = FusionProfile::with_decay(
+        BTreeMap::from([(stratum.clone(), Fixed::ZERO)]),
+        DecayRule::ReciprocalRank { k: 60 },
+    )
+    .expect_err("a zero weight cannot fuse");
     match error {
         FusionError::NonPositiveWeight {
             stratum: named,
@@ -985,8 +1146,11 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
     // cannot contribute at all, never of a small one. (What such a weight cannot
     // do is order a deep stratum, and that is a different, separately named
     // dimension: see the monotone-depth tests above.)
-    let thin = FusionProfile::new(BTreeMap::from([(stratum.clone(), Fixed::from_raw(1))]), 60)
-        .expect("one raw unit is strictly positive");
+    let thin = FusionProfile::with_decay(
+        BTreeMap::from([(stratum.clone(), Fixed::from_raw(1))]),
+        DecayRule::ReciprocalRank { k: 60 },
+    )
+    .expect("one raw unit is strictly positive");
     assert_eq!(thin.weight(&stratum), Some(Fixed::from_raw(1)));
 
     // And a profile a plan can actually be fused under admits that plan, with no
@@ -1000,7 +1164,8 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
         .cloned()
         .map(|reached| (reached, Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, 60).expect("unit weights are valid");
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 })
+        .expect("unit weights are valid");
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
@@ -1026,7 +1191,8 @@ fn a_profile_weighting_a_stratum_no_producer_emits_under_is_admitted() {
         .chain(core::iter::once(ghost.clone()))
         .map(|stratum| (stratum, Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, 60).expect("every weight is strictly positive");
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 })
+        .expect("every weight is strictly positive");
     assert_eq!(
         profile.weight(&ghost),
         Some(Fixed::ONE),
@@ -1070,6 +1236,95 @@ fn admission_rejects_stale_statistics() {
             assert_eq!(current_revision, "r2");
         }
         other => panic!("expected StaleStatistics, got {other:?}"),
+    }
+}
+
+/// **A plan naming subjects the provider answered nothing for still admits.**
+///
+/// The derivation record grew: a plan now names every stratum planning
+/// consulted, including ones the provider was silent about, and carries the
+/// inputs each depth came from. Growing what a plan *records* must not change
+/// what admission *accepts* — a refusal is a claim too, and one that rejected a
+/// plan for recording more evidence would be the mirror of the silent-drop bug,
+/// invisible because every existing test would still pass.
+///
+/// Both halves run, so the test can tell "admits everything" from "admits
+/// correctly": the plan whose evidence is unchanged is admitted, and the same
+/// plan against a moved revision is still refused by name.
+#[test]
+fn a_plan_recording_unanswered_subjects_still_admits() {
+    let registry = fixture_registry();
+    let planned = statistics("r1");
+    let plan = fresh_plan(&registry, &planned);
+
+    plan.certify()
+        .expect("the planner's own output derives its own depths");
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &planned,
+        fusion_profile: None,
+    };
+    compile(&plan, &env).expect("evidence in force admits, however much of it the plan records");
+
+    // The neighbour that must still be refused, so the acceptance above is a
+    // decision rather than the absence of one.
+    let moved = statistics("r2");
+    let moved_env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &moved,
+        fusion_profile: None,
+    };
+    assert!(
+        matches!(
+            compile(&plan, &moved_env),
+            Err(AdmissionError::StaleStatistics { .. })
+        ),
+        "a moved revision is still refused by name"
+    );
+}
+
+/// **A plan whose layout version this build does not write is refused, and the
+/// version this build does write is admitted.**
+///
+/// [`Plan::from_canonical_bytes`] has a version gate of its own, but a plan
+/// decoded through serde never passes through it, so admission re-checks the
+/// dimension rather than assume it. That check is the *first* thing admission
+/// looks at, which is precisely why it has to be executed in both directions: a
+/// gate set one value too wide at step one would refuse every plan there is, and
+/// every later dimension's refusal test would still pass while doing so.
+#[test]
+fn a_plan_version_this_build_does_not_write_is_refused_while_the_current_version_admits() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    // THE NEIGHBOURING CASE, stated first because it is what the refusal must
+    // not reach: the version this build writes is admitted and compiles units.
+    let current = fresh_plan(&registry, &stats);
+    assert_eq!(
+        current.version,
+        Plan::VERSION,
+        "a freshly planned request carries this build's layout version"
+    );
+    let compiled = compile(&current, &env).expect("the current plan version is admitted");
+    assert_eq!(compiled.units.len(), 3, "one unit per declared stratum");
+
+    // The violation: the same plan, carrying a version this build's field order
+    // does not define. One version either side, and nothing else changed.
+    for moved in [Plan::VERSION.wrapping_add(1), Plan::VERSION.wrapping_sub(1)] {
+        let mut tampered = fresh_plan(&registry, &stats);
+        tampered.version = moved;
+        let error = compile(&tampered, &env).expect_err("a foreign plan version is refused");
+        assert_eq!(error.dimension(), "invalid_plan_version");
+        match error {
+            AdmissionError::InvalidPlanVersion { version } => assert_eq!(version, moved),
+            other => panic!("expected InvalidPlanVersion, got {other:?}"),
+        }
     }
 }
 
@@ -1439,10 +1694,10 @@ fn every_bound_stratum_with_a_depth_emits_its_branch() {
             .find(|unit| unit.stratum == binding.stratum)
             .unwrap_or_else(|| panic!("stratum {} emits a unit", binding.stratum));
         assert!(
-            unit.sparql.contains(&binding.producer),
+            unit.sparql().contains(&binding.producer),
             "producer {} has a branch in its stratum's unit: {}",
             binding.producer,
-            unit.sparql
+            unit.sparql()
         );
     }
 }
@@ -1512,17 +1767,105 @@ fn a_declared_row_bound_still_refuses_a_raised_depth() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/universal")));
             assert_eq!(declared, 200);
             assert_eq!(requested, 201);
+            assert!(
+                matches!(mode, BoundMode::Invoked { .. }),
+                "this producer declares one mode and is invoked under it, so the \
+                 refused number was read where the call is made: {mode:?}"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
 }
 
+/// **A stratum with a depth and no producer to invoke is held to the widest bound its
+/// registry declares, and the refusal says that is what happened.**
+///
+/// [`BoundMode::Uninvoked`] is the arm for a stratum the plan binds no producer to. The
+/// count cannot be read at an invoked mode, because there is no invocation; it is read at
+/// the widest mode the producer declares, which is the only figure that can refuse
+/// nothing the registry did not itself speak against. Nothing is emitted for such a
+/// stratum, so no *read* is ever judged by the number — only the recorded depth is, which
+/// is exactly what happens here.
+///
+/// The whole rendered sentence is asserted rather than the variant alone. `BoundMode`
+/// exists because a bare count sends a multi-mode producer's author to whichever of its
+/// promises they think of first, and a variant that is unreachable in a message is a
+/// variant that says nothing to anybody: the clause this arm contributes has to read as
+/// English in the position it is spliced into.
 #[test]
-fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
+fn a_stratum_with_no_producer_to_invoke_is_bounded_at_its_widest_declared_mode() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let text = iri(&ex("stratum/text"));
+    let mut plan = fresh_plan(&registry, &stats);
+    assert_eq!(
+        plan.stratum_depths[&text], 100,
+        "the planner's own depth for this stratum is the registry's declaration"
+    );
+    // The binding removed, the depth left behind: a plan naming a depth for a stratum it
+    // selected no producer for. The planner does not write this, so such a plan was
+    // edited — which is precisely the class of plan the waist exists to re-derive.
+    plan.producer_bindings
+        .retain(|binding| binding.stratum != text);
+    plan.stratum_depths.insert(text.clone(), 101);
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let error = compile(&plan, &env).expect_err("a depth past the declaration is refused");
+    match &error {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+            mode,
+        } => {
+            assert_eq!(**stratum, text);
+            assert_eq!(*declared, 100);
+            assert_eq!(*requested, 101);
+            assert_eq!(
+                *mode,
+                BoundMode::Uninvoked {
+                    declared: BindingPattern::from_code("ff"),
+                },
+                "there is no invocation, so the number was read at the widest mode this \
+                 producer declares"
+            );
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "stratum {} declares depth 101, but the registry bounds it at 100 under mode \
+             `ff`, the widest mode declared, this stratum binding no producer to invoke",
+            ex("stratum/text")
+        ),
+        "the clause reads as one sentence with the count it qualifies"
+    );
+
+    // THE NEIGHBOUR. The same plan, still binding no producer for the stratum, at a
+    // depth ON the bound: the widest declared mode is a real bound rather than a
+    // pretext, so a depth it covers is admitted — and the stratum emits nothing, because
+    // there is still no producer to emit for.
+    plan.stratum_depths.insert(text.clone(), 100);
+    let compiled = compile(&plan, &env).expect("a depth at the widest declared bound admits");
+    assert!(
+        compiled.units.iter().all(|unit| unit.stratum != text),
+        "nothing is emitted for a stratum the plan binds no producer to, which is why \
+         this number judges the recorded depth and no read"
+    );
+}
+
+#[test]
+fn a_ghost_stratum_is_refused_above_its_bound_and_refused_again_at_zero() {
     // The third case, pinned so it stays distinguishable from the two above: a
     // stratum the registry ranks nothing under declared a bound — of zero —
     // because nothing can rank there. That is not the same fact as a stratum
@@ -1543,19 +1886,307 @@ fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
             stratum,
             declared,
             requested,
+            mode,
         } => {
             assert_eq!(*stratum, iri(&ex("stratum/ghost")));
             assert_eq!(declared, 0);
             assert_eq!(requested, 5);
+            assert_eq!(
+                mode,
+                BoundMode::Undeclared,
+                "nothing ranks under this stratum, so there is no declaration and no \
+                 mode for the refusal to name"
+            );
         }
         other => panic!("expected DepthBoundViolation, got {other:?}"),
     }
 
-    // A depth of zero for the same stratum is an honest empty stratum, not a
-    // violation, which is the neighbour that keeps the bound from being read as
-    // "this stratum may not appear".
+    // A depth of zero for the same stratum is refused on the other dimension,
+    // and refused it must be: a zero takes no row from the relation whatever its
+    // index holds, and would still be reported as an exhausted stratum — a
+    // completeness claim about a read that was never allowed to answer. A caller
+    // that wants this stratum left out of the answer leaves out its entry.
     plan.stratum_depths.insert(iri(&ex("stratum/ghost")), 0);
-    compile(&plan, &env).expect("a zero depth is within a zero bound");
+    let error = compile(&plan, &env).expect_err("a depth of zero reads nothing");
+    match error {
+        AdmissionError::ZeroDepth { stratum } => {
+            assert_eq!(*stratum, iri(&ex("stratum/ghost")));
+        }
+        other => panic!("expected ZeroDepth, got {other:?}"),
+    }
+
+    // The neighbour that must still admit, in the same plan: drop the ghost and
+    // hold a stratum the registry really ranks under at a depth of one.
+    plan.stratum_depths.remove(&iri(&ex("stratum/ghost")));
+    plan.stratum_depths.insert(iri(&ex("stratum/text")), 1);
+    compile(&plan, &env).expect("a depth of one over a ranked stratum admits");
+}
+
+#[test]
+fn a_declared_zero_admits_the_floored_row_and_refuses_the_one_past_it() {
+    // The fourth case, and the one the three above left out: a stratum whose one
+    // producer declared a bound of zero because its data is empty right now. That
+    // is a measurement, not a contradiction, and the answer is to read the one
+    // floored row so the producer reports the emptiness in its own receipt. So a
+    // depth of one is admitted here — while everything the other three cases
+    // refuse stays refused.
+    let registry = registry_with_an_empty_producer();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&registry, &stats);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    assert_eq!(
+        plan.stratum_depths[&iri(&ex("stratum/empty"))],
+        1,
+        "the planner floors a declared zero at the one probing row"
+    );
+    let compiled = compile(&plan, &env).expect("a depth of one over a declared zero admits");
+    let unit = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == iri(&ex("stratum/empty")))
+        .expect("the stratum emits a unit, so its relation is actually invoked");
+    assert_eq!(unit.depth(), 1);
+    // One row past the floored depth, exactly as at every other depth. Never
+    // `LIMIT 0`, which would read nothing — and never `LIMIT 1` either, which at a
+    // depth of one is a bound EQUAL to the depth: no row past it could arrive, so the
+    // read would be certified exhausted however many rows the index turned out to
+    // hold. A declared zero is read rather than obeyed here as everywhere else, which
+    // is what makes the emptiness this producer reports a verified claim.
+    assert!(
+        unit.sparql().ends_with("LIMIT 2"),
+        "the emitted bound is one row past the floored depth: {}",
+        unit.sparql()
+    );
+
+    // Only the floor. A declared zero admits one row because one row is what the
+    // probe costs; the second row is a depth the registry's number does not carry.
+    let mut deeper = plan.clone();
+    deeper.stratum_depths.insert(iri(&ex("stratum/empty")), 2);
+    match compile(&deeper, &env).expect_err("two rows exceed a declared zero's floor") {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+            mode,
+        } => {
+            assert_eq!(*stratum, iri(&ex("stratum/empty")));
+            assert_eq!(declared, 1, "the floor is the whole of the bound");
+            assert_eq!(requested, 2);
+            assert!(
+                matches!(mode, BoundMode::Invoked { .. }),
+                "a declared zero is still a declaration, read at the invoked mode: \
+                 {mode:?}"
+            );
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+
+    // A recorded zero is still not a read, here as everywhere.
+    let mut zeroed = plan.clone();
+    zeroed.stratum_depths.insert(iri(&ex("stratum/empty")), 0);
+    match compile(&zeroed, &env).expect_err("a zero reads nothing, declared zero or not") {
+        AdmissionError::ZeroDepth { stratum } => {
+            assert_eq!(*stratum, iri(&ex("stratum/empty")));
+        }
+        other => panic!("expected ZeroDepth, got {other:?}"),
+    }
+
+    // And the stratum no ranked producer emits under at all is still refused at
+    // every positive depth. Its bound is absent rather than declared, so there is
+    // no producer here to hand a probing row to and nothing to floor: the two
+    // zeroes stay two facts.
+    let mut ghost = plan;
+    ghost.stratum_depths.insert(iri(&ex("stratum/ghost")), 1);
+    match compile(&ghost, &env).expect_err("nothing ranks under a stratum nothing declared") {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+            mode,
+        } => {
+            assert_eq!(*stratum, iri(&ex("stratum/ghost")));
+            assert_eq!(declared, 0, "an absent bound is not floored to one");
+            assert_eq!(requested, 1);
+            assert_eq!(
+                mode,
+                BoundMode::Undeclared,
+                "nothing ranks under this stratum, so there is no declaration and no \
+                 mode for the refusal to name"
+            );
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under() {
+    // The same refusal where the registry has plenty of room for the depth: the
+    // ground is not the declared bound (100 rows would admit any of these), it
+    // is that zero is not a read. The planner cannot produce this value — it
+    // floors every depth it derives at one — so a plan carrying it was edited.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let mut plan = fresh_plan(&registry, &stats);
+    assert_eq!(
+        plan.stratum_depths[&iri(&ex("stratum/text"))],
+        100,
+        "the planner's own depth for this stratum is nowhere near zero"
+    );
+    plan.stratum_depths.insert(iri(&ex("stratum/text")), 0);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let error = compile(&plan, &env).expect_err("a zero depth is not a read");
+    match error {
+        AdmissionError::ZeroDepth { ref stratum } => {
+            assert_eq!(**stratum, iri(&ex("stratum/text")));
+        }
+        ref other => panic!("expected ZeroDepth, got {other:?}"),
+    }
+    assert_eq!(error.dimension(), "zero_depth");
+
+    // The neighbour: one row deep is a real read and admits, and its unit says
+    // so in the emitted bound.
+    plan.stratum_depths.insert(iri(&ex("stratum/text")), 1);
+    let compiled = compile(&plan, &env).expect("a depth of one admits");
+    let unit = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == iri(&ex("stratum/text")))
+        .expect("the stratum emits a unit");
+    // One row read, plus the one probe row the registry's wider declared bound
+    // leaves room for: the read is one row deep, and the emitted bound is what
+    // lets the executor tell "there was only one" from "I stopped at one".
+    assert!(
+        unit.sparql().ends_with("LIMIT 2"),
+        "the shallowest honest read is one row, probed one deeper: {}",
+        unit.sparql()
+    );
+    assert_eq!(
+        unit.depth(),
+        1,
+        "the depth is one; the probe row is a read and never a recorded value"
+    );
+}
+
+#[test]
+fn a_recorded_depth_that_cannot_carry_its_probe_row_is_refused_at_the_ceiling() {
+    // The zero-depth refusal above, read at the other end of the range. A unit is
+    // emitted one row deeper than its depth so the executor can tell a read the
+    // bound cut from a read that ran out; at the top of the 32-bit rank range that
+    // row is not expressible, the emitted bound would equal the depth, and the read
+    // would be reported `Exhausted` — the one ending that names no stopper —
+    // for a stratum the `LIMIT` may well have cut. The registry is not what refuses
+    // it: this producer declares four billion rows, so its bound has room for
+    // either depth below.
+    let registry = registry_with_a_deep_producer();
+    let mut stats = statistics("r1");
+    stats.cardinalities.insert(iri(&ex("stratum/deep")), 1_000);
+    let mut plan = fresh_plan(&registry, &stats);
+    let deep = iri(&ex("stratum/deep"));
+    assert_eq!(
+        plan.stratum_depths[&deep], 1_000,
+        "the planner's own depth is the measured cardinality, nowhere near the ceiling"
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    plan.stratum_depths.insert(deep.clone(), u32::MAX);
+    let error = compile(&plan, &env).expect_err("a depth with no room for its probe row");
+    match error {
+        AdmissionError::DepthWithoutProbe {
+            ref stratum,
+            depth,
+            ceiling,
+        } => {
+            assert_eq!(**stratum, deep);
+            assert_eq!(depth, u32::MAX);
+            assert_eq!(
+                ceiling,
+                u32::MAX - 1,
+                "the ceiling is the deepest depth whose ending can be observed"
+            );
+        }
+        ref other => panic!("expected DepthWithoutProbe, got {other:?}"),
+    }
+    assert_eq!(error.dimension(), "depth_without_probe");
+
+    // The neighbour, and it is the one that matters most here: one rank shallower
+    // is the deepest read this layer can take, and it must still plan, admit and
+    // compile — with the probe row present, which is the whole difference between
+    // the two depths.
+    plan.stratum_depths.insert(deep.clone(), u32::MAX - 1);
+    let compiled = compile(&plan, &env).expect("the deepest readable depth admits");
+    let unit = compiled
+        .units
+        .iter()
+        .find(|unit| unit.stratum == deep)
+        .expect("the stratum emits a unit");
+    assert_eq!(unit.depth(), u32::MAX - 1);
+    assert!(
+        unit.sparql().ends_with(&format!("LIMIT {}", u32::MAX)),
+        "the emitted bound is one row deeper than the depth, at the ceiling as \
+         anywhere else: {}",
+        unit.sparql()
+    );
+    assert!(
+        emitted_bound(&unit.sparql()) > unit.depth(),
+        "and the probe slot is what that inequality is: a bound equal to its own \
+         depth could never report how the read ended"
+    );
+}
+
+/// The `LIMIT` a unit's outer `SELECT` carries.
+fn emitted_bound(sparql: &str) -> u32 {
+    sparql
+        .rsplit("LIMIT ")
+        .next()
+        .expect("an emitted unit carries a LIMIT")
+        .trim()
+        .parse()
+        .expect("an emitted LIMIT is a number")
+}
+
+#[test]
+fn a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all() {
+    // Absence, not a zero. The planner records a depth only for a stratum a
+    // surviving producer ranks under, which is what makes a recorded zero
+    // diagnosable as an edit rather than as something the planner might have
+    // written. `pf/modeless` is declared under its own stratum and rejected at
+    // placement, so that stratum reaches step 6 with nothing to bound.
+    let registry = registry_with_a_modeless_producer();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&registry, &stats);
+    assert!(
+        plan.producer_decisions.iter().any(|decision| matches!(
+            decision,
+            ProducerDecision::Rejected { producer, .. } if producer == &ex("pf/modeless")
+        )),
+        "the modeless producer is rejected: {:?}",
+        plan.producer_decisions
+    );
+    assert!(
+        !plan
+            .stratum_depths
+            .contains_key(&iri(&ex("stratum/modeless"))),
+        "its stratum carries no entry, rather than an entry of zero: {:?}",
+        plan.stratum_depths
+    );
+    assert!(
+        plan.stratum_depths
+            .contains_key(&iri(&ex("stratum/universal"))),
+        "while the stratum a surviving producer ranks under does carry one"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1566,9 +2197,13 @@ fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
 /// one row at a time through the ranked-stream protocol, to exhaustion.
 fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
-    while let Some(row) = block_on(stream.next()).expect("a materialized stream obeys the protocol")
+    // The block each row names is not what these assertions are about — every
+    // producer here declares `Unrestricted` and so names none — so it is dropped
+    // by name rather than compared.
+    while let Some((rank, candidate, _block)) =
+        block_on(stream.next()).expect("a materialized stream obeys the protocol")
     {
-        rows.push(row);
+        rows.push((rank, candidate));
     }
     rows
 }
@@ -1593,12 +2228,51 @@ fn one_stratum_failure_others_continue() {
     };
     let mut compiled = compile(&plan, &env).expect("the plan admits");
     let failing = compiled.units[1].stratum.clone();
-    compiled.units[1].sparql = "THIS IS NOT SPARQL".to_owned();
+    // A text that is not SPARQL at all never reaches a bundle: the constructor parses
+    // what it is handed, so it is refused here, by name, with the parser's own
+    // diagnostic — rather than admitted and discovered one execution later.
+    let template = &compiled.units[1];
+    let refused = StratumUnit::new(
+        template.stratum.clone(),
+        "THIS IS NOT SPARQL".to_owned(),
+        template.contract.clone(),
+        template.depth(),
+        template.declared_rows(),
+    )
+    .expect_err("a text that is not a query is not a unit");
+    match refused {
+        UnitError::NotAQuery { reason } => assert!(
+            reason.contains("expected SELECT, CONSTRUCT, ASK or DESCRIBE"),
+            "the parser's own diagnostic is carried rather than summarized: {reason}"
+        ),
+        other => panic!("expected NotAQuery, got {other:?}"),
+    }
+
+    // So the isolated failure below is driven by a text that IS a query and still
+    // cannot run: it reaches for a user-defined function nothing registered. Everything
+    // else about the unit is the compiler's own, so the surviving strata are unaffected
+    // — including their `Exhausted`, which they still earn because their own text is
+    // still rendered.
+    let broken = StratumUnit::new(
+        template.stratum.clone(),
+        format!(
+            "SELECT ?candidate WHERE {{ BIND(<{}>(1) AS ?candidate) }}",
+            ex("fn/absent")
+        ),
+        template.contract.clone(),
+        template.depth(),
+        template.declared_rows(),
+    )
+    .expect("a well-formed query over an unresolvable function is still a unit");
+    compiled.units[1] = broken;
 
     let result = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
         .expect("execution starts");
     match result.statuses.get(&failing) {
-        Some(ProducerStatus::ExecutionFailed { .. }) => {}
+        Some(ProducerStatus::ExecutionFailed { reason }) => assert!(
+            reason.contains(&ex("fn/absent")),
+            "the failure names what could not be reached: {reason}"
+        ),
         other => panic!("the failing stratum is ExecutionFailed, got {other:?}"),
     }
     for unit in &compiled.units {
@@ -1724,8 +2398,10 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         accepted_terms: accepted,
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
+        fidelity: RankFidelity::EXACT,
+        domains: CandidateDomains::Unrestricted,
+        block_position: None,
         mandatory,
     }
 }
@@ -1935,7 +2611,7 @@ fn narrowing_a_producer_is_refused_only_when_the_registry_declared_it_mandatory(
 
 #[test]
 fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_mandatory() {
-    let request = RetrievalRequest::from_terms(vec![vector_term()]);
+    let request = RetrievalRequest::complete(vec![vector_term()]);
 
     // Not declared mandatory: the planner records why it could not be invoked
     // and drops it, and the plan is admitted on the strength of what remains.
@@ -1962,11 +2638,11 @@ fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_manda
         1,
         "the surviving producer still emits"
     );
-    assert!(compiled.units[0].sparql.contains(&ex("pf/free")));
+    assert!(compiled.units[0].sparql().contains(&ex("pf/free")));
     assert!(
-        !compiled.units[0].sparql.contains(&ex("pf/renders")),
+        !compiled.units[0].sparql().contains(&ex("pf/renders")),
         "and the dropped producer is not in the text: {}",
-        compiled.units[0].sparql
+        compiled.units[0].sparql()
     );
     // The survivor declares no placement, so it is NOT serving the vector: the
     // plan says so per term, and the text it emits carries no embedding. Naming
@@ -1988,10 +2664,10 @@ fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_manda
     );
     assert!(
         !compiled.units[0]
-            .sparql
+            .sparql()
             .contains(&purrdf_retrieval::encode_embedding(&[0.25, -1.5, 3.0])),
         "and the embedding is nowhere in it: {}",
-        compiled.units[0].sparql
+        compiled.units[0].sparql()
     );
 
     // Declared mandatory: the very same plan is refused, because the registry
@@ -2075,7 +2751,7 @@ fn a_plan_that_binds_two_producers_to_one_stratum_is_refused() {
 /// A lexical term beside an entity seed: the multimodal request a coverage-floor
 /// host asks for, and the one the wider quantifier refused.
 fn lexical_and_seed_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![lexical_term(), seed_term()])
+    RetrievalRequest::complete(vec![lexical_term(), seed_term()])
 }
 
 /// The declared-mandatory text producer's binding in `plan`, if it has one.
@@ -2099,7 +2775,7 @@ fn catch_all_binding(plan: &Plan) -> Option<&purrdf_retrieval::ProducerBinding> 
 /// `Triple`, which neither of the catch-all's alternatives names, so it is in
 /// neither the required count nor the provided one.
 fn literal_seed_and_triple_request() -> RetrievalRequest {
-    RetrievalRequest::from_terms(vec![
+    RetrievalRequest::complete(vec![
         lexical_term(),
         seed_term(),
         RequestTerm::EntitySeed {
@@ -2299,9 +2975,9 @@ fn a_mandatory_producer_that_places_nothing_must_be_present_and_serves_no_term()
         .find(|unit| unit.stratum == iri(&ex("stratum/universal")))
         .expect("its stratum still emits");
     assert!(
-        universal.sparql.contains("( ?c0 ) <") && universal.sparql.contains("( ?c1 )"),
+        universal.sparql().contains("( ?c0 ) <") && universal.sparql().contains("( ?c1 )"),
         "and it is emitted with both arguments free: {}",
-        universal.sparql
+        universal.sparql()
     );
 
     // Presence is still enforced, and that is the whole of what `mandatory`
@@ -2344,7 +3020,7 @@ fn a_mandatory_producer_that_accepts_nothing_of_a_request_is_not_required_by_it(
         fusion_profile: None,
     };
 
-    let seed_only = RetrievalRequest::from_terms(vec![seed_term()]);
+    let seed_only = RetrievalRequest::complete(vec![seed_term()]);
     let plan = purrdf_retrieval::plan(&seed_only, &registry, &stats).expect("the seed plans");
     assert!(
         literal_binding(&plan).is_none(),

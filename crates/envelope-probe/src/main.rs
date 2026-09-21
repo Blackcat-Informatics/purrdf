@@ -12,42 +12,11 @@
 //! Usage: `envelope-probe [PROFILE] [--groups N]` — profile defaults to
 //! `smoke`; `--groups` overrides the resident scale for exploratory runs.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use purrdf_envelope_probe::alloc::{live_bytes, peak_bytes, record_allocation, record_deallocation, reset_peak};
+use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_envelope_probe::{Metric, PROFILES, Profile, WORKLOADS, profile, run};
-
-struct CountingAllocator;
-
-// SAFETY: delegates every operation to `System`, only adjusting counters.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: same contract as `System::alloc`.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        // SAFETY: same contract as `System::dealloc`.
-        unsafe { System.dealloc(pointer, layout) };
-        record_deallocation(layout.size());
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: same contract as `System::realloc`.
-        let grown = unsafe { System.realloc(pointer, layout, new_size) };
-        if !grown.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        grown
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -168,12 +137,16 @@ fn main() -> ExitCode {
     let mut rows = Vec::with_capacity(WORKLOADS.len());
     let mut failed = false;
     for workload in WORKLOADS {
-        let baseline = reset_peak();
+        // The whole-process window: a workload that fans out over worker threads
+        // must be charged for what those threads allocate, or the envelope it
+        // reports is not the one the memory ceiling has to hold.
+        let window = WholeProcessWindow::open();
         let started = Instant::now();
-        let status = run(workload, &active);
+        let status = run(workload, &active, &window);
         let duration_ms = started.elapsed().as_millis();
-        let peak_bytes = peak_bytes() - baseline;
-        let retained_delta_bytes = live_bytes() - baseline;
+        let measured = window.close();
+        let peak_bytes = measured.peak_working_bytes;
+        let retained_delta_bytes = measured.retained_bytes;
         failed |= status.is_err();
         rows.push(WorkloadRow {
             name: workload,

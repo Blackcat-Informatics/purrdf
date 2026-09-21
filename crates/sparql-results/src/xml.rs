@@ -75,11 +75,11 @@
 //! own, so without a caller-supplied namespace no such element is ever emitted,
 //! however populated `provenance` is — see [`crate::model::ProvenanceNamespace`].
 
-use purrdf_core::sink::TextOut;
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_core::sink::TextOut;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes

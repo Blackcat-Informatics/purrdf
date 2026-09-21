@@ -1311,6 +1311,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-alloc-probe"
+version = "2.0.2"
+
+[[package]]
+name = "purrdf-bench"
+version = "2.0.2"
+dependencies = [
+ "purrdf-rdf",
+ "serde_json",
+]
+
+[[package]]
 name = "purrdf-capi"
 version = "2.0.2"
 dependencies = [
@@ -1342,11 +1354,13 @@ dependencies = [
  "flate2",
  "memmap2",
  "purrdf",
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-entail",
  "purrdf-gts",
  "purrdf-iri",
  "purrdf-rdf",
+ "purrdf-shapes",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
@@ -1379,6 +1393,7 @@ dependencies = [
  "memmap2",
  "pretty_assertions",
  "proptest",
+ "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-events",
  "purrdf-iri",
@@ -1423,6 +1438,7 @@ dependencies = [
 name = "purrdf-envelope-probe"
 version = "2.0.2"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-rdf",
  "purrdf-shapes",
@@ -1462,6 +1478,7 @@ dependencies = [
  "filetime",
  "flate2",
  "getrandom 0.3.4",
+ "purrdf-alloc-probe",
  "purrdf-events",
  "purrdf-iri",
  "rayon",
@@ -1498,6 +1515,7 @@ name = "purrdf-json"
 version = "2.0.2"
 dependencies = [
  "criterion",
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-rdf",
  "purrdf-sparql-eval",
@@ -1546,6 +1564,7 @@ dependencies = [
  "pretty_assertions",
  "proc-macro2",
  "proptest",
+ "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-core",
  "purrdf-events",
@@ -1568,9 +1587,12 @@ dependencies = [
 name = "purrdf-retrieval"
 version = "2.0.2"
 dependencies = [
+ "ahash",
  "blake3",
  "pretty_assertions",
+ "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-text",
  "serde",
@@ -1585,7 +1607,9 @@ version = "2.0.2"
 dependencies = [
  "boon",
  "criterion",
+ "proc-macro2",
  "proptest",
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-gts",
  "purrdf-iri",
@@ -1600,6 +1624,8 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "smallvec",
+ "syn 2.0.118",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -1681,6 +1707,7 @@ dependencies = [
  "md-5",
  "pretty_assertions",
  "proptest",
+ "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-core",
  "purrdf-iri",
@@ -1734,6 +1761,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
+ "purrdf-sparql-eval",
  "serde",
  "serde_json",
 ]

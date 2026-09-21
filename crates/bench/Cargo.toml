@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-bench"
+description = "Benchmark tooling: the deterministic, shardable scale-corpus generator whose mixed IRI classes keep a capacity claim honest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "benchmark", "corpus"]
+categories = ["development-tools::testing"]
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bench-corpus"
+path = "src/main.rs"
+
+[dev-dependencies]
+# Test-only round-trip validation: every generated row must satisfy the
+# project's own strict N-Quads reader. The generator itself has zero
+# dependencies — pure arithmetic and formatting.
+purrdf-rdf = { workspace = true }
+# Test-only: parse the --manifest JSON contract in the CLI integration tests.
+serde_json = { workspace = true }

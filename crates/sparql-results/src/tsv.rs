@@ -24,12 +24,12 @@
 //! [`ResultProvenance`] is trimmed and signalled via
 //! [`SerializeOutcome::provenance_dropped`].
 
-use purrdf_core::sink::TextOut;
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
 use crate::term::ntriples_token;
 use purrdf_core::SparqlResult;
+use purrdf_core::sink::TextOut;
 
 /// Serialize a [`SparqlResult`] to W3C SPARQL Results TSV.
 ///
@@ -125,7 +125,7 @@ pub(crate) fn write_tsv<W: TextOut + ?Sized>(
         out.push('\n');
     }
 
-        Ok(())
+    Ok(())
 }
 
 /// Append one `?`-prefixed TSV header field.

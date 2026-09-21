@@ -265,6 +265,68 @@ impl DeltaDatasetView {
         &self.delta
     }
 
+    /// Every row this snapshot CHANGES relative to its base, in this view's own
+    /// [`DeltaViewId`] space: each added row, then each suppressed one.
+    ///
+    /// The point of the id space is that a consumer can join these rows against
+    /// reads of this same view without a term-value round trip. [`Self::delta`]
+    /// alone cannot serve that: its ids are delta-LOCAL, so a term the base
+    /// already interned carries a different number there than it does here.
+    ///
+    /// The three added-row streams are chained because the delta keeps RDF 1.2
+    /// reifier and annotation rows in tables of their own, and a consumer asking
+    /// "what moved?" that saw only the plain rows would miss a statement whose
+    /// only change was an annotation. Rows may therefore repeat — a row present in
+    /// two of those tables is yielded twice, and an added row identical to a
+    /// suppressed one is yielded on both sides. That is deliberate: this is a
+    /// CHANGE set, its consumers deduplicate whatever they accumulate from it, and
+    /// deduplicating here would cost a base-sized set to answer a question nobody
+    /// asked.
+    ///
+    /// # What "changes" means here: the SURFACE, not the table
+    ///
+    /// The guarantee is over this snapshot's RDF surface — plain rows and BOTH
+    /// statement tables together, which is what an RDF 1.2 consumer reads. Every
+    /// row that JOINS or LEAVES that surface is named here.
+    ///
+    /// It is deliberately NOT a guarantee about any one table, because the RDF 1.2
+    /// overlay moves rows BETWEEN tables without touching the surface: declaring a
+    /// reifier for `(r, g)` demotes the base rows about `r` in `g` from the plain
+    /// table into `r`'s annotations (`base_quad_is_ordinary` and
+    /// `base_quad_is_annotation`), and suppressing a base reifier promotes them
+    /// back (`base_annotation_is_ordinary`). A reclassified row is still read, at
+    /// the same subject and predicate, by any consumer that unions the overlay onto
+    /// the plain stream — so it did not change, and only the reifier declaration
+    /// itself did. That declaration IS named, as an added or a suppressed row.
+    ///
+    /// A consumer that reads [`DatasetView::quads`] ALONE, without the
+    /// statement tables, sees a narrower surface than this set describes, and for
+    /// that consumer a demotion does look like a disappearance. The only caller
+    /// today is the incremental SHACL change path, and it reads the projected
+    /// union — not by happy accident but because it REFUSES to expand a change
+    /// otherwise: its data view carries a statement-projection predicate and its
+    /// expansion entry point hard-fails a delta binding that answers `false`,
+    /// naming the projecting constructor to use instead. That guard is what keeps
+    /// this paragraph true, since the narrow view is constructible through a
+    /// public argument. A consumer introduced later that genuinely wants the
+    /// narrow surface needs this stream extended with the reclassified rows rather
+    /// than a filter downstream, because a change set that is short by a row
+    /// cannot be told from a graph that did not change.
+    /// `changed_quads_names_every_row_the_rdf12_overlay_moves_on_or_off_the_surface`
+    /// holds the line as stated.
+    pub fn changed_quads(&self) -> impl Iterator<Item = QuadIds<DeltaViewId>> + '_ {
+        self.delta
+            .quads_for_pattern(None, None, None, GraphMatch::Any)
+            .chain(self.delta.reifier_quads())
+            .chain(self.delta.annotation_quads())
+            .map(|q| self.map_delta(q))
+            .chain(
+                self.suppressed
+                    .iter()
+                    .map(|q| map_quad(*q, DeltaViewId::Base)),
+            )
+    }
+
     pub(crate) fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
         self.base
             .term_id_by_iri(iri)
@@ -449,12 +511,23 @@ impl DeltaDatasetView {
             s: map(s)?,
             p: map(p)?,
             o: map(o)?,
-            g: match g {
-                GraphMatch::Any => GraphMatch::Any,
-                GraphMatch::Default => GraphMatch::Default,
-                GraphMatch::Named(id) => GraphMatch::Named(self.local_id(id, layer)?),
-            },
+            g: self.local_graph(g, layer)?,
         })
+    }
+
+    /// One graph constraint translated into `layer`'s own handle space, or `None`
+    /// when that layer's dictionary does not hold the named graph at all.
+    ///
+    /// `None` is a proof of emptiness, not an error: every row a layer yields carries
+    /// a graph slot drawn from that layer's dictionary, so a graph the dictionary
+    /// never interned cannot appear in any of its rows. A caller may therefore skip
+    /// the whole layer instead of scanning it.
+    fn local_graph(&self, g: GraphMatch<DeltaViewId>, layer: Layer) -> Option<GraphMatch> {
+        match g {
+            GraphMatch::Any => Some(GraphMatch::Any),
+            GraphMatch::Default => Some(GraphMatch::Default),
+            GraphMatch::Named(id) => self.local_id(id, layer).map(GraphMatch::Named),
+        }
     }
 }
 
@@ -652,6 +725,38 @@ impl DatasetView for DeltaDatasetView {
             )
     }
 
+    /// Narrows each layer through its OWN [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph)
+    /// before the overlay's masks (`suppressed` on the base, `duplicate_reifiers` on
+    /// the delta) are applied, so a layer that can skip storage units for `g` still
+    /// does; a layer whose dictionary cannot name `g` drops that whole arm via
+    /// `local_graph`. The trait default would scan both layers' whole reifier tables.
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // The overlay is a per-row mask, so it composes with the graph seam rather
+        // than erasing it: narrow each layer through its OWN `reifier_quads_in_graph`
+        // — so a layer that can skip storage units for `g` still does — and keep the
+        // unkeyed override's masks (`suppressed` on the base, `duplicate_reifiers` on
+        // the delta) on top, unchanged. A layer whose dictionary cannot name `g` at
+        // all holds no row in `g`, so `local_graph` returning `None` drops that whole
+        // arm. Chain order, and the order within each arm, are the unkeyed
+        // override's, so this is the same multiset in the same order as
+        // `reifier_quads().filter(|q| g.matches(q.g))`.
+        self.local_graph(g, Layer::Base)
+            .into_iter()
+            .flat_map(move |graph| self.base.reifier_quads_in_graph(graph))
+            .filter(|q| !self.suppressed.contains(q))
+            .map(|q| map_quad(q, DeltaViewId::Base))
+            .chain(
+                self.local_graph(g, Layer::Delta)
+                    .into_iter()
+                    .flat_map(move |graph| self.delta.reifier_quads_in_graph(graph))
+                    .filter(|q| !self.duplicate_reifiers.contains(q))
+                    .map(|q| self.map_delta(q)),
+            )
+    }
+
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.base
             .annotation_quads()
@@ -667,6 +772,44 @@ impl DatasetView for DeltaDatasetView {
             .chain(
                 self.delta
                     .annotation_quads()
+                    .filter(|q| !self.duplicate_annotations.contains(q))
+                    .map(|q| self.map_delta(q)),
+            )
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same layer-local narrowing and masks, over the ANNOTATION stream — including the
+    /// middle arm for base quads promoted to annotations by a delta-added reifier.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        // See `reifier_quads_in_graph` above: the same layer-local narrowing and the
+        // same masks, over the ANNOTATION stream. The middle arm — base quads PROMOTED
+        // to annotations because the delta added a reifier for them — reads the base's
+        // ordinary table, which carries no graph seam of its own, so it keeps the
+        // definitional row filter; `local_graph` still drops the whole base arm when
+        // the base cannot name `g`.
+        self.local_graph(g, Layer::Base)
+            .into_iter()
+            .flat_map(move |graph| {
+                self.base
+                    .annotation_quads_in_graph(graph)
+                    .filter(|q| self.base_annotation_is_retained(*q))
+                    .chain(
+                        self.has_added_reifiers
+                            .then_some(self.base.as_ref())
+                            .into_iter()
+                            .flat_map(RdfDataset::quads)
+                            .filter(move |q| graph.matches(q.g))
+                            .filter(|q| self.base_quad_is_annotation(*q)),
+                    )
+            })
+            .map(|q| map_quad(q, DeltaViewId::Base))
+            .chain(
+                self.local_graph(g, Layer::Delta)
+                    .into_iter()
+                    .flat_map(move |graph| self.delta.annotation_quads_in_graph(graph))
                     .filter(|q| !self.duplicate_annotations.contains(q))
                     .map(|q| self.map_delta(q)),
             )
@@ -781,6 +924,225 @@ mod tests {
                 .named_graphs()
                 .map(|id| frozen.term_value(id))
                 .collect()
+        );
+    }
+
+    /// Every row of one dataset's RDF surface — plain rows and BOTH statement
+    /// tables — as owned values, which is the set an RDF 1.2 consumer that unions
+    /// the overlay onto the plain stream actually reads.
+    fn base_surface(base: &RdfDataset) -> BTreeSet<String> {
+        base.quads()
+            .chain(base.reifier_quads())
+            .chain(base.annotation_quads())
+            .map(|q| {
+                row_key(&QuadValues {
+                    s: base.term_value(q.s),
+                    p: base.term_value(q.p),
+                    o: base.term_value(q.o),
+                    g: q.g.map(|g| base.term_value(g)),
+                })
+            })
+            .collect()
+    }
+
+    /// The same surface, read through a snapshot.
+    fn view_surface(view: &DeltaDatasetView) -> BTreeSet<String> {
+        view.quads()
+            .chain(view.reifier_quads())
+            .chain(view.annotation_quads())
+            .map(|q| {
+                row_key(&QuadValues {
+                    s: view.term_value(q.s),
+                    p: view.term_value(q.p),
+                    o: view.term_value(q.o),
+                    g: q.g.map(|g| view.term_value(g)),
+                })
+            })
+            .collect()
+    }
+
+    /// A value row as a comparable key. `QuadValues` is neither `Hash` nor `Ord`,
+    /// and its derived `Debug` spells every component of every nested term, so two
+    /// rows share a key exactly when they are the same row.
+    fn row_key(q: &QuadValues) -> String {
+        format!("{q:?}")
+    }
+
+    /// THE CHANGE-SET LAW, stated over the surface rather than over any one table:
+    /// every row that joins or leaves the RDF surface must be NAMED by
+    /// [`DeltaDatasetView::changed_quads`].
+    ///
+    /// This is the property a change-set consumer depends on, and it is stronger
+    /// than "the added and suppressed tables are returned": the RDF 1.2 overlay
+    /// RECLASSIFIES rows — an added reifier for `(r, g)` moves the base rows about
+    /// `r` from the plain table into the annotation table, and suppressing one
+    /// moves them back — so a table-by-table reading of "what changed" is not the
+    /// same question. A row that merely changed tables did not join or leave the
+    /// surface and is not required here; a row that is absent from the surface
+    /// after being present in it (or the reverse) is, and a change set that omits
+    /// one is a silent drop, because nothing downstream can tell a short answer
+    /// from a quiet graph.
+    fn assert_changed_quads_covers_the_surface_difference(
+        base: &Arc<RdfDataset>,
+        mutation: &MutableDataset,
+        case: &str,
+    ) {
+        let view = mutation.snapshot_view().unwrap();
+        let changed: BTreeSet<String> = view
+            .changed_quads()
+            .map(|q| {
+                row_key(&QuadValues {
+                    s: view.term_value(q.s),
+                    p: view.term_value(q.p),
+                    o: view.term_value(q.o),
+                    g: q.g.map(|g| view.term_value(g)),
+                })
+            })
+            .collect();
+        let before = base_surface(base);
+        let after = view_surface(&view);
+        assert_ne!(
+            before, after,
+            "{case}: the delta moved no row at all, so this case proves nothing"
+        );
+        for row in before.symmetric_difference(&after) {
+            assert!(
+                changed.contains(row),
+                "{case}: {row:?} joined or left the RDF surface and changed_quads does not \
+                 name it — a consumer filtering the change set by predicate would never \
+                 re-examine it"
+            );
+        }
+        // The owned freeze of the same mutation is the independent oracle for what
+        // the surface became: a snapshot that disagrees with it would make the
+        // comparison above a comparison of one implementation with itself.
+        assert_eq!(
+            after,
+            base_surface(&mutation.freeze().unwrap()),
+            "{case}: the snapshot surface and its owned freeze must agree"
+        );
+    }
+
+    /// A base carrying a reifier declaration and one annotation on it, plus an
+    /// unrelated plain row, in the default graph.
+    fn reified_base() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://example.org/s");
+        let p = b.intern_iri("https://example.org/p");
+        let o = b.intern_iri("https://example.org/o");
+        let r = b.intern_iri("https://example.org/r");
+        let other = b.intern_iri("https://example.org/other");
+        let triple = b.intern_triple(s, p, o);
+        b.push_quad(s, p, o, None);
+        b.push_quad(other, p, o, None);
+        b.push_reifier_in_graph(r, triple, None);
+        b.push_annotation_in_graph(r, p, other, None);
+        b.freeze().unwrap()
+    }
+
+    /// The reifier declaration of [`reified_base`], as a value row.
+    fn reifier_row() -> QuadValues {
+        QuadValues {
+            s: iri("r"),
+            p: TermValue::Iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies".into()),
+            o: TermValue::Triple {
+                s: Box::new(iri("s")),
+                p: Box::new(iri("p")),
+                o: Box::new(iri("o")),
+            },
+            g: None,
+        }
+    }
+
+    #[test]
+    fn changed_quads_names_every_row_the_rdf12_overlay_moves_on_or_off_the_surface() {
+        // 1. An ADDED reifier: it demotes the base rows about its subject out of
+        //    the plain table. They stay on the surface as that reifier's
+        //    annotations, so the only row that JOINED is the declaration itself.
+        let base = reified_base();
+        let mut mutation = MutableDataset::new(Arc::clone(&base));
+        assert!(
+            mutation
+                .insert(QuadValues {
+                    s: iri("other"),
+                    ..reifier_row()
+                })
+                .unwrap()
+        );
+        assert_changed_quads_covers_the_surface_difference(&base, &mutation, "added reifier");
+
+        // 2. A SUPPRESSED reifier: it promotes that reifier's annotations back
+        //    into the plain table. Again a move, not a departure — the annotation
+        //    is still on the surface, and only the declaration left it.
+        let mut mutation = MutableDataset::new(Arc::clone(&base));
+        assert!(mutation.remove(&reifier_row()));
+        assert_changed_quads_covers_the_surface_difference(&base, &mutation, "suppressed reifier");
+
+        // 3. Suppressing a reifier AND its annotation: the annotation really does
+        //    leave, and it is named because it is suppressed in its own right.
+        let mut mutation = MutableDataset::new(Arc::clone(&base));
+        assert!(mutation.remove(&reifier_row()));
+        assert!(mutation.remove(&QuadValues {
+            s: iri("r"),
+            p: iri("p"),
+            o: iri("other"),
+            g: None,
+        }));
+        assert_changed_quads_covers_the_surface_difference(
+            &base,
+            &mutation,
+            "suppressed reifier and annotation",
+        );
+
+        // 4. A plain row added about an EXISTING reifier: it is admitted as that
+        //    reifier's annotation rather than as a plain row, so the table it
+        //    lands in is not the one a caller named — it is on the surface either
+        //    way, and named either way.
+        let mut mutation = MutableDataset::new(Arc::clone(&base));
+        assert!(
+            mutation
+                .insert(QuadValues {
+                    s: iri("r"),
+                    p: iri("p"),
+                    o: iri("s"),
+                    g: None,
+                })
+                .unwrap()
+        );
+        assert_changed_quads_covers_the_surface_difference(
+            &base,
+            &mutation,
+            "annotation of an existing reifier",
+        );
+
+        // 5. A reifier added for a subject that already carries plain rows AND an
+        //    identical annotation, which is the one shape in which a demoted row
+        //    is dropped rather than re-filed. It is still on the surface, via the
+        //    annotation that masked it.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("https://example.org/s");
+        let p = b.intern_iri("https://example.org/p");
+        let o = b.intern_iri("https://example.org/o");
+        let triple = b.intern_triple(s, p, o);
+        b.push_quad(s, p, o, None);
+        b.push_reifier_in_graph(s, triple, None);
+        b.push_annotation_in_graph(s, p, o, None);
+        let masked = b.freeze().unwrap();
+        let mut mutation = MutableDataset::new(Arc::clone(&masked));
+        assert!(
+            mutation
+                .insert(QuadValues {
+                    s: iri("s"),
+                    p: iri("p"),
+                    o: iri("other"),
+                    g: None,
+                })
+                .unwrap()
+        );
+        assert_changed_quads_covers_the_surface_difference(
+            &masked,
+            &mutation,
+            "reifier masking an identical annotation",
         );
     }
 

@@ -44,6 +44,11 @@ pub mod xml_escape;
 // evaluator's demand keying and the SPARQL property-function access-pattern
 // feasibility check.
 pub mod binding_pattern;
+// The generic authenticated artifact envelope: the ONE fixed-layout, fully
+// self-verifying byte container every prepared-product codec instantiates, so
+// the pack container's admission discipline is proven once rather than
+// transcribed per codec.
+pub mod artifact;
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure

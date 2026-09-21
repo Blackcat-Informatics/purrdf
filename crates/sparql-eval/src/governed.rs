@@ -45,6 +45,7 @@ use purrdf_core::{
 };
 
 use crate::governor::NonMonotoneBarrier;
+use crate::witness::RelationWitness;
 
 /// The result of one governed query execution.
 ///
@@ -83,7 +84,9 @@ impl GovernedOutcome {
     }
 
     /// The identity of the property-function registry this execution ran under,
-    /// whichever outcome it reached.
+    /// whichever outcome it reached — and, on
+    /// [`RelationIdentity::witness`], what the relations it actually invoked attested
+    /// about the indexes behind them.
     ///
     /// Empty ([`RelationIdentity::is_empty`]) when no registry, or an empty one, was in
     /// scope — never absent, for the reason [`RelationIdentity`] gives.
@@ -266,12 +269,28 @@ pub struct BudgetExhausted {
 /// the full descriptor set on every call. A caller that needs the full description reads
 /// it from an explain call over the same registry.
 ///
+/// # What the declarations cannot say, and the witness can
+///
+/// The fingerprint covers everything DECLARED about a registry, which is exactly what
+/// the planner reads — and a relation's index can be rebuilt underneath it without any
+/// declaration changing. Two governed runs of one query over one dataset snapshot under
+/// one registry could therefore carry byte-identical identities and different rows, with
+/// nothing on the receipt to say why. [`Self::witness`] is the other half: what the
+/// relations actually attested while they answered. The identity says which relations
+/// could have been asked; the witness says what the ones that WERE asked reported about
+/// themselves.
+///
 /// # Absence, not omission
 ///
-/// Empty (both the fingerprint and the IRI list) when no registry, or an empty one, was
-/// in scope — the same "present but empty" convention every other absence on this
-/// receipt uses (see [`QueryExplanation::relations`](crate::governor::QueryExplanation::relations)),
-/// never a missing value that could be mistaken for "this build does not report it".
+/// Empty (the fingerprint, the IRI list, AND the witness) when no registry, or an empty
+/// one, was in scope — the same "present but empty" convention every other absence on
+/// this receipt uses (see [`QueryExplanation::relations`](crate::governor::QueryExplanation::relations)),
+/// never a missing value that could be mistaken for "this build does not report it". The
+/// three are independently empty and that is deliberate: a non-empty registry whose
+/// relations this query never invoked carries a fingerprint, IRIs, and an EMPTY witness,
+/// which is the true statement that relations were in scope and none of them ran. An
+/// empty witness is never a claim that an index was whole — see
+/// [`ServiceLevel`](crate::ServiceLevel).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RelationIdentity {
     /// The registry's fingerprint — everything about its contents that can change a
@@ -281,16 +300,32 @@ pub struct RelationIdentity {
     pub fingerprint: String,
     /// The registered IRIs the fingerprint was taken over, sorted.
     pub iris: Vec<String>,
+    /// What each relation this execution actually invoked attested about the index
+    /// behind it: which generation answered, and whether it declared that index NOT
+    /// whole. See [`RelationWitness`].
+    ///
+    /// This is the per-run half of this receipt, riding beside the per-registry half,
+    /// exactly as [`GovernorEvidence`] rides beside the ceilings that produced it.
+    pub witness: RelationWitness,
 }
 
 impl RelationIdentity {
-    /// The empty identity: no registry, or an empty one, was in scope.
+    /// The empty identity: no registry, or an empty one, was in scope, and nothing
+    /// attested.
     pub const EMPTY: Self = Self {
         fingerprint: String::new(),
         iris: Vec::new(),
+        // `const`-constructible for the same reason `String::new()` and `Vec::new()`
+        // above are, so this constant survives the witness field without being
+        // downgraded to a function. See [`RelationWitness::EMPTY`].
+        witness: RelationWitness::EMPTY,
     };
 
     /// Whether no registry, or an empty one, was in scope.
+    ///
+    /// Reads the fingerprint ONLY, deliberately: the witness is per-run evidence, and a
+    /// run under a real registry that happened to invoke no relation has an empty
+    /// witness while the registry it ran under was anything but empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.fingerprint.is_empty()

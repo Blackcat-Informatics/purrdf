@@ -7,76 +7,31 @@
 //! RSS. The incremental peak is additional live requested storage above the phase
 //! baseline; governor peak cells remain a separate, typed execution measurement.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
+use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_core::{RdfDatasetBuilder, ResourceDimension, SparqlEngine, SparqlRequest};
 use purrdf_sparql_eval::governor::GovernorState;
 use purrdf_sparql_eval::{CacheLimits, NativeSparqlEngine, QueryGovernors, QueryOptions};
 
 const QUERY: &str = "SELECT ?s ?value WHERE { ?s <http://example.org/p> ?value } ORDER BY ?s";
 const REPETITIONS: usize = 100;
-static REQUESTS: AtomicUsize = AtomicUsize::new(0);
-static REQUESTED_BYTES: AtomicUsize = AtomicUsize::new(0);
-static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
-static PEAK_BYTES: AtomicUsize = AtomicUsize::new(0);
-struct CountingAllocator;
-
-fn allocated(bytes: usize) {
-    REQUESTS.fetch_add(1, Ordering::Relaxed);
-    REQUESTED_BYTES.fetch_add(bytes, Ordering::Relaxed);
-    let live = LIVE_BYTES.fetch_add(bytes, Ordering::Relaxed) + bytes;
-    PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
-}
-
-// SAFETY: Every allocation and deallocation forwards its pointer and original
-// layout unchanged to System; counters neither inspect nor alter the storage.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            allocated(layout.size());
-        }
-        pointer
-    }
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc_zeroed(layout) };
-        if !pointer.is_null() {
-            allocated(layout.size());
-        }
-        pointer
-    }
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
-        unsafe { System.dealloc(pointer, layout) };
-    }
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let replacement = unsafe { System.realloc(pointer, layout, size) };
-        if !replacement.is_null() {
-            LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
-            allocated(size);
-        }
-        replacement
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn measure(name: &str, engine: &NativeSparqlEngine, operation: impl FnOnce()) {
     let cache_before = engine.plan_cache_stats();
-    let initial_live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_BYTES.store(initial_live, Ordering::Relaxed);
-    let initial_requests = REQUESTS.load(Ordering::Relaxed);
-    let initial_bytes = REQUESTED_BYTES.load(Ordering::Relaxed);
+    // The whole-process window, because evaluation may fan out: the counters this
+    // replaced were process-wide atomics and this phase must keep seeing every
+    // thread it allocates on.
+    let window = WholeProcessWindow::open();
     operation();
-    let requests = REQUESTS.load(Ordering::Relaxed) - initial_requests;
-    let bytes = REQUESTED_BYTES.load(Ordering::Relaxed) - initial_bytes;
-    let peak = PEAK_BYTES
-        .load(Ordering::Relaxed)
-        .saturating_sub(initial_live);
+    let measured = window.close();
+    let requests = measured.allocations;
+    let bytes = measured.requested_bytes;
+    let peak = measured.peak_working_bytes;
     let cache = engine.plan_cache_stats();
     let plans = engine.plan_memory_observer().stats();
     println!(

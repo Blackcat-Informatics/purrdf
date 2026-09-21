@@ -309,6 +309,23 @@ pub trait DatasetView {
     /// The number of distinct interned terms this view addresses.
     fn term_count(&self) -> usize;
 
+    /// The total UTF-8 byte length of the term strings this view would hand back —
+    /// the size a destination's string arena has to reach to hold a full replay of
+    /// it, if the view can say cheaply.
+    ///
+    /// A SIZING HINT and nothing else. It never bounds a replay, is never a content
+    /// identity, and is never a cache key: a caller reserves against it and keeps
+    /// working if the replay overruns it. The default is `None` — "cannot say" — so a
+    /// view that would have to walk its own terms to answer stays silent rather than
+    /// paying an O(n) scan to save an O(log n) number of reallocations.
+    ///
+    /// A backend that already stores its strings in one arena (an [`RdfDataset`], a
+    /// pack dictionary) answers with that arena's length, which is exact for the
+    /// terms it owns.
+    fn term_bytes_hint(&self) -> Option<usize> {
+        None
+    }
+
     /// A cheap, deterministic size fingerprint for a dataset-aware cache key (e.g. a
     /// join-order cache). A *cache discriminator*, not a content digest. The default
     /// is `0` (no discrimination); [`RdfDataset`] hashes its quad and term counts.
@@ -354,6 +371,40 @@ pub trait DatasetView {
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
         let _ = reifier;
         std::iter::empty()
+    }
+
+    /// The reifier side-table rows scoped to graph `g`: the graph-narrowed twin of
+    /// [`reifier_quads`](Self::reifier_quads), for a caller that already knows the
+    /// active graph scope before it starts the walk (e.g. `GRAPH <g> { ... }`).
+    ///
+    /// Yields EXACTLY the rows `reifier_quads().filter(|q| g.matches(q.g))` yields, in
+    /// the same order. The default IS that filter, so every backend — including one
+    /// with no reifier layer at all — is correct with no per-backend work: this
+    /// method is an OPTIMIZATION SEAM, not a new obligation on implementors that
+    /// don't need it. A backend that can name, without materializing anything, which
+    /// of its own storage units could possibly hold a row in `g` overrides this to
+    /// visit only those units — see [`PagedDataset`](crate::ir::paged::PagedDataset)'s
+    /// and [`PagedQueryView`](crate::ir::paged::PagedQueryView)'s overrides, which
+    /// narrow to the pages a derived graph-postings index names for the reifier
+    /// stream, then still apply the per-row graph filter within each admitted unit
+    /// (a unit named by the index may also hold rows in OTHER graphs).
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.reifier_quads().filter(move |q| g.matches(q.g))
+    }
+
+    /// The annotation side-table rows scoped to graph `g`: the graph-narrowed twin of
+    /// [`annotation_quads`](Self::annotation_quads). See
+    /// [`reifier_quads_in_graph`](Self::reifier_quads_in_graph) for the full contract
+    /// (default-equivalence, optimization-seam status, and the override discipline);
+    /// this is the same seam for the annotation stream.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        self.annotation_quads().filter(move |q| g.matches(q.g))
     }
 
     /// Every named graph this view addresses, in ascending id order (sorted,
@@ -868,6 +919,13 @@ impl DatasetView for RdfDataset {
     }
 
     #[inline]
+    fn term_bytes_hint(&self) -> Option<usize> {
+        // The frozen dataset stores every term string in ONE arena, so its length is
+        // exactly the figure the hint asks for.
+        Some(self.rdf_text_bytes())
+    }
+
+    #[inline]
     fn stats_fingerprint(&self) -> u64 {
         Self::stats_fingerprint(self)
     }
@@ -958,6 +1016,11 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
 
     #[inline]
+    fn term_bytes_hint(&self) -> Option<usize> {
+        (**self).term_bytes_hint()
+    }
+
+    #[inline]
     fn probe_plan(
         &self,
         s_bound: bool,
@@ -1022,6 +1085,28 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         reifier: Self::Id,
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
         (**self).annotations_of_with_graph(reifier)
+    }
+
+    /// Forwarded per the impl-level doc above: whatever narrowing `T` provides for its
+    /// own [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) override is
+    /// inherited unchanged, so an `Arc`-wrapped paged backend keeps skipping the same
+    /// pages it would skip unwrapped.
+    #[inline]
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).reifier_quads_in_graph(g)
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: the
+    /// same unconditional forward, over the ANNOTATION stream.
+    #[inline]
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<Self::Id>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
+        (**self).annotation_quads_in_graph(g)
     }
 
     #[inline]

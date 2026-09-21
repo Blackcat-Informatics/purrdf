@@ -15,11 +15,11 @@
 //! [`ResultProvenance`] is trimmed and the drop is signalled via
 //! [`SerializeOutcome::provenance_dropped`] (the no-silent-cap contract).
 
-use purrdf_core::sink::TextOut;
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
 use crate::term::ntriples_token;
+use purrdf_core::sink::TextOut;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// Serialize a [`SparqlResult`] to W3C SPARQL Results CSV.
@@ -92,7 +92,6 @@ pub(crate) fn write_csv<W: TextOut + ?Sized>(
         }
     };
 
-
     // The over-wide-row refusal is decided BEFORE the first byte. Eagerly the partial
     // document was discarded; an incremental sink has already sent it. The scan picks
     // the same first offending row the interleaved check did — iteration order is
@@ -129,7 +128,7 @@ pub(crate) fn write_csv<W: TextOut + ?Sized>(
         out.push_str("\r\n");
     }
 
-        Ok(())
+    Ok(())
 }
 
 /// The bare CSV "value" for a bound term.

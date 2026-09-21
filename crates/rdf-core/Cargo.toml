@@ -76,6 +76,10 @@ regex = { workspace = true }
 regex-syntax = { workspace = true }
 
 [dev-dependencies]
+# The workspace's shared counting allocator, for `tests/ir_zero_alloc.rs`. Path-
+# only and unpublished, so it is stripped from the packaged manifest; std-only
+# and dependency-free, so it needs no target gate.
+purrdf-alloc-probe = { workspace = true }
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing
 # `use pretty_assertions::assert_eq;` per test file; identical on pass.
 pretty_assertions = { workspace = true }
@@ -175,6 +179,18 @@ harness = false
 # `.purremb` fixtures. Kept in a separate process so allocator atomics cannot
 # distort the Criterion timings above.
 name = "purremb_alloc"
+harness = false
+
+[[bench]]
+# One-shot allocation/count/high-water probes over the pack RESTORE path
+# (`PackView::from_bytes`, `dataset_from_view`, and `restore_pack` over both), on an
+# RDF 1.1 and an RDF 1.2 fixture. Separate from the `pack_query` Criterion target so
+# the allocator atomics cannot distort its timings, and separate from that target's
+# concerns because a decoder that quietly returns to one allocation per term reads as
+# noise in a latency measurement and as a scaling count here. Report-only — no
+# allocation or timing threshold is asserted. `make bench` lane only — excluded from
+# `make check`.
+name = "pack_restore_alloc"
 harness = false
 
 [[bench]]

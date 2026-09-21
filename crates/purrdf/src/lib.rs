@@ -490,6 +490,13 @@ mod tests {
             .ranked_declaration(
                 iri::parse(STRATUM).expect("the fixture stratum IRI is valid"),
                 Some(NOTE.to_owned()),
+                // The fixture index holds every document the fixture dataset
+                // has, so the exhaustive declaration is the true one.
+                sparql::RankFidelity::EXACT,
+                // The facade fixture fuses one stratum, so there is no second
+                // producer for a narrower declaration to certify against; the
+                // widest promise is the honest one.
+                sparql::CandidateDomains::Unrestricted,
             )
             .expect("a single-partition index declares a ranked order");
         registry.register_ranked(PRODUCER, Arc::new(relation), declaration);
@@ -497,17 +504,25 @@ mod tests {
         let stratum = retrieval::Iri::parse(STRATUM).expect("the fixture stratum IRI is valid");
         let mut weights = BTreeMap::new();
         weights.insert(stratum.clone(), retrieval::Fixed::ONE);
-        let profile = retrieval::FusionProfile::new(weights, 60)
-            .expect("the fixture fusion profile is valid");
+        let profile = retrieval::FusionProfile::with_decay(
+            weights,
+            retrieval::DecayRule::ReciprocalRank { k: 60 },
+        )
+        .expect("the fixture fusion profile is valid");
 
-        let request =
-            retrieval::RetrievalRequest::from_terms(vec![retrieval::RequestTerm::Lexical {
+        // The row bound is part of the request, because it is what the planner
+        // derives each stratum's depth from: `search` reads it from here rather
+        // than taking it as an argument of its own.
+        let request = retrieval::RetrievalRequest::bounded(
+            vec![retrieval::RequestTerm::Lexical {
                 text: "quick fox".to_owned(),
                 language: None,
                 predicate: Some(
                     retrieval::Iri::parse(NOTE).expect("the fixture predicate is valid"),
                 ),
-            }]);
+            }],
+            retrieval::TopK::new(4),
+        );
         let statistics = NoStatistics;
         let environment = retrieval::AdmissionEnvironment {
             registry: &registry,
@@ -522,7 +537,6 @@ mod tests {
             &*dataset,
             &environment,
             &profile,
-            retrieval::TopK::new(4),
         ))
         .expect("the facade composes the ladder");
 

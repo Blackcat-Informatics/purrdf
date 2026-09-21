@@ -18,8 +18,8 @@
 //! field equality over the declaration. [`place`] answers *where each facet of
 //! that term goes* and *what constant it becomes*, by reading the same
 //! declaration's [`TermPlacement`]s. The two halves are paired in the registry's
-//! [`AcceptedTerm`] so a reader cannot mis-align them, and they are paired here
-//! for the same reason.
+//! [`AcceptedTerm`](purrdf_sparql_eval::AcceptedTerm) so a reader cannot mis-align
+//! them, and they are paired here for the same reason.
 //!
 //! # Matching is not receiving
 //!
@@ -59,14 +59,49 @@ use crate::embedding::encode_embedding;
 use crate::render::{self, RDF_LANG_STRING, XSD_STRING};
 use crate::request::RequestTerm;
 
+/// What one flattened argument position of an invocation holds.
+///
+/// Three states rather than two, and the third is the point: a producer that declared
+/// a [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement) has that position
+/// **occupied** — which is what decides the invocation's access mode — while the
+/// number in it belongs to the unit and is rendered on every read of the unit's text.
+/// Represented as an occupied slot with no value, the two facts stop being one: the
+/// mode is derivable without a depth, and the depth is rendered without a second
+/// spelling of which position it goes in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Slot {
+    /// Nothing was placed here: the call renders the free variable `?cN`.
+    Free,
+    /// A request facet's constant, proved renderable by [`place`].
+    Placed(TermValue),
+    /// The per-stratum depth's own position, carrying the literal datatype its
+    /// producer declared for it and no value.
+    Depth {
+        /// The literal datatype IRI the producer declared for its depth argument.
+        datatype: String,
+    },
+}
+
+impl Slot {
+    /// Whether this position is occupied, which is what the access mode is read
+    /// from.
+    const fn is_occupied(&self) -> bool {
+        !matches!(*self, Self::Free)
+    }
+}
+
 /// One producer invocation, rendered from the request: what each flattened
 /// argument position holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Invocation {
-    /// Flattened position -> the constant to render, or `None` for a free `?cN`.
-    pub(crate) slots: Vec<Option<TermValue>>,
+    /// Flattened position -> what that position holds.
+    pub(crate) slots: Vec<Slot>,
     /// The access pattern the invocation actually has: bit `p` set iff
     /// `slots[p]` is occupied.
+    ///
+    /// This is the mode the evaluator will compute for the emitted call, and
+    /// therefore the mode the producer's own `rows_per_invocation` is read at —
+    /// see [`crate::admission::declared_row_bound`].
     pub(crate) mode: BindingPattern,
 }
 
@@ -287,6 +322,26 @@ pub(crate) fn seed_kind(text: &str) -> Option<TermKind> {
 /// applied in declaration order — caller order is identity-bearing and is never
 /// sorted.
 ///
+/// # No depth is needed, and that is what makes the bound knowable
+///
+/// This takes no depth, because the invocation's access mode does not depend on one.
+/// A declared [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement) occupies its
+/// position whatever number goes in it, the registry refuses a declaration that puts a
+/// term placement in that same position
+/// (`PropertyFunctionRegistry::register_ranked`), and the position's *rendered* text is
+/// the unit's to write on every read of its query. So the mode is a function of the
+/// declaration and the bound terms alone.
+///
+/// It used to take one, and the argument's only effect was to occupy that slot — the
+/// text it produced was discarded at emission. Its cost was an ordering that looked
+/// circular: the depth was derived from the registry's declared row bound, the bound
+/// was wanted at the mode, and the mode came from here. Both the planner and the waist
+/// resolved that by reading the bound at *every* declared mode and taking the maximum,
+/// which is a number no invocation is ever made under. With no depth here the order is
+/// the honest one — place, then read the declaration at the mode placement derived,
+/// then choose the depth — and the planner's whole provisional depth pass, which
+/// existed only to supply this argument, is gone with it.
+///
 /// # Errors
 ///
 /// A [`PlacementError`] naming the exact rule that refused; see that type.
@@ -296,7 +351,6 @@ pub(crate) fn place(
     decl: &RankedDeclaration,
     request_terms: &[RequestTerm],
     bound_indices: &[u32],
-    depth: u32,
 ) -> Result<Invocation, PlacementError> {
     let total = descriptor.subject_arity + descriptor.object_arity;
     if total > BindingPattern::MAX_ARITY {
@@ -310,7 +364,7 @@ pub(crate) fn place(
             declared: declared_modes(descriptor),
         });
     }
-    let mut slots: Vec<Option<TermValue>> = vec![None; total];
+    let mut slots: Vec<Slot> = vec![Slot::Free; total];
 
     let mut indices: Vec<u32> = bound_indices.to_vec();
     indices.sort_unstable();
@@ -343,18 +397,22 @@ pub(crate) fn place(
     }
 
     if let Some(depth_placement) = decl.depth_placement.as_ref() {
-        // A decimal integer with a declared datatype and no tag: the one term
-        // shape [`render::sparql_term`] can never refuse, so it is not re-checked.
-        let value = TermValue::Literal {
-            lexical_form: depth.to_string(),
+        // Occupied with the declared datatype and no value. The registry refuses a
+        // declaration that also places a term facet here, so there is no rewrite for
+        // `occupy` to reconcile — but the position can still be outside the relation's
+        // arity under a registry that moved, which is the one refusal left.
+        let slot =
+            slots
+                .get_mut(depth_placement.position)
+                .ok_or(PlacementError::PositionConflict {
+                    position: depth_placement.position,
+                })?;
+        *slot = Slot::Depth {
             datatype: depth_placement.datatype.clone(),
-            language: None,
-            direction: None,
         };
-        occupy(&mut slots, depth_placement.position, value)?;
     }
 
-    let mode = BindingPattern::from_bools(slots.iter().map(Option::is_some));
+    let mode = BindingPattern::from_bools(slots.iter().map(Slot::is_occupied));
     if !descriptor
         .modes
         .iter()
@@ -389,19 +447,18 @@ fn declared_modes(descriptor: &PfDescriptor) -> Vec<String> {
 /// alternatives can legitimately render the same constant into one position —
 /// but a *different* value is, because only one of the two questions could then
 /// be asked.
-fn occupy(
-    slots: &mut [Option<TermValue>],
-    position: usize,
-    value: TermValue,
-) -> Result<(), PlacementError> {
+fn occupy(slots: &mut [Slot], position: usize, value: TermValue) -> Result<(), PlacementError> {
     let slot = slots
         .get_mut(position)
         .ok_or(PlacementError::PositionConflict { position })?;
     match slot {
-        Some(existing) if *existing == value => Ok(()),
-        Some(_) => Err(PlacementError::PositionConflict { position }),
-        None => {
-            *slot = Some(value);
+        Slot::Placed(existing) if *existing == value => Ok(()),
+        // A position the depth already holds cannot also hold a request value — one
+        // argument renders one value, which is exactly what the registry asserts at
+        // registration, so reaching this means the registry moved under the plan.
+        Slot::Placed(_) | Slot::Depth { .. } => Err(PlacementError::PositionConflict { position }),
+        Slot::Free => {
+            *slot = Slot::Placed(value);
             Ok(())
         }
     }
@@ -683,36 +740,79 @@ fn renderable(
         })
 }
 
-/// Render every occupied slot, leaving a free position as `?c{position}`.
+/// One argument position of a rendered call.
 ///
-/// Shared so the branch text is written in exactly one place.
+/// Lives here rather than beside the query it is written into, because it is the
+/// per-position output of [`render_slots`] and therefore the shape of a [`Slot`] once
+/// rendered: the two enums are read together, and a reader who finds them in one place
+/// cannot pair the wrong arms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UnitArgument {
+    /// A position rendered once, at emission: a constant [`place`] put a request facet
+    /// into, or the free `?cN` variable of a position nothing was placed into. Neither
+    /// depends on the depth.
+    Placed(String),
+    /// The depth argument of a producer that declared a
+    /// [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement), held as the datatype
+    /// that producer declared for it and rendered from the unit's own depth every
+    /// time the text is asked for.
+    ///
+    /// The number is `compile::depth_argument`'s, which is not the emitted `LIMIT`'s —
+    /// see the [`compile`](crate::compile) module header for why a request and a
+    /// ceiling are not one number.
+    Depth {
+        /// The literal datatype IRI the producer declared for its depth argument.
+        datatype: String,
+    },
+}
+
+impl UnitArgument {
+    /// Whether this position is the depth argument.
+    pub(crate) const fn is_depth(&self) -> bool {
+        matches!(*self, Self::Depth { .. })
+    }
+}
+
+/// Render every occupied slot, leaving a free position as `?c{position}` and the
+/// depth's own position as the number's placeholder.
+///
+/// Shared so the branch text is written in exactly one place. The depth position is
+/// carried out rather than rendered, because the number in it is the unit's and is
+/// written on every read of the unit's text; which position that is comes from the
+/// [`Slot`] placement itself rather than from a second reading of the declaration.
 ///
 /// # Errors
 ///
 /// A [`RenderError`](render::RenderError) if a placed value has no constant
 /// form. [`place`] proves every slot it fills renders, so only a hand-built
 /// [`Invocation`] can reach this.
-pub(crate) fn render_slots(invocation: &Invocation) -> Result<Vec<String>, render::RenderError> {
+pub(crate) fn render_slots(
+    invocation: &Invocation,
+) -> Result<Vec<UnitArgument>, render::RenderError> {
     invocation
         .slots
         .iter()
         .enumerate()
         .map(|(position, slot)| match slot {
-            None => Ok(format!("?c{position}")),
-            Some(value) => render::sparql_term(value),
+            Slot::Free => Ok(UnitArgument::Placed(format!("?c{position}"))),
+            Slot::Placed(value) => render::sparql_term(value).map(UnitArgument::Placed),
+            Slot::Depth { datatype } => Ok(UnitArgument::Depth {
+                datatype: datatype.clone(),
+            }),
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Invocation, PlacementError, place, render_slots};
+    use super::{Invocation, PlacementError, UnitArgument, place, render_slots};
     use crate::iri::{Iri, Term};
     use crate::request::{Metric, RequestTerm};
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
-        AcceptedTerm, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode, RankOrdering,
-        RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+        AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode,
+        RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+        Volatility,
     };
 
     fn ex(suffix: &str) -> String {
@@ -745,8 +845,12 @@ mod tests {
             accepted_terms: accepted,
             depth_placement: depth,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
+            // Placement is about rendering arguments, not about fusion, so
+            // these fixtures make the widest promise there is on both terms.
+            fidelity: RankFidelity::EXACT,
+            domains: CandidateDomains::Unrestricted,
+            block_position: None,
             mandatory: false,
         }
     }
@@ -774,8 +878,18 @@ mod tests {
         }
     }
 
+    /// The constant text at each argument position, with the depth's own position
+    /// named rather than rendered: the number there is the unit's, written when the
+    /// unit's text is asked for, so placement has no value to show.
     fn placed(invocation: &Invocation) -> Vec<String> {
-        render_slots(invocation).expect("every placed slot renders")
+        render_slots(invocation)
+            .expect("every placed slot renders")
+            .into_iter()
+            .map(|argument| match argument {
+                UnitArgument::Placed(text) => text,
+                UnitArgument::Depth { datatype } => format!("<the unit's depth>^^<{datatype}>"),
+            })
+            .collect()
     }
 
     #[test]
@@ -788,7 +902,6 @@ mod tests {
             &declaration(any_accepting(value_at(1)), None),
             &[lexical(Some("en"))],
             &[0],
-            5,
         )
         .expect("a tagged needle places");
         assert_eq!(placed(&tagged)[1], "\"quick brown fox\"@en");
@@ -814,7 +927,6 @@ mod tests {
             ),
             &[lexical(Some("en"))],
             &[0],
-            5,
         )
         .expect("a split needle places");
         assert_eq!(placed(&split)[1], "\"quick brown fox\"");
@@ -839,15 +951,8 @@ mod tests {
             ]),
             None,
         );
-        let error = place(
-            &ex("pf/mock"),
-            &descriptor,
-            &decl,
-            &[lexical(None)],
-            &[0],
-            5,
-        )
-        .expect_err("an untagged needle cannot fill a language position");
+        let error = place(&ex("pf/mock"), &descriptor, &decl, &[lexical(None)], &[0])
+            .expect_err("an untagged needle cannot fill a language position");
         assert!(
             matches!(
                 error,
@@ -865,7 +970,6 @@ mod tests {
                 &decl,
                 &[lexical(Some("en"))],
                 &[0],
-                5,
             )
             .is_ok(),
             "the neighbouring tagged needle still places"
@@ -893,7 +997,6 @@ mod tests {
             &declaration(any_accepting(value_at(1)), None),
             std::slice::from_ref(&vector),
             &[0],
-            5,
         )
         .expect_err("an embedding under no declared datatype is not renderable");
         match error {
@@ -918,7 +1021,6 @@ mod tests {
             ),
             std::slice::from_ref(&vector),
             &[0],
-            5,
         )
         .expect("a declared datatype makes the embedding renderable");
         assert_eq!(
@@ -944,7 +1046,6 @@ mod tests {
                 entity: Term::new(format!("<{}>", ex("s"))),
             }],
             &[0],
-            5,
         )
         .expect("an IRI seed places");
         assert_eq!(placed(&seeded)[1], format!("<{}>", ex("s")));
@@ -962,7 +1063,6 @@ mod tests {
                 entity: Term::new("_:b0"),
             }],
             &[0],
-            5,
         )
         .expect_err("a blank node is a non-distinguished variable");
         match error {
@@ -980,7 +1080,6 @@ mod tests {
                     entity: Term::new(format!("<{}>", ex("s"))),
                 }],
                 &[0],
-                5,
             )
             .is_ok(),
             "the neighbouring IRI seed still places"
@@ -1004,7 +1103,6 @@ mod tests {
                 },
             ],
             &[0, 1],
-            5,
         )
         .expect_err("two different seeds cannot share one position");
         assert_eq!(
@@ -1024,7 +1122,6 @@ mod tests {
                 },
             ],
             &[0, 1],
-            5,
         )
         .expect("an identical re-write is not a conflict");
         assert_eq!(placed(&identical)[1], format!("<{}>", ex("a")));
@@ -1041,7 +1138,6 @@ mod tests {
             &declaration(any_accepting(value_at(1)), None),
             &[lexical(None)],
             &[0],
-            7,
         )
         .expect_err("`fbb` cannot serve an invocation that leaves the depth free");
         match without {
@@ -1066,13 +1162,16 @@ mod tests {
             ),
             &[lexical(None)],
             &[0],
-            7,
         )
         .expect("the declared depth placement makes `fbb` satisfiable");
         assert_eq!(with.mode, BindingPattern::from_code("fbb"));
+        // The depth's position is OCCUPIED — which is the whole of what makes `fbb`
+        // satisfiable — and holds no number: the datatype its producer declared comes
+        // back, and the number is rendered from the unit's own depth when the unit's
+        // text is asked for. That is why placement needs no depth to run.
         assert_eq!(
             placed(&with)[2],
-            "\"7\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+            "<the unit's depth>^^<http://www.w3.org/2001/XMLSchema#integer>"
         );
     }
 
@@ -1100,9 +1199,9 @@ mod tests {
                 entity: Term::new("\"needle\""),
             },
         ];
-        let forward = place(&ex("pf/mock"), &descriptor, &decl, &terms, &[0, 1], 5)
+        let forward = place(&ex("pf/mock"), &descriptor, &decl, &terms, &[0, 1])
             .expect("ascending indices place");
-        let reversed = place(&ex("pf/mock"), &descriptor, &decl, &terms, &[1, 0], 5)
+        let reversed = place(&ex("pf/mock"), &descriptor, &decl, &terms, &[1, 0])
             .expect("reordered indices place identically");
         assert_eq!(forward, reversed);
         assert_eq!(placed(&forward), placed(&reversed));
@@ -1126,7 +1225,7 @@ mod tests {
             },
         ];
         for order in [vec![0_u32, 1], vec![1, 0]] {
-            let error = place(&ex("pf/mock"), &descriptor, &decl, &terms, &order, 5)
+            let error = place(&ex("pf/mock"), &descriptor, &decl, &terms, &order)
                 .expect_err("both terms refuse");
             match error {
                 PlacementError::Unrenderable { term_index, .. } => assert_eq!(term_index, 0),
@@ -1176,7 +1275,6 @@ mod tests {
                 upper: Some("2026-02-01T00:00:00Z".to_owned()),
             }],
             &[0],
-            5,
         )
         .expect("both endpoints have a constant form");
         assert_eq!(
@@ -1202,7 +1300,6 @@ mod tests {
                 upper: Some(purrdf_text::Fixed::from_raw(2_250_000_000_000)),
             }],
             &[0],
-            5,
         )
         .expect("both endpoints have a constant form");
         // Exact: the raw fixed-point integer, reproduced digit for digit.
@@ -1230,7 +1327,6 @@ mod tests {
             &declaration(any_accepting(bounds_at(1, 2, XSD_DECIMAL)), None),
             std::slice::from_ref(&open_above),
             &[0],
-            5,
         )
         .expect_err("an absent endpoint is not a value to invent");
         assert!(
@@ -1258,7 +1354,6 @@ mod tests {
             ),
             &[open_above],
             &[0],
-            5,
         )
         .expect("the endpoint the term does carry places");
         assert_eq!(
@@ -1289,7 +1384,6 @@ mod tests {
             &declaration(any_accepting(untyped), None),
             std::slice::from_ref(&term),
             &[0],
-            5,
         )
         .expect_err("an endpoint with no declared datatype is not renderable");
         match error {
@@ -1312,7 +1406,6 @@ mod tests {
                 ),
                 &[term],
                 &[0],
-                5,
             )
             .is_ok(),
             "the neighbouring typed endpoint still places"
@@ -1335,7 +1428,6 @@ mod tests {
                 upper: Some(purrdf_text::Fixed::ONE),
             }],
             &[0],
-            5,
         )
         .expect_err("an interval has no single constant form");
         match error {

@@ -22,6 +22,7 @@ use purrdf_core::{
 };
 
 use super::*;
+use crate::property_fn::{Completeness, OrderFidelity};
 
 /// The fixture namespace. PurRDF mints no IRIs; these are the example vocabulary the
 /// repository's fixtures use.
@@ -1741,7 +1742,16 @@ fn the_ranked_declaration_places_the_seed_and_binds_k_as_the_depth() {
         purrdf_core::parse_iri("https://example.org/stratum/knn").expect("fixture stratum");
     let integer = "http://www.w3.org/2001/XMLSchema#integer".to_owned();
 
-    let declaration = relation.ranked_declaration(stratum.clone(), TermKind::Iri, integer.clone());
+    let declaration = relation.ranked_declaration(
+        stratum.clone(),
+        TermKind::Iri,
+        integer.clone(),
+        // This fixture space holds every vector the fixture corpus has, so the
+        // exhaustive declaration is the true one — and it is stated here, by
+        // the caller, rather than asserted by the relation.
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+    );
 
     assert_eq!(declaration.stratum, stratum, "the stratum is the caller's");
     assert_eq!(
@@ -1789,10 +1799,89 @@ fn the_ranked_declaration_places_the_seed_and_binds_k_as_the_depth() {
                 purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
                 TermKind::Literal,
                 "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
             )
             .accepted_terms[0]
             .pattern,
         TermPattern::of_kind(TermKind::Literal)
+    );
+}
+
+/// The fidelity is the **caller's word**, carried through unchanged, and the
+/// relation puts none of its own into the caller's mouth.
+///
+/// This relation's search really is exhaustive over the vectors it holds, so
+/// `EXACT` is a true statement about it — and that is exactly why asserting it
+/// here would be the dangerous convenience. It is not a statement about whether
+/// those vectors are the whole of the host's corpus, and nothing downstream can
+/// recover the difference: a stream that ran out of rows and a stream whose
+/// space never held them both stop yielding, both leave contiguous ranks, both
+/// report exhaustion. A consumer either receives the fact from the producer or
+/// never has it.
+#[test]
+fn the_ranked_declaration_carries_the_fidelity_the_caller_stated() {
+    let relation = EmbeddingKnnRelation::new(Arc::new(space(
+        &DistanceMetric::SquaredEuclidean,
+        &points(),
+    )));
+    let integer = "http://www.w3.org/2001/XMLSchema#integer".to_owned();
+    let declare = |fidelity: RankFidelity| {
+        relation
+            .ranked_declaration(
+                purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
+                TermKind::Iri,
+                integer.clone(),
+                fidelity,
+                CandidateDomains::Unrestricted,
+            )
+            .fidelity
+    };
+
+    // A host over a space it knows is its whole corpus states the top of the
+    // lattice, and gets it. The neighbouring-valid case: nothing here refuses
+    // the exhaustive claim, it only stops making it unbidden.
+    assert_eq!(declare(RankFidelity::EXACT), RankFidelity::EXACT);
+
+    // A host whose space holds a sample says so, in its own words, and those
+    // words arrive byte for byte rather than as a boolean derived from them.
+    let evidence: Arc<str> = Arc::from(
+        "this space was built over the 2019 slice of the corpus; an absent \
+         neighbour may be a 2020 document that was never embedded",
+    );
+    let sampled = RankFidelity {
+        completeness: Completeness::Lossy {
+            evidence: Arc::clone(&evidence),
+        },
+        order: OrderFidelity::Faithful,
+    };
+    let declared = declare(sampled.clone());
+    assert_eq!(declared, sampled);
+    let Completeness::Lossy {
+        evidence: carried, ..
+    } = &declared.completeness
+    else {
+        panic!("the declared loss is the one the host stated");
+    };
+    assert_eq!(&**carried, &*evidence);
+    assert!(
+        declared.may_omit(),
+        "and a consumer reads it as a stratum that may have withheld a row"
+    );
+
+    // The order axis is the host's too, and it is the axis on which no finite
+    // score bound survives — a producer comparing approximated values can rank a
+    // row better than it was due.
+    let perturbed = declare(RankFidelity {
+        completeness: Completeness::Complete,
+        order: OrderFidelity::Perturbed {
+            evidence: Arc::clone(&evidence),
+        },
+    });
+    assert!(perturbed.order_is_unbounded());
+    assert!(
+        !perturbed.may_omit(),
+        "the two axes are independent and this relation collapses neither"
     );
 }
 
@@ -1809,6 +1898,8 @@ fn the_declared_depth_placement_yields_an_invocation_the_relation_answers() {
         purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
         TermKind::Iri,
         "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
     );
     let depth = declaration.depth_placement.expect("a depth placement");
 

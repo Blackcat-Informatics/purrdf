@@ -120,6 +120,96 @@ fn inclusive_limits_and_cache_accounting_are_exact() {
     assert_eq!(evidence.consumed_bytes, 0);
 }
 
+/// Page-budget refusal boundary. A single-page dataset that owns the only page a
+/// graph-selective query needs: a ZERO page budget refuses it (the owning page is the
+/// very first request, and the budget is already exhausted), while a budget of
+/// EXACTLY ONE completes it on a fresh view — the inclusive ceiling admitting the
+/// one page the query genuinely needs.
+#[test]
+fn page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it() {
+    let pages = vec![page_in_named_graph("s", "o", "g")];
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("g interned at seal");
+
+    let refused = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert_eq!(
+        refused
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "a zero page budget refuses the one page this graph-selective query needs"
+    );
+    assert_eq!(
+        failed_status(refused.operation_status()).0,
+        PagedQueryError::PageBudgetExceeded {
+            page: PageId(0),
+            limit: 0,
+            consumed: 0,
+        }
+    );
+
+    // Neighbouring valid case: budget 1 completes the identical query on a fresh view.
+    let admitted = paged.query_view(PagedQueryLimits::new(1, u64::MAX));
+    let row_count = admitted
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "budget 1 completes the one-graph query");
+    assert_eq!(
+        ready_evidence(admitted.operation_status()).consumed_pages,
+        1
+    );
+}
+
+/// Byte-budget refusal boundary. A single-page dataset with an explicit deterministic
+/// byte charge: a budget ONE BYTE below that charge refuses the one-graph query,
+/// while a budget EXACTLY EQUAL to it completes the query — the inclusive ceiling
+/// documented on [`PagedQueryLimits`].
+#[test]
+fn byte_budget_below_the_owning_page_charge_refuses_and_exact_equality_admits() {
+    const CHARGE: u64 = 42;
+    let page = page_in_named_graph("s", "o", "g");
+    let provider = Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(page, CHARGE)],
+        PageGeneration::INITIAL,
+    ));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("g interned at seal");
+
+    let refused = paged.query_view(PagedQueryLimits::new(u64::MAX, CHARGE - 1));
+    assert_eq!(
+        refused
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "one byte below the owning page's charge refuses"
+    );
+    assert_eq!(
+        failed_status(refused.operation_status()).0,
+        PagedQueryError::ByteBudgetExceeded {
+            page: PageId(0),
+            limit: CHARGE - 1,
+            consumed: 0,
+            page_bytes: CHARGE,
+        }
+    );
+
+    // Neighbouring valid case: EXACTLY the page's charge admits (inclusive ceiling).
+    let admitted = paged.query_view(PagedQueryLimits::new(u64::MAX, CHARGE));
+    let row_count = admitted
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "a budget exactly equal to the charge admits");
+    assert_eq!(
+        ready_evidence(admitted.operation_status()).consumed_bytes,
+        CHARGE
+    );
+}
+
 struct FailAfterSealProvider {
     page: Arc<RdfDataset>,
     calls: AtomicUsize,
@@ -577,4 +667,147 @@ fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_wor
         "a view already failed before the drain must trigger no additional \
          materialization work"
     );
+}
+
+/// A page with one base quad asserted in a named graph, for the `named_graphs`
+/// sticky-failure test below (`page` above only ever writes the default graph).
+fn page_in_named_graph(subject: &str, object: &str, graph: &str) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri(&format!("http://example.org/{object}"));
+    let graph = builder.intern_iri(&format!("http://example.org/{graph}"));
+    builder.push_quad(subject, predicate, object, Some(graph));
+    builder.freeze().expect("valid page")
+}
+
+/// `DatasetView::named_graphs` on `PagedQueryView` MUST respect the sticky-failure
+/// gate every other egress on this type honours: once the view's first operational
+/// error has latched, `named_graphs()` yields nothing, even though the answer is
+/// metadata read from `GraphPageIndex` and would otherwise cost nothing. The
+/// neighbouring positive case proves the gate is not simply starving every view: a
+/// HEALTHY view at the identical resource limits still yields the full named-graph
+/// set.
+#[test]
+fn named_graphs_is_empty_after_a_sticky_failure() {
+    let generation = PageGeneration(9);
+    let pages = vec![page_in_named_graph("s0", "o0", "gA")];
+    let provider = Arc::new(InMemoryPageProvider::with_byte_lengths(
+        pages.into_iter().map(|p| (p, 10)).collect(),
+        generation,
+    ));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    // A zero page budget: any pattern read that must materialize a page trips a
+    // terminal PageBudgetExceeded error, which latches for the rest of the view.
+    let failed = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert_eq!(
+        failed
+            .quads_for_pattern(None, None, None, GraphMatch::Any)
+            .count(),
+        0,
+        "the zero-page budget refuses the only page"
+    );
+    assert!(
+        matches!(
+            failed.operation_status(),
+            ViewOperationStatus::Failed {
+                error: PagedQueryError::PageBudgetExceeded { .. },
+                ..
+            }
+        ),
+        "the forced pattern read must have latched a terminal error"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&failed).count(),
+        0,
+        "named_graphs must yield nothing once the view has failed, even though the \
+         answer is metadata that would otherwise cost no page"
+    );
+
+    // The positive neighbour: a FRESH view at the SAME limits that never attempts a
+    // pattern read never fails, and named_graphs still returns the full set — the
+    // gate above is not simply starving every view of this dataset.
+    let healthy = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert!(
+        matches!(
+            healthy.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ),
+        "a view that never requests a page must stay Ready"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&healthy).count(),
+        1,
+        "a healthy view must still see the one named graph, at zero page cost"
+    );
+    assert!(
+        matches!(
+            healthy.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ),
+        "reading named_graphs on a healthy view must not itself request a page or fail it"
+    );
+}
+
+/// A page whose ONE named graph carries ONE annotation row, for the
+/// `annotation_quads_in_graph` page-narrowing tests below.
+fn page_with_annotation_in_own_graph(i: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let reifier = builder.intern_iri(&format!("http://example.org/r{i}"));
+    let predicate = builder.intern_iri(&format!("http://example.org/p{i}"));
+    let object = builder.intern_iri(&format!("http://example.org/o{i}"));
+    let graph = builder.intern_iri(&format!("http://example.org/g{i}"));
+    builder.push_annotation_in_graph(reifier, predicate, object, Some(graph));
+    builder.freeze().expect("valid page")
+}
+
+/// `PagedQueryView::annotation_quads_in_graph(GraphMatch::Named(g0))` on a 4-page
+/// view — one named graph and one annotation row per page — must consume EXACTLY the
+/// one page whose graph-postings entry names it (`evidence.requested_pages ==
+/// [PageId(0)]`), going through `self.page` so the sticky-failure gate and the
+/// page/byte budget charging still apply. The neighbouring must-succeed case: the
+/// SAME shape of view under `GraphMatch::Any` still consumes every page and yields
+/// every row — narrowing by graph is not narrowing by accident.
+#[test]
+fn annotation_quads_in_graph_named_consumes_only_the_owning_page() {
+    let pages: Vec<Arc<RdfDataset>> = (0..4).map(page_with_annotation_in_own_graph).collect();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    let g0 = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g0"))
+        .expect("g0 interned at seal");
+
+    let named_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let named_row_count = named_view
+        .annotation_quads_in_graph(GraphMatch::Named(g0))
+        .count();
+    assert_eq!(
+        named_row_count, 1,
+        "only page 0's annotation row is in graph g0"
+    );
+    let named_evidence = ready_evidence(named_view.operation_status());
+    assert_eq!(
+        named_evidence.requested_pages,
+        vec![PageId(0)],
+        "GraphMatch::Named(g0) must request only the one page g0's postings name"
+    );
+    assert_eq!(named_evidence.consumed_pages, 1);
+
+    // Neighbouring must-succeed case: `GraphMatch::Any` still consumes every page and
+    // yields every row, on a FRESH view over the same dataset and limits.
+    let any_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let any_row_count = any_view.annotation_quads_in_graph(GraphMatch::Any).count();
+    assert_eq!(
+        any_row_count, 4,
+        "Any must yield every page's annotation row"
+    );
+    let any_evidence = ready_evidence(any_view.operation_status());
+    assert_eq!(
+        any_evidence.requested_pages,
+        vec![PageId(0), PageId(1), PageId(2), PageId(3)],
+        "GraphMatch::Any must still visit every page"
+    );
+    assert_eq!(any_evidence.consumed_pages, 4);
 }

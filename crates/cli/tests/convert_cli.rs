@@ -2569,9 +2569,7 @@ fn file_target_partial_output_is_removed_on_failure() {
             "<https://example.org/s{i}> <https://example.org/p> \"value {i}\" ."
         );
     }
-    doc.push_str(
-        "<https://example.org/bad> <https://example.org/p> \"bad\\uFFFF\" .\n",
-    );
+    doc.push_str("<https://example.org/bad> <https://example.org/p> \"bad\\uFFFF\" .\n");
     std::fs::write(&source, doc).expect("write source");
     let out = dir.path().join("out.rdf");
 

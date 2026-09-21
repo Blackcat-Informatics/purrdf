@@ -17,8 +17,8 @@
 
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral, RdfTerm, RdfTextDirection};
 use purrdf_rdf::{
-    NativeRdfFormat, SerializeGraph, SerializeOptions, StatementLayer, serialize_dataset_to_writer_with,
-    serialize_dataset_with,
+    NativeRdfFormat, SerializeGraph, SerializeOptions, StatementLayer,
+    serialize_dataset_to_writer_with, serialize_dataset_with,
 };
 use std::sync::Arc;
 
@@ -229,6 +229,9 @@ fn streaming_survives_a_one_byte_at_a_time_writer() {
             dribble.0.len(),
             "{format:?} miscounted bytes across single-byte writes"
         );
-        assert_eq!(eager.bytes, dribble.0, "{format:?} lost bytes to a short writer");
+        assert_eq!(
+            eager.bytes, dribble.0,
+            "{format:?} lost bytes to a short writer"
+        );
     }
 }

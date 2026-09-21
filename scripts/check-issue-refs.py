@@ -51,14 +51,34 @@ above are left alone as the unrelated compound words they are; only the bare
 phrase and its ``'s``/``-author`` forms are rejected.
 
 **Hazard / finding labels** — a bare ``H12``, or an ``F6``/``N3``-shaped token
-used AS A LABEL (``F6:`` at the start of a clause, or wrapped alone in
-parentheses, ``(F1)``). These are identifiers from a review thread — meaningful
-only to the reviewer who assigned them, not to the codebase. A bare ``H<N>`` is
-banned outright (no legitimate first-party use collides with that shape); an
-``F<N>``/``N<N>`` shape is only banned in the specific label positions above,
-because those two letters are also legitimate technical vocabulary elsewhere
-(``F32``/``F64`` float widths, ``N3`` the RDF serialization, ``N802`` a linter
-code) that must not be flagged.
+used AS A LABEL (``F6:`` opening a clause, ``F6 —`` opening one with a dash
+instead of a colon, or wrapped alone in parentheses, ``(F1)``). These are
+identifiers from a review thread — meaningful only to the reviewer who assigned
+them, not to the codebase. Every one of these letters is also legitimate
+technical vocabulary — ``F32``/``F64`` float widths, ``N3`` the RDF
+serialization, ``N802`` a linter code, ``H1``–``H6`` the Markdown heading levels
+this repository ships a codec for — so a label is recognised by the LABEL SHAPE
+(a position plus its punctuation), never by the letter alone.
+
+The DASH form is the one this gate was blind to, and the blindness is the worst
+kind: the rule was written, the scan ran, and eleven labels reading ``F1 —``
+sat in two tracked test files while the gate printed OK, because the separator
+was an em-dash rather than the colon the pattern required. A punctuation mark
+is not what makes a label a label. All three separators are matched now — the
+colon, an em/en dash, and the ASCII ``-``/``--`` a plain-text comment uses for
+the same purpose.
+
+The correction to that fix is the mirror failure, and it is recorded here
+because it is the one this rule will keep drifting toward. Widening the rule to
+read the label's POSITION *alone* — any comment line opening with ``F``/``N``
+and digits — made the gate refuse ``// N3 is a Turtle superset; we parse Turtle
+only.`` and ``// F64 values round-trip exactly through the writer.``, and it
+refused them on CONTINUATION lines too, so re-wrapping a paragraph could turn
+valid prose into a gate failure. It passed only because no line in the tree
+happened to begin with one of those tokens. A refusal is a claim, and that one
+was false: position and punctuation are BOTH required, together. The label
+shapes are enumerated at ``LABEL_OPENING_RE``, and the prose that must stay
+spared is asserted case by case in ``_DETECTION_CASES``.
 
 **Development gap/remediation tags** — a bare ``G12:``/``R9:`` label opening a
 clause (mirroring the hazard-label shape above but for the ``G<N>``/``R<N>``
@@ -203,11 +223,24 @@ acceptance-criterion label ``AC`` followed by exactly one digit (``AC1``);
 single-digit labels this repository's planning documents have used.
 
 The hazard-label token patterns are a bare ``H`` followed by 1-3 digits
-(``H12``), and an ``F``/``N`` followed by 1-3 digits either immediately
-followed by a colon (``F6:``) or wrapped alone in parentheses (``(F1)``,
-``(N3)``) — the two shapes every real finding label in this repository's
-history has taken. The narrower ``F``/``N`` shape leaves every other use of
-those letters (a float width, a serialization name, a linter code) alone.
+(``H12``), and an ``F``/``N`` followed by 1-3 digits that is either immediately
+followed by a colon (``F6:``), separated by whitespace from an em/en dash
+(``F1 —``), separated by whitespace from an ASCII ``--`` that is itself
+followed by whitespace (``F1 -- ``), or wrapped alone in parentheses
+(``(F1)``, ``(N3)``). The narrower ``F``/``N`` shape leaves every other use of
+those letters (a float width, a serialization name, a linter code) alone, and
+the trailing-whitespace requirement on the ASCII form keeps ``F1 -1`` — a label
+shape followed by a negative number — out of the match.
+
+The bare ``H<N>`` shape carries ONE exemption, and it is an exemption in the
+prose's own terms rather than a register of files: ``H1``–``H6`` (only those
+six — ``H7`` and ``H12`` are never spared) on a line that also says
+"heading"/"header" is naming a Markdown heading LEVEL, not a review-thread
+hazard. This repository ships a Markdown codec, so ``Uses H1 through H6 for
+Markdown heading levels.`` and ``H2 headings become sections`` are prose it will
+keep writing; refusing them is the over-refusal mirror of the miss above. A
+hazard id on a line with no heading vocabulary (``risk H3 is unresolved``) still
+fires, and so does ``H12`` on a line about headings.
 
 The gap-tag token patterns are, all case-insensitive on the word "gap": the
 literal collocation ``gap R`` followed by 1-2 digits (``gap R9``), the
@@ -287,7 +320,10 @@ TOKEN_RE = re.compile(
     r"(?:['’]s)?(?![A-Za-z0-9_-])))"
     rf"|(?P<issue_normative>{_NOT_AFTER_WORD}issue-normative{_NOT_BEFORE_WORD})"
     rf"|(?P<hazard>{_NOT_AFTER_WORD}H\d{{1,3}}{_NOT_BEFORE_WORD})"
-    rf"|(?P<hazard_label>{_NOT_AFTER_WORD}[FN]\d{{1,3}}:|\([FHN]\d{{1,3}}\))"
+    rf"|(?P<hazard_label>{_NOT_AFTER_WORD}[FN]\d{{1,3}}:"
+    rf"|{_NOT_AFTER_WORD}[FN]\d{{1,3}}\s+[—–]"
+    rf"|{_NOT_AFTER_WORD}[FN]\d{{1,3}}\s+--(?=\s)"
+    rf"|\([FHN]\d{{1,3}}\))"
     rf"|(?P<plan_ref>{_NOT_AFTER_WORD}the plan(?:[\'’]s{_NOT_BEFORE_WORD}|\s+§))"
     rf"|(?P<ac_label>{_NOT_AFTER_WORD}AC\d{_NOT_BEFORE_WORD})"
     rf"|(?P<gap_tag>(?i:gap)\s+R\d{{1,2}}{_NOT_BEFORE_WORD}"
@@ -296,6 +332,61 @@ TOKEN_RE = re.compile(
     rf"|{_NOT_AFTER_WORD}G\d{{1,2}}:"
     rf"|{_NOT_AFTER_WORD}R\d{{1,2}}:)"
 )
+
+# A finding label OPENING a comment line — after nothing but the comment's own
+# punctuation — AND closed, on that same line, by the punctuation a label wears.
+# BOTH halves are required, and the second half is the correction to a real
+# over-refusal: reading the position alone made every comment line that merely
+# BEGAN with `N3`, `F32` or `F64` a gate failure, including a continuation line
+# produced by nothing worse than re-wrapping a paragraph.
+#
+# The closing is an immediate colon, a whitespace-separated em/en dash, a
+# whitespace-separated ASCII `--`, or a single bare word closed by a colon
+# (`F2 regression:`, `F1 rows:`) — any of which may be preceded by a
+# PARENTHETICAL qualifying the label itself (`F1 (value-restriction variant):`,
+# `F1 (THE FINDING ITSELF) —`). The parenthetical is optional rather than its
+# own alternative on purpose: enumerating `label + parenthetical + colon` while
+# forgetting `label + parenthetical + dash` is the same enumeration hole the
+# colon-only rule had, and one of the eleven labels this branch removed wore
+# exactly that second shape.
+#
+# A SINGLE `-` is deliberately not a separator here: `N3 - a Turtle superset -
+# is out of scope.` is prose, and thirty `# noqa: CODE - reason` suppressions
+# ship in the RDFLib compatibility layer.
+#
+# The dash and colon closings are also matched by `TOKEN_RE` wherever they
+# occur, not just at a line's start; this rule adds the qualifier shapes, which
+# have no unambiguous reading anywhere else.
+LABEL_OPENING_RE = re.compile(
+    r"^[ \t/*#!>-]*([FHN]\d{1,3})"
+    r"(?:[ \t]*\([^)]*\))?"
+    r"(?::"
+    r"|[ \t]+[—–]"
+    r"|[ \t]+--(?=[ \t])"
+    r"|[ \t]+[A-Za-z][A-Za-z0-9_-]*:"
+    r")"
+)
+
+# ``H1``–``H6`` are the Markdown HEADING LEVELS as well as the shape a review
+# thread's hazard ids wear, and this repository ships a Markdown codec — so
+# ``Uses H1 through H6 for Markdown heading levels.`` and ``H2 headings become
+# sections`` are prose it will keep writing, and a gate that refuses them is the
+# over-refusal mirror of the label miss above. The exemption is stated in the
+# prose's own terms rather than as a register of files, and it is doubly narrow:
+# only the six levels Markdown actually has (``H7`` and ``H12`` are never
+# spared), and only on a line that also says "heading"/"header". A hazard id
+# with no heading vocabulary beside it still fires.
+HEADING_LEVEL_RE = re.compile(r"\AH[1-6]\Z")
+HEADING_PROSE_RE = re.compile(r"(?i)head(?:ing|er)s?")
+
+
+def is_markdown_heading_level(kind: str, token: str, line: str) -> bool:
+    """Whether an ``H<N>`` hit names a Markdown heading level, not a hazard id."""
+    return (
+        kind == "hazard"
+        and HEADING_LEVEL_RE.match(token) is not None
+        and HEADING_PROSE_RE.search(line) is not None
+    )
 
 # Where a rendered book tree's files live in the source tree, for register
 # lookups in ``--rendered-tree`` mode (see ``main``).
@@ -374,6 +465,12 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
         ("crates/rdf/tests/gts_certify.rs", "the plan's"),
         ("crates/shapes/src/instance.rs", "Task 6"),
+        # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
+        # which reads the label's POSITION rather than the punctuation after it.
+        # `F6:` in this same file was already registered; these are the same
+        # debt spelled `F1 (variant)`, `F1 rows:` and `F<N> regression:`, which
+        # a colon-or-dash pattern could not see.
+        ("crates/shapes/src/json_schema.rs", "F1"),
         ("crates/shapes/src/json_schema.rs", "F6:"),
         ("crates/shapes/src/json_schema.rs", "Task 3"),
         ("crates/shapes/src/json_schema.rs", "Task 4"),
@@ -383,6 +480,9 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/sparql-conformance/tests/owl2_rl_conformance.rs", "the plan's"),
         ("crates/sparql-eval/src/parallel_determinism_gate.rs", "Task 7"),
         ("crates/sparql-eval/src/stat_agg.rs", "the plan's"),
+        ("crates/xsd/src/temporal.rs", "F1"),
+        ("crates/xsd/src/temporal.rs", "F2"),
+        ("crates/xsd/src/temporal.rs", "F3"),
     }
 )
 
@@ -418,18 +518,23 @@ AMBIGUOUS_PLAN_PHRASES: frozenset[str] = frozenset(
     {
         "bindings/python/python/src/purrdf/__init__.pyi",
         "bindings/python/src/py_retrieval.rs",
+        "bindings/python/tests/test_retrieval.py",
         "crates/datalog/src/seminaive.rs",
         "crates/gts/src/compact.rs",
         "crates/gts/tests/pinned_dict_compaction.rs",
         "crates/rdf-core/src/ir/dataset.rs",
         "crates/rdf/tests/dict_vectors.rs",
+        "crates/retrieval/README.md",
         "crates/retrieval/src/admission.rs",
         "crates/retrieval/src/canonical.rs",
         "crates/retrieval/src/compile.rs",
+        "crates/retrieval/src/error.rs",
         "crates/retrieval/src/lib.rs",
         "crates/retrieval/src/matching.rs",
         "crates/retrieval/src/plan.rs",
         "crates/retrieval/tests/admission_tests.rs",
+        "crates/retrieval/tests/plan.rs",
+        "crates/retrieval/tests/planner_golden.rs",
         "crates/retrieval/tests/search.rs",
         "crates/sparql-eval/src/governor/ledger.rs",
         "crates/sparql-eval/src/property_fn.rs",
@@ -800,6 +905,7 @@ def scan_comments(
     meaning there and a ``#NNN`` token inside them is still flagged.
     """
     violations: list[tuple[int, int, str, str, str]] = []
+    seen_labels: set[tuple[int, int]] = set()
 
     for start_line, start_col, text in comments:
         text_lines = text.split("\n")
@@ -815,10 +921,45 @@ def scan_comments(
                 spans = find_inline_code_spans(text_lines[rel_line - 1])
                 if any(s <= col0 < e for s, e in spans):
                     continue
+            if is_markdown_heading_level(kind, match.group(), text_lines[rel_line - 1]):
+                continue
             line = start_line + rel_line - 1
             col = start_col + rel_col - 1 if rel_line == 1 else rel_col
+            if kind == "hazard_label":
+                seen_labels.add((line, col))
             violations.append(
                 (line, col, match.group(), snippet(text, offset, match.end()), kind)
+            )
+
+        # A FINDING LABEL OPENS A CLAUSE AND IS CLOSED BY LABEL PUNCTUATION, and
+        # it takes BOTH to be one. A pattern written around the marks alone
+        # catches whichever ones it happened to enumerate — eleven `F1 —` labels
+        # shipped past a rule that required a colon. A pattern written around
+        # the POSITION alone refuses ordinary prose: `// N3 is a Turtle
+        # superset` and `// F64 values round-trip exactly` are sentences, and on
+        # a wrapped comment they are sentences that only START a line because of
+        # where the paragraph happened to break. Requiring the two together
+        # catches `F1 (value-restriction variant):` and `F2 regression:` — the
+        # qualifier shapes no punctuation rule reaches — while leaving every
+        # sentence that merely begins with a float width or a serialization name
+        # alone. See `LABEL_OPENING_RE` for the enumerated closings.
+        for rel_line, line_text in enumerate(text_lines, start=1):
+            opening = LABEL_OPENING_RE.match(line_text)
+            if opening is None:
+                continue
+            rel_col = opening.start(1) + 1
+            line = start_line + rel_line - 1
+            col = start_col + rel_col - 1 if rel_line == 1 else rel_col
+            if (line, col) in seen_labels:
+                continue
+            violations.append(
+                (
+                    line,
+                    col,
+                    opening.group(1),
+                    line_text.strip()[:60],
+                    "hazard_label",
+                )
             )
 
     return violations
@@ -1249,6 +1390,8 @@ def scan_markdown(src: str) -> list[tuple[int, int, str, str, str]]:
                 start >= s and start < e for s, e in code_spans
             ):
                 continue
+            if is_markdown_heading_level(kind, match.group(), line):
+                continue
             violations.append(
                 (
                     line_no,
@@ -1276,13 +1419,16 @@ def scan_toml(src: str) -> list[tuple[int, int, str, str, str]]:
     for line_no, line in enumerate(src.splitlines(), start=1):
         for match in TOKEN_RE.finditer(line):
             start = match.start()
+            kind = match.lastgroup or "issue"
+            if is_markdown_heading_level(kind, match.group(), line):
+                continue
             violations.append(
                 (
                     line_no,
                     start + 1,
                     match.group(),
                     snippet(line, start, match.end()),
-                    match.lastgroup or "issue",
+                    kind,
                 )
             )
 
@@ -1460,6 +1606,249 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
     # ASCII lookaround is the same boundary `\b` was wherever `\b` worked, and
     # the clean Chinese sentence at the end proves the widened match fires on
     # tokens, not on Chinese.
+    # The finding-label separators. The colon form was matched from the start;
+    # the dash forms were not, and eleven labels spelled with an em-dash sat in
+    # tracked Rust comments while this gate reported clean. Each separator is
+    # asserted here, with the technical vocabulary that shares those letters
+    # asserted clean beside it.
+    (
+        "a finding label opening a clause with a colon",
+        ".rs",
+        "// F6: the manifest is written before the corpus exists.\n",
+        "F6:",
+    ),
+    (
+        "a finding label opening a clause with an em-dash (the shape that shipped)",
+        ".rs",
+        "// F1 — the lane certifies output it never produced.\n",
+        "F1 —",
+    ),
+    (
+        "a finding label opening a clause with an en-dash",
+        ".md",
+        "N3 – the shard manifest outlives its shard.\n",
+        "N3 –",
+    ),
+    (
+        "a finding label opening a clause with an ASCII double hyphen",
+        ".rs",
+        "// F4 -- the stamp survives a failed run.\n",
+        "F4 --",
+    ),
+    (
+        "a finding label wrapped alone in parentheses",
+        ".rs",
+        "// The guard added for (F1) is exercised below.\n",
+        "(F1)",
+    ),
+    (
+        # The shape no punctuation rule reaches: the label OPENS the clause and
+        # what follows it is a parenthetical, not a separator.
+        "a finding label opening a clause with a parenthetical",
+        ".rs",
+        "// F1 (the value-restriction variant): the guard rejects a bare node.\n",
+        "F1",
+    ),
+    (
+        "a finding label opening a clause with a bare word",
+        ".rs",
+        "// F2 regression: magnitudes past the old wrap point.\n",
+        "F2",
+    ),
+    (
+        # The counter-check to the two above. Mid-sentence, these letters are
+        # ordinary technical vocabulary and the rule must leave them alone.
+        "a serialization name and a float width mid-sentence (spared)",
+        ".rs",
+        "// The N3 grammar and the F64 lane are both handled here.\n",
+        None,
+    ),
+    (
+        "a float width followed by a dash is not a finding label",
+        ".rs",
+        "// The F64-to-F32 narrowing is checked by the caller.\n",
+        None,
+    ),
+    (
+        "a label shape followed by a negative number is not a finding label",
+        ".md",
+        "The F1 -1 offset is the sentinel for an absent frame.\n",
+        None,
+    ),
+    (
+        # The reason the ASCII separator is the DOUBLE hyphen and not the single
+        # one. A linter suppression spells its code, a single hyphen, and a
+        # reason -- which is lexically a label followed by a dash, and thirty of
+        # them ship in the RDFLib compatibility layer. Rejecting those would be
+        # the mirror of missing the em-dash: a rule nobody can live with.
+        "a linter suppression code followed by a single hyphen (spared)",
+        ".py",
+        "    value = obj  # noqa: N802 - RDFLib API name\n",
+        None,
+    ),
+    # ── Position is not enough, and the over-refusal that proved it ────────────
+    #
+    # Reading the label's POSITION alone — any comment line opening with an
+    # `F`/`N`/`H` and digits — refuses ordinary prose in an RDF library, and
+    # refuses it on a CONTINUATION line too, so re-wrapping a paragraph could
+    # turn a valid comment into a gate failure. Each sentence below is prose
+    # this repository is entitled to write; each has a firing control beside it,
+    # because a gate whose self-test only proves it refuses is half a test.
+    (
+        "a serialization name opening a comment line (spared)",
+        ".rs",
+        "// N3 is a Turtle superset; we parse Turtle only.\n",
+        None,
+    ),
+    (
+        "a float width opening a comment line (spared)",
+        ".rs",
+        "// F64 values round-trip exactly through the writer.\n",
+        None,
+    ),
+    (
+        "two float widths opening a comment line (spared)",
+        ".rs",
+        "// F32 and F64 are both accepted by the numeric cast.\n",
+        None,
+    ),
+    (
+        "a serialization name opening a line with SINGLE hyphens (spared)",
+        ".rs",
+        "// N3 - a Turtle superset - is out of scope.\n",
+        None,
+    ),
+    (
+        # The landmine shape: nothing is wrong with the comment, the paragraph
+        # merely broke before the token.
+        "a doc-comment continuation line beginning with a float width (spared)",
+        ".rs",
+        "/// The decimal path is the one the reader tolerates, which is why\n"
+        "/// F64 values are compared after normalisation rather than before.\n",
+        None,
+    ),
+    (
+        "an ordinary-comment continuation line beginning with a serialization name (spared)",
+        ".rs",
+        "// The parser accepts Turtle and, by the superset relation,\n"
+        "// N3 documents whose subset is Turtle.\n",
+        None,
+    ),
+    (
+        "a continuation line beginning with a narrow float width (spared)",
+        ".rs",
+        "// The cast widens on the way in and narrows on the way out, so\n"
+        "// F32 inputs are stored at the width the caller handed over.\n",
+        None,
+    ),
+    (
+        "a label shape mid-sentence after a section word (spared)",
+        ".rs",
+        "// Section F2 of the contract covers the numeric cast.\n",
+        None,
+    ),
+    (
+        "a label shape mid-sentence after an imperative (spared)",
+        ".rs",
+        "// Use F1 when the frame is absent and F2 when it is not.\n",
+        None,
+    ),
+    # The controls for the four spared shapes above: the SAME letters, in the
+    # same opening position, wearing the punctuation that makes them labels.
+    (
+        "a finding label opening a clause with a colon (control)",
+        ".rs",
+        "// F1: the lane certifies output it never produced.\n",
+        "F1:",
+    ),
+    (
+        "a serialization-letter label with an em-dash (control)",
+        ".rs",
+        "// N3 — the shard manifest outlives its shard.\n",
+        "N3 —",
+    ),
+    (
+        "a float-width-letter label with an ASCII double hyphen (control)",
+        ".rs",
+        "// F4 -- the stamp survives a failed run.\n",
+        "F4 --",
+    ),
+    (
+        "a label wrapped alone in parentheses on a continuation line (control)",
+        ".rs",
+        "// The guard below closes the finding recorded as\n// (N2) in the review.\n",
+        "(N2)",
+    ),
+    (
+        "an issue number in a comment (control)",
+        ".rs",
+        "// Tracked as #332 until the writer is rewritten.\n",
+        "#332",
+    ),
+    (
+        # The eleventh of the eleven. Its qualifier is a parenthetical and its
+        # separator is a dash, and a rule that enumerated `parenthetical + colon`
+        # alone let it through — the same enumeration hole, one shape further on.
+        "a finding label with a parenthetical qualifier and a dash (control)",
+        ".rs",
+        "// F1 (THE FINDING ITSELF) — the lane certified a digest for a corpus "
+        "that did not exist.\n",
+        "F1",
+    ),
+    (
+        # A wrapped comment whose continuation line IS a label still fires: the
+        # rule that spares the sentences above is punctuation, not line count.
+        "a label opening a continuation line with a dash (control)",
+        ".rs",
+        "// The guard covers the wide lane, and the finding it closes is\n"
+        "// F1 — the lane certifies output it never produced.\n",
+        "F1 —",
+    ),
+    # ── Markdown heading levels are not hazard ids ─────────────────────────────
+    #
+    # `H1`..`H6` are what a Markdown codec's prose calls its heading levels. The
+    # bare `H<N>` rule refused that prose outright; it is spared now, on the two
+    # conditions stated at `is_markdown_heading_level`, with the controls that
+    # prove each condition is load-bearing.
+    (
+        "a heading-level range in a comment about Markdown (spared)",
+        ".rs",
+        "// Uses H1 through H6 for Markdown heading levels.\n",
+        None,
+    ),
+    (
+        "heading-level prose in Markdown (spared)",
+        ".md",
+        "H2 headings become sections in the exported document.\n",
+        None,
+    ),
+    (
+        "a heading level beside the word header (spared)",
+        ".rs",
+        "// The H3 header is emitted as a nested section.\n",
+        None,
+    ),
+    (
+        # Condition one: the line must be ABOUT headings. A hazard id keeps its
+        # number wherever it appears.
+        "a single-digit hazard id with no heading vocabulary (control)",
+        ".rs",
+        "// The H3 risk is unresolved and blocks the writer.\n",
+        "H3",
+    ),
+    (
+        # Condition two: only the six levels Markdown has. `H12` is not one.
+        "a two-digit hazard id on a line about headings (control)",
+        ".md",
+        "H12 headings are not a level; this is a review-thread id.\n",
+        "H12",
+    ),
+    (
+        "a heading-shaped id outside the Markdown range (control)",
+        ".rs",
+        "// The H7 heading hazard is tracked separately.\n",
+        "H7",
+    ),
     ("a hazard id glued to CJK", ".md", "风险H12点已处理。\n", "H12"),
     ("a hazard id spaced from CJK (house typography)", ".md", "风险 H12 点已处理。\n", "H12"),
     ("a hazard id in English prose", ".md", "risk H12 handled.\n", "H12"),

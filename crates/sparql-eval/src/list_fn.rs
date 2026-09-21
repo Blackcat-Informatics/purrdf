@@ -1102,4 +1102,164 @@ mod tests {
             triples(&graph)
         );
     }
+
+    // ── both egress doors: owned `SparqlResult` vs borrowed `InternedOutcome` ──
+
+    use crate::engine::QueryOptions;
+    use crate::interned::{InternedOutcome, InternedRequest};
+
+    /// [`run_constructed`] through the INTERNED egress door: the first projected
+    /// column of every surviving row, stringified the way [`head_str`] spells the
+    /// owned door's, plus the auxiliary constructed graph the borrowed result
+    /// exposes.
+    fn run_constructed_interned(
+        ds: &Arc<RdfDataset>,
+        query: &str,
+    ) -> (Vec<String>, Arc<RdfDataset>) {
+        let engine = NativeSparqlEngine::new().with_parser_options(ext_options());
+        engine
+            .query_interned_view(
+                ds.as_ref(),
+                InternedRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::EMPTY,
+                |outcome| match outcome {
+                    InternedOutcome::Solutions(solutions) => {
+                        let heads = solutions
+                            .rows()
+                            .iter()
+                            .map(|row| match solutions.cell(row, 0) {
+                                Some(TermValue::Iri(i)) => format!("<{i}>"),
+                                Some(TermValue::Blank { label, .. }) => format!("_:{label}"),
+                                other => panic!("expected a list head term, got {other:?}"),
+                            })
+                            .collect();
+                        (heads, solutions.constructed_dataset())
+                    }
+                    InternedOutcome::Boolean(_) | InternedOutcome::Graph(_) => {
+                        panic!("expected solutions")
+                    }
+                },
+            )
+            .expect("interned query")
+    }
+
+    #[test]
+    fn both_doors_agree_on_the_constructed_graph_of_a_list_slice() {
+        // The head `listSlice` binds names cells that exist nowhere in the queried
+        // dataset — this execution minted them. The owned door carries them out as
+        // `aux`. The borrowed door must carry the SAME quads, or a caller that reads
+        // the head and no more holds an identifier pointing into a graph it cannot
+        // see.
+        let ds = list_ds();
+        let q = format!(
+            "{PREFIX} SELECT ?s WHERE {{ ?q <http://ex/list> ?l . \
+             BIND(g:listSlice(?l, 1, 3) AS ?s) }}"
+        );
+
+        let (owned_rows, owned_aux) = run_constructed(&ds, &q);
+        let (interned_heads, interned_aux) = run_constructed_interned(&ds, &q);
+
+        assert_eq!(
+            interned_heads,
+            vec![head_str(&owned_rows)],
+            "the two doors disagree about the head term"
+        );
+        assert_eq!(
+            triples(&interned_aux),
+            triples(&owned_aux),
+            "the two doors disagree about the constructed quads"
+        );
+        // Not vacuous: the query really does construct, and the borrowed door's graph
+        // is the walkable list, not merely a graph of equal size.
+        assert_eq!(
+            members_of(&interned_aux, &interned_heads[0]),
+            vec!["<http://ex/y>".to_owned(), "<http://ex/z>".to_owned()]
+        );
+        assert_eq!(interned_aux.quad_count(), 4);
+    }
+
+    #[test]
+    fn both_doors_agree_on_the_constructed_graph_of_a_list_concat() {
+        // `listConcat` over a freshly sliced list: the intermediate slice's cells are
+        // buffered but unreachable from the surviving row, so BOTH doors must prune
+        // them — the borrowed door runs the same reachability walk, not a laxer one.
+        let ds = list_ds();
+        let q = format!(
+            "{PREFIX} SELECT ?s WHERE {{ ?q <http://ex/list> ?l . \
+             BIND(g:listConcat(g:listSlice(?l, 1, 3), ?l) AS ?s) }}"
+        );
+
+        let (owned_rows, owned_aux) = run_constructed(&ds, &q);
+        let (interned_heads, interned_aux) = run_constructed_interned(&ds, &q);
+
+        assert_eq!(interned_heads, vec![head_str(&owned_rows)]);
+        assert_eq!(
+            triples(&interned_aux),
+            triples(&owned_aux),
+            "the two doors disagree about the constructed quads"
+        );
+        assert_eq!(
+            members_of(&interned_aux, &interned_heads[0]),
+            vec![
+                "<http://ex/y>".to_owned(),
+                "<http://ex/z>".to_owned(),
+                "<http://ex/x>".to_owned(),
+                "<http://ex/y>".to_owned(),
+                "<http://ex/z>".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn both_doors_agree_that_a_pruned_row_constructs_nothing() {
+        // The row↔aux contract, asserted on the borrowed door: a list minted on a row
+        // that FILTER then removes leaves no orphaned cells in EITHER graph.
+        let ds = list_ds();
+        let q = format!(
+            "{PREFIX} SELECT ?s WHERE {{ ?q <http://ex/list> ?l . \
+             BIND(g:listSlice(?l, 0, 2) AS ?s) FILTER(1 > 2) }}"
+        );
+
+        let (owned_rows, owned_aux) = run_constructed(&ds, &q);
+        let (interned_heads, interned_aux) = run_constructed_interned(&ds, &q);
+
+        assert_eq!(
+            owned_rows.len(),
+            0,
+            "all rows are filtered out: {owned_rows:?}"
+        );
+        assert_eq!(
+            interned_heads.len(),
+            0,
+            "all rows are filtered out: {interned_heads:?}"
+        );
+        assert_eq!(owned_aux.quad_count(), 0);
+        assert_eq!(
+            interned_aux.quad_count(),
+            0,
+            "orphaned cells leaked through the borrowed door: {:?}",
+            triples(&interned_aux)
+        );
+    }
+
+    #[test]
+    fn a_query_that_constructs_nothing_has_an_empty_interned_constructed_graph() {
+        // The negative case: no list constructor anywhere in the query. The borrowed
+        // door must answer with an empty graph — not an error, and not an absent one —
+        // exactly as the owned door does.
+        let ds = list_ds();
+        let q = format!("{PREFIX} SELECT ?l WHERE {{ ?q <http://ex/list> ?l }}");
+
+        let (_, owned_aux) = run_constructed(&ds, &q);
+        let (interned_heads, interned_aux) = run_constructed_interned(&ds, &q);
+
+        assert_eq!(interned_heads, vec!["<http://ex/l0>".to_owned()]);
+        assert_eq!(owned_aux.quad_count(), 0);
+        assert_eq!(interned_aux.quad_count(), 0);
+        assert_eq!(triples(&interned_aux), triples(&owned_aux));
+    }
 }

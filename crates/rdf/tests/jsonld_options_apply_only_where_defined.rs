@@ -47,10 +47,9 @@ fn a_format_without_jsonld_options_refuses_them() {
         NativeRdfFormat::TriX,
         NativeRdfFormat::HexTuples,
     ] {
-        let diagnostic = serialize_dataset_to_format_with_jsonld_options(
-            &*dataset, format, None, &options,
-        )
-        .expect_err("JSON-LD options do not apply to this format and must be refused");
+        let diagnostic =
+            serialize_dataset_to_format_with_jsonld_options(&*dataset, format, None, &options)
+                .expect_err("JSON-LD options do not apply to this format and must be refused");
         let rendered = diagnostic.to_string();
         assert!(
             rendered.contains("cannot be used with"),

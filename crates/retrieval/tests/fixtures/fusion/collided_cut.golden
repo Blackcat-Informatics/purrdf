@@ -1,0 +1,12 @@
+row alpha score=0.000000000031 witness=0.000000000000
+  http://example.org/stratum/text rank=1 score=0.000000000016
+  http://example.org/stratum/vector rank=4 score=0.000000000015
+row delta score=0.000000000031 witness=0.000000000000
+  http://example.org/stratum/text rank=4 score=0.000000000015
+  http://example.org/stratum/vector rank=1 score=0.000000000016
+status http://example.org/stratum/text Exhausted { rows_emitted: 4 }
+status http://example.org/stratum/vector Exhausted { rows_emitted: 4 }
+profile 897af8c8c174b3f9f1c3397d3a65d9716f6b7e9f799fca43683021402f4f18d9
+resolution http://example.org/stratum/text separates_to=Some(1) ranks_pulled=4 collisions=2
+resolution http://example.org/stratum/vector separates_to=Some(1) ranks_pulled=4 collisions=2
+cut_on_a_tie true

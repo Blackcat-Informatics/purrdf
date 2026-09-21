@@ -510,7 +510,11 @@ fn is_self_reifier(graph: &SerGraph, rid: usize) -> bool {
 }
 
 /// Write a graph-name element (`<uri>` / `<id>`).
-fn write_graph_name<W: TextOut + ?Sized>(out: &mut W, graph: &SerGraph, tid: usize) -> Result<(), RdfDiagnostic> {
+fn write_graph_name<W: TextOut + ?Sized>(
+    out: &mut W,
+    graph: &SerGraph,
+    tid: usize,
+) -> Result<(), RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
@@ -529,7 +533,11 @@ fn write_graph_name<W: TextOut + ?Sized>(out: &mut W, graph: &SerGraph, tid: usi
 }
 
 /// Write a single term as a `<uri>` / `<id>` / `<plainLiteral>` / `<typedLiteral>`.
-fn write_term<W: TextOut + ?Sized>(out: &mut W, graph: &SerGraph, tid: usize) -> Result<(), RdfDiagnostic> {
+fn write_term<W: TextOut + ?Sized>(
+    out: &mut W,
+    graph: &SerGraph,
+    tid: usize,
+) -> Result<(), RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
@@ -548,7 +556,11 @@ fn write_term<W: TextOut + ?Sized>(out: &mut W, graph: &SerGraph, tid: usize) ->
     Ok(())
 }
 
-fn write_literal<W: TextOut + ?Sized>(out: &mut W, graph: &SerGraph, term: &SerTerm) -> Result<(), RdfDiagnostic> {
+fn write_literal<W: TextOut + ?Sized>(
+    out: &mut W,
+    graph: &SerGraph,
+    term: &SerTerm,
+) -> Result<(), RdfDiagnostic> {
     let lexical = escape_text(ser_value(term)?)?;
     if let Some(language) = &term.lang {
         let _ = writeln!(

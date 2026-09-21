@@ -28,6 +28,7 @@
 
 pub use purrdf::*;
 
+mod attestation;
 mod py_entail;
 mod py_gts;
 mod py_gts_dataset;
