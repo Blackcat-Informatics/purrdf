@@ -71,6 +71,11 @@ SCANNED: tuple[str, ...] = (
 # rewrite the front, which a drained stream no longer holds at all.
 REWIND = re.compile(r"\.(?:truncate\(|clear\(\)|pop\(\)|insert\(0|remove\(0)")
 
+# `r"`, `r#"`, `r##"` … — a raw string opener, whose closer depends on the hash count.
+RAW_STRING_OPEN = re.compile(r'r#*"')
+# A char literal (`'a'`, `'\\n'`), as opposed to a lifetime (`'a` with no closing quote).
+CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
+
 # (path, receiver) -> why this receiver is not an output buffer.
 #
 # Keyed by receiver rather than by line number so the table survives edits above
@@ -142,14 +147,88 @@ def receiver(line: str) -> str:
     return match.group(1) if match else ""
 
 
+def strip_noncode(source: str) -> list[str]:
+    """`source` with comments and string literals blanked, line structure intact.
+
+    Only real code is scanned. A line comment mentioning a rewind is prose; so is a
+    block comment, and so is a string literal that happens to contain one. Reporting
+    any of those is the mirror bug this gate is built around — a gate that fails
+    ``make check`` on correct code teaches authors to work around it.
+
+    Characters are replaced by spaces rather than removed, so reported line numbers
+    and the quoted line still match the file.
+    """
+    out = list(source)
+    index = 0
+    end = len(source)
+    while index < end:
+        char = source[index]
+        if char == "/" and index + 1 < end and source[index + 1] == "/":
+            while index < end and source[index] != "\n":
+                out[index] = " "
+                index += 1
+        elif char == "/" and index + 1 < end and source[index + 1] == "*":
+            # Rust block comments NEST, so track depth rather than finding `*/`.
+            depth = 0
+            while index < end:
+                if source.startswith("/*", index):
+                    depth += 1
+                    out[index] = out[index + 1] = " "
+                    index += 2
+                elif source.startswith("*/", index):
+                    depth -= 1
+                    out[index] = out[index + 1] = " "
+                    index += 2
+                    if depth == 0:
+                        break
+                else:
+                    if source[index] != "\n":
+                        out[index] = " "
+                    index += 1
+        elif char == "r" and (match := RAW_STRING_OPEN.match(source, index)):
+            close = '"' + "#" * (len(match.group(0)) - 2)
+            stop = source.find(close, match.end())
+            stop = end if stop == -1 else stop + len(close)
+            for position in range(index, stop):
+                if source[position] != "\n":
+                    out[position] = " "
+            index = stop
+        elif char in {'"', "'"}:
+            # A Rust lifetime (`'a`) is not a literal; a char literal is.
+            if char == "'" and not CHAR_LITERAL.match(source, index):
+                index += 1
+                continue
+            quote = char
+            out[index] = " "
+            index += 1
+            while index < end:
+                if source[index] == "\\":
+                    out[index] = " "
+                    if index + 1 < end and source[index + 1] != "\n":
+                        out[index + 1] = " "
+                    index += 2
+                    continue
+                done = source[index] == quote
+                if source[index] != "\n":
+                    out[index] = " "
+                index += 1
+                if done:
+                    break
+        else:
+            index += 1
+    return "".join(out).splitlines()
+
+
 def scan() -> tuple[list[str], set[tuple[str, str]]]:
     """Findings, and which allowlist keys were actually used."""
     findings: list[str] = []
     used: set[tuple[str, str]] = set()
     for path in rust_sources():
         rel = path.relative_to(REPO_ROOT).as_posix()
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            code = line.split("//", 1)[0]
+        source = path.read_text(encoding="utf-8")
+        raw = source.splitlines()
+        for number, code in enumerate(strip_noncode(source), 1):
+            line = raw[number - 1]
             if not REWIND.search(code):
                 continue
             key = (rel, receiver(code))
@@ -182,9 +261,39 @@ def self_test() -> int:
     if receiver(exempt.split("//", 1)[0]) != "stack":
         print(f"SELF-TEST FAIL: receiver not read from an exempt line: {exempt.strip()}")
         failures += 1
-    # A comment mentioning a rewind is prose, not code.
-    if REWIND.search("        // the old spelling called out.truncate(start) here".split("//", 1)[0]):
-        print("SELF-TEST FAIL: fired on a comment")
+    # Prose mentioning a rewind is not a rewind. Each of these is a shape that
+    # appears in real Rust and that a naive `//`-only strip would report — the
+    # over-refusal this gate is built to avoid, which would fail `make check` on
+    # correct code and teach authors to route around it.
+    prose = (
+        ("line comment", "        // the old spelling called out.truncate(start) here"),
+        ("block comment", "        /* out.truncate(start) */ let x = 1;"),
+        ("nested block comment", "        /* outer /* out.pop() */ still comment */"),
+        ("string literal", '        let message = "call out.truncate(0) to reset";'),
+        ("raw string", '        let pattern = r"out.pop() is not a rewind here";'),
+        ("hashed raw string", '        let pattern = r#"out.clear() inside "quotes""#;'),
+        ("trailing comment after code", "        let n = v.len(); // v.pop() explained"),
+    )
+    for name, line in prose:
+        stripped = strip_noncode(line)
+        if stripped and REWIND.search(stripped[0]):
+            print(f"SELF-TEST FAIL: fired on a {name}: {line.strip()}")
+            failures += 1
+
+    # And the other direction: stripping must not blind the gate to real code on a
+    # line that ALSO carries prose, or a rewind hides behind a comment.
+    mixed = '        out.truncate(start); // retract the header'
+    stripped = strip_noncode(mixed)
+    if not (stripped and REWIND.search(stripped[0])):
+        print(f"SELF-TEST FAIL: stripping hid real code: {mixed.strip()}")
+        failures += 1
+
+    # A lifetime is not a char literal; treating `\'a` as opening a string would
+    # swallow the rest of the line and hide anything after it.
+    lifetime = "        fn f<'a>(out: &'a mut String) { out.truncate(0); }"
+    stripped = strip_noncode(lifetime)
+    if not (stripped and REWIND.search(stripped[0])):
+        print(f"SELF-TEST FAIL: a lifetime blinded the scan: {lifetime.strip()}")
         failures += 1
     if failures:
         return 1

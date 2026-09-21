@@ -637,11 +637,11 @@ pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
     )?;
     let carrier = build_carrier(&graph, true)?;
     let mut out = TextSink::in_memory();
-    write_yaml_header(schema_url, &mut out);
     {
         // Scoped so the bounded wrapper's borrow of `out` ends before the sink is
         // finished, rather than being ended by a `drop` call that reads as a no-op.
         let mut bounded = BoundedJsonOutput::new(&mut out, MAX_JSON_LD_DOCUMENT_BYTES);
+        write_yaml_header(schema_url, &mut bounded)?;
         carrier.write_compacted_yaml(&mut bounded, context)?;
     }
     finish_json_output(out)
@@ -655,8 +655,8 @@ fn write_ser_graph_to_yamlld(
     out: &mut TextSink<'_>,
 ) -> Result<(), RdfDiagnostic> {
     let carrier = build_carrier(graph, false)?;
-    write_yaml_header(schema_url, out);
     let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    write_yaml_header(schema_url, &mut bounded)?;
     match base_only_context(graph)? {
         None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
         Some(context) => carrier.write_compacted_yaml(&mut bounded, &context),
@@ -670,8 +670,8 @@ pub(crate) fn write_ser_graph_to_yamlld_with_options(
 ) -> Result<(), RdfDiagnostic> {
     let fold_lists = !matches!(options.mode(), JsonLdSerializeMode::Expanded);
     let carrier = build_carrier(graph, fold_lists)?;
-    write_yaml_header(options.yaml_schema_url(), out);
     let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    write_yaml_header(options.yaml_schema_url(), &mut bounded)?;
     match options.mode() {
         JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
             None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
@@ -691,17 +691,29 @@ pub(crate) fn write_ser_graph_to_yamlld_with_options(
 
 /// The editor-schema banner every YAML-LD document opens with.
 ///
-/// Pushed straight to the sink rather than prepended to a finished body: the header
-/// and the document are two independent fragments and concatenating them was one more
-/// whole-document copy.
-fn write_yaml_header(schema_url: Option<&str>, out: &mut TextSink<'_>) {
+/// Pushed as its own fragment rather than prepended to a finished body: the header and
+/// the document are independent, and concatenating them was one more whole-document
+/// copy.
+///
+/// It goes through the BOUNDED writer, not straight to the sink. The header is part of
+/// the document the caller receives, so a limit it does not count against is not a
+/// limit on that document: a long `schema_url` beside a body near the ceiling would
+/// produce output over `MAX_JSON_LD_DOCUMENT_BYTES` while every individual check
+/// passed.
+fn write_yaml_header<W: IoWrite>(
+    schema_url: Option<&str>,
+    out: &mut W,
+) -> Result<(), RdfDiagnostic> {
     let url = schema_url.unwrap_or(BUNDLED_SCHEMA_REF);
-    out.push_str("# yaml-language-server: $schema=");
-    out.push_str(url);
-    out.push_str(
-        "\n# The default reference is the bundled purrdf.schema.json; pass an explicit\n\
-         # schema_url to point editors at a hosted copy.\n",
-    );
+    out.write_all(b"# yaml-language-server: $schema=")
+        .and_then(|()| out.write_all(url.as_bytes()))
+        .and_then(|()| {
+            out.write_all(
+                b"\n# The default reference is the bundled purrdf.schema.json; pass an explicit\n\
+                  # schema_url to point editors at a hosted copy.\n",
+            )
+        })
+        .map_err(|error| decode(format!("YAML-LD output: {error}")))
 }
 
 /// The whole-`String` spelling of [`write_ser_graph_to_yamlld_with_options`].
