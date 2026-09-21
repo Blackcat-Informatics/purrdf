@@ -3089,6 +3089,293 @@ mod tests {
         assert!(got[0].contains("http://ex/x"), "?o = :x : {got:?}");
     }
 
+    // ── the repeated-variable fallback ────────────────────────────────────────
+    //
+    // `apply_substitutions` carries every pre-binding on ONE seed row, which two
+    // bindings of the SAME variable cannot spell: a single `Values` row has one cell
+    // per variable. That case keeps the original per-variable path — one
+    // `substitute_variable` per pre-binding, each its own single-row `Values` join —
+    // and the two tests below are its pair. The first is the shape the combined seed
+    // cannot represent; the second is its NEIGHBOUR, a repeat that is satisfiable,
+    // and it is here because "the repeated-variable branch works" and "the
+    // repeated-variable branch refuses everything" are indistinguishable from the
+    // first test alone.
+
+    #[test]
+    fn prebinding_repeats_a_variable_incompatibly_and_yields_nothing() {
+        // $this pre-bound to :a AND to :b. Two single-row `Values` joins binding one
+        // variable to two different terms are incompatible, so the join is empty and
+        // so is the answer.
+        let got = run_subst(
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o }",
+            &[
+                ("this".to_owned(), TermValue::Iri("http://ex/a".to_owned())),
+                ("this".to_owned(), TermValue::Iri("http://ex/b".to_owned())),
+            ],
+        );
+        assert!(
+            got.is_empty(),
+            "binding one variable to two distinct terms is unsatisfiable; a non-empty \
+             answer means one of the two pre-bindings was dropped rather than joined: \
+             {got:?}"
+        );
+    }
+
+    #[test]
+    fn prebinding_repeats_a_variable_compatibly_and_still_matches() {
+        // The neighbour of the case above: the SAME variable twice, to the SAME term.
+        // This still takes the repeated-variable path — `has_repeated_variable` looks
+        // at names, not values — and the two seeds are compatible, so the row
+        // survives and carries :a's object.
+        //
+        // :x is the control that makes this test able to fail for its stated reason.
+        // The other two subjects' objects are :y and :z, so an answer of :x cannot
+        // have come from a dropped pre-binding widening the match.
+        let got = run_subst(
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o }",
+            &[
+                ("this".to_owned(), TermValue::Iri("http://ex/a".to_owned())),
+                ("this".to_owned(), TermValue::Iri("http://ex/a".to_owned())),
+            ],
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "a variable repeated to the SAME term is satisfiable, so the repeated-\
+             variable path must still answer: {got:?}"
+        );
+        assert!(
+            got[0].contains("http://ex/x"),
+            "?o = :x, :a's object — :y or :z would mean the pre-binding stopped \
+             narrowing: {got:?}"
+        );
+    }
+
+    // ── the rewrite's STRUCTURE, asserted directly ────────────────────────────
+    //
+    // The boundary tests above read the rewrite through its ANSWER, which is the
+    // right instrument where the two sides of the boundary disagree about what the
+    // answer IS. Two clauses of the envelope do not have that property. A `LATERAL`
+    // is an INNER correlated join, so restricting its right arm and filtering above
+    // it agree on the bag; and once both the pushdown and the seed have run, the
+    // ORDER they ran in is invisible in the result. An answer-shaped test for either
+    // would pass whether or not the rule held — which is a test that cannot fail for
+    // the reason it states — so both are asserted against the algebra the rewrite
+    // actually produces.
+
+    /// Parse `query`, run the pre-binding rewrite over it, and return the rewritten
+    /// root pattern.
+    fn prebound_pattern(query: &str, substitutions: &[(String, TermValue)]) -> GraphPattern {
+        let parsed = SparqlParser::new()
+            .parse_query(query)
+            .expect("the fixture query must parse");
+        let rewritten =
+            crate::substitute::apply_substitutions(parsed, Prebindings::Owned(substitutions))
+                .expect("the fixture's pre-bindings must be groundable");
+        match rewritten {
+            Query::Select { pattern, .. } => pattern,
+            other => panic!("the fixture is a SELECT, got {other:?}"),
+        }
+    }
+
+    /// The first `Lateral` node at or below `pattern`, as `(left, right)`.
+    fn find_lateral(pattern: &GraphPattern) -> Option<(&GraphPattern, &GraphPattern)> {
+        match pattern {
+            GraphPattern::Lateral { left, right } => Some((left, right)),
+            GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner } => find_lateral(inner),
+            GraphPattern::Filter { inner, .. } | GraphPattern::Graph { inner, .. } => {
+                find_lateral(inner)
+            }
+            GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+                find_lateral(left).or_else(|| find_lateral(right))
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn prebinding_is_not_pushed_into_a_lateral_right_arm() {
+        // `?this :p ?o LATERAL { ?this :p ?v }` with $this := :a.
+        //
+        // `push_probes` descends a `Lateral`'s LEFT operand only. Unlike `OPTIONAL`
+        // and `MINUS`, whose right arms diverge on the ANSWER, a `LATERAL` is an
+        // inner join and restricting its right arm would agree with the seed's filter
+        // — so what is pinned here is the rewrite itself, not a bag difference: the
+        // right arm must come out BYTE-IDENTICAL to the way it parsed.
+        //
+        // That matters because a `LATERAL`'s right arm is re-evaluated per left row
+        // through `crate::expr`'s substitution walk, which keys on node identity; a
+        // rewrite here would hand that machinery a different subtree than the one the
+        // plan was admitted with.
+        const QUERY: &str =
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o LATERAL { ?this <http://ex/p> ?v } }";
+        let subs = [("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))];
+
+        let parsed = SparqlParser::new().parse_query(QUERY).expect("parse");
+        let Query::Select {
+            pattern: original, ..
+        } = parsed
+        else {
+            panic!("the fixture is a SELECT");
+        };
+        let (_, original_right) = find_lateral(&original).expect("the fixture has a LATERAL");
+
+        let rewritten = prebound_pattern(QUERY, &subs);
+        let (rewritten_left, rewritten_right) =
+            find_lateral(&rewritten).expect("the rewrite must not remove the LATERAL");
+
+        assert_eq!(
+            rewritten_right, original_right,
+            "the LATERAL's right arm must be untouched by the pushdown"
+        );
+        // Non-vacuity: the LEFT arm really was rewritten, so the assertion above is
+        // reading a boundary rather than a rewrite that never ran at all.
+        let (_, original_left) = find_lateral(&original)
+            .map(|(l, r)| (r, l))
+            .expect("lateral");
+        assert_ne!(
+            rewritten_left, original_left,
+            "the LATERAL's LEFT arm must carry the pushed constant; if it does not, \
+             this test's right-arm assertion is vacuous because nothing was pushed \
+             anywhere"
+        );
+    }
+
+    #[test]
+    fn prebinding_pushdown_runs_before_the_seed() {
+        // `SELECT ?o WHERE { ?this :p ?o }` with $this := :a lowers to
+        // `Project(Bgp)`, and `map_core_pattern` hands the `Bgp` to the rewrite as
+        // the core root.
+        //
+        // Pushdown FIRST, seed second, produces:
+        //     Project(Join { left: Values{$this = :a}, right: Bgp(<a> :p ?o) })
+        // The right arm is a BARE `Bgp`: `at_core_root` is true for the node the seed
+        // is about to wrap, so the leaf needs no restoring `Values` of its own.
+        //
+        // Seed first, pushdown second, would produce:
+        //     Project(Join { left: Values, right: Join { Bgp(<a> :p ?o), Values } })
+        // because the pushdown would then meet a `Join` rather than the core root,
+        // descend with `at_core_root = false`, and emit the restoring `Values` the
+        // peephole exists to suppress. The presence of that second `Values` is the
+        // observable difference between the two orderings.
+        let pattern = prebound_pattern(
+            "SELECT ?o WHERE { ?this <http://ex/p> ?o }",
+            &[("this".to_owned(), TermValue::Iri("http://ex/a".to_owned()))],
+        );
+        let GraphPattern::Project { inner, .. } = &pattern else {
+            panic!("a SELECT lowers to a Project, got {pattern:?}");
+        };
+        let GraphPattern::Join { left, right } = inner.as_ref() else {
+            panic!("the seed joins a Values onto the core, got {inner:?}");
+        };
+        assert!(
+            matches!(left.as_ref(), GraphPattern::Values { .. }),
+            "the seed is the Join's LEFT operand, got {left:?}"
+        );
+        assert!(
+            matches!(right.as_ref(), GraphPattern::Bgp { .. }),
+            "the seeded core must be a BARE Bgp. A `Join {{ Bgp, Values }}` here means \
+             the seed was built before the pushdown descended, so the pushdown saw a \
+             Join instead of the core root and emitted the restoring Values that \
+             `at_core_root` exists to suppress: {right:?}"
+        );
+        // And the constant really is in the leaf — otherwise "bare Bgp" would be
+        // satisfied by a rewrite that pushed nothing.
+        let GraphPattern::Bgp { patterns } = right.as_ref() else {
+            unreachable!("asserted above");
+        };
+        assert_eq!(patterns.len(), 1, "one triple pattern: {patterns:?}");
+        assert!(
+            format!("{:?}", patterns[0].subject).contains("http://ex/a"),
+            "the pushdown must have written :a into the subject position: {:?}",
+            patterns[0]
+        );
+    }
+
+    /// Build a graph through the CONSTRUCT staging path with `substitutions` applied
+    /// on `prebinding`'s lane, and return its quad count.
+    fn construct_subst_quads(prebinding: ShaclPrebinding, focus: &str) -> usize {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query: "CONSTRUCT { ?this <http://ex/derived> ?o } \
+                            WHERE { ?this <http://ex/p> ?o }",
+                    base_iri: None,
+                    substitutions: &[("this".to_owned(), TermValue::Iri(focus.to_owned()))],
+                },
+                QueryOptions {
+                    prebinding,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("construct");
+        let SparqlResult::Graph(graph) = result else {
+            panic!("CONSTRUCT must return a graph");
+        };
+        graph.quad_count()
+    }
+
+    #[test]
+    fn construct_staging_pre_binds_on_both_lanes() {
+        // `stage_construct` takes `Cow::Borrowed(&prepared.query)` when there are no
+        // substitutions and only clones-and-rewrites when there are, so every
+        // CONSTRUCT test that passes an empty substitution list leaves the rewriting
+        // branch — both of its lanes — unexercised. This drives it.
+        //
+        // The fixture's three subjects each have one `:p` object, so an un-narrowed
+        // CONSTRUCT emits three quads. Pre-binding $this to :a must emit exactly one.
+        // Three is the control: it is what this test sees if the substitution is
+        // dropped on the floor, and it is distinguishable from the one quad a working
+        // pre-binding produces.
+        for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+            assert_eq!(
+                construct_subst_quads(lane, "http://ex/a"),
+                1,
+                "{lane:?}: pre-binding $this := :a must narrow the template to :a's \
+                 one row; three quads would mean the CONSTRUCT staging path ignored \
+                 the substitutions"
+            );
+        }
+    }
+
+    #[test]
+    fn construct_staging_pre_binding_selects_the_named_focus() {
+        // The neighbour of the count assertion: a DIFFERENT focus must produce a
+        // different quad, so "one quad" cannot be satisfied by a rewrite that narrows
+        // to a fixed row regardless of which focus was supplied.
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        let object_for = |focus: &str| -> String {
+            let result = engine
+                .query_with_options_view(
+                    &*ds,
+                    SparqlRequest {
+                        query: "CONSTRUCT { ?this <http://ex/derived> ?o } \
+                                WHERE { ?this <http://ex/p> ?o }",
+                        base_iri: None,
+                        substitutions: &[("this".to_owned(), TermValue::Iri(focus.to_owned()))],
+                    },
+                    QueryOptions {
+                        prebinding: ShaclPrebinding::Applied,
+                        ..QueryOptions::EMPTY
+                    },
+                )
+                .expect("construct");
+            let SparqlResult::Graph(graph) = result else {
+                panic!("CONSTRUCT must return a graph");
+            };
+            let quad = graph.quads().next().expect("exactly one quad");
+            format!("{:?}", graph.resolve(quad.o))
+        };
+        assert!(object_for("http://ex/a").contains("http://ex/x"), ":a → :x");
+        assert!(object_for("http://ex/b").contains("http://ex/y"), ":b → :y");
+    }
+
     #[test]
     fn substitute_ask_is_pre_binding() {
         // ASK over the blank focus: true (it has a :p edge); a focus absent from the
