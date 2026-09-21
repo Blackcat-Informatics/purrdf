@@ -1361,6 +1361,23 @@ fn a_certificate_does_not_depend_on_the_scratch_directory() {
 // preceded by a reset of that same path.
 #[test]
 fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
+    // THIS TEST WAS DEFEATED FIVE WAYS BEFORE IT HELD, and every one of them is ordinary
+    // shell. `line.contains("2>\"")` missed `2> "${x}"` (a space after the operator),
+    // `2>${x}` (unquoted) and `2>>"${x}"` (appending) — and missed them INVISIBLY, without
+    // even incrementing the counter, so the floor could not fire either. And
+    // `ends_with("() {")` missed `function f {`, missed a header with trailing whitespace,
+    // and treated a capture with no enclosing function as guarded by whatever reset
+    // happened to appear earlier in the file — in a different, already-closed function.
+    //
+    // A coverage test that can be evaded is worth less than no coverage test, because it
+    // reports the absence of a problem it cannot see.
+    let redirect = regex_lite_capture();
+    let function_header = |line: &str| {
+        let trimmed = line.trim_end();
+        (trimmed.ends_with("() {") || (trimmed.starts_with("function ") && trimmed.ends_with('{')))
+            && !line.starts_with(char::is_whitespace)
+    };
+
     let mut unguarded: Vec<String> = Vec::new();
     let mut found = 0usize;
 
@@ -1368,59 +1385,99 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
         "scripts/lane-common.sh",
         "scripts/lubm-lane.sh",
         "scripts/watdiv-lane.sh",
+        // The third lane sources `lane-common.sh` and calls `lane_run_probe`. It has no
+        // file-based capture today, so including it is what keeps that true.
+        "scripts/scale-corpus.sh",
     ] {
         let text = std::fs::read_to_string(repo_root().join(script)).expect("read the lane script");
         let lines: Vec<&str> = text.lines().collect();
         for (index, line) in lines.iter().enumerate() {
-            // A capture is a redirection of stderr into a path under the scratch directory.
-            // Comments are excluded: this file documents the defect in prose that quotes it.
-            let trimmed = line.trim_start();
-            if trimmed.starts_with('#') {
+            if line.trim_start().starts_with('#') {
                 continue;
             }
-            // A capture is any redirection of a command's stderr into a file. The target is
-            // taken as written, because the lanes spell it two ways -- the probe redirects to
-            // a literal `${LANE_TMP}/probe.err`, the query loops to an `${errfile}` variable --
-            // and a detector that knew only one spelling found one of the three sites and
-            // reported the other two as absent rather than as unguarded. That is the same
-            // blindness this test exists to catch, so the floor below is what surfaced it.
-            let Some(after) = line.split_once("2>\"") else {
-                continue;
-            };
-            let Some((target, _)) = after.1.split_once('"') else {
+            let Some(target) = redirect(line) else {
                 continue;
             };
             found += 1;
-            // The reset must name THE SAME target, EARLIER IN THE SAME FUNCTION. A fixed
-            // line window was the first attempt and it was wrong on a legitimate case: one
-            // capture sits 52 lines below its reset because a whole embedded Python program
-            // lies between them. The law is an ordering, not a proximity, so the search runs
-            // back to the enclosing function's opening line.
-            let function_start = lines[..index]
+            // NO ENCLOSING FUNCTION MEANS UNGUARDED, not "scan from the top of the file".
+            // Scanning from line 0 let a reset inside an unrelated closed function satisfy
+            // a top-level capture.
+            let Some(function_start) = lines[..index].iter().rposition(|l| function_header(l))
+            else {
+                unguarded.push(format!(
+                    "{script}:{}: {} (no enclosing function, so no reset can precede it)",
+                    index + 1,
+                    line.trim()
+                ));
+                continue;
+            };
+            let guarded = lines[function_start + 1..index]
                 .iter()
-                .rposition(|earlier| earlier.ends_with("() {") && !earlier.starts_with(' '))
-                .map_or(0, |at| at + 1);
-            let guarded = lines[function_start..index]
-                .iter()
-                .any(|earlier| earlier.contains("lane_reset_capture") && earlier.contains(target));
+                .any(|earlier| earlier.contains("lane_reset_capture") && earlier.contains(&target));
             if !guarded {
                 unguarded.push(format!("{script}:{}: {}", index + 1, line.trim()));
             }
         }
     }
 
-    // The enumeration must find something, or it is a test that passes by looking nowhere —
-    // exactly the failure it exists to catch, one level up.
     assert!(
-        found >= 3,
-        "expected at least the three known capture sites; found {found}. If a lane stopped \
-         capturing stderr into the scratch directory this assertion needs updating, but a \
-         coverage test that covers nothing must fail loudly rather than pass."
+        found >= 4,
+        "expected at least the four known capture sites; found {found}. A coverage test \
+         that covers nothing must fail loudly rather than pass — this floor is what caught \
+         the detector missing two of three sites on its first attempt."
     );
     assert!(
         unguarded.is_empty(),
-        "these stderr captures are not preceded by `lane_reset_capture`, so an unwritable \
-         scratch directory is reported as a failure of the binary under test:\n  {}",
+        "these stderr captures are not preceded by `lane_reset_capture` naming the same \
+         target, inside the same function, so an unwritable scratch directory is reported \
+         as a failure of the binary under test:\n  {}",
         unguarded.join("\n  ")
     );
+}
+
+/// Returns a closure extracting the target of a stderr redirection, in every form the lanes
+/// use: `2>"x"`, `2> "x"`, `2>x`, `2>>"x"`.
+///
+/// Hand-rolled rather than pulling in a regex dependency for a test: the grammar is small and
+/// writing it out keeps the evaded forms visible in one place.
+fn regex_lite_capture() -> impl Fn(&str) -> Option<String> {
+    |line: &str| {
+        let at = line.find("2>")?;
+        // `12>` is not a stderr redirection, and neither is `$2>`.
+        if at > 0 {
+            let before = line.as_bytes()[at - 1];
+            if before.is_ascii_digit() || before == b'$' || before == b'&' {
+                return None;
+            }
+        }
+        let rest = line[at + 2..].trim_start_matches('>').trim_start();
+        if rest.starts_with('&') {
+            // `2>&1` and `2>&${fd}` duplicate a descriptor; there is no file to reset.
+            return None;
+        }
+        let target: String = if let Some(stripped) = rest.strip_prefix('"') {
+            stripped.chars().take_while(|c| *c != '"').collect()
+        } else {
+            // An UNQUOTED target ends at whitespace OR at shell syntax. Taking only
+            // "not whitespace" produced `/dev/null)"` from `2>/dev/null)" || count=""`,
+            // which then failed to match the `/dev/null` exclusion below and reported two
+            // discard sites as unguarded captures.
+            rest.chars()
+                .take_while(|c| !c.is_whitespace() && !matches!(c, ')' | ';' | '|' | '&' | '"'))
+                .collect()
+        };
+        if target.is_empty() {
+            return None;
+        }
+        // DISCARDING IS NOT CAPTURING. `2>/dev/null` throws stderr away deliberately and
+        // there is nothing to make writable first, so it is not a capture site. Stated
+        // rather than left as an unexplained exception: the stricter detector found both
+        // of these the moment it started seeing unquoted targets, which is the detector
+        // working, and calling them unguarded would be the over-refusal that gets a
+        // coverage test deleted.
+        if target == "/dev/null" {
+            return None;
+        }
+        Some(target)
+    }
 }
