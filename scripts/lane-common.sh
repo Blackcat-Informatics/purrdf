@@ -116,9 +116,24 @@ certificate must never outlive the run it certifies" >&2
 
 LANE_TMP="$(mktemp -d)"
 
+# A HELPER THAT MUST WRITE OUTSIDE `LANE_TMP` STILL OWES THE TRAP ITS PATH.
+# `lane_query_set_digest` captures its interpreter's stderr with `mktemp` rather
+# than into `LANE_TMP`, deliberately: a certificate must not acquire a dependency
+# on a directory whose failure it is the thing reporting. The cost of moving out
+# was that the trap no longer knew about the file, so an interrupt mid-digest left
+# it behind in TMPDIR -- demonstrated with SIGINT during a 600 MB corpus. Buying
+# independence from `LANE_TMP` must not cost the cleanup guarantee it provided, so
+# such a file is registered here and swept on every exit path, signals included.
+LANE_STRAY_FILES=()
+
+lane_track_stray() {
+  LANE_STRAY_FILES+=("$1")
+}
+
 lane_cleanup() {
   local status=$?
   rm -rf "${LANE_TMP}"
+  ((${#LANE_STRAY_FILES[@]} == 0)) || rm -f -- "${LANE_STRAY_FILES[@]}"
   if ((status != 0)); then
     lane_revoke_certificates
     # A lane may own certificates it cannot name in advance — one per shard, for
@@ -337,6 +352,8 @@ lane_query_set_digest() {
   # `mktemp` rather than `LANE_TMP`: a digest is a certificate, and a certificate must
   # not depend on a directory whose failure it cannot report.
   errors="$(mktemp)" || die "could not create a temporary file to capture digest errors"
+  # Outside `LANE_TMP` by choice, so the trap is told about it explicitly.
+  lane_track_stray "${errors}"
   python3 -c '
 import hashlib, pathlib, stat, sys
 
@@ -404,8 +421,23 @@ print(hashlib.sha256(("\n".join(records) + "\n").encode("utf-8")).hexdigest())
     local detail=""
     [[ -s "${errors}" ]] && detail="$(lane_flatten_detail "$(cat "${errors}")")"
     rm -f -- "${errors}"
-    die "${detail:-could not digest the query set at '"'"'${directory}'"'"' and the reason could
-  not be captured. Check that the directory is readable and that python3 is on PATH.}"
+    # THE FALLBACK'S OWN TEXT WAS WRONG TWICE OVER, and no test reached it, which
+    # is how both survived. It carried the `'"'"'` idiom for a literal quote --
+    # correct in a single-quoted context, pasted into a double-quoted one where a
+    # quote is already literal, so it printed `'''${directory}'''`. And its advice
+    # named a case that cannot arrive here: a missing interpreter writes "command
+    # not found" INTO the capture, so `-s` is true and `detail` is used instead.
+    #
+    # What actually reaches this branch is a non-zero status with nothing written,
+    # which is characteristically a killed interpreter. So the status is quoted --
+    # it is the only evidence there is -- and the advice names that.
+    if [[ -n "${detail}" ]]; then
+      die "${detail}"
+    fi
+    die "could not digest the query set at '${directory}': the interpreter exited
+  ${status} and wrote nothing. A non-zero status with no message is characteristic
+  of a process killed by a signal rather than one that failed and explained itself
+  -- check whether this host ran out of memory."
   fi
   rm -f -- "${errors}"
 }

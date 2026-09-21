@@ -47,6 +47,33 @@ fn in_lane_common(body: &str) -> (i32, String) {
     )
 }
 
+/// As [`in_lane_common`], with `TMPDIR` pointed at a directory the caller can enumerate.
+///
+/// `mktemp` obeys `TMPDIR`, so this is what makes a claim about what a helper leaves behind
+/// observable at all: the default temporary directory is shared with every other process on the
+/// host, and "is this file still there?" cannot be answered in it.
+fn in_lane_common_with_tmpdir(body: &str, tmpdir: &Path) -> (i32, String) {
+    let script = format!(
+        "set -uo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
+        repo_root().join("scripts/lane-common.sh").display()
+    );
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .env("TMPDIR", tmpdir)
+        .current_dir(repo_root())
+        .output()
+        .expect("run bash with lane-common.sh sourced");
+    (
+        output.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
 fn repo_root() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     dir.pop();
@@ -1037,6 +1064,104 @@ fn a_binary_that_cannot_run_is_refused_for_every_lane_at_once() {
         out.contains("CAPTURED=probe 9.9.9"),
         "and what it said must be captured, because that string becomes the provenance \
          of every number the lane prints; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// THE BRANCH NO TEST COULD REACH SAID THE WRONG THING TWICE.
+//
+// The fallback diagnosis — used when the digest's interpreter fails and writes nothing — carried
+// the `'"'"'` idiom for a literal quote, which is correct in a single-quoted context and was
+// pasted into a double-quoted one where a quote is already literal, so it printed `'''/path'''`.
+// Its advice ("check that python3 is on PATH") also named a case that cannot arrive there: a
+// missing interpreter writes "command not found" INTO the capture, so the captured detail is used
+// instead and the fallback never fires. Both survived because no test reached the branch — the
+// existing scratch-independence test passes a nonexistent directory, which makes Python write a
+// `FAIL:` line, so the captured detail is non-empty.
+//
+// Shadowing `python3` with a shell function reaches it: a function is found before a command on
+// PATH, so this produces exactly the observed state the branch is written for — a non-zero status
+// with an empty capture, which is what a killed interpreter looks like.
+#[test]
+fn the_digest_fallback_names_the_directory_once_and_quotes_the_status_it_has() {
+    let (code, out) = in_lane_common(
+        "python3() { return 137; }\nlane_query_set_digest /some/arena",
+    );
+    assert_ne!(code, 0, "a failing digest must refuse; output:\n{out}");
+    assert!(
+        out.contains("at '/some/arena'"),
+        "the path must be quoted with ONE quote on each side; output:\n{out:?}"
+    );
+    assert!(
+        !out.contains("'''"),
+        "three quotes means the literal-quote idiom was pasted into a context that did not \
+         need it; output:\n{out:?}"
+    );
+    assert!(
+        out.contains("exited\n  137") || out.contains("exited 137"),
+        "the status is the only evidence this branch has and must appear; output:\n{out:?}"
+    );
+    assert!(
+        !out.contains("python3 is on PATH"),
+        "advice naming a state that cannot reach this branch sends a reader to check the one \
+         thing that is not wrong; output:\n{out:?}"
+    );
+}
+
+// A HELPER THAT MOVED OUT OF `LANE_TMP` STILL OWES THE TRAP ITS PATH.
+//
+// The digest captures its interpreter's stderr with `mktemp` rather than into `LANE_TMP`, and
+// that is deliberate — a certificate must not depend on a directory whose failure it is the thing
+// reporting. What it cost was the cleanup guarantee `LANE_TMP` provided for free: an interrupt
+// mid-digest left the capture behind in TMPDIR, because the trap only knew about `LANE_TMP`.
+// Independence from the scratch directory must not be bought with a leak.
+#[test]
+fn a_capture_taken_outside_the_scratch_directory_is_still_swept_on_a_signal() {
+    let root = scratch("stray-sweep");
+
+    // The script interrupts ITSELF mid-digest, so the observation needs no external signaller
+    // and no wall-clock race: `python3` is shadowed by a function that raises SIGINT and then
+    // blocks, guaranteeing the digest is in flight when the signal lands.
+    let (_code, out) = in_lane_common_with_tmpdir(
+        "python3() { kill -INT $$; sleep 30; }\nlane_query_set_digest /some/arena",
+        &root,
+    );
+    let leaked: Vec<String> = std::fs::read_dir(&root)
+        .expect("enumerate the private TMPDIR")
+        .map(|entry| entry.expect("read a TMPDIR entry").file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("tmp."))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "the capture file must not survive an interrupt: {leaked:?} left in TMPDIR; output:\n{out}"
+    );
+
+    // THE NEIGHBOUR: the sweep must not be achieved by never creating the file, or by the
+    // trap removing something it should not. A successful digest still returns its value, and
+    // it too leaves nothing behind.
+    let queries = root.join("queries");
+    std::fs::create_dir_all(&queries).expect("create the query directory");
+    write(&queries.join("q1.rq"), b"SELECT * WHERE { ?s ?p ?o }\n");
+    let (code, out) = in_lane_common_with_tmpdir(
+        &format!("lane_query_set_digest '{}'", queries.display()),
+        &root,
+    );
+    assert_eq!(code, 0, "a valid set must still certify; output:\n{out}");
+    assert_eq!(
+        out.trim().len(),
+        64,
+        "and it must be a digest, so the sweep is not hiding a helper that stopped working; \
+         output:\n{out:?}"
+    );
+    let survivors: Vec<String> = std::fs::read_dir(&root)
+        .expect("enumerate the private TMPDIR")
+        .map(|entry| entry.expect("read a TMPDIR entry").file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("tmp."))
+        .collect();
+    assert!(
+        survivors.is_empty(),
+        "a successful digest must leave nothing behind either: {survivors:?}"
     );
 
     let _ = std::fs::remove_dir_all(&root);
