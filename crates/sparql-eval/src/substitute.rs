@@ -47,6 +47,16 @@ pub(crate) enum Prebindings<'a> {
     Owned(&'a [(String, TermValue)]),
     /// An interned entry point's list, names borrowed from the caller.
     Borrowed(&'a [crate::interned::Prebinding<'a>]),
+    /// A prepared execution's parameters and their current values, as parallel
+    /// slices.
+    ///
+    /// The handle owns its parameter list as already-interned [`Variable`]s and its
+    /// bindings as a separate vector it overwrites per execution, so neither can be
+    /// zipped into one slice without building it — which is the per-execution
+    /// allocation a prepared execution exists to remove. Reading them side by side
+    /// costs nothing, and the name never has to be re-interned because the
+    /// [`Variable`] is already here.
+    Paired(&'a [Variable], &'a [Option<TermValue>]),
 }
 
 impl<'a> Prebindings<'a> {
@@ -55,6 +65,7 @@ impl<'a> Prebindings<'a> {
         match self {
             Self::Owned(list) => list.len(),
             Self::Borrowed(list) => list.len(),
+            Self::Paired(names, _) => names.len(),
         }
     }
 
@@ -85,6 +96,24 @@ impl<'a> Prebindings<'a> {
         match self {
             Self::Owned(list) => (list[index].0.as_str(), &list[index].1),
             Self::Borrowed(list) => (list[index].variable, &list[index].value),
+            Self::Paired(names, values) => (
+                names[index].as_str(),
+                values[index]
+                    .as_ref()
+                    .expect("a prepared execution refuses to run with a parameter unbound"),
+            ),
+        }
+    }
+
+    /// The `index`-th pre-binding's [`Variable`].
+    ///
+    /// A prepared execution already holds one, so it is cloned — an `Arc` refcount
+    /// bump — rather than looked up by name. Every other shape carries only the name
+    /// and goes through the per-worker interner.
+    fn variable(self, index: usize) -> Variable {
+        match self {
+            Self::Paired(names, _) => names[index].clone(),
+            _ => interned_variable(self.get(index).0),
         }
     }
 }
@@ -155,7 +184,7 @@ thread_local! {
 }
 
 /// The [`Variable`] for `name`, interned per worker.
-fn interned_variable(name: &str) -> Variable {
+pub(crate) fn interned_variable(name: &str) -> Variable {
     INTERNED_VARIABLES.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(var) = cache.get(name) {
@@ -187,8 +216,12 @@ fn build_probes(
     substitutions: Prebindings<'_>,
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
     let mut probes = Vec::with_capacity(substitutions.len());
-    for (name, value) in substitutions.iter() {
-        probes.push((interned_variable(name), ground_term_from_value(value)?));
+    for index in 0..substitutions.len() {
+        let (_, value) = substitutions.get(index);
+        probes.push((
+            substitutions.variable(index),
+            ground_term_from_value(value)?,
+        ));
     }
     Ok(probes)
 }

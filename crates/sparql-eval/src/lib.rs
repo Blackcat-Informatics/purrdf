@@ -125,6 +125,7 @@ mod row_ingest;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.
+pub mod execution;
 pub mod service;
 pub mod solution;
 pub mod stat_agg;
@@ -154,6 +155,7 @@ pub use error::{EvalError, UnsupportedKind};
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
+pub use execution::PreparedExecution;
 pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 pub use governed::{
     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,

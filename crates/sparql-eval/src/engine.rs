@@ -29,6 +29,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::Arc;
 
+use crate::execution::PreparedExecution;
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, MutableDataset, RdfDataset, RdfDiagnostic,
     SparqlEngine, SparqlRequest, SparqlResult, TermValue, ViewOperationStatus,
@@ -1885,6 +1886,114 @@ impl NativeSparqlEngine {
             )?,
         };
         Ok(materialize(outcome, &ctx))
+    }
+
+    /// Prepare `query` once as a **parameterized execution** that can be bound and
+    /// run many times.
+    ///
+    /// This is the object [`PlanCache`]'s documentation points callers at: pass
+    /// changing data as substitutions to a prepared plan rather than splicing it into
+    /// query text. Splicing mints a new query, and a new query misses the plan cache,
+    /// is re-parsed and is re-admitted; binding a parameter writes a cell.
+    ///
+    /// `parameters` names the variables the caller will bind. They are interned here,
+    /// once, so running never rebuilds a `Variable` from a borrow.
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] if `query` does not parse or is refused admission, or if
+    /// `parameters` repeats a name — a repeated parameter has no single slot to bind
+    /// and would make [`PreparedExecution::bind`] ambiguous about which occurrence it
+    /// set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let execution = engine.prepare_execution(
+    ///     "SELECT ?o WHERE { ?this <http://example.org/p> ?o }",
+    ///     None,
+    ///     &["this"],
+    ///     QueryOptions::EMPTY,
+    /// )?;
+    /// assert_eq!(execution.parameters().len(), 1);
+    /// assert_eq!(execution.slot("this"), Some(0));
+    /// assert_eq!(execution.slot("absent"), None);
+    /// # Ok::<(), purrdf_core::RdfDiagnostic>(())
+    /// ```
+    pub fn prepare_execution(
+        &self,
+        query: &str,
+        base_iri: Option<&str>,
+        parameters: &[&str],
+        options: QueryOptions<'_>,
+    ) -> Result<PreparedExecution, RdfDiagnostic> {
+        for (index, name) in parameters.iter().enumerate() {
+            if parameters[..index].contains(name) {
+                return Err(RdfDiagnostic::error(
+                    "native-sparql-execution-parameter",
+                    format!("parameter {name:?} is declared more than once"),
+                ));
+            }
+        }
+        let prepared = self.prepare_for(
+            query,
+            base_iri,
+            options.property_functions,
+            options.aggregates,
+        )?;
+        Ok(PreparedExecution {
+            prepared,
+            parameters: parameters
+                .iter()
+                .map(|name| crate::substitute::interned_variable(name))
+                .collect(),
+            values: vec![None; parameters.len()],
+        })
+    }
+
+    /// Run `execution` against `dataset` with its current bindings.
+    ///
+    /// The plan is already prepared and admitted, so this does no cache probe, no
+    /// parse and no admission; and the bindings are read from the execution's own
+    /// parallel slices, so passing them costs no list to build.
+    ///
+    /// `&mut execution` is what makes an execution already in flight unreachable —
+    /// see [`crate::execution`] for why that is a guarantee rather than a limitation.
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] if any parameter is still unbound, or if evaluation fails. An
+    /// unbound parameter is refused rather than treated as unrestricted: running a
+    /// query whose focus was never supplied would answer over every subject, which is
+    /// a silently wider answer rather than a visible mistake.
+    pub fn execute<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<R, RdfDiagnostic> {
+        let unbound = execution.unbound();
+        if !unbound.is_empty() {
+            return Err(RdfDiagnostic::error(
+                "native-sparql-execution-parameter",
+                format!("parameters still unbound: {}", unbound.join(", ")),
+            ));
+        }
+        let prepared = Arc::clone(&execution.prepared);
+        let ctx = self.eval_ctx(dataset);
+        let mut ctx = apply_query_options(ctx, options)?;
+        let outcome = match options.prebinding {
+            ShaclPrebinding::Applied => {
+                evaluate_with_shacl_prebinding(&prepared, execution.prebindings(), &mut ctx)?
+            }
+            ShaclPrebinding::None => {
+                evaluate_with_substitutions(&prepared, execution.prebindings(), &mut ctx)?
+            }
+        };
+        Ok(visit(borrow_outcome(&outcome, &ctx)))
     }
 
     /// [`Self::query_with_options_view`] on the **interned** egress: `visit` is
