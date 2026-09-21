@@ -166,6 +166,20 @@ impl OutTarget {
     /// Standard Unix filters exit 0 silently on a downstream EPIPE, so that ONE
     /// error kind on stdout is a clean success; every other kind, and every kind on
     /// a file target, still propagates.
+    ///
+    /// # This is the only flush
+    ///
+    /// `TextSink::finish` drains what it has staged and deliberately does NOT flush
+    /// the writer underneath it — "the owner of that writer owns its buffering", as
+    /// it puts it. THIS type is that owner for both targets, and this method is where
+    /// the ownership is discharged. The two halves of that contract are written a
+    /// crate apart, so a reader of either one alone could reasonably conclude the
+    /// other end was handling it and nobody was.
+    ///
+    /// Nothing currently depends on it: a `File` is unbuffered, and stdout's
+    /// `LineWriter` flushes on drop. That is exactly why it is worth stating — the
+    /// invariant holds today by a property of the two targets that happen to be
+    /// wired up, not by anything that would fail if a buffered writer were added.
     pub(crate) fn finish(mut self) -> Result<(), CliError> {
         if self.hung_up() {
             return Ok(());
