@@ -110,31 +110,44 @@ def _misrendering(component: str) -> str | None:
     than a list that stops wherever attention ran out. Measured, not assumed: every tracked
     path passes.
     """
-    for char in component:
+    for index, char in enumerate(component):
         code = ord(char)
         category = unicodedata.category(char)
-        # `Cc` RATHER THAN AN ASCII RANGE. `code < 0x20 or code == 0x7F` stopped exactly
-        # where attention ran out: U+0085 NEL is `Cc`, and `"a\u0085b".splitlines()`
-        # returns two entries -- the docstring's own stated ground for refusing a newline.
-        # U+009B is the 8-bit CSI, the ground for refusing an escape. Both were accepted.
         if category == "Cc":
             return f"the control character U+{code:04X}"
-        # A SPACE THAT IS NOT THE SPACE. There was no `Zs` rule at all, so `a b.md` and
-        # `a\u00a0b.md` were both accepted and render identically -- the exact cost this
-        # gate names. The asymmetry was accidental: `str.strip()` eats a LEADING NBSP while
-        # an interior one walked through.
         if category == "Zs" and char != " ":
             return f"U+{code:04X}, a space character that is not the ordinary space"
+        # A VARIATION SELECTOR IS ONLY MEANINGFUL AFTER A CHARACTER THAT HAS VARIANTS.
+        #
+        # Excluding U+FE0F wholesale fixed a real over-refusal (`❤️.md` was rejected) and
+        # introduced the silent drop this gate exists to prevent: `docs/README.md` and
+        # `docs/README<FE0F>.md` were BOTH accepted, render identically in every listing and
+        # diff, and the pair rule cannot see them either, because their NFC and casefold
+        # keys differ. Two distinct tracked paths, one rendering, no diagnosis.
+        #
+        # The distinction is the BASE. After an emoji, a selector chooses a presentation and
+        # is orthography. After an ASCII character -- which has no emoji presentation to
+        # select -- it is pure invisibility. So the condition is on what precedes it, which
+        # is what the wholesale exclusion threw away.
+        if 0xFE00 <= code <= 0xFE0F or 0xE0100 <= code <= 0xE01EF:
+            base = component[index - 1] if index else ""
+            if base == "" or base.isascii():
+                return (
+                    f"the variation selector U+{code:04X} after {base!r}, which has no "
+                    f"variant to select -- so the selector renders nothing and the name is "
+                    f"indistinguishable from the same name without it"
+                )
+            continue
         if category == "Cf":
-            # ZWNJ AND ZWJ ARE ORTHOGRAPHY, NOT DECORATION. They are required in Persian
-            # (`می‌روم`) and control Indic conjuncts, and a blanket `Cf` refusal took them
-            # -- an over-refusal inside a rule about honesty. Excluded by name, with the
-            # reason, rather than by narrowing the category and losing the bidi controls.
             if char in "\u200c\u200d":
                 continue
             return f"the invisible format character U+{code:04X} ({category})"
         if category in {"Zl", "Zp"}:
             return f"the line or paragraph separator U+{code:04X} ({category})"
+        # RESERVED DEFAULT-IGNORABLE CODE POINTS render as nothing by specification and are
+        # unassigned, so a name carrying one is invisible AND not valid text.
+        if category == "Cn" and (0x2060 <= code <= 0x206F or 0xFFF0 <= code <= 0xFFF8):
+            return f"the reserved default-ignorable code point U+{code:04X}"
         if char in _BLANK_BUT_NOT_SPACE:
             return f"U+{code:04X}, which renders as nothing at all"
     return None
@@ -276,6 +289,13 @@ def self_test() -> int:
         # `"a\u2028b".splitlines()` returns two entries, which is why `\n` is refused.
         "has\u2028lineseparator",
         "has\u2029paragraphseparator",
+        # A VARIATION SELECTOR AFTER AN ASCII CHARACTER selects nothing, so this renders
+        # identically to `docs/README.md` -- two tracked paths, one rendering. The wholesale
+        # U+FE0F exclusion accepted it, trading an over-refusal for a silent drop.
+        "docs/README\ufe0f.md",
+        "docs/README\ufe0e.md",
+        "docs/a\ufe00b.md",
+        "docs/reserved\u2065.md",
         # `"a\u0085b".splitlines()` returns two entries, which is the stated ground for
         # refusing a newline; U+009B is the 8-bit CSI. Both are `Cc` and both were
         # accepted while `\r` was refused.
@@ -333,6 +353,41 @@ def self_test() -> int:
         ok = False
     else:
         print(f"OK: self-test — all {len(accepted)} ordinary paths are accepted")
+
+    # THE PAIR RULE NEEDS PAIRS. `collisions` is a LIST predicate and every case above
+    # drives `offences` one path at a time, so a one-element list cannot collide -- the rule
+    # could be stubbed to `return []` with this self-test green and the bare run at exit 0,
+    # and it has no live signal either, because no tracked path carries a non-ASCII byte. A
+    # rule that can be deleted with every gate green is indistinguishable from an absent one,
+    # which is this repository's own argument for having gates at all.
+    colliding = [
+        ("Unicode normalisation (NFC vs NFD)", ["docs/caf\u00e9.md", "docs/cafe\u0301.md"]),
+        ("case only", ["README.md", "readme.md"]),
+        ("case only, deeper", ["docs/Design.md", "docs/design.md"]),
+    ]
+    for label, pair in colliding:
+        if not collisions(pair):
+            print(f"SELF-TEST FAIL: {label} must collide: {pair!r}")
+            ok = False
+    else:
+        print(f"OK: self-test — all {len(colliding)} colliding pairs are refused")
+
+    # AND THE NEIGHBOURS, which are what a `return []` stub would also satisfy: distinct
+    # names must NOT collide, and the same path repeated must not collide with itself --
+    # `git ls-files` emits one entry per index stage, so during an unresolved merge a single
+    # conflicted file arrives three times.
+    distinct = [
+        ("genuinely different names", ["docs/a.md", "docs/b.md"]),
+        ("the same path repeated", ["CHANGELOG.md", "CHANGELOG.md", "CHANGELOG.md"]),
+        ("different case AND different name", ["docs/Alpha.md", "docs/beta.md"]),
+        ("the real tree", tracked_paths()),
+    ]
+    wrongly_collided = [label for label, paths in distinct if collisions(paths)]
+    if wrongly_collided:
+        print(f"SELF-TEST FAIL: these must not collide: {wrongly_collided}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(distinct)} non-colliding sets are accepted")
 
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1

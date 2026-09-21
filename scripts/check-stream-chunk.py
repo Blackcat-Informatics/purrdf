@@ -174,10 +174,40 @@ def python_offences(path: Path, text: str) -> list[str]:
     return found
 
 
-# A `python3 -c '...'` argument inside a shell script. The delimiter is stable in this tree:
-# the body opens after `python3 -c '` and closes at a line that is exactly `'` followed by
-# the arguments. Both lanes and `scale-corpus.sh` use that shape.
-EMBEDDED_PYTHON = re.compile(r"python3 -c '\n(.*?)\n'", re.DOTALL)
+# EVERY WAY A SHELL SCRIPT LAUNCHES AN EMBEDDED PROGRAM, not the one form that came to
+# mind. The first version matched only `python3 -c '` followed immediately by a newline,
+# which opened 3 of the 12 `-c` sites and NONE of the five heredoc sites
+# (`python3 - "$arg" <<'PY'`) in three files. A survey of the tracked shell scripts is
+# what settled that; a narrower pattern had reported the heredocs absent.
+#
+# Two launchers, two delimiters:
+#   python3 -c '<body>'          -- the body is the single-quoted argument
+#   python3 - [args] <<'DELIM'   -- the body runs to a line that is exactly DELIM
+_QUOTED_BODY = re.compile(r"python3 -c '(.*?)^'", re.DOTALL | re.MULTILINE)
+_HEREDOC_OPEN = re.compile(r"python3 -[^\n]*<<[-]?'?(\w+)'?[^\n]*$", re.MULTILINE)
+
+
+def embedded_programs(text: str) -> list[tuple[int, str]]:
+    """Every embedded Python program as `(line_offset, body)`.
+
+    `line_offset` is the 0-based line the body starts on in the shell file, so a finding can
+    name the shell line rather than a line number inside a fragment nobody can locate.
+    """
+    programs: list[tuple[int, str]] = []
+    for match in _QUOTED_BODY.finditer(text):
+        programs.append((text[: match.start(1)].count("\n"), match.group(1)))
+    lines = text.splitlines()
+    for match in _HEREDOC_OPEN.finditer(text):
+        delimiter = match.group(1)
+        opened = text[: match.start()].count("\n")
+        body: list[str] = []
+        for line in lines[opened + 1 :]:
+            if line.strip() == delimiter:
+                break
+            body.append(line)
+        if body:
+            programs.append((opened + 1, "\n".join(body)))
+    return programs
 
 
 def shell_offences(path: Path, text: str) -> list[str]:
@@ -187,19 +217,20 @@ def shell_offences(path: Path, text: str) -> list[str]:
     files kept a line scan whose regex truncates at the first `)`, so a truncated fragment
     failed to parse and read as a name -- a silent pass. And the lanes' embedded Python is
     exactly where the non-trivial reads live: `scripts/lane-common.sh`'s own
-    `handle.read(int(sys.argv[2]))` was invisible to the gate, which the file's comment block
-    cites as a reason for the AST rewrite it then did not apply here.
+    `handle.read(int(sys.argv[2]))` was invisible to the gate, which this file's own comment
+    block cites as a reason for the AST rewrite it then did not apply here.
     """
     found: list[str] = []
-    # The embedded programs, parsed with the same walker the `.py` path uses.
-    for match in EMBEDDED_PYTHON.finditer(text):
-        body = match.group(1)
-        line_offset = text[: match.start()].count("\n") + 1
+    for line_offset, body in embedded_programs(text):
         for problem in python_offences(path, body):
-            # Re-base the reported line onto the shell file, so the location is usable.
             found.append(_rebase_line(problem, line_offset))
-    # And the shell's own reads, which the line scan is right for.
-    found.extend(offences(path, EMBEDDED_PYTHON.sub("", text)))
+    # The shell's own reads. Embedded bodies are blanked LINE-FOR-LINE rather than deleted:
+    # `sub("")` removed their lines outright and shifted every later line number, so a
+    # shell-native finding was reported up to 119 lines early in `lane-common.sh`.
+    masked = text
+    for line_offset, body in embedded_programs(text):
+        masked = masked.replace(body, "\n" * body.count("\n"), 1)
+    found.extend(offences(path, masked))
     return found
 
 
@@ -329,6 +360,57 @@ def self_test() -> int:
     else:
         total = len(accepted_python) + len(accepted_other)
         print(f"OK: self-test — all {total} named or non-streaming reads are accepted")
+
+    # SHELL FIXTURES, DRIVEN THROUGH `shell_offences`. Not one existed: every fixture above
+    # is a Python line, so the entire `.sh` path -- the subject of the change that added it,
+    # and where the lanes' embedded programs live -- could be stubbed to `return []` with
+    # this self-test green and the bare run at exit 0. The CI step is named "Check the
+    # stream-chunk gate can still fail", which it could not.
+    shell_refused = {
+        "a literal read in a `-c` body": "python3 -c '\nimport sys\nh.read(4194304)\n'\n",
+        # A NESTED CALL, so this fixture can only pass through the AST walker. A plain
+        # `read(4194304)` here proved nothing: the line scanner sees it whether or not the
+        # heredoc was ever extracted, so the fixture passed with the extractor disabled --
+        # a control that cannot distinguish the case it exists for. Caught by mutating the
+        # heredoc pattern to never match and watching the test stay green.
+        "a literal read the line scanner cannot see, in a heredoc body": (
+            "python3 - \"$1\" <<'PY'\nimport sys\nh.read(int(4194304))\nPY\n"
+        ),
+        "a shape the line scanner could not see": "python3 -c '\nh.read(int(4194304))\n'\n",
+        "a shell-native read": '    chunk = "$(dd bs=4194304)"\n    h.read(4194304)\n',
+    }
+    missed = [label for label, body in shell_refused.items() if not shell_offences(here, body)]
+    if missed:
+        print(f"SELF-TEST FAIL: these shell shapes were not refused: {missed}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(shell_refused)} shell shapes are refused")
+
+    shell_accepted = {
+        "a named read in a `-c` body": "python3 -c '\nh.read(int(sys.argv[2]))\n'\n",
+        "a named read in a heredoc body": (
+            "python3 - \"$1\" <<'PY'\nh.read(chunk_bytes)\nPY\n"
+        ),
+        "a small fixed-width field": "python3 -c '\nh.read(2)\n'\n",
+        "shell with no read at all": 'echo "no reads here"\n',
+    }
+    wrongly = [label for label, body in shell_accepted.items() if shell_offences(here, body)]
+    if wrongly:
+        print(f"SELF-TEST FAIL: these shell shapes must be accepted: {wrongly}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(shell_accepted)} named or non-streaming shell reads are accepted")
+
+    # AND THE LINE NUMBER MUST NAME THE SHELL LINE. Blanking an embedded body with `sub("")`
+    # deleted its lines and shifted every later number, so a shell-native finding was
+    # reported up to 119 lines early.
+    probe = "\n" * 9 + "python3 -c '\nh.read(4194304)\n'\n"
+    reported = shell_offences(here, probe)
+    if not reported or ":11:" not in reported[0]:
+        print(f"SELF-TEST FAIL: the embedded finding does not name the shell line: {reported}")
+        ok = False
+    else:
+        print("OK: self-test — an embedded finding names its line in the shell file")
 
     # And the tree as it stands, which is the neighbour for the whole gate.
     standing = scan()

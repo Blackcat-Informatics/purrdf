@@ -26,9 +26,15 @@ use std::process::Command;
 ///
 /// `LANE`/`LANE_BINARY` are set because the file refuses to load without them —
 /// that refusal is itself one of its laws.
+///
+/// `set -euo pipefail` MATCHES WHAT THE LANES RUN. The harness had `-uo` without `-e`, so a
+/// `die` inside a command substitution left the harness at exit 0 and continuing where a
+/// real lane aborts — an acceptance test that cannot see an intermediate non-zero is
+/// testing a shell the production surface does not use. All 35 tests pass either way, which
+/// is why the divergence was invisible rather than harmless.
 fn in_lane_common(body: &str) -> (i32, String) {
     let script = format!(
-        "set -uo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
+        "set -euo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
         repo_root().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
@@ -54,7 +60,7 @@ fn in_lane_common(body: &str) -> (i32, String) {
 /// host, and "is this file still there?" cannot be answered in it.
 fn in_lane_common_with_tmpdir(body: &str, tmpdir: &Path) -> (i32, String) {
     let script = format!(
-        "set -uo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
+        "set -euo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
         repo_root().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
@@ -526,7 +532,7 @@ fn a_multi_line_diagnostic_survives_flattening_instead_of_being_truncated() {
 #[test]
 fn sourcing_the_shared_laws_pins_collation_whatever_the_caller_had() {
     let script = format!(
-        "set -uo pipefail\nLANE=probe\nLANE_BINARY=b\nsource '{}'\necho \"LC_ALL=${{LC_ALL}}\"",
+        "set -euo pipefail\nLANE=probe\nLANE_BINARY=b\nsource '{}'\necho \"LC_ALL=${{LC_ALL}}\"",
         repo_root().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
@@ -1472,9 +1478,15 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
                 ));
                 continue;
             };
-            let guarded = lines[function_start + 1..index]
-                .iter()
-                .any(|earlier| earlier.contains("lane_reset_capture") && earlier.contains(&target));
+            let guarded = lines[function_start + 1..index].iter().any(|earlier| {
+                // A COMMENTED-OUT RESET IS NOT A RESET. The capture scan skips comments
+                // and this one did not, so `# DISABLED: lane_reset_capture "${errfile}"`
+                // still reported GUARDED -- the exact regression this test exists to
+                // prevent, passing green.
+                !earlier.trim_start().starts_with('#')
+                    && earlier.contains("lane_reset_capture")
+                    && earlier.contains(&target)
+            });
             if !guarded {
                 unguarded.push(format!("{script}:{}: {}", index + 1, line.trim()));
             }
@@ -1597,8 +1609,9 @@ fn every_shared_lane_helper_appears_in_the_design_doc_inventory() {
         .collect();
 
     assert!(
-        defined.len() >= 20,
-        "expected the shared file to define at least twenty `lane_*` helpers; found {} — a \
+        defined.len() >= 24,
+        "expected the shared file to define at least the 24 `lane_*` helpers it had when \
+         this floor was set; found {} — four could vanish under a floor of twenty, and a \
          coverage test that finds nothing passes for the wrong reason",
         defined.len()
     );
@@ -1640,5 +1653,106 @@ fn every_shared_lane_helper_appears_in_the_design_doc_inventory() {
         "the inventory names these helpers and `scripts/lane-common.sh` defines none of \
          them:\n  {}",
         stale.join("\n  ")
+    );
+}
+
+// THE PIN LOOKUP IS THE BRANCH'S HEADLINE AND HAD NO TEST AT ALL.
+//
+// `lane_require_pin` and `lane_lookup_pin` gate every published digest: the corpus pins, the
+// census pin, the query-set pins and the twenty per-query answer counts all pass through one
+// of them. `grep -rn 'lane_require_pin\|lane_lookup_pin' crates/ --include=*.rs` returned
+// ZERO before this test. Removing either guard lets a lane compare a real corpus SHA-256
+// against an EMPTY expectation and exit 0, with nothing noticing.
+//
+// The distinction the two helpers exist to draw is between "recorded nowhere" (exit 2, a
+// reportable state) and "the lookup itself is broken" (anything else, a lane failure) —
+// because both used to arrive as one non-zero status behind `2>/dev/null`, and a skip is
+// indistinguishable from a pass.
+#[test]
+fn a_required_pin_is_returned_and_a_missing_one_is_refused_by_name() {
+    let root = repo_root();
+
+    // A pin that IS recorded comes back as its value, so a caller comparing a digest has
+    // something to compare against.
+    let (code, out) = in_lane_common(&format!(
+        "value=\"$(lane_require_pin '{}' lubm.queries.sha256 'the query-set pin')\"\n\
+         printf 'got=[%s]\\n' \"${{value}}\"",
+        root.display()
+    ));
+    assert_eq!(code, 0, "a recorded pin must be returned; output:\n{out}");
+    assert!(
+        out.contains("got=[5ad5a5c735bc86625c0f008fc78a2f7cfc30f063de25ad33a36339e2e49774a8]"),
+        "and it must be the VALUE, not an empty string — an empty expectation compared \
+         against a real digest is the silent pass this helper exists to stop; output:\n{out}"
+    );
+
+    // A pin recorded nowhere is a refusal that names it, not an empty return.
+    let (code, out) = in_lane_common(&format!(
+        "lane_require_pin '{}' no.such.pin.anywhere 'the invented pin'\necho REACHED",
+        root.display()
+    ));
+    assert_ne!(code, 0, "an unrecorded pin must refuse; output:\n{out}");
+    assert!(
+        !out.contains("REACHED"),
+        "and it must refuse rather than return empty and continue; output:\n{out}"
+    );
+    assert!(
+        out.contains("no.such.pin.anywhere") && out.contains("the invented pin"),
+        "the refusal must name the pin and what it was for; output:\n{out}"
+    );
+}
+
+#[test]
+fn an_optional_pin_reports_absence_and_dies_on_a_broken_lookup() {
+    let root = repo_root();
+
+    // Found: sets LANE_PIN_VALUE and returns 0.
+    let (code, out) = in_lane_common(&format!(
+        "lane_lookup_pin '{}' lubm.1.0.seed0.rows.Q1 && printf 'found=[%s]\\n' \"${{LANE_PIN_VALUE}}\"",
+        root.display()
+    ));
+    assert_eq!(code, 0, "output:\n{out}");
+    assert!(out.contains("found=[4]"), "output:\n{out}");
+
+    // Recorded nowhere: returns 1 WITHOUT dying, because a version-keyed pin is expected to
+    // be absent the first time a new binary runs. `LANE_PIN_VALUE` must be cleared, or a
+    // caller reads the previous lookup's value as this one's.
+    let (code, out) = in_lane_common(&format!(
+        "lane_lookup_pin '{}' lubm.1.0.seed0.rows.Q1\n\
+         if lane_lookup_pin '{}' no.such.pin.anywhere; then echo UNEXPECTED-SUCCESS; else \
+         printf 'absent, value=[%s]\\n' \"${{LANE_PIN_VALUE}}\"; fi",
+        root.display(),
+        root.display()
+    ));
+    assert_eq!(
+        code, 0,
+        "an absent optional pin is a reportable state, not a lane failure; output:\n{out}"
+    );
+    assert!(out.contains("absent, value=[]"), "output:\n{out}");
+    assert!(
+        !out.contains("UNEXPECTED-SUCCESS"),
+        "an absent pin must return non-zero so the caller can branch; output:\n{out}"
+    );
+
+    // A BROKEN LOOKUP IS NOT AN ABSENT PIN. Shadowing `python3` with a function that exits
+    // 3 reproduces a renamed flag or a syntax error in the pin table: the helper must DIE,
+    // because reporting that as "no pin recorded" is the silent skip it exists to prevent.
+    let (code, out) = in_lane_common(&format!(
+        "python3() {{ return 3; }}\n\
+         if lane_lookup_pin '{}' lubm.queries.sha256; then echo FOUND; else echo ABSENT; fi",
+        root.display()
+    ));
+    assert_ne!(
+        code, 0,
+        "a broken lookup must be a lane failure; output:\n{out}"
+    );
+    assert!(
+        !out.contains("ABSENT") && !out.contains("FOUND"),
+        "it must not resolve to either answer — reporting a broken lookup as an absent pin \
+         is the skip that reads exactly like a pass; output:\n{out}"
+    );
+    assert!(
+        out.contains("exited 3"),
+        "and it must quote the status, which is the only evidence it has; output:\n{out}"
     );
 }

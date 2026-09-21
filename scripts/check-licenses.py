@@ -302,6 +302,23 @@ def first_party_header_offenders(root: Path, expected: str) -> list[str]:
     return offenders
 
 
+def _assert_outside_repo(fixture: Path) -> None:
+    """Refuse a fixture path inside the repository.
+
+    `tempfile` obeys `TMPDIR`, and `_fixture_repo` runs `git init` in whatever it is given.
+    A `TMPDIR` pointing inside the worktree would therefore place a throwaway `.git` in the
+    tree this gate judges -- and a nested repository changes what `git ls-files` returns for
+    the real one. No tracked write happens today; this is the condition that would make one
+    possible, checked rather than assumed.
+    """
+    root = repo_root().resolve()
+    if root in fixture.resolve().parents or fixture.resolve() == root:
+        sys.exit(
+            f"check-licenses: refusing to build a fixture repository at {fixture} because it "
+            f"is inside {root}. Point TMPDIR outside the worktree."
+        )
+
+
 def _fixture_repo(root: Path) -> None:
     """Make *root* a git repository, so `git ls-files` can enumerate a fixture.
 
@@ -310,6 +327,7 @@ def _fixture_repo(root: Path) -> None:
     repository, and two offline git calls are a smaller price than giving the function a
     second code path that the real run would not take.
     """
+    _assert_outside_repo(root)
     for command in (["init", "-q"], ["add", "-A"]):
         subprocess.run(
             ["git", "-C", str(root), *command],
@@ -515,7 +533,10 @@ def self_test() -> int:
 # `Licensing` as well as `License`/`Licence`, and a single `#` as well as `##`. The first
 # pattern was `^##+\s+Licen[cs]e`, which refused a section headed `## Licensing` -- the name
 # of this repository's own LICENSING.md -- and a top-level `# License`.
-LICENCE_HEADING = re.compile(r"^(#{1,6})\s+Licen[cs]", re.MULTILINE)
+# `Licensing`/`Licence`/`License`, and the zh-Hans heading, which an English-only pattern
+# could not match -- so `README.zh-Hans.md` would be mis-diagnosed as "publishes with no
+# licence section" the moment this rule reaches a non-crate README.
+LICENCE_HEADING = re.compile(r"^(#{1,6})\s+(?:Licen[cs]|许可|授权)", re.MULTILINE)
 
 # HOW EACH TERM MAY BE WRITTEN. `term.split("-")[0]` reduced the needles to `MIT`,
 # `Apache` and `MulanPSL`, so the VERSION was never checked: a section naming
@@ -523,10 +544,21 @@ LICENCE_HEADING = re.compile(r"^(#{1,6})\s+Licen[cs]", re.MULTILINE)
 # Apache-2.0 or MulanPSL-2.0" -- a section explicitly REFUSING two of the three, accepted
 # as stating all three. A term with no entry here is a hard failure rather than a fallback
 # to substring matching, so a future licence cannot be silently unchecked.
+# WHITESPACE-TOLERANT, because Markdown wraps. The root README spells its own offer as
+# `[Apache License\n2.0]` across a line break, and a pattern with a literal space matched
+# neither alias -- so the gate would have false-refused this repository's own landing page
+# the moment the rule reached it. `\s+` rather than a space in every multi-word alias.
 LICENCE_ALIASES: dict[str, tuple[str, ...]] = {
     "MIT": (r"\bMIT\b",),
-    "Apache-2.0": (r"Apache-2\.0", r"Apache License,? Version 2\.0"),
-    "MulanPSL-2.0": (r"MulanPSL-2\.0", r"Mulan Permissive Software License,? Version 2"),
+    "Apache-2.0": (
+        r"Apache-2\.0",
+        r"Apache\s+License,?\s+Version\s+2\.0",
+        r"Apache\s+License\s+2\.0",
+    ),
+    "MulanPSL-2.0": (
+        r"MulanPSL-2\.0",
+        r"Mulan\s+Permissive\s+Software\s+License,?\s+Version\s+2",
+    ),
 }
 
 
@@ -593,25 +625,25 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
             for term in terms
             if not any(re.search(alias, section) for alias in LICENCE_ALIASES[term])
         ]
-        # A TERM NAMED IN ORDER TO REFUSE IT IS NOT AN OFFER. Presence matching cannot see
-        # this on its own: "MIT only. NOT offered under Apache-2.0 or MulanPSL-2.0" contains
-        # all three spellings and passed as stating all three. The phrase list is
-        # deliberately short and literal -- a general negation detector over prose would
-        # over-refuse, and the shapes that matter are few.
-        negation = re.search(
-            r"\b(?:not|never)\s+(?:offered|available|licen[cs]ed|usable|provided)\b"
-            r"|\bexcept\s+under\b|\bonly\b(?=[^.]*\bnot\b)",
-            section,
-            re.IGNORECASE,
-        )
-        if negation is not None:
-            offenders.append(
-                f"crates/{name}/README.md: its licence section contains {negation.group(0)!r}, "
-                f"so it names a term in order to REFUSE it. A section that lists every term "
-                f"and then withdraws one states a narrower offer than the metadata does, and "
-                f"naming a licence is not offering it."
-            )
-            continue
+        # WITHDRAWAL IS NOT DETECTABLE BY PRESENCE MATCHING, and the attempt was worse
+        # than nothing. A phrase list keyed on `only` / `not offered` / `except under`
+        # refused all four of these legitimate tri-licence sentences --
+        #
+        #   "Pick only one of the three; you do not need to comply with all"
+        #   "The vendored W3C corpora are not licensed under these terms"
+        #   "No warranty is provided and support is not offered"
+        #   "You may not remove the notice except under the terms"
+        #
+        # -- while missing two of three real withdrawals ("do NOT apply to this crate",
+        # "were withdrawn"). `\bonly\b(?=[^.]*\bnot\b)` was the worst of it: `[^.]`
+        # matches newlines, so any `only` before any `not` with no intervening period fired.
+        #
+        # It passed the four neighbours I wrote for it because I chose neighbours that did
+        # not contain the trigger words -- a control that cannot distinguish the case it
+        # exists for, which is the shape this whole change is about. A rule refusing more
+        # good prose than bad makes the gate worse than its absence, so it is deleted
+        # rather than tuned. What remains is the checkable claim: every term of the offer
+        # must be NAMED in the section.
         if missing:
             offenders.append(
                 f"crates/{name}/README.md: its licence section does not name {missing}; the "
