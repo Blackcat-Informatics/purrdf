@@ -77,7 +77,17 @@ def strip_yaml_comments(text: str) -> str:
     removing it costs nothing here, whereas leaving comments in let an English sentence
     in a comment act as a `make` invocation. See `WORKFLOW_MAKE`.
     """
-    return "\n".join(re.sub(r"(?<!\S)#.*$", "", line) for line in text.splitlines())
+    stripped = []
+    for line in text.splitlines():
+        # QUOTE STATE FIRST. `run: echo "a # b" && make check` lost the `make check` target
+        # entirely -- the hiding direction this gate exists to refuse -- because the `#`
+        # inside the quoted scalar cut the line. Quoted spans are blanked before the comment
+        # rule runs, so a `#` inside one cannot terminate anything.
+        masked = re.sub(r'"[^"\n]*"', lambda m: '"' + "_" * (len(m.group(0)) - 2) + '"', line)
+        masked = re.sub(r"'[^'\n]*'", lambda m: "'" + "_" * (len(m.group(0)) - 2) + "'", masked)
+        cut = re.search(r"(?<!\S)#", masked)
+        stripped.append(line[: cut.start()] if cut else line)
+    return "\n".join(stripped)
 
 
 # GATES A PULL-REQUEST WORKFLOW RUNS AND `make check` DELIBERATELY DOES NOT, with the
@@ -115,6 +125,14 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "entry point; only its `--self-test` arm is cheap enough for `make check`"
     ),
 }
+
+
+# HOW MANY EXEMPTIONS THERE ARE, pinned. The register's comment says it "may only
+# SHRINK", and `stale_exemptions` only caught entries that stopped diverging -- nothing
+# refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
+# both the changelog and the PR body is the proof that nothing noticed. Growth is now a
+# deliberate, visible edit to this number.
+ONE_SIDED_COUNT = 6
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:
@@ -162,11 +180,45 @@ def merge_blocking(workflow_texts: dict[str, str]) -> dict[str, str]:
 # quoted strings inside a `run: |` block -- and produced twenty-one refusals naming things
 # that are not gates at all. An invocation is a program being RUN, and that is what the
 # prefix establishes.
+# PROSE IS EXCLUDED BY WHAT IT IS, NOT BY WHERE IT SITS. The first attempt anchored the
+# interpreter in command position, which is wrong twice: it still admitted an unquoted
+# `name:` field, and it REJECTED a real invocation, because `uv run --project … python
+# crates/shapes/tests/pydantic_oracle.py` has its interpreter mid-command behind a runner.
+#
+# What distinguishes prose from a command is that prose lives inside a quoted string or a
+# YAML metadata value. Four shapes read as invocations before this: an `echo "…"`, a step
+# `name:` field, an inline trailing comment, and a quoted YAML list item. Demonstrated: a
+# full divergence was silenced by adding `run: true # reproduce locally with python3
+# scripts/check-no-features.py`, and an `echo` inside the recipe produced a false refusal
+# naming a gate that does not exist.
 INVOCATION = re.compile(  # noqa: E501
-    r"(?:\b(?:python3?|bash|sh)\s+(?:-\w+\s+)*|(?:^|(?<=run:\s)|(?<=[;&|(]\s))\./)"
+    r"(?:\b(?:python3?|bash|sh)\s+(?:-\w+\s+)*|(?<![\w/])\./)"
     r"((?:scripts|crates)/[^\s]+)([^\n;&|#]*)",
     re.MULTILINE,
 )
+
+# YAML keys whose value is metadata a human reads, never a command.
+_YAML_PROSE_KEY = re.compile(r"^\s*(?:-\s*)?(?:name|if|id|description|summary):", re.MULTILINE)
+
+
+def _drop_prose(text: str) -> str:
+    """The text with quoted spans and YAML metadata values blanked.
+
+    A quoted string is data — `echo "run scripts/check-x.py"` documents a gate, it does not
+    run one — and a step's `name:` is a label. Blanking rather than deleting keeps line
+    numbers and surrounding structure intact for everything else on the line.
+    """
+    kept = []
+    for line in text.splitlines():
+        if _YAML_PROSE_KEY.match(line):
+            kept.append(line.split(":", 1)[0] + ":")
+            continue
+        # Blank double- and single-quoted spans, leaving the quotes so a following
+        # separator is still visible.
+        line = re.sub(r'"[^"\n]*"', '""', line)
+        line = re.sub(r"'[^'\n]*'", "''", line)
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _uncomment(text: str, comment_prefixes: tuple[str, ...]) -> str:
@@ -195,7 +247,10 @@ def _join_continuations(text: str) -> str:
     identical single-line `run:` -- the precise failure the argument-run comment above says
     it fixed for `&&`.
     """
-    return re.sub(r"\\\n\s*", " ", text)
+    # HORIZONTAL whitespace only. `\s` includes `\n`, so a stray trailing backslash joined
+    # across a blank line: two real gates vanished from the set AND a phantom identity
+    # appeared -- the same defect this joiner was added to fix for `&&`, one round later.
+    return re.sub(r"\\\n[ \t]*", " ", text)
 
 
 # TWO WAYS AN INVOCATION IS A GATE, stated separately because they are different rules.
@@ -241,7 +296,12 @@ def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
             for following in lines[index + 1 :]:
                 if following.startswith("\t"):
                     body.append(following)
-                elif following.strip() == "":
+                elif following.strip() == "" or following.lstrip().startswith("#"):
+                    # A COLUMN-0 COMMENT INSIDE A RECIPE IS LEGAL MAKE, and it ended the
+                    # recipe -- so one comment took `local` from 40 gates to 1 and emitted
+                    # 39 messages saying gates do not run in `make check` that demonstrably
+                    # do. The docstring reasoned about what ends a recipe, got blank lines
+                    # right, and got comments wrong.
                     continue
                 else:
                     break
@@ -307,7 +367,10 @@ def make_targets(text: str) -> set[str]:
 
 def invocations(text: str) -> set[str]:
     """Every in-repo program invocation in a blob of Makefile or YAML text."""
-    prepared = _join_continuations(_uncomment(text, ("#",)))
+    # INLINE COMMENTS TOO, as `make_targets` already does. `_uncomment` removed only
+    # whole-line comments, so a trailing `# ... python3 scripts/check-x.py` was read as a
+    # running gate.
+    prepared = _drop_prose(_join_continuations(strip_yaml_comments(_uncomment(text, ("#",)))))
     return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(prepared)}
 
 
@@ -399,6 +462,13 @@ def divergence(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
         )
         problems.append(
             f"`{call}` runs in `make check` and {where}, so it cannot block a merge"
+        )
+    if len(ONE_SIDED_BY_DESIGN) != ONE_SIDED_COUNT:
+        problems.append(
+            f"the one-sided register holds {len(ONE_SIDED_BY_DESIGN)} entries and "
+            f"ONE_SIDED_COUNT says {ONE_SIDED_COUNT}. The register may only shrink, so an "
+            f"addition must be a visible edit to that number and to whatever prose states "
+            f"it -- the last growth went unnoticed and left a stale count in two files."
         )
     problems.extend(stale_exemptions(local, ci_gates))
     for call in sorted(ci_gates - local - set(ONE_SIDED_BY_DESIGN)):
@@ -580,6 +650,77 @@ def self_test() -> int:
         ok = False
     else:
         print("OK: self-test — four spellings of one invocation normalise to one identity")
+
+    # PROSE IS NOT AN INVOCATION, in the four shapes that read as one. Each was
+    # demonstrated: an `echo` in the recipe produced a false refusal naming a gate that
+    # does not exist, and a trailing comment silenced a full divergence.
+    prose_shapes = {
+        "an echo in a recipe": '\techo "scripts/check-terminal-predicates.py --help"\n',
+        "a step name: field": "      - name: Check that python3 scripts/check-foo.py works\n",
+        "an inline trailing comment": "        run: true # run python3 scripts/check-foo.py\n",
+        "a quoted YAML list item": '          - "python3 scripts/check-qux.py"\n',
+    }
+    seen_prose = {label: invocations(text) for label, text in prose_shapes.items() if invocations(text)}
+    if seen_prose:
+        print(f"SELF-TEST FAIL: prose read as an invocation: {seen_prose}")
+        ok = False
+    else:
+        print(f"OK: self-test — none of {len(prose_shapes)} prose shapes reads as an invocation")
+
+    # AND THE NEIGHBOUR, which is what the first attempt at the rule above broke: every
+    # real spelling must still be seen, including an interpreter behind a runner
+    # (`uv run … python …`) and `./` inside a `run: |` body.
+    real_shapes = {
+        "a tab-indented recipe line": ("\tpython3 scripts/check-foo.py\n", "scripts/check-foo.py"),
+        "a run: step": ("        run: python3 scripts/check-foo.py\n", "scripts/check-foo.py"),
+        "an interpreter behind a runner": (
+            "\tuv run --project x --no-sync python crates/shapes/tests/probe.py\n",
+            "crates/shapes/tests/probe.py",
+        ),
+        "./ in a recipe": ("\t./scripts/check-foo.py\n", "scripts/check-foo.py"),
+        "./ in a run: | body": ("        run: |\n          ./scripts/check-foo.py\n", "scripts/check-foo.py"),
+    }
+    unseen = {
+        label: text for label, (text, wanted) in real_shapes.items() if wanted not in invocations(text)
+    }
+    if unseen:
+        print(f"SELF-TEST FAIL: a real invocation was not seen: {sorted(unseen)}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(real_shapes)} real invocation spellings are seen")
+
+    # A COLUMN-0 COMMENT INSIDE A RECIPE IS LEGAL MAKE and used to end it, taking `local`
+    # from forty gates to one and emitting thirty-nine false messages.
+    commented = real_makefile.replace(
+        "\tpython3 scripts/check-no-features.py\n",
+        "\tpython3 scripts/check-no-features.py\n# the licence gates follow\n",
+        1,
+    )
+    if len(gates_only(invocations_with_recursion(commented, "check"))) != len(
+        gates_only(invocations_with_recursion(real_makefile, "check"))
+    ):
+        print("SELF-TEST FAIL: a column-0 comment inside the recipe changes the gate set")
+        ok = False
+    else:
+        print("OK: self-test — a comment inside the `check` recipe does not end it")
+
+    # A `#` INSIDE A QUOTED SCALAR MUST NOT HIDE A MAKE TARGET.
+    if make_targets('        run: echo "a # b" && make check\n') != {"check"}:
+        print("SELF-TEST FAIL: a quoted `#` hides a make target")
+        ok = False
+    elif make_targets("        # run make check locally\n"):
+        print("SELF-TEST FAIL: a real comment is no longer stripped")
+        ok = False
+    else:
+        print("OK: self-test — a quoted `#` hides nothing and a real comment still strips")
+
+    # A STRAY CONTINUATION MUST NOT JOIN ACROSS A BLANK LINE and swallow the next gate.
+    joined = invocations("\tpython3 scripts/check-a.py \\\n\n\tpython3 scripts/check-b.py\n")
+    if joined != {"scripts/check-a.py", "scripts/check-b.py"}:
+        print(f"SELF-TEST FAIL: a continuation crossed a blank line: {sorted(joined)}")
+        ok = False
+    else:
+        print("OK: self-test — a continuation joins its own line only")
 
     # A gate present in BOTH but with different arguments is a divergence too:
     # `--self-test` and the bare run are different rules.

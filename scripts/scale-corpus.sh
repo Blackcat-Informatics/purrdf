@@ -114,8 +114,6 @@ SINK="${SCALE_SINK:-}"
 MANIFEST_PATH="${SCALE_MANIFEST:-}"
 BIN="${SCALE_BIN:-}"
 
-
-
 # WHAT THE MANIFEST CERTIFIES AND WHAT THE LANE PRODUCED ARE TWO DIFFERENT
 # NUMBERS, and only the second one is evidence. The manifest is produced by
 # asking the binary what it INTENDS to emit; this is the count of what actually

@@ -456,7 +456,11 @@ for path in entries:
         subject = "%r in %s" % (path.name, root)
         sys.exit("FAIL: " + explain(error, subject))
     if not stat.S_ISREG(mode):
-        kind = "a symbolic link" if path.is_symlink() else "not a regular file"
+        # FROM THE MODE ALREADY IN HAND. `path.is_symlink()` calls lstat again and
+        # re-raises on EACCES, so a traceback escaped the handler the comment above says
+        # every filesystem call is inside -- and was then published as the diagnostic. The
+        # successful lstat two lines up already answered this.
+        kind = "a symbolic link" if stat.S_ISLNK(mode) else "not a regular file"
         sys.exit(
             f"FAIL: {root} holds {path.name!r}, which is {kind}. A query set is a flat "
             "directory of regular files: anything else either cannot be certified, or "

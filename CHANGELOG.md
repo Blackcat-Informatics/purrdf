@@ -18,8 +18,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   found three pre-existing divergences on its first run -- `check-terminal-predicates.py`
   and its `--self-test` ran locally and in no workflow at all, and
   `check-toolchain-pin.py --self-test` ran in CI and not locally -- and a fourth that was
-  live behind a workflow `make` step. Four one-sided gates are registered with their
-  reasons, under a register that may only shrink.
+  live behind a workflow `make` step. Six one-sided gates are registered with their
+  reasons -- two determinism checks needing the wasm toolchain, the book render needing
+  mdbook, the conformance matrix needing tens of minutes, and two `uv`-driven emitter
+  oracles -- under a register that may only shrink and whose size is pinned, so growth is
+  a visible edit rather than the silent one that left this count stale.
   `scripts/check-stream-chunk.py` refuses a streamed read whose chunk size is written out
   instead of named; six copies of that number lived under two names across five files,
   two already drifted to a quarter and a sixty-fourth of the shared size, and because every
