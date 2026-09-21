@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Reader for the normative RIF-in-XML (RIF XML) syntax used by the W3C SPARQL
 //! RIF-entailment cases (`rif01`/`rif03`/`rif04`/`rif06`).

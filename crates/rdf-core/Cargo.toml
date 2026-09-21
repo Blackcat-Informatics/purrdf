@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [package]
 name = "purrdf-core"
@@ -44,7 +44,7 @@ purrdf-cdt = { workspace = true }
 # The permissive RDF 1.2 ingestion protocol: this crate provides
 # the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
-# is dependency-free and uses the same `MIT OR Apache-2.0` license as this crate.
+# is dependency-free and uses the same `MIT OR Apache-2.0 OR MulanPSL-2.0` license as this crate.
 purrdf-events = { workspace = true }
 # Fixed-key, non-cryptographic hashing for in-memory IR lookup tables. The tables
 # never persist hash values and equality still resolves collisions; this replaces

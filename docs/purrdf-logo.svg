@@ -1,5 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
-<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">PurRDF black cat RDF triple logo</title>
   <desc id="desc">A stylized black cat head holding an RDF triple: a subject node linked to an object node by a blue predicate arrow, with red and green arrows binding a literal frame below.</desc>

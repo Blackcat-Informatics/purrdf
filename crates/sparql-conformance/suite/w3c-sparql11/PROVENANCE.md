@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: MIT OR Apache-2.0
+SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
 
 # Vendored W3C SPARQL 1.1 conformance fixtures
@@ -154,7 +154,7 @@ Software and Document License** — see
 They are vendored verbatim (query + data) and are **not** relicensed; each carries
 a `.license` SPDX sidecar (`SPDX-License-Identifier: LicenseRef-W3C-Test-Suite`).
 The selector `manifest.ttl` files and this document are PurRDF-authored
-(MIT OR Apache-2.0).
+(MIT OR Apache-2.0 OR MulanPSL-2.0).
 
 ## Vendored files & fidelity
 

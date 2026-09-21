@@ -5,7 +5,7 @@
 </p>
 
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
-<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 
 # `purrdf-shapes` — Rust SHACL Validator
 
@@ -791,7 +791,7 @@ independently of the `Shapes` value.
 
 Copyright © 2026 Blackcat Informatics® Inc.
 
-This crate is licensed under **MIT OR Apache-2.0** — see
+This crate is licensed under **MIT OR Apache-2.0 OR MulanPSL-2.0** — see
 [`LICENSE-MIT`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 and
 [`LICENSE-APACHE`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)

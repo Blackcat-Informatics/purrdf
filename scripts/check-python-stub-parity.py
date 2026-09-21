@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 """Hygiene gate: every member the PyO3 extension exposes to Python must be DECLARED in
 `bindings/python/python/src/purrdf/__init__.pyi`.

@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: MIT OR Apache-2.0
+SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
 # Contributing to purrdf
 
@@ -148,12 +148,13 @@ Release mechanics (tag-driven trusted publishing, provenance, SBOMs) live in
   lint table (pedantic + nursery) is inherited by every crate, and CI denies
   warnings. Prefer fixing code over adding `#[allow]`; when an allow is genuinely
   right, scope it tightly and give it a reason.
-- Every source file must carry an SPDX `MIT OR Apache-2.0` license header.
+- Every source file must carry an SPDX `MIT OR Apache-2.0 OR MulanPSL-2.0` license header.
 - Keep changes focused; describe **what** changed and **why** in the PR description.
 
 ## Licensing of contributions
 
-Contributions to **purrdf** are accepted under **Apache-2.0 OR MIT** and, under the
+Contributions to **purrdf** are accepted under **MIT OR Apache-2.0 OR
+MulanPSL-2.0** and, under the
 project CLA, under terms that permit separate proprietary/commercial licensing.
 
 By submitting a contribution you agree to license it under the terms above. For the

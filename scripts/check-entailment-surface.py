@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 """Hygiene gate: every conclusion-directed entailment service `purrdf-entail`
 publishes must be reachable from ALL FIVE host shapes — Rust, Python, WASM, the

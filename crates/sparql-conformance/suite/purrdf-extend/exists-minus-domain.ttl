@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # `:existsMinusDomain` fixture, the SEP-0007 "Issue 4" MINUS shape: the
 # correlated variable (`?s`, bound to `:cA`/`:other` in turn) occurs ONLY in

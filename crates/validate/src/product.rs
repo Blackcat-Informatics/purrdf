@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The prepared-shapes-product boundary every language binding routes through —
 //! the string/bytes-in, bytes-out seam over [`purrdf_shapes::product`].

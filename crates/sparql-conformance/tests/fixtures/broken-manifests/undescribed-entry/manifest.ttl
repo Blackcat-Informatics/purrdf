@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # F9 negative fixture: a manifest that DECLARES a test in its `mf:entries` list
 # but never DESCRIBES it (no `rdf:type`/`mf:name`/`mf:action` triples at all) —

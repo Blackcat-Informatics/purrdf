@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Node-constraint satisfaction (ShEx 2.1 spec §5.4): node kind, datatype
 //! with lexical-validity checking, string/numeric XML-Schema facets, and

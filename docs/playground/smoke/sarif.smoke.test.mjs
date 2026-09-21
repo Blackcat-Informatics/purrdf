@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //
 // SARIF-contract smoke gate for the PurRDF console. The console renders SHACL
 // results as SARIF and asserts the version the UI accepts via

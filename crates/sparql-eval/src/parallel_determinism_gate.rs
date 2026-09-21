@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Task 7 comprehensive determinism gate: forcing the parallel fork-join path
 //! (`parallel::force_parallel_for_test(true)`) vs forcing the sequential path

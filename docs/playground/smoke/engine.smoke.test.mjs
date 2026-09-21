@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //
 // Engine smoke gate for the PurRDF console. This asserts the SAME engine calls
 // each pane of the console makes actually work against the real wasm package.

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Falsifiable acceptance tests for the graph-partitioned succinct bitmap-triples
 //! codec (`purrdf_core::ir::pack::triples`): every one of the 8 `(s, p, o)`

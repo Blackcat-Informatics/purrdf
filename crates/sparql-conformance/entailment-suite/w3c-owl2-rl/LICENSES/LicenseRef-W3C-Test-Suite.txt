@@ -18,4 +18,4 @@ PROVENANCE.md in the parent directory for the exact upstream source
 (https://www.w3.org/2009/11/owl-test/all.rdf), the pinned archive revision, the
 fetch date, and the per-file fidelity statement. The PurRDF-authored harness that
 reads this tree (`crates/sparql-conformance/src/owl2.rs`) is licensed
-MIT OR Apache-2.0 (see its SPDX header).
+MIT OR Apache-2.0 OR MulanPSL-2.0 (see its SPDX header).

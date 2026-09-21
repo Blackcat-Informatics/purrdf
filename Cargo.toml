@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [workspace]
 resolver = "2"
@@ -53,7 +53,7 @@ exclude = [
 version = "2.0.2"
 edition = "2024"
 rust-version = "1.96"
-license = "MIT OR Apache-2.0"
+license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
 repository = "https://github.com/Blackcat-Informatics/purrdf"
 homepage = "https://blackcatinformatics.ca/purrdf/"
 

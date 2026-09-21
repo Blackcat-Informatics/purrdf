@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Syntactic locality module extraction (SLME) — `BOT`, `TOP` and `STAR`.
 //!
@@ -48,7 +48,7 @@
 //! Ontologies: Theory and Practice", JAIR 2008); algorithms are not copyrightable. The
 //! RDF-native shape of this implementation is lifted, with the copyright owner's
 //! authorization, from Blackcat Informatics' `gmeow-ontology` and relicensed here under
-//! `MIT OR Apache-2.0`.
+//! `MIT OR Apache-2.0 OR MulanPSL-2.0`.
 //!
 //! # Determinism
 //!

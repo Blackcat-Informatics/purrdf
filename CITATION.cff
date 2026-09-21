@@ -36,6 +36,7 @@ date-released: "2026-09-14"
 license:
   - Apache-2.0
   - MIT
+  - MulanPSL-2.0
 url: "https://blackcatinformatics.ca/purrdf/"
 repository-code: "https://github.com/Blackcat-Informatics/purrdf"
 keywords:

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `purrdf_shacl_validate_to_sarif`: validate a data graph against a shapes graph
 //! and return a SARIF 2.1.0 report — plus the prepared-shapes-product codec.

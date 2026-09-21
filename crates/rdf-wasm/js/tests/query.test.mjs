@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // Node real-execution conformance for the OFFLINE SPARQL surface (Dataset.query):
 // drives the ACTUAL compiled wasm evaluator through SELECT / ASK / CONSTRUCT and the

@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: MIT OR Apache-2.0
+SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
 # PurRDF for Python（简体中文）
 
@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 <p>
   <a href="https://pypi.org/project/purrdf/"><img src="https://img.shields.io/pypi/v/purrdf.svg?label=PyPI" alt="PyPI"></a>
-  <a href="https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
+  <a href="https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg" alt="License: MIT OR Apache-2.0 OR MulanPSL-2.0"></a>
   <a href="https://pypi.org/project/purrdf/"><img src="https://img.shields.io/pypi/pyversions/purrdf.svg" alt="Python versions"></a>
 </p>
 
@@ -587,4 +587,4 @@ rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs
 - GTS 规范、一致性矩阵与完整文档位于仓库的
   [`docs/`](https://github.com/Blackcat-Informatics/purrdf/tree/main/docs) 之下。
 
-以 MIT OR Apache-2.0 双许可发布，由使用者任选其一。
+以 MIT、Apache-2.0 或 MulanPSL-2.0 三种开源许可发布，由使用者任选其一。

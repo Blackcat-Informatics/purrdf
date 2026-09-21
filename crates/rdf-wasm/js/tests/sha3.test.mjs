@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // Node real-execution coverage for the SEP-0008 SHA-3 built-ins, driven through the
 // ACTUAL compiled wasm module — query text in, SPARQL-results out.

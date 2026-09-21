@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """``Resource`` must unwrap a ``Resource``-typed predicate/index, not just object.
 
 ``Resource`` wraps a graph + subject identifier so callers never see raw

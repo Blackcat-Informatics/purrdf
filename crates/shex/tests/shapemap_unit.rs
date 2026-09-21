@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Unit tests for query shape maps: parsing the compact `{FOCUS p _}` /
 //! `{_ p FOCUS}` syntax, resolving selectors against the data graph

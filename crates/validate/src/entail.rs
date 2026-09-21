@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! SHACL rule entailment → canonical N-Triples in one call — the shared boundary
 //! the language bindings (C-ABI, WASM, and the Python caller) all route through.
