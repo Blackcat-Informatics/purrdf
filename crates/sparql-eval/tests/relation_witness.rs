@@ -18,10 +18,10 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, EvalError, EvalOptions, GovernedOutcome, GovernorState, IndexGeneration,
-    InternedGoverned, InternedOutcome, InternedRequest, NativeSparqlEngine, PfArgs, PfArity,
-    PfAttestation, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, RelationAttestations, RelationWitness, ServiceLevel, Volatility,
+    BindingPattern, EvalError, EvalOptions, ExtensionEnv, GovernedOutcome, GovernorState,
+    IndexGeneration, InternedGoverned, InternedOutcome, InternedRequest, NativeSparqlEngine,
+    PfArgs, PfArity, PfAttestation, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    QueryGovernors, QueryOptions, RelationAttestations, RelationWitness, ServiceLevel, Volatility,
 };
 
 /// The relation IRI every query below calls. PurRDF mints no vocabulary: without this
@@ -167,13 +167,13 @@ impl PfCursor for AttestingCursor {
 // ---------------------------------------------------------------------------
 
 /// A registry holding one relation under [`REL_IRI`].
-fn registry(mode_code: &str, declares: Declares) -> PropertyFunctionRegistry {
+fn registry(mode_code: &str, declares: Declares) -> ExtensionEnv {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL_IRI.to_owned(),
         Arc::new(AttestingRelation::new(mode_code, declares)),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
 /// Three ordinary triples, so a driving pattern has three rows to lateral over.
@@ -196,30 +196,26 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
-fn with_relations(relations: &PropertyFunctionRegistry) -> QueryOptions<'_> {
+fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        property_functions: relations,
+        env,
         ..QueryOptions::EMPTY
     }
 }
 
 /// Drive `query` through the governed entry `query_prepared_governed_view` under
 /// `QueryGovernors::UNBOUNDED` — the lane whose outcome carries a witness.
-fn governed(
-    engine: &NativeSparqlEngine,
-    relations: &PropertyFunctionRegistry,
-    query: &str,
-) -> GovernedOutcome {
+fn governed(engine: &NativeSparqlEngine, env: &ExtensionEnv, query: &str) -> GovernedOutcome {
     let dataset = dataset();
     let prepared = engine
-        .prepare_query_with_options(query, None, with_relations(relations))
+        .prepare_query_with_options(query, None, with_relations(env))
         .expect("the query prepares against the registry");
     engine
         .query_prepared_governed_view(
             &*dataset,
             &prepared,
             &[],
-            with_relations(relations),
+            with_relations(env),
             &QueryGovernors::UNBOUNDED,
         )
         .expect("a governed run of a valid query is an outcome, never an error")
@@ -228,11 +224,11 @@ fn governed(
 /// Drive `query` through the UNGOVERNED entry, whose result type has no witness slot.
 fn ungoverned(
     engine: &NativeSparqlEngine,
-    relations: &PropertyFunctionRegistry,
+    env: &ExtensionEnv,
     query: &str,
 ) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     let dataset = dataset();
-    engine.query_with_options_view(&*dataset, request(query), with_relations(relations))
+    engine.query_with_options_view(&*dataset, request(query), with_relations(env))
 }
 
 /// Suppress the default panic-hook stderr dump for an EXPECTED, caught panic.
@@ -684,9 +680,9 @@ fn the_declarations_are_identical_across_runs_and_across_the_fork() {
     /// What one run declared, per relation, with the schedule-dependent count left out.
     fn declarations(
         engine: &NativeSparqlEngine,
-        relations: &PropertyFunctionRegistry,
+        env: &ExtensionEnv,
     ) -> Vec<(String, BTreeSet<IndexGeneration>, BTreeSet<String>)> {
-        governed(engine, relations, UNION_CALL)
+        governed(engine, env, UNION_CALL)
             .relations()
             .witness
             .iter()
@@ -908,18 +904,18 @@ fn an_attestation_collected_on_a_row_loop_worker_reaches_the_receipt() {
     /// relation attested.
     fn attested_over_wide_rows(
         engine: &NativeSparqlEngine,
-        relations: &PropertyFunctionRegistry,
+        env: &ExtensionEnv,
     ) -> RelationAttestations {
         let dataset = wide_dataset();
         let prepared = engine
-            .prepare_query_with_options(FILTER_EXISTS_CALL, None, with_relations(relations))
+            .prepare_query_with_options(FILTER_EXISTS_CALL, None, with_relations(env))
             .expect("the query prepares against the registry");
         let outcome = engine
             .query_prepared_governed_view(
                 &*dataset,
                 &prepared,
                 &[],
-                with_relations(relations),
+                with_relations(env),
                 &QueryGovernors::UNBOUNDED,
             )
             .expect("a governed run of a valid query is an outcome, never an error");

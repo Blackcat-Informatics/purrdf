@@ -105,7 +105,7 @@ impl PropertyFunction for FlagRelation {
     }
 }
 
-fn relations() -> (Arc<PropertyFunctionRegistry>, Arc<AtomicU64>) {
+fn relations() -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
     let opens = Arc::new(AtomicU64::new(0));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -115,7 +115,7 @@ fn relations() -> (Arc<PropertyFunctionRegistry>, Arc<AtomicU64>) {
             opens: Arc::clone(&opens),
         }),
     );
-    (Arc::new(registry), opens)
+    (registry, opens)
 }
 
 /// Two typed nodes, and nothing that could tell them apart.
@@ -158,8 +158,8 @@ fn run(predicate: &str) -> (GovernedOutcome, Arc<AtomicU64>) {
     let engine = NativeSparqlEngine::new();
     let env = ExtensionEnv::new(
         ParserOptions::default(),
-        Arc::clone(&relations),
-        Arc::new(AggregateRegistry::EMPTY),
+        relations,
+        AggregateRegistry::EMPTY,
     )
     .expect("the declarations read cleanly");
     let bound = engine
@@ -168,7 +168,7 @@ fn run(predicate: &str) -> (GovernedOutcome, Arc<AtomicU64>) {
 
     let options = QueryOptions {
         functions: &bound,
-        property_functions: env.relations(),
+        env: &env,
         ..QueryOptions::EMPTY
     };
     let query =

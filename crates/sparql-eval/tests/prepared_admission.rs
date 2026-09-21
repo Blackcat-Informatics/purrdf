@@ -10,7 +10,7 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_sparql_eval::governor::GovernorState;
 use purrdf_sparql_eval::{
-    CacheLimits, MemoryRelation, NativeSparqlEngine, PlanCache, PreparedQuery,
+    CacheLimits, ExtensionEnv, MemoryRelation, NativeSparqlEngine, PlanCache, PreparedQuery,
     PropertyFunctionRegistry, QueryGovernors, QueryOptions,
 };
 use std::sync::Arc;
@@ -183,8 +183,9 @@ fn rewritten_calls_share_registry_and_arity_admission() {
         "http://example.org/relation",
         Arc::new(MemoryRelation::new(1, 1, vec![]).unwrap()),
     );
+    let env = registry;
     let options = QueryOptions {
-        property_functions: &registry,
+        env: &env,
         ..QueryOptions::EMPTY
     };
     assert!(PreparedQuery::rewritten(call(vec![], vec![]), options).is_err());
@@ -420,7 +421,7 @@ impl purrdf_sparql_eval::PropertyFunction for SubjectBoundRelation {
     }
 }
 
-fn subject_bound_registry() -> PropertyFunctionRegistry {
+fn subject_bound_registry() -> ExtensionEnv {
     use purrdf_core::{TermValue, binding_pattern::BindingPattern};
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -438,14 +439,15 @@ fn subject_bound_registry() -> PropertyFunctionRegistry {
             modes: [BindingPattern::from_code("bf")],
         }),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
 #[test]
 fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
     let registry = subject_bound_registry();
+    let env = registry;
     let options = QueryOptions {
-        property_functions: &registry,
+        env: &env,
         ..QueryOptions::EMPTY
     };
     let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
@@ -507,8 +509,9 @@ fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
 #[test]
 fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
     let registry = subject_bound_registry();
+    let env = registry;
     let options = QueryOptions {
-        property_functions: &registry,
+        env: &env,
         ..QueryOptions::EMPTY
     };
     let query = "SELECT (FOLD(?v ORDER BY ASC(EXISTS { \

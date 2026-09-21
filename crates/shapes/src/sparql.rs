@@ -690,8 +690,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     // scopes via `borrow_mut`, which would panic ("already borrowed") if an outer
     // immutable borrow were still live.
     let functions = CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone());
-    let relations = current_property_functions();
-    let aggregates = current_aggregates();
+    let env = current_env().map_err(|e| format!("query evaluation error: {e}"))?;
     let governors = current_governors();
     // The ambient thread-local scope is genuinely optional (no `sh:sparql` body has
     // ever installed one); an absent scope and the canonical `EMPTY` registry are the
@@ -706,11 +705,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     // that must outlive this one statement (it is read again below, once per branch),
     // so it needs a genuine `'static` place to borrow from.
     static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
-    static EMPTY_RELATIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
-    static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
     let registry = functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS);
-    let property_functions = relations.as_deref().unwrap_or(&EMPTY_RELATIONS);
-    let agg_registry = aggregates.as_deref().unwrap_or(&EMPTY_AGGREGATES);
     let request = InternedRequest {
         query,
         base_iri: None,
@@ -719,8 +714,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     let options = QueryOptions {
         prebinding: prebind,
         functions: registry,
-        property_functions,
-        aggregates: agg_registry,
+        env: &env,
         bnode_mint_prefix,
         // The graph THIS query is reading, handed to any expression-bodied function
         // it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a fixpoint round
@@ -814,19 +808,70 @@ impl Drop for FunctionScope {
 ///
 /// A message if a registered relation's or aggregate's declaration methods panic.
 pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
-    static EMPTY_RELATIONS: LazyLock<Arc<PropertyFunctionRegistry>> =
-        LazyLock::new(|| Arc::new(PropertyFunctionRegistry::EMPTY));
-    static EMPTY_AGGREGATES: LazyLock<Arc<AggregateRegistry>> =
-        LazyLock::new(|| Arc::new(AggregateRegistry::EMPTY));
-    let relations = current_property_functions().unwrap_or_else(|| Arc::clone(&EMPTY_RELATIONS));
-    let aggregates = current_aggregates().unwrap_or_else(|| Arc::clone(&EMPTY_AGGREGATES));
-    ExtensionEnv::new(
-        purrdf_sparql_algebra::ParserOptions::default(),
-        relations,
-        aggregates,
-    )
-    .map(Arc::new)
-    .map_err(|e| format!("extension environment: {e}"))
+    thread_local! {
+        /// The environment last built, alongside the exact registry handles it was
+        /// built from.
+        ///
+        /// Memoized because `run_query_view` asks once per query and a SHACL
+        /// validation issues one query per focus node, while the ambient registries
+        /// change once per validation at most. Building an environment clones both
+        /// registries' maps and derives the parse configuration; doing that per
+        /// focus node would put a per-node cost on the exact path the plan cache's
+        /// reusable key buffer exists to keep allocation-free.
+        ///
+        /// Keyed by `Arc::ptr_eq` on the installed handles rather than by a content
+        /// comparison, and that is sound precisely BECAUSE the memo holds the `Arc`s:
+        /// a live strong reference keeps each allocation alive, so the addresses
+        /// cannot be recycled underneath the comparison while the entry is cached —
+        /// which is the hazard that makes pointer identity unusable in general.
+        static CACHED_ENV: RefCell<Option<(
+            Option<Arc<PropertyFunctionRegistry>>,
+            Option<Arc<AggregateRegistry>>,
+            Arc<ExtensionEnv>,
+        )>> = const { RefCell::new(None) };
+    }
+
+    fn same<T>(left: Option<&Arc<T>>, right: Option<&Arc<T>>) -> bool {
+        match (left, right) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    let relations = current_property_functions();
+    let aggregates = current_aggregates();
+    let hit = CACHED_ENV.with(|slot| {
+        slot.borrow().as_ref().and_then(|(r, a, env)| {
+            (same(r.as_ref(), relations.as_ref()) && same(a.as_ref(), aggregates.as_ref()))
+                .then(|| Arc::clone(env))
+        })
+    });
+    if let Some(env) = hit {
+        return Ok(env);
+    }
+
+    // The registries are cloned out of their `Arc`s rather than shared into the
+    // environment. A clone of either copies a map of `Arc<dyn …>` trait objects and
+    // preserves its `RegistryId`, so the environment resolves every call to the
+    // identical implementations the ambient scope holds — the clone is the same
+    // registry instance for every purpose a plan's identity cares about.
+    let env = Arc::new(
+        ExtensionEnv::new(
+            purrdf_sparql_algebra::ParserOptions::default(),
+            relations
+                .as_deref()
+                .map_or_else(|| PropertyFunctionRegistry::EMPTY, Clone::clone),
+            aggregates
+                .as_deref()
+                .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+        )
+        .map_err(|e| format!("extension environment: {e}"))?,
+    );
+    CACHED_ENV.with(|slot| {
+        *slot.borrow_mut() = Some((relations, aggregates, Arc::clone(&env)));
+    });
+    Ok(env)
 }
 
 /// Bind `functions`' SPARQL bodies against the extension environment currently in

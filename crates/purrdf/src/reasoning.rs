@@ -365,7 +365,7 @@ fn relations_over_closure(
 ///
 /// # `relations` is how a DATASET-DERIVED relation reaches the closure
 ///
-/// `options.property_functions` is built before this call and therefore before the closure
+/// `options.property_functions()` is built before this call and therefore before the closure
 /// exists, so a relation snapshotted from the caller's dataset answers about the
 /// PRE-closure edges while every other pattern in the query reads the closure.
 /// [`ClosureRelations`] is the parameter that fixes the order — see its documentation for
@@ -694,7 +694,7 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 ///
 /// # `relations` is how a DATASET-DERIVED relation reaches the closure
 ///
-/// `options.property_functions` is built before this call and therefore before the closure
+/// `options.property_functions()` is built before this call and therefore before the closure
 /// exists, so a relation snapshotted from the caller's dataset answers about the
 /// PRE-closure edges while every other pattern in the query reads the closure.
 /// [`ClosureRelations`] is the parameter that fixes the order — see its documentation for

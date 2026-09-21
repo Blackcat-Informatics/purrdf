@@ -77,7 +77,7 @@
 //! host whose declared namespaces differ from the ones it was written under.
 
 use std::borrow::Cow;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::OnceLock;
 
 use purrdf_core::ContentDigest;
 use purrdf_sparql_algebra::ParserOptions;
@@ -99,6 +99,15 @@ const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/extension-env";
 /// reordered below.
 const CONTENT_VERSION: u16 = 1;
 
+/// [`ParserOptions::default`] spelled as a `const`, so [`ExtensionEnv::EMPTY`] can be
+/// one. `Default` is not a const trait, and the three fields are `pub`, so the
+/// literal is written out rather than derived.
+const EMPTY_PARSER_OPTIONS: ParserOptions = ParserOptions {
+    extension_fn_namespaces: Vec::new(),
+    property_fn_namespaces: Vec::new(),
+    property_fn_iris: Vec::new(),
+};
+
 /// The configuration a SPARQL text is interpreted relative to, with every derived
 /// value computed at construction.
 ///
@@ -113,8 +122,13 @@ pub struct ExtensionEnv {
     /// are not the same environment — the first accepts an unregistered IRI under
     /// that namespace as a hard error, the second reads it as ordinary data.
     base: ParserOptions,
-    relations: Arc<PropertyFunctionRegistry>,
-    aggregates: Arc<AggregateRegistry>,
+    /// Held by value rather than behind an `Arc`, so [`Self::EMPTY`] can be a `const`
+    /// and `QueryOptions::EMPTY` can stay one. Cloning either registry copies a map
+    /// of `Arc<dyn …>` trait objects and — load-bearing — PRESERVES its
+    /// [`RegistryId`], so a clone is the same registry instance for every purpose a
+    /// plan's identity cares about.
+    relations: PropertyFunctionRegistry,
+    aggregates: AggregateRegistry,
     /// [`Self::base`] with `relations`' registered IRIs unioned into
     /// [`ParserOptions::property_fn_iris`]. Derived once; see
     /// [`Self::parser_options`].
@@ -140,23 +154,30 @@ pub struct ExtensionEnv {
     id: RegistryId,
 }
 
-/// The canonical environment that configures nothing: default parser options and
-/// the canonical empty registries.
+/// The canonical environment that configures nothing.
 ///
 /// One shared value rather than a fresh one per caller, for the reason
 /// [`RegistryId::EMPTY`] gives: every empty environment interprets every text
-/// identically, so a distinction between two of them would be a distinction
-/// nothing honours. Sharing it also means [`ExtensionEnv::empty`] is the answer to
-/// "no environment", and there is no second spelling — no `Option`, no
+/// identically, so a distinction between two of them would be a distinction nothing
+/// honours. Sharing it also means [`ExtensionEnv::empty`] is the answer to "no
+/// environment", and there is no second spelling — no `Option`, no
 /// absent-versus-present-but-empty pair — for a consumer to disagree about.
-static EMPTY: LazyLock<ExtensionEnv> = LazyLock::new(|| {
-    ExtensionEnv::new(
-        ParserOptions::default(),
-        Arc::new(PropertyFunctionRegistry::EMPTY),
-        Arc::new(AggregateRegistry::EMPTY),
-    )
-    .expect("an environment over empty registries reads no declaration and cannot fail")
-});
+///
+/// A `static` holding the literal rather than a `const` anyone can copy. The
+/// difference is load-bearing here: a `const` is substituted at each use site, so
+/// every user would get its own [`OnceLock`] and the memoized content digest would
+/// be computed once PER USE rather than once. A `static` is one value with one
+/// cell — which is also why its interior mutability is correct rather than a hazard.
+static EMPTY: ExtensionEnv = ExtensionEnv {
+    base: EMPTY_PARSER_OPTIONS,
+    relations: PropertyFunctionRegistry::EMPTY,
+    aggregates: AggregateRegistry::EMPTY,
+    effective: EMPTY_PARSER_OPTIONS,
+    relations_fingerprint: String::new(),
+    aggregates_fingerprint: String::new(),
+    content: OnceLock::new(),
+    id: RegistryId::EMPTY,
+};
 
 impl ExtensionEnv {
     /// Build an environment and derive everything it will ever be asked for.
@@ -194,8 +215,8 @@ impl ExtensionEnv {
     /// environment over empty registries reads no declaration and cannot fail.
     pub fn new(
         base: ParserOptions,
-        relations: Arc<PropertyFunctionRegistry>,
-        aggregates: Arc<AggregateRegistry>,
+        relations: PropertyFunctionRegistry,
+        aggregates: AggregateRegistry,
     ) -> Result<Self, EvalError> {
         let effective = match derive_parser_options(&base, &relations)? {
             Cow::Borrowed(_) => base.clone(),
@@ -215,10 +236,44 @@ impl ExtensionEnv {
         })
     }
 
-    /// The canonical environment that configures nothing — the one answer to "no
-    /// environment", with no second spelling. See [`EMPTY`].
+    /// An environment over `relations` and nothing else: default parser options and
+    /// no custom aggregates.
+    ///
+    /// The shape almost every caller of the relation seam wants, and short enough to
+    /// write inline where the old `property_functions:` field used to go.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError`] if a registered relation's declaration methods panic.
+    pub fn over_relations(relations: PropertyFunctionRegistry) -> Result<Self, EvalError> {
+        Self::new(EMPTY_PARSER_OPTIONS, relations, AggregateRegistry::EMPTY)
+    }
+
+    /// An environment over `aggregates` and nothing else: default parser options and
+    /// no relations.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError`] if a registered aggregate's declaration methods panic.
+    pub fn over_aggregates(aggregates: AggregateRegistry) -> Result<Self, EvalError> {
+        Self::new(
+            EMPTY_PARSER_OPTIONS,
+            PropertyFunctionRegistry::EMPTY,
+            aggregates,
+        )
+    }
+
+    /// The environment that configures nothing: default parser options and the
+    /// canonical empty registries — the one answer to "no environment", with no
+    /// second spelling.
+    ///
+    /// A `const fn` so [`crate::engine::QueryOptions::EMPTY`] can stay a `const`,
+    /// which is what keeps every caller that writes `..QueryOptions::EMPTY` working
+    /// without naming an environment at all. Its fingerprints are the empty string
+    /// for the same reason both registry modules' `registry_fingerprint`
+    /// short-circuit there, and its id is [`RegistryId::EMPTY`].
     #[must_use]
-    pub fn empty() -> &'static Self {
+    pub const fn empty() -> &'static Self {
         &EMPTY
     }
 
@@ -246,22 +301,9 @@ impl ExtensionEnv {
         &self.relations
     }
 
-    /// The relation registry as a shared handle, for a consumer that must keep it
-    /// alive past this environment's borrow.
-    #[must_use]
-    pub fn relations_arc(&self) -> &Arc<PropertyFunctionRegistry> {
-        &self.relations
-    }
-
     /// The custom-aggregate registry a `Custom` call is admitted against.
     #[must_use]
     pub fn aggregates(&self) -> &AggregateRegistry {
-        &self.aggregates
-    }
-
-    /// The custom-aggregate registry as a shared handle.
-    #[must_use]
-    pub fn aggregates_arc(&self) -> &Arc<AggregateRegistry> {
         &self.aggregates
     }
 
@@ -407,7 +449,7 @@ mod tests {
     const C: &str = "http://example.org/rel/c";
 
     /// A registry over `iris`, registered in the order given.
-    fn relations(iris: &[&str]) -> Arc<PropertyFunctionRegistry> {
+    fn relations(iris: &[&str]) -> PropertyFunctionRegistry {
         let mut registry = PropertyFunctionRegistry::new();
         for iri in iris {
             registry.register(
@@ -415,11 +457,11 @@ mod tests {
                 Arc::new(MemoryRelation::new(1, 1, Vec::new()).expect("an empty table is valid")),
             );
         }
-        Arc::new(registry)
+        registry
     }
 
     fn env(base: ParserOptions, iris: &[&str]) -> ExtensionEnv {
-        ExtensionEnv::new(base, relations(iris), Arc::new(AggregateRegistry::EMPTY))
+        ExtensionEnv::new(base, relations(iris), AggregateRegistry::EMPTY)
             .expect("declarations read cleanly")
     }
 
@@ -605,11 +647,11 @@ mod tests {
     #[test]
     fn the_cached_fingerprints_equal_the_standalone_derivations() {
         let registry = relations(&[A, B]);
-        let aggregates = Arc::new(AggregateRegistry::EMPTY);
+        let aggregates = AggregateRegistry::EMPTY;
         let env = ExtensionEnv::new(
             ParserOptions::default(),
-            Arc::clone(&registry),
-            Arc::clone(&aggregates),
+            registry.clone(),
+            aggregates.clone(),
         )
         .expect("declarations read cleanly");
         assert_eq!(

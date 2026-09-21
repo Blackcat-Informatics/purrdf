@@ -18,9 +18,9 @@ use purrdf_sparql_algebra::{
     GraphPattern, Query, SparqlParser, TermPattern, Variable, pattern_to_select_query,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, ChargePoint, EvalError, GovernedOutcome, GovernedUpdateOutcome, GovernorState,
-    MemoryRelation, NativeSparqlEngine, NodeCharges, ParserOptions, PfArgs, PfArity, PfCursor,
-    PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    BindingPattern, ChargePoint, EvalError, ExtensionEnv, GovernedOutcome, GovernedUpdateOutcome,
+    GovernorState, MemoryRelation, NativeSparqlEngine, NodeCharges, ParserOptions, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
     ResourceDimension, TrippedGovernor, Volatility,
 };
 
@@ -46,7 +46,7 @@ fn options() -> ParserOptions {
 
 /// The host's relation: three (person, team) pairs, held in host memory and reachable
 /// from no graph.
-fn relations() -> PropertyFunctionRegistry {
+fn relations() -> ExtensionEnv {
     let iri = |local: &str| TermValue::iri(format!("{EX}{local}"));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -64,7 +64,7 @@ fn relations() -> PropertyFunctionRegistry {
             .expect("every row is two values wide"),
         ),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
 /// A dataset holding one unrelated triple: the answers below come from the relation,
@@ -132,7 +132,7 @@ fn a_configured_predicate_parses_to_a_call_and_answers_from_the_injected_relatio
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &relations(),
+                env: &relations(),
                 ..QueryOptions::EMPTY
             },
         )
@@ -314,7 +314,7 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &registry,
+                env: &registry,
                 ..QueryOptions::EMPTY
             },
         )
@@ -448,9 +448,9 @@ fn request(query: &str) -> SparqlRequest<'_> {
 }
 
 /// The options a host with relations in scope hands a governed entry.
-fn with_relations(registry: &PropertyFunctionRegistry) -> QueryOptions<'_> {
+fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        property_functions: registry,
+        env,
         ..QueryOptions::EMPTY
     }
 }

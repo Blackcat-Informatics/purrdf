@@ -13,7 +13,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
-    NativeSparqlEngine, QueryOptions, Volatility,
+    ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
 };
 
 const EX: &str = "http://example.org/d/";
@@ -157,7 +157,7 @@ impl CustomAggregate for WeightedSumAggregate {
     }
 }
 
-fn registry() -> AggregateRegistry {
+fn registry() -> ExtensionEnv {
     let mut registry = AggregateRegistry::new();
     registry.register(
         SUM_IRI,
@@ -172,12 +172,12 @@ fn registry() -> AggregateRegistry {
         }),
     );
     registry.register(WEIGHTED_SUM_IRI, Arc::new(WeightedSumAggregate));
-    registry
+    ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
 
-fn with_aggregates(registry: &AggregateRegistry) -> QueryOptions<'_> {
+fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        aggregates: registry,
+        env,
         ..QueryOptions::EMPTY
     }
 }
@@ -556,10 +556,10 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
 
 const STAT_NS: &str = "http://example.org/agg/";
 
-fn statistical_registry() -> AggregateRegistry {
+fn statistical_registry() -> ExtensionEnv {
     let mut registry = AggregateRegistry::new();
     registry.register_statistical_aggregates(STAT_NS);
-    registry
+    ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
 
 fn stat_lex(row: &[Option<TermValue>], index: usize) -> String {

@@ -24,9 +24,9 @@ use purrdf_core::{
     SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    GovernedOutcome, MemoryRelation, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph,
-    PathLimits, PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, ResourceDimension, ShortestPathWitnessRelation, TrippedGovernor,
+    ExtensionEnv, GovernedOutcome, MemoryRelation, NativeSparqlEngine, ParserOptions,
+    PathDirection, PathGraph, PathLimits, PathStep, PathWitnessRelation, PropertyFunctionRegistry,
+    QueryGovernors, QueryOptions, ResourceDimension, ShortestPathWitnessRelation, TrippedGovernor,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,13 +130,13 @@ fn limits(min: u32, max: u32) -> PathLimits {
 }
 
 /// A registry holding one [`PathWitnessRelation`] under [`WALK`].
-fn walk_registry(graph: Arc<PathGraph>, limits: PathLimits) -> PropertyFunctionRegistry {
+fn walk_registry(graph: Arc<PathGraph>, limits: PathLimits) -> ExtensionEnv {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         WALK.to_owned(),
         Arc::new(PathWitnessRelation::new(graph, limits)),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
 /// A registry holding one [`ShortestPathWitnessRelation`] under [`SHORTEST`].
@@ -195,7 +195,7 @@ impl Answers {
 fn run(
     data: &RdfDataset,
     query: &str,
-    registry: &PropertyFunctionRegistry,
+    registry: &ExtensionEnv,
 ) -> Result<Answers, purrdf_core::RdfDiagnostic> {
     let result = engine().query_with_options_view(
         data,
@@ -205,7 +205,7 @@ fn run(
             substitutions: &[],
         },
         QueryOptions {
-            property_functions: registry,
+            env: registry,
             ..QueryOptions::EMPTY
         },
     )?;
@@ -219,7 +219,7 @@ fn run(
 }
 
 /// Evaluate `query`, requiring it to succeed.
-fn solve(data: &RdfDataset, query: &str, registry: &PropertyFunctionRegistry) -> Answers {
+fn solve(data: &RdfDataset, query: &str, env: &ExtensionEnv) -> Answers {
     run(data, query, registry).expect("the call resolves and evaluates")
 }
 
@@ -1558,7 +1558,7 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &registry,
+                env: &registry,
                 ..QueryOptions::EMPTY
             },
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(1_000),
@@ -1611,7 +1611,7 @@ fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &registry,
+                env: &registry,
                 ..QueryOptions::EMPTY
             },
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(10),
