@@ -1167,6 +1167,107 @@ fn a_capture_taken_outside_the_scratch_directory_is_still_swept_on_a_signal() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// A SCRATCH FAILURE MUST NOT BE PUBLISHED AS A FAILURE OF THE BINARY UNDER TEST.
+//
+// Both lanes carried their own copy of the same two lines for capturing the binary's stderr, and
+// both copies had the defect this file records one helper over: an unconditional `cat` of a
+// `LANE_TMP` file. In a query loop the consequence is worse than in a digest, because the loop
+// attributes blame per row. When the scratch directory is unusable the REDIRECT fails, so the
+// binary never runs; `rc` is 1 with an empty capture, and every row reads "the binary exited 1
+// without saying anything", ending in a summary reporting that not one query executed.
+#[test]
+fn an_unwritable_capture_path_is_a_scratch_failure_named_as_one() {
+    let root = scratch("capture-path");
+    // A regular file as the parent directory: every open beneath it is ENOTDIR for every uid,
+    // so this is uncreatable for root as well and the test does not depend on who runs it.
+    let blocker = root.join("not-a-directory");
+    write(&blocker, b"x");
+    let unwritable = blocker.join("query.err");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_reset_capture '{}'\necho REACHED-THE-QUERY",
+        unwritable.display()
+    ));
+    assert_ne!(code, 0, "an uncreatable capture path must refuse; output:\n{out}");
+    assert!(
+        !out.contains("REACHED-THE-QUERY"),
+        "the refusal must precede the redirect that depends on the path; output:\n{out}"
+    );
+    assert!(
+        out.contains("scratch directory"),
+        "the diagnosis must name the scratch directory — the whole point is that it is NOT the \
+         binary, the corpus or a knob; output:\n{out}"
+    );
+    for misblamed in ["the binary", "corpus", "knob you set"] {
+        // Each of these appears in the message only as something explicitly EXCLUDED. What must
+        // not happen is the old behaviour: silence here and `the binary exited 1` per row.
+        assert!(
+            out.contains(misblamed),
+            "the message must say what is not at fault, because the failure it replaces blamed \
+             exactly those things; output:\n{out}"
+        );
+    }
+
+    // THE NEIGHBOUR: an ordinary path under the scratch directory is accepted and truncated.
+    let (code, out) = in_lane_common(
+        "lane_reset_capture \"${LANE_TMP}/query.err\"\n\
+         printf 'stale bytes' >\"${LANE_TMP}/query.err\"\n\
+         lane_reset_capture \"${LANE_TMP}/query.err\"\n\
+         printf 'size=%s\\n' \"$(wc -c <\"${LANE_TMP}/query.err\")\"",
+    );
+    assert_eq!(code, 0, "a usable capture path must be accepted; output:\n{out}");
+    assert!(
+        out.contains("size=0"),
+        "and resetting it must truncate, so one query cannot inherit the previous query's \
+         message; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_capture_is_read_only_when_there_is_something_to_read() {
+    let root = scratch("capture-read");
+    let empty = root.join("empty.err");
+    write(&empty, b"");
+    let spoken = root.join("spoken.err");
+    write(&spoken, b"error: line one\nerror: line two\n");
+    let missing = root.join("never-created.err");
+
+    // The ordinary case, and the one the unconditional `cat` got wrong: a binary that succeeded
+    // said nothing. That must be the empty string and NOT a `cat:` line on the lane's stderr.
+    for (path, label) in [(&empty, "an empty capture"), (&missing, "a capture never created")] {
+        let (code, out) = in_lane_common(&format!(
+            "said=\"$(lane_capture_stderr '{}')\"\nprintf 'said=[%s]\\n' \"${{said}}\"",
+            path.display()
+        ));
+        assert_eq!(code, 0, "{label} is not an error; output:\n{out}");
+        assert!(
+            out.contains("said=[]"),
+            "{label} must flatten to the empty string; output:\n{out}"
+        );
+        assert!(
+            !out.contains("cat:"),
+            "{label} must not put a stray `cat:` complaint on the lane's own stderr, which is \
+             where the report goes; output:\n{out}"
+        );
+    }
+
+    // And the case it exists for: a real message survives whole, on one line.
+    let (code, out) = in_lane_common(&format!(
+        "said=\"$(lane_capture_stderr '{}')\"\nprintf 'said=[%s]\\n' \"${{said}}\"",
+        spoken.display()
+    ));
+    assert_eq!(code, 0, "output:\n{out}");
+    assert!(
+        out.contains("said=[error: line one | error: line two]"),
+        "both lines must survive, joined — a multi-line message dropped after the first line is \
+         the defect `lane_flatten_detail` exists for; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Writes `contents` to `path`, makes it executable, and returns `path`.
 fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
     std::fs::write(&path, contents).expect("write the executable script");

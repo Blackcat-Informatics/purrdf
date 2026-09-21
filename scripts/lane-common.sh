@@ -442,6 +442,38 @@ print(hashlib.sha256(("\n".join(records) + "\n").encode("utf-8")).hexdigest())
   rm -f -- "${errors}"
 }
 
+# CAPTURING A BINARY'S STDERR IS A LANE LAW, NOT A PER-LANE HABIT. Both lanes had
+# their own copy of the same two lines, and both copies carried the same defect
+# this file records one helper over: an unconditional `cat` of a `LANE_TMP` file.
+#
+# The consequence is worse in a query loop than in a digest, because the loop
+# attributes blame per row. When `LANE_TMP` is unusable the REDIRECT fails, so the
+# binary never runs at all; bash reports that on the lane's own stderr, `rc` is 1
+# and the capture is empty -- and the row reads `CANNOT-EXECUTE ... the binary
+# exited 1 without saying anything`, for every query, ending in a summary saying
+# not one of them executed. A scratch failure published as a total failure of the
+# binary under test, with a stray `cat:` line as the only hint.
+#
+# So the two halves are separated and both are shared. `lane_reset_capture` proves
+# the path is writable BEFORE the redirect that depends on it, and names the
+# scratch directory rather than the binary; `lane_capture_stderr` reads it only if
+# there is something there.
+lane_reset_capture() {
+  local path="$1"
+  : >"${path}" ||
+    die "cannot create the stderr capture at '${path}'.
+  That path is inside the scratch directory this run made for itself, so nothing
+  about the binary, the corpus or any knob you set is at fault -- the scratch
+  directory has become unusable. Check TMPDIR and the free space on it."
+}
+
+lane_capture_stderr() {
+  local path="$1"
+  # Nothing to read is the ordinary case: a binary that succeeded said nothing.
+  [[ -s "${path}" ]] || return 0
+  lane_flatten_detail "$(cat "${path}")"
+}
+
 # A GENERATOR REPORTING SUCCESS IS NOT A FULL QUERY SET. `$1` is the directory,
 # `$2` the count the pinned workload is defined to have, `$3` the knob that named
 # the arena. No digest is published for a set that is not the whole set: a partial

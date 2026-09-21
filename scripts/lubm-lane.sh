@@ -735,6 +735,7 @@ run_query() {
 
   local start stop out rc errfile
   errfile="${LANE_TMP}/query.err"
+  lane_reset_capture "${errfile}"
   start="$(now_ms)"
   set +e
   out="$("${BIN}" query "${flags[@]}" "${query_text}" 2>"${errfile}")"
@@ -743,7 +744,7 @@ run_query() {
   stop="$(now_ms)"
 
   local said
-  said="$(lane_flatten_detail "$(cat "${errfile}")")"
+  said="$(lane_capture_stderr "${errfile}")"
 
   if ((rc != 0)); then
     printf 'CANNOT-EXECUTE\t-\t%s\t%s\n' "$((stop - start))" \
