@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The `owlrl` differential oracle: an INDEPENDENT second implementation of OWL 2 RL,
 //! checked against PurRDF's `OWL-RL` closure over a shared corpus.
@@ -874,7 +874,7 @@ fn input_text(fixture: &Fixture) -> String {
 fn corpus_file_text(fixture: &Fixture) -> String {
     format!(
         "# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>\n\
-         # SPDX-License-Identifier: MIT OR Apache-2.0\n\
+         # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0\n\
          #\n\
          # GENERATED — by crates/entail/tests/owlrl_oracle.rs's write_owlrl_corpus_inputs. Do not\n\
          # hand-edit; see that test's doc comment to regenerate.\n\

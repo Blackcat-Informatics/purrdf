@@ -1,12 +1,12 @@
 <!--
 SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: MIT OR Apache-2.0
+SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
 # PurRDF for Python
 
 <p>
   <a href="https://pypi.org/project/purrdf/"><img src="https://img.shields.io/pypi/v/purrdf.svg?label=PyPI" alt="PyPI"></a>
-  <a href="https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
+  <a href="https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg" alt="License: MIT OR Apache-2.0 OR MulanPSL-2.0"></a>
   <a href="https://pypi.org/project/purrdf/"><img src="https://img.shields.io/pypi/pyversions/purrdf.svg" alt="Python versions"></a>
 </p>
 
@@ -693,4 +693,4 @@ The same entry points are grouped under `purrdf.gts` for discoverability.
 - GTS specification, conformance matrix, and full docs live under
   [`docs/`](https://github.com/Blackcat-Informatics/purrdf/tree/main/docs) in the repo.
 
-Licensed under MIT OR Apache-2.0, at your option.
+Licensed under MIT OR Apache-2.0 OR MulanPSL-2.0, at your option.

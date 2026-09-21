@@ -35,4 +35,4 @@ minted; the datatype stays `cdt:List` / `cdt:Map`): RDF 1.2 **triple terms**
 `"lex"@lang--ltr` / `"lex"@lang--rtl`. Both are emitted only when such a term
 is actually present, i.e. only for values SEP-0009 cannot express at all.
 
-Licensed under MIT OR Apache-2.0.
+Licensed under MIT OR Apache-2.0 OR MulanPSL-2.0.

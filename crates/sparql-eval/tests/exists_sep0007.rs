@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `EXISTS`/`NOT EXISTS` (SEP-0007's `Replace`/`PrjMap` definition — see
 //! [`purrdf_sparql_eval::exists_admission_gate`]'s module doc and `crate::enf`'s

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `--help` surface: the built `purrdf` binary lists every subcommand, and each
 //! subcommand's `--help` lists its options and the `ValueEnum` choices. Drives the

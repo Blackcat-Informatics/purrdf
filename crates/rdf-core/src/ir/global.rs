@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The **global** `u64`-scaled term-identity layer: [`GlobalTermId`] and the
 //! [`GlobalDictionary`] value-interner (backend seam, purrdf P4/paged backends).

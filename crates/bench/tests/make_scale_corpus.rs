@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Drives the DOCUMENTED `make scale-corpus` entry point (`docs/BENCHMARKS.md`) rather than
 //! `scripts/scale-corpus.sh` directly — with one deliberate exception, below.

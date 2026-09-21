@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The GeoSPARQL 1.1 **Query Rewrite** extension (OGC 22-047r1 Clause 13),
 //! driven from real SPARQL query text through `NativeSparqlEngine`.

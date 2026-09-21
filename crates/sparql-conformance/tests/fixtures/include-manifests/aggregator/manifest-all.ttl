@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # The POSITIVE control for `mf:include`: a pure aggregator, exactly the shape the
 # vendored SEP-0009 corpus uses in `vectors/sparql-cdt/manifest-all.ttl` — zero

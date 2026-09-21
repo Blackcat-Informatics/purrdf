@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! SEP-0009's `FOLD` aggregate, end to end through the PUBLIC
 //! [`NativeSparqlEngine`] query entry — never reaching into the crate.

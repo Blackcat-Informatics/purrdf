@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 """License-hygiene gate for vendored corpora.
 
@@ -106,8 +106,38 @@ def check_root(vendored_root: Path) -> list[Path]:
     return offenders
 
 
+
+MULAN_SHA256 = "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+
+
+def check_mulan_text(root: Path) -> list[str]:
+    """The committed MulanPSL-2.0 text is a byte contract: its Chinese text
+    governs (its own section 6), so a silently drifted copy would change the
+    controlling terms. Both committed copies must match the pinned digest."""
+    import hashlib
+
+    problems = []
+    copies = [root / "LICENSE-MULAN", root / "LICENSES" / "MulanPSL-2.0.txt"]
+    for copy in copies:
+        if not copy.exists():
+            problems.append(f"missing {copy.relative_to(root)}")
+            continue
+        digest = hashlib.sha256(copy.read_bytes()).hexdigest()
+        if digest != MULAN_SHA256:
+            problems.append(
+                f"{copy.relative_to(root)} digest {digest} != pinned {MULAN_SHA256}"
+            )
+    return problems
+
+
 def main() -> int:
     root = repo_root()
+    mulan_problems = check_mulan_text(root)
+    if mulan_problems:
+        print("License hygiene FAILED: MulanPSL-2.0 text drifted:", file=sys.stderr)
+        for problem in mulan_problems:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
     roots = find_vendored_roots(root)
     if not roots:
         print("check-licenses: no vendored roots found (LICENSES/ marker).", file=sys.stderr)
@@ -129,7 +159,7 @@ def main() -> int:
         return 1
 
     total = sum(1 for _ in roots)
-    print(f"OK: {total} vendored root(s) license-clean.")
+    print(f"OK: {total} vendored root(s) license-clean; MulanPSL-2.0 text matches its pin.")
     return 0
 
 

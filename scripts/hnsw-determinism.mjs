@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // The wasm32 half of purrdf-hnsw's cross-target determinism check: instantiate the
 // module `scripts/check-hnsw-determinism.sh` built and print its digest in exactly

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! A reference, in-memory, demand-paged dataset — [`PagedDataset`] — that composes
 //! many frozen [`RdfDataset`] pages into ONE logical dataset queried through the

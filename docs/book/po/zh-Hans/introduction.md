@@ -18,7 +18,7 @@ zh-Hans 译稿（第一阶段）。与 docs/book/src/introduction.md 逐段对�
 WebAssembly/JavaScript 与 C，但有一处例外须先行说明：GTS 容器可从 Rust、CLI（作为输入
 格式）、Python 与 C 访问，而 wasm/JavaScript 包并不暴露它。每一个已发布的 crate 都能构建到 `wasm32-unknown-unknown`，
 因此在服务器上回答某条查询的引擎，也会在浏览器标签页中逐字节地给出同一答案。它由
-黑猫信息科技（Blackcat Informatics® Inc.）开发，以 MIT OR Apache-2.0 发布。
+黑猫信息科技（Blackcat Informatics® Inc.）开发，以 MIT OR Apache-2.0 OR MulanPSL-2.0 发布。
 
 > **同一个 RDF 引擎，同一套行为，每一种语言。**
 

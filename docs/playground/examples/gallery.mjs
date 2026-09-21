@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //
 // Curated RDF-1.2 vignettes for the PurRDF console. Every fixture uses
 // http://example.org/ IRIs and only standard rdf:/sh:/xsd: vocabulary — PurRDF

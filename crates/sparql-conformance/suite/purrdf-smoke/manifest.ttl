@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # A PURRDF-owned smoke manifest in the W3C mf: shape, proving the conformance
 # harness end-to-end (SELECT multiset, ASK boolean, expression-valued GROUP BY)

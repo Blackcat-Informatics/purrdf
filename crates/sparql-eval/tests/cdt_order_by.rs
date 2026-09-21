@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `ORDER BY` over SEP-0009 composite literals (`cdt:List` / `cdt:Map`), end to
 //! end through the PUBLIC [`NativeSparqlEngine`] query entry — never reaching into

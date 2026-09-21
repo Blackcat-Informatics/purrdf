@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Engine-level unit tests for the ShEx 2.1 validator: node-constraint
 //! families, `EXTRA`/`CLOSED` corners, recursion (a linked list),

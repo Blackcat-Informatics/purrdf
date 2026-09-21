@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """RDF term model for the purrdf rdflib compat shim (``purrdf.compat.rdflib``).
 
 The terms are ``str`` subclasses — exactly as in RDFLib 7.6 — so existing call
