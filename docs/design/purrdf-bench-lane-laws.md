@@ -164,6 +164,37 @@ The lane then prints the engine's parse complaint for what is actually a missing
 artifact, blaming the thing under test for the harness's own fault. Check the file
 exists, and name it.
 
+**Blaming the binary for the scratch directory.** Both lanes captured the
+binary's stderr into `LANE_TMP` and read it back unconditionally. When that
+directory is unusable the *redirect* fails, so the binary never runs: the status
+is 1, the capture is empty, and every row reads `CANNOT-EXECUTE … the binary
+exited 1 without saying anything`, ending in a summary stating that not one query
+executed. A harness failure published as a total failure of the thing under test.
+The capture path is therefore proven writable *before* the redirect that depends
+on it (`lane_reset_capture`), and read only when there is something in it
+(`lane_capture_stderr`) — both shared, because both lanes had written the bug.
+
+### The broadest diagnosis runs first
+
+When two checks can fail on the same state, the one whose message describes that
+state must run first, or the narrower one answers in its place and the broader
+one becomes unreachable in exactly the case it was written for.
+
+Both lanes had this backwards, and the second was found only because the first
+was fixed. A wholly vacuous run — every query executed, every one matching zero
+rows — is reported by a guard that names the dataset, the conversion and the
+normalisation as suspects and says in as many words that zero everywhere is not a
+fast run. Ahead of it sat a per-query oracle. A zero is a real answer, so the
+oracle *has* a recorded value for a query that matched nothing, and it fired
+first: the operator was told "Q1 answered 0 rows; LUBM publishes 4 … the corpus
+or the conversion is wrong" about a corpus in which nothing matched at all, and
+the paragraph written for precisely that case never printed.
+
+Demonstrated in both directions with a stand-in that answers every query zero
+rows while delegating conversion to the real binary — so the corpus still matches
+its pin and the run is vacuous in exactly the way the guard describes. Before the
+reordering the lane died on the oracle's message; after it, on the vacuous one.
+
 ## The query set: counted, certified, re-checked
 
 These three began life in `scripts/watdiv-lane.sh` alone, which is the shape the
