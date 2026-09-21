@@ -53,7 +53,31 @@ CI_WORKFLOW = WORKFLOWS / "ci.yaml"
 # hardcoded set both under-counted the blocking surface and would go stale the first
 # time a workflow was added. Same defect shape as the two hand-maintained lists this
 # whole gate exists to compare.
-ON_PULL_REQUEST = re.compile(r"^on:\s*$.*?^\s{2}pull_request:", re.MULTILINE | re.DOTALL)
+# THE `on:` BLOCK IS BOUNDED AND THEN TOKEN-MATCHED. The first version was
+# `^on:\s*$.*?^\s{2}pull_request:` with DOTALL, which recognised ONE of six legal
+# spellings and failed in both directions at once:
+#
+#   on:\n  pull_request:   -> True      on: [pull_request]   -> False
+#   on: pull_request        -> False     on:\n  - pull_request  -> False
+#   "on":\n  pull_request:  -> False     on:  # c\n  pull_request: -> False
+#
+# `"on":` is what YAML 1.1 parsers require, because bare `on` is a boolean. Reformatting
+# `ci.yaml` to `on: [pull_request, push]` -- a pure style edit -- would have turned all
+# forty gates red with a message that is a factual lie, AND blinded direction 2 to every
+# CI-only gate. DOTALL gave the inverse too: a cron-only workflow with any two-space
+# `pull_request:` key anywhere below `on:` was promoted to merge-blocking.
+ON_BLOCK = re.compile(r'^["\']?on["\']?:(.*?)(?=^\S|\Z)', re.MULTILINE | re.DOTALL)
+PULL_REQUEST_TOKEN = re.compile(r"(?<![\w-])pull_request(?![\w-])")
+
+
+def strip_yaml_comments(text: str) -> str:
+    """The text with `#` comments removed, so prose cannot be read as configuration.
+
+    Crude on purpose -- a `#` inside a quoted scalar is rare in these workflows and
+    removing it costs nothing here, whereas leaving comments in let an English sentence
+    in a comment act as a `make` invocation. See `WORKFLOW_MAKE`.
+    """
+    return "\n".join(re.sub(r"(?<!\S)#.*$", "", line) for line in text.splitlines())
 
 
 # GATES A PULL-REQUEST WORKFLOW RUNS AND `make check` DELIBERATELY DOES NOT, with the
@@ -76,6 +100,15 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
     "scripts/check-i18n-render.py --self-test": (
         "renders the book to check the translation, so it needs mdbook and the pinned "
         "mdbook-i18n-helpers; `make check-i18n` is the local entry point and says so"
+    ),
+    "crates/shapes/tests/pydantic_oracle.py": (
+        "an emitter oracle run through `uv run --project bindings/python`, so it needs the "
+        "Python environment the pytest job builds; `make pydantic-oracle` is the local "
+        "entry point"
+    ),
+    "crates/shapes/tests/linkml_oracle.py": (
+        "same as the pydantic oracle: a `uv`-driven emitter check needing the built Python "
+        "environment, with `make linkml-oracle` as the local entry point"
     ),
     "scripts/conformance-matrix.py": (
         "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
@@ -101,11 +134,12 @@ def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:
 
 def merge_blocking(workflow_texts: dict[str, str]) -> dict[str, str]:
     """The workflows whose `on:` block includes `pull_request`, so they can block a merge."""
-    return {
-        name: text
-        for name, text in workflow_texts.items()
-        if ON_PULL_REQUEST.search(text) is not None
-    }
+    blocking = {}
+    for name, text in workflow_texts.items():
+        block = ON_BLOCK.search(strip_yaml_comments(text))
+        if block is not None and PULL_REQUEST_TOKEN.search(block.group(1)):
+            blocking[name] = text
+    return blocking
 
 # `python3 scripts/x.py --flag`, `bash scripts/x.sh --flag`. The interpreter is
 # part of the match but not of the identity: what matters is which program runs
@@ -115,12 +149,55 @@ def merge_blocking(workflow_texts: dict[str, str]) -> dict[str, str]:
 # `scripts/a.py && python3 scripts/b.py` -- the second program never seen, and one list
 # spelling a pair on one line while the other spells it on two reported divergence in BOTH
 # directions over an equivalent spelling. No such line today; the regex is the hazard.
-INVOCATION = re.compile(r"\b(?:python3|bash)\s+((?:scripts|crates)/[^\s]+)([^\n;&|]*)")
+# An invocation of an in-repo program. `python3 scripts/x.py --flag`,
+# `bash scripts/x.sh`, `./scripts/x.py`, `python -u scripts/x.py`.
+#
+# The first version hardcoded `python3|bash` and a bare `scripts/` prefix, so it REFUSED
+# equivalent spellings: `scripts/check-no-features.py` is mode 100755 with a shebang, and
+# `./scripts/check-no-features.py` was reported as a workflow not running a gate it
+# demonstrably runs. The argument run also stopped at `;&|` but not `#`, so a trailing
+# comment became part of a gate's identity.
+# The interpreter (or `./`) is REQUIRED, not optional. Making it optional matched every
+# bare `scripts/…` or `crates/…` path in the tree -- YAML path filters, `cp` arguments,
+# quoted strings inside a `run: |` block -- and produced twenty-one refusals naming things
+# that are not gates at all. An invocation is a program being RUN, and that is what the
+# prefix establishes.
+INVOCATION = re.compile(  # noqa: E501
+    r"(?:\b(?:python3?|bash|sh)\s+(?:-\w+\s+)*|(?:^|(?<=run:\s)|(?<=[;&|(]\s))\./)"
+    r"((?:scripts|crates)/[^\s]+)([^\n;&|#]*)",
+    re.MULTILINE,
+)
 
-# Release workflows legitimately run publish scripts with real arguments
-# (`publish-release-crates.sh "${VERSION#rust-v}"`), which `make check` must not
-# do. Only the `scripts/` programs whose names mark them as gates are required to
-# appear on both sides.
+
+def _uncomment(text: str, comment_prefixes: tuple[str, ...]) -> str:
+    """The text with comment lines removed.
+
+    A COMMENTED-OUT GATE IS NOT A RUNNING GATE, and both lists were scanned as raw text.
+    A cleanly commented-out CI step and a recipe line commented as `@# python3 ...` each
+    satisfied the comparison while running nothing -- and "comment it out for now" is how
+    a gate actually dies. Whole-line only: an inline `#` inside a quoted scalar is not
+    worth the false positives, and a gate invocation is never mid-line prose.
+    """
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip().lstrip("@").lstrip()
+        if any(stripped.startswith(prefix) for prefix in comment_prefixes):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _join_continuations(text: str) -> str:
+    """Backslash-continued lines joined, so one invocation is one identity.
+
+    The idiomatic tab-indented `python3 scripts/x.py \\` / `--self-test` yielded the
+    identity `scripts/x.py \\` and was refused in BOTH directions against the semantically
+    identical single-line `run:` -- the precise failure the argument-run comment above says
+    it fixed for `&&`.
+    """
+    return re.sub(r"\\\n\s*", " ", text)
+
+
 # TWO WAYS AN INVOCATION IS A GATE, stated separately because they are different rules.
 #
 # By NAME: a `check-*` program, the conformance matrix, the workload acquirer, a query
@@ -183,12 +260,55 @@ def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
 # `check-i18n-render.py --self-test` -- a gate absent from `make check` and from ci.yaml,
 # so a contributor could not reproduce that red locally. That is direction 2's own stated
 # motivation, still live after this gate was written for it.
-WORKFLOW_MAKE = re.compile(r"(?:^|\s)make\s+([\w-]+)", re.MULTILINE)
+# A `make` STEP, IN COMMAND POSITION, WITH EVERY TARGET IT NAMES.
+#
+# The first version was `(?:^|\s)make\s+([\w-]+)` over raw text, which is bypassable by an
+# English sentence. `.github/workflows/ci.yaml:299` reads "step above alone does not make
+# cargo use 1.96 inside this repo" and yielded the target `cargo` -- benign only because no
+# `cargo:` target exists. A workflow containing "run make check before opening a PR" in a
+# comment resolves the WHOLE `check` target, so every gate is reported as reached in CI and
+# direction 1 is defeated by a sentence. Demonstrated on a fixture: two gates in no workflow
+# at all report clean once that comment is present.
+#
+# It also took the FIRST word after `make`, so `make -C dir tgt` resolved `-C`, and the
+# second target of `make a b` was dropped -- live at `docs.yaml:99`, where `playground` was
+# never resolved.
+WORKFLOW_MAKE = re.compile(r"(?:^|(?<=run:\s)|(?<=[;&|(]\s)|(?<=[;&|(]))\s*make\s+([^\n;&|]+)")
+# A word that is a flag or a variable assignment rather than a target.
+NOT_A_TARGET = re.compile(r"^(?:-|[A-Za-z_][\w]*=)")
+# Flags whose VALUE is the next word, so that word is not a target either. `make -C sub
+# tgt` yielded `sub` as well as `tgt` -- harmless while no `sub:` recipe exists, and a
+# collision waiting for one.
+FLAGS_TAKING_A_VALUE = frozenset(
+    {"-C", "-f", "-I", "-l", "-o", "-W", "--directory", "--file", "--include-dir",
+     "--load-average", "--old-file", "--what-if", "--makefile", "--assume-old"}
+)
+
+
+def make_targets(text: str) -> set[str]:
+    """Every target named by a `make` step in command position, comments removed."""
+    targets: set[str] = set()
+    for run in WORKFLOW_MAKE.findall(strip_yaml_comments(text)):
+        words = run.split()
+        skip_next = False
+        for word in words:
+            if skip_next:
+                skip_next = False
+                continue
+            if word in FLAGS_TAKING_A_VALUE:
+                skip_next = True
+                continue
+            if NOT_A_TARGET.match(word):
+                continue
+            if re.fullmatch(r"[\w-]+", word):
+                targets.add(word)
+    return targets
 
 
 def invocations(text: str) -> set[str]:
     """Every in-repo program invocation in a blob of Makefile or YAML text."""
-    return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(text)}
+    prepared = _join_continuations(_uncomment(text, ("#",)))
+    return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(prepared)}
 
 
 def workflow_invocations(text: str, makefile_text: str) -> set[str]:
@@ -198,7 +318,7 @@ def workflow_invocations(text: str, makefile_text: str) -> set[str]:
     through the Makefile is what makes "runs in CI" mean what the comparison assumes.
     """
     found = invocations(text)
-    for target in set(WORKFLOW_MAKE.findall(text)):
+    for target in make_targets(text):
         found |= invocations_with_recursion(makefile_text, target)
     return found
 
@@ -244,7 +364,13 @@ def gates_only(found: set[str]) -> set[str]:
 
 def divergence(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
     """Every gate one list runs and the other does not, in both directions."""
+    # THE ROOT TARGET MUST EXIST. `missing_is_fatal=True` was dead code -- the only call
+    # site passed False -- so renaming `check` yielded `OK: all 0 hygiene gates`.
+    check_recipe(makefile_text, "check")
     local = gates_only(invocations_with_recursion(makefile_text, "check"))
+    if not local:
+        return ["`make check` runs no hygiene gate at all, which is not a state this "
+                "repository can be in -- the recipe is empty, renamed, or unparseable"]
     # MERGE-BLOCKING WORKFLOWS, not all of them. Direction 1's stated subject is "cannot
     # block a merge", and subtracting the union of all seven workflows checks something
     # weaker: three are tag-triggered, one is a weekly cron, one is path-filtered, so a
@@ -375,6 +501,84 @@ def self_test() -> int:
         ok = False
     else:
         print("OK: self-test — every registered exemption still describes a real divergence")
+
+    # PROSE IN A COMMENT IS NOT A MAKE STEP. One English sentence in a workflow comment
+    # resolved the whole `check` target and reported every gate as reached in CI --
+    # direction 1 defeated by a sentence. The live false match was at ci.yaml:299.
+    prose = "      # run make check before opening a PR\n"
+    if make_targets(prose):
+        print(f"SELF-TEST FAIL: a comment was read as a make step ({make_targets(prose)})")
+        ok = False
+    elif make_targets("        run: make rdf-core-hygiene\n") != {"rdf-core-hygiene"}:
+        print("SELF-TEST FAIL: a real make step was not read as one")
+        ok = False
+    else:
+        print("OK: self-test — a `make` in prose is not a step, and a real step still is")
+
+    # EVERY TARGET A STEP NAMES, and no flag argument. `make a b` dropped `b` (live at
+    # docs.yaml), and `make -C sub tgt` read `sub` as a target.
+    if make_targets("        run: make a b\n") != {"a", "b"}:
+        print("SELF-TEST FAIL: the second target of `make a b` is dropped")
+        ok = False
+    elif make_targets("        run: make -C sub tgt\n") != {"tgt"}:
+        print("SELF-TEST FAIL: a flag's argument is read as a target")
+        ok = False
+    else:
+        print("OK: self-test — every target is taken and no flag argument is")
+
+    # SIX LEGAL SPELLINGS OF `on:`, because the first version recognised one and failed in
+    # both directions at once: it would have turned all forty gates red over a style edit
+    # AND blinded direction 2 to every CI-only gate.
+    spellings = {
+        "on:\n  pull_request:\n": True,
+        "on: [pull_request]\n": True,
+        "on: pull_request\n": True,
+        "on:\n  - pull_request\n": True,
+        '"on":\n  pull_request:\n': True,
+        "on:  # a comment\n  pull_request:\n": True,
+        "on:\n  schedule:\n    - cron: '0 0 * * 0'\n": False,
+        "on:\n  push:\n    tags: ['v*']\n": False,
+    }
+    wrong = [
+        form
+        for form, want in spellings.items()
+        if bool(merge_blocking({"probe.yaml": form})) is not want
+    ]
+    if wrong:
+        print(f"SELF-TEST FAIL: `on:` spellings judged wrongly: {wrong}")
+        ok = False
+    else:
+        print(
+            f"OK: self-test — all {len(spellings)} `on:` spellings are judged correctly, "
+            "including the two that must NOT be merge-blocking"
+        )
+
+    # A COMMENTED-OUT GATE IS NOT A RUNNING GATE, on either side.
+    if invocations("\t# python3 scripts/check-invented.py\n"):
+        print("SELF-TEST FAIL: a commented-out recipe line counts as a gate")
+        ok = False
+    elif invocations("        # run: python3 scripts/check-invented.py\n"):
+        print("SELF-TEST FAIL: a commented-out workflow step counts as a gate")
+        ok = False
+    elif not invocations("\tpython3 scripts/check-invented.py\n"):
+        print("SELF-TEST FAIL: an uncommented gate stopped counting")
+        ok = False
+    else:
+        print("OK: self-test — a commented-out gate counts on neither side, an active one does")
+
+    # EQUIVALENT SPELLINGS ARE ONE IDENTITY, or the gate refuses a workflow that is right.
+    spellings_of_one = [
+        "\tpython3 scripts/check-x.py --self-test\n",
+        "        run: ./scripts/check-x.py --self-test\n",
+        "        run: python3 -u scripts/check-x.py --self-test\n",
+        "\tpython3 scripts/check-x.py \\\n\t\t--self-test\n",
+    ]
+    identities = {next(iter(invocations(spelling)), None) for spelling in spellings_of_one}
+    if identities != {"scripts/check-x.py --self-test"}:
+        print(f"SELF-TEST FAIL: equivalent spellings are not one identity: {identities}")
+        ok = False
+    else:
+        print("OK: self-test — four spellings of one invocation normalise to one identity")
 
     # A gate present in BOTH but with different arguments is a divergence too:
     # `--self-test` and the bare run are different rules.
