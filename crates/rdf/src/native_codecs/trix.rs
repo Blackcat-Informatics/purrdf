@@ -17,7 +17,6 @@
 //! loss.
 
 use purrdf_core::sink::{TextOut, TextSink};
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -518,10 +517,14 @@ fn write_graph_name<W: TextOut + ?Sized>(
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = writeln!(out, "    <uri>{}</uri>", escape_text(ser_value(term)?)?);
+            out.push_str("    <uri>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</uri>\n");
         }
         SerTermKind::Bnode => {
-            let _ = writeln!(out, "    <id>{}</id>", escape_text(ser_value(term)?)?);
+            out.push_str("    <id>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</id>\n");
         }
         other => {
             return Err(serialize_err(format!(
@@ -541,10 +544,14 @@ fn write_term<W: TextOut + ?Sized>(
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = writeln!(out, "      <uri>{}</uri>", escape_text(ser_value(term)?)?);
+            out.push_str("      <uri>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</uri>\n");
         }
         SerTermKind::Bnode => {
-            let _ = writeln!(out, "      <id>{}</id>", escape_text(ser_value(term)?)?);
+            out.push_str("      <id>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</id>\n");
         }
         SerTermKind::Literal => write_literal(out, graph, term)?,
         SerTermKind::Triple => {
@@ -561,22 +568,24 @@ fn write_literal<W: TextOut + ?Sized>(
     graph: &SerGraph,
     term: &SerTerm,
 ) -> Result<(), RdfDiagnostic> {
-    let lexical = escape_text(ser_value(term)?)?;
+    let lexical = ser_value(term)?;
     if let Some(language) = &term.lang {
-        let _ = writeln!(
-            out,
-            "      <plainLiteral xml:lang=\"{}\">{lexical}</plainLiteral>",
-            escape_attr(language)?
-        );
+        out.push_str("      <plainLiteral xml:lang=\"");
+        push_attr(language, out)?;
+        out.push_str("\">");
+        push_text(lexical, out)?;
+        out.push_str("</plainLiteral>\n");
     } else if let Some(datatype) = term.datatype {
         let datatype_iri = ser_value(ser_term(graph, datatype)?)?;
-        let _ = writeln!(
-            out,
-            "      <typedLiteral datatype=\"{}\">{lexical}</typedLiteral>",
-            escape_attr(datatype_iri)?
-        );
+        out.push_str("      <typedLiteral datatype=\"");
+        push_attr(datatype_iri, out)?;
+        out.push_str("\">");
+        push_text(lexical, out)?;
+        out.push_str("</typedLiteral>\n");
     } else {
-        let _ = writeln!(out, "      <plainLiteral>{lexical}</plainLiteral>");
+        out.push_str("      <plainLiteral>");
+        push_text(lexical, out)?;
+        out.push_str("</plainLiteral>\n");
     }
     Ok(())
 }
@@ -595,14 +604,21 @@ fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
 }
 
 /// Lossless XML character data under the shared XML 1.0 law.
-fn escape_text(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Text)
+/// Append lossless XML 1.0 character data STRAIGHT INTO the sink.
+///
+/// `push_into` rather than `escape`: the allocating spelling returns a `Cow` that
+/// allocates whenever any character needs replacing, once per term, on a path whose
+/// whole purpose is to not accumulate the document. The extra scan `push_into` pays is
+/// the trade this codec was converted to make.
+fn push_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
         .map_err(|error| serialize_err(error.to_string()))
 }
 
 /// Lossless double-quoted XML attribute value.
-fn escape_attr(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
+/// Append a lossless double-quoted XML 1.0 attribute value straight into the sink.
+fn push_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
         .map_err(|error| serialize_err(error.to_string()))
 }
 

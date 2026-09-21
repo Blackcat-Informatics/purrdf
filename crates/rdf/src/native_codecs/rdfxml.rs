@@ -1140,7 +1140,7 @@ fn serialize_xml_node<W: TextOut + ?Sized>(
         };
         if node.is_text() {
             if let Some(text) = node.text() {
-                out.push_str(&escape_xml_text(text)?);
+                push_xml_text(text, out)?;
             }
             continue;
         }
@@ -1153,9 +1153,13 @@ fn serialize_xml_node<W: TextOut + ?Sized>(
         if let Some(namespaces) = apex_ns.filter(|_| is_apex) {
             for (prefix, iri) in namespaces {
                 if prefix.is_empty() {
-                    let _ = write!(out, " xmlns=\"{}\"", escape_xml_attr(iri)?);
+                    push_xml_attribute("xmlns", iri, out)?;
                 } else {
-                    let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(iri)?);
+                    out.push_str(" xmlns:");
+                    out.push_str(prefix);
+                    out.push_str("=\"");
+                    push_xml_attr(iri, out)?;
+                    out.push('"');
                 }
             }
         }
@@ -1163,7 +1167,7 @@ fn serialize_xml_node<W: TextOut + ?Sized>(
             out.push(' ');
             out.push_str(&raw_attr_name(node, attr));
             out.push_str("=\"");
-            out.push_str(&escape_xml_attr(attr.value())?);
+            push_xml_attr(attr.value(), out)?;
             out.push('"');
         }
         // Canonical XML has no self-closing form: always emit a start/end pair.
@@ -1204,16 +1208,39 @@ fn qualify(node: Node<'_, '_>, namespace: Option<&str>, local: &str) -> String {
     }
 }
 
-/// Lossless XML character data under the shared XML 1.0 law.
-fn escape_xml_text(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Text)
+/// Append lossless XML character data STRAIGHT INTO the sink.
+///
+/// `push_into` rather than `escape`: the allocating spelling returns a `Cow` that
+/// allocates whenever any character needs replacing, once per term, on a path whose
+/// whole purpose is to not accumulate the document. The extra scan `push_into` pays is
+/// the trade this codec was converted to make.
+fn push_xml_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
         .map_err(|error| serialize_err(error.to_string()))
 }
 
-/// Lossless double-quoted XML attribute value.
-fn escape_xml_attr(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
+/// Append a lossless double-quoted XML attribute value straight into the sink.
+fn push_xml_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
         .map_err(|error| serialize_err(error.to_string()))
+}
+
+/// Append ` name="value"` with the value escaped on its way into the sink.
+///
+/// The interpolating spelling — `write!(out, " name=\"{}\"", escape(value)?)` — is what
+/// forced the allocation: a format argument has to exist as a value before it can be
+/// interpolated. Naming the shape instead lets the escaped bytes go straight through.
+fn push_xml_attribute<W: TextOut + ?Sized>(
+    name: &str,
+    value: &str,
+    out: &mut W,
+) -> Result<(), RdfDiagnostic> {
+    out.push(' ');
+    out.push_str(name);
+    out.push_str("=\"");
+    push_xml_attr(value, out)?;
+    out.push('"');
+    Ok(())
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -1311,14 +1338,18 @@ fn write_rdfxml<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<()
     );
     for (namespace, prefix) in &namespaces {
         if prefix != "rdf" && prefix != "xsd" {
-            let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(namespace)?);
+            out.push_str(" xmlns:");
+            out.push_str(prefix);
+            out.push_str("=\"");
+            push_xml_attr(namespace, out)?;
+            out.push('"');
         }
     }
     // The document base, when one is in force: `xml:base` on the root scopes it to the
     // whole document, which is what every relativized `rdf:about` / `rdf:resource` below
     // resolves against on re-read.
     if let Some(base) = graph.base() {
-        let _ = write!(out, " xml:base=\"{}\"", escape_xml_attr(base.as_str())?);
+        push_xml_attribute("xml:base", base.as_str(), out)?;
     }
     // Declare RDF 1.2 so a round-trip preserves triple terms and base direction (their
     // parse is gated on `rdf:version="1.2"`).
@@ -1402,18 +1433,10 @@ fn write_node_attribute<W: TextOut + ?Sized>(
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = write!(
-                out,
-                " rdf:about=\"{}\"",
-                escape_xml_attr(&iri_reference(graph, ser_value(term)?))?
-            );
+            push_xml_attribute("rdf:about", &iri_reference(graph, ser_value(term)?), out)?;
         }
         SerTermKind::Bnode => {
-            let _ = write!(
-                out,
-                " rdf:nodeID=\"{}\"",
-                escape_xml_attr(ser_value(term)?)?
-            );
+            push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
         }
         other => {
             return Err(serialize_err(format!(
@@ -1563,35 +1586,35 @@ fn write_property<W: TextOut + ?Sized>(
         SerTermKind::Iri => {
             // `rdf:resource` is an IRI reference and resolves against `xml:base`, so it
             // is spelled against the document base exactly as `rdf:about` is.
-            let _ = writeln!(
-                out,
-                "{indent}<{name} rdf:resource=\"{}\"/>",
-                escape_xml_attr(&iri_reference(graph, ser_value(term)?))?
-            );
+            out.push_str(indent);
+            out.push('<');
+            out.push_str(&name);
+            push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
+            out.push_str("/>\n");
         }
         SerTermKind::Bnode => {
-            let _ = writeln!(
-                out,
-                "{indent}<{name} rdf:nodeID=\"{}\"/>",
-                escape_xml_attr(ser_value(term)?)?
-            );
+            out.push_str(indent);
+            out.push('<');
+            out.push_str(&name);
+            push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+            out.push_str("/>\n");
         }
         SerTermKind::Literal => {
             let _ = write!(out, "{indent}<{name}");
             if let Some(language) = &term.lang {
-                let _ = write!(out, " xml:lang=\"{}\"", escape_xml_attr(language)?);
+                push_xml_attribute("xml:lang", language, out)?;
             }
             if let Some(direction) = &term.direction {
                 let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
             }
             if let Some(datatype) = term.datatype {
-                let _ = write!(
-                    out,
-                    " rdf:datatype=\"{}\"",
-                    escape_xml_attr(ser_value(ser_term(graph, datatype)?)?)?
-                );
+                push_xml_attribute("rdf:datatype", ser_value(ser_term(graph, datatype)?)?, out)?;
             }
-            let _ = writeln!(out, ">{}</{name}>", escape_xml_text(ser_value(term)?)?);
+            out.push('>');
+            push_xml_text(ser_value(term)?, out)?;
+            out.push_str("</");
+            out.push_str(&name);
+            out.push_str(">\n");
         }
         SerTermKind::Triple => {
             let (s, p, o) = term
