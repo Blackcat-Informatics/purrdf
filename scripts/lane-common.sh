@@ -366,6 +366,13 @@ lane_query_set_digest() {
   errors="$(mktemp)" || die "could not create a temporary file to capture digest errors"
   # Outside `LANE_TMP` by choice, so the trap is told about it explicitly.
   lane_track_stray "${errors}"
+  # AND RESET LIKE EVERY OTHER CAPTURE. `mktemp` already proved the path creatable, so
+  # this is not the misdiagnosis the reset was written for -- but a law with one
+  # justified exception is a law someone has to re-derive, and the coverage test that
+  # found this site cannot distinguish a justified exception from an unadopted one.
+  # Uniform is cheaper than exceptional, and it closes the window between `mktemp` and
+  # the redirect in which something else could remove the file.
+  lane_reset_capture "${errors}"
   python3 -c '
 import hashlib, pathlib, stat, sys
 
@@ -625,6 +632,14 @@ lane_run_probe() {
   local provenance="$1" asked="$2"
   shift 2
   local status=0
+  # THE THIRD CAPTURE SITE, and it was the one that mattered most. This runs FIRST and
+  # asserts most loudly that the binary is at fault, so an unwritable scratch directory
+  # here produced verbatim the sentence the capture law exists to prevent: "the pinned
+  # binary is not a working <kind>: it exited 1 when asked for its version ... nothing
+  # has been fetched". ENOSPC on a host whose TMPDIR holds a 1.5 GB extraction is the
+  # live cause. The law was added for the two query loops and not applied twelve lines
+  # below its own comment block.
+  lane_reset_capture "${LANE_TMP}/probe.err"
   LANE_PROBE_OUT="$("$@" 2>"${LANE_TMP}/probe.err")" || status=$?
   if ((status != 0)); then
     local detail=""

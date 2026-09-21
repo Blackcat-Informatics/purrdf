@@ -1347,3 +1347,80 @@ fn a_certificate_does_not_depend_on_the_scratch_directory() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// EVERY STDERR CAPTURE SITE IS GUARDED, ENUMERATED RATHER THAN SPOT-CHECKED.
+//
+// `lane_reset_capture` was written for the two query loops and applied to them, and the THIRD
+// site — `lane_run_probe`, twelve lines below the comment block stating the law — was left raw.
+// It was the site that mattered most: it runs before step 1 and asserts most loudly that the
+// binary is at fault, so an unwritable scratch directory produced verbatim the sentence the law
+// forbids ("the pinned binary is not a working …: it exited 1 when asked for its version").
+//
+// A behaviour test of the helper cannot catch an unadopted site, and neither can reading. So the
+// subject here is COVERAGE: every redirection of a command's stderr into `LANE_TMP` must be
+// preceded by a reset of that same path.
+#[test]
+fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
+    let mut unguarded: Vec<String> = Vec::new();
+    let mut found = 0usize;
+
+    for script in [
+        "scripts/lane-common.sh",
+        "scripts/lubm-lane.sh",
+        "scripts/watdiv-lane.sh",
+    ] {
+        let text = std::fs::read_to_string(repo_root().join(script)).expect("read the lane script");
+        let lines: Vec<&str> = text.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            // A capture is a redirection of stderr into a path under the scratch directory.
+            // Comments are excluded: this file documents the defect in prose that quotes it.
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            // A capture is any redirection of a command's stderr into a file. The target is
+            // taken as written, because the lanes spell it two ways -- the probe redirects to
+            // a literal `${LANE_TMP}/probe.err`, the query loops to an `${errfile}` variable --
+            // and a detector that knew only one spelling found one of the three sites and
+            // reported the other two as absent rather than as unguarded. That is the same
+            // blindness this test exists to catch, so the floor below is what surfaced it.
+            let Some(after) = line.split_once("2>\"") else {
+                continue;
+            };
+            let Some((target, _)) = after.1.split_once('"') else {
+                continue;
+            };
+            found += 1;
+            // The reset must name THE SAME target, EARLIER IN THE SAME FUNCTION. A fixed
+            // line window was the first attempt and it was wrong on a legitimate case: one
+            // capture sits 52 lines below its reset because a whole embedded Python program
+            // lies between them. The law is an ordering, not a proximity, so the search runs
+            // back to the enclosing function's opening line.
+            let function_start = lines[..index]
+                .iter()
+                .rposition(|earlier| earlier.ends_with("() {") && !earlier.starts_with(' '))
+                .map_or(0, |at| at + 1);
+            let guarded = lines[function_start..index]
+                .iter()
+                .any(|earlier| earlier.contains("lane_reset_capture") && earlier.contains(target));
+            if !guarded {
+                unguarded.push(format!("{script}:{}: {}", index + 1, line.trim()));
+            }
+        }
+    }
+
+    // The enumeration must find something, or it is a test that passes by looking nowhere —
+    // exactly the failure it exists to catch, one level up.
+    assert!(
+        found >= 3,
+        "expected at least the three known capture sites; found {found}. If a lane stopped \
+         capturing stderr into the scratch directory this assertion needs updating, but a \
+         coverage test that covers nothing must fail loudly rather than pass."
+    );
+    assert!(
+        unguarded.is_empty(),
+        "these stderr captures are not preceded by `lane_reset_capture`, so an unwritable \
+         scratch directory is reported as a failure of the binary under test:\n  {}",
+        unguarded.join("\n  ")
+    );
+}

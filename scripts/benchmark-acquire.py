@@ -1225,6 +1225,21 @@ def self_test() -> int:
     elif not per_query:
         print("SELF-TEST FAIL: no per-query WatDiv pin is recorded, so the total stands alone")
         ok = False
+    elif len(per_query) != WATDIV_BASIC_TEMPLATES:
+        # THE SUM ALONE CANNOT SEE A MISSING ZERO, and five of these pins are zero.
+        # Deleting the pin for C2 (0 rows) leaves the sum at 434748 and the check above
+        # green, and the lane then prints "19 of 20 queries matched ...; no pin is
+        # recorded for: C2" and exits 0. That is exactly the half-finished pin update
+        # the lane reports, and it destroys exactly the claim the zero pins exist to
+        # make -- that "matched nothing" is a falsifiable answer rather than a note.
+        # The comment above says nothing else in the tree can catch this; that was true
+        # of the count as well as the sum.
+        print(
+            f"SELF-TEST FAIL: {len(per_query)} per-query WatDiv pins are recorded and the "
+            f"workload has {WATDIV_BASIC_TEMPLATES} templates. The sum cannot see a missing "
+            f"zero-valued pin, and five of these are zero."
+        )
+        ok = False
     elif sum(per_query.values()) != int(WORKLOAD_PINS[total_key]):
         print(
             f"SELF-TEST FAIL: the {len(per_query)} per-query pins sum to "
