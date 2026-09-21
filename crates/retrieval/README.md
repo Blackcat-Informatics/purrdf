@@ -280,3 +280,11 @@ in that registry accepts. It is documentation that executes.
 
 Reached from the umbrella crate as `purrdf::retrieval`, so a consumer that
 registers a ranked relation composes the answer without a second dependency.
+
+## License
+
+Licensed under any one of the following, at your option:
+
+- [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)

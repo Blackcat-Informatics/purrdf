@@ -21,6 +21,7 @@ vendored root and is enforced with zero changes here.
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tomllib
@@ -368,6 +369,48 @@ def self_test() -> int:
     finally:
         del DELIBERATE_OTHER_LICENSE["docs/NOTES.md"]
 
+    # 7. A PUBLISHED README MUST STATE THE OFFER IN FULL. The gap this closes was named
+    #    in two commit messages and closed by neither, and each naming was followed by a
+    #    new defect on the same surface: 17 pages with a doubled sentence, then one crate
+    #    offering a tri-licensed library under two licences and one publishing no offer at
+    #    all. All three shapes execute here.
+    probe = root / "crates" / "iri" / "README.md"
+    original = probe.read_text(encoding="utf-8")
+    try:
+        for mutation, label, needle in (
+            (original.replace("## License", "## Notes", 1), "no licence section", "no licence section"),
+            (
+                original.replace(
+                    "- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)]"
+                    "(https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)\n",
+                    "",
+                    1,
+                ),
+                "a proper subset of the offer",
+                "proper subset",
+            ),
+        ):
+            probe.write_text(mutation, encoding="utf-8")
+            found = published_readme_offenders(root, expected)
+            if any("crates/iri" in problem and needle in problem for problem in found):
+                print(f"OK: self-test — a published README with {label} is refused")
+            else:
+                print(f"SELF-TEST FAIL: {label} was not refused ({found[:1]})")
+                ok = False
+    finally:
+        probe.write_text(original, encoding="utf-8")
+
+    # AND THE NEIGHBOUR: every published README as committed is accepted. Without this a
+    # rule that refused everything would pass both cases above.
+    if published_readme_offenders(root, expected):
+        print(
+            "SELF-TEST FAIL: the tree as committed has a published README that does not "
+            f"state the offer: {published_readme_offenders(root, expected)[:2]}"
+        )
+        ok = False
+    else:
+        print("OK: self-test — every published crate README as committed states the full offer")
+
     # 5. THE EXPRESSION IS READ FROM Cargo.toml, not restated here. This is the property
     #    the whole design rests on: a copy in this file would be a second place to change
     #    and would diverge in exactly the situation the gate exists to catch.
@@ -403,6 +446,63 @@ def self_test() -> int:
 
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
+
+
+# ── A publishable README must state the offer, not a subset of it ─────────────
+#
+# THE GAP WAS NAMED TWICE AND CLOSED NEITHER TIME, and both times the naming was
+# followed immediately by a new defect on the same surface. The first commit said
+# "nothing yet gates the human-readable offer, so this is a fix without a guard";
+# it shipped a doubled sentence to 17 crates.io pages. The second said "Naming the
+# gap did not substitute for having the guard"; it left `crates/rdf-capi` offering
+# a tri-licensed crate under two licences, and `crates/retrieval` -- publishable,
+# `readme` declared -- with no licence offer at all.
+#
+# A crate whose `Cargo.toml` names a README is publishing that file to crates.io
+# beside three-license metadata. So the README must carry a licence section, and
+# that section must name every term of the offer. Naming a PROPER SUBSET is the
+# defect that matters: the metadata says three, the page a human reads says two,
+# and the page is the one they believe.
+LICENCE_HEADING = re.compile(r"^##+\s+Licen[cs]e", re.MULTILINE)
+
+
+def published_readme_offenders(root: Path, expected: str) -> list[str]:
+    """Every crate that publishes a README not stating the full licence offer."""
+    terms = [term.strip() for term in expected.split(" OR ")]
+    offenders: list[str] = []
+    for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
+        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        package = data.get("package", {})
+        if package.get("readme") != "README.md" or package.get("publish") is False:
+            continue
+        readme = manifest.parent / "README.md"
+        name = manifest.parent.name
+        if not readme.is_file():
+            offenders.append(f"crates/{name}: publishes README.md and it does not exist")
+            continue
+        body = readme.read_text(encoding="utf-8")
+        heading = LICENCE_HEADING.search(body)
+        if heading is None:
+            offenders.append(
+                f"crates/{name}/README.md: publishes to crates.io with no licence section, "
+                f"so the page carries the metadata's offer and no human-readable one"
+            )
+            continue
+        # SCOPED TO THE SECTION, not the whole file. Reading the body let the file's own
+        # SPDX header -- which names all three by construction -- satisfy a section that
+        # named two, so the subset case the gate exists for could never fire.
+        section = body[heading.end():]
+        next_heading = re.search(r"^##+\s", section, re.MULTILINE)
+        if next_heading is not None:
+            section = section[: next_heading.start()]
+        missing = [term for term in terms if term.split("-")[0] not in section]
+        if missing:
+            offenders.append(
+                f"crates/{name}/README.md: its licence section does not name {missing}; the "
+                f"crate's metadata offers {expected!r}, so the page states a proper subset "
+                f"of what the crate actually offers"
+            )
+    return offenders
 
 
 def main() -> int:
@@ -450,6 +550,16 @@ def main() -> int:
         for problem in scope_offenders:
             print(f"  {problem}", file=sys.stderr)
         return 1
+    readme_offenders = published_readme_offenders(root, expected)
+    if readme_offenders:
+        print(
+            "License hygiene FAILED: a crate publishes a README that does not state the\n"
+            f"full offer {expected!r}:",
+            file=sys.stderr,
+        )
+        for problem in readme_offenders:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
     header_offenders = first_party_header_offenders(root, expected)
     if header_offenders:
         print(
@@ -465,7 +575,8 @@ def main() -> int:
     total = sum(1 for _ in roots)
     print(
         f"OK: {total} vendored root(s) license-clean; MulanPSL-2.0 text matches its pin; "
-        f"every first-party SPDX header declares {expected!r}."
+        f"every first-party SPDX header declares {expected!r}; every published crate "
+        f"README states that offer in full."
     )
     return 0
 
