@@ -493,7 +493,7 @@ step "5/7 load the dataset through the purrdf CLI into a native pack"
 # reuse branch then read `-s` plus an 8-byte magic, so a pack modified past byte 8
 # in the arena was reused, queried, and its twenty row counts printed beside a pinned
 # corpus digest and a pinned query-set digest -- a provenance claim the bytes
-# measured did not have. That is verbatim the defect this branch exists to close,
+# measured did not have. That is verbatim the defect the lane laws forbid,
 # left un-applied to the sibling stamp in the same file.
 #
 # Line 1 is the corpus digest and the binary version: the two things that determine
@@ -760,30 +760,48 @@ fi
 # are the failure mode this whole workload exists to expose.
 ((executed > 0)) ||
   die "not one of the 20 queries executed; this lane measured nothing"
-# THE AGGREGATE ANSWER COUNT IS ASSERTED, at the default knobs. It is engine output, so
-# neither the corpus pin nor the query-set pin covers it -- a wrong pack built from the
-# right corpus would publish wrong counts and `nonempty > 0` would wave them through,
-# which is the floor LUBM's published-answer oracle replaced. WatDiv publishes no
-# reference answers, so this is a regression pin rather than an oracle, and it is
-# checked only where its inputs are pinned.
-if [[ "${SCALE}" == "10M" && "${SEED}" == "0" ]]; then
-  expected_rows_total="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-    --workload-pin "watdiv.10M.seed0.total_rows")" ||
-    die "no total-row pin is recorded for WatDiv 10M at seed 0"
-  ((total_rows == expected_rows_total)) ||
-    die "the twenty queries returned ${total_rows} rows in total; the pin for WatDiv 10M
-  at seed 0 is ${expected_rows_total}. The corpus and the query set both matched their
-  pins, so the engine answered them differently -- no row count is published for a run
-  that disagrees with its recorded answers."
-  echo "answers: ${total_rows} rows in total, matching the pin for 10M at seed 0"
-else
-  echo "answers: ${total_rows} rows in total, NOT checked against a pin (scale ${SCALE},"
-  echo "  seed ${SEED} is a different workload)."
-fi
 ((nonempty > 0)) ||
   die "all ${executed} queries executed and every one matched zero rows.
   That is vacuous, not fast: 20 basic graph patterns over ${data_rows} triples cannot
   all legitimately be empty. Suspect the prefix table, the load, or the instantiation."
+
+# THE AGGREGATE ANSWER COUNT IS ASSERTED, and it comes AFTER the vacuous-run guard on
+# purpose. Placed before it, a run where all twenty matched nothing had `total_rows` of
+# zero, this check fired first, and the vacuous-run diagnosis -- "that is vacuous, not
+# fast … suspect the prefix table, the load, or the instantiation" -- became dead code in
+# precisely the case it was written for.
+#
+# It is also gated on a COMPLETE run. `total_rows` accumulates only for queries that
+# executed, and this lane treats a query that cannot run as a RESULT it reports rather
+# than a reason to abandon the run. So one non-executing query made the total short of
+# the pin and killed the run under "the engine answered them differently" -- a cause not
+# established, which is the law this lane states elsewhere.
+#
+# It is engine output, so neither the corpus pin nor the query-set pin covers it: a wrong
+# pack built from the right corpus would publish wrong counts and `nonempty > 0` would
+# wave them through. WatDiv publishes no reference answers, so this is a regression pin
+# rather than an oracle, and the key carries the binary version for the same reason the
+# LUBM corpus pin does.
+answers_pin_key="watdiv.${SCALE}.seed${SEED}.total_rows.${PURRDF_VERSION// /-}"
+if ((unexecuted == 0)) &&
+  expected_rows_total="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --workload-pin "${answers_pin_key}" 2>/dev/null)"; then
+  ((total_rows == expected_rows_total)) ||
+    die "the twenty queries returned ${total_rows} rows in total; the pin for
+  ${answers_pin_key} is ${expected_rows_total}.
+  All twenty executed, and the corpus and the query set both matched their pins -- so
+  what differs is the answers this binary produced over them. No row count is published
+  for a run that disagrees with its recorded answers."
+  echo "answers: ${total_rows} rows in total, matching the pin for ${answers_pin_key}"
+elif ((unexecuted != 0)); then
+  echo "answers: ${total_rows} rows across ${executed} queries, NOT checked against a pin:"
+  echo "  ${unexecuted} query/queries did not execute, so the total is not comparable to"
+  echo "  one recorded for a complete run. The rows above still say what each returned."
+else
+  echo "answers: ${total_rows} rows in total, NOT checked against a pin: none is recorded"
+  echo "  for ${answers_pin_key}. A different scale, seed or binary is a different"
+  echo "  workload, and this binary's answers over it have not been recorded."
+fi
 
 cat <<REPORT
 SUMMARY

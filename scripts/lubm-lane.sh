@@ -335,22 +335,35 @@ rm -rf "${ARENA}"
 WORK="${ARENA}/work"
 mkdir_checked "${WORK}"
 
+# THE LOG IS OPENED FIRST, THROUGH A CHECKED WRITE, so the observer is the write.
+#
+# Two earlier versions got this wrong. The first blamed the generator whenever the run
+# failed, including when the redirect could not be opened -- pointing the operator at a
+# file that did not exist. The second tested `-f` on the log, which cannot tell "the
+# redirect failed" from "java failed" and reports stale bytes from an earlier run as this
+# run's output. The third captured the subshell's stderr, which does not help either:
+# when bash cannot open a stdout redirect it reports that on ITS OWN stderr before the
+# command runs, so the capture is empty and the guard falls through to blaming the
+# generator anyway. Verified by running it.
+#
+# Creating the log up front settles it. If that write fails the lane dies naming the log
+# and the knob, and the generator is never run; if it succeeds, a later non-zero status
+# is the generator's, because the only other party has already reported.
+# `write_checked` is this lane's ADAPTER: it injects the knob-naming `where` itself, so
+# it takes (destination, role, command...). Passing a `where` as the third argument makes
+# it the command -- which is how the first attempt at this turned a working lane into one
+# that died at step 4 with "No such file or directory" about a path that was fine.
+write_checked "${ARENA}/generator.stdout" "the generator's captured output" true
 gen_start="$(now_ms)"
+generator_status=0
 (
   cd "${WORK}"
   java -cp "${UBA}/classes" edu.lehigh.swat.bench.uba.Generator \
     -univ "${UNIVERSITIES}" -index "${INDEX}" -seed "${SEED}" -onto "${ONTO}"
-) >"${ARENA}/generator.stdout" 2>&1 || generator_status=$?
-# A DIAGNOSIS MUST NOT NAME A CAUSE THIS HAS NOT ESTABLISHED. If the redirection above
-# cannot be opened, bash never runs java at all -- so blaming the generator and pointing
-# the operator at a file that does not exist names the wrong cause twice.
-if ((${generator_status:-0} != 0)); then
-  [[ -f "${ARENA}/generator.stdout" ]] ||
-    die "could not open '${ARENA}/generator.stdout' (under LUBM_OUT='${OUT}') to capture
-  the generator's output, so the generator was never run. Nothing is known about it."
+) >>"${ARENA}/generator.stdout" 2>&1 || generator_status=$?
+((generator_status == 0)) ||
   die "the UBA generator exited ${generator_status}; its output is in
   ${ARENA}/generator.stdout"
-fi
 gen_ms=$(($(now_ms) - gen_start))
 
 # The Windows-separator pathology: the files are in ARENA, named `work\NAME`.
@@ -551,7 +564,7 @@ echo "sha256(lubm-data.nq) = ${data_sha}"
 # else default produced a legitimately different corpus, matched this guard anyway,
 # failed the pin, and died naming "generation, conversion, or the concatenation
 # order" -- none of which had changed. That is precisely the unnamed-input-to-a-
-# published-digest defect this branch exists to fix, reproduced by the fix for it.
+# published-digest defect these lanes exist to refuse, reproduced by its own repair.
 if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
   "${ONTO}" == "${LUBM_DEFAULT_ONTO}" && "${DOC_BASE}" == "${LUBM_DEFAULT_DOC_BASE}" ]]; then
   # THE BINARY IS AN INPUT TOO, so it is part of the key. These bytes are the

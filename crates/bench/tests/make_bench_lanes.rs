@@ -345,6 +345,14 @@ fn credible_stand_in(path: PathBuf) -> PathBuf {
             r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9 (stand-in)'; exit 0; fi
 for a in "$@"; do last="$a"; done
+# WRITE ONLY WHERE A LANE ASKED. This wrote to the last argument whatever it was, so
+# pointing it at a lane whose final argument is a FLAG deposited a file named `--manifest`
+# at the repository root — tracked, and breaking every `*` glob there until someone
+# noticed. A stand-in that can write outside its scratch space turns an abandoned
+# experiment into a committed artifact.
+case "$last" in
+  -*|"") echo "stand-in refusing to write to non-path argument: $last" >&2; exit 3 ;;
+esac
 case "$last" in
   *.pack) printf '{PACK_MAGIC}and then some payload bytes' >"$last" ;;
   *) printf '%s\n' '<http://example.org/s> <http://example.org/p> <http://example.org/o> .' >"$last" ;;

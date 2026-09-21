@@ -124,7 +124,11 @@ from typing import Callable, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# One chunk size for every streamed digest in this repository's benchmark surface.
+# One chunk size for every streamed read in this repository's benchmark surface --
+# digests and the download that feeds them. Claiming "one constant now" while three
+# sites still carried their own, one of them at a quarter the size, is the same
+# bookkeeping failure as a miscounted total: the claim was checked against the two
+# sites in view rather than against the tree.
 # `lane_sha256_file` reads 4 MiB and this file read 1 MiB, which is exactly the drift
 # the shared helper was introduced to end -- in the path that verifies every pinned
 # byte. No digest was ever wrong; the point is that two numbers for one decision is how
@@ -372,12 +376,17 @@ WORKLOAD_PINS: dict[str, str] = {
     # floor that LUBM's Q1/Q14 oracle replaced.
     #
     # This is a REGRESSION pin, not an oracle -- WatDiv publishes no reference answers,
-    # so the value is this engine's own measurement over pinned inputs. It is also why
+    # so the value is this engine's own measurement over pinned inputs. Which is exactly
+    # why the VERSION is in the key, as it is for the LUBM corpus digest two entries up:
+    # an engine-output pin that is not keyed on the engine turns the next release that
+    # legitimately changes an answer count into "the engine answered them differently",
+    # blaming the engine for a difference a new version is entitled to produce. Keyed, a
+    # bump is a MISSING pin the lane reports as not checked for this binary. It is also why
     # the pack's digest is not pinned separately: the pack is determined by the pinned
     # corpus and the keyed binary version, and a row count is a cheaper and far more
     # legible refusal than a second hex string. "434748 rows, expected 434748" says
     # what is wrong; two digests say only that something is.
-    "watdiv.10M.seed0.total_rows": "434748",
+    "watdiv.10M.seed0.total_rows.purrdf-2.0.2": "434748",
     # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
     "watdiv.10M.seed0.queries.sha256": (
         "2fabc0ef56b5d18bb9a7c9d6a4aa5c661043500103d6f133087d39d41fa59301"
@@ -542,7 +551,7 @@ def _download_verified(artifact: Artifact, dest: Path) -> None:
                 ) as response,
                 tmp.open("wb") as handle,
             ):
-                for chunk in iter(lambda: response.read(1 << 22), b""):  # noqa: B023
+                for chunk in iter(lambda: response.read(_DIGEST_CHUNK), b""):  # noqa: B023
                     handle.write(chunk)
             break
         # `http.client.IncompleteRead` is an HTTPException, NOT an OSError, so the

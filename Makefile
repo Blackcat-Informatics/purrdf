@@ -113,6 +113,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-entailment-surface.py
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
+	python3 scripts/check-tracked-paths.py --self-test
+	python3 scripts/check-tracked-paths.py
 	python3 scripts/benchmark-acquire.py --self-test
 	python3 scripts/watdiv-queries.py --offline-self-test
 	python3 scripts/lubm-queries.py --offline-self-test

@@ -137,6 +137,10 @@ EXPECTED_TEMPLATES = 20
 
 _U64 = (1 << 64) - 1
 
+# The chunk size every streamed digest here uses, matching `lane_sha256_file` and
+# `benchmark-acquire.py`. This digest decides a cache hit, so it is not a free choice.
+DIGEST_CHUNK = 1 << 22
+
 
 # ── The selection function ──────────────────────────────────────────────────────
 
@@ -443,7 +447,7 @@ def read_declared(path: Path) -> dict[str, int]:
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 22), b""):
+        for chunk in iter(lambda: handle.read(DIGEST_CHUNK), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -593,8 +597,18 @@ def write_candidates(candidates: Candidates, path: Path) -> None:
     # later run until an operator deleted the file by hand -- an over-refusal on the
     # one axis the sibling stamps self-heal. A temporary file plus `os.replace` means a
     # cache is either wholly there or absent.
+    # Any scratch left by a killed run is swept first: `os.replace` makes the cache
+    # itself atomic, but nothing removed the partial files, so they accumulated in the
+    # arena unreported.
+    for stale in path.parent.glob(f"{path.name}.part.*"):
+        stale.unlink(missing_ok=True)
     scratch = path.with_name(f"{path.name}.part.{os.getpid()}")
-    scratch.write_text(header + "\n" + body, encoding="utf-8")
+    # `fsync` before the rename, so "wholly there or absent" holds across a host crash
+    # and not merely across a killed process.
+    with scratch.open("w", encoding="utf-8") as handle:
+        handle.write(header + "\n" + body)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(scratch, path)
 
 
@@ -658,12 +672,17 @@ def read_candidates(path: Path, dataset_sha256: str) -> Candidates | None:
         return None
     body = "".join(f"{line}\n" for line in lines[3:])
     if hashlib.sha256(body.encode("utf-8")).hexdigest() != recorded_body.strip():
-        sys.exit(
-            f"FAIL: {path} no longer digests to what its own header records.\n"
-            "  This file IS the workload: every substitution indexes into these pools, so an\n"
-            "  edited cache is a different query set under the same name. Delete it to force a\n"
-            "  fresh scrape."
+        # A MISS, NOT A REFUSAL. This used to `sys.exit`, so a cache truncated by a
+        # killed run made every later run die until an operator deleted the file by
+        # hand -- while the sibling reuse stamps treat a mismatch as a cache miss and
+        # re-derive. A cache is scratch: the cheap, self-healing answer is to rescrape,
+        # and refusing instead is an over-refusal on the one axis the stamps get right.
+        print(
+            f"  candidates cache at {path} no longer digests to what its header records; "
+            "rescraping rather than trusting it",
+            file=sys.stderr,
         )
+        return None
     by_type: dict[str, list[str]] = {}
     for line in lines[3:]:
         prefixed, _, iri = line.partition("\t")
@@ -1223,16 +1242,14 @@ def offline_self_test() -> int:
         lines = good.read_text(encoding="utf-8").splitlines()
         swapped = [*lines[:3], *reversed(lines[3:])]
         tampered.write_text("\n".join(swapped) + "\n", encoding="utf-8")
-        try:
-            read_candidates(tampered, pool.dataset_sha256)
-        except SystemExit as exc:
-            check(
-                "no longer digests" in str(exc.code),
-                "a candidates cache whose body was edited is refused, naming the cause",
-            )
-        else:
-            print("SELF-TEST FAIL: an edited candidates cache was accepted as a hit")
-            ok = False
+        #    A MISS, not a refusal: the cache is scratch, so the self-healing answer is
+        #    to rescrape. Hard-failing made a cache truncated by a killed run kill every
+        #    later run until someone deleted it by hand, while the sibling reuse stamps
+        #    treat a mismatch as a miss. What must NOT happen is accepting it.
+        check(
+            read_candidates(tampered, pool.dataset_sha256) is None,
+            "a candidates cache whose body was edited is a miss, not a hit",
+        )
 
     # THE PREFIX REFUSAL, BOTH DIRECTIONS, ON THE PRODUCTION FUNCTION.
     #

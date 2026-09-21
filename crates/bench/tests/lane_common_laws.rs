@@ -986,3 +986,52 @@ fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
     std::fs::set_permissions(&path, permissions).expect("make the script executable");
     path
 }
+
+#[test]
+fn a_certificate_does_not_depend_on_the_scratch_directory() {
+    // A previous version of the digest captured Python's stderr into `LANE_TMP` and read
+    // it back unconditionally. A scratch directory that could not be written therefore
+    // made a VALID query set fail — and fail with an EMPTY message, because there was
+    // nothing to read. That is two defects at once: a certificate acquiring an unnamed
+    // precondition, and a helper refusing with nothing to say.
+    let root = scratch("scratch-independence");
+    let queries = root.join("queries");
+    std::fs::create_dir_all(&queries).expect("create the query directory");
+    write(&queries.join("q1.rq"), b"SELECT * WHERE { ?s ?p ?o }\n");
+
+    let (code, out) = in_lane_common(&format!("lane_query_set_digest '{}'", queries.display()));
+    assert_eq!(code, 0, "output:\n{out}");
+    let with_scratch = out.trim().to_string();
+
+    // Same call with the scratch directory destroyed first.
+    let (code, out) = in_lane_common(&format!(
+        "rm -rf \"${{LANE_TMP}}\"\nlane_query_set_digest '{}'",
+        queries.display()
+    ));
+    assert_eq!(
+        code, 0,
+        "a valid query set must still certify when the scratch directory is unusable — \
+         the digest is a certificate and must not acquire an unnamed precondition; \
+         output:\n{out}"
+    );
+    assert_eq!(
+        out.trim(),
+        with_scratch,
+        "and it must be the SAME digest, not merely a successful one; output:\n{out}"
+    );
+
+    // And an invalid directory must still produce a diagnosis carrying the lane's name,
+    // rather than an empty refusal.
+    let (code, out) = in_lane_common(&format!(
+        "rm -rf \"${{LANE_TMP}}\"\nlane_query_set_digest '{}'",
+        queries.join("nowhere").display()
+    ));
+    assert_ne!(code, 0, "output:\n{out}");
+    assert!(
+        out.contains("probe:") && out.trim() != "probe:",
+        "the refusal must carry the lane's name AND a reason — an empty diagnosis is \
+         worse than the bare traceback it replaced; output:\n{out:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

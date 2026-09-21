@@ -37,13 +37,13 @@ the third carrying the defect, and the binary check had drifted in five places
 between two copies of itself.
 
 Two of the three lanes then define a handful of same-named helpers — `write_checked`,
-`mkdir_checked`, `require_nonempty_file` — and the first two are **adapters, not
-copies**. Their entire body delegates to the `lane_*` implementation, passing the one
-thing that genuinely differs: which knob supplied the path. (`require_nonempty_file`
-injects nothing and is a bare alias; it is kept only so the three read alike at their
-call sites, and nothing would be lost by calling the shared helper directly.), so the diagnostic can quote
-`LUBM_OUT` or `WATDIV_OUT` back at the operator instead of emitting a bare
-`mkdir: cannot create directory`.
+`mkdir_checked`, `require_nonempty_file`. The first two are **adapters, not copies**:
+their whole body delegates to the `lane_*` implementation, passing the one thing that
+genuinely differs — which knob supplied the path — so the diagnostic can quote `LUBM_OUT`
+or `WATDIV_OUT` back at the operator instead of emitting a bare `mkdir: cannot create
+directory`. `require_nonempty_file` injects nothing and is a bare alias, kept only so the
+three read alike at their call sites; nothing would be lost by calling the shared helper
+directly.
 
 `scale-corpus.sh` does it the other way — it calls `lane_write_checked` and
 `lane_mkdir_checked` directly and passes the knob name inline at each site. Both forms

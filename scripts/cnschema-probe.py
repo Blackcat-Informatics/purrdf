@@ -31,6 +31,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# The chunk size the benchmark surface's streamed digests share (see
+# `scripts/lane-common.sh` and `scripts/benchmark-acquire.py`). This was the last 1 MiB
+# holdout after those were unified.
+_DIGEST_CHUNK = 1 << 22
+
 PINNED_COMMIT = "ecfa596d50b0578d1a28df8f9c76bdafe7069ec6"
 EXPORT_URL = (
     "https://raw.githubusercontent.com/cnschema/cnSchema/"
@@ -48,7 +53,7 @@ CACHE = REPO_ROOT / "target" / "cnschema-probe"
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
+        for chunk in iter(lambda: handle.read(_DIGEST_CHUNK), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
