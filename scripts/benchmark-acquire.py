@@ -133,7 +133,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # the shared helper was introduced to end -- in the path that verifies every pinned
 # byte. No digest was ever wrong; the point is that two numbers for one decision is how
 # they start to differ in ways that do matter.
-_DIGEST_CHUNK = 1 << 22
+# THE CHUNK SIZE IS NOT DEFINED HERE. Six copies lived under two names across five
+# files, two of them already drifted -- one to a quarter of the shared size and one
+# to a sixteenth. Every chunk size produces a correct digest, so nothing reported
+# that divergence. The number
+# now lives in `scripts/lane_chunk.py` and nothing restates it. The path insert is
+# explicit rather than relying on `sys.path[0]`, because this module is also loaded
+# by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lane_chunk import STREAM_CHUNK_BYTES  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 # The one place anything is written. Everything under ``target/`` is build
 # output; no artifact fetched here is ever written anywhere else in the tree.
@@ -397,7 +405,7 @@ WORKLOAD_PINS: dict[str, str] = {
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_DIGEST_CHUNK), b""):
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -412,7 +420,7 @@ def md5_of(path: Path) -> str:
     """
     digest = hashlib.md5(usedforsecurity=False)  # noqa: S324 - publisher-published checksum, not a security primitive
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_DIGEST_CHUNK), b""):
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -551,7 +559,7 @@ def _download_verified(artifact: Artifact, dest: Path) -> None:
                 ) as response,
                 tmp.open("wb") as handle,
             ):
-                for chunk in iter(lambda: response.read(_DIGEST_CHUNK), b""):  # noqa: B023
+                for chunk in iter(lambda: response.read(STREAM_CHUNK_BYTES), b""):  # noqa: B023
                     handle.write(chunk)
             break
         # `http.client.IncompleteRead` is an HTTPException, NOT an OSError, so the

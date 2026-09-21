@@ -31,10 +31,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The chunk size the benchmark surface's streamed digests share (see
-# `scripts/lane-common.sh` and `scripts/benchmark-acquire.py`). This was the last 1 MiB
-# holdout after those were unified.
-_DIGEST_CHUNK = 1 << 22
+# THE CHUNK SIZE IS NOT DEFINED HERE. Six copies lived under two names across five
+# files, two of them already drifted -- one to a quarter of the shared size and one
+# to a sixteenth. Every chunk size produces a correct digest, so nothing reported
+# it. (The comment that stood here claimed this file was "the last 1 MiB holdout
+# after those were unified", which was false in both halves: this file was at 4 MiB
+# already, and two sites in `scale-corpus.sh` were still below it.) The number
+# now lives in `scripts/lane_chunk.py` and nothing restates it. The path insert is
+# explicit rather than relying on `sys.path[0]`, because this module is also loaded
+# by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lane_chunk import STREAM_CHUNK_BYTES  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 PINNED_COMMIT = "ecfa596d50b0578d1a28df8f9c76bdafe7069ec6"
 EXPORT_URL = (
@@ -53,7 +60,7 @@ CACHE = REPO_ROOT / "target" / "cnschema-probe"
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_DIGEST_CHUNK), b""):
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 

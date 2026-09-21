@@ -159,6 +159,7 @@ import os
 import sys
 
 destination = sys.argv[1]
+chunk_bytes = int(sys.argv[2])
 out = sys.stdout.buffer
 read = sys.stdin.buffer.read
 rows = 0
@@ -166,7 +167,7 @@ size = 0
 last = b""
 try:
     while True:
-        chunk = read(1 << 16)
+        chunk = read(chunk_bytes)
         if not chunk:
             break
         out.write(chunk)
@@ -187,7 +188,7 @@ except BrokenPipeError:
     raise SystemExit(1)
 with open(destination, "w", encoding="utf-8") as handle:
     handle.write("%d %d %d\n" % (rows, size, 1 if last == b"\n" else 0))
-' "$1"
+' "$1" "${LANE_STREAM_CHUNK_BYTES}"
 }
 
 # Sums the per-shard counts this run wrote and applies the law to the total.
@@ -300,12 +301,13 @@ import hashlib
 import sys
 
 destination = sys.argv[1]
+chunk_bytes = int(sys.argv[2])
 digest = hashlib.sha256()
 size = 0
 rows = 0
 last = b""
 while True:
-    chunk = sys.stdin.buffer.read(1 << 20)
+    chunk = sys.stdin.buffer.read(chunk_bytes)
     if not chunk:
         break
     digest.update(chunk)
@@ -316,7 +318,7 @@ density = (size / rows) if rows else 0.0
 with open(destination, "w", encoding="utf-8") as handle:
     handle.write("%d %d %d\n" % (rows, size, 1 if last == b"\n" else 0))
 print(f"rows={rows} bytes={size} bytes_per_row={density:.1f} sha256={digest.hexdigest()}")
-' "$1"
+' "$1" "${LANE_STREAM_CHUNK_BYTES}"
 }
 
 shard_args() {

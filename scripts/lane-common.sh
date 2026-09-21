@@ -130,6 +130,19 @@ lane_track_stray() {
   LANE_STRAY_FILES+=("$1")
 }
 
+# THE CHUNK SIZE EVERY STREAMED READ USES, read from the one place that defines it.
+# A shell cannot import a module, so the number is fetched once here and passed into
+# the embedded Python blocks as an argument -- which is what keeps the shell sites
+# and the Python sites from being two definitions again. They were: six copies under
+# two names across five files, two of them already drifted -- one to a quarter of the
+# shared size and one to a sixteenth -- and because every chunk size produces a
+# correct digest, that divergence had nothing to report it.
+LANE_STREAM_CHUNK_BYTES="$(python3 "$(dirname "${BASH_SOURCE[0]}")/lane_chunk.py")" ||
+  die "cannot read the shared stream chunk size from scripts/lane_chunk.py"
+[[ "${LANE_STREAM_CHUNK_BYTES}" =~ ^[0-9]+$ ]] ||
+  die "scripts/lane_chunk.py printed '${LANE_STREAM_CHUNK_BYTES}', which is not a byte count"
+readonly LANE_STREAM_CHUNK_BYTES
+
 lane_cleanup() {
   local status=$?
   rm -rf "${LANE_TMP}"
@@ -154,7 +167,6 @@ trap lane_cleanup EXIT
 # Redirections into `LANE_TMP` are the exception and do not come here: that directory is
 # created by this file and removed by its trap, so a failure there is not a knob error.
 # The claim used to read "every redirection", which was false.
-
 #
 # `$1` is the destination, `$2` WHAT is being written, `$3` how to name WHERE it
 # was going (the caller spells this so the knob appears exactly as an operator
@@ -295,10 +307,10 @@ lane_sha256_file() {
 import hashlib, sys
 digest = hashlib.sha256()
 with open(sys.argv[1], "rb") as handle:
-    for chunk in iter(lambda: handle.read(1 << 22), b""):
+    for chunk in iter(lambda: handle.read(int(sys.argv[2])), b""):
         digest.update(chunk)
 print(digest.hexdigest())
-' "${path}"
+' "${path}" "${LANE_STREAM_CHUNK_BYTES}"
 }
 
 # A DIAGNOSTIC MUST SURVIVE THE RECORD IT TRAVELS IN. A lane's result rows are

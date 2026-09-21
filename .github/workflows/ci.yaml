@@ -50,6 +50,12 @@ jobs:
       - name: Check `make check` and this workflow run the same hygiene gates
         run: python3 scripts/check-gate-parity.py
 
+      - name: Check the stream-chunk gate can still fail
+        run: python3 scripts/check-stream-chunk.py --self-test
+
+      - name: Check every streamed read names its chunk size
+        run: python3 scripts/check-stream-chunk.py
+
       - name: Check the build-profile gate can still fail
         run: python3 scripts/check-build-profiles.py --self-test
 

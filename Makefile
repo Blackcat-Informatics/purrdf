@@ -90,6 +90,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-toolchain-pin.py --self-test
 	python3 scripts/check-gate-parity.py --self-test
 	python3 scripts/check-gate-parity.py
+	python3 scripts/check-stream-chunk.py --self-test
+	python3 scripts/check-stream-chunk.py
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
 	python3 scripts/check-iri-resolver-singleton.py

@@ -945,6 +945,22 @@ fi
 # nothing is a run over something that is not LUBM. (A zero on an individual
 # query is a real answer and always reported as one: Q2 is legitimately 0, and a
 # rung below 'full' legitimately answers 0 for individuals outside its subset.)
+# THE BROADEST DIAGNOSIS RUNS FIRST, or the narrow one answers for it in the state
+# the broad one was written for. `ANSWERED["Q1"]` is recorded for a query that
+# executed and matched nothing -- a zero is a real answer -- so with the oracle
+# ahead of this guard, a wholly vacuous corpus at the default knobs died on "Q1
+# answered 0 rows; LUBM publishes 4 ... the corpus or the conversion is wrong",
+# and the paragraph below, which names the dataset, the normalisation and the
+# conversion as suspects and explains why zero everywhere is not a fast run, was
+# unreachable at the only knobs whose wording it applies to. The same ordering
+# defect was found and fixed in the sibling lane; it is the same law, so it is
+# recorded in `docs/design/purrdf-bench-lane-laws.md` rather than in one lane.
+((nonempty > 0)) ||
+  die "all ${executed} queries executed and every one matched zero rows.
+  That is vacuous, not fast: Q1 and Q14 are answered without entailment over the
+  full ${data_rows}-row dataset and have matching individuals in any real LUBM
+  corpus. Suspect the conversion, the dataset, or the query normalisation."
+
 # LUBM PUBLISHES ANSWERS FOR Q1 AND Q14, and they are the only oracle this lane
 # has: both need NO entailment, so both run on the full corpus, and at the default
 # knobs their counts are constants of LUBM(1, 0) seed 0. `nonempty > 0` -- one
@@ -967,11 +983,6 @@ if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" ]]; then
   done
   echo "oracle: Q1 and Q14 match LUBM's published answers for LUBM(1, 0)"
 fi
-((nonempty > 0)) ||
-  die "all ${executed} queries executed and every one matched zero rows.
-  That is vacuous, not fast: Q1 and Q14 are answered without entailment over the
-  full ${data_rows}-row dataset and have matching individuals in any real LUBM
-  corpus. Suspect the conversion, the dataset, or the query normalisation."
 
 cat <<REPORT
 SUMMARY
