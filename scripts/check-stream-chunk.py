@@ -200,40 +200,75 @@ _QUOTED_BODY = re.compile(r"python3 -c '((?:[^']|'\\'')*)'")
 # as a claim about shell.
 _DQUOTED_BODY = re.compile(r'python3 -c "((?:[^"\\]|\\.)*)"')
 
-_HEREDOC_OPEN = re.compile(r"python3 -[^\n]*<<[-]?'?(\w+)'?[^\n]*$", re.MULTILINE)
+_HEREDOC_OPEN = re.compile(r"python3 -[^\n]*<<(-?)'?(\w+)'?[^\n]*$", re.MULTILINE)
 
 
-def embedded_programs(text: str) -> list[tuple[int, str]]:
-    """Every embedded Python program as `(line_offset, body)`.
+def embedded_programs(text: str) -> list[tuple[int, str, str]]:
+    """Every embedded Python program as `(line_offset, raw, body)`.
 
     `line_offset` is the 0-based line the body starts on in the shell file, so a finding can
     name the shell line rather than a line number inside a fragment nobody can locate.
+    `raw` is the text exactly as it appears (used for masking); `body` is the program the
+    shell would actually hand to Python, with that launcher's escapes undone.
+
+    THE UNESCAPING IS PER LAUNCHER, because the launchers do not share an escape rule.
+    Applying the single-quoted rule to a double-quoted body corrupted it, and applying
+    neither to a double-quoted body left `\"` in the source -- so the ordinary spelling
+    `python3 -c "print(\"hi\"); …"` was reported as a parse failure. That is both failure
+    directions from one mis-translation: a legitimate script refused with a nonsense
+    diagnostic, and a body that DOES write the chunk size out reported as unparseable rather
+    than as the offence, losing the literal and the line number.
     """
-    programs: list[tuple[int, str]] = []
-    for pattern in (_QUOTED_BODY, _DQUOTED_BODY):
-      for match in pattern.finditer(text):
-        # A SHELL COMMENT MENTIONING THE IDIOM IS NOT AN INVOCATION. `# see python3 -c
-        # 'h.read(4194304)' for the idiom` produced a false offence -- an over-refusal that
-        # would flag a comment documenting the very rule this gate enforces. Only the line
-        # the match STARTS on matters: a `#` inside an extracted body is Python, not shell.
-        line_start = text.rfind("\n", 0, match.start()) + 1
-        if text[line_start : match.start()].lstrip().startswith("#"):
+    programs: list[tuple[int, str, str]] = []
+
+    def _commented(at: int) -> bool:
+        # A SHELL COMMENT MENTIONING THE IDIOM IS NOT AN INVOCATION. Only the line the match
+        # starts on matters: a `#` inside a body is Python, judged by the walker.
+        line_start = text.rfind("\n", 0, at) + 1
+        return text[line_start:at].lstrip().startswith("#")
+
+    for match in _QUOTED_BODY.finditer(text):
+        if _commented(match.start()):
             continue
-        # The escape becomes the quote it stands for, so the body is the program the shell
-        # would actually hand to Python.
-        body = match.group(1).replace(_QUOTE_ESCAPE, "'")
-        programs.append((text[: match.start(1)].count("\n"), body))
+        raw = match.group(1)
+        programs.append((text[: match.start(1)].count("\n"), raw, raw.replace(_QUOTE_ESCAPE, "'")))
+
+    for match in _DQUOTED_BODY.finditer(text):
+        if _commented(match.start()):
+            continue
+        raw = match.group(1)
+        # INSIDE DOUBLE QUOTES ONLY FIVE ESCAPES EXIST. The shell removes a backslash
+        # before `$`, a backtick, `"`, a backslash and a newline, and KEEPS it before
+        # anything else -- verified against bash: `a\_b` keeps it, `a\$b` and `a\"b` drop
+        # it. Unescaping everything corrupted `msg = '\''` into three quotes, an
+        # unterminated triple quote, and refused a legitimate body. Caught by the fixture
+        # written for the opposite defect, which is why both directions are fixtures.
+        body = re.sub(r"\\\n", "", raw)
+        body = re.sub(r"\\([$`\"\\])", r"\1", body)
+        programs.append((text[: match.start(1)].count("\n"), raw, body))
+
     lines = text.splitlines()
     for match in _HEREDOC_OPEN.finditer(text):
-        delimiter = match.group(1)
+        if _commented(match.start()):
+            continue
+        strips_tabs = match.group(1) == "-"
+        delimiter = match.group(2)
         opened = text[: match.start()].count("\n")
         body: list[str] = []
         for line in lines[opened + 1 :]:
-            if line.strip() == delimiter:
+            # `<<-` STRIPS LEADING TABS, from the body AND from the delimiter line; plain
+            # `<<` requires the delimiter to be the whole line. Accepting `<<-` while
+            # keeping its tabs made the body `unexpected indent` -- a spelling the pattern
+            # went out of its way to admit and could then not judge. And comparing with
+            # `.strip()` on a plain heredoc terminated on an indented look-alike inside a
+            # triple-quoted string.
+            candidate = line.lstrip("\t") if strips_tabs else line
+            if candidate == delimiter if strips_tabs else line == delimiter:
                 break
-            body.append(line)
+            body.append(candidate)
         if body:
-            programs.append((opened + 1, "\n".join(body)))
+            raw = "\n".join(lines[opened + 1 : opened + 1 + len(body)])
+            programs.append((opened + 1, raw, "\n".join(body)))
     return programs
 
 
@@ -248,15 +283,18 @@ def shell_offences(path: Path, text: str) -> list[str]:
     block cites as a reason for the AST rewrite it then did not apply here.
     """
     found: list[str] = []
-    for line_offset, body in embedded_programs(text):
+    for line_offset, _raw, body in embedded_programs(text):
         for problem in python_offences(path, body):
             found.append(_rebase_line(problem, line_offset))
     # The shell's own reads. Embedded bodies are blanked LINE-FOR-LINE rather than deleted:
     # `sub("")` removed their lines outright and shifted every later line number, so a
     # shell-native finding was reported up to 119 lines early in `lane-common.sh`.
     masked = text
-    for line_offset, body in embedded_programs(text):
-        masked = masked.replace(body, "\n" * body.count("\n"), 1)
+    # MASKED ON THE RAW TEXT, not the translated body: once an escape is undone the body no
+    # longer appears in the file, so `replace` found nothing and the same read was reported
+    # twice on one line.
+    for _line_offset, raw, _body in embedded_programs(text):
+        masked = masked.replace(raw, "\n" * raw.count("\n"), 1)
     # A WHOLE-LINE SHELL COMMENT IS DOCUMENTATION, not a read. Without this, a comment
     # mentioning the idiom this gate enforces -- `# see python3 -c 'h.read(4194304)'` -- was
     # itself an offence: an over-refusal against prose describing the rule. Blanked rather
@@ -428,14 +466,40 @@ def self_test() -> int:
         "a nested read after the POSIX quote escape": (
             "python3 -c 'msg = '\\''go'\\''; h.read(int(4194304))'\n"
         ),
+        # A DOUBLE-QUOTED BODY WITH ESCAPED QUOTES is the ordinary spelling of that
+        # launcher, not a corner. Handing it to the parser with the backslashes still in it
+        # refused a legitimate script AND lost the literal -- the same both-directions
+        # mis-translation as the single-quoted case, committed by the repair for it.
+        "a double-quoted body with escaped quotes": (
+            'python3 -c "print(\\"hi\\"); h.read(int(4194304))"\n'
+        ),
+        # `<<-` strips leading tabs. Accepting the spelling and keeping the tabs made every
+        # such body `unexpected indent`.
+        "a tab-indented `<<-` heredoc body": (
+            "python3 - <<-'PY'\n\th.read(int(4194304))\n\tPY\n"
+        ),
         "a shell-native read": '    chunk = "$(dd bs=4194304)"\n    h.read(4194304)\n',
     }
-    missed = [label for label, body in shell_refused.items() if not shell_offences(here, body)]
+    # A REFUSAL MUST NAME THE LITERAL, not merely be a refusal. Every one of these bodies
+    # writes `4194304` out, and a mis-extraction reports "cannot be parsed" instead -- which
+    # is still non-empty, so a fixture asserting only "something was reported" passes on the
+    # very defect it exists to catch. Two fixtures fell into that trap before this.
+    missed = [
+        label
+        for label, body in shell_refused.items()
+        if not any("4194304" in problem for problem in shell_offences(here, body))
+    ]
     if missed:
-        print(f"SELF-TEST FAIL: these shell shapes were not refused: {missed}")
+        print(
+            f"SELF-TEST FAIL: these shell shapes were not refused, or were refused without "
+            f"naming the literal: {missed}"
+        )
         ok = False
     else:
-        print(f"OK: self-test — all {len(shell_refused)} shell shapes are refused")
+        print(
+            f"OK: self-test — all {len(shell_refused)} shell shapes are refused, each naming "
+            "the literal rather than a parse failure"
+        )
 
     shell_accepted = {
         "a named read in a `-c` body": "python3 -c '\nh.read(int(sys.argv[2]))\n'\n",
@@ -444,6 +508,18 @@ def self_test() -> int:
         ),
         "a small fixed-width field": "python3 -c '\nh.read(2)\n'\n",
         "a single-line `-c` body, named": "python3 -c 'h.read(int(sys.argv[2]))'\n",
+        "a double-quoted body with escaped quotes, named": (
+            'python3 -c "print(\\"hi\\"); h.read(chunk_bytes)"\n'
+        ),
+        # Inside DOUBLE quotes those four characters are Python source, not a shell escape.
+        # Applying the single-quoted rule to them corrupted the body into an unterminated
+        # string.
+        "a double-quoted body containing the quote-escape characters": (
+            'python3 -c "msg = \'\\\'\'; h.read(chunk_bytes)"\n'
+        ),
+        "a tab-indented `<<-` heredoc body, named": (
+            "python3 - <<-'PY'\n\th.read(chunk_bytes)\n\tPY\n"
+        ),
         "the quote escape with a named read": (
             "python3 -c 'msg = '\\''go'\\''; h.read(chunk_bytes)'\n"
         ),
@@ -464,6 +540,20 @@ def self_test() -> int:
     # AND THE LINE NUMBER MUST NAME THE SHELL LINE. Blanking an embedded body with `sub("")`
     # deleted its lines and shifted every later number, so a shell-native finding was
     # reported up to 119 lines early.
+    # ONE READ IS ONE FINDING. The embedded bodies are blanked out before the shell scan,
+    # and the blanking must use the RAW text: once an escape is translated the body no longer
+    # appears in the file, `replace` finds nothing, and the same read is reported twice on one
+    # line. Nothing observed that until this fixture.
+    duplicated = shell_offences(here, "python3 -c 'msg = '\\''go'\\''; h.read(4194304)'\n")
+    if len(duplicated) != 1:
+        print(
+            f"SELF-TEST FAIL: one read in an escaped body produced {len(duplicated)} findings, "
+            f"not one -- the body was masked after translation rather than as written"
+        )
+        ok = False
+    else:
+        print("OK: self-test -- a read in an escaped body is reported exactly once")
+
     # THE LINE NUMBER OF AN EMBEDDED FINDING must name the shell line, and the number of a
     # SHELL-NATIVE finding AFTER an embedded body must survive the blanking. The first
     # version of this probe had nothing after the body, so it could not observe the defect
