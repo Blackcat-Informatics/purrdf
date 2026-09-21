@@ -385,8 +385,21 @@ root = pathlib.Path(sys.argv[1])
 # written for. No apostrophes in here: this block is single-quoted to the shell.
 if not root.is_dir():
     sys.exit(f"FAIL: {root} is not a directory; it was removed or replaced underneath this run")
+# AND THE CHECK ABOVE GUARDS NOTHING BELOW IT. `is_dir()` answers about one instant; the
+# enumeration, the lstat and the read all happen after it, and a concurrent run removing
+# the directory or a single query file between them produced a traceback instead of the
+# arena-conflict diagnostic -- which is the same defect the check was added to fix, one
+# statement later. Every filesystem call is therefore inside the handler.
 records = []
-for path in sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8")):
+try:
+    entries = sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8"))
+except OSError as error:
+    sys.exit(
+        f"FAIL: {root} could not be enumerated ({error.strerror}); it was removed or "
+        "replaced underneath this run. Another run is almost certainly using the same "
+        "arena -- two runs at once want two arenas."
+    )
+for path in entries:
     # A NON-REGULAR ENTRY IS REFUSED, not skipped. Filtering to `is_file()` made the
     # claim above false: a subdirectory queued alongside the queries had its contents
     # excluded from the certificate that is also the concurrency tripwire, silently.
@@ -405,7 +418,14 @@ for path in sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8")):
     # the intent: the index the result loop reads and the provenance record are part of
     # what a run IS, and leaving them outside the certificate was a finding. What the
     # two guards share is depth, not membership.
-    if not stat.S_ISREG(path.lstat().st_mode):
+    try:
+        mode = path.lstat().st_mode
+    except OSError as error:
+        sys.exit(
+            f"FAIL: {path.name!r} vanished from {root} while it was being certified "
+            f"({error.strerror}). Another run is almost certainly using the same arena."
+        )
+    if not stat.S_ISREG(mode):
         kind = "a symbolic link" if path.is_symlink() else "not a regular file"
         sys.exit(
             f"FAIL: {root} holds {path.name!r}, which is {kind}. A query set is a flat "
@@ -417,7 +437,16 @@ for path in sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8")):
             f"FAIL: {path.name!r} carries a newline or a NUL, which a manifest record "
             "cannot represent unambiguously"
         )
-    records.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        sys.exit(
+            f"FAIL: {path.name!r} in {root} could not be read while it was being certified "
+            f"({error.strerror}). A digest is a certificate, so a file it cannot read is a "
+            "refusal rather than an omission -- and a concurrent run in this arena is the "
+            "likeliest cause."
+        )
+    records.append(f"{hashlib.sha256(content).hexdigest()}  {path.name}")
 if not records:
     sys.exit(
         f"FAIL: {root} holds no files, so there is no query set to certify. The digest of "

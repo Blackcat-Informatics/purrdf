@@ -667,6 +667,8 @@ def _download_verified(artifact: Artifact, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = _scratch_for(dest)
     for attempt in range(1, _FETCH_ATTEMPTS + 1):
+        received = 0
+        declared: str | None = None
         try:
             with (
                 urllib.request.urlopen(  # noqa: S310 - pinned https URL
@@ -676,6 +678,22 @@ def _download_verified(artifact: Artifact, dest: Path) -> None:
             ):
                 for chunk in iter(lambda: response.read(STREAM_CHUNK_BYTES), b""):  # noqa: B023
                     handle.write(chunk)
+                    received += len(chunk)
+                declared = response.getheader("Content-Length")
+            # A SHORT BODY IS A TRANSFER FAILURE, AND IT DOES NOT RAISE. When a
+            # non-chunked response closes before its declared length, a SIZED `read()`
+            # returns b"" rather than raising `IncompleteRead` -- CPython preserves that
+            # for sized reads. So the loop ended normally, `break` left the retry behind,
+            # and `_verify_and_install` then reported a SIZE MISMATCH and QUARANTINED the
+            # file: a truncated download published as a corrupt artifact or a wrong pin,
+            # which is the misdiagnosis this file exists to avoid, with the retry that
+            # would have fixed it skipped.
+            #
+            # Only a response that DECLARES a larger length is treated as retryable. A
+            # server that declares nothing has said nothing to contradict, and inventing a
+            # short-body verdict there would retry every chunked transfer.
+            if declared is not None and received < int(declared):
+                raise http.client.IncompleteRead(b"", expected=int(declared) - received)
             break
         # `http.client.IncompleteRead` is an HTTPException, NOT an OSError, so the
         # commonest mid-transfer truncation -- the exact failure the retry below
