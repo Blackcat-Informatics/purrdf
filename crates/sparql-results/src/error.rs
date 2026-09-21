@@ -34,6 +34,31 @@ pub enum Error {
     InvalidNamespace(String),
     /// An internal invariant failed. Used sparingly; prefer a specific variant.
     Internal(String),
+    /// The destination a streaming serialization was writing into failed.
+    ///
+    /// Carries the failure's description rather than the `io::Error` itself,
+    /// because this enum is `Clone + PartialEq + Eq` and an `io::Error` is none of
+    /// those. That trade costs the `source()` chain, which terminates here.
+    ///
+    /// `kind` is kept ALONGSIDE the message because the description alone is not
+    /// actionable: the one distinction a caller streaming to a pipe actually has to
+    /// make is a downstream reader that closed early — the ubiquitous `… | head`
+    /// idiom, which is not a failure — against every other write error, which is.
+    /// Flattening that into a string forced any caller wanting the distinction to
+    /// carry it out of band or to match on prose.
+    ///
+    /// The type is the SINK's classification rather than `std::io::ErrorKind`,
+    /// because that is the classification actually made here and it is the one that
+    /// stays true off `std::io`: a [`purrdf_core::sink::ByteDrain`] may be a JS
+    /// callback, a C function pointer or a Python file object, none of which has an
+    /// `io::ErrorKind` to report. It is `Copy + Eq`, so it costs this enum none of
+    /// its derives.
+    Write {
+        /// What kind of write failure this was.
+        kind: purrdf_core::sink::DrainErrorKind,
+        /// The failure's description.
+        message: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -43,6 +68,7 @@ impl fmt::Display for Error {
             Self::Format(msg) => write!(f, "result format error: {msg}"),
             Self::InvalidNamespace(msg) => write!(f, "invalid provenance namespace: {msg}"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
+            Self::Write { message, .. } => write!(f, "result write error: {message}"),
         }
     }
 }

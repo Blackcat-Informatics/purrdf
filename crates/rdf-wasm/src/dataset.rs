@@ -16,10 +16,52 @@ use purrdf::{
     CanonHash, JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph,
     SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify, datasets_isomorphic,
     parse_dataset, serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_with, try_canonicalize_flat_view,
+    serialize_dataset_to_writer_with, serialize_dataset_with, try_canonicalize_flat_view,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+extern "C" {
+    /// Any JS object with a `write(chunk: Uint8Array)` method.
+    ///
+    /// Declared as an extern type rather than taken as a `js_sys::Function` so this
+    /// crate does not grow a `js-sys` dependency it has otherwise avoided, and so the
+    /// accepted shape is the one hosts already have — a `WritableStreamDefaultWriter`,
+    /// a Node `Writable`, or an array collector — rather than a PurRDF-specific type
+    /// a caller would have to construct.
+    #[wasm_bindgen(js_name = Object, typescript_type = "{ write(chunk: Uint8Array): void }")]
+    pub type ChunkSink;
+
+    /// `catch`, so a host that throws aborts the serialization instead of having its
+    /// exception cross the wasm boundary as a trap.
+    #[wasm_bindgen(method, catch, js_name = write)]
+    fn write(this: &ChunkSink, chunk: &[u8]) -> Result<(), JsValue>;
+}
+
+/// Adapts a duck-typed JS sink to the writer the streaming serializer expects.
+struct SinkWriter<'a> {
+    sink: &'a ChunkSink,
+    /// What the host threw, kept because `io::Error` cannot carry a `JsValue` and the
+    /// host's own message is more useful than any description of it.
+    thrown: Option<JsValue>,
+}
+
+impl std::io::Write for SinkWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self.sink.write(buf) {
+            Ok(()) => Ok(buf.len()),
+            Err(error) => {
+                self.thrown = Some(error);
+                Err(std::io::Error::other("the sink's write threw"))
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 use purrdf::viz::{
     VizGraphPolicy, VizLabelPolicy, VizLayoutOptions, VizMode, VizRenderOptions, VizRole,
@@ -276,6 +318,59 @@ impl Dataset {
         .map_err(|e| diag_to_err(&e))?;
         String::from_utf8(outcome.bytes)
             .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
+    }
+
+    /// Serialize INCREMENTALLY, handing each window to `sink.write`.
+    ///
+    /// The streaming twin of [`serialize`](Self::serialize), and the reason the sink's
+    /// destination is a trait rather than a Rust writer: a JS callback is not
+    /// `io::Write`, and a browser host otherwise had to take delivery of a whole
+    /// document — as one JS string, with the UTF-16 copy that implies — before it
+    /// could write a byte. Peak memory here tracks the staging window instead.
+    ///
+    /// `sink` is duck-typed: anything with a `write(chunk: Uint8Array)` method works,
+    /// which is the shape a `WritableStreamDefaultWriter`, a Node `Writable` and a
+    /// two-line array collector all already have. Nothing about it is PurRDF's type.
+    ///
+    /// A `write` that THROWS aborts the serialization and the throw reaches the
+    /// caller, rather than being swallowed into a truncated document. That is the
+    /// failure worth being loud about here: a host that silently received half an
+    /// answer has no way to discover it.
+    ///
+    /// The bytes are identical to [`serialize`](Self::serialize); only the delivery
+    /// differs.
+    #[wasm_bindgen(js_name = serializeToSink)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn serialize_to_sink(
+        &self,
+        format: &str,
+        base: Option<String>,
+        sink: &ChunkSink,
+    ) -> Result<(), JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let native = classify(format).map_err(|e| diag_to_err(&e))?;
+        let mut writer = SinkWriter { sink, thrown: None };
+        let outcome = serialize_dataset_to_writer_with(
+            &frozen,
+            native,
+            base.as_deref(),
+            &SerializeOptions {
+                selection: SerializeGraph::Dataset,
+                statement_layer: StatementLayer::Emit,
+                jsonld_options: None,
+            },
+            &mut writer,
+        );
+        // The JS exception is preferred over the io error wrapping it: the wrapper
+        // only exists because `io::Write` cannot carry a `JsValue`, and reporting the
+        // wrapper would hide the host's own message behind a description of it.
+        if let Some(thrown) = writer.thrown {
+            return Err(JsError::new(&format!(
+                "the sink's write threw: {}",
+                thrown.as_string().unwrap_or_else(|| format!("{thrown:?}"))
+            )));
+        }
+        outcome.map(|_| ()).map_err(|e| diag_to_err(&e))
     }
 
     /// `serializeWithLoss(format, base?)` → the document the declared transcode contract

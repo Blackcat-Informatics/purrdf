@@ -41,6 +41,8 @@
 
 use std::sync::Arc;
 
+use purrdf_alloc_probe::{Measurement, WholeProcessWindow};
+
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
     PagedQueryLimits, RdfDataset, RdfLookaside, ResourceDimension, SparqlRequest, SparqlResult,
@@ -49,7 +51,7 @@ use purrdf_core::{
 use purrdf_rdf::gts_fixtures::{keystone_base, keystone_contribution};
 use purrdf_rdf::{
     NativeRdfFormat, SerializeGraph, SerializeOptions, StatementLayer, import_gts_events,
-    parse_dataset, serialize_dataset_with,
+    parse_dataset, serialize_dataset_to_writer_with, serialize_dataset_with,
 };
 use purrdf_shapes::engine::{self as shacl_engine, GovernedValidation};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
@@ -75,6 +77,19 @@ pub struct Profile {
     pub paged_max_pages: u64,
     /// Byte budget for the bounded paged query.
     pub paged_max_bytes: u64,
+    /// The allocator peak the `roundtrip` workload must stay under, when one has
+    /// been established for this profile.
+    ///
+    /// This is a WORKLOAD budget, not the process ceiling. The process ceiling stays
+    /// pinned by the harness around the probe (a cgroup `MemoryMax`, a wasm linear
+    /// memory maximum) and this crate still only measures it; what this adds is one
+    /// workload whose own peak is an acceptance criterion rather than a reading.
+    ///
+    /// `None` means the envelope for this profile has not been measured yet, and the
+    /// report says so rather than passing quietly. It is NOT an opt-out: a profile
+    /// that has a number must meet it. Refusing a profile merely because nobody has
+    /// measured it yet would reject a valid run — the mirror of the silent pass.
+    pub roundtrip_peak_ceiling_bytes: Option<u64>,
 }
 
 /// The named profiles of the envelope proposal, plus `smoke` for tests and
@@ -88,6 +103,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 64,
         paged_max_pages: 4,
         paged_max_bytes: 8 << 20,
+        roundtrip_peak_ceiling_bytes: Some(4 << 20),
     },
     Profile {
         name: "wasm-browser",
@@ -96,6 +112,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 2_000,
         paged_max_pages: 8,
         paged_max_bytes: 64 << 20,
+        roundtrip_peak_ceiling_bytes: Some(150_000_000),
     },
     Profile {
         name: "sbc-32-small",
@@ -104,6 +121,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 15_625,
         paged_max_pages: 32,
         paged_max_bytes: 128 << 20,
+        roundtrip_peak_ceiling_bytes: None,
     },
     Profile {
         name: "sbc-64",
@@ -112,6 +130,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 78_125,
         paged_max_pages: 64,
         paged_max_bytes: 512 << 20,
+        roundtrip_peak_ceiling_bytes: None,
     },
     Profile {
         name: "edge-gateway",
@@ -120,6 +139,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 78_125,
         paged_max_pages: 64,
         paged_max_bytes: 1 << 30,
+        roundtrip_peak_ceiling_bytes: None,
     },
 ];
 
@@ -151,6 +171,20 @@ const EXPECTED_METRICS: &[(&str, &[&str])] = &[
             "nquads_bytes",
             "trig_bytes",
             "jsonld_bytes",
+            // Per-leg peaks, three legs per format. These are what make the
+            // workload's single peak attributable: serializing and reparsing the
+            // same document at the same scale are separately charged, so a change
+            // to one cannot be credited to the other. The roster is the reason a
+            // leg cannot quietly stop being metered.
+            "nquads_eager_peak_bytes",
+            "nquads_reparse_peak_bytes",
+            "nquads_streamed_peak_bytes",
+            "trig_eager_peak_bytes",
+            "trig_reparse_peak_bytes",
+            "trig_streamed_peak_bytes",
+            "jsonld_eager_peak_bytes",
+            "jsonld_reparse_peak_bytes",
+            "jsonld_streamed_peak_bytes",
         ],
     ),
     (
@@ -234,9 +268,13 @@ fn check_metric_roster(workload: &str, metrics: &[Metric]) -> Result<(), String>
 /// A string naming the first failure; the probe is evidence tooling, and any
 /// failure is a finding to report verbatim, never to degrade around. Emitting
 /// fewer (or other) metrics than the workload declares is itself such a failure.
-pub fn run(workload: &str, profile: &Profile) -> Result<Vec<Metric>, String> {
+pub fn run(
+    workload: &str,
+    profile: &Profile,
+    window: &WholeProcessWindow,
+) -> Result<Vec<Metric>, String> {
     let metrics = match workload {
-        "roundtrip" => roundtrip(profile),
+        "roundtrip" => roundtrip(profile, window),
         "governed_query" => governed_query(profile),
         "shacl" => shacl(profile),
         "gts" => gts(profile),
@@ -284,7 +322,16 @@ const ROUNDTRIP_FORMATS: &[(NativeRdfFormat, &str, &str)] = &[
     (NativeRdfFormat::JsonLd, "application/ld+json", "jsonld"),
 ];
 
-fn roundtrip(profile: &Profile) -> Result<Vec<Metric>, String> {
+/// A leg's peak working bytes, as the unsigned quantity a metric carries.
+///
+/// The ledger is signed because live bytes move in both directions; a leg's
+/// working span cannot be negative, so a negative value here would be a counter
+/// defect. It reports zero rather than wrapping into a plausible enormous number.
+fn peak_metric(measured: &Measurement) -> u64 {
+    u64::try_from(measured.peak_working_bytes).unwrap_or(0)
+}
+
+fn roundtrip(profile: &Profile, window: &WholeProcessWindow) -> Result<Vec<Metric>, String> {
     let dataset = keystone_base(profile.groups);
     let rows = dataset.rdf_row_count() as u64;
     let mut metrics = vec![
@@ -298,26 +345,94 @@ fn roundtrip(profile: &Profile) -> Result<Vec<Metric>, String> {
             statement_layer: StatementLayer::PerFormatCapability,
             jsonld_options: None,
         };
-        let outcome = serialize_dataset_with(&*dataset, *format, None, &options)
-            .map_err(|d| format!("{label} serialize: {d}"))?;
+        // The EAGER leg: the whole document in one allocation, as before. Metered on
+        // its own so its cost is attributable rather than folded into the workload.
+        let (eager, eager_leg) =
+            window.metered(|| serialize_dataset_with(&*dataset, *format, None, &options));
+        let eager_peak = peak_metric(&eager_leg);
+        let outcome = eager.map_err(|d| format!("{label} serialize: {d}"))?;
         let dropped = (outcome.statement_rows_dropped
             + outcome.directional_literals_dropped
             + outcome.named_graph_rows_dropped) as u64;
-        let reparsed = parse_dataset(&outcome.bytes, media_type, None)
-            .map_err(|d| format!("{label} reparse: {d}"))?;
+        let eager_bytes = outcome.bytes.len() as u64;
+
+        // The round-trip conservation check, on the eager bytes. This is the
+        // workload's integrity obligation and it is NOT weakened to make a memory
+        // number move: every format still round-trips at full profile scale.
+        let (reparsed, reparse_leg) =
+            window.metered(|| parse_dataset(&outcome.bytes, media_type, None));
+        let reparse_peak = peak_metric(&reparse_leg);
+        let reparsed = reparsed.map_err(|d| format!("{label} reparse: {d}"))?;
         let back = reparsed.rdf_row_count() as u64;
         if back + dropped != rows {
             return Err(format!(
                 "{label} round-trip lost rows: {rows} out, {back} back, {dropped} declared dropped"
             ));
         }
+        drop(reparsed);
+        drop(outcome);
+
+        // The STREAMED leg: identical dataset, identical options, identical scale —
+        // only the destination differs. Comparing these two is what attributes the
+        // difference to the sink rather than to a reshaped measurement.
+        let mut counted = CountingSink(0);
+        let (streamed, streamed_leg) = window.metered(|| {
+            serialize_dataset_to_writer_with(&*dataset, *format, None, &options, &mut counted)
+        });
+        let streamed_peak = peak_metric(&streamed_leg);
+        let report = streamed.map_err(|d| format!("{label} streamed serialize: {d}"))?;
+
+        // Three independent counts of the same document must agree: what the eager
+        // path produced, what the serializer says it wrote, and what the sink
+        // actually received. A disagreement is a defect, not a metric.
+        if report.bytes_written != counted.0 || counted.0 != eager_bytes {
+            return Err(format!(
+                "{label} byte counts disagree: eager {eager_bytes}, reported \
+                 {}, received {}",
+                report.bytes_written, counted.0
+            ));
+        }
+
         metrics.push(match *label {
-            "nquads" => ("nquads_bytes", outcome.bytes.len() as u64),
-            "trig" => ("trig_bytes", outcome.bytes.len() as u64),
-            _ => ("jsonld_bytes", outcome.bytes.len() as u64),
+            "nquads" => ("nquads_bytes", eager_bytes),
+            "trig" => ("trig_bytes", eager_bytes),
+            _ => ("jsonld_bytes", eager_bytes),
+        });
+        metrics.push(match *label {
+            "nquads" => ("nquads_eager_peak_bytes", eager_peak),
+            "trig" => ("trig_eager_peak_bytes", eager_peak),
+            _ => ("jsonld_eager_peak_bytes", eager_peak),
+        });
+        metrics.push(match *label {
+            "nquads" => ("nquads_reparse_peak_bytes", reparse_peak),
+            "trig" => ("trig_reparse_peak_bytes", reparse_peak),
+            _ => ("jsonld_reparse_peak_bytes", reparse_peak),
+        });
+        metrics.push(match *label {
+            "nquads" => ("nquads_streamed_peak_bytes", streamed_peak),
+            "trig" => ("trig_streamed_peak_bytes", streamed_peak),
+            _ => ("jsonld_streamed_peak_bytes", streamed_peak),
         });
     }
     Ok(metrics)
+}
+
+/// Counts bytes and retains none of them.
+///
+/// The probe's OWN counter, deliberately not the serializer's: the two are
+/// cross-checked against each other every run, which they could not be if one were
+/// derived from the other.
+struct CountingSink(u64);
+
+impl std::io::Write for CountingSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The join query every profile measures: touches every group through both
@@ -776,8 +891,8 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EXPECTED_METRICS, Metric, PROFILES, WORKLOADS, check_metric_roster, expected_metrics,
-        profile, run,
+        EXPECTED_METRICS, Metric, PROFILES, WORKLOADS, WholeProcessWindow, check_metric_roster,
+        expected_metrics, profile, run,
     };
 
     /// Every `WORKLOADS` entry owns a non-empty, duplicate-free `EXPECTED_METRICS`
@@ -839,9 +954,17 @@ mod tests {
     #[test]
     fn smoke_profile_runs_every_workload() {
         let smoke = profile("smoke").expect("smoke profile exists");
+        // A window is required to reach a metered leg at all, and this is the only
+        // test in this binary that opens one — so the nesting guard cannot be
+        // tripped by a sibling running concurrently. Its COUNTS are inert here:
+        // `CountingAllocator` is registered by the binary, not by the test harness,
+        // so nothing records into the ledger. That is the right shape for this test,
+        // which asserts that every workload RUNS and reports its declared roster,
+        // never what any of them cost.
+        let window = WholeProcessWindow::open();
         for workload in WORKLOADS {
-            let metrics =
-                run(workload, smoke).unwrap_or_else(|e| panic!("workload {workload} failed: {e}"));
+            let metrics = run(workload, smoke, &window)
+                .unwrap_or_else(|e| panic!("workload {workload} failed: {e}"));
             assert!(!metrics.is_empty(), "{workload} reported no metrics");
         }
     }

@@ -17,8 +17,9 @@ use purrdf_rdf::native_codecs::jsonld::{
     serialize_dataset_to_jsonld, serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{
-    ParseOptions, RdfDataset, RdfDatasetBuilder, RdfLiteral, SerializeGraph, parse_dataset,
-    parse_dataset_from_reader, parse_dataset_with, serialize_dataset,
+    NativeRdfFormat, ParseOptions, RdfDataset, RdfDatasetBuilder, RdfLiteral, SerializeGraph,
+    SerializeOptions, StatementLayer, parse_dataset, parse_dataset_from_reader, parse_dataset_with,
+    serialize_dataset, serialize_dataset_to_writer_with,
 };
 
 #[path = "support/jsonld.rs"]
@@ -222,7 +223,51 @@ fn bench_serialize_nquads(c: &mut Criterion) {
             black_box(bytes);
         });
     });
+    // The STREAMED spelling of the same documents, into a discarding writer.
+    //
+    // Report-only, and the PAIRING is the point rather than either number: the eager
+    // arm's cost includes growing and handing back a document-sized `Vec`, the
+    // streamed arm's does not, and a reader comparing them is comparing the same
+    // emitter against two destinations. There is deliberately no assertion — this
+    // machine is not quiet enough for a wall-clock claim, and the memory claims this
+    // work rests on are made by allocator tests rather than by timings.
+    for (name, dataset) in [
+        ("nquads_2k_streamed", &clean_ds),
+        ("nquads_2k_escape_heavy_streamed", &dirty_ds),
+    ] {
+        group.bench_function(name, |bencher| {
+            bencher.iter(|| {
+                let report = serialize_dataset_to_writer_with(
+                    black_box(dataset),
+                    NativeRdfFormat::NQuads,
+                    None,
+                    &SerializeOptions {
+                        selection: SerializeGraph::Dataset,
+                        statement_layer: StatementLayer::PerFormatCapability,
+                        jsonld_options: None,
+                    },
+                    &mut Discard,
+                )
+                .expect("serialize");
+                black_box(report.bytes_written);
+            });
+        });
+    }
     group.finish();
+}
+
+/// A writer that keeps nothing, so a streamed arm measures the emitter rather than
+/// the bench's own accumulation of what it produced.
+struct Discard;
+
+impl std::io::Write for Discard {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Pre-change expanded JSON-LD parse/serialize timing over one deterministic RDF 1.2

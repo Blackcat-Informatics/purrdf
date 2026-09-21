@@ -617,6 +617,27 @@ export class Dataset implements Iterable<Quad> {
    */
   serialize(format: string, base?: string | null): string;
   /**
+   * `serialize` delivered a window at a time instead of as one string.
+   *
+   * The bytes are identical; only the delivery differs. Peak memory tracks the
+   * serializer's staging window rather than the document, so a dataset whose
+   * rendering would not fit in one JS string can still be written out.
+   *
+   * `sink` is duck-typed — anything with `write(chunk: Uint8Array)` — which is the
+   * shape a `WritableStreamDefaultWriter`, a Node `Writable`, and a two-line array
+   * collector already have. Nothing about it is a PurRDF type.
+   *
+   * A `write` that throws aborts the serialization and the throw reaches you, rather
+   * than being swallowed into a truncated document.
+   *
+   * `base` carries the same meaning it does on `serialize`.
+   */
+  serializeToSink(
+    format: string,
+    base: string | null | undefined,
+    sink: { write(chunk: Uint8Array): void },
+  ): void;
+  /**
    * The transcode lane: the declared format contract plus the realized loss.
    * Byte-identical to `serialize(format, base)` for a star-capable target; for
    * `rdfxml`, `trix` and `hextuples` it projects the RDF-1.2 statement layer to base

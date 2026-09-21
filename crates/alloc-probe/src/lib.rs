@@ -609,6 +609,92 @@ impl WholeProcessWindow {
         }
     }
 
+    /// Measure ONE LEG of this window's work, without disturbing what this
+    /// window goes on to report.
+    ///
+    /// A window reports one number for everything it did. That is the right
+    /// answer to "what must the memory ceiling hold?" and the wrong answer to
+    /// "which half of this workload costs that?" — and the second question is
+    /// the one that attributes a change to the thing that was changed. A leg
+    /// measured here answers it: two ways of doing the same work, metered at
+    /// the same scale with the same data already resident, so what is compared
+    /// is the ADDITIONAL residency each way requires rather than the residency
+    /// they share.
+    ///
+    /// # This is the only legal nesting, and `&self` is what makes it legal
+    ///
+    /// [`WholeProcessWindow::open`] panics if a window is already open, because
+    /// two live windows over one set of counters would each report the union of
+    /// both regions while appearing to report their own. That guard is not
+    /// weakened here and must never be: a leg is reachable only through a
+    /// window that is already open, so it cannot reach `open` at all.
+    ///
+    /// # The restore is load-bearing — do not remove it
+    ///
+    /// Anchoring the marks at the leg's start is what lets the leg report its
+    /// own span, and it necessarily discards the enclosing window's marks. They
+    /// are handed back afterwards, folded with the leg's own. Without that, an
+    /// enclosing window's reported peak silently becomes "whatever happened
+    /// after the last leg" — a number that is wrong in the direction that looks
+    /// like an improvement, and that is produced entirely by the act of
+    /// measuring. That failure has already been observed once on this probe: an
+    /// early run reported a workload peak falling to 122 MB, and none of it was
+    /// real.
+    ///
+    /// Both ends are recorder-safe against a concurrent thread: the marks are
+    /// established with `swap` and folded back with `fetch_max`/`fetch_min`, so no
+    /// update can be lost in a gap between a read and a write. What a leg cannot do
+    /// is decide WHICH region an allocation on another thread belongs to — see below.
+    ///
+    /// # What a leg charges
+    ///
+    /// Every thread, exactly as the enclosing window does — so a leg that fans
+    /// out over `rayon` is charged for its workers. The corollary is that
+    /// unrelated traffic on another thread during the leg lands in the leg; a
+    /// leg is a time slice of a process-wide ledger, not a thread of it.
+    pub fn metered<T>(&self, leg: impl FnOnce() -> T) -> (T, Measurement) {
+        let allocations_before = PROCESS_ALLOCATIONS.load(Ordering::Relaxed);
+        let requested_before = PROCESS_REQUESTED_BYTES.load(Ordering::Relaxed);
+        let live_before = PROCESS_LIVE_BYTES.load(Ordering::Relaxed);
+
+        // Both marks anchor at the level live bytes hold NOW, so the leg's span is
+        // measured from where the leg starts rather than from where the enclosing
+        // window opened.
+        //
+        // SWAPPED rather than read-then-written, and that is not a style choice. A
+        // load followed by a store leaves a gap: a recorder on another thread that
+        // raises the peak inside it has its update read back as the enclosing value
+        // (so it is not preserved) and then overwritten (so it is not kept either),
+        // and neither the snapshot before nor the leg's own reading afterwards can
+        // recover it. The peak simply goes missing, which under-reports BOTH this
+        // leg and the window enclosing it — silently, and only under concurrency, so
+        // a single-threaded workload would never show it.
+        //
+        // `swap` reads and writes in one atomic step, so there is no instant at
+        // which an update can land unobserved.
+        let enclosing_peak = PROCESS_PEAK_BYTES.swap(live_before, Ordering::AcqRel);
+        let enclosing_trough = PROCESS_TROUGH_BYTES.swap(live_before, Ordering::AcqRel);
+
+        let value = leg();
+
+        let leg_peak = PROCESS_PEAK_BYTES.load(Ordering::Relaxed);
+        let leg_trough = PROCESS_TROUGH_BYTES.load(Ordering::Relaxed);
+        let live_after = PROCESS_LIVE_BYTES.load(Ordering::Relaxed);
+        let allocations_after = PROCESS_ALLOCATIONS.load(Ordering::Relaxed);
+        let requested_after = PROCESS_REQUESTED_BYTES.load(Ordering::Relaxed);
+
+        PROCESS_PEAK_BYTES.fetch_max(enclosing_peak, Ordering::Relaxed);
+        PROCESS_TROUGH_BYTES.fetch_min(enclosing_trough, Ordering::Relaxed);
+
+        let measured = Measurement {
+            allocations: allocations_after.saturating_sub(allocations_before),
+            requested_bytes: requested_after.saturating_sub(requested_before),
+            retained_bytes: live_after.saturating_sub(live_before),
+            peak_working_bytes: leg_peak.saturating_sub(leg_trough),
+        };
+        (value, measured)
+    }
+
     /// Close the window, returning what it observed.
     ///
     /// Disarms the ledger and waits for every in-flight recorder to leave it

@@ -7,6 +7,7 @@
 //! attribute tabs and line feeds. Character references preserve these scalars.
 //! A scalar outside the `Char` production has no XML spelling and is refused.
 
+use core::fmt;
 use std::borrow::Cow;
 
 /// The XML context containing an escaped value.
@@ -84,29 +85,60 @@ pub fn escape(value: &str, context: Context) -> Result<Cow<'_, str>, InvalidXmlC
     })
 }
 
-/// Append an escaped value to an existing output buffer.
+/// Append an escaped value to any text sink.
+///
+/// Validity is decided in a FIRST pass, before a single byte is emitted, so a
+/// rejected value leaves `output` untouched **without the rewind** the `String`
+/// form used to perform. That matters because the sinks this feeds may already
+/// have drained earlier bytes downstream, where `truncate` is not available and
+/// never will be.
+///
+/// The cost is that a valid value is scanned twice. It is paid back at the call
+/// sites that previously reached for [`escape`], which allocates a whole `String`
+/// whenever any scalar needs a reference; this allocates nothing.
+///
+/// Emission itself is infallible here by contract: a sink that can fail records
+/// its own sticky error and surfaces it at its own terminal, so this function
+/// reports only the XML-validity failure and never a write failure.
 ///
 /// # Errors
-/// Returns the first forbidden scalar. The output is unchanged on failure.
-pub fn push(value: &str, context: Context, output: &mut String) -> Result<(), InvalidXmlChar> {
-    let original_length = output.len();
-    let mut start = 0;
+/// Returns the first scalar excluded by XML 1.0 §2.2 production `[2]` — the same
+/// scalar, at the same byte offset, that the single-pass form reported.
+pub fn push_into<W: fmt::Write + ?Sized>(
+    value: &str,
+    context: Context,
+    output: &mut W,
+) -> Result<(), InvalidXmlChar> {
     for (offset, character) in value.char_indices() {
         if !purrdf_iri::terminals::is_xml_char(character) {
-            output.truncate(original_length);
             return Err(InvalidXmlChar {
                 byte_offset: offset,
                 character,
             });
         }
+    }
+    let mut start = 0;
+    for (offset, character) in value.char_indices() {
         if let Some(reference) = replacement(character, context) {
-            output.push_str(&value[start..offset]);
-            output.push_str(reference);
+            // The sink owns its own failure channel; see the contract above.
+            let _ = output.write_str(&value[start..offset]);
+            let _ = output.write_str(reference);
             start = offset + character.len_utf8();
         }
     }
-    output.push_str(&value[start..]);
+    let _ = output.write_str(&value[start..]);
     Ok(())
+}
+
+/// Append an escaped value to an existing `String`.
+///
+/// The `String` spelling of [`push_into`], which is the one implementation; this
+/// is not a second escaper.
+///
+/// # Errors
+/// Returns the first forbidden scalar. The output is unchanged on failure.
+pub fn push(value: &str, context: Context, output: &mut String) -> Result<(), InvalidXmlChar> {
+    push_into(value, context, output)
 }
 
 #[cfg(test)]
@@ -123,6 +155,63 @@ mod tests {
         let error = push("&🐈\u{FFFF}", Context::Text, &mut out).unwrap_err();
         assert_eq!(error.byte_offset, 5);
         assert_eq!(out, "prefix");
+    }
+
+    /// The atomicity the single-pass form bought with `truncate` now holds for a
+    /// sink that CANNOT rewind: a rejected value emits nothing at all, rather than
+    /// emitting a prefix and retracting it.
+    #[test]
+    fn a_rejected_value_emits_nothing_into_a_sink_that_cannot_rewind() {
+        /// Counts writes as well as bytes, so "emitted a prefix then retracted it"
+        /// is distinguishable from "never emitted".
+        struct CountingWrites {
+            text: String,
+            writes: usize,
+        }
+        impl fmt::Write for CountingWrites {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                self.writes += 1;
+                self.text.push_str(s);
+                Ok(())
+            }
+        }
+
+        let mut sink = CountingWrites {
+            text: String::new(),
+            writes: 0,
+        };
+        // `&` at offset 0 WOULD be replaced, and the single-pass form wrote that
+        // replacement before discovering the forbidden scalar at offset 5.
+        let error = push_into("&🐈\u{FFFF}", Context::Text, &mut sink).unwrap_err();
+        assert_eq!(error.byte_offset, 5);
+        assert_eq!(error.character, '\u{FFFF}');
+        assert_eq!(sink.writes, 0, "no write was attempted");
+        assert_eq!(sink.text, "");
+    }
+
+    /// `push_into` and `escape` are one escaper: same bytes, for every context and
+    /// every shape that exercises a replacement, a clean run, or both.
+    #[test]
+    fn push_into_agrees_with_escape_for_every_valid_value() {
+        let values = [
+            "",
+            "plain",
+            "&<>\"'\t\n\r",
+            "🐈 mixed \u{4e2d}\u{6587} &amp; tail",
+            "trailing&",
+            "&leading",
+        ];
+        for context in [Context::Text, Context::Attribute] {
+            for value in values {
+                let mut pushed = String::new();
+                push_into(value, context, &mut pushed).expect("value is valid");
+                assert_eq!(
+                    pushed,
+                    escape(value, context).expect("value is valid").as_ref(),
+                    "context {context:?}, value {value:?}"
+                );
+            }
+        }
     }
 
     #[test]

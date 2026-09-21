@@ -16,10 +16,9 @@
 //! surface: a triple term in a serialize request is a HARD error rather than silent
 //! loss.
 
-use std::borrow::Cow;
+use purrdf_core::sink::{TextOut, TextSink};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use roxmltree::{Document, Node};
@@ -54,15 +53,18 @@ impl RdfCodec for TriXCodec {
         super::parse::catch_codec_panic(NativeRdfFormat::TriX, || parse_trix_to_dataset(text, base))
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
-        // Built whole, then appended. Unlike the four text formats, this one's document
-        // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
-        // cannot emit a prefix before it knows what follows, and appending would mean
-        // rebuilding the construction itself rather than redirecting its output. The
-        // sink still earns its place here: the caller's buffer is the only one that
-        // outlives the call, and this is the seam a streaming writer replaces.
-        out.push_str(&serialize_ser_graph_to_trix(graph)?);
-        Ok(())
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        // Emitted element by element after a grouping pre-pass. TriX's own shape is
+        // flat — `<graph>` blocks of `<triple>` elements — so the writer never needs
+        // to know what follows; what it needs first is which rows share a graph slot,
+        // and that index holds row IDENTIFIERS, not document text. Removing the output
+        // buffer is therefore independent of it: the index stays, the document does
+        // not accumulate.
+        write_trix(graph, out)
     }
 }
 
@@ -438,7 +440,7 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
 /// then named graphs in first-appearance order) so the emission is deterministic.
 /// Annotation rows are emitted as plain triples in the default graph. A quoted-triple
 /// (RDF-1.2) term is a HARD error — TriX has no triple-term surface.
-pub(super) fn serialize_ser_graph_to_trix(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+fn write_trix<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), RdfDiagnostic> {
     // Group triples by graph slot, preserving first-appearance order.
     let mut order: Vec<Option<usize>> = Vec::new();
     let mut groups: HashMap<Option<usize>, Vec<(usize, usize, usize)>> = HashMap::new();
@@ -472,25 +474,31 @@ pub(super) fn serialize_ser_graph_to_trix(graph: &SerGraph) -> Result<String, Rd
     // Ensure the default graph sorts before named graphs when both are present.
     order.sort_by_key(|slot| (slot.is_some(), *slot));
 
-    let mut out = String::from(
+    out.push_str(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<TriX xmlns=\"http://www.w3.org/2004/03/trix/trix-1/\">\n",
     );
     for slot in order {
+        if out.failed() {
+            return Ok(());
+        }
         out.push_str("  <graph>\n");
         if let Some(gid) = slot {
-            write_graph_name(&mut out, graph, gid)?;
+            write_graph_name(out, graph, gid)?;
         }
         for (s, p, o) in groups.remove(&slot).unwrap_or_default() {
+            if out.failed() {
+                return Ok(());
+            }
             out.push_str("    <triple>\n");
-            write_term(&mut out, graph, s)?;
-            write_term(&mut out, graph, p)?;
-            write_term(&mut out, graph, o)?;
+            write_term(out, graph, s)?;
+            write_term(out, graph, p)?;
+            write_term(out, graph, o)?;
             out.push_str("    </triple>\n");
         }
         out.push_str("  </graph>\n");
     }
     out.push_str("</TriX>\n");
-    Ok(out)
+    Ok(())
 }
 
 fn is_self_reifier(graph: &SerGraph, rid: usize) -> bool {
@@ -501,14 +509,22 @@ fn is_self_reifier(graph: &SerGraph, rid: usize) -> bool {
 }
 
 /// Write a graph-name element (`<uri>` / `<id>`).
-fn write_graph_name(out: &mut String, graph: &SerGraph, tid: usize) -> Result<(), RdfDiagnostic> {
+fn write_graph_name<W: TextOut + ?Sized>(
+    out: &mut W,
+    graph: &SerGraph,
+    tid: usize,
+) -> Result<(), RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = writeln!(out, "    <uri>{}</uri>", escape_text(ser_value(term)?)?);
+            out.push_str("    <uri>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</uri>\n");
         }
         SerTermKind::Bnode => {
-            let _ = writeln!(out, "    <id>{}</id>", escape_text(ser_value(term)?)?);
+            out.push_str("    <id>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</id>\n");
         }
         other => {
             return Err(serialize_err(format!(
@@ -520,14 +536,22 @@ fn write_graph_name(out: &mut String, graph: &SerGraph, tid: usize) -> Result<()
 }
 
 /// Write a single term as a `<uri>` / `<id>` / `<plainLiteral>` / `<typedLiteral>`.
-fn write_term(out: &mut String, graph: &SerGraph, tid: usize) -> Result<(), RdfDiagnostic> {
+fn write_term<W: TextOut + ?Sized>(
+    out: &mut W,
+    graph: &SerGraph,
+    tid: usize,
+) -> Result<(), RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = writeln!(out, "      <uri>{}</uri>", escape_text(ser_value(term)?)?);
+            out.push_str("      <uri>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</uri>\n");
         }
         SerTermKind::Bnode => {
-            let _ = writeln!(out, "      <id>{}</id>", escape_text(ser_value(term)?)?);
+            out.push_str("      <id>");
+            push_text(ser_value(term)?, out)?;
+            out.push_str("</id>\n");
         }
         SerTermKind::Literal => write_literal(out, graph, term)?,
         SerTermKind::Triple => {
@@ -539,23 +563,29 @@ fn write_term(out: &mut String, graph: &SerGraph, tid: usize) -> Result<(), RdfD
     Ok(())
 }
 
-fn write_literal(out: &mut String, graph: &SerGraph, term: &SerTerm) -> Result<(), RdfDiagnostic> {
-    let lexical = escape_text(ser_value(term)?)?;
+fn write_literal<W: TextOut + ?Sized>(
+    out: &mut W,
+    graph: &SerGraph,
+    term: &SerTerm,
+) -> Result<(), RdfDiagnostic> {
+    let lexical = ser_value(term)?;
     if let Some(language) = &term.lang {
-        let _ = writeln!(
-            out,
-            "      <plainLiteral xml:lang=\"{}\">{lexical}</plainLiteral>",
-            escape_attr(language)?
-        );
+        out.push_str("      <plainLiteral xml:lang=\"");
+        push_attr(language, out)?;
+        out.push_str("\">");
+        push_text(lexical, out)?;
+        out.push_str("</plainLiteral>\n");
     } else if let Some(datatype) = term.datatype {
         let datatype_iri = ser_value(ser_term(graph, datatype)?)?;
-        let _ = writeln!(
-            out,
-            "      <typedLiteral datatype=\"{}\">{lexical}</typedLiteral>",
-            escape_attr(datatype_iri)?
-        );
+        out.push_str("      <typedLiteral datatype=\"");
+        push_attr(datatype_iri, out)?;
+        out.push_str("\">");
+        push_text(lexical, out)?;
+        out.push_str("</typedLiteral>\n");
     } else {
-        let _ = writeln!(out, "      <plainLiteral>{lexical}</plainLiteral>");
+        out.push_str("      <plainLiteral>");
+        push_text(lexical, out)?;
+        out.push_str("</plainLiteral>\n");
     }
     Ok(())
 }
@@ -574,14 +604,21 @@ fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
 }
 
 /// Lossless XML character data under the shared XML 1.0 law.
-fn escape_text(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Text)
+/// Append lossless XML 1.0 character data STRAIGHT INTO the sink.
+///
+/// `push_into` rather than `escape`: the allocating spelling returns a `Cow` that
+/// allocates whenever any character needs replacing, once per term, on a path whose
+/// whole purpose is to not accumulate the document. The extra scan `push_into` pays is
+/// the trade this codec was converted to make.
+fn push_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
         .map_err(|error| serialize_err(error.to_string()))
 }
 
 /// Lossless double-quoted XML attribute value.
-fn escape_attr(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
+/// Append a lossless double-quoted XML 1.0 attribute value straight into the sink.
+fn push_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
         .map_err(|error| serialize_err(error.to_string()))
 }
 

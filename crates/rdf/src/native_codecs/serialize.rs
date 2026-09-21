@@ -43,7 +43,7 @@
 //! statement-layer axis wearing a function name, so it is gone: pass
 //! [`StatementLayer::Project`] instead.
 
-use std::collections::HashMap;
+use hashbrown::HashTable;
 use std::io::Write;
 
 use super::jsonld::JsonLdSerializeOptions;
@@ -51,10 +51,9 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::dataset_view::ViewTermId;
 use crate::ir::TermRef;
-use crate::{
-    DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue,
-};
+use crate::{DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_core::sink::{TextSink, WriterDrain};
 use purrdf_iri::BaseIri;
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
@@ -227,6 +226,92 @@ pub fn serialize_dataset_with<D: DatasetView>(
     base_iri: Option<&str>,
     options: &SerializeOptions<'_>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    let report = serialize_dataset_into_sink(dataset, format, base_iri, options, &mut out)?;
+    let finished = out
+        .finish()
+        .map_err(|error| RdfDiagnostic::error("native-codec-write", error.to_string()))?;
+    Ok(SerializeOutcome {
+        bytes: finished.bytes,
+        statement_rows_dropped: report.statement_rows_dropped,
+        directional_literals_dropped: report.directional_literals_dropped,
+        named_graph_rows_dropped: report.named_graph_rows_dropped,
+    })
+}
+
+/// Serialize a frozen dataset INTO `writer`, returning the counts.
+///
+/// The bounded-memory twin of [`serialize_dataset_with`], and the one the eager
+/// spelling is expressed through: peak residency tracks the working set rather than
+/// the size of the finished document. The bytes are identical — it is the same
+/// emitter, pointed at a different destination.
+///
+/// # What this bounds, and what it does not
+///
+/// It removes the finished document from the serializer's peak and nothing else.
+/// The `SerGraph` the emitter walks is proportional to the dataset by construction —
+/// the canonical sort that makes output backend-independent is defined over it —
+/// and three formats additionally hold a grouping index. JSON-LD and YAML-LD hold
+/// a carrier document, which compaction is defined over. None of that is constant
+/// memory and nothing here should be read as claiming it is.
+///
+/// # Errors
+///
+/// Every failure [`serialize_dataset_with`] reports, plus `native-codec-write` when
+/// `writer` fails. Note that a write failure or a per-term failure may leave a
+/// PREFIX of the document already written: a sink is not transactional, unlike the
+/// projection package sink. Format- and kind-level refusals are all decided before
+/// the first byte.
+pub fn serialize_dataset_to_writer_with<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &SerializeOptions<'_>,
+    writer: &mut dyn Write,
+) -> Result<SerializeReport, RdfDiagnostic> {
+    let mut drain = WriterDrain(writer);
+    let mut out = TextSink::to_drain(&mut drain);
+    let report = serialize_dataset_into_sink(dataset, format, base_iri, options, &mut out)?;
+    let finished = out
+        .finish()
+        .map_err(|error| RdfDiagnostic::error("native-codec-write", error.to_string()))?;
+    Ok(SerializeReport {
+        bytes_written: finished.written,
+        ..report
+    })
+}
+
+/// [`serialize_dataset_to_writer_with`] at this crate's default options: the whole
+/// dataset, the statement layer carried where the format can express it.
+pub fn serialize_dataset_to_writer<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    writer: &mut dyn Write,
+) -> Result<SerializeReport, RdfDiagnostic> {
+    serialize_dataset_to_writer_with(
+        dataset,
+        format,
+        base_iri,
+        &SerializeOptions {
+            selection: SerializeGraph::Dataset,
+            statement_layer: StatementLayer::PerFormatCapability,
+            jsonld_options: None,
+        },
+        writer,
+    )
+}
+
+/// The ONE serialization body. Both spellings above are this function with a
+/// different destination, which is what makes their bytes equal by construction
+/// rather than by test.
+fn serialize_dataset_into_sink<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &SerializeOptions<'_>,
+    out: &mut TextSink<'_>,
+) -> Result<SerializeReport, RdfDiagnostic> {
     if options.jsonld_options.is_some()
         && !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd)
     {
@@ -270,18 +355,28 @@ pub fn serialize_dataset_with<D: DatasetView>(
         egress_base(format, base_iri)?,
     )?;
 
-    let text = match options.jsonld_options {
+    match options.jsonld_options {
         // Dispatch to the format's codec (the single `codec_for` chokepoint): the
         // line/Turtle family walks the shared `ser_model` writers, and RDF/XML, TriX and
         // HexTuples walk the SAME `SerGraph` through their in-repo emitters.
-        None => super::codec::codec_for(format).serialize(&graph)?,
-        Some(configured) if format == NativeRdfFormat::JsonLd => {
-            super::jsonld::serialize_ser_graph_with_options(&graph, configured)?
-        }
-        Some(configured) => {
-            super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, configured)?
-        }
-    };
+        None => super::codec::codec_for(format).serialize_into(&graph, out)?,
+        Some(configured) => match format {
+            NativeRdfFormat::JsonLd => {
+                super::jsonld::write_ser_graph_with_options(&graph, configured, out)?;
+            }
+            NativeRdfFormat::YamlLd => {
+                super::jsonld::write_ser_graph_to_yamlld_with_options(&graph, configured, out)?;
+            }
+            // Unreachable: the guard at the top of this function already refused
+            // every other format. It is spelled out rather than left as a catch-all
+            // because the arm it replaces sent every OTHER format down the YAML-LD
+            // writer — so if that guard were ever moved or loosened, a Turtle request
+            // carrying a JSON-LD context would have silently produced a YAML
+            // document rather than failing. Routed through the same constructor as
+            // the guard, so one condition keeps one wording.
+            other => return Err(jsonld_options_unused(other)),
+        },
+    }
 
     // A `Named` selection emits NO statement rows whatever the format can carry (the
     // filter in `build_ser_graph`), so rows the caller asked to emit still did not reach
@@ -304,8 +399,10 @@ pub fn serialize_dataset_with<D: DatasetView>(
         dataset.reifier_quads().count() + dataset.annotation_quads().count()
     };
 
-    Ok(SerializeOutcome {
-        bytes: text.into_bytes(),
+    Ok(SerializeReport {
+        // The eager spelling replaces this from its own buffer; the streaming one
+        // from the sink's running total. Neither is derived from the other.
+        bytes_written: 0,
         statement_rows_dropped,
         directional_literals_dropped,
         named_graph_rows_dropped,
@@ -372,12 +469,28 @@ pub fn serialize_dataset_with_jsonld_options<D: DatasetView>(
     .map(|outcome| outcome.bytes)
 }
 
-/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) into the given writer.
+/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) into the given writer,
+/// incrementally.
+///
+/// This is the body behind [`RdfSerializerBackend::serialize`](purrdf_core::RdfSerializer),
+/// which is the workspace's `W: Write` serialization seam — the one an abstraction-layer
+/// caller reaches rather than naming a format function directly.
+///
+/// It used to build the whole document with [`serialize_dataset_with`] and then
+/// `write_all` it. That made the seam's shape a lie: every caller who reached
+/// serialization through the trait — the spelling that most looks like streaming, and the
+/// one a bounded-memory caller would pick precisely because it takes a writer — got the
+/// entire document resident anyway. A `W: Write` parameter that buffers is worse than an
+/// honest `-> Vec<u8>`, because the signature tells the caller the opposite of the truth.
 ///
 /// `base_iri` is the egress base and is honored exactly as on every other seam: a format
 /// whose registry row can express a base emits it and relativizes against it; one that
 /// cannot emits absolute IRIs. A base that is not an absolute IRI is a hard failure here,
 /// not a silent fall back to absolute output.
+///
+/// The [`SerializeReport`] is discarded because the trait returns `()`. That is unchanged
+/// — the eager spelling discarded the same counts — and it is the reason a caller who
+/// needs the drop counts reaches [`serialize_dataset_to_writer_with`] directly.
 pub(crate) fn serialize_into<D: DatasetView, W: Write>(
     dataset: &D,
     media_type: &str,
@@ -385,7 +498,7 @@ pub(crate) fn serialize_into<D: DatasetView, W: Write>(
     base_iri: Option<&str>,
     mut output: W,
 ) -> Result<(), RdfDiagnostic> {
-    let bytes = serialize_dataset_with(
+    serialize_dataset_to_writer_with(
         dataset,
         classify(media_type)?,
         base_iri,
@@ -394,11 +507,28 @@ pub(crate) fn serialize_into<D: DatasetView, W: Write>(
             statement_layer: StatementLayer::Emit,
             jsonld_options: None,
         },
-    )?
-    .bytes;
-    output
-        .write_all(&bytes)
-        .map_err(|e| RdfDiagnostic::error("native-codec-write", e.to_string()))
+        &mut output,
+    )
+    .map(|_| ())
+}
+
+/// Every count a serialization produces, for the caller whose bytes went to a
+/// writer and who therefore has none handed back.
+///
+/// The byte-less twin of [`SerializeOutcome`]. The three drop counts are computed in
+/// the one serialization body and mean exactly what they mean there; `bytes_written`
+/// is what actually reached the destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "a serialization's drop counts are a loss report; discarding them is a silent drop"]
+pub struct SerializeReport {
+    /// Bytes handed to the destination. Meaningful only on `Ok`.
+    pub bytes_written: u64,
+    /// RDF-1.2 statement-layer rows the target has no surface for.
+    pub statement_rows_dropped: usize,
+    /// Object literals whose base direction the target cannot express.
+    pub directional_literals_dropped: usize,
+    /// Rows dropped because the target flattened a graph-scoped dataset.
+    pub named_graph_rows_dropped: usize,
 }
 
 /// Outcome of serializing an [`RdfDataset`](crate::RdfDataset) to a concrete RDF format through the
@@ -722,9 +852,28 @@ struct SerGraphInterner<I: ViewTermId> {
     /// quoted-triple terms (skipped by the N-Quads serializer).
     reifiers: Vec<SerReifierRow>,
     annotations: Vec<SerAnnotationRow>,
-    /// Value → term-id memo so equal terms collapse to one term, matching the fold the
-    /// reader produces.
-    memo: HashMap<TermValue, usize>,
+    /// Emitted-shape → term-id memo, so equal terms collapse to one term, matching
+    /// the fold the reader produces.
+    ///
+    /// Keyed by a HASH of the already-stored [`SerTerm`] rather than by an owned
+    /// `TermValue`. The owned spelling meant every term's text existed twice for the
+    /// life of the build — once in `terms`, once as a memo key — and the duplicate was
+    /// freed only when the interner was dropped at the very end. Metered on a
+    /// 40,000-quad dataset it was the difference between a 32.4 MB peak and a 13.0 MB
+    /// retained graph: the ceiling a document then grows underneath, and the reason
+    /// N-Quads and TriG report BYTE-IDENTICAL serialization peaks for documents that
+    /// differ in size — they build the same graph, so they duplicate the same text.
+    ///
+    /// Collisions resolve against `terms`, so the text lives in exactly one place.
+    memo: HashTable<usize>,
+    /// Component-indices → term-id memo for quoted triples.
+    ///
+    /// A triple's identity is its `(s, p, o)`, and those are already interned, so
+    /// three `usize`s identify it exactly — no text, and no recursion through a value
+    /// tree. Separate from `memo` because a triple's `SerTerm` carries a
+    /// self-referential `reifier` index that differs per occurrence, so hashing the
+    /// stored shape would never match two structurally equal triples.
+    triple_memo: FastMap<(usize, usize, usize), usize>,
     /// IR-id → term-id memo probed BEFORE the value memo. `resolve(id)` is a pure
     /// function of the (frozen, immutable) view for the whole build, so an id seen
     /// once maps to the same value — and thus the same term-id — every time. Without
@@ -745,7 +894,8 @@ impl<I: ViewTermId> SerGraphInterner<I> {
             terms: Vec::with_capacity(term_count),
             reifiers: Vec::new(),
             annotations: Vec::new(),
-            memo: HashMap::with_capacity(term_count),
+            memo: HashTable::with_capacity(term_count),
+            triple_memo: FastMap::default(),
             id_memo: FastMap::with_capacity_and_hasher(term_count, FastHasher::default()),
             alphabet,
         }
@@ -762,13 +912,11 @@ impl<I: ViewTermId> SerGraphInterner<I> {
         if let Some(&idx) = self.id_memo.get(&id) {
             return Ok(idx);
         }
-        let value = term_value(dataset, id);
-        if let Some(&idx) = self.memo.get(&value) {
-            self.id_memo.insert(id, idx);
-            return Ok(idx);
-        }
+        // The emitted shape is built ONCE and is what the memo probes against. On a
+        // miss it becomes the `terms` entry; on a hit it is dropped. Either way the
+        // term's text is allocated once, never twice.
         let idx = match dataset.resolve(id) {
-            TermRef::Iri(iri) => self.push_term(SerTerm {
+            TermRef::Iri(iri) => self.intern_shaped(SerTerm {
                 kind: SerTermKind::Iri,
                 value: Some(iri.to_owned()),
                 datatype: None,
@@ -783,7 +931,7 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                 // deterministic, injective envelope, so serialization is total
                 // and blank-node co-reference survives exactly.
                 let emitted = encode_blank_label(label, scope, self.alphabet).into_owned();
-                self.push_term(SerTerm {
+                self.intern_shaped(SerTerm {
                     kind: SerTermKind::Bnode,
                     value: Some(emitted),
                     datatype: None,
@@ -809,7 +957,7 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                 } else {
                     Some(self.intern_iri_string(datatype_iri))
                 };
-                self.push_term(SerTerm {
+                self.intern_shaped(SerTerm {
                     kind: SerTermKind::Literal,
                     value: Some(lexical.to_owned()),
                     datatype: datatype_slot,
@@ -825,43 +973,63 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                 let s = self.intern(dataset, s)?;
                 let p = self.intern(dataset, p)?;
                 let o = self.intern(dataset, o)?;
-                let triple_id = self.terms.len();
-                self.terms.push(SerTerm {
-                    kind: SerTermKind::Triple,
-                    value: None,
-                    datatype: None,
-                    lang: None,
-                    direction: None,
-                    reifier: Some(triple_id),
-                });
-                // Self-reifier sentinel for an inline quoted-triple TERM — never a
-                // graph-scoped statement-layer row, so its graph slot is `None`.
-                self.reifiers.push((triple_id, (s, p, o), None));
-                triple_id
+                self.intern_triple(s, p, o)
             }
         };
-        self.memo.insert(value, idx);
         self.id_memo.insert(id, idx);
         Ok(idx)
+    }
+
+    /// Intern a non-triple term by its emitted shape, pushing it only on a miss.
+    fn intern_shaped(&mut self, term: SerTerm) -> usize {
+        let hash = shape_hash(&term);
+        let terms = &self.terms;
+        if let Some(&idx) = self.memo.find(hash, |&idx| terms[idx] == term) {
+            return idx;
+        }
+        let idx = self.push_term(term);
+        let terms = &self.terms;
+        self.memo
+            .insert_unique(hash, idx, |&other| shape_hash(&terms[other]));
+        idx
+    }
+
+    /// Intern a quoted-triple term by its component indices.
+    ///
+    /// Those are already interned, so three `usize`s identify the triple exactly —
+    /// the same relation the old value-tree comparison expressed, reached without
+    /// rebuilding the tree.
+    fn intern_triple(&mut self, s: usize, p: usize, o: usize) -> usize {
+        if let Some(&idx) = self.triple_memo.get(&(s, p, o)) {
+            return idx;
+        }
+        let triple_id = self.terms.len();
+        self.terms.push(SerTerm {
+            kind: SerTermKind::Triple,
+            value: None,
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: Some(triple_id),
+        });
+        // Self-reifier sentinel for an inline quoted-triple TERM — never a
+        // graph-scoped statement-layer row, so its graph slot is `None`.
+        self.reifiers.push((triple_id, (s, p, o), None));
+        self.triple_memo.insert((s, p, o), triple_id);
+        triple_id
     }
 
     /// Intern an IRI by value, deduplicating through the memo. Used for literal
     /// datatype terms, which the IR does not surface as standalone term ids.
     fn intern_iri_string(&mut self, iri: &str) -> usize {
-        let value = TermValue::Iri(iri.to_owned());
-        if let Some(&idx) = self.memo.get(&value) {
-            return idx;
-        }
-        let idx = self.push_term(SerTerm {
+        self.intern_shaped(SerTerm {
             kind: SerTermKind::Iri,
             value: Some(iri.to_owned()),
             datatype: None,
             lang: None,
             direction: None,
             reifier: None,
-        });
-        self.memo.insert(value, idx);
-        idx
+        })
     }
 
     /// Resolve a triple-term id to the `(s, p, o)` term indices of its components
@@ -892,40 +1060,23 @@ impl<I: ViewTermId> SerGraphInterner<I> {
     }
 }
 
-/// The dataset-independent value of an IR term, for the interner memo.
-fn term_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => TermValue::Literal {
-            lexical_form: lexical.to_owned(),
-            datatype: iri_of(dataset, datatype).unwrap_or_default(),
-            language: language.map(str::to_owned),
-            direction,
-        },
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(term_value(dataset, s)),
-            p: Box::new(term_value(dataset, p)),
-            o: Box::new(term_value(dataset, o)),
-        },
-    }
+/// The hash a [`SerTerm`] is memoized under.
+///
+/// One function so the probe and the insert cannot drift: `hashbrown` needs the hash
+/// of an already-stored entry to rehash on growth, and a second spelling of "how a
+/// term hashes" is exactly the kind of divergence that shows up as a silently larger
+/// term table rather than as a failure.
+fn shape_hash(term: &SerTerm) -> u64 {
+    use core::hash::BuildHasher;
+    FastHasher::default().hash_one(term)
 }
 
-/// Resolve an IR term id known to be an IRI (a literal datatype) to its IRI string.
-fn iri_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<String, RdfDiagnostic> {
-    iri_str_of(dataset, id).map(str::to_owned)
-}
-
-/// Borrowing twin of [`iri_of`]: the IRI straight out of the view, for callers that
-/// only compare or copy it into the term table (no intermediate `String`).
+/// The IRI straight out of the view, for callers that only compare it or copy it into
+/// the term table.
+///
+/// There is no owning twin. The one that existed served the interner's value memo,
+/// which allocated an owned copy of every datatype IRI purely to build a key — the
+/// duplication that memo no longer performs.
 fn iri_str_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<&str, RdfDiagnostic> {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => Ok(iri),
@@ -1120,5 +1271,79 @@ mod serialize_to_format_tests {
                 "{format:?} carries the base direction — nothing dropped"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod build_residency {
+    use super::build_ser_graph;
+    use crate::{NativeRdfFormat, SerializeGraph};
+    use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, RdfTerm};
+
+    #[global_allocator]
+    static GLOBAL: CountingAllocator = CountingAllocator;
+
+    /// Building the serialization graph must not transiently allocate more than the
+    /// graph itself.
+    ///
+    /// This is the ceiling a serialized document then grows underneath, and it is why
+    /// N-Quads and TriG used to report BYTE-IDENTICAL serialization peaks for
+    /// documents differing by a megabyte: the peak was not the output at all, it was
+    /// the build, and both formats build the same graph.
+    ///
+    /// The cause was the interner memoizing on an owned copy of every term's value, so
+    /// the text existed twice for the life of the build. The memo now keys on a hash of
+    /// the already-stored term.
+    ///
+    /// Stated against the graph's own retained size rather than an absolute, so the bar
+    /// moves with the fixture instead of rotting. Before the fix the transient was
+    /// 19.5 MB against a 13.0 MB graph; after, 5.0 MB.
+    #[test]
+    fn building_the_graph_does_not_hold_the_terms_twice() {
+        let mut builder = RdfDatasetBuilder::new();
+        for i in 0..40_000 {
+            let subject = builder
+                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")));
+            let predicate = builder.intern_iri("https://example.org/predicate");
+            let object =
+                builder.intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        let dataset = builder.freeze().expect("dataset freezes");
+
+        let window = CurrentThreadWindow::open();
+        let graph = build_ser_graph(
+            &*dataset,
+            NativeRdfFormat::NQuads,
+            SerializeGraph::Dataset,
+            true,
+            None,
+        )
+        .expect("the serialization graph builds");
+        let measured = window.close();
+
+        assert!(
+            measured.retained_bytes > 8 * 1024 * 1024,
+            "the fixture must build a graph large enough for the comparison to mean \
+             anything; retained {} bytes",
+            measured.retained_bytes
+        );
+        let transient = measured.peak_working_bytes - measured.retained_bytes;
+        assert!(
+            transient < measured.retained_bytes,
+            "building the graph peaked {transient} bytes above the {} bytes it \
+             retained. A transient at graph scale means every term's text is being \
+             held twice, which is what sets the serialization peak.",
+            measured.retained_bytes
+        );
+        // The term table must be unchanged by how the memo is keyed. If the dedup
+        // relation moved, this is where it shows: a coarser memo collapses terms, a
+        // finer one splits them, and either changes emitted blank labels and indices.
+        assert_eq!(
+            graph.terms.len(),
+            80_001,
+            "the interned term table changed size, so the dedup relation moved"
+        );
     }
 }

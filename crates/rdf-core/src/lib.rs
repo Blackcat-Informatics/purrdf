@@ -16,9 +16,12 @@
 //!
 //! The immutable IR ([`ir`]) is the kernel's purest layer and is **file-IO-free**
 //! (no `std::fs`/`std::io`), the first prerequisite for an eventual `alloc`-only
-//! `no_std` core for embedded / C-ABI consumers. The remaining blocker is the
-//! interner's `std::collections::{HashMap, HashSet}` (not in `alloc`); migrating it
-//! to `hashbrown` is tracked as **P3c**. New IR code therefore prefers
+//! `no_std` core for embedded / C-ABI consumers. Two blockers remain: the
+//! interner's `std::collections::{HashMap, HashSet}` (not in `alloc`), which wants
+//! `hashbrown`; and [`sink::WriterDrain`], which adapts `std::io::Write` as one
+//! [`sink::ByteDrain`] implementor. The drain SEAM is `core`-only by construction,
+//! so the flip needs that one adapter moved behind a `std` boundary, not the sink
+//! redesigned. New IR code therefore prefers
 //! `core::`/`alloc::` over `std::` where the item exists in both (e.g. `core::fmt`,
 //! `alloc::sync::Arc`) so the eventual `#![no_std]` flip stays mechanical. Per the
 //! purrdf plan, `no_std` is for embedded/C-ABI targets and is **not** a WASM
@@ -114,6 +117,7 @@ pub mod named_graph;
 // validator + RDF serializer. PyO3-free; replaces the `sssom` PyPI
 // package's parse+validate behaviour for the PurRDF mapping artifacts.
 // Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
+pub mod sink;
 pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
