@@ -112,11 +112,26 @@ def _misrendering(component: str) -> str | None:
     """
     for char in component:
         code = ord(char)
-        if code < 0x20 or code == 0x7F:
-            return f"the control character U+{code:04X}"
         category = unicodedata.category(char)
+        # `Cc` RATHER THAN AN ASCII RANGE. `code < 0x20 or code == 0x7F` stopped exactly
+        # where attention ran out: U+0085 NEL is `Cc`, and `"a\u0085b".splitlines()`
+        # returns two entries -- the docstring's own stated ground for refusing a newline.
+        # U+009B is the 8-bit CSI, the ground for refusing an escape. Both were accepted.
+        if category == "Cc":
+            return f"the control character U+{code:04X}"
+        # A SPACE THAT IS NOT THE SPACE. There was no `Zs` rule at all, so `a b.md` and
+        # `a\u00a0b.md` were both accepted and render identically -- the exact cost this
+        # gate names. The asymmetry was accidental: `str.strip()` eats a LEADING NBSP while
+        # an interior one walked through.
+        if category == "Zs" and char != " ":
+            return f"U+{code:04X}, a space character that is not the ordinary space"
         if category == "Cf":
-            # Format characters: bidi controls, joiners, the byte-order mark.
+            # ZWNJ AND ZWJ ARE ORTHOGRAPHY, NOT DECORATION. They are required in Persian
+            # (`می‌روم`) and control Indic conjuncts, and a blanket `Cf` refusal took them
+            # -- an over-refusal inside a rule about honesty. Excluded by name, with the
+            # reason, rather than by narrowing the category and losing the bidi controls.
+            if char in "\u200c\u200d":
+                continue
             return f"the invisible format character U+{code:04X} ({category})"
         if category in {"Zl", "Zp"}:
             return f"the line or paragraph separator U+{code:04X} ({category})"
@@ -127,7 +142,9 @@ def _misrendering(component: str) -> str | None:
 
 # Characters that render blank without being a space and without a category that says so,
 # so a name containing one is indistinguishable from a name without it.
-_BLANK_BUT_NOT_SPACE = frozenset("\u3164\u2800\u115f\u1160\u17b4\u17b5")
+_BLANK_BUT_NOT_SPACE = frozenset(
+    "\u3164\u2800\u115f\u1160\u17b4\u17b5\uffa0\u034f\ufe0f\u180e"
+)
 
 
 def offences(paths: list[str]) -> list[str]:
@@ -205,6 +222,17 @@ def self_test() -> int:
         # `"a\u2028b".splitlines()` returns two entries, which is why `\n` is refused.
         "has\u2028lineseparator",
         "has\u2029paragraphseparator",
+        # `"a\u0085b".splitlines()` returns two entries, which is the stated ground for
+        # refusing a newline; U+009B is the 8-bit CSI. Both are `Cc` and both were
+        # accepted while `\r` was refused.
+        "has\u0085nel",
+        "has\u009bcsi",
+        # A space that is not the space: these render identically to `a b`.
+        "has\u00a0nbsp",
+        "has\u3000ideographicspace",
+        "has\u202fnarrownbsp",
+        # The halfwidth twin of a filler already refused.
+        "has\uffa0halfwidthfiller",
     ]
     for path in refused:
         if not offences([path]):
@@ -231,6 +259,13 @@ def self_test() -> int:
         "docs/design/a file with spaces.md",
         # A hyphen inside a component is not a leading one.
         "crates/rdf-core/src/dataset_view.rs",
+        # NON-ASCII PATHS ARE ORDINARY. This list gained nothing when the rule was
+        # widened, which is how the ZWNJ over-refusal went unnoticed.
+        "docs/zh-Hans/说明.md",
+        "docs/fr/café.md",
+        "docs/fa/می\u200cروم.md",
+        "docs/emoji/🐈.md",
+        "docs/he/עברית.md",
     ]
     wrongly = [path for path in accepted if offences([path])]
     if wrongly:

@@ -53,7 +53,10 @@ wrapper into a `lane_*` call *and drop the knob argument*, because that is what 
 a path failure anonymous. An earlier version of this paragraph claimed collapsing them
 would necessarily discard the knob name, which the third lane already disproves.
 
-The laws that are genuinely shared, and therefore hold for every lane:
+The laws that are genuinely shared, and therefore hold for every lane. This table is an
+INVENTORY, not an illustration: a law added to `lane-common.sh` and not added here is a
+law the next lane author will not find, and five rows were missing when that was last
+checked — including the two the immediately preceding changes had created.
 
 | law | shared implementation |
 | --- | --- |
@@ -67,6 +70,11 @@ The laws that are genuinely shared, and therefore hold for every lane:
 | Existing is not being produced — an artifact must be a regular, non-empty file | `lane_require_nonempty_file` |
 | Non-empty is not "is what it claims to be" | `lane_require_magic`, `lane_require_nquads` |
 | The binary that certifies every number is itself checked before it is trusted — before step 1 when a `*_BIN` knob supplies it, and at the build step when the lane builds it | `lane_require_executable`, `lane_run_probe`, `lane_require_probe_said_something` |
+| A knob value bash cannot carry intact is refused by name, never replaced — bash integers are signed 64-bit and wrap silently, so an all-digits knob could become a negative seed | `lane_require_uint`, `lane_require_positive` |
+| A pin that is *recorded nowhere* and a pin *lookup that is broken* are different states, and only the first is reportable — both arrived as one non-zero status behind `2>/dev/null`, and a skip is indistinguishable from a pass | `lane_require_pin`, `lane_lookup_pin` |
+| A capture path is proven writable before the redirect that depends on it, so a scratch failure is never published as a failure of the binary under test | `lane_reset_capture`, `lane_capture_stderr` |
+| A file written outside the scratch directory still owes the trap its path, so buying independence from `LANE_TMP` does not cost the cleanup it provided | `lane_track_stray` |
+| One definition of how many bytes a streamed read takes, and one of how a file is made durable before a rename promotes it | `scripts/lane_chunk.py` (`STREAM_CHUNK_BYTES`, `fsync_path`) |
 
 ## A digest is a certificate only if every input to it is pinned
 

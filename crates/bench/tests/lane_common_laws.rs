@@ -1372,10 +1372,28 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
     // A coverage test that can be evaded is worth less than no coverage test, because it
     // reports the absence of a problem it cannot see.
     let redirect = regex_lite_capture();
+    // A HEADER IS A SHAPE, NOT A SUFFIX. Requiring the line to END with `{` missed a
+    // header carrying a trailing comment and one with the brace on the next line — and
+    // each miss widened the search window so a reset inside a DIFFERENT, already-closed
+    // function satisfied the capture. It also produced the mirror fault: a correctly
+    // guarded capture under such a header was reported UNGUARDED, because no enclosing
+    // function was found at all. Same defect shape, third rewrite.
     let function_header = |line: &str| {
-        let trimmed = line.trim_end();
-        (trimmed.ends_with("() {") || (trimmed.starts_with("function ") && trimmed.ends_with('{')))
-            && !line.starts_with(char::is_whitespace)
+        if line.starts_with(char::is_whitespace) {
+            return false;
+        }
+        let head = line.split('#').next().unwrap_or("").trim_end();
+        let named = head.split_once('(').is_some_and(|(name, rest)| {
+            !name.trim().is_empty()
+                && name
+                    .trim()
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                && rest.trim_start().starts_with(')')
+        });
+        let keyword = head.starts_with("function ");
+        // The brace may close the line or open the next one.
+        (named || keyword) && (head.ends_with('{') || head.ends_with(')') || keyword)
     };
 
     let mut unguarded: Vec<String> = Vec::new();
@@ -1442,7 +1460,18 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
 /// writing it out keeps the evaded forms visible in one place.
 fn regex_lite_capture() -> impl Fn(&str) -> Option<String> {
     |line: &str| {
-        let at = line.find("2>")?;
+        // EVERY `2>` ON THE LINE, not the first. `2>/dev/null` earlier on a line made the
+        // whole line return None, so a real capture after it was invisible — and
+        // invisible without incrementing the counter, so the floor could not fire either.
+        line.match_indices("2>")
+            .filter_map(|(at, _)| capture_target(line, at))
+            .next()
+    }
+}
+
+/// The target of the stderr redirection at byte offset `at`, if it is a file capture.
+fn capture_target(line: &str, at: usize) -> Option<String> {
+    {
         // `12>` is not a stderr redirection, and neither is `$2>`.
         if at > 0 {
             let before = line.as_bytes()[at - 1];
@@ -1450,13 +1479,23 @@ fn regex_lite_capture() -> impl Fn(&str) -> Option<String> {
                 return None;
             }
         }
-        let rest = line[at + 2..].trim_start_matches('>').trim_start();
+        // `2>|` overrides noclobber and is still a redirection to a file; it was not
+        // counted at all.
+        let rest = line[at + 2..]
+            .trim_start_matches('>')
+            .trim_start_matches('|')
+            .trim_start();
         if rest.starts_with('&') {
             // `2>&1` and `2>&${fd}` duplicate a descriptor; there is no file to reset.
             return None;
         }
+        // A SINGLE-QUOTED TARGET IS THE SAME TARGET. `2>'\${errors}'` never matched the
+        // reset naming `"\${errors}"`, so a correctly guarded capture was reported
+        // unguarded — the mirror of an evasion, and just as wrong.
         let target: String = if let Some(stripped) = rest.strip_prefix('"') {
             stripped.chars().take_while(|c| *c != '"').collect()
+        } else if let Some(stripped) = rest.strip_prefix('\'') {
+            stripped.chars().take_while(|c| *c != '\'').collect()
         } else {
             // An UNQUOTED target ends at whitespace OR at shell syntax. Taking only
             // "not whitespace" produced `/dev/null)"` from `2>/dev/null)" || count=""`,

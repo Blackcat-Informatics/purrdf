@@ -1293,15 +1293,45 @@ def self_test() -> int:
     # a table that does not sum reports a failure against whichever it checks second.
     # Nothing else in the tree can catch this, because both sides of the comparison are
     # in this file.
-    per_query = {k: int(v) for k, v in counts.items() if ".rows." in k and k.startswith("watdiv.")}
+    # KEYED ON THE KNOBS THE LANE USES, not on a prefix. The selector was
+    # `k.startswith("watdiv.") and ".rows." in k`, while the lane builds
+    # `watdiv.${SCALE}.seed${SEED}.rows.<id>` -- so scale and seed are inputs to the
+    # identity and were absent from the selector. A pin for seed 3 or scale 100M joined
+    # the sum, and because the set check compares template IDS it saw a duplicate C1 as
+    # already present: 21 pins summing to 434748, reported GREEN.
+    watdiv_stem = "watdiv.10M.seed0.rows."
+    per_query = {k: int(v) for k, v in counts.items() if k.startswith(watdiv_stem)}
     total_key = "watdiv.10M.seed0.total_rows.purrdf-2.0.2"
+    # AND EVERY ANSWER PIN MUST BE CLASSIFIED. A third workload family added to the table
+    # was checked by nothing at all: not by the oracle arm (which selects `lubm.`), not by
+    # the per-query arm (now `watdiv.10M.seed0.rows.`), and not by the sum.
+    unclassified = sorted(set(counts) - set(per_query) - set(oracle_counts))
+    if unclassified:
+        print(
+            f"SELF-TEST FAIL: answer pin(s) {unclassified} are checked by nothing -- they "
+            f"are neither a published oracle nor a per-query pin at the default knobs, so "
+            f"no arm of this self-test and no lane asserts them."
+        )
+        ok = False
+    else:
+        print(
+            f"OK: self-test — all {len(counts)} answer pin(s) are classified, so a new "
+            "workload family is a failure to classify rather than a silent pass"
+        )
+
     if total_key not in WORKLOAD_PINS:
         print(f"SELF-TEST FAIL: {total_key} is not recorded, so the per-query pins sum to nothing")
         ok = False
     elif not per_query:
         print("SELF-TEST FAIL: no per-query WatDiv pin is recorded, so the total stands alone")
         ok = False
-    elif {k.split(".rows.")[1].split(".")[0] for k in per_query} != set(WATDIV_BASIC_TEMPLATE_IDS):
+    elif len(per_query) != WATDIV_BASIC_TEMPLATES:
+        print(
+            f"SELF-TEST FAIL: {len(per_query)} per-query pins are recorded under "
+            f"{watdiv_stem!r} and the workload has {WATDIV_BASIC_TEMPLATES} templates."
+        )
+        ok = False
+    elif {k[len(watdiv_stem):].split(".")[0] for k in per_query} != set(WATDIV_BASIC_TEMPLATE_IDS):
         # THE SUM ALONE CANNOT SEE A MISSING ZERO, and five of these pins are zero.
         # Deleting the pin for C2 (0 rows) leaves the sum at 434748 and the check above
         # green, and the lane then prints "19 of 20 queries matched ...; no pin is
@@ -1313,9 +1343,9 @@ def self_test() -> int:
         print(
             f"SELF-TEST FAIL: the per-query WatDiv pins do not cover the published "
             f"templates. Missing: "
-            f"{sorted(set(WATDIV_BASIC_TEMPLATE_IDS) - {k.split('.rows.')[1].split('.')[0] for k in per_query})}; "
+            f"{sorted(set(WATDIV_BASIC_TEMPLATE_IDS) - {k[len(watdiv_stem):].split('.')[0] for k in per_query})}; "
             f"unexpected: "
-            f"{sorted({k.split('.rows.')[1].split('.')[0] for k in per_query} - set(WATDIV_BASIC_TEMPLATE_IDS))}. "
+            f"{sorted({k[len(watdiv_stem):].split('.')[0] for k in per_query} - set(WATDIV_BASIC_TEMPLATE_IDS))}. "
             f"Neither the count nor the sum can see a RENAMED key -- both stay correct while "
             f"one template silently loses its pin."
         )
