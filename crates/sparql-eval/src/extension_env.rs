@@ -53,9 +53,10 @@
 //!
 //! # Computed once
 //!
-//! Everything derived is derived in [`ExtensionEnv::new`]: the effective
-//! [`ParserOptions`], both instance-tier registry fingerprints, and this
-//! environment's own content digest. That is not merely tidy. `PlanCache`'s
+//! The effective [`ParserOptions`] and both instance-tier registry fingerprints are
+//! derived in [`ExtensionEnv::new`]; the content digest is deferred to first demand,
+//! because only a caller crossing a process boundary ever asks for it. That is not
+//! merely tidy. `PlanCache`'s
 //! `prepare_with_relations` computed both registry fingerprints on every call,
 //! ahead of the cache probe — and a SHACL validation issues one query per focus
 //! node, so a host that had configured the seam paid a full `describe()` walk and
@@ -76,7 +77,7 @@
 //! host whose declared namespaces differ from the ones it was written under.
 
 use std::borrow::Cow;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use purrdf_core::ContentDigest;
 use purrdf_sparql_algebra::ParserOptions;
@@ -122,7 +123,20 @@ pub struct ExtensionEnv {
     relations_fingerprint: String,
     /// The instance-tier fingerprint `PlanCache` folds into its lookup key.
     aggregates_fingerprint: String,
-    content: ContentDigest,
+    /// The content digest, computed on first demand rather than at construction.
+    ///
+    /// Everything else here is derived eagerly because every query needs it. This is
+    /// not: only a caller that must state its environment ACROSS A PROCESS BOUNDARY
+    /// — a prepared product writing or checking its identity row — ever asks, and
+    /// that happens once per artifact rather than once per query.
+    ///
+    /// Eager computation would therefore have made this type strictly more expensive
+    /// to construct than the loose registries it replaces: a caller building one per
+    /// query would pay a full digest over both registries' declarations on a path
+    /// that previously paid two fingerprints. Deferring it means constructing an
+    /// environment costs what deriving the parse configuration always cost, and the
+    /// hoisting caller — the one this type exists for — pays neither per query.
+    content: OnceLock<ContentDigest>,
     id: RegistryId,
 }
 
@@ -189,7 +203,6 @@ impl ExtensionEnv {
         };
         let relations_fingerprint = crate::property_fn_plan::registry_fingerprint(&relations)?;
         let aggregates_fingerprint = crate::agg_fn::registry_fingerprint(&aggregates)?;
-        let content = content_digest(&base, &relations, &aggregates)?;
         Ok(Self {
             base,
             relations,
@@ -197,7 +210,7 @@ impl ExtensionEnv {
             effective,
             relations_fingerprint,
             aggregates_fingerprint,
-            content,
+            content: OnceLock::new(),
             id: RegistryId::fresh(),
         })
     }
@@ -291,9 +304,17 @@ impl ExtensionEnv {
     /// [`Self::id`] closes in-process and no content-derived value can close, so a
     /// caller crossing a process boundary must pair this digest with whatever
     /// separately identifies the implementations behind those declarations.
-    #[must_use]
-    pub fn content_fingerprint(&self) -> ContentDigest {
-        self.content
+    /// # Errors
+    ///
+    /// [`EvalError`] if a registered relation's or aggregate's declaration methods
+    /// panic. Computed once and memoized; a second call cannot fail if the first
+    /// succeeded.
+    pub fn content_fingerprint(&self) -> Result<ContentDigest, EvalError> {
+        if let Some(digest) = self.content.get() {
+            return Ok(*digest);
+        }
+        let digest = content_digest(&self.base, &self.relations, &self.aggregates)?;
+        Ok(*self.content.get_or_init(|| digest))
     }
 }
 
@@ -516,8 +537,8 @@ mod tests {
         let forward = env(ParserOptions::default(), &[A, B, C]);
         let reversed = env(ParserOptions::default(), &[C, B, A]);
         assert_eq!(
-            forward.content_fingerprint(),
-            reversed.content_fingerprint(),
+            forward.content_fingerprint().expect("digest"),
+            reversed.content_fingerprint().expect("digest"),
             "same declarations, different registration order, same identity"
         );
     }
@@ -526,7 +547,10 @@ mod tests {
     fn different_relation_sets_produce_different_content_fingerprints() {
         let two = env(ParserOptions::default(), &[A, B]);
         let three = env(ParserOptions::default(), &[A, B, C]);
-        assert_ne!(two.content_fingerprint(), three.content_fingerprint());
+        assert_ne!(
+            two.content_fingerprint().expect("digest"),
+            three.content_fingerprint().expect("digest")
+        );
     }
 
     /// Declared namespaces are part of the environment's identity even though they
@@ -546,10 +570,20 @@ mod tests {
             &[A],
         );
         assert_ne!(
-            bare.content_fingerprint(),
-            declared.content_fingerprint(),
+            bare.content_fingerprint().expect("digest"),
+            declared.content_fingerprint().expect("digest"),
             "an environment that declares a namespace is not the environment that does not"
         );
+    }
+
+    /// The digest is memoized, so the price of deferring it is paid at most once per
+    /// environment however many artifacts ask.
+    #[test]
+    fn the_content_digest_is_computed_once_and_reused() {
+        let env = env(ParserOptions::default(), &[A, B]);
+        let first = env.content_fingerprint().expect("digest");
+        let second = env.content_fingerprint().expect("digest");
+        assert_eq!(first, second);
     }
 
     /// The instance tier answers a question the content tier cannot: two registries
@@ -560,8 +594,8 @@ mod tests {
         let right = env(ParserOptions::default(), &[A]);
         assert_ne!(left.id(), right.id());
         assert_eq!(
-            left.content_fingerprint(),
-            right.content_fingerprint(),
+            left.content_fingerprint().expect("digest"),
+            right.content_fingerprint().expect("digest"),
             "while declaring identically, which is exactly why the instance tier exists"
         );
     }
