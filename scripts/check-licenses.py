@@ -20,6 +20,7 @@ vendored root and is enforced with zero changes here.
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import tomllib
@@ -153,12 +154,24 @@ def check_mulan_text(root: Path) -> list[str]:
 
 
 def workspace_license(root: Path) -> str:
-    """The license expression `Cargo.toml` declares, which is the project's offer."""
-    for line in (root / "Cargo.toml").read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("license = "):
-            return stripped.split('"')[1]
-    sys.exit("check-licenses: no `license = ` in Cargo.toml; cannot derive the offer")
+    """The license expression `[workspace.package]` declares, which is the project's offer.
+
+    Parsed, not line-scanned. The first version returned the first line ANYWHERE in
+    `Cargo.toml` beginning `license = `, while its own comment claimed to read
+    `[workspace.package]` -- so a `[package.metadata.*] license` above line 56 would
+    silently have become the gate's expectation. It also did `split('"')[1]`, which
+    raises IndexError on `license = 'MIT OR Apache-2.0'`: a legal TOML literal string
+    produced a traceback instead of the stated diagnostic. `tomllib` was already
+    imported in this file.
+    """
+    manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    try:
+        return manifest["workspace"]["package"]["license"]
+    except (KeyError, TypeError):
+        sys.exit(
+            "check-licenses: Cargo.toml has no [workspace.package] license; the project's "
+            "offer cannot be derived, and this gate will not assume one."
+        )
 
 
 # Suffixes whose first-party files carry a header this gate judges. Kept to the
@@ -178,6 +191,28 @@ DELIBERATE_OTHER_LICENSE: dict[str, str] = {
     # license of the thing it builds, which is not the license of the tree.
     "docs/book/book.toml": "CC-BY-4.0",
 }
+
+
+def registration_scope_offenders() -> list[str]:
+    """Every register entry whose suffix this gate does not inspect.
+
+    "The register may only SHRINK" was true only for the nine checked suffixes.
+    `DELIBERATE_OTHER_LICENSE` is keyed by path with no suffix constraint, so an entry
+    for a `.md` file was an assertion nothing evaluated -- the main loop skips the
+    suffix, so `declared != allowed` never runs and the staleness sweep only asks
+    whether the marker is present at all. For every unchecked suffix the register was a
+    silent widening.
+
+    This is the same law `check-issue-refs.py` applies one level up: a suffix enumerated
+    with no scanner behind it extends a gate's apparent scope over a surface it never
+    inspects.
+    """
+    return [
+        f"{rel}: registered as deliberately {allowed!r}, but {Path(rel).suffix!r} is not in "
+        f"HEADER_SUFFIXES, so this registration asserts something nothing checks"
+        for rel, allowed in sorted(DELIBERATE_OTHER_LICENSE.items())
+        if Path(rel).suffix not in HEADER_SUFFIXES
+    ]
 
 
 def first_party_header_offenders(root: Path, expected: str) -> list[str]:
@@ -207,8 +242,25 @@ def first_party_header_offenders(root: Path, expected: str) -> list[str]:
         path = root / rel
         if path.suffix not in HEADER_SUFFIXES or not path.is_file():
             continue
+        # EXCLUDED BY WHOSE STATEMENT IT IS, not by which directory it sits in.
+        #
+        # Excluding whole vendored roots protected ZERO upstream headers and hid FOUR of
+        # ours: the six vendored roots contain exactly four files with a checked suffix,
+        # and all four are first-party `REUSE.toml` carrying the project's own offer. So
+        # the stated rationale -- "a vendored identifier is UPSTREAM's statement and must
+        # not be rewritten to match ours" -- described a case that does not exist in this
+        # tree, while the exclusion created the one it was written to prevent: the next
+        # license change that missed those four would pass green.
+        #
+        # A file is upstream's if its copyright line is not ours. That is the property
+        # the rationale was actually about.
         if any(vendored_root in path.parents for vendored_root in vendored):
-            continue
+            try:
+                opening = path.read_text(encoding="utf-8").splitlines()[:8]
+            except (UnicodeDecodeError, OSError):
+                continue
+            if not any("Blackcat Informatics" in line for line in opening):
+                continue
         try:
             head = path.read_text(encoding="utf-8").splitlines()[:8]
         except (UnicodeDecodeError, OSError):
@@ -247,7 +299,119 @@ def first_party_header_offenders(root: Path, expected: str) -> list[str]:
     return offenders
 
 
+def self_test() -> int:
+    """The four directions the header rule needs, executed rather than described.
+
+    This gate shipped its new refusal with no self-test and no argument parsing at all:
+    `--self-test` and `--this-flag-does-not-exist` both printed the normal OK line and
+    exited 0. That is worse than a missing self-test, because `check-gate-parity.py`
+    makes arguments part of a gate's identity -- so wiring `check-licenses.py
+    --self-test` into both lists would have produced a green no-op the parity gate
+    certified as an agreeing rule.
+    """
+    root = repo_root()
+    ok = True
+    real = (root / "Cargo.toml").read_text(encoding="utf-8")
+    expected = workspace_license(root)
+
+    # 1. THE TREE AS COMMITTED IS CLEAN. First, because it is the neighbour a
+    #    refusal-only suite cannot distinguish: a rule that reported everything would
+    #    pass every case below and reject the repository.
+    standing = first_party_header_offenders(root, expected) + registration_scope_offenders()
+    if standing:
+        print("SELF-TEST FAIL: the tree as committed is reported as offending:")
+        for problem in standing[:5]:
+            print(f"  {problem}")
+        ok = False
+    else:
+        print(f"OK: self-test — the tree as committed declares {expected!r} throughout")
+
+    # 2. A file at the OLD offer is caught. Checked against a real tracked file so the
+    #    scan's own path handling is exercised, not a fixture the scan never walks.
+    probe = root / "scripts" / "lane_chunk.py"
+    original = probe.read_text(encoding="utf-8")
+    try:
+        probe.write_text(original.replace(expected, "MIT OR Apache-2.0", 1), encoding="utf-8")
+        found = first_party_header_offenders(root, expected)
+        if any("lane_chunk.py" in problem and "MIT OR Apache-2.0'" in problem for problem in found):
+            print("OK: self-test — a first-party file left at a narrower offer is refused")
+        else:
+            print(f"SELF-TEST FAIL: a stale offer was not refused (reported: {found[:2]})")
+            ok = False
+    finally:
+        probe.write_text(original, encoding="utf-8")
+
+    # 3. A STALE REGISTRATION is caught. The register may only shrink, so an entry whose
+    #    file has come back into line must be reported rather than silently honoured.
+    registered = next(iter(DELIBERATE_OTHER_LICENSE))
+    DELIBERATE_OTHER_LICENSE[registered] = "Zlib"
+    try:
+        found = first_party_header_offenders(root, expected)
+        if any(registered in problem and "stale" in problem for problem in found):
+            print("OK: self-test — a registration that no longer matches its file is refused")
+        else:
+            print(f"SELF-TEST FAIL: a stale registration was not refused (reported: {found[:2]})")
+            ok = False
+    finally:
+        DELIBERATE_OTHER_LICENSE[registered] = "CC-BY-4.0"
+
+    # 4. A REGISTRATION OUTSIDE THE CHECKED SUFFIXES is refused, so the register cannot
+    #    widen into a surface nothing inspects.
+    DELIBERATE_OTHER_LICENSE["docs/NOTES.md"] = "Proprietary-DoNotDistribute"
+    try:
+        found = registration_scope_offenders()
+        if any("NOTES.md" in problem and "HEADER_SUFFIXES" in problem for problem in found):
+            print("OK: self-test — a registration whose suffix is unchecked is refused")
+        else:
+            print(f"SELF-TEST FAIL: an out-of-scope registration was not refused ({found})")
+            ok = False
+    finally:
+        del DELIBERATE_OTHER_LICENSE["docs/NOTES.md"]
+
+    # 5. THE EXPRESSION IS READ FROM Cargo.toml, not restated here. This is the property
+    #    the whole design rests on: a copy in this file would be a second place to change
+    #    and would diverge in exactly the situation the gate exists to catch.
+    try:
+        (root / "Cargo.toml").write_text(
+            real.replace(f'license = "{expected}"', 'license = "Zlib OR WTFPL"', 1),
+            encoding="utf-8",
+        )
+        moved = workspace_license(root)
+        found = first_party_header_offenders(root, moved)
+        if moved == "Zlib OR WTFPL" and len(found) > 100:
+            print(
+                f"OK: self-test — changing Cargo.toml's field moves the expectation "
+                f"({len(found)} files then offend), so it is read rather than restated"
+            )
+        else:
+            print(f"SELF-TEST FAIL: the expectation did not follow Cargo.toml (got {moved!r})")
+            ok = False
+    finally:
+        (root / "Cargo.toml").write_text(real, encoding="utf-8")
+
+    # 6. A literal-string license parses. `split('"')[1]` raised IndexError here.
+    scratch = root / "target" / "check-licenses-selftest"
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "Cargo.toml").write_text(
+        "[workspace.package]\nlicense = 'MIT OR Apache-2.0'\n", encoding="utf-8"
+    )
+    if workspace_license(scratch) == "MIT OR Apache-2.0":
+        print("OK: self-test — a TOML literal-string license parses instead of crashing")
+    else:
+        print("SELF-TEST FAIL: a literal-string license did not parse")
+        ok = False
+
+    print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
+    return 0 if ok else 1
+
+
 def main() -> int:
+    # ARGUMENTS ARE PARSED, and an unknown one is refused. This file used to ignore argv
+    # entirely, so every flag was a silent no-op that still printed OK.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--self-test", action="store_true")
+    if parser.parse_args().self_test:
+        return self_test()
     root = repo_root()
     mulan_problems = check_mulan_text(root)
     if mulan_problems:
@@ -276,6 +440,16 @@ def main() -> int:
         return 1
 
     expected = workspace_license(root)
+    scope_offenders = registration_scope_offenders()
+    if scope_offenders:
+        print(
+            "License hygiene FAILED: the deliberate-exemption register asserts something\n"
+            "this gate does not check:",
+            file=sys.stderr,
+        )
+        for problem in scope_offenders:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
     header_offenders = first_party_header_offenders(root, expected)
     if header_offenders:
         print(

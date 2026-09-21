@@ -92,6 +92,9 @@ jobs:
       - name: Check the LUBM query normalisation and its controls hold (offline)
         run: python3 scripts/lubm-queries.py --offline-self-test
 
+      - name: Check the license gate can still fail
+        run: python3 scripts/check-licenses.py --self-test
+
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
