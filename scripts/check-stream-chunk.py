@@ -183,7 +183,16 @@ def python_offences(path: Path, text: str) -> list[str]:
 # Two launchers, two delimiters:
 #   python3 -c '<body>'          -- the body is the single-quoted argument
 #   python3 - [args] <<'DELIM'   -- the body runs to a line that is exactly DELIM
-_QUOTED_BODY = re.compile(r"python3 -c '(.*?)^'", re.DOTALL | re.MULTILINE)
+# A SHELL SINGLE-QUOTED STRING CANNOT CONTAIN A SINGLE QUOTE, so the body is simply
+# everything up to the next one -- which covers the single-line and multi-line spellings
+# with one pattern and no line-position assumption.
+#
+# This is the THIRD narrow pattern in this function. First it required `-c '` plus an
+# immediate newline (3 of 12 `-c` sites, no heredocs). Then `^'` for the closing quote,
+# which silently required a MULTI-line body and missed all four single-line sites -- where
+# the nested-call and two-argument shapes this file exists to catch passed in silence. Each
+# time the replacement was a slightly wider guess at the syntax instead of the syntax rule.
+_QUOTED_BODY = re.compile(r"python3 -c '([^']*)'")
 _HEREDOC_OPEN = re.compile(r"python3 -[^\n]*<<[-]?'?(\w+)'?[^\n]*$", re.MULTILINE)
 
 
@@ -404,13 +413,31 @@ def self_test() -> int:
     # AND THE LINE NUMBER MUST NAME THE SHELL LINE. Blanking an embedded body with `sub("")`
     # deleted its lines and shifted every later number, so a shell-native finding was
     # reported up to 119 lines early.
-    probe = "\n" * 9 + "python3 -c '\nh.read(4194304)\n'\n"
-    reported = shell_offences(here, probe)
-    if not reported or ":11:" not in reported[0]:
-        print(f"SELF-TEST FAIL: the embedded finding does not name the shell line: {reported}")
+    # THE LINE NUMBER OF AN EMBEDDED FINDING must name the shell line, and the number of a
+    # SHELL-NATIVE finding AFTER an embedded body must survive the blanking. The first
+    # version of this probe had nothing after the body, so it could not observe the defect
+    # it was written for: reverting the line-for-line blanking to `replace(body, "", 1)` --
+    # which deleted the lines and shifted everything below -- left this self-test fully
+    # green while reporting real findings up to 119 lines early in `lane-common.sh`.
+    probe = "\n" * 9 + "python3 -c '\nh.read(4194304)\n'\n" + "\nh.read(65536)\n"
+    reported = sorted(shell_offences(here, probe))
+    embedded = [problem for problem in reported if "4194304" in problem]
+    native = [problem for problem in reported if "65536" in problem]
+    if not embedded or ":11:" not in embedded[0]:
+        print(f"SELF-TEST FAIL: the embedded finding does not name the shell line: {embedded}")
+        ok = False
+    elif not native or ":14:" not in native[0]:
+        print(
+            f"SELF-TEST FAIL: a shell-native finding AFTER an embedded body does not name its "
+            f"own line — the embedded body was deleted rather than blanked, so every later "
+            f"line number is short: {native}"
+        )
         ok = False
     else:
-        print("OK: self-test — an embedded finding names its line in the shell file")
+        print(
+            "OK: self-test — an embedded finding names its shell line, and a shell-native "
+            "finding after one keeps its own"
+        )
 
     # And the tree as it stands, which is the neighbour for the whole gate.
     standing = scan()

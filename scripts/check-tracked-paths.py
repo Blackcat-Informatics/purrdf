@@ -131,6 +131,13 @@ def _misrendering(component: str) -> str | None:
         # is what the wholesale exclusion threw away.
         if 0xFE00 <= code <= 0xFE0F or 0xE0100 <= code <= 0xE01EF:
             base = component[index - 1] if index else ""
+            # TWELVE ASCII CHARACTERS DO HAVE STANDARDIZED EMOJI VARIATION SEQUENCES: the
+            # keycap bases `#`, `*` and `0`-`9`. `1️⃣` is U+0031 U+FE0F U+20E3, and refusing
+            # it was an over-refusal whose diagnostic asserted a falsehood -- "which has no
+            # variant to select" -- about a path that does NOT render like `1.md`. The rule's
+            # own stated ground was not met, which is the tell.
+            if base in _KEYCAP_BASES:
+                continue
             if base == "" or base.isascii():
                 return (
                     f"the variation selector U+{code:04X} after {base!r}, which has no "
@@ -169,6 +176,9 @@ def _misrendering(component: str) -> str | None:
 # preceding character to modify, and they are what let two paths render identically. U+034F
 # (COMBINING GRAPHEME JOINER) also stays -- it is invisible and carries no orthographic
 # requirement in any script this repository documents.
+# The only ASCII characters with standardized emoji variation sequences (the keycaps).
+_KEYCAP_BASES = frozenset("#*0123456789")
+
 _BLANK_BUT_NOT_SPACE = frozenset(
     "\u3164\u2800\u115f\u1160\u17b4\u17b5\uffa0\u034f\u180e"
 )
@@ -346,6 +356,9 @@ def self_test() -> int:
         "docs/emoji/❤️.md",
         "docs/emoji/⚠️-warning.md",
         "docs/emoji/🏳️‍🌈.md",
+        # The keycap sequences, whose ASCII base DOES have an emoji variant.
+        "docs/1️⃣-first.md",
+        "docs/#️⃣-hash.md",
     ]
     wrongly = [path for path in accepted if offences([path])]
     if wrongly:
@@ -365,10 +378,14 @@ def self_test() -> int:
         ("case only", ["README.md", "readme.md"]),
         ("case only, deeper", ["docs/Design.md", "docs/design.md"]),
     ]
-    for label, pair in colliding:
-        if not collisions(pair):
-            print(f"SELF-TEST FAIL: {label} must collide: {pair!r}")
-            ok = False
+    # `for … else` WITHOUT A `break` RUNS THE `else` UNCONDITIONALLY, so this printed
+    # "all 3 colliding pairs are refused" directly beneath the failures it had just
+    # reported. `ok` still propagated, so the exit code was right and the OUTPUT was a lie --
+    # the misrepresenting-success shape this whole change argues against, in its own gate.
+    not_colliding = [label for label, pair in colliding if not collisions(pair)]
+    if not_colliding:
+        print(f"SELF-TEST FAIL: these must collide: {not_colliding}")
+        ok = False
     else:
         print(f"OK: self-test — all {len(colliding)} colliding pairs are refused")
 
