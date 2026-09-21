@@ -44,13 +44,24 @@ impl Document {
         .map_err(|source| decode(format!("JSON-LD serialization: {source}")))
     }
 
+    /// Takes `self` BY VALUE because compaction rewrites the document in place.
+    ///
+    /// The two preparation passes below — consuming graph-index metadata, relocating
+    /// reverse properties — need `&mut`, and reaching them from `&self` meant cloning
+    /// the whole carrier for no reason other than the receiver's shape. On a
+    /// dataset-sized document that clone is the largest single allocation on the
+    /// serialize side, and it is pure duplication: the original is dropped the moment
+    /// this returns.
+    ///
+    /// Every caller builds its carrier locally and hands it over exactly once, so the
+    /// move costs them nothing.
     pub(super) fn write_compacted_json<W: Write>(
-        &self,
+        mut self,
         writer: W,
         context: &CompiledJsonLdContext,
     ) -> Result<(), RdfDiagnostic> {
-        let mut prepared = self.clone();
-        let graph_index_plans = plan_graph_index_containers(&prepared, context)?;
+        let prepared = &mut self;
+        let graph_index_plans = plan_graph_index_containers(prepared, context)?;
         consume_graph_index_metadata(&mut prepared.default_nodes, None, &graph_index_plans);
         for graph in &mut prepared.named_graphs {
             consume_graph_index_metadata(
@@ -66,7 +77,7 @@ impl Document {
         serde_json::to_writer_pretty(
             writer,
             &CompactedDocument {
-                document: &prepared,
+                document: prepared,
                 context,
                 graph_index_plans: &graph_index_plans,
             },

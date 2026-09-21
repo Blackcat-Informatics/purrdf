@@ -367,7 +367,7 @@ pub fn serialize_dataset_to_jsonld_with_context<D: DatasetView>(
         None,
     )?;
     let carrier = build_carrier(&graph, true)?;
-    serialize_carrier_compacted(&carrier, context)
+    serialize_carrier_compacted(carrier, context)
 }
 
 /// Derive a deterministic, vocabulary-neutral JSON-LD context from dataset IRI slots.
@@ -403,7 +403,7 @@ fn write_ser_graph(graph: &SerGraph, out: &mut TextSink<'_>) -> Result<(), RdfDi
     let carrier = build_carrier(graph, false)?;
     match base_only_context(graph)? {
         None => write_carrier_expanded(&carrier, out),
-        Some(context) => write_carrier_compacted(&carrier, &context, out),
+        Some(context) => write_carrier_compacted(carrier, &context, out),
     }
 }
 
@@ -423,16 +423,16 @@ pub(crate) fn write_ser_graph_with_options(
     match options.mode() {
         JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
             None => write_carrier_expanded(&carrier, out),
-            Some(context) => write_carrier_compacted(&carrier, &context, out),
+            Some(context) => write_carrier_compacted(carrier, &context, out),
         },
         JsonLdSerializeMode::Context(context) => {
             let merged = context_with_base(context, graph)?;
-            write_carrier_compacted(&carrier, merged.as_ref().unwrap_or(context), out)
+            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(context), out)
         }
         JsonLdSerializeMode::Derived => {
             let context = derived::derive_context(&carrier)?;
             let merged = context_with_base(&context, graph)?;
-            write_carrier_compacted(&carrier, merged.as_ref().unwrap_or(&context), out)
+            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(&context), out)
         }
     }
 }
@@ -501,7 +501,7 @@ fn write_carrier_expanded(
 }
 
 fn write_carrier_compacted(
-    carrier: &CarrierDocument,
+    carrier: CarrierDocument,
     context: &CompiledJsonLdContext,
     out: &mut TextSink<'_>,
 ) -> Result<(), RdfDiagnostic> {
@@ -511,7 +511,7 @@ fn write_carrier_compacted(
 
 /// The whole-`String` spelling of [`write_carrier_compacted`].
 fn serialize_carrier_compacted(
-    carrier: &CarrierDocument,
+    carrier: CarrierDocument,
     context: &CompiledJsonLdContext,
 ) -> Result<String, RdfDiagnostic> {
     let mut out = TextSink::in_memory();
@@ -636,7 +636,7 @@ pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
         None,
     )?;
     let carrier = build_carrier(&graph, true)?;
-    let json = serialize_carrier_compacted(&carrier, context)?;
+    let json = serialize_carrier_compacted(carrier, context)?;
     let mut out = TextSink::in_memory();
     write_yaml(&json, schema_url, &mut out)?;
     finish_json_output(out)
@@ -2208,7 +2208,13 @@ mod carrier_law_tests {
         .expect("serialization graph");
         let expanded = build_carrier(&graph, true).expect("typed expanded carrier");
         let context = CompiledJsonLdContext::compile(context_value, None).expect("context");
-        let compacted = serialize_carrier_compacted(&expanded, &context).expect("compaction");
+        // Cloned HERE, explicitly, because this assertion compares the original
+        // against the re-expansion and so needs the carrier to outlive compaction.
+        // Compaction consumes its document — it rewrites it in place — and that is the
+        // point: the clone is now one test's cost rather than every production
+        // serialization's.
+        let compacted =
+            serialize_carrier_compacted(expanded.clone(), &context).expect("compaction");
         let document = context::parse_document(compacted.as_bytes()).expect("strict JSON");
         let initial = CompiledJsonLdContext::compile(&json!({}), None).expect("empty context");
         let reexpanded = expand::expand_document(document, &initial).expect("re-expansion");
