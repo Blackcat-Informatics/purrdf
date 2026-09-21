@@ -4886,18 +4886,22 @@ def change_path_pin_claims(pins: dict[str, int]) -> list[Claim]:
 
 
 # The change-path document's allocation decomposition, by the row label it publishes.
-# The three `—` rows are the components of the row above them; the last two sit beside
-# it. Nothing in the repository measures this table — it was taken by inserting one
-# extra discarded copy of each slice into the live path and differencing — so what is
-# gated is the arithmetic it asserts about itself and the figures DERIVED from it,
-# which is every figure in the document that a later re-measurement would leave behind.
+# The four `—` rows are the components of the row above them; the evaluation-context
+# and query-context rows sit beside it, additive with it rather than inside it. Nothing
+# in the repository measures this table — it was taken by inserting one extra discarded
+# copy of each slice into the live path and differencing — so what is gated is the
+# arithmetic it asserts about itself and the figures DERIVED from it, which is every
+# figure in the document that a later re-measurement would leave behind.
 _DECOMPOSITION_TOTAL = "pre-binding rewrite, total"
 _DECOMPOSITION_PARTS = (
     "— the algebra clone",
     "— term and string materialization",
-    "— pushdown, seed and expression walks",
+    "— pushdown and seed descent",
+    "— expression walk and the second ground-term conversion",
 )
-_DECOMPOSITION_EVALUATOR = "**evaluator per-query execution setup**"
+_DECOMPOSITION_CONTEXT = "evaluation context construction"
+_DECOMPOSITION_QUERY_CONTEXT = "query-context preparation"
+_DECOMPOSITION_EVALUATOR = "**evaluating the freshly minted tree**"
 _DECOMPOSITION_REMAINDER = "SHACL-side remainder"
 
 
@@ -4911,7 +4915,24 @@ def _decomposition_row(text: str, label: str) -> list[int]:
             f"in {rel}; the figures derived from that row cannot be checked, so do not "
             f"leave them unchecked"
         )
-    cells = [int(cell) for cell in re.findall(r"\d+", row.group(1))]
+    # An em-dash cell means "not applicable here" — a real, gated zero — not an
+    # absence to be dropped. `re.findall(r"\d+", ...)` used to drop it silently,
+    # which shrank the row's width instead of failing, so a width mismatch that
+    # should have caught a reworded table went undetected.
+    raw_cells = [cell.strip() for cell in row.group(1).split("|")]
+    raw_cells = [cell for cell in raw_cells if cell != ""]
+    cells: list[int] = []
+    for cell in raw_cells:
+        if cell.strip("*") == "—":
+            cells.append(0)
+            continue
+        found = re.search(r"\d+", cell)
+        if not found:
+            raise SystemExit(
+                f"check-doc-claims: the {label!r} row in {rel} has a cell "
+                f"{cell!r} that is neither a number nor an em-dash"
+            )
+        cells.append(int(found.group()))
     if not cells:
         raise SystemExit(
             f"check-doc-claims: the {label!r} row in {rel} carries no numbers"
@@ -4922,21 +4943,26 @@ def _decomposition_row(text: str, label: str) -> list[int]:
 def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
     """The decomposition table's own arithmetic, and the two figures derived from it.
 
-    Three identities hold by construction and are checked per surface: the three
-    component rows sum to the pre-binding total; the pre-binding total, the evaluator's
-    per-query setup and the SHACL-side remainder sum to the stated baseline; and the
-    residual an id-native pre-binding would leave is the baseline less the pre-binding
-    total. The document states that residual twice, in two different spellings, and
-    both are derived here — a re-measurement that updates the table and not the
-    sentences is precisely the edit this catches.
+    Three identities hold by construction and are checked per surface: the four
+    component rows sum to the pre-binding total; the pre-binding total, the two
+    context rows, the cost of evaluating the freshly minted tree, and the SHACL-side
+    remainder sum to the stated baseline; and the residual an id-native pre-binding
+    would leave is the baseline less the pre-binding total. The document states that
+    residual twice, in two different spellings, and both are derived here — a
+    re-measurement that updates the table and not the sentences is precisely the
+    edit this catches.
     """
     text = _read(_CHANGE_PATH_DESIGN)
     rel = _CHANGE_PATH_DESIGN.relative_to(_REPO)
     baseline_row = re.search(
         _flow(
             r"against the baseline of (?P<a>\d+) / (?P<b>\d+) / (?P<c>\d+) / (?P<d>\d+) "
-            r"that held before"
-        ),
+        )
+        # "that held" followed by whatever the clause says next — the doc has
+        # read "that held before" and "that held when the decomposition was
+        # taken", and a future rewording should not have to touch this anchor
+        # again, only the number in it.
+        + r"that held\b[^;,.\n]*",
         text,
     )
     if not baseline_row:
@@ -4947,11 +4973,18 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
     baseline = [int(value) for value in baseline_row.groups()]
     total = _decomposition_row(text, _DECOMPOSITION_TOTAL)
     parts = [_decomposition_row(text, label) for label in _DECOMPOSITION_PARTS]
+    context = _decomposition_row(text, _DECOMPOSITION_CONTEXT)
+    query_context = _decomposition_row(text, _DECOMPOSITION_QUERY_CONTEXT)
     evaluator = _decomposition_row(text, _DECOMPOSITION_EVALUATOR)
     remainder = _decomposition_row(text, _DECOMPOSITION_REMAINDER)
-    widths = {len(baseline), len(total), len(evaluator), len(remainder)} | {
-        len(part) for part in parts
-    }
+    widths = {
+        len(baseline),
+        len(total),
+        len(context),
+        len(query_context),
+        len(evaluator),
+        len(remainder),
+    } | {len(part) for part in parts}
     if len(widths) != 1:
         raise SystemExit(
             f"check-doc-claims: the allocation decomposition in {rel} has rows of "
@@ -4966,7 +4999,13 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
                 f"component rows sum to {summed}, but {_DECOMPOSITION_TOTAL!r} says "
                 f"{total[column]}"
             )
-        whole = total[column] + evaluator[column] + remainder[column]
+        whole = (
+            total[column]
+            + context[column]
+            + query_context[column]
+            + evaluator[column]
+            + remainder[column]
+        )
         if whole != baseline[column]:
             problems.append(
                 f"{rel}: the allocation decomposition's column {column + 1} — its rows "

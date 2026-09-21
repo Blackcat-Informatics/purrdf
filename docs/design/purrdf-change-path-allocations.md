@@ -133,9 +133,10 @@ So the dominant term is not *setting up* an execution. It is **evaluating a tree
 that was minted for this focus node and will be dropped at the end of it** — the
 seed `VALUES` the rewrite just built, the join onto it, and the `VarSchema` every
 `Project` and `Bgp` node rebuilds because the node it belongs to is a fresh heap
-temporary. Together with the rewrite that produced that tree, those two account
-for the whole per-focus-node figure, to within the SHACL-side remainder the last
-row names.
+temporary — and it is larger than the entire pre-binding rewrite on three of the
+four surfaces. Together with the rewrite that produced that tree, those two
+account for the whole per-focus-node figure, to within the SHACL-side remainder
+the last row names.
 
 There is an irony worth recording. The pre-binding path round-trips an identity
 through a string and back to the same identity: a term id becomes an owned term
@@ -147,7 +148,7 @@ is why removing it was not the fix it appeared to be.
 ## Why an id-native pre-binding does not reach zero
 
 Carrying an identity through the pre-binding interface, taken to its theoretical
-maximum, removes the whole pre-binding row. That leaves 61, 106, 69 and 144
+maximum, removes the whole pre-binding row. That leaves 59, 104, 67 and 142
 allocations per focus node. The goal of no growth term is unreachable from that
 path — not narrowly, but by a factor of one and a half to two and a half on the
 residual alone, because nothing in the pre-binding path can reach the evaluator's
@@ -163,7 +164,7 @@ across four crates. Every remaining spelling either re-derives the
 right-arm-of-`OPTIONAL`-and-`MINUS` boundary in two further places, which is the
 change most likely to introduce a silent soundness difference, or needs a
 sentinel-marking scheme plus a second plan cache plus a side table threaded
-through four subsystems — for a ceiling that is still 61 / 106 / 69 / 144.
+through four subsystems — for a ceiling that is still 59 / 104 / 67 / 142.
 
 ## What was taken, and what is left
 
