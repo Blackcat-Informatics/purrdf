@@ -267,11 +267,55 @@ pub(crate) fn serialize(
     };
     match output {
         Some(output) => {
-            output.call_method1("write", (PyBytes::new(py, &bytes),))?;
+            write_all_to(py, output, &bytes)?;
             Ok(None)
         }
         None => Ok(Some(PyBytes::new(py, &bytes).unbind())),
     }
+}
+
+/// Write every byte of `bytes` to a Python file-like `output`, honouring short writes.
+///
+/// `write` on a Python file object is NOT obliged to consume everything it is given.
+/// `io.RawIOBase.write` returns the number of bytes actually written and may return
+/// less than it was handed — a raw unbuffered file on a full pipe is the ordinary
+/// case — and any object satisfying the file-like protocol may do the same. Calling
+/// it once and discarding the count silently truncated the document whenever that
+/// happened, and produced a short file with no error: exactly the silent drop this
+/// binding exists to avoid on every other seam.
+///
+/// `None` is accepted as "consumed it all", which is what `io.TextIOBase` and many
+/// hand-rolled sinks return. Anything else that is not a non-negative integer is a
+/// hard failure rather than a guess, because guessing is how a truncation becomes
+/// invisible again.
+fn write_all_to(py: Python<'_>, output: &Bound<'_, PyAny>, bytes: &[u8]) -> PyResult<()> {
+    let mut written = 0usize;
+    while written < bytes.len() {
+        let result = output.call_method1("write", (PyBytes::new(py, &bytes[written..]),))?;
+        if result.is_none() {
+            return Ok(());
+        }
+        let count: i64 = result.extract().map_err(|_| {
+            PyTypeError::new_err(
+                "serialize: output.write must return the number of bytes written, or None; \
+                 a value of another type cannot be checked for a short write",
+            )
+        })?;
+        let count = usize::try_from(count).map_err(|_| {
+            PyValueError::new_err(format!(
+                "serialize: output.write reported {count} bytes written, which is negative"
+            ))
+        })?;
+        if count == 0 {
+            return Err(PyValueError::new_err(format!(
+                "serialize: output.write accepted 0 of {} remaining bytes and would not \
+                 make progress; the document was not written in full",
+                bytes.len() - written
+            )));
+        }
+        written += count.min(bytes.len() - written);
+    }
+    Ok(())
 }
 
 // ── Pure-Rust cores (PyO3-free, exercised through the pytest suite) ─────────────
