@@ -143,5 +143,12 @@ the crate's `wasm-bindgen` version, `0.2.125`).
 
 ## License
 
-MIT OR Apache-2.0 OR MulanPSL-2.0 (the `purrdf` engine); the `purrdf-events` ingestion protocol it
-depends on is permissive (MIT OR Apache-2.0 OR MulanPSL-2.0).
+Licensed under any one of the following, at your option:
+
+- [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
+
+The `purrdf-events` ingestion protocol this package depends on carries the same offer.
+An earlier version of this section named that offer twice as though the two differed,
+which is what the mechanical substitution left behind when both halves became equal.

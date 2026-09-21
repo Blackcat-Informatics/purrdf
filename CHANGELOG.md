@@ -71,6 +71,39 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   count, silently truncating the document whenever a file-like object accepted less
   than it was given.
 
+- **build:** three hygiene gates, each wired into both `make check` and CI because the
+  first of them exists to make that pairing checkable.
+  `scripts/check-gate-parity.py` takes the AGREEMENT between `make check` and the
+  pull-request workflows as its subject: CI does not run `make check`, it enumerates each
+  gate as a named step, so the two lists encode one rule and nothing compared them. It
+  found three pre-existing divergences on its first run -- `check-terminal-predicates.py`
+  and its `--self-test` ran locally and in no workflow at all, and
+  `check-toolchain-pin.py --self-test` ran in CI and not locally -- and a fourth that was
+  live behind a workflow `make` step. Six one-sided gates are registered with their
+  reasons -- two determinism checks needing the wasm toolchain, the book render needing
+  mdbook, the conformance matrix needing tens of minutes, and two `uv`-driven emitter
+  oracles -- under a register that may only shrink and whose size is pinned, so growth is
+  a visible edit rather than the silent one that left this count stale.
+  `scripts/check-stream-chunk.py` refuses a streamed read whose chunk size is written out
+  instead of named; six copies of that number lived under two names across five files,
+  two already drifted to a quarter and a sixty-fourth of the shared size, and because every
+  chunk size produces a correct digest nothing reported it.
+  `scripts/check-tracked-paths.py` refuses a tracked path that misrepresents itself to the
+  tools that read it -- a component beginning with `-`, which a glob hands to a command as
+  a FLAG, or a character that does not render as what it is. A flag-shaped artifact had
+  been committed at the repository root and swept past roughly thirty hygiene scripts,
+  because they all walk a file list rather than a glob.
+
+- **license:** MulanPSL-2.0 is offered as a third option alongside MIT and
+  Apache-2.0, at the user's choice. `LICENSE-MULAN` and
+  `LICENSES/MulanPSL-2.0.txt` carry the text, pinned by SHA-256 in
+  `scripts/check-licenses.py` because the license's own section 6 makes its
+  Chinese text controlling -- a silently drifted copy would change the governing
+  terms. `scripts/check-licenses.py` also now refuses a first-party file whose
+  SPDX identifier is not the expression `Cargo.toml` declares, reading that field
+  rather than restating it, so the next license change cannot leave a file behind
+  at the old offer. `docs/book/book.toml` is registered as deliberately CC-BY-4.0
+  with its reason, under a register that only shrinks.
 - **build:** `scripts/check-python-binding-tests.py`, wired into `make check`,
   `make pytest`, `make python-binding-hygiene` and CI. It fails if a `test`
   predicate appears in any `cfg` invocation, or a `#[test]` attribute anywhere,

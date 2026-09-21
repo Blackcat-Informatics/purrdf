@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-markdown.svg)](https://crates.io/crates/purrdf-markdown)
 [![docs.rs](https://docs.rs/purrdf-markdown/badge.svg)](https://docs.rs/purrdf-markdown)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-markdown` turns a Markdown document into RDF 1.2 along the
@@ -409,3 +409,11 @@ canon base that carries no scheme or is no IRI at all. Then the document: an
 empty source id, which would be written `<>` and name no document; a source id
 that cannot be written inside `<` and `>`; one that carries no scheme; one that
 is no IRI at all; and bytes that are not UTF-8 (naming the offset).
+
+## License
+
+Licensed under any one of the following, at your option:
+
+- [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)

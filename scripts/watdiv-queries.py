@@ -108,8 +108,12 @@ against another engine answering THE SAME query under the same conditions.
 
 import argparse
 import hashlib
+import os
+import time
+import subprocess
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -133,6 +137,18 @@ TOOLKIT_TAR = REPO_ROOT / "target" / "bench-artifacts" / "watdiv_v06.tar"
 EXPECTED_TEMPLATES = 20
 
 _U64 = (1 << 64) - 1
+
+# The chunk size every streamed digest here uses, matching `lane_sha256_file` and
+# `benchmark-acquire.py`. This digest decides a cache hit, so it is not a free choice.
+# THE CHUNK SIZE IS NOT DEFINED HERE. Six copies lived under two names across five
+# files, two of them already drifted -- one to a quarter of the shared size and one
+# to a sixty-fourth. Every chunk size produces a correct digest, so nothing reported
+# that divergence. The number
+# now lives in `scripts/lane_chunk.py` and nothing restates it. The path insert is
+# explicit rather than relying on `sys.path[0]`, because this module is also loaded
+# by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lane_chunk import STREAM_CHUNK_BYTES, fsync_path  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
 # ── The selection function ──────────────────────────────────────────────────────
@@ -178,8 +194,14 @@ def stream_of(template: str, variable: str) -> int:
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
-def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int]:
-    """Choose one of ``count`` candidates uniformly. Returns ``(index, draw)``.
+def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int, int]:
+    """Choose one of ``count`` candidates uniformly. Returns ``(index, draw, attempts)``.
+
+    ``attempts`` is 1 when the first draw was accepted and rises by one per
+    REJECTION. It is returned because the rejection path is otherwise invisible:
+    a check that read the raw draw as an attempt count passed identically at a
+    count where rejection is arithmetically impossible, and printed a retry figure
+    that was simply the sample size.
 
     Plain ``draw % count`` folds the top of the 64-bit range unevenly, favouring
     the first ``2**64 % count`` candidates. The draw is therefore rejected and
@@ -194,7 +216,7 @@ def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int]:
     while True:
         value = draw(seed, TAG_MAPPING, stream + attempt * _RETRY_STRIDE)
         if value < limit:
-            return value % count, value
+            return value % count, value, attempt + 1
         attempt += 1
 
 
@@ -203,6 +225,34 @@ def uniform_index(seed: int, stream: int, count: int) -> tuple[int, int]:
 _MAPPING = re.compile(r"^#mapping\s+(\S+)\s+(\S+)\s+(\S+)\s*$")
 _PLACEHOLDER = re.compile(r"%(\w+)%")
 _PREFIXED = re.compile(r"(?<![\w:<])([A-Za-z][\w.-]*):[\w.%-]+")
+
+# An angle-bracketed IRI, or a quoted literal INCLUDING its ECHAR escapes.
+#
+# The escapes are the whole point. A naive `"[^"\n]*"` closes the literal at the
+# first `\"` inside it and leaves the remainder of that literal standing in the
+# text the prefix scan then reads -- so a perfectly legal
+# `"say \"nosuch:name\""` had `nosuch:name` scanned as a prefixed name and the
+# template was REFUSED. SPARQL 1.1 §19.7 admits `\"` in a STRING_LITERAL2 via
+# ECHAR, so that body is legal and refusing it is an over-refusal: the mirror of
+# the silent drop the prefix check replaced.
+# Built from parts rather than one pattern, because the LONG forms must come FIRST and
+# an alternation is ordered: a short-literal arm ahead of them would consume the
+# opening pair of a long literal and leave its body exposed to the prefix scan -- the
+# same shape as the escape defect, one syntax over. No pinned template carries a quote
+# of any kind today and substitution injects only IRIs, so the long forms are
+# unreachable rather than broken; they are here so the first template to carry a
+# literal does not rediscover this.
+_LITERAL_OR_IRI = re.compile(
+    "|".join(
+        [
+            r"<[^>\s]*>",  # an IRI reference
+            r'"""(?:\\.|[^\\])*?"""',  # a long double-quoted literal
+            r"'''(?:\\.|[^\\])*?'''",  # a long single-quoted literal
+            r'"(?:\\.|[^"\\\n])*"',  # a double-quoted literal, escapes included
+            r"'(?:\\.|[^'\\\n])*'",  # a single-quoted literal, escapes included
+        ]
+    )
+)
 _NAMESPACE = re.compile(r"^#namespace\s+(\S+?)\s*=\s*(\S+)\s*$")
 
 # The distributions this program implements. A mapping naming anything else is a
@@ -363,7 +413,13 @@ def expand(prefixed: str, namespaces: dict[str, str]) -> str:
 
 _ENTITY_LOCAL = re.compile(r"^([A-Za-z]+?)(\d+)$")
 
-CANDIDATES_HEADER = "# purrdf-watdiv-candidates-v1"
+# Bumped to v2 when the body digest was added: a v1 file has no digest line, so an
+# older cache is a MISS rather than something read under a format it does not follow.
+# How old a `.part.*` scratch file must be before this process will remove one it does
+# not own. See `write_candidates` for why a blanket sweep was wrong.
+_STALE_SCRATCH_SECONDS = 3600
+
+CANDIDATES_HEADER = "# purrdf-watdiv-candidates-v2"
 
 
 class Candidates(NamedTuple):
@@ -404,7 +460,7 @@ def read_declared(path: Path) -> dict[str, int]:
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 22), b""):
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -497,19 +553,12 @@ def scrape_candidates(
                 by_type[prefixed].append(iri)
             break
 
-    problems = []
-    for prefixed, expected in sorted(declared.items()):
-        actual = len(by_type[prefixed])
-        if actual != expected:
-            problems.append(f"    {prefixed}: scraped {actual}, census declares {expected}")
-    if problems:
-        sys.exit(
-            "FAIL: the candidate scrape disagrees with the dataset's own entity census.\n"
-            + "\n".join(problems)
-            + "\n  Either the entity naming rule or the frozen dataset is not what this program\n"
-            "  believes. Instantiating from a candidate set that may be incomplete would bias\n"
-            "  every query built from it, so nothing is written."
-        )
+    check_against_census(
+        declared,
+        {prefixed: tuple(values) for prefixed, values in by_type.items()},
+        "This is a FRESH scrape, so the disagreement is with the dataset itself.",
+        "scraped",
+    )
 
     # Canonical order, by UTF-8 bytes. The selection must not depend on the order
     # the file happened to mention a term in.
@@ -520,14 +569,117 @@ def scrape_candidates(
     return Candidates(sha256_of(dataset), ordered)
 
 
+def _candidates_body(candidates: Candidates) -> str:
+    """The cache body: one `type&lt;TAB&gt;iri` row per candidate, in canonical order."""
+    return "".join(
+        f"{prefixed}\t{iri}\n"
+        for prefixed in sorted(candidates.by_type)
+        for iri in candidates.by_type[prefixed]
+    )
+
+
 def write_candidates(candidates: Candidates, path: Path) -> None:
-    """Persist the scrape so re-running at another seed need not re-read 1.5 GB."""
+    """Persist the scrape so re-running at another seed need not re-read 1.5 GB.
+
+    THE BODY CARRIES ITS OWN DIGEST, and it is worth being exact about what that does
+    and does not buy. It detects an ACCIDENTAL edit: a truncated write, a hand
+    modification, a partially written file. It is NOT a certificate, because the digest
+    is written by the same run that writes the body -- recompute both and the cache is
+    accepted again, which was demonstrated. Calling it one would be the
+    trust-on-first-use overclaim this repository argues against elsewhere.
+
+    What actually certifies the workload is the query-set pin
+    (`watdiv.10M.seed0.queries.sha256`), and only at the default scale and seed. At any
+    other seed -- the cache's whole reason to exist -- an adversarially rewritten cache
+    with a recomputed digest is not caught by anything here, and the honest remedy is to
+    delete the cache when its provenance is in doubt. The header carries the dataset
+    digest so a cache from other bytes is a miss, and the version so an older format is
+    a miss rather than something read under a format it does not follow.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [CANDIDATES_HEADER, f"# dataset-sha256 {candidates.dataset_sha256}"]
-    for prefixed in sorted(candidates.by_type):
-        for iri in candidates.by_type[prefixed]:
-            lines.append(f"{prefixed}\t{iri}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    body = _candidates_body(candidates)
+    header = "\n".join(
+        [
+            CANDIDATES_HEADER,
+            f"# dataset-sha256 {candidates.dataset_sha256}",
+            f"# body-sha256 {hashlib.sha256(body.encode('utf-8')).hexdigest()}",
+        ]
+    )
+    # WRITTEN ATOMICALLY. A killed run used to leave a truncated cache whose body no
+    # longer matched its recorded digest, and the body check then hard-failed every
+    # later run until an operator deleted the file by hand -- an over-refusal on the
+    # one axis the sibling stamps self-heal. A temporary file plus `os.replace` means a
+    # cache is either wholly there or absent.
+    # Scratch left by a KILLED run is swept; scratch belonging to a LIVE one is not.
+    #
+    # The first version of this swept every `.part.*` in the directory, which is a defect
+    # I introduced while fixing a smaller one. Two runs share the arena at the default
+    # knobs -- a case this lane's shared law file handles explicitly elsewhere -- and the
+    # sweep deleted the other run's in-flight scratch, so its `os.replace` raised a bare
+    # `FileNotFoundError` naming a path and no lane. Housekeeping that destroys live work
+    # is worse than the accumulation it was tidying.
+    #
+    # Two things are safe to remove, and nothing else is. This process's OWN scratch name
+    # (a predecessor with the same pid, which we are about to overwrite anyway), and a
+    # file old enough that no run could still be inside the few hundred milliseconds
+    # between creating it and replacing it. The threshold is written down rather than
+    # implied, with the cost of being wrong stated: an hour is four orders of magnitude
+    # more than this write takes, and guessing high merely leaves an abandoned file for
+    # one more run to find.
+    scratch = path.with_name(f"{path.name}.part.{os.getpid()}")
+    cutoff = time.time() - _STALE_SCRATCH_SECONDS
+    for stale in path.parent.glob(f"{path.name}.part.*"):
+        if stale == scratch:
+            stale.unlink(missing_ok=True)
+            continue
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            # It vanished, or cannot be stat'd. Either way it is not ours to force.
+            continue
+    # `fsync` before the rename, so "wholly there or absent" holds across a host crash
+    # and not merely across a killed process.
+    with scratch.open("w", encoding="utf-8") as handle:
+        handle.write(header + "\n" + body)
+    fsync_path(scratch)
+    os.replace(scratch, path)
+
+
+def check_against_census(
+    declared: dict[str, int],
+    by_type: dict[str, tuple[str, ...]],
+    remedy: str,
+    observed_as: str,
+) -> None:
+    """Refuse unless every declared type's candidate count matches the census.
+
+    ONE implementation, called from both the fresh scrape and the cache-hit path.
+    They were two, with two messages that had already drifted apart, and two
+    copies of a rule are two rules -- the drift this lane's shared law file was
+    created to end.
+
+    Two things genuinely differ between the call sites and are therefore
+    parameters rather than a second copy: *remedy*, the advice, which is not the
+    same for a fresh scrape as for a cache that may have been edited; and
+    *observed_as*, the verb for where the counts came from. "scraped" is a lie on
+    the cache path, where nothing was scraped, and "have" throws away the one word
+    that tells an operator whether to suspect the dataset or the cache.
+    """
+    problems = [
+        f"    {prefixed}: {observed_as} {len(by_type.get(prefixed, ()))}, "
+        f"census declares {expected}"
+        for prefixed, expected in sorted(declared.items())
+        if len(by_type.get(prefixed, ())) != expected
+    ]
+    if problems:
+        sys.exit(
+            "FAIL: the candidate sets do not agree with the dataset's own entity census.\n"
+            + "\n".join(problems)
+            + "\n  Either the entity naming rule or the frozen dataset is not what this program\n"
+            "  believes. Instantiating from a candidate set that may be incomplete would bias\n"
+            f"  every query built from it, so nothing is written.\n  {remedy}"
+        )
 
 
 def read_candidates(path: Path, dataset_sha256: str) -> Candidates | None:
@@ -541,17 +693,68 @@ def read_candidates(path: Path, dataset_sha256: str) -> Candidates | None:
     if not path.exists():
         return None
     lines = path.read_text(encoding="utf-8").splitlines()
-    if len(lines) < 2 or lines[0] != CANDIDATES_HEADER:
+    if len(lines) < 3 or lines[0] != CANDIDATES_HEADER:
         return None
     marker, _, recorded = lines[1].partition(" dataset-sha256 ")
     if marker != "#" or recorded.strip() != dataset_sha256:
         return None
+    # THE BODY IS RE-DIGESTED. Without this the cache was validated only by which
+    # corpus it came from and by per-type counts, and an IRI swapped for another of
+    # the same type survived both while changing every query drawn from that pool.
+    body_marker, _, recorded_body = lines[2].partition(" body-sha256 ")
+    if body_marker != "#":
+        return None
+    body = "".join(f"{line}\n" for line in lines[3:])
+    if hashlib.sha256(body.encode("utf-8")).hexdigest() != recorded_body.strip():
+        # A MISS, NOT A REFUSAL. This used to `sys.exit`, so a cache truncated by a
+        # killed run made every later run die until an operator deleted the file by
+        # hand -- while the sibling reuse stamps treat a mismatch as a cache miss and
+        # re-derive. A cache is scratch: the cheap, self-healing answer is to rescrape,
+        # and refusing instead is an over-refusal on the one axis the stamps get right.
+        #
+        # AND THE BYTES ARE KEPT, which is `benchmark-acquire.py`'s quarantine law
+        # arriving here in the shape a cache can take it. That sibling holds a file
+        # that failed its digest as evidence and names where; this printed a path and
+        # then let the rescrape overwrite it, so the one message telling an operator
+        # something had edited their cache pointed at a file that no longer existed by
+        # the time they looked. A cache does not need to REFUSE to be inspectable.
+        held = path.with_name(f"{path.name}.mismatched")
+        try:
+            os.replace(path, held)
+            where = f"the bytes that failed are held at {held}"
+        except OSError as error:
+            # Failing to preserve evidence must not fail the run: the rescrape is still
+            # the correct answer and is still what happens.
+            where = f"the bytes that failed could not be set aside ({error})"
+        print(
+            f"  candidates cache at {path} no longer digests to what its header records; "
+            f"rescraping rather than trusting it. {where}",
+            file=sys.stderr,
+        )
+        return None
     by_type: dict[str, list[str]] = {}
-    for line in lines[2:]:
+    for line in lines[3:]:
         prefixed, _, iri = line.partition("\t")
         if iri:
             by_type.setdefault(prefixed, []).append(iri)
-    return Candidates(dataset_sha256, {key: tuple(value) for key, value in by_type.items()})
+    # RE-CANONICALISE RATHER THAN TRUST THE FILE'S ORDER. Candidate order IS the
+    # workload: `uniform_index` indexes into these tuples, so the same seed over a
+    # differently ordered list is a different query set. On the fresh-scrape path
+    # that order is a property of this program (`scrape_candidates` sorts by UTF-8
+    # bytes); read back without this sort it became a property of a file under
+    # ``target/``. A candidates.tsv written by an earlier version whose canonical
+    # order differed has the same dataset digest and the same counts, so it is a
+    # cache HIT -- and it would silently produce different queries at one seed.
+    # The header version cannot guard that, because ordering is not part of what
+    # it names. One sort over a few hundred thousand strings buys back the
+    # invariant.
+    return Candidates(
+        dataset_sha256,
+        {
+            key: tuple(sorted(value, key=lambda iri: iri.encode("utf-8")))
+            for key, value in by_type.items()
+        },
+    )
 
 
 # ── Instantiation ───────────────────────────────────────────────────────────────
@@ -589,7 +792,9 @@ def instantiate(
                 f"for {mapping.type_prefixed!r} in this dataset"
             )
 
-        index, raw = uniform_index(seed, stream_of(template.name, mapping.variable), len(pool))
+        index, raw, _attempts = uniform_index(
+            seed, stream_of(template.name, mapping.variable), len(pool)
+        )
         chosen = pool[index]
         placeholder = f"%{mapping.variable}%"
         if placeholder not in body:
@@ -621,7 +826,38 @@ def instantiate(
     # Emit only the prefixes the instantiated text actually uses. Substituting a
     # placeholder with a full IRI can retire a prefix entirely, and a PREFIX
     # declaration for a prefix nothing names is noise in a file meant to be read.
-    used = sorted({match for match in _PREFIXED.findall(body) if match in namespaces})
+    #
+    # A NAME THE MODEL DOES NOT DECLARE IS A HARD FAILURE, not something to skip
+    # past. `if match in namespaces` reads like a filter for retired prefixes, but
+    # it also silently swallowed a prefixed name whose prefix the data model never
+    # declared: the PREFIX line was dropped, the emitted .rq referenced an
+    # undeclared prefix, the CLI refused to parse it, and the lane reported the
+    # parser's complaint as CANNOT-EXECUTE -- a symptom, never the cause. `expand`
+    # already treats this exact condition as fatal and names the prefix; this is
+    # the same law and now says the same thing.
+    # Quoted literals AND angle-bracketed IRIs are removed before scanning.
+    # `_LITERAL_OR_IRI` understands ECHAR escapes; a regex that did not closed the
+    # literal at the first `\"` and left the rest of it exposed to the prefix scan.
+    # `_PREFIXED` is deliberately loose: a literal such as "note: see below"
+    # matches it, and so does the `a:b` inside `<http://example.org/a:b>`, because
+    # the lookbehind only blocks a match immediately after `<`. Since
+    # instantiation substitutes full IRIs into these bodies, scanning the raw text
+    # would refuse legal output -- the over-refusal that mirrors the silent drop
+    # this check exists to fix. Only prefixes outside literals and IRIs count, in
+    # both directions.
+    scannable = _LITERAL_OR_IRI.sub(" ", body)
+    found = sorted(set(_PREFIXED.findall(scannable)))
+    undeclared = [prefix for prefix in found if prefix not in namespaces]
+    if undeclared:
+        sys.exit(
+            f"FAIL: {template.name} uses prefix(es) {undeclared} that the WatDiv data "
+            "model does not declare.\n"
+            f"  Declared prefixes: {', '.join(sorted(namespaces))}\n"
+            "  An emitted query naming an undeclared prefix does not parse, and the "
+            "lane would report the parser's complaint as the diagnosis rather than "
+            "this."
+        )
+    used = found
     header = "\n".join(f"PREFIX {prefix}: <{namespaces[prefix]}>" for prefix in used)
     text = (header + "\n" + body if header else body).strip() + "\n"
     return Query(template.name, text, tuple(choices))
@@ -794,6 +1030,510 @@ def _fixture_candidates(namespaces: dict[str, str]) -> Candidates:
     return Candidates("0" * 64, by_type)
 
 
+# ── The offline half of the self-test ───────────────────────────────────────────
+#
+# `self_test()` needs the fetched toolkit tarball, so it runs only inside
+# `make watdiv`, after a download. That left the arithmetic every published
+# WatDiv number depends on -- splitmix64, the stream derivation, the rejection
+# sampler, and instantiation itself -- outside every gate in this repository,
+# which is how a change to `_RETRY_STRIDE`, `TAG_MAPPING` or `stream_of` could
+# have altered every query set at one seed with all checks still green.
+#
+# Everything below is synthetic and runs offline, so it can live in `make check`.
+
+_PINNED_FIXTURE_SEED_0 = "e377b94c325592336ef1a40f37dc7165faf0251e9f9883643cffe5225635276c"
+
+_FIXTURE_NAMESPACES = {
+    "wsdbm": "http://db.uwaterloo.ca/~galuc/wsdbm/",
+    "sorg": "http://schema.org/",
+}
+
+
+def _fixture_templates() -> list[Template]:
+    """Three synthetic templates: one mapping, two mappings, and none at all.
+
+    The no-mapping case is the control. It must be seed-INDEPENDENT, so a change
+    that moved something it should not have is distinguishable from a change that
+    moved a mapping.
+    """
+    return [
+        Template(
+            "X1",
+            (Mapping("v1", "wsdbm:User", "uniform"),),
+            "SELECT ?v0 WHERE {\n  %v1% wsdbm:likes ?v0 .\n}",
+        ),
+        Template(
+            "X2",
+            (Mapping("v1", "wsdbm:City", "uniform"), Mapping("v2", "wsdbm:User", "uniform")),
+            "SELECT ?v0 WHERE {\n  ?v0 sorg:name %v1% .\n  %v2% wsdbm:friendOf ?v0 .\n}",
+        ),
+        Template("X3", (), "SELECT ?v0 WHERE {\n  ?v0 wsdbm:likes ?v1 .\n}"),
+    ]
+
+
+def _fixture_pool() -> Candidates:
+    """Two pools of deliberately different sizes, canonically ordered."""
+    by_type = {}
+    for prefixed, size in (("wsdbm:User", 100), ("wsdbm:City", 7)):
+        base = expand(prefixed, _FIXTURE_NAMESPACES)
+        local = prefixed.partition(":")[2]
+        by_type[prefixed] = tuple(
+            sorted((f"{base}{local}{n}" for n in range(size)), key=lambda iri: iri.encode("utf-8"))
+        )
+    return Candidates("fixture", by_type)
+
+
+def _fixture_digest(seed: int) -> str:
+    """Digest the fixture query set at *seed* as a manifest of per-query digests.
+
+    NOT a concatenation of names and texts. That stream is ambiguous -- nothing
+    delimits the end of one text from the start of the next name -- so two
+    different query sets can share one digest, which would make this pin
+    unfalsifiable in exactly the cases it exists to catch. This mirrors
+    `lane_query_set_digest`, and it is the same law: a directory digest is a
+    manifest of per-file digests, never a concatenation.
+    """
+    records = sorted(
+        f"{hashlib.sha256(query.text.encode('utf-8')).hexdigest()}  {query.name}"
+        for query in build(_fixture_templates(), seed, _fixture_pool(), _FIXTURE_NAMESPACES)
+    )
+    return hashlib.sha256(("\n".join(records) + "\n").encode("utf-8")).hexdigest()
+
+
+def offline_self_test() -> int:
+    """The tarball-free checks, so the instantiator's arithmetic is gated."""
+    ok = True
+
+    def check(condition: bool, label: str) -> None:
+        nonlocal ok
+        print(f"{'OK' if condition else 'SELF-TEST FAIL'}: {label}")
+        ok = ok and condition
+
+    check(
+        splitmix64(0) == 0xE220_A839_7B1D_CDAF,
+        "splitmix64 matches its published reference vector for 0",
+    )
+
+    # THE REPRODUCIBILITY CLAIM, PINNED. The lane prints a query-set digest and
+    # calls it the reproducibility check, but nothing compared it to a recorded
+    # value -- `verify_query_set` compares it only to itself, as a concurrency
+    # tripwire. So an edit to the mixing constants, the stream tag, the retry
+    # stride or the prefix emission changed every query set at one seed while
+    # every gate stayed green. This is that missing comparison, over fixtures
+    # rather than over a multi-gigabyte corpus, which is what lets it run here.
+    actual = _fixture_digest(0)
+    check(
+        actual == _PINNED_FIXTURE_SEED_0,
+        f"the fixture query set at seed 0 reproduces its pinned digest ({actual[:16]}…)",
+    )
+    check(_fixture_digest(0) == actual, "two builds at one seed agree byte for byte")
+    check(
+        _fixture_digest(7) != actual,
+        "a different seed is a different workload, not the same one",
+    )
+
+    # The control: a template with no mapping has nothing to draw, so the seed
+    # must not reach it. Without this, "the seed changed the output" cannot be
+    # told apart from "the seed changed something it had no business touching".
+    unmapped = [t for t in _fixture_templates() if not t.mappings]
+    at_zero = build(unmapped, 0, _fixture_pool(), _FIXTURE_NAMESPACES)
+    at_seven = build(unmapped, 7, _fixture_pool(), _FIXTURE_NAMESPACES)
+    check(
+        [q.text for q in at_zero] == [q.text for q in at_seven],
+        "a template with no mapping is seed-independent",
+    )
+
+    # `uniform_index` is exercised directly, because the digest above only pins
+    # what REACHES a query: one draw per mapping. A sweep shows the selector
+    # spans its pool rather than favouring an index, which is the property the
+    # digest cannot see.
+    #
+    # THE RETRY BRANCH IS COVERED, at a count where rejection actually fires.
+    #
+    # An earlier version of this comment declined to cover it, reasoning that
+    # rejection lands in a window `2**64 % count` wide and so is unreachable. That
+    # is true of WATDIV'S POOL SIZES -- at count 7 the window is 2, about one part
+    # in 1.1e19 -- and false of `uniform_index`'s own contract, which this fixture
+    # is free to exercise at any count. At `2**63 + 1` the window is half the
+    # space, so every stream retries, and `_RETRY_STRIDE` moves from "argued
+    # unreachable" to pinned. Declining coverage that costs two lines was a gap
+    # dressed as a principle.
+    reachable = {uniform_index(0, stream, 7)[0] for stream in range(4000)}
+    check(
+        reachable == set(range(7)),
+        f"every index of a 7-candidate pool is reachable (saw {len(reachable)}/7)",
+    )
+
+    # A count whose reject window is half the space: the loop must terminate, stay
+    # in range, and demonstrably have taken the retry path.
+    wide = (1 << 63) + 1
+    draws = [uniform_index(0, stream, wide) for stream in range(200)]
+    retried = sum(1 for _, _, attempts in draws if attempts > 1)
+    check(
+        all(0 <= index < wide for index, _, _ in draws),
+        "every draw at a half-rejecting count is still in range",
+    )
+    check(
+        retried > 0,
+        f"the rejection retry path is taken at a half-rejecting count ({retried} of {len(draws)})",
+    )
+    # THE CONTROL. Without it this proves nothing: the previous version of this check
+    # read the raw 64-bit draw as an attempt count, so it passed identically at a count
+    # where rejection is ARITHMETICALLY IMPOSSIBLE, and reported the sample size as the
+    # retry count. A pool of 7 has a reject window of 2 out of 2**64, so the honest
+    # expectation here is zero retries -- and if this ever sees one, the check above is
+    # measuring something other than rejection.
+    never = [uniform_index(0, stream, 7) for stream in range(200)]
+    check(
+        all(attempts == 1 for _, _, attempts in never),
+        "a pool whose reject window is 2 out of 2**64 never retries "
+        f"({sum(1 for _, _, a in never if a > 1)} of {len(never)} retried)",
+    )
+    check(
+        retried < len(draws),
+        f"the retry figure is a measurement, not the sample size ({retried} < {len(draws)})",
+    )
+    # The stride's ODDNESS is the invariant that makes the retry walk sound: only an
+    # odd addend generates the whole additive group mod 2**64, so only an odd stride
+    # is guaranteed to reach an acceptable draw rather than cycling inside a
+    # subgroup. Exercising the path does NOT pin this -- an even stride still finds a
+    # draw quickly when the reject window is wide, which is exactly what a mutation
+    # to an even value demonstrated -- so the property is asserted directly.
+    check(_RETRY_STRIDE % 2 == 1, f"the retry stride is odd ({_RETRY_STRIDE:#x})")
+
+    # THE CACHE IS THE WORKLOAD, so it is checked three ways. Order IS the
+    # workload -- every substitution indexes into these pools -- and so are the
+    # rows themselves.
+    with tempfile.TemporaryDirectory() as raw:
+        pool = _fixture_pool()
+
+        # 1. A valid cache round-trips exactly, canonically ordered. The valid
+        #    neighbour first: the two refusals below would "pass" against a reader
+        #    that rejected every cache.
+        good = Path(raw) / "good.tsv"
+        write_candidates(pool, good)
+        reloaded = read_candidates(good, pool.dataset_sha256)
+        check(
+            reloaded is not None and reloaded.by_type == pool.by_type,
+            "a freshly written candidates cache round-trips exactly",
+        )
+
+        # 2. A cache from OTHER bytes is a miss, not a stale hit.
+        check(
+            read_candidates(good, "0" * 64) is None,
+            "a cache taken from a different dataset is a miss",
+        )
+
+        # 3. THE CANONICAL RE-SORT, which is the load-bearing half and had no observer.
+        #    Order IS the workload: every substitution indexes into these tuples, so a
+        #    cache written in another order emits a different query set at one seed.
+        #    Deleting the sort in `read_candidates` used to turn nothing red. The body
+        #    digest alone cannot catch this, because a cache written in another order
+        #    carries a matching digest for that order -- so the fixture recomputes it.
+        reordered = Path(raw) / "reordered.tsv"
+        rows = good.read_text(encoding="utf-8").splitlines()
+        body_rows = list(reversed(rows[3:]))
+        reordered_body = "".join(f"{row}\n" for row in body_rows)
+        reordered.write_text(
+            "\n".join(
+                [
+                    CANDIDATES_HEADER,
+                    f"# dataset-sha256 {pool.dataset_sha256}",
+                    f"# body-sha256 {hashlib.sha256(reordered_body.encode('utf-8')).hexdigest()}",
+                ]
+            )
+            + "\n"
+            + reordered_body,
+            encoding="utf-8",
+        )
+        back = read_candidates(reordered, pool.dataset_sha256)
+        check(
+            back is not None and back.by_type == pool.by_type,
+            "a cache whose rows are in another order reloads canonically, so the order "
+            "is a property of this program rather than of a file under target/",
+        )
+
+        # 4. AN OLDER HEADER VERSION IS A MISS, not a file read under a format it does
+        #    not follow. The version was bumped when the body digest was added and
+        #    nothing asserted the bump does anything.
+        #    The fixture is a file that is WELL FORMED IN EVERY OTHER RESPECT -- three
+        #    header lines, the right dataset digest, a correct body digest -- and carries
+        #    only the wrong version. A real v1 file also lacks the body-digest line, so a
+        #    fixture shaped like one is rejected by the structural check whether or not
+        #    the version is compared, and proves nothing about the version. (Checked: it
+        #    stays green with the version comparison deleted.)
+        body = _candidates_body(pool)
+        legacy = Path(raw) / "legacy.tsv"
+        legacy.write_text(
+            "\n".join(
+                [
+                    "# purrdf-watdiv-candidates-v1",
+                    f"# dataset-sha256 {pool.dataset_sha256}",
+                    f"# body-sha256 {hashlib.sha256(body.encode('utf-8')).hexdigest()}",
+                ]
+            )
+            + "\n"
+            + body,
+            encoding="utf-8",
+        )
+        check(
+            read_candidates(legacy, pool.dataset_sha256) is None,
+            "a cache under an older header version is a miss even when everything else "
+            "about it is well formed",
+        )
+
+        # 5. A TAMPERED BODY is refused, which per-type counts could never catch.
+        #    Swapping one IRI for another of the same type preserves every count,
+        #    keeps the dataset digest intact, passes the census cross-check, and
+        #    changes every query drawn from that pool. This is the case a reordering
+        #    test could not distinguish, because reordering is itself a tamper now.
+        tampered = Path(raw) / "tampered.tsv"
+        lines = good.read_text(encoding="utf-8").splitlines()
+        swapped = [*lines[:3], *reversed(lines[3:])]
+        tampered.write_text("\n".join(swapped) + "\n", encoding="utf-8")
+        #    A MISS, not a refusal: the cache is scratch, so the self-healing answer is
+        #    to rescrape. Hard-failing made a cache truncated by a killed run kill every
+        #    later run until someone deleted it by hand, while the sibling reuse stamps
+        #    treat a mismatch as a miss. What must NOT happen is accepting it.
+        check(
+            read_candidates(tampered, pool.dataset_sha256) is None,
+            "a candidates cache whose body was edited is a miss, not a hit",
+        )
+
+        #    AND THE FAILED BYTES ARE KEPT. The sibling that installs pinned artifacts
+        #    quarantines a file that fails its digest and names where; this printed a
+        #    path and then let the rescrape overwrite it, so the one message telling an
+        #    operator something had edited their cache pointed at a file that was gone
+        #    by the time they looked.
+        check(
+            tampered.with_name(f"{tampered.name}.mismatched").is_file(),
+            "a cache whose body was edited is set aside as evidence rather than simply "
+            "overwritten by the rescrape",
+        )
+        check(
+            not tampered.exists(),
+            "and it is out of the way, so the rescrape writes a clean cache rather than "
+            "reading the edited one again",
+        )
+
+        # 6. THE SWEEP DOES NOT DESTROY A LIVE RUN'S SCRATCH. Two runs share the arena
+        #    at the default knobs, and the first version of this sweep removed every
+        #    `.part.*` it found -- so the other run's `os.replace` raised a bare
+        #    `FileNotFoundError` naming a path and no lane. Housekeeping that destroys
+        #    live work is worse than the accumulation it was tidying, and that was a
+        #    defect introduced while fixing a smaller one.
+        #
+        #    This check lives HERE rather than in the network self-test because the
+        #    network one is run by no gate at all: it needs the fetched tarball, so
+        #    `make check` and CI both run only the offline half. Cache laws need no
+        #    tarball, so there is no reason for one to sit behind that.
+        swept = Path(raw) / "sweep" / "candidates.tsv"
+        swept.parent.mkdir(parents=True, exist_ok=True)
+        in_flight = swept.with_name(f"{swept.name}.part.999999")
+        in_flight.write_text("another run is mid-write\n", encoding="utf-8")
+        abandoned = swept.with_name(f"{swept.name}.part.999998")
+        abandoned.write_text("a killed run left this\n", encoding="utf-8")
+        # Backdated past the threshold, which is what distinguishes the two cases.
+        # Without it the test could not tell "swept because stale" from "swept because
+        # present" -- and the defect was a sweep that could not tell them apart either.
+        stale_time = time.time() - (_STALE_SCRATCH_SECONDS * 2)
+        os.utime(abandoned, (stale_time, stale_time))
+
+        write_candidates(pool, swept)
+
+        check(
+            in_flight.exists(),
+            "a concurrent run's in-flight scratch survives the sweep, so its os.replace "
+            "does not fail with a bare FileNotFoundError",
+        )
+        check(
+            not abandoned.exists(),
+            "scratch older than the stated threshold is still swept, so a killed run "
+            "does not leave files accumulating unreported",
+        )
+        check(
+            read_candidates(swept, pool.dataset_sha256) is not None,
+            "and the cache was written while both of those held, so neither check is "
+            "satisfied by a function that did nothing",
+        )
+
+    # THE PREFIX REFUSAL, BOTH DIRECTIONS, ON THE PRODUCTION FUNCTION.
+    #
+    # `instantiate` hard-fails on a prefix the data model does not declare. The
+    # cases below were run once in a shell when that refusal was written and then
+    # discarded, which is not coverage -- and the over-refusal half is the one that
+    # matters, because `_PREFIXED` is deliberately loose and instantiation
+    # substitutes full IRIs into these bodies. The valid neighbours come first: a
+    # refusal that rejected them would be the mirror of the silent drop this
+    # replaced.
+    def instantiate_body(body: str, mappings: tuple[Mapping, ...] = ()) -> Query:
+        return instantiate(
+            Template("P1", mappings, body), 0, _fixture_pool(), _FIXTURE_NAMESPACES
+        )
+
+    accepted = {
+        "declared prefixes only": "SELECT ?v0 WHERE {\n  ?v0 wsdbm:likes ?v1 .\n}",
+        "a colon inside a quoted literal": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name "note: see below" .\n}'
+        ),
+        # THE COLON INSIDE THE ESCAPED QUOTES IS THE CONTROL. This fixture used
+        # `"say \"hi\""` first, and `hi` carries no colon -- so it passed whether or
+        # not the literal stripper understood ECHAR escapes, and it certified a LIVE
+        # over-refusal as a false positive. A control that cannot distinguish the
+        # case it exists for is not a control; this one fails if the stripper
+        # regresses.
+        "escaped quotes wrapping a colon": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name "say \\"nosuch:name\\"" . ?v0 wsdbm:likes ?v1 .\n}'
+        ),
+        # The LONG forms are unreachable on today's templates and are covered anyway,
+        # so the first template to carry a literal cannot rediscover the defect the
+        # short form had. The colon inside is what makes each of these a control.
+        "a long literal wrapping a colon": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name """a "x:y" b""" .\n}'
+        ),
+        "a colon inside an IRI path": (
+            "SELECT ?v0 WHERE {\n  ?v0 <http://example.org/a:b> ?v1 .\n}"
+        ),
+        "a real substituted WatDiv IRI": (
+            "SELECT ?v0 WHERE {\n  <http://db.uwaterloo.ca/~galuc/wsdbm/User1> wsdbm:likes ?v0 .\n}"
+        ),
+    }
+    for label, body in accepted.items():
+        try:
+            instantiate_body(body)
+        except SystemExit as exc:
+            print(f"SELF-TEST FAIL: a legal body was refused ({label}): {exc.code}")
+            ok = False
+        else:
+            print(f"OK: a legal body is accepted -- {label}")
+
+    for label, body in {
+        "an undeclared prefix": "SELECT ?v0 WHERE {\n  ?v0 nosuch:name ?v1 .\n}",
+        "an undeclared prefix beside an IRI": (
+            "SELECT ?v0 WHERE {\n  <http://example.org/x> bogus:p ?v1 .\n}"
+        ),
+        "an undeclared prefix after a long literal": (
+            'SELECT ?v0 WHERE {\n  ?v0 sorg:name """q""" . ?v0 bogus:p ?v1 .\n}'
+        ),
+    }.items():
+        try:
+            instantiate_body(body)
+        except SystemExit as exc:
+            message = str(exc.code)
+            if "does not declare" in message:
+                print(f"OK: {label} is refused, naming the prefix")
+            else:
+                print(f"SELF-TEST FAIL: {label} refused for the wrong reason: {message}")
+                ok = False
+        else:
+            print(f"SELF-TEST FAIL: {label} was accepted; the emitted query would not parse")
+            ok = False
+
+    # THE CENSUS PARSER HAD NO TEST AT ALL, in either direction -- and
+    # `saved.txt` is, by this module's own docstring, the only independent check
+    # on the scrape that exists. `scrape_candidates` is well covered, but only
+    # ever against a hand-built `declared` dict, so nothing exercised the code
+    # that produces that dict from the frozen file.
+    def expect_exit(thunk, label: str, must_contain: list[str]) -> None:
+        nonlocal ok
+        try:
+            thunk()
+        except SystemExit as exc:
+            message = str(exc.code)
+            if not exc.code or isinstance(exc.code, int) and exc.code == 0:
+                print(f"SELF-TEST FAIL: {label} exited zero")
+                ok = False
+                return
+            missing = [needle for needle in must_contain if needle not in message]
+            if missing:
+                print(f"SELF-TEST FAIL: {label} did not say {missing}: {message}")
+                ok = False
+                return
+            print(f"OK: {label}")
+            return
+        print(f"SELF-TEST FAIL: {label} did not refuse at all")
+        ok = False
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+
+        # The valid neighbour FIRST: a well-formed census must parse, or every
+        # refusal below would "pass" against a parser that rejects everything.
+        good = root / "saved.txt"
+        good.write_text("2\nwsdbm:User 100\nwsdbm:City 7\n", encoding="utf-8")
+        parsed = read_declared(good)
+        check(
+            parsed == {"wsdbm:User": 100, "wsdbm:City": 7},
+            f"a well-formed census parses to its declared counts (got {parsed})",
+        )
+
+        missing = root / "absent.txt"
+        expect_exit(lambda: read_declared(missing), "a missing census is refused", ["FAIL:"])
+
+        headless = root / "headless.txt"
+        headless.write_text("wsdbm:User 100\n", encoding="utf-8")
+        expect_exit(
+            lambda: read_declared(headless),
+            "a census with no leading type count is refused",
+            ["does not start with a type count"],
+        )
+
+        short = root / "short.txt"
+        short.write_text("5\nwsdbm:User 100\n", encoding="utf-8")
+        expect_exit(
+            lambda: read_declared(short),
+            "a census declaring more rows than it holds is refused",
+            ["declares 5 types"],
+        )
+
+        malformed = root / "malformed.txt"
+        malformed.write_text("1\nnot-a-census-row\n", encoding="utf-8")
+        expect_exit(
+            lambda: read_declared(malformed),
+            "a census row the parser cannot read is refused, quoting it",
+            ["cannot read"],
+        )
+
+        # `load_templates` is the loader the LANE uses, and the tarball-backed
+        # self-test exercises a different one (`_toolkit_templates`), so its
+        # directory and count refusals were untested on both sides.
+        empty = root / "no-templates"
+        empty.mkdir()
+        expect_exit(
+            lambda: load_templates(empty),
+            f"a directory holding fewer than {EXPECTED_TEMPLATES} templates is refused",
+            ["FAIL:"],
+        )
+        expect_exit(
+            lambda: load_templates(root / "nowhere"),
+            "a templates path that is not a directory is refused",
+            ["FAIL:"],
+        )
+
+
+    # The pin file is the single source of truth for this count. This script keeps its
+    # own constant so it runs standalone, and the self-test asserts the two agree --
+    # otherwise "one copy of the number" is two copies that happen to match today.
+    pinned = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "benchmark-acquire.py"), "--template-count"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if pinned.returncode != 0:
+        print(f"SELF-TEST FAIL: could not read the pinned count: {pinned.stderr.strip()}")
+        ok = False
+    else:
+        check(
+            int(pinned.stdout.strip()) == EXPECTED_TEMPLATES,
+            f"this script's EXPECTED_TEMPLATES ({EXPECTED_TEMPLATES}) equals the pinned count "
+            f"({pinned.stdout.strip()})",
+        )
+
+    print("OFFLINE SELF-TEST PASS" if ok else "OFFLINE SELF-TEST FAIL")
+    return 0 if ok else 1
+
+
 def self_test() -> int:
     """Assert the rules' SCOPE, not merely that instantiation ran."""
     ok = True
@@ -809,7 +1549,11 @@ def self_test() -> int:
             thunk()
         except SystemExit as exc:
             message = str(exc.code)
-            if isinstance(exc.code, int) and exc.code == 0:
+            # `SystemExit(None)` is a ZERO exit too, and this missed it -- so a
+            # refusal that vanished into a bare `sys.exit()` would be judged by
+            # its message rather than by the fact that it succeeded. The sibling
+            # helper in benchmark-acquire.py already reads it this way.
+            if not exc.code or isinstance(exc.code, int) and exc.code == 0:
                 print(f"SELF-TEST FAIL: {label} exited zero")
                 ok = False
                 return
@@ -990,7 +1734,6 @@ def self_test() -> int:
     # 12. THE SCRAPE AND ITS CENSUS CROSS-CHECK, run for real against tiny
     #     fixture datasets. Both arms are needed: a cross-check that rejected
     #     every scrape would pass a test that only ever fed it a bad one.
-    import tempfile
 
     wsdbm = namespaces["wsdbm"]
     triples = [
@@ -1113,7 +1856,15 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="directory to write .rq files into")
     parser.add_argument("--provenance", action="store_true", help="print the full record")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--offline-self-test",
+        action="store_true",
+        help="the tarball-free checks, suitable for a gate",
+    )
     args = parser.parse_args()
+
+    if args.offline_self_test:
+        return offline_self_test()
 
     if args.self_test:
         return self_test()
@@ -1145,17 +1896,12 @@ def main() -> int:
     # edited; re-checking it costs a dictionary comparison and means the counts
     # behind the queries were verified on THIS run rather than on some earlier
     # one whose result we are trusting by reputation.
-    problems = []
-    for prefixed, expected in sorted(declared.items()):
-        actual = len(candidates.by_type.get(prefixed, ()))
-        if actual != expected:
-            problems.append(f"    {prefixed}: have {actual}, census declares {expected}")
-    if problems:
-        sys.exit(
-            "FAIL: the candidate sets do not agree with the dataset's own entity census.\n"
-            + "\n".join(problems)
-            + f"\n  Delete {args.candidates} to force a fresh scrape."
-        )
+    check_against_census(
+        declared,
+        candidates.by_type,
+        f"Delete {args.candidates} to force a fresh scrape.",
+        "have",
+    )
 
     queries = build(templates, args.seed, candidates, namespaces)
     if args.out:

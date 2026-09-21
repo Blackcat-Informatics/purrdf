@@ -1049,9 +1049,20 @@ The file *contents* are valid RDF/XML; only the name is wrong. The lane
 therefore **renames the output after generation** instead of patching
 `Generator.java`, which keeps the GPL source unmodified and un-vendored, needs
 no Java compiler (the artifact ships prebuilt `classes/`, and a JRE is enough),
-and is checkable — the lane counts what it renamed and fails if nothing
-appeared. Each run generates inside its own directory, so concurrent runs cannot
-collide.
+and is checkable — the lane refuses to leave a single backslash-named stray
+behind, so a pathology that changes shape (some files misplaced, some not) fails
+rather than converting a partial corpus.
+
+A rename count of zero is **not** a failure: it is what a fixed generator, or a
+platform that splits the backslash, looks like. The lane's guard is that a corpus
+exists and has bytes, never how its files came by their names.
+
+Each run generates inside its own directory, so the misplaced files land in that
+run's own arena rather than in a shared parent. That is a statement about where
+the strays go, not about concurrent safety — the arena is derived from `LUBM_OUT`
+alone, so two runs with default knobs share it and each step begins by wiping it.
+Two runs at once want two arenas: `make lubm LUBM_OUT=target/lubm-$$`. The
+artifact cache is shared regardless of the arena.
 
 ### Determinism, and the one place it was not free
 
@@ -1069,6 +1080,31 @@ owl:Ontology` and its `owl:imports` — and none of the 14 queries touches eithe
 documentation domain and this repository's fixture convention, standing in for
 the publication IRI a locally generated corpus does not have. An operator who
 publishes a corpus sets it to where that corpus actually lives.
+
+The published corpus digest has **seven** inputs, and the list took three
+corrections to complete — which is the point of stating it.
+
+Five are knobs: `LUBM_UNIVERSITIES`, `LUBM_INDEX`, `LUBM_SEED`, `LUBM_ONTO` and
+`LUBM_DOC_BASE`. `LUBM_ONTO` belongs there because the generator stamps it into
+every document it writes, so it reaches every type and property IRI of the corpus.
+
+The sixth is **collation**, and it is not a knob. The lane concatenates its
+converted files in `find | sort` order, and `sort` obeys `LC_COLLATE` — under a
+UTF-8 collation `University0_10.owl` sorts *before* `University0_1.owl`, which
+changes the concatenation order, the digest, and which file becomes the smallest
+entailment rung. The lanes pin `LC_ALL=C` themselves rather than trusting the
+caller's environment.
+
+The seventh is the **`purrdf` binary**. Those bytes are its serializer's output, so a
+digest recorded with one version says nothing about another; the version is part of
+the pin key, and a bump reports "no pin recorded for this binary" rather than
+failing as though conversion had changed. See
+[the lane laws](design/purrdf-bench-lane-laws.md).
+
+The JDK is deliberately *not* on the list: the pinned generator references
+`java.util.ArrayList` and `java.util.Random` and no hash-ordered collection, so its
+output carries no iteration-order dependence, and `java.util.Random` is specified
+rather than implementation-defined.
 
 ### Entailment regimes are part of the query, not metadata about it
 
@@ -1399,10 +1435,18 @@ Every knob is an overridable `make` variable, in the same style as `LUBM_*`.
 | `WATDIV_OUT` | `target/watdiv` | Where the lane works. An absolute path is used verbatim; a relative one resolves against the repository root, so the default keeps everything the lane writes inside `target/` as build output. |
 | `WATDIV_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
 
-The extraction and the pack are each stamped with the digest they were built
-from — the dataset tarball's digest, and for the pack that plus the binary's own
-version — so a re-run reuses them only when they provably came from the same
-bytes, and a stale artifact is a cache miss rather than a silent stale hit.
+The extraction and the pack are each stamped with the digest of **the artifact a
+later run will actually read**, not of the container it came out of. The extraction
+stamp records the tarball's digest, the extracted corpus's and the census's, and
+re-derives the last two on every reuse; the pack stamp records the corpus digest and
+the binary's version, plus the pack's own digest, re-derived the same way. So a re-run
+reuses them only when the bytes it is about to read are still the bytes that were
+certified, and a stale artifact is a cache miss rather than a silent stale hit.
+
+Keying a stamp on a container instead would say only that something was once built
+here from those bytes — which is true of an artifact that has since been edited. Both
+stamps were once keyed that way; see [the lane laws](design/purrdf-bench-lane-laws.md)
+for why that is not the same claim.
 
 **Give concurrent runs separate arenas.** Instantiation begins by deleting
 `$WATDIV_OUT/queries`, so a second run starting while a first is partway through

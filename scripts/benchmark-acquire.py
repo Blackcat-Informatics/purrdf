@@ -111,14 +111,38 @@ WHAT THIS SCRIPT GUARANTEES
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
+import http.client
 import tempfile
+import time
+import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# One chunk size for every streamed read in this repository's benchmark surface --
+# digests and the download that feeds them. Claiming "one constant now" while three
+# sites still carried their own, one of them at a quarter the size, is the same
+# bookkeeping failure as a miscounted total: the claim was checked against the two
+# sites in view rather than against the tree.
+# `lane_sha256_file` reads 4 MiB and this file read 1 MiB, which is exactly the drift
+# the shared helper was introduced to end -- in the path that verifies every pinned
+# byte. No digest was ever wrong; the point is that two numbers for one decision is how
+# they start to differ in ways that do matter.
+# THE CHUNK SIZE IS NOT DEFINED HERE. Six copies lived under two names across five
+# files, two of them already drifted -- one to a quarter of the shared size and one
+# to a sixty-fourth. Every chunk size produces a correct digest, so nothing reported
+# that divergence. The number
+# now lives in `scripts/lane_chunk.py` and nothing restates it. The path insert is
+# explicit rather than relying on `sys.path[0]`, because this module is also loaded
+# by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lane_chunk import STREAM_CHUNK_BYTES, fsync_path  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 # The one place anything is written. Everything under ``target/`` is build
 # output; no artifact fetched here is ever written anywhere else in the tree.
@@ -254,13 +278,254 @@ ARTIFACTS: tuple[Artifact, ...] = (
 # no digest at all -- it turns a download into an unchecked download that prints
 # "OK". `scripts/watdiv-lane.sh` refuses an unpinned scale by name and points
 # here rather than quietly falling back to 10M.
+# Every scale upstream publishes. Which of them this repository has actually
+# PINNED is derived from ARTIFACTS rather than restated here, so the two cannot
+# disagree: `pinned_watdiv_scales` reads the pins and `unpinned_watdiv_scales` is
+# the difference. Both are printed by `--list`, and `scripts/watdiv-lane.sh`
+# points an operator at that output instead of carrying its own copy of the list.
 WATDIV_SCALES: tuple[str, ...] = ("10M", "100M", "1000M")
+
+# The row count of each pinned dataset AFTER extraction, as a tracked pin.
+#
+# The tarball's digest is pinned and re-verified every run, so the bytes that go
+# INTO an extraction are certain. What comes out is certified only by a stamp the
+# first extraction itself wrote -- trust-on-first-use -- and a stamp is not a pin.
+# `docs/design/purrdf-bench-lane-laws.md` states that a known count may go
+# unasserted only where a digest re-verified AGAINST A PIN already fixes it; the
+# corpus digest is re-verified against a stamp, so by that law this count must be
+# asserted, and here it is.
+#
+# Measured from an extraction of the digest-verified tarball rather than copied
+# from prose, and cross-checked against the figure `docs/BENCHMARKS.md` publishes.
+WATDIV_DATASET_ROWS: dict[str, int] = {"10M": 10_916_457}
+
+# How many BASIC query templates WatDiv publishes: three complex, five snowflake,
+# five linear and seven star. One number, pinned once, because the lane needs it
+# three times -- the templates it extracts, the queries it instantiates, and the
+# denominator of its report -- and three typed literals are three chances to
+# disagree. `docs/design/purrdf-bench-lane-laws.md` says a denominator is only a true
+# statement if it is derived rather than typed; this is where it is derived from.
+# The twenty published basic templates, by id. A COUNT cannot see a RENAME: changing
+# `rows.C2` to `rows.C9` keeps the count at 20 and the sum at 434748, both assertions green,
+# while the lane reports "19 of 20 queries matched ...; no pin is recorded for: C2" and exits
+# 0 -- the exact outcome the count was added to prevent. The set is the property; the count
+# is derived from it, so there is still one definition.
+WATDIV_BASIC_TEMPLATE_IDS: tuple[str, ...] = (
+    "C1", "C2", "C3",
+    "F1", "F2", "F3", "F4", "F5",
+    "L1", "L2", "L3", "L4", "L5",
+    "S1", "S2", "S3", "S4", "S5", "S6", "S7",
+)
+WATDIV_BASIC_TEMPLATES: int = len(WATDIV_BASIC_TEMPLATE_IDS)
+
+# How many queries LUBM publishes. Pinned for the same reason as the template count
+# above and read the same way: the LUBM lane enforced it at two shell sites and
+# `lubm-queries.py` at two more, four typed literals for one published fact, while the
+# sibling lane had already been moved to a pin. The design note says a denominator is
+# only a true statement if it is derived rather than typed; this is what both lanes now
+# derive from.
+LUBM_PUBLISHED_QUERIES: int = 14
+
+# Values that are deterministic functions of the PINNED artifacts and the DEFAULT
+# knobs, recorded here so a lane can ASSERT them rather than print them.
+#
+# Each of these was already deterministic and already printed; printing a known
+# value instead of checking it is the "missed refusal" this repository's lane-laws
+# document names. They live beside the artifact pins because that is what they are
+# derived from -- one copy of each number, next to the bytes that determine it.
+#
+# A lane compares one of these ONLY when the knobs it depends on are at their
+# defaults, and says so when they are not. A different seed or scale is a different
+# workload, and asserting a default's value against it would be an over-refusal.
+#
+# WHAT A SELF-DERIVED PIN DOES AND DOES NOT BUY, stated because the difference is
+# easy to overstate. The four DIGESTS below were produced by running the code they
+# now pin, so they catch CHANGE and not CORRECTNESS: they will fail the day
+# generation, conversion, normalisation or instantiation alters its output, which is
+# the regression worth catching, and they would not have caught a value that was
+# wrong from the start. What makes them trustworthy is not this file -- it is that
+# each is a deterministic function of an artifact pinned by digest against its
+# publisher, so the inputs are certain even though the recorded output is our own
+# measurement of them.
+#
+# The two ROW COUNTS are different in kind and stronger: `rows.Q1` and `rows.Q14`
+# are LUBM's OWN PUBLISHED ANSWERS for LUBM(1, 0), corroborated by the paper rather
+# than by this tree, so those two are an independent oracle and not self-derived at
+# all. They are the only external check either lane has.
+WORKLOAD_PINS: dict[str, str] = {
+    # sha256 over the normalised LUBM query set, at the default ontology namespace.
+    "lubm.queries.sha256": (
+        "5ad5a5c735bc86625c0f008fc78a2f7cfc30f063de25ad33a36339e2e49774a8"
+    ),
+    # LUBM's own published answers for LUBM(1, 0) seed 0. These two queries need NO
+    # entailment, so they run on the full corpus on any engine and their counts are
+    # the only oracle this lane has. `> 0` was letting a conversion bug that halved
+    # either one pass silently.
+    "lubm.1.0.seed0.rows.Q1": "4",
+    "lubm.1.0.seed0.rows.Q14": "5916",
+    # sha256 over the EXTRACTED WatDiv corpus. The tarball is pinned and verified
+    # every run, but what comes out of an extraction was certified only by a stamp
+    # the first extraction itself wrote -- trust-on-first-use, which cannot detect a
+    # first extraction that was already wrong because that extraction is what wrote
+    # the record. Pinning it removes the TOFU entirely and makes the lane-laws
+    # exception ("a digest verified against a pin") true rather than aspirational.
+    "watdiv.10M.corpus.sha256": (
+        "7cfe0341d578a677d3b5d562eaaf94d67aff8587d9e0ef3d83cc82765b77cddd"
+    ),
+    # AND THE CENSUS BESIDE IT, which was the last trust-on-first-use in this lane and
+    # was left annotated rather than closed. `saved.txt` is the entity census: it is the
+    # only external audit of the candidate scrape that exists, it drives the candidate
+    # pools, and therefore every substitution and every row count now asserted against a
+    # pin. Its digest was recorded on line 3 of the arena's own stamp and re-derived on
+    # reuse -- so a later edit was caught -- but nothing said what it SHOULD be, so a
+    # first extraction that produced a wrong census was certified by the record that
+    # extraction wrote. Exactly the gap the corpus pin six lines up removes, in the file
+    # beside it.
+    #
+    # The comment that stood in the lane called this "a narrow gap rather than an open
+    # door" and noted it was "not zero". Both were true and neither is a reason: the
+    # value comes out of the same digest-verified tarball, so recording it costs one
+    # line. Derived from that tarball at its pinned digest
+    # (1d0a8a4725c98974eb7347ce3e6d9cab44f9f40389589809674254151b745af6), which is the
+    # same provenance the corpus pin has.
+    "watdiv.10M.census.sha256": (
+        "8ac40d776b37f026ad04f6c154e9f92c4759ebb3682ac0a185de4eae2c945aa7"
+    ),
+    # sha256 over the concatenated LUBM corpus at the default knobs -- AND FOR A
+    # NAMED BINARY, which is why the version is in the key.
+    #
+    # These bytes are the purrdf serializer's OUTPUT: the lane converts each
+    # generated RDF/XML document with `purrdf convert` and digests the
+    # concatenation. So the binary is an input to this digest exactly as the seed
+    # is, and a pin taken with one version does not apply to another --
+    # `watdiv-lane.sh` already reasons this way about its pack, whose stamp key is
+    # the dataset digest AND the binary version.
+    #
+    # Putting the version in the key rather than in a second condition makes a
+    # version bump a MISSING pin, which the lane reports as "not checked for this
+    # binary", instead of a mismatch that would blame generation or conversion for
+    # a difference the new serializer is entitled to.
+    "lubm.1.0.seed0.corpus.sha256.purrdf-2.0.2": (
+        "b3fbfcc822092428fcf6e03757f0ca555e39c2b29304bc8638c9d9d05f875308"
+    ),
+    # The total answer rows the twenty WatDiv queries return at the default scale and
+    # seed. This is ENGINE OUTPUT, so neither pin-verified digest covers it: a wrong
+    # pack built from the right corpus would publish wrong row counts that nothing
+    # caught, and WatDiv's `nonempty > 0` guard is the "one non-zero row anywhere"
+    # floor that LUBM's Q1/Q14 oracle replaced.
+    #
+    # This is a REGRESSION pin, not an oracle -- WatDiv publishes no reference answers,
+    # so the value is this engine's own measurement over pinned inputs. Which is exactly
+    # why the VERSION is in the key, as it is for the LUBM corpus digest two entries up:
+    # an engine-output pin that is not keyed on the engine turns the next release that
+    # legitimately changes an answer count into "the engine answered them differently",
+    # blaming the engine for a difference a new version is entitled to produce. Keyed, a
+    # bump is a MISSING pin the lane reports as not checked for this binary. It is also why
+    # the pack's digest is not pinned separately: the pack is determined by the pinned
+    # corpus and the keyed binary version, and a row count is a cheaper and far more
+    # legible refusal than a second hex string. "434748 rows, expected 434748" says
+    # what is wrong; two digests say only that something is.
+    "watdiv.10M.seed0.total_rows.purrdf-2.0.2": "434748",
+    # AND PER QUERY, because the aggregate alone was disabled by the very failure it
+    # most needed to survive. The total was asserted only when every query executed --
+    # defensible in itself, since a query that cannot run makes a SUM incomparable --
+    # but the consequence was a blanket skip: one CANNOT-EXECUTE query at the default
+    # knobs printed "NOT checked against a pin", a full SUMMARY and exit 0. A pack that
+    # broke one query and changed the answers to others passed, where before this
+    # branch's own change it had failed.
+    #
+    # Per-query counts have no such coupling. A query that does not execute fails
+    # against ITS OWN pin, by name, and says which one; the other nineteen are still
+    # asserted. This is the shape the sibling lane already used for Q1/Q14, and it is
+    # what makes "a non-executing query is a reported result, not an abandoned run"
+    # compatible with asserting every answer that was produced.
+    #
+    # Same reasoning as the total for the version key: these are this engine's own
+    # measurements over pinned inputs, not reference answers WatDiv publishes. The
+    # self-test asserts they sum to the total pin, so a transcription error in one of
+    # twenty-one numbers cannot hide in the table.
+    #
+    # A zero is a REAL ANSWER here and is pinned as one. WatDiv's deliberate skew
+    # concentrates a property on some entities and leaves others without it, so a
+    # pattern demanding several at once legitimately matches none -- and pinning that
+    # zero is what turns "matched nothing" from an unfalsifiable note into a claim.
+    "watdiv.10M.seed0.rows.C1.purrdf-2.0.2": "16",
+    "watdiv.10M.seed0.rows.C2.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.C3.purrdf-2.0.2": "434169",
+    "watdiv.10M.seed0.rows.F1.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.F2.purrdf-2.0.2": "2",
+    "watdiv.10M.seed0.rows.F3.purrdf-2.0.2": "8",
+    "watdiv.10M.seed0.rows.F4.purrdf-2.0.2": "36",
+    "watdiv.10M.seed0.rows.F5.purrdf-2.0.2": "13",
+    "watdiv.10M.seed0.rows.L1.purrdf-2.0.2": "1",
+    "watdiv.10M.seed0.rows.L2.purrdf-2.0.2": "103",
+    "watdiv.10M.seed0.rows.L3.purrdf-2.0.2": "36",
+    "watdiv.10M.seed0.rows.L4.purrdf-2.0.2": "56",
+    "watdiv.10M.seed0.rows.L5.purrdf-2.0.2": "269",
+    "watdiv.10M.seed0.rows.S1.purrdf-2.0.2": "8",
+    "watdiv.10M.seed0.rows.S2.purrdf-2.0.2": "25",
+    "watdiv.10M.seed0.rows.S3.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.S4.purrdf-2.0.2": "1",
+    "watdiv.10M.seed0.rows.S5.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.S6.purrdf-2.0.2": "5",
+    "watdiv.10M.seed0.rows.S7.purrdf-2.0.2": "0",
+    # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
+    "watdiv.10M.seed0.queries.sha256": (
+        "2fabc0ef56b5d18bb9a7c9d6a4aa5c661043500103d6f133087d39d41fa59301"
+    ),
+}
+
+
+# ── The one construction of a pin key's version suffix ────────────────────────
+#
+# A version-keyed pin name ends with `.purrdf-<version>`, and that suffix was built
+# in THREE places: here in the self-test (from `Cargo.toml`), and in each lane as
+# `${PURRDF_VERSION// /-}` where `PURRDF_VERSION` is the WHOLE stdout of
+# `purrdf --version`. Nothing asserted the constructions agree, and nothing pinned
+# the shape of `--version`.
+#
+# That is a switch, not a nuisance. If a release adds a git hash or a second banner
+# line, every one of the 22 version-keyed pins becomes unreachable and the WatDiv
+# lane prints "NOT checked against pins" and EXITS 0 while LUBM reports no corpus
+# pin -- one environment change silently disabling the entire apparatus, with no
+# gate reddening. The branch's own stand-in already proves the shape is
+# unconstrained: it prints `purrdf 9.9.9 (stand-in)`, which becomes
+# `purrdf-9.9.9-(stand-in)`.
+#
+# So the suffix has one definition, the lanes ASK for it rather than deriving it,
+# and the derivation from a `--version` line is checked rather than assumed.
+
+
+def pin_version_suffix(version_line: str) -> str:
+    """The pin-key suffix for a binary that reported *version_line*.
+
+    Refuses anything that is not exactly `<name> <semver>`, because a suffix built
+    from an unexpected banner names a pin nobody recorded -- which reads as "no pin
+    for this binary" and is indistinguishable from a pass.
+    """
+    # THE FULL SEMVER GRAMMAR. `[-+][0-9A-Za-z.-]+` permits a prerelease OR build metadata
+    # and not both, so `purrdf 2.0.2-alpha+build.1` -- legal semver, legal in Cargo.toml --
+    # was refused and the message blamed the binary's banner for a legal manifest. An
+    # over-refusal inside the check added to prevent an under-refusal.
+    match = re.fullmatch(
+        r"([a-z0-9-]+) (\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)",
+        version_line.strip(),
+    )
+    if match is None:
+        sys.exit(
+            f"FAIL: cannot build a pin-key suffix from {version_line.strip()!r}.\n"
+            "  A version-keyed pin name ends with `.<name>-<semver>`, so an unexpected\n"
+            "  --version banner would name a pin nobody recorded -- which a lane reports as\n"
+            "  'no pin for this binary' and exits 0 on. That is every pin silently off.\n"
+            "  Expected exactly `<name> <semver>`, for example `purrdf 2.0.2`."
+        )
+    return f"{match.group(1)}-{match.group(2)}"
 
 
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -275,7 +540,7 @@ def md5_of(path: Path) -> str:
     """
     digest = hashlib.md5(usedforsecurity=False)  # noqa: S324 - publisher-published checksum, not a security primitive
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
+        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -296,31 +561,34 @@ def quarantine(path: Path, actual: str) -> Path:
     download. It is renamed to ``<name>.rejected-<digest prefix>`` so the next
     run sees a cache miss rather than the same bad bytes, while the bad bytes
     remain on disk for an operator to inspect. The digest is part of the name so
-    two different failures do not overwrite each other. A ``.part`` suffix is
-    dropped first, so a failed download is quarantined under the name it was
-    trying to become.
+    two different failures do not overwrite each other. A ``.part.<pid>`` suffix
+    is dropped first, so a failed download is quarantined under the name it was
+    trying to become rather than under the scratch name it happened to have — and
+    two processes quarantining the same bad bytes converge on one file instead of
+    leaving a pid-tagged copy each.
     """
-    stem = path.name[: -len(".part")] if path.name.endswith(".part") else path.name
+    stem = re.sub(r"\.part(?:\.\d+)?$", "", path.name)
     held = path.with_name(f"{stem}.rejected-{actual[:16]}")
     os.replace(path, held)
     return held
 
 
-def _install_verified_bytes(data: bytes, dest: Path, artifact: Artifact) -> None:
-    """Install *data* at *dest* only if every pinned identity matches.
+def _scratch_for(dest: Path) -> Path:
+    """The scratch name a download writes before it has earned *dest*'s name."""
+    return dest.with_name(f"{dest.name}.part.{os.getpid()}")
 
-    The bytes are written to a sibling ``.part`` file and ``os.replace``d into
-    place — atomic within a filesystem — only after size, SHA-256, and (where
-    upstream publishes one) MD5 all agree with the pin. A truncated response, a
-    proxy error page, or an interrupted transfer therefore never appears at
-    *dest* under the artifact's real name; it is quarantined instead, and the
-    process exits non-zero.
+
+def _verify_and_install(tmp: Path, dest: Path, artifact: Artifact) -> None:
+    """Promote *tmp* to *dest* only if every pinned identity matches.
+
+    *tmp* has already been written. It is ``os.replace``d into place — atomic
+    within a filesystem — only after size, SHA-256, and (where upstream publishes
+    one) MD5 all agree with the pin. A truncated response, a proxy error page, or
+    an interrupted transfer therefore never appears at *dest* under the
+    artifact's real name; it is quarantined instead, and the process exits
+    non-zero.
     """
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".part")
     try:
-        tmp.write_bytes(data)
-
         actual_size = tmp.stat().st_size
         if actual_size != artifact.size:
             held = quarantine(tmp, sha256_of(tmp))
@@ -358,17 +626,125 @@ def _install_verified_bytes(data: bytes, dest: Path, artifact: Artifact) -> None
                     "  the sha256 pin matched, so the PIN is what is wrong here, not the download"
                 )
 
+        # DURABLE BEFORE THE RENAME, so "verified or absent" survives a host crash and
+        # not merely a killed process. `os.replace` is atomic with respect to other
+        # processes the moment it returns, which is what the comments above are about;
+        # it says nothing about a power loss between the write and the rename reaching
+        # the disk, and the outcome there is a file at the artifact's real name whose
+        # contents were never the verified bytes. That is the one state this whole
+        # function exists to make impossible.
+        #
+        # This was added to the WatDiv candidates CACHE first and not here, which is the
+        # wrong way round: a cache that loses its bytes is rescraped, and a pinned
+        # artifact that loses its bytes is read as pinned. Both install paths --
+        # `_install_verified_bytes` and the streamed `_download_verified` -- promote
+        # through this function, so one call covers both and cannot drift from itself.
+        fsync_path(tmp)
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
 
 
+def _install_verified_bytes(data: bytes, dest: Path, artifact: Artifact) -> None:
+    """Install *data* at *dest* only if every pinned identity matches."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # The scratch name carries this process's pid. The cache is a fixed directory
+    # under ``target/`` shared by every lane regardless of which arena each one
+    # was given, so two concurrent acquisitions — two lanes, or one lane run twice
+    # with different ``*_OUT`` — raced on a single ``.part``: both wrote it, and
+    # whichever lost ``os.replace`` got a bare ``FileNotFoundError``, or one
+    # process hashed the other's partial bytes and quarantined a download that was
+    # never corrupt. Separating arenas does not separate the cache, so the cache
+    # has to be safe on its own terms. ``os.replace`` onto *dest* stays atomic and
+    # every candidate is verified before it, so a unique scratch name is the whole
+    # fix.
+    tmp = _scratch_for(dest)
+    tmp.write_bytes(data)
+    _verify_and_install(tmp, dest, artifact)
+
+
+# A stalled connection with no timeout blocks a lane FOREVER, with the last thing
+# printed being "fetching <url>" and no diagnostic ever following it. Python's
+# default socket timeout is None, so this has to be stated. The retry is small and
+# its backoff is fixed rather than jittered: a transient reset partway through a
+# large transfer should not discard the run, and this repository does not
+# introduce nondeterminism it does not need.
+_FETCH_TIMEOUT_SECONDS = 60
+_FETCH_ATTEMPTS = 3
+_FETCH_BACKOFF_SECONDS = 2
+
+
 def _download_verified(artifact: Artifact, dest: Path) -> None:
-    """Fetch *artifact* over the network and install it only if it verifies."""
+    """Fetch *artifact* over the network and install it only if it verifies.
+
+    The response is streamed to the scratch file rather than read into memory:
+    the pinned WatDiv dataset is tens of megabytes today and this file documents
+    how to pin the 1000M one, at which point buffering the whole body would make
+    acquisition the memory peak of a lane that otherwise streams everything.
+    """
     print(f"  fetching {artifact.url}")
-    with urllib.request.urlopen(artifact.url) as response:  # noqa: S310 - pinned https URL
-        data = response.read()
-    _install_verified_bytes(data, dest, artifact)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _scratch_for(dest)
+    for attempt in range(1, _FETCH_ATTEMPTS + 1):
+        received = 0
+        declared: str | None = None
+        try:
+            with (
+                urllib.request.urlopen(  # noqa: S310 - pinned https URL
+                    artifact.url, timeout=_FETCH_TIMEOUT_SECONDS
+                ) as response,
+                tmp.open("wb") as handle,
+            ):
+                for chunk in iter(lambda: response.read(STREAM_CHUNK_BYTES), b""):  # noqa: B023
+                    handle.write(chunk)
+                    received += len(chunk)
+                declared = response.getheader("Content-Length")
+            # A SHORT BODY IS A TRANSFER FAILURE, AND IT DOES NOT RAISE. When a
+            # non-chunked response closes before its declared length, a SIZED `read()`
+            # returns b"" rather than raising `IncompleteRead` -- CPython preserves that
+            # for sized reads. So the loop ended normally, `break` left the retry behind,
+            # and `_verify_and_install` then reported a SIZE MISMATCH and QUARANTINED the
+            # file: a truncated download published as a corrupt artifact or a wrong pin,
+            # which is the misdiagnosis this file exists to avoid, with the retry that
+            # would have fixed it skipped.
+            #
+            # Only a response that DECLARES a larger length is treated as retryable. A
+            # server that declares nothing has said nothing to contradict, and inventing a
+            # short-body verdict there would retry every chunked transfer.
+            if declared is not None:
+                # PARSED INSIDE THE HANDLER, because a header is upstream input. `int()`
+                # sat outside the `except` tuple, so `Content-Length: 1,024` from a proxy
+                # or captive portal produced a ValueError traceback instead of a named
+                # refusal -- and because the handler never ran, the scratch file was left
+                # behind in the cache. A traceback and a leak, in the function whose whole
+                # subject is not misdiagnosing a transfer failure.
+                try:
+                    expected_length = int(declared)
+                except ValueError:
+                    raise http.client.HTTPException(
+                        f"the server sent an unparseable Content-Length: {declared!r}"
+                    ) from None
+                if received < expected_length:
+                    raise http.client.IncompleteRead(
+                        b"", expected=expected_length - received
+                    )
+            break
+        # `http.client.IncompleteRead` is an HTTPException, NOT an OSError, so the
+        # commonest mid-transfer truncation -- the exact failure the retry below
+        # exists for -- escaped it as a traceback and left a scratch file behind.
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
+            tmp.unlink(missing_ok=True)
+            if attempt == _FETCH_ATTEMPTS:
+                sys.exit(
+                    f"FAIL: could not fetch {artifact.filename} after "
+                    f"{_FETCH_ATTEMPTS} attempt(s)\n"
+                    f"  url    {artifact.url}\n"
+                    f"  error  {error}\n"
+                    "  nothing was installed into the cache"
+                )
+            print(f"  attempt {attempt} failed ({error}); retrying")
+            time.sleep(_FETCH_BACKOFF_SECONDS * attempt)
+    _verify_and_install(tmp, dest, artifact)
 
 
 Fetcher = Callable[[Artifact, Path], None]
@@ -399,6 +775,28 @@ def ensure_cached(
                 "  a cached file that stops verifying is an error, not a cache miss: nothing was\n"
                 "  re-downloaded over it. Inspect the quarantined copy, then remove it to refetch."
             )
+        # THE PUBLISHER'S MD5 IS CHECKED HERE TOO, because the run PRINTS it.
+        #
+        # On a cache hit no download happens, so `_verify_and_install` -- which
+        # checks md5 before any byte earns the cached name -- was never reached. A
+        # WRONG PIN therefore went unexamined while `acquire` still printed
+        # "md5 <value> (publisher-published)": a false report of an independent
+        # publisher confirmation that nothing had confirmed. Re-checking here is
+        # not a duplicate of that rule, it is the same rule on the other path.
+        if artifact.md5 is not None:
+            actual_md5 = md5_of(dest)
+            if actual_md5 != artifact.md5:
+                held = quarantine(dest, actual)
+                sys.exit(
+                    f"FAIL: cached {artifact.filename} disagrees with the publisher's own "
+                    "checksum\n"
+                    f"  path     {dest}\n"
+                    f"  expected {artifact.md5}\n"
+                    f"  actual   {actual_md5}\n"
+                    f"  quarantined at {held}\n"
+                    "  the sha256 pin matched, so the PIN is what is wrong here, not the bytes.\n"
+                    "  No publisher confirmation is printed for a checksum that does not agree."
+                )
         return "cache-hit"
 
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -428,16 +826,37 @@ def _offending_status_lines(status_text: str, top: str) -> list[str]:
     return hits
 
 
+def _licence_posture_sentence() -> str:
+    """Describe the pinned set's licensing posture, counted from ARTIFACTS.
+
+    Restating these counts in prose is how a licensing diagnostic goes stale: the
+    sentence this replaced still described four artifacts, and named one as GPL,
+    after a second GPL artifact and two more pins had been added.
+    """
+    gpl = sum(1 for a in ARTIFACTS if a.licence.startswith("GPL"))
+    ungranted = sum(1 for a in ARTIFACTS if a.licence.startswith("unlicensed"))
+    citation = sum(1 for a in ARTIFACTS if a.licence.startswith("citation"))
+    parts = []
+    if gpl:
+        parts.append(f"{gpl} of these artifacts {'is' if gpl == 1 else 'are'} GPL-2.0-or-later")
+    if ungranted:
+        parts.append(f"{ungranted} carry no licence grant at all")
+    if citation:
+        parts.append(f"{citation} are citation-ware with no redistribution grant")
+    return ", ".join(parts)
+
+
 def assert_cache_invisible_to_git(cache_dir: Path) -> None:
     """Prove the cache cannot be committed, using the REPOSITORY's own rules.
 
     The operator's personal ignore file is disabled for this check on purpose.
     An artifact that is only invisible because of a personal ``core.excludesFile``
     is visible in every clone that lacks it, and these artifacts are exactly the
-    ones that must never be committed: one is GPL, two carry no licence grant at
-    all, and the fourth is redistributable only by its publisher. Only lines that
-    name the cache tree are inspected, so unrelated untracked files an operator
-    ignores personally do not make this fail.
+    ones that must never be committed — the posture counts in the diagnostic are
+    derived from ARTIFACTS rather than restated, so adding a pin cannot leave a
+    licensing sentence describing the set it used to be. Only lines that name the
+    cache tree are inspected, so unrelated untracked files an operator ignores
+    personally do not make this fail.
     """
     top = cache_dir.relative_to(REPO_ROOT).parts[0]
     result = subprocess.run(
@@ -471,8 +890,8 @@ def assert_cache_invisible_to_git(cache_dir: Path) -> None:
             f"{listed}\n"
             f"  The repository's own .gitignore must cover '{top}'. It currently does not\n"
             "  (a personal core.excludesFile does not count: a fresh clone has no such file).\n"
-            "  One of these artifacts is GPL-2.0-or-later and two carry no licence grant at\n"
-            "  all, so committing them is a licensing incident, not an untidy tree.\n"
+            f"  {_licence_posture_sentence()}, so committing them is a licensing\n"
+            "  incident, not an untidy tree.\n"
             "  Fix .gitignore before running this again. Nothing was fetched."
         )
     print(f"OK: '{top}/' is ignored by the repository's own rules; the cache cannot be committed")
@@ -483,9 +902,11 @@ def select_artifacts(names: list[str] | None) -> tuple[Artifact, ...]:
 
     An unknown name is a HARD FAILURE that names the bad value and lists every valid
     one — never a silent no-op (fetch nothing) and never a silent fallback (fetch
-    everything). This is what lets `scripts/lubm-lane.sh` ask for only its four
-    artifacts and `scripts/watdiv-lane.sh` ask for only its two, instead of every
-    lane paying for every pinned artifact regardless of which one it uses.
+    everything). This is what lets each lane ask for only the artifacts it
+    actually consumes, instead of every lane paying for every pinned artifact
+    regardless of which one it uses. ``GeneratorLinuxFix.zip`` is the reason that
+    distinction is worth having: it is pinned here so the licensing analysis is on
+    the record, and no lane fetches it, because no lane uses it.
 
     Order follows ``ARTIFACTS``, not *names*, and a name repeated in *names* is
     fetched once: this selects a subset, it does not resequence or multiply it.
@@ -502,6 +923,21 @@ def select_artifacts(names: list[str] | None) -> tuple[Artifact, ...]:
         )
     wanted = set(names)
     return tuple(artifact for artifact in ARTIFACTS if artifact.filename in wanted)
+
+
+def pinned_watdiv_scales() -> tuple[str, ...]:
+    """The WatDiv scales that are actually pinned, read from ARTIFACTS."""
+    return tuple(
+        name.removeprefix("watdiv.").removesuffix(".tar.bz2")
+        for name in (a.filename for a in ARTIFACTS)
+        if name.startswith("watdiv.") and name.endswith(".tar.bz2")
+    )
+
+
+def unpinned_watdiv_scales() -> tuple[str, ...]:
+    """The scales upstream publishes that this repository has NOT pinned."""
+    pinned = set(pinned_watdiv_scales())
+    return tuple(scale for scale in WATDIV_SCALES if scale not in pinned)
 
 
 def list_artifacts() -> int:
@@ -523,6 +959,15 @@ def list_artifacts() -> int:
         print(f"  licence  {artifact.licence}")
         for index, line in enumerate(_wrap(artifact.posture, 74)):
             print(f"  posture  {line}" if index == 0 else f"           {line}")
+    print()
+    for scale, rows in sorted(WATDIV_DATASET_ROWS.items()):
+        print(f"watdiv.{scale} extracted row count (pinned): {rows}")
+    print(f"WatDiv scales pinned here:  {', '.join(pinned_watdiv_scales())}")
+    print(f"published upstream, NOT pinned: {', '.join(unpinned_watdiv_scales())}")
+    print(
+        "  An unpinned scale is refused by name rather than silently substituted.\n"
+        "  To use one, fetch it, hash it yourself, and add it to ARTIFACTS."
+    )
     return 0
 
 
@@ -673,7 +1118,7 @@ def self_test() -> int:
         if target.exists():
             print("SELF-TEST FAIL: unverified fetched bytes were installed at the real name")
             ok = False
-        elif (fetch_dir / (fixture.filename + ".part")).exists():
+        elif list(fetch_dir.glob(fixture.filename + ".part*")):
             print("SELF-TEST FAIL: a .part file was left behind after a rejected fetch")
             ok = False
         else:
@@ -687,6 +1132,294 @@ def self_test() -> int:
             "right size with wrong content still fails the digest",
             ["sha256 mismatch", good_sha],
         )
+
+        # 7b. The md5 refusal, which is the one branch that was covered only on
+        #     its VALID side: every case above carries a fixture whose md5 is
+        #     right, so nothing ever proved the refusal fires, or that its
+        #     message says what it is for. It is the only check that can fail
+        #     with the sha256 pin already matching, which means the PIN is wrong
+        #     rather than the download — and that sentence had never been
+        #     executed.
+        mismatched_md5 = fixture._replace(md5="0" * 32)
+        ok &= _expect_exit(
+            lambda: _install_verified_bytes(good, fetch_dir / "md5.bin", mismatched_md5),
+            "bytes matching sha256 but not the publisher's md5 are refused",
+            ["md5 disagrees with the publisher's own checksum", "the PIN is what is wrong here"],
+        )
+        if (fetch_dir / "md5.bin").exists():
+            print("SELF-TEST FAIL: bytes failing the md5 cross-check were installed anyway")
+            ok = False
+        else:
+            print("OK: self-test — an md5 mismatch is refused and nothing is installed")
+
+    # 7c. The licensing sentence is DERIVED from ARTIFACTS, so it is checked like
+    #     any other derived value. It is reached only from a `sys.exit` branch, so
+    #     nothing else in the gate would notice it going stale -- which is how its
+    #     hand-written predecessor came to describe four artifacts when there were
+    #     six, and to call one GPL when two are.
+    posture = _licence_posture_sentence()
+    gpl = sum(1 for a in ARTIFACTS if a.licence.startswith("GPL"))
+    if f"{gpl} of these artifacts" not in posture or "GPL-2.0-or-later" not in posture:
+        print(f"SELF-TEST FAIL: the licensing sentence does not count the GPL pins: {posture}")
+        ok = False
+    elif str(len(ARTIFACTS)) == posture:
+        print("SELF-TEST FAIL: the licensing sentence is a bare total, not a posture breakdown")
+        ok = False
+    else:
+        print(f"OK: self-test — the licensing posture sentence is derived from the pins ({posture})")
+
+    # 7c-bis. THE CACHE-HIT MD5 REFUSAL, whose valid side was the only one executed.
+    #         It was added because a wrong pin printed "md5 ... (publisher-published)"
+    #         on every warm-cache run with nothing hashing the bytes -- and then it too
+    #         went untested, which is the same omission one layer down.
+    with tempfile.TemporaryDirectory() as raw:
+        warm = Path(raw)
+        (warm / fixture.filename).write_bytes(good)
+        wrong_md5 = fixture._replace(md5="0" * 32)
+        ok &= _expect_exit(
+            lambda: ensure_cached(wrong_md5, warm, explode),
+            "a cached entry whose publisher md5 disagrees is refused, not reported OK",
+            ["disagrees with the publisher", "the PIN is what is wrong here"],
+        )
+        if (warm / fixture.filename).exists():
+            print("SELF-TEST FAIL: the cache entry failing the md5 cross-check was left in place")
+            ok = False
+        elif not list(warm.glob(f"{fixture.filename}.rejected-*")):
+            print("SELF-TEST FAIL: the cache entry failing the md5 cross-check was not quarantined")
+            ok = False
+        else:
+            print("OK: self-test — a cached md5 mismatch is quarantined and nothing is refetched")
+
+    # 7d. THE PINS THIS FILE EXISTS TO HOLD, which had no check of their own. The
+    #     artifact pins were covered and the workload pins were not -- and one of them
+    #     carries a binary version in its key, so a version bump silently makes it
+    #     unreachable unless something asserts that every recorded key is one a lane can
+    #     actually construct.
+    seen_keys = sorted(WORKLOAD_PINS)
+    if len(seen_keys) != len(set(seen_keys)):
+        print("SELF-TEST FAIL: a workload pin name is recorded twice")
+        ok = False
+    elif any(not key or key != key.strip() for key in seen_keys):
+        print("SELF-TEST FAIL: a workload pin name is empty or carries stray whitespace")
+        ok = False
+    else:
+        print(f"OK: self-test — {len(seen_keys)} workload pin name(s) are well formed and unique")
+
+    digests = {k: v for k, v in WORKLOAD_PINS.items() if k.endswith(".sha256") or ".sha256." in k}
+    malformed = {
+        key: value
+        for key, value in digests.items()
+        if len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+    }
+    if malformed:
+        print(f"SELF-TEST FAIL: workload pin(s) are not 64 lowercase hex characters: {malformed}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(digests)} digest pin(s) are 64 lowercase hex characters")
+
+    # THE EXIT CODES ARE LOAD-BEARING AND THEREFORE EXECUTED. Both lanes now branch on
+    # 2 meaning "recorded nowhere" and die on anything else, so a refactor that made an
+    # absent pin exit 1 would turn every pin check in both lanes into a lane failure,
+    # and one that made a broken lookup exit 2 would turn it into a silent skip. Neither
+    # is visible from inside this function; only running the entry point shows it.
+    here = str(Path(__file__).resolve())
+    absent = subprocess.run(
+        [sys.executable, here, "--workload-pin", "no.such.pin.recorded.anywhere"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if absent.returncode != 2:
+        print(
+            f"SELF-TEST FAIL: an absent pin exited {absent.returncode}, not 2 — the lanes "
+            "cannot distinguish 'no pin for this binary' from 'the lookup is broken'"
+        )
+        ok = False
+    elif "FAIL: no workload pin named" not in absent.stderr:
+        print(f"SELF-TEST FAIL: an absent pin exited 2 but said nothing: {absent.stderr!r}")
+        ok = False
+    else:
+        print("OK: self-test — an absent workload pin exits 2 and says which name was asked for")
+
+    # THE NEIGHBOUR: a recorded pin still prints its value on stdout and exits 0. Without
+    # this, "exit 2 for everything" would pass the check above while breaking every lane.
+    present_key = "watdiv.10M.seed0.total_rows.purrdf-2.0.2"
+    present = subprocess.run(
+        [sys.executable, here, "--workload-pin", present_key],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if present.returncode != 0 or present.stdout.strip() != WORKLOAD_PINS[present_key]:
+        print(
+            f"SELF-TEST FAIL: {present_key} exited {present.returncode} with stdout "
+            f"{present.stdout!r}, expected 0 and {WORKLOAD_PINS[present_key]!r}"
+        )
+        ok = False
+    else:
+        print("OK: self-test — a recorded pin exits 0 and prints only its value")
+
+    counts = {k: v for k, v in WORKLOAD_PINS.items() if ".rows." in k}
+    if not counts or any(not v.isdigit() for v in counts.values()):
+        print(f"SELF-TEST FAIL: an answer pin is not a decimal count: {counts}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(counts)} answer pin(s) are decimal counts")
+
+    # A ZERO IS A REAL ANSWER for a regression pin and NOT for an oracle, and the
+    # distinction is the whole difference between the two kinds. WatDiv's skew
+    # concentrates a property on some entities and leaves others without it, so a
+    # pattern demanding several at once legitimately matches none -- pinning that zero
+    # is what turns "matched nothing" from an unfalsifiable note into a claim. LUBM's
+    # Q1/Q14 are PUBLISHED answers used as an oracle, and an oracle of zero is
+    # satisfied by an engine that answers nothing, so those must be positive.
+    oracle_counts = {k: v for k, v in counts.items() if k.startswith("lubm.")}
+    if not oracle_counts:
+        print("SELF-TEST FAIL: no published-answer oracle is pinned")
+        ok = False
+    elif any(int(v) <= 0 for v in oracle_counts.values()):
+        zero = [k for k, v in oracle_counts.items() if int(v) <= 0]
+        print(f"SELF-TEST FAIL: an oracle pin is zero, which any engine satisfies: {zero}")
+        ok = False
+    else:
+        print(
+            f"OK: self-test — all {len(oracle_counts)} published-answer oracle pin(s) are "
+            "positive, so no engine satisfies one by answering nothing"
+        )
+
+    # AND THE TWENTY-ONE NUMBERS MUST AGREE WITH EACH OTHER. The per-query pins and the
+    # aggregate are recorded separately, so a transcription error in any one of them is
+    # invisible from inside its own row: a lane comparing 20 counts and a total against
+    # a table that does not sum reports a failure against whichever it checks second.
+    # Nothing else in the tree can catch this, because both sides of the comparison are
+    # in this file.
+    # KEYED ON THE KNOBS THE LANE USES, not on a prefix. The selector was
+    # `k.startswith("watdiv.") and ".rows." in k`, while the lane builds
+    # `watdiv.${SCALE}.seed${SEED}.rows.<id>` -- so scale and seed are inputs to the
+    # identity and were absent from the selector. A pin for seed 3 or scale 100M joined
+    # the sum, and because the set check compares template IDS it saw a duplicate C1 as
+    # already present: 21 pins summing to 434748, reported GREEN.
+    watdiv_stem = "watdiv.10M.seed0.rows."
+    per_query = {k: int(v) for k, v in counts.items() if k.startswith(watdiv_stem)}
+    total_key = "watdiv.10M.seed0.total_rows.purrdf-2.0.2"
+    # AND EVERY ANSWER PIN MUST BE CLASSIFIED. A third workload family added to the table
+    # was checked by nothing at all: not by the oracle arm (which selects `lubm.`), not by
+    # the per-query arm (now `watdiv.10M.seed0.rows.`), and not by the sum.
+    unclassified = sorted(set(counts) - set(per_query) - set(oracle_counts))
+    if unclassified:
+        print(
+            f"SELF-TEST FAIL: answer pin(s) {unclassified} are checked by nothing -- they "
+            f"are neither a published oracle nor a per-query pin at the default knobs, so "
+            f"no arm of this self-test and no lane asserts them."
+        )
+        ok = False
+    else:
+        print(
+            f"OK: self-test — all {len(counts)} answer pin(s) are classified, so a new "
+            "workload family is a failure to classify rather than a silent pass"
+        )
+
+    if total_key not in WORKLOAD_PINS:
+        print(f"SELF-TEST FAIL: {total_key} is not recorded, so the per-query pins sum to nothing")
+        ok = False
+    elif not per_query:
+        print("SELF-TEST FAIL: no per-query WatDiv pin is recorded, so the total stands alone")
+        ok = False
+    elif len(per_query) != WATDIV_BASIC_TEMPLATES:
+        print(
+            f"SELF-TEST FAIL: {len(per_query)} per-query pins are recorded under "
+            f"{watdiv_stem!r} and the workload has {WATDIV_BASIC_TEMPLATES} templates."
+        )
+        ok = False
+    elif {k[len(watdiv_stem):].split(".")[0] for k in per_query} != set(WATDIV_BASIC_TEMPLATE_IDS):
+        # THE SUM ALONE CANNOT SEE A MISSING ZERO, and five of these pins are zero.
+        # Deleting the pin for C2 (0 rows) leaves the sum at 434748 and the check above
+        # green, and the lane then prints "19 of 20 queries matched ...; no pin is
+        # recorded for: C2" and exits 0. That is exactly the half-finished pin update
+        # the lane reports, and it destroys exactly the claim the zero pins exist to
+        # make -- that "matched nothing" is a falsifiable answer rather than a note.
+        # The comment above says nothing else in the tree can catch this; that was true
+        # of the count as well as the sum.
+        print(
+            f"SELF-TEST FAIL: the per-query WatDiv pins do not cover the published "
+            f"templates. Missing: "
+            f"{sorted(set(WATDIV_BASIC_TEMPLATE_IDS) - {k[len(watdiv_stem):].split('.')[0] for k in per_query})}; "
+            f"unexpected: "
+            f"{sorted({k[len(watdiv_stem):].split('.')[0] for k in per_query} - set(WATDIV_BASIC_TEMPLATE_IDS))}. "
+            f"Neither the count nor the sum can see a RENAMED key -- both stay correct while "
+            f"one template silently loses its pin."
+        )
+        ok = False
+    elif sum(per_query.values()) != int(WORKLOAD_PINS[total_key]):
+        print(
+            f"SELF-TEST FAIL: the {len(per_query)} per-query pins sum to "
+            f"{sum(per_query.values())}, and {total_key} records "
+            f"{WORKLOAD_PINS[total_key]} — the table disagrees with itself"
+        )
+        ok = False
+    else:
+        print(
+            f"OK: self-test — the {len(per_query)} per-query pins sum to "
+            f"{WORKLOAD_PINS[total_key]}, matching the aggregate pin"
+        )
+
+    # The binary-keyed pin must name the version this workspace builds, or the lane it
+    # serves will report "no pin recorded" for the binary it just built -- a pin that
+    # is recorded and unreachable, which is worse than one that is absent.
+    version_keyed = [k for k in WORKLOAD_PINS if ".purrdf-" in k]
+    # PARSED, NOT LINE-SCANNED. The same defect `check-licenses.py` documents and fixes:
+    # taking the first line anywhere starting `version = ` meant a `[package.metadata.*]
+    # version` above the workspace one silently became the expected pin suffix, and every
+    # version-keyed pin was then reported absent while exiting 0. And `split('"')[1]` raised
+    # IndexError on `version = '2.0.2'`, a legal TOML literal string. Fixed in the sibling
+    # this round and left here, which is the shape this whole change is about.
+    workspace_version = None
+    cargo_toml = REPO_ROOT / "Cargo.toml"
+    if cargo_toml.exists():
+        try:
+            workspace_version = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))[
+                "workspace"
+            ]["package"]["version"]
+        except (KeyError, TypeError, tomllib.TOMLDecodeError):
+            workspace_version = None
+    if not version_keyed:
+        print("SELF-TEST FAIL: no version-keyed pin is recorded, so nothing pins the serializer")
+        ok = False
+    elif workspace_version is None:
+        print("SELF-TEST FAIL: could not read the workspace version to check the pin key")
+        ok = False
+    elif not all(key.endswith(f".{pin_version_suffix(f'purrdf {workspace_version}')}") for key in version_keyed):
+        print(
+            f"SELF-TEST FAIL: version-keyed pin(s) {version_keyed} do not name the workspace "
+            f"version {workspace_version}, so the lane will report no pin for the binary it built"
+        )
+        ok = False
+    else:
+        print(
+            f"OK: self-test — every version-keyed pin names the workspace version "
+            f"({workspace_version})"
+        )
+
+    if LUBM_PUBLISHED_QUERIES <= 0:
+        print(f"SELF-TEST FAIL: the LUBM query count pin is not positive ({LUBM_PUBLISHED_QUERIES})")
+        ok = False
+    else:
+        print(f"OK: self-test — the LUBM published-query count is pinned ({LUBM_PUBLISHED_QUERIES})")
+
+    if WATDIV_BASIC_TEMPLATES <= 0 or not WATDIV_DATASET_ROWS:
+        print("SELF-TEST FAIL: the template count or the dataset row pins are empty")
+        ok = False
+    elif any(rows <= 0 for rows in WATDIV_DATASET_ROWS.values()):
+        print(f"SELF-TEST FAIL: a pinned dataset row count is not positive: {WATDIV_DATASET_ROWS}")
+        ok = False
+    elif set(WATDIV_DATASET_ROWS) - set(pinned_watdiv_scales()):
+        print(
+            "SELF-TEST FAIL: a row count is pinned for a scale whose artifact is not: "
+            f"{sorted(set(WATDIV_DATASET_ROWS) - set(pinned_watdiv_scales()))}"
+        )
+        ok = False
+    else:
+        print("OK: self-test — the template count and every dataset row pin are positive and pinned")
 
     # 8. The git-visibility matcher flags the cache tree and nothing adjacent.
     flagged = _offending_status_lines(
@@ -806,12 +1539,14 @@ def acquire(artifacts: tuple[Artifact, ...]) -> int:
             fetched += 1
         verify_digest(CACHE / artifact.filename, artifact.sha256, artifact.filename)
         if artifact.md5 is not None:
-            actual_md5 = md5_of(CACHE / artifact.filename)
-            if actual_md5 != artifact.md5:
-                sys.exit(
-                    f"FAIL: {artifact.filename} md5 mismatch\n"
-                    f"  expected {artifact.md5}\n  actual   {actual_md5}"
-                )
+            # Not re-checked HERE, because both paths that can reach this line
+            # have already checked it: `_verify_and_install` before any byte earns
+            # the cached name, and `ensure_cached` on a cache hit. A third copy
+            # would be a weaker statement of a rule stated twice already. What
+            # matters is that no path prints this line without having verified it
+            # -- the earlier version of this comment argued against duplication
+            # while leaving the cache-hit path unverified, which is how a false
+            # publisher confirmation got printed.
             print(f"OK: {artifact.filename} md5 {artifact.md5} (publisher-published)")
         print(f"     {status}  {artifact.licence}")
 
@@ -834,6 +1569,35 @@ def main() -> int:
         action="store_true",
         help="print every pinned artifact, its URL, its digest and its licence posture",
     )
+    parser.add_argument(
+        "--template-count",
+        action="store_true",
+        help="print the pinned count of published WatDiv basic templates and exit",
+    )
+    parser.add_argument(
+        "--lubm-query-count",
+        action="store_true",
+        help="print the pinned count of published LUBM queries and exit",
+    )
+    parser.add_argument(
+        "--pin-version-suffix",
+        metavar="VERSION_LINE",
+        help=(
+            "print the pin-key suffix for a binary that reported VERSION_LINE, and exit. "
+            "The lanes call this instead of transforming the line themselves, so the suffix "
+            "has one definition rather than three."
+        ),
+    )
+    parser.add_argument(
+        "--workload-pin",
+        metavar="NAME",
+        help="print the recorded value of a workload pin and exit",
+    )
+    parser.add_argument(
+        "--dataset-rows",
+        metavar="SCALE",
+        help="print the pinned extracted row count for SCALE and exit",
+    )
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
         "--only",
@@ -850,6 +1614,46 @@ def main() -> int:
 
     if args.self_test:
         return self_test()
+    if args.template_count:
+        print(WATDIV_BASIC_TEMPLATES)
+        return 0
+    if args.lubm_query_count:
+        print(LUBM_PUBLISHED_QUERIES)
+        return 0
+    if args.pin_version_suffix is not None:
+        print(pin_version_suffix(args.pin_version_suffix))
+        return 0
+    if args.workload_pin is not None:
+        value = WORKLOAD_PINS.get(args.workload_pin)
+        if value is None:
+            # EXIT 2, NOT 1, and that distinction is load-bearing. A lane asking for a
+            # pin has two questions, and "no pin is recorded for this binary" is a
+            # reportable state while "the lookup itself failed" is a lane failure. The
+            # lanes could not tell them apart: both arrived as a non-zero status behind
+            # a `2>/dev/null`, so a renamed flag, a syntax error in this file and an
+            # absent pin all produced the same silent skip — and a skip looks exactly
+            # like a pass. `2` says "recorded nowhere"; anything else is this tool
+            # breaking, and the lanes now die on it.
+            print(
+                f"FAIL: no workload pin named {args.workload_pin!r}.\n"
+                f"  Recorded: {', '.join(sorted(WORKLOAD_PINS))}.\n"
+                "  This tool will not invent a value for a workload it has not recorded.",
+                file=sys.stderr,
+            )
+            return 2
+        print(value)
+        return 0
+    if args.dataset_rows is not None:
+        rows = WATDIV_DATASET_ROWS.get(args.dataset_rows)
+        if rows is None:
+            sys.exit(
+                f"FAIL: no extracted row count is pinned for WatDiv scale "
+                f"{args.dataset_rows!r}. Pinned: {', '.join(sorted(WATDIV_DATASET_ROWS))}.\n"
+                "  A scale whose row count is not pinned cannot have that count asserted, and\n"
+                "  this tool will not invent one."
+            )
+        print(rows)
+        return 0
     if args.list:
         return list_artifacts()
 

@@ -133,13 +133,7 @@ step() {
   echo "=== $* ==="
 }
 
-require_uint() {
-  local name="$1" value="$2"
-  [[ "${value}" =~ ^[0-9]+$ ]] ||
-    die "${name} must be a decimal unsigned integer (got '${value}')"
-}
-
-require_uint WATDIV_SEED "${SEED}"
+lane_require_uint WATDIV_SEED SEED
 
 # Only the 10M dataset is pinned. A larger scale is a one-line addition to
 # scripts/benchmark-acquire.py -- but only by whoever fetches and hashes it
@@ -147,8 +141,10 @@ require_uint WATDIV_SEED "${SEED}"
 # the wrong corpus under the right name, so the request is REFUSED by name.
 [[ "${SCALE}" == "10M" ]] ||
   die "WATDIV_SCALE='${SCALE}' is not pinned; only 10M is.
-  Upstream also publishes watdiv.100M.tar.bz2 and watdiv.1000M.tar.bz2. To use one,
-  fetch it, hash it YOURSELF, and add it to ARTIFACTS in scripts/benchmark-acquire.py.
+  Run 'python3 scripts/benchmark-acquire.py --list' for which scales are pinned and
+  which upstream publishes without a pin here -- that list is derived from the pins
+  themselves rather than restated, so it cannot drift out of step with them. To use
+  an unpinned scale, fetch it, hash it YOURSELF, and add it to ARTIFACTS.
   This lane will not invent a digest and will not silently run a different corpus."
 
 TARBALL="watdiv.${SCALE}.tar.bz2"
@@ -186,6 +182,19 @@ validate_purrdf_bin() {
     "A binary that says nothing is not the purrdf CLI, and this lane records what it
   printed as half of the stamp that lets a later run reuse this run's pack."
   PURRDF_VERSION="${LANE_PROBE_OUT}"
+  # THE PIN-KEY SUFFIX HAS ONE DEFINITION, and it is not here. This used to be
+  # `${PURRDF_VERSION// /-}` in each lane while the self-test built the same suffix
+  # from `Cargo.toml` -- three constructions, none compared. A release adding a git
+  # hash or a second banner line would make every version-keyed pin unreachable, and
+  # an unreachable pin reads as "no pin for this binary" and exits 0. One environment
+  # change, every pin silently off. Asking for the suffix also validates the shape:
+  # the derivation refuses anything that is not `<name> <semver>` by name.
+  PURRDF_PIN_SUFFIX="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --pin-version-suffix "${PURRDF_VERSION}")" ||
+    die "the binary reported a version line no pin key can be built from:
+  '${PURRDF_VERSION}'
+  Every version-keyed pin would be unreachable, which a lane reports as 'no pin
+  recorded' and exits 0 on -- so this is refused rather than carried."
 
   # One triple, in the reserved documentation domain this repository's fixtures
   # use. It exercises the same `--from ntriples --to pack` path step 5 uses on the
@@ -263,14 +272,7 @@ for required in "${TARBALL}" watdiv_v06.tar; do
     "${required}, which acquisition reported it had cached,"
 done
 
-TARBALL_SHA="$(python3 -c '
-import hashlib, sys
-digest = hashlib.sha256()
-with open(sys.argv[1], "rb") as handle:
-    for chunk in iter(lambda: handle.read(1 << 22), b""):
-        digest.update(chunk)
-print(digest.hexdigest())
-' "${CACHE}/${TARBALL}")"
+TARBALL_SHA="$(lane_sha256_file "${CACHE}/${TARBALL}")"
 echo "frozen dataset tarball: ${TARBALL}  sha256 ${TARBALL_SHA}"
 
 # ── 2. The purrdf binary ────────────────────────────────────────────────────────
@@ -293,15 +295,53 @@ command -v bzip2 >/dev/null 2>&1 || die "bzip2 is not on PATH; the dataset is bz
 
 mkdir_checked "${ARENA}"
 
-# Extraction is keyed by the tarball's DIGEST, not by the presence of a file or by
-# its mtime, so a stale extraction from other bytes is a miss and never a hit.
+# CONTAINER IDENTITY IS NOT CORPUS IDENTITY, so the stamp records both digests
+# and the reuse test re-derives the one that matters.
+#
+# The tarball's digest proves what was DOWNLOADED. Extraction is a separate event
+# with its own failure modes -- a truncated write, an interrupted run, a manual
+# edit, a half-finished experiment left in the arena -- so a stamp carrying only
+# the tarball's digest says no more than "an extraction from these bytes happened
+# here once". A later run reads that as a claim about the bytes present NOW, and
+# every number it goes on to print is reported beside the tarball's pinned digest:
+# a provenance claim the corpus it actually measured does not carry. Substituting
+# any non-empty file for the dataset was enough, because the only other condition
+# was `-s`.
+#
+# So the reuse branch re-digests the dataset and compares. A mismatch is a CACHE
+# MISS, not a refusal: the arena is scratch, the tarball is pinned, and
+# re-extracting is both self-healing and cheaper than making an operator who
+# touched a file in `target/` work out why the lane now refuses to run.
 #
 # A STAMP IS A CERTIFICATE: it is what a LATER run consults to skip this work
 # entirely. So it is written only after the artifacts it certifies have been
 # checked for being artifacts, and the reuse test demands a NON-EMPTY dataset —
 # `-f` alone would have made a zero-byte `watdiv.10M.nt` reusable forever.
 extract_start="$(now_ms)"
-if [[ -f "${DATA_STAMP}" && "$(cat "${DATA_STAMP}")" == "${TARBALL_SHA}" && -s "${DATASET}" && -s "${CENSUS}" ]]; then
+stamp_matches=0
+if [[ -f "${DATA_STAMP}" && -s "${DATASET}" && -s "${CENSUS}" ]]; then
+  stamped_tarball="$(sed -n '1p' "${DATA_STAMP}")"
+  stamped_dataset="$(sed -n '2p' "${DATA_STAMP}")"
+  # LINE 3 IS READ, because it is written. It recorded the census digest under a
+  # comment saying a later run re-derives it, and no later run did: only lines 1 and
+  # 2 were ever consulted. `saved.txt` is the only independent check on the candidate
+  # scrape that exists, and it is an input to the query-set digest -- so a census
+  # edited in the arena was reused with its recorded digest unexamined, and at any
+  # non-default seed there is no query-set pin downstream to catch it. A certificate
+  # field nothing reads is not a certificate; it is a comment that looks like one.
+  stamped_census="$(sed -n '3p' "${DATA_STAMP}")"
+  if [[ "${stamped_tarball}" == "${TARBALL_SHA}" && -n "${stamped_dataset}" &&
+    -n "${stamped_census}" ]]; then
+    if [[ "$(lane_sha256_file "${DATASET}")" == "${stamped_dataset}" &&
+      "$(lane_sha256_file "${CENSUS}")" == "${stamped_census}" ]]; then
+      stamp_matches=1
+    else
+      echo "dataset: the extracted corpus or its census no longer digests to what this" \
+        "arena's stamp recorded; re-extracting rather than reporting numbers about it" >&2
+    fi
+  fi
+fi
+if ((stamp_matches == 1)); then
   echo "dataset: reusing the extraction already stamped with this tarball's digest"
   extracted="reused"
 else
@@ -312,7 +352,12 @@ else
   require_nonempty_file "${DATASET}" "${DATASET_NAME}, which ${TARBALL} must contain,"
   require_nonempty_file "${CENSUS}" \
     "saved.txt (the entity census the candidate scrape is checked against), which ${TARBALL} must contain,"
-  write_checked "${DATA_STAMP}" "the dataset stamp" printf '%s\n' "${TARBALL_SHA}"
+  # Line 1 is the container digest, line 2 the corpus, line 3 the census that
+  # audits the corpus. Lines 2 and 3 are what a later run re-derives; line 1
+  # records which pinned bytes they came from.
+  write_checked "${DATA_STAMP}" "the dataset stamp" \
+    printf '%s\n%s\n%s\n' "${TARBALL_SHA}" "$(lane_sha256_file "${DATASET}")" \
+    "$(lane_sha256_file "${CENSUS}")"
   # A STAMP IS A CERTIFICATE THIS RUN WROTE, so it does not survive this run
   # failing: the next run would otherwise skip the extraction on the strength of
   # a certificate written by a run that never finished.
@@ -336,16 +381,65 @@ tar xf "${CACHE}/watdiv_v06.tar" -C "${ARENA}" --strip-components=1 \
 # among them; they are removed so nothing downstream can accidentally count them.
 rm -rf "${TESTSUITE}/linear_incremental" "${TESTSUITE}/linear_mixed"
 
-template_count=$(find "${TESTSUITE}" -maxdepth 1 -name '*.txt' | wc -l)
-((template_count == 20)) ||
-  die "expected 20 basic templates in ${TESTSUITE}, found ${template_count}"
+# ONE COPY OF THE NUMBER, read from the pin file. The lane needs it three times --
+# here, for the instantiated query count, and as the report's denominator -- and this
+# was three typed literals, which is three chances to disagree.
+EXPECTED_TEMPLATES="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --template-count)" ||
+  die "could not read the pinned WatDiv basic-template count"
+template_count=$(find "${TESTSUITE}" -maxdepth 1 -type f -name '*.txt' | wc -l)
+((template_count == EXPECTED_TEMPLATES)) ||
+  die "expected ${EXPECTED_TEMPLATES} basic templates in ${TESTSUITE}, found ${template_count}"
 [[ -f "${MODEL}" ]] || die "watdiv_v06.tar did not contain model/wsdbm-data-model.txt"
 
+# THE ROW COUNT IS ASSERTED AGAINST A PIN, not merely reported.
+#
+# An earlier version of this reported it, arguing that the corpus digest already
+# fixed it. That argument does not survive its own law: the digest above is
+# re-verified against a STAMP THIS ARENA WROTE, not against a pin, so a first
+# extraction that was already wrong would be certified by its own record and agreed
+# with forever. `docs/design/purrdf-bench-lane-laws.md` permits an unasserted count
+# only where a digest re-verified AGAINST A PIN fixes it, so this one must be
+# asserted -- and the pin lives beside the artifact pins rather than here, so there
+# is still exactly one copy of the number.
+expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --dataset-rows "${SCALE}")" ||
+  die "no extracted row count is pinned for WatDiv scale ${SCALE}"
+# AND BOTH EXTRACTED FILES AGAINST A PIN, not only against the stamp this arena wrote.
+# The stamp detects later change; it cannot detect a first extraction that was
+# already wrong, because that extraction is what wrote it.
+#
+# `saved.txt` was the last file here still certified only by its own record, and the
+# comment that stood in its place said so -- calling it "a narrow gap rather than an open
+# door" and noting it was "not zero". Both were true and neither was a reason. The census
+# is the only external audit of the candidate scrape that exists; it drives the candidate
+# pools, so it reaches every substitution and every row count now asserted against a pin.
+# It comes out of the same digest-verified tarball as the corpus, which is what made
+# recording it cost one line rather than a fetch. Annotating a gap is not closing one.
+expected_corpus="$(lane_require_pin "${REPO_ROOT}" "watdiv.${SCALE}.corpus.sha256" \
+  "extracted-corpus digest for WatDiv scale ${SCALE}")"
+expected_census="$(lane_require_pin "${REPO_ROOT}" "watdiv.${SCALE}.census.sha256" \
+  "entity-census digest for WatDiv scale ${SCALE}")"
+actual_census="$(lane_sha256_file "${CENSUS}")"
+[[ "${actual_census}" == "${expected_census}" ]] ||
+  die "the extracted WatDiv ${SCALE} entity census does not match its recorded pin.
+  expected ${expected_census}
+  found    ${actual_census}
+  saved.txt is the only external audit of the candidate scrape, so every candidate pool,
+  every substitution and every pinned row count below is drawn against it. The tarball
+  matched its own digest, so the extraction is what disagrees."
+actual_corpus="$(lane_sha256_file "${DATASET}")"
+[[ "${actual_corpus}" == "${expected_corpus}" ]] ||
+  die "the extracted WatDiv ${SCALE} corpus does not match its recorded pin.
+  expected ${expected_corpus}
+  found    ${actual_corpus}
+  The tarball matched its own digest, so the extraction is what disagrees. No number
+  is published for a corpus that is not the pinned one."
 data_rows=$(wc -l <"${DATASET}")
 data_bytes=$(wc -c <"${DATASET}")
-((data_rows > 0)) ||
-  die "the extracted dataset at ${DATASET} has ${data_bytes} bytes but not one triple;
-  every row this lane prints would be a zero over an empty corpus"
+((data_rows == expected_rows)) ||
+  die "the extracted dataset at ${DATASET} holds ${data_rows} triples in ${data_bytes}
+  bytes, but the pinned count for WatDiv ${SCALE} is ${expected_rows}.
+  The tarball matched its digest, so the extraction is what disagrees. No number is
+  published for a corpus that is not the pinned one."
 echo "dataset:   ${data_rows} triples, ${data_bytes} bytes (${extracted} in ${extract_ms} ms)"
 echo "templates: ${template_count} basic templates, prefix table from $(basename "${MODEL}")"
 
@@ -368,37 +462,40 @@ python3 "${REPO_ROOT}/scripts/watdiv-queries.py" \
   die "could not instantiate the WatDiv templates"
 inst_ms=$(($(now_ms) - inst_start))
 
-# Digest the emitted .rq files in name order. This is the reproducibility handle
-# -- the same dataset and the same seed must reproduce it exactly -- and it is
-# also the tripwire that makes a CONCURRENT RUN visible (see verify_query_set).
-queries_digest() {
-  python3 -c '
-import hashlib, pathlib, sys
-digest = hashlib.sha256()
-for path in sorted(pathlib.Path(sys.argv[1]).glob("*.rq")):
-    digest.update(path.name.encode("utf-8"))
-    digest.update(path.read_bytes())
-print(digest.hexdigest())
-' "${QUERIES}"
-}
+
 
 # A DIGEST IS A CERTIFICATE, so it is never published for output that was not
-# produced. `queries_digest` over an EMPTY directory is
-# e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -- the SHA-256
-# of the empty string -- and printing that under "the reproducibility check"
-# would certify a workload of no queries.
-rq_count=$(find "${QUERIES}" -maxdepth 1 -name '*.rq' | wc -l)
-((rq_count == 20)) ||
-  die "the instantiator reported success but wrote ${rq_count} .rq file(s) to ${QUERIES}, not 20.
-  No query-set digest is published for a set that is not the 20 published templates."
+# produced. `lane_query_set_digest` refuses an empty directory outright for this
+# reason -- its manifest digest would be a perfectly ordinary-looking 64 hex
+# characters, and printing that under "the reproducibility check" would certify a
+# workload of no queries. The count below is the other half of the same guard.
+lane_require_query_count "${QUERIES}" "${EXPECTED_TEMPLATES}" "WATDIV_OUT='${OUT}'"
 require_nonempty_file "${QUERIES}/queries.tsv" "the instantiated query index"
+# EXISTING IS NOT BEING PRODUCED, and the report directs the reader here for the
+# explanation of every empty result -- so the record gets the same check its
+# sibling four lines up already had.
+require_nonempty_file "${QUERIES}/provenance.txt" "the instantiation provenance record"
 
-queries_sha="$(queries_digest)"
+queries_sha="$(lane_query_set_digest "${QUERIES}")"
 
 echo "instantiated in ${inst_ms} ms"
 echo "provenance: ${QUERIES}/provenance.txt"
 echo "sha256(queries @ seed ${SEED}) = ${queries_sha}"
 echo "  ^ the reproducibility check: this dataset and this seed must reproduce it"
+if [[ "${SCALE}" == "10M" && "${SEED}" == "0" ]]; then
+  expected_queries="$(lane_require_pin "${REPO_ROOT}" "watdiv.10M.seed0.queries.sha256" \
+    "query-set pin for WatDiv 10M at seed 0")"
+  [[ "${queries_sha}" == "${expected_queries}" ]] ||
+    die "the instantiated WatDiv query set does not match its recorded pin.
+  expected ${expected_queries}
+  found    ${queries_sha}
+  The dataset matched its pin and the seed is 0, so the INSTANTIATOR changed. Every
+  number below would be for a different workload under the same name."
+  echo "    and it does: checked against the recorded pin for 10M at seed 0."
+else
+  echo "    NOT checked against a pin: no pin is recorded for scale ${SCALE} at seed"
+  echo "    ${SEED}, and a different seed is a different workload."
+fi
 echo "    byte for byte. A DIFFERENT SEED IS A DIFFERENT WORKLOAD, not a re-run."
 
 # ── 5. Load through the purrdf CLI ──────────────────────────────────────────────
@@ -409,13 +506,38 @@ step "5/7 load the dataset through the purrdf CLI into a native pack"
 # store does. Handing 20 queries the raw N-Triples file would re-parse well over a
 # gigabyte twenty times and measure the parser, not the planner. The pack is
 # written by the same CLI under test, so nothing external is doing the loading.
-PACK_KEY="${TARBALL_SHA} ${PURRDF_VERSION}"
+# THE PACK STAMP CERTIFIES THE PACK, NOT ITS CONTAINER. It used to be
+# `${TARBALL_SHA} ${PURRDF_VERSION}` -- the digest of the TARBALL the dataset came
+# out of, which is the container twice removed from the artifact a later run reads.
+# The same law this lane applies to the dataset stamp: a reuse stamp keyed on a
+# container says only that something was once built here from those bytes, and the
+# reuse branch then read `-s` plus an 8-byte magic, so a pack modified past byte 8
+# in the arena was reused, queried, and its twenty row counts printed beside a pinned
+# corpus digest and a pinned query-set digest -- a provenance claim the bytes
+# measured did not have. That is verbatim the defect the lane laws forbid,
+# left un-applied to the sibling stamp in the same file.
+#
+# Line 1 is the corpus digest and the binary version: the two things that determine
+# what the pack should BE. Line 2 is the digest of the pack itself, re-derived on
+# every reuse. Cost is not an objection -- this lane already digests the 1.5 GB
+# dataset every run, and the pack is a twelfth of that.
+PACK_KEY="${expected_corpus} ${PURRDF_VERSION}"
 load_start="$(now_ms)"
-# `-s` rather than `-f`: a zero-byte pack beside a matching stamp would be reused
-# by every subsequent run, and the stamp is written below only after the pack has
-# been checked for being one. Same law as the dataset stamp above.
-if [[ -f "${PACK_STAMP}" && "$(cat "${PACK_STAMP}")" == "${PACK_KEY}" && -s "${PACK}" ]]; then
-  echo "pack: reusing the one already stamped with this dataset digest and this binary"
+pack_reusable=0
+if [[ -f "${PACK_STAMP}" && -s "${PACK}" ]]; then
+  stamped_pack_key="$(sed -n '1p' "${PACK_STAMP}")"
+  stamped_pack_digest="$(sed -n '2p' "${PACK_STAMP}")"
+  if [[ "${stamped_pack_key}" == "${PACK_KEY}" && -n "${stamped_pack_digest}" ]]; then
+    if [[ "$(lane_sha256_file "${PACK}")" == "${stamped_pack_digest}" ]]; then
+      pack_reusable=1
+    else
+      echo "pack: the pack in this arena no longer digests to what its stamp recorded;" \
+        "rebuilding rather than querying it" >&2
+    fi
+  fi
+fi
+if ((pack_reusable == 1)); then
+  echo "pack: reusing the one already stamped with this corpus digest and this binary"
   loaded="reused"
 else
   rm -f "${PACK}" "${PACK_STAMP}"
@@ -437,7 +559,8 @@ else
   # followed, and were reused by every later run as this dataset's pack.
   lane_require_magic "${PACK}" "the pack the CLI reported it had written" \
     "${PACK_MAGIC}" "a purrdf pack"
-  write_checked "${PACK_STAMP}" "the pack stamp" printf '%s\n' "${PACK_KEY}"
+  write_checked "${PACK_STAMP}" "the pack stamp" \
+    printf '%s\n%s\n' "${PACK_KEY}" "$(lane_sha256_file "${PACK}")"
   # And the stamp does not survive this run failing: every later run consults it
   # INSTEAD of loading, so a stamp left behind by a run that did not finish is a
   # certificate for a pack nothing ever finished certifying.
@@ -478,17 +601,28 @@ else:
 # reports rather than a reason to abandon the run and print nothing.
 run_query() {
   local query_text="$1"
-  local start stop out rc
+  # STDERR IS NOT RESULTS. Merging the two meant a binary that exits 0 while
+  # writing anything at all to stderr prepended non-JSON to well-formed output,
+  # the parse failed, and the lane reported that the results were unparseable
+  # when they were fine -- a cause it had not established, blamed on the binary
+  # under test. The open-cost probe hit it first and died claiming it "could not
+  # run against the pack", which was equally untrue.
+  local start stop out rc errfile
+  errfile="${LANE_TMP}/query.err"
+  lane_reset_capture "${errfile}"
   start="$(now_ms)"
   set +e
-  out="$("${BIN}" query --data "${PACK}" --results-format json "${query_text}" 2>&1)"
+  out="$("${BIN}" query --data "${PACK}" --results-format json "${query_text}" 2>"${errfile}")"
   rc=$?
   set -e
   stop="$(now_ms)"
 
+  local said
+  said="$(lane_capture_stderr "${errfile}")"
+
   if ((rc != 0)); then
     printf 'CANNOT-EXECUTE\t-\t%s\t%s\n' "$((stop - start))" \
-      "$(printf '%s' "${out}" | head -1)"
+      "${said:-the binary exited ${rc} without saying anything}"
     return
   fi
 
@@ -496,7 +630,7 @@ run_query() {
   count="$(printf '%s' "${out}" | rows_of_json 2>/dev/null)" || count=""
   if [[ -z "${count}" ]]; then
     printf 'BAD-RESULTS\t-\t%s\t%s\n' "$((stop - start))" \
-      "the engine exited 0 but its results were not parseable SPARQL JSON"
+      "the engine exited 0 but its stdout was not parseable SPARQL JSON${said:+; it also wrote: ${said}}"
     return
   fi
   printf 'OK\t%s\t%s\t-\n' "${count}" "$((stop - start))"
@@ -529,16 +663,7 @@ step "7/7 run the 20 instantiated queries (pure BGP, no entailment)"
 # change means a concurrent run, and it is named as one rather than surfacing as
 # a puzzling "some file is missing".
 verify_query_set() {
-  local when="$1" now
-  now="$(queries_digest)"
-  [[ "${now}" == "${queries_sha}" ]] && return 0
-  die "the instantiated query set CHANGED ${when}.
-  expected ${queries_sha}
-  found    ${now}
-  Another run is almost certainly using the same WATDIV_OUT ('${OUT}') and rewrote
-  the queries underneath this one: step 4 starts by deleting that directory. Numbers
-  from a run whose queries changed mid-flight are not numbers, so this run stops.
-  Give each concurrent run its own arena, for example WATDIV_OUT=target/watdiv-\$\$."
+  lane_verify_query_set "${QUERIES}" "${queries_sha}" "$1" "WATDIV_OUT='${OUT}'"
 }
 
 verify_query_set "between instantiation and the first query"
@@ -564,25 +689,49 @@ nonempty=0
 total_rows=0
 declare -a NOTES=()
 declare -a EMPTY=()
+# Every template id in the order the index lists them, and the row count each one
+# that EXECUTED returned. Two arrays rather than one sentinel value: "answered zero
+# rows" and "did not execute" are different facts about a query, and a per-query pin
+# must be able to fail on the second without reading it as the first.
+declare -a IDS=()
+declare -A ANSWERED=()
 
-while IFS=$'\t' read -r id regime mappings file; do
+while IFS=$'\t' read -r id _regime mappings file; do
   [[ "${id}" != "id" ]] || continue
   # A missing file is almost always a concurrent run having just deleted the
-  # directory, so ask that question first: it gives the real diagnosis instead of
+  # directory, so ask that question FIRST: it gives the real diagnosis instead of
   # a filename that vanished for no stated reason.
-  if [[ ! -f "${QUERIES}/${file}" ]]; then
-    verify_query_set "while ${id} was about to run"
-    die "${file} is missing from ${QUERIES}, yet the query set digest is unchanged"
-  fi
-  result="$(run_query "$(cat "${QUERIES}/${file}")")"
+  [[ -f "${QUERIES}/${file}" ]] || verify_query_set "while ${id} was about to run"
+  # Then the artifact itself, on EVERY iteration rather than only when it is
+  # missing: present-but-unreadable and present-but-empty both reach `cat` and
+  # both become an empty query the engine is then blamed for rejecting.
+  lane_require_query_file "${QUERIES}/${file}" "${id}" "WATDIV_OUT='${OUT}'"
+  # THE READ IS CHECKED, not nested inside the call. `run_query "$(cat ...)"`
+  # hides a failed read completely: the inner substitution yields the empty string
+  # and the outer one still succeeds because `run_query` returns 0, so the engine
+  # is handed an empty query and its usage complaint becomes this lane's diagnosis.
+  query_text="$(cat "${QUERIES}/${file}")" ||
+    die "could not read ${QUERIES}/${file} (under WATDIV_OUT='${OUT}') at the moment
+  ${id} was about to run. The engine has not been asked and is not at fault: an
+  unread query becomes an empty query string, and the engine's complaint about that
+  would be reported here as though the pack or the binary were wrong."
+  [[ -n "${query_text}" ]] ||
+    die "${QUERIES}/${file} read as empty although it passed the non-empty check
+  moments earlier. Something is changing the arena underneath this run."
+  result="$(run_query "${query_text}")"
   status="$(printf '%s' "${result}" | cut -f1)"
   rows="$(printf '%s' "${result}" | cut -f2)"
   ms="$(printf '%s' "${result}" | cut -f3)"
   detail="$(printf '%s' "${result}" | cut -f4)"
 
+  IDS+=("${id}")
   if [[ "${status}" == "OK" ]]; then
     eval_ms=$((ms - OPEN_MS))
     ((eval_ms >= 0)) || eval_ms=0
+    # RECORDED PER QUERY, so a pin can be checked per query. A zero is recorded as
+    # the real answer it is; absence from this array means the query did not
+    # execute, which is a different fact and must not read as zero rows.
+    ANSWERED["${id}"]="${rows}"
     executed=$((executed + 1))
     total_ms=$((total_ms + ms))
     total_rows=$((total_rows + rows))
@@ -604,6 +753,18 @@ done <"${QUERIES}/queries.tsv"
 # The twenty rows above are only one measurement if they were all answered over
 # the same query set. Checking afterwards is what proves they were.
 verify_query_set "while the twenty queries were running"
+
+# TWENTY ARTIFACTS IS NOT TWENTY ROWS. The .rq count is asserted above, but the
+# rows printed come from `queries.tsv`, and nothing tied the two together: an
+# index carrying a header and one row produced one row, `executed=1`, a full
+# SUMMARY and exit 0 -- under a line reading "queries executed 1 of 20". The
+# vacuous-run law was enforced at zero and not at one.
+query_total=$((executed + unexecuted))
+((query_total == EXPECTED_TEMPLATES)) ||
+  die "read ${query_total} row(s) from ${QUERIES}/queries.tsv, not ${EXPECTED_TEMPLATES}.
+  The twenty .rq files were written and counted, so the index that drives this loop
+  disagrees with them. No SUMMARY is printed for a run that measured part of the
+  workload under the whole workload's name."
 
 echo ""
 if ((${#NOTES[@]} > 0)); then
@@ -637,14 +798,94 @@ fi
   That is vacuous, not fast: 20 basic graph patterns over ${data_rows} triples cannot
   all legitimately be empty. Suspect the prefix table, the load, or the instantiation."
 
+# THE AGGREGATE ANSWER COUNT IS ASSERTED, and it comes AFTER the vacuous-run guard on
+# purpose. Placed before it, a run where all twenty matched nothing had `total_rows` of
+# zero, this check fired first, and the vacuous-run diagnosis -- "that is vacuous, not
+# fast … suspect the prefix table, the load, or the instantiation" -- became dead code in
+# precisely the case it was written for.
+#
+# It is engine output, so neither the corpus pin nor the query-set pin covers it: a wrong
+# pack built from the right corpus would publish wrong counts and `nonempty > 0` would
+# wave them through. WatDiv publishes no reference answers, so this is a regression pin
+# rather than an oracle, and the key carries the binary version for the same reason the
+# LUBM corpus pin does.
+#
+# IT IS CHECKED PER QUERY, and the earlier revision of this block is why. That one
+# asserted the AGGREGATE and gated it on `unexecuted == 0`, which is defensible in
+# itself -- a query that cannot run makes a SUM incomparable, and blaming the engine for
+# a short total is naming a cause the lane has not established. But the consequence was
+# a blanket skip: ONE non-executing query at the default knobs printed "NOT checked
+# against a pin", a full SUMMARY and exit 0, so a pack that broke one query and changed
+# the answers to the others passed. Before that revision it had failed. A check disabled
+# by the failure most likely to need it is worse than the coarse guard it replaced.
+#
+# Per-query counts have no such coupling. A query that does not execute fails against
+# ITS OWN pin, by name; the other nineteen are still asserted. That is the shape the
+# sibling lane already used for Q1/Q14, and it is what makes "a query that cannot run is
+# a reported result, not an abandoned run" compatible with asserting every answer the
+# run actually produced.
+answers_pin_stem="watdiv.${SCALE}.seed${SEED}.rows"
+answers_pin_suffix="${PURRDF_PIN_SUFFIX}"
+pinned=0
+unpinned=()
+for id in "${IDS[@]}"; do
+  pin_key="${answers_pin_stem}.${id}.${answers_pin_suffix}"
+  # A LOOKUP THAT FAILS FOR ANY OTHER REASON MUST NOT READ AS "NO PIN". `2>/dev/null`
+  # here made a renamed flag, a syntax error and an absent pin one observable, and all
+  # three then produced a silent skip. The status distinguishes them: 2 is "recorded
+  # nowhere", anything else is the lookup itself failing and is a lane failure.
+  if ! lane_lookup_pin "${REPO_ROOT}" "${pin_key}"; then
+    unpinned+=("${id}")
+    continue
+  fi
+  expected_rows="${LANE_PIN_VALUE}"
+  got="${ANSWERED[${id}]:-}"
+  [[ -n "${got}" ]] ||
+    die "${id} did not execute, and its answer over ${SCALE} at seed ${SEED} is pinned at
+  ${expected_rows} rows for this binary. A pinned query that cannot run is a failure, not
+  a note: the row above says why it could not run, and that reason is the defect."
+  ((got == expected_rows)) ||
+    die "${id} returned ${got} rows; the pin for ${pin_key} is ${expected_rows}.
+  The corpus and the query set both matched their pins, so what differs is the answer
+  this binary produced over them. No row count is published for a run that disagrees
+  with its recorded answers."
+  pinned=$((pinned + 1))
+done
+
+if ((${#unpinned[@]} == 0)); then
+  echo "answers: every one of the ${pinned} queries matched its recorded row count"
+  echo "  (${answers_pin_stem}.<id>.${answers_pin_suffix}), ${total_rows} rows in total"
+elif ((pinned == 0)); then
+  # A MISSING PIN IS REPORTED HERE AND IS FATAL IN THE SIBLING LANE, and that difference
+  # is deliberate rather than drift. LUBM's Q1 and Q14 are answers LUBM ITSELF PUBLISHES
+  # for LUBM(1, 0) seed 0: they exist unconditionally, so their absence means the lookup
+  # or the table is broken and dying is right. These are REGRESSION pins -- this engine's
+  # own measurements, keyed on the binary version -- so absence is the expected state the
+  # first time a new version runs, and dying would make every release bump a lane failure.
+  echo "answers: ${total_rows} rows across ${executed} queries, NOT checked against pins:"
+  echo "  none is recorded under ${answers_pin_stem}.<id>.${answers_pin_suffix}. A"
+  echo "  different scale, seed or binary is a different workload, and this binary's"
+  echo "  answers over it have not been recorded."
+else
+  # A PARTIAL PIN SET IS REPORTED AS ONE. It is the state a half-finished pin update
+  # leaves behind, and reading it as either extreme would be wrong: saying "every query
+  # matched" over nineteen pins is a false claim, and saying "not checked" discards
+  # nineteen assertions that did hold.
+  echo "answers: ${pinned} of ${#IDS[@]} queries matched their recorded row counts;"
+  echo "  no pin is recorded for: ${unpinned[*]}"
+  echo "  A partial pin set is reported rather than rounded either way."
+fi
+
 cat <<REPORT
 SUMMARY
+  binary             ${BIN} (${PURRDF_VERSION})
   dataset            WatDiv ${SCALE} frozen output, ${data_rows} triples, ${data_bytes} bytes
-  dataset sha256     ${TARBALL_SHA}  (the pinned tarball)
+  corpus sha256      ${actual_corpus}  (the extracted corpus, checked against its pin)
+  tarball sha256     ${TARBALL_SHA}  (the container it came out of)
   loaded             ${pack_bytes}-byte pack, ${loaded} in ${load_ms} ms
   seed               ${SEED}
   queries sha256     ${queries_sha}
-  queries executed   ${executed} of 20 (${total_ms} ms total, ${total_rows} rows)
+  queries executed   ${executed} of ${query_total} (${total_ms} ms total, ${total_rows} rows)
   matched nothing    ${#EMPTY[@]}
   not executed       ${unexecuted}
   open cost          ${OPEN_MS} ms, included in every TOTAL_MS above
