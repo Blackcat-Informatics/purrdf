@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # REPOSITORY-GLOBAL: no `make: Entering directory '...'` banners, from ANY
 # target — at any recursion depth ON GNU MAKE 4.4 OR NEWER.

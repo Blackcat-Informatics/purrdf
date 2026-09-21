@@ -133,7 +133,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   nursery). `cargo clippy --workspace --all-targets` must be warning-free.
   Prefer fixing code over `#[allow]`; a genuinely-right allow must be tightly
   scoped and carry a reason comment.
-* **SPDX headers** on every source file: `MIT OR Apache-2.0` (docs may be
+* **SPDX headers** on every source file: `MIT OR Apache-2.0 OR MulanPSL-2.0` (docs may be
   `CC-BY-4.0`).
 
 ## 3. Commands

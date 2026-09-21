@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Compatibility shims layered over the native ``purrdf`` surface.
 
 ``purrdf.compat.rdflib`` is the purrdf P0 subset of the eventual P9 public

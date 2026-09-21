@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 """Hygiene gate: every `#[wasm_bindgen]` FREE FUNCTION compiled into
 `crates/rdf-wasm/src/` must be re-exported from the npm package root,

@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # REUSE.toml (REUSE spec 3.3): declares licensing for the vendored W3C OWL 2
 # payload in this tree. The payload is 522 files across 261 cases, so it is

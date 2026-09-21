@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: MIT OR Apache-2.0
+SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
 
 # purrdf (wasm) — RDF 1.2 in the browser & Node, the RDF/JS way
@@ -143,5 +143,5 @@ the crate's `wasm-bindgen` version, `0.2.125`).
 
 ## License
 
-MIT OR Apache-2.0 (the `purrdf` engine); the `purrdf-events` ingestion protocol it
-depends on is permissive (MIT OR Apache-2.0).
+MIT OR Apache-2.0 OR MulanPSL-2.0 (the `purrdf` engine); the `purrdf-events` ingestion protocol it
+depends on is permissive (MIT OR Apache-2.0 OR MulanPSL-2.0).

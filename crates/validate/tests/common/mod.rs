@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Shared test support for the DL search-cost guards (`dl_step_ledger`,
 //! `dl_consistency_search_budget`, `dl_work_budget`): one certificate-field reader instead of

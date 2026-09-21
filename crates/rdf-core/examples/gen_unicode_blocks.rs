@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Regenerates the committed Unicode block-escape lookup table
 //! (`crates/rdf-core/src/xsd_regex/blocks.rs`) from the vendored
@@ -152,7 +152,11 @@ fn main() {
         "// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>"
     )
     .unwrap();
-    writeln!(out, "// SPDX-License-Identifier: MIT OR Apache-2.0").unwrap();
+    writeln!(
+        out,
+        "// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0"
+    )
+    .unwrap();
     writeln!(out).unwrap();
     writeln!(
         out,

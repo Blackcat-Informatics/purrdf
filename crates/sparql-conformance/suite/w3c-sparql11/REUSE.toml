@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # REUSE.toml (REUSE spec 3.3): declares licensing for the PurRDF-authored files
 # in this vendored tree that carry no per-file `.license` sidecar. Verbatim W3C
 # files each carry their own `LicenseRef-W3C-Test-Suite` sidecar; the files below
 # are first-party (harness selectors + semantically-reconstructed expected
-# results, see PROVENANCE.md) and are covered by the repo's MIT OR Apache-2.0.
+# results, see PROVENANCE.md) and are covered by the repo's MIT OR Apache-2.0 OR MulanPSL-2.0.
 
 version = 1
 
@@ -23,4 +23,4 @@ path = [
   "subquery/*.srx",
 ]
 SPDX-FileCopyrightText = "2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>"
-SPDX-License-Identifier = "MIT OR Apache-2.0"
+SPDX-License-Identifier = "MIT OR Apache-2.0 OR MulanPSL-2.0"

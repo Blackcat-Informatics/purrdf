@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //
 // The PurRDF console engine worker. This module OWNS the parsed Dataset state;
 // the main thread is a pure view/message client. Every handler is wrapped in

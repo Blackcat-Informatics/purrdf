@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `purrdf_query` (typed result + row cursor) and `purrdf_query_json` (the
 //! SPARQL 1.1/1.2 Query Results JSON convenience path).

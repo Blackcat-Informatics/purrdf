@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //
 // PurRDF console service worker. Caches the app shell + the colocated wasm
 // package on install and serves cache-first, so the console runs fully offline

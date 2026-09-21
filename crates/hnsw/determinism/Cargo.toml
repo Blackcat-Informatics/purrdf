@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # NOT a workspace member — see the root Cargo.toml's `exclude` list, and
 # `crates/geo/determinism` for the same pattern. This directory exists to build
@@ -18,7 +18,7 @@ name = "purrdf-hnsw-determinism"
 description = "Not published: the wasm32 half of purrdf-hnsw's cross-target determinism check"
 version = "0.0.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
 publish = false
 
 [lib]

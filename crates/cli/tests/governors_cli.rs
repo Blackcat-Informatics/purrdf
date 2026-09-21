@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! End-to-end coverage of `query`'s execution governors, `--explain`, and the exit-3
 //! contract, driving the BUILT `purrdf` binary (`env!("CARGO_BIN_EXE_purrdf")`) rather than

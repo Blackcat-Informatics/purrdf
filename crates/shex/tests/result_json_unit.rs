@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Unit tests for result-shape-map JSON output (`ResultShapeMap::to_result_json`):
 //! the array shape, `node`/`shape`/`status`/`reason` fields, term syntax for

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Unit tests for [`validate_shape_map`], the one-call
 //! `parse_shape_map` → `resolve_shape_map` → `validate_with` → `ResultShapeMap`

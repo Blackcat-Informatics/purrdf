@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # XSD Appendix G `quantifier` (`?`, `*`, `+`, `{n,m}`, `{n,}`, `{n}`) and the
 # reluctant (`?`-suffixed) forms XPath F&O 3.1 5.6.1 adds to that grammar.

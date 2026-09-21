@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # SEP-0007 (defensible EXISTS) fixture for `:existsGraphVariableCorrelated`. This
 # file is loaded TWICE by the harness — once untagged (`qt:data`, into the default

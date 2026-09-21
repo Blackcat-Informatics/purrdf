@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # A positive control for `broken_manifest_with_an_undescribed_entry_is_rejected`:
 # the exact sibling shape of `../undescribed-entry/manifest.ttl`, except this

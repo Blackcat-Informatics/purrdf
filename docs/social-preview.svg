@@ -1,5 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
-<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="t d">
   <title id="t">PurRDF</title>
   <desc id="d">RDF 1.2 primitives and codecs, SPARQL, SHACL validation, and GTS graph transport for Rust, Python, WebAssembly, and C.</desc>
@@ -86,7 +86,7 @@
     <circle cx="1146" cy="442" r="11" fill="#34a853"/><text x="1166" y="452">C</text>
   </g>
 
-  <text class="mono" x="570" y="506" font-size="23" fill="#7488a0">one behavior in every language · MIT OR Apache-2.0</text>
+  <text class="mono" x="570" y="506" font-size="23" fill="#7488a0">one behavior in every language · MIT OR Apache-2.0 OR MulanPSL-2.0</text>
 
   <!-- Accent bar -->
   <g>

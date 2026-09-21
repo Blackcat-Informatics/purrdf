@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 """Fetch the pinned comparison-workload artifacts by digest (`make benchmark-acquire`).
 
@@ -21,7 +21,7 @@ artifact reached three binding conclusions, and the bytes bear all three out:
   ``uba1.7.zip`` carries the GNU General Public License header, "either version
   2 of the License, or (at your option) any later version", and
   ``GeneratorLinuxFix.zip`` is a modified copy of that same source carrying the
-  same header. PurRDF is MIT OR Apache-2.0. The generator is therefore **RUN,
+  same header. PurRDF is MIT OR Apache-2.0 OR MulanPSL-2.0. The generator is therefore **RUN,
   NEVER VENDORED**: copying it into this tree would place a copyleft work inside
   a permissively licensed distribution. Running a GPL program to produce data is
   not distribution of that program, and the data it emits is what the benchmark
@@ -150,7 +150,7 @@ class Artifact(NamedTuple):
 
 _LUBM_GPL = (
     "The UBA generator is RUN, NEVER VENDORED: copyleft cannot enter this "
-    "MIT OR Apache-2.0 tree. Running it to produce data is not distribution of "
+    "MIT OR Apache-2.0 OR MulanPSL-2.0 tree. Running it to produce data is not distribution of "
     "it. Cite Guo, Pan and Heflin, Journal of Web Semantics 3(2), in results."
 )
 

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Parsing distinct blank-node labels is INJECTIVE, as the SPARQL evaluator sees
 //! it: `COUNT(DISTINCT ?s)` over a document of five distinct `_:` tokens is 5.
