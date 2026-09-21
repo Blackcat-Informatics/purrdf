@@ -281,6 +281,46 @@ impl PyStore {
         materialize_results(py, result)
     }
 
+    /// Prepare a SPARQL query once, to be bound and run many times.
+    ///
+    /// `Store.query` parses and admits its text on every call. A caller running one
+    /// query per row therefore pays that cost per row to be handed back the same
+    /// plan — and a caller who instead splices the row's value into the text pays a
+    /// real re-parse, because a spliced query is a different query. A prepared query
+    /// is the alternative: the text is parsed and admitted here, and each run binds
+    /// parameters and evaluates.
+    ///
+    /// `parameters` names the variables `run` will bind, without the `?`/`$` sigil.
+    /// Each is pre-bound exactly as a `substitutions` entry is on
+    /// [`query`](Self::query), so a parameter stays projectable and reaches inside
+    /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    ///
+    /// The returned object holds a **snapshot** of this store taken now. Later
+    /// mutations are not visible to it; prepare again to see them. Re-reading the
+    /// store per run would make two runs of one prepared query disagree for a reason
+    /// the caller never asked about.
+    ///
+    /// A prepared query must not be shared between threads: a run borrows it
+    /// uniquely, because a query body can re-enter the evaluator and a handle
+    /// reachable twice while in flight is one two evaluations can disagree about.
+    #[pyo3(signature = (query, *, parameters=None))]
+    fn prepare(
+        &self,
+        query: &str,
+        parameters: Option<Vec<String>>,
+    ) -> PyResult<super::prepared::PyPreparedQuery> {
+        let dataset = self
+            .inner
+            .freeze()
+            .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+        let engine = build_engine(EngineConfig {
+            extension_namespaces: None,
+            property_fn_namespaces: None,
+            standpoint_predicates: None,
+        });
+        super::prepared::prepare(dataset, &engine, query, &parameters.unwrap_or_default())
+    }
+
     /// Run a SPARQL query under caller-supplied execution governors, returning a
     /// `QueryOutcome` rather than the results directly.
     ///
