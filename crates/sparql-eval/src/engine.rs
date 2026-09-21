@@ -1955,19 +1955,32 @@ impl NativeSparqlEngine {
 
     /// Run `execution` against `dataset` with its current bindings.
     ///
-    /// The plan is already prepared and admitted, so this does no cache probe, no
-    /// parse and no admission; and the bindings are read from the execution's own
-    /// parallel slices, so passing them costs no list to build.
+    /// The plan is already prepared and admitted, so this does no cache probe and no
+    /// parse; and the bindings are read from the execution's own parallel slices, so
+    /// passing them costs no list to build. It still checks the ONE thing prepare
+    /// could not have fixed in advance: that `options` names the SAME
+    /// property-function and custom-aggregate registries
+    /// [`Self::prepare_execution`] admitted the plan against (see
+    /// [`check_plan_matches_relations`]). `execution` and `options` are supplied by
+    /// two different calls, so nothing else stops a caller from preparing under one
+    /// registry and running under another; without this check that disagreement
+    /// would evaluate silently rather than refuse, because a plan prepared with no
+    /// registry has already lowered every registered relation's predicate to an
+    /// ordinary triple pattern, and a `Custom` aggregate call was admitted (its
+    /// arity checked) against whichever registry resolved its IRI at prepare time.
     ///
     /// `&mut execution` is what makes an execution already in flight unreachable —
     /// see [`crate::execution`] for why that is a guarantee rather than a limitation.
     ///
     /// # Errors
     ///
-    /// [`RdfDiagnostic`] if any parameter is still unbound, or if evaluation fails. An
-    /// unbound parameter is refused rather than treated as unrestricted: running a
-    /// query whose focus was never supplied would answer over every subject, which is
-    /// a silently wider answer rather than a visible mistake.
+    /// [`RdfDiagnostic`] if any parameter is still unbound, if `options` supplies a
+    /// property-function or custom-aggregate registry that disagrees with the one
+    /// `execution` was prepared against (`native-sparql-property-function` or
+    /// `native-sparql-aggregate-function`), or if evaluation fails. An unbound
+    /// parameter is refused rather than treated as unrestricted: running a query
+    /// whose focus was never supplied would answer over every subject, which is a
+    /// silently wider answer rather than a visible mistake.
     pub fn execute<'d, D: DatasetView + Sync, R>(
         &'d self,
         execution: &mut PreparedExecution,
@@ -1982,6 +1995,7 @@ impl NativeSparqlEngine {
                 format!("parameters still unbound: {}", unbound.join(", ")),
             ));
         }
+        check_plan_matches_relations(&execution.prepared, options)?;
         let prepared = Arc::clone(&execution.prepared);
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;

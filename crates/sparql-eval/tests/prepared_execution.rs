@@ -12,8 +12,12 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
-use purrdf_sparql_eval::{InternedOutcome, NativeSparqlEngine, QueryOptions};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_sparql_eval::{
+    AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
+    InternedOutcome, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+    Volatility,
+};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -196,4 +200,376 @@ fn declaring_one_parameter_twice_is_refused() {
         .prepare_execution(QUERY, None, &["this", "other"], QueryOptions::EMPTY)
         .expect("distinct parameters must prepare");
     assert_eq!(execution.parameters().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// `execute` must refuse a plan/registry disagreement, exactly the way every
+// other governed and ungoverned entry that can observe one already does
+// (`query_prepared_view`, `query_prepared_fallible_view`,
+// `query_governed_prepared_in_state`, …). `execute` takes `execution` (which
+// carries the plan `prepare_execution` admitted under ITS `options`) and a
+// SEPARATE `options` for the run — two different calls, so nothing else stops
+// them from naming different registries. Before this fix that disagreement
+// evaluated silently; these tests are what makes it unreachable on the
+// prepared-execution handle too.
+// ---------------------------------------------------------------------------
+
+/// The namespace a host configures for the relation predicate below. Registering a
+/// relation is what makes `NativeSparqlEngine::prepare_for` recognise the predicate
+/// as a call at parse time; with no registry in scope it is ordinary data.
+const REL_NS: &str = "https://example.org/rel/";
+
+/// The data namespace of the relation/dataset fixture terms.
+const REL_EX: &str = "https://example.org/d/";
+
+/// The query every property-function test below prepares and runs.
+const RELATION_QUERY: &str = "PREFIX rel: <https://example.org/rel/>\n\
+                              SELECT ?person ?team WHERE { ?person rel:memberOf ?team }\n";
+
+/// The host relation: three (person, team) pairs held in host memory, reachable
+/// from no graph.
+fn relation_registry() -> PropertyFunctionRegistry {
+    let iri = |local: &str| TermValue::iri(format!("{REL_EX}{local}"));
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        format!("{REL_NS}memberOf"),
+        Arc::new(
+            MemoryRelation::new(
+                1,
+                1,
+                vec![
+                    vec![iri("ada"), iri("alpha")],
+                    vec![iri("brian"), iri("alpha")],
+                    vec![iri("chen"), iri("beta")],
+                ],
+            )
+            .expect("every row is two values wide"),
+        ),
+    );
+    registry
+}
+
+/// A dataset holding ONE ordinary triple under the very same predicate IRI the
+/// relation above registers, binding a DIFFERENT (person, team) pair than any row
+/// the relation emits. This is the observing oracle: a run that honours the
+/// registry answers the relation's three rows and never touches this triple; a run
+/// that silently fell back to a plain graph scan (the shape this fix closes) would
+/// answer this ONE triple instead. The two answers cannot be confused for each
+/// other by row count OR by content, so the test can assert on the rows rather
+/// than merely on `is_err()`/`len()`.
+fn relation_dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri(&format!("{REL_EX}graph_only"));
+    let p = b.intern_iri(&format!("{REL_NS}memberOf"));
+    let o = b.intern_iri(&format!("{REL_EX}graph_only_team"));
+    b.push_quad(s, p, o, None);
+    b.freeze().expect("freeze fixture")
+}
+
+fn with_relations(registry: &PropertyFunctionRegistry) -> QueryOptions<'_> {
+    QueryOptions {
+        property_functions: registry,
+        ..QueryOptions::EMPTY
+    }
+}
+
+/// Read `RELATION_QUERY`'s `(?person, ?team)` rows out of an interned outcome as
+/// owned `(String, String)` pairs, in solution order.
+fn person_team_rows<D: purrdf_core::DatasetView + Sync>(
+    outcome: InternedOutcome<'_, '_, D>,
+) -> Vec<(String, String)> {
+    let InternedOutcome::Solutions(solutions) = outcome else {
+        panic!("expected solutions");
+    };
+    let person = solutions.column("person").expect("?person is projected");
+    let team = solutions.column("team").expect("?team is projected");
+    solutions
+        .rows()
+        .iter()
+        .map(|row| {
+            let cell = |column: usize| {
+                solutions
+                    .cell(row, column)
+                    .and_then(|value| value.as_iri().map(str::to_owned))
+                    .expect("every cell here is a bound IRI")
+            };
+            (cell(person), cell(team))
+        })
+        .collect()
+}
+
+/// (a) THE INVALID CASE and (b) its neighbouring VALID case, per the repo rule: a
+/// plan prepared under `QueryOptions::EMPTY` (no registry in scope, so
+/// `rel:memberOf` stayed an ordinary triple pattern) must be refused when
+/// `execute` is handed `options` that DOES carry the registry — and the identical
+/// plan/registry pairing, matched, must still answer.
+#[test]
+fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers()
+ {
+    let _guard = measure_lock();
+    let engine = NativeSparqlEngine::new();
+    let registry = relation_registry();
+    let ds = relation_dataset();
+
+    // (a) Prepared with NO registry: the predicate parses as ordinary data, so the
+    // admitted plan is a plain BGP triple pattern over `rel:memberOf`.
+    let mut stale = engine
+        .prepare_execution(RELATION_QUERY, None, &[], QueryOptions::EMPTY)
+        .expect("prepare with no registry parses as ordinary data");
+
+    let refused = engine.execute(&mut stale, &*ds, with_relations(&registry), |_| ());
+    let error = refused.expect_err(
+        "a plan prepared with no registry must be refused when executed under one, not \
+         silently evaluated as a graph scan over the ordinary triple pattern it was admitted \
+         as",
+    );
+    assert_eq!(error.code, "native-sparql-property-function");
+
+    // (b) The neighbour: prepared AND executed under the SAME registry. The rows
+    // must be exactly the relation's three rows — never `graph_only`/
+    // `graph_only_team`, which is what a silently-dropped registry would have
+    // answered instead (see `relation_dataset`'s doc comment for the oracle).
+    let mut matched = engine
+        .prepare_execution(RELATION_QUERY, None, &[], with_relations(&registry))
+        .expect("prepare with the registry lowers the predicate to a call");
+    let rows = engine
+        .execute(
+            &mut matched,
+            &*ds,
+            with_relations(&registry),
+            person_team_rows,
+        )
+        .expect("a plan and options that agree on the registry must execute");
+    assert_eq!(
+        rows,
+        vec![
+            (format!("{REL_EX}ada"), format!("{REL_EX}alpha")),
+            (format!("{REL_EX}brian"), format!("{REL_EX}alpha")),
+            (format!("{REL_EX}chen"), format!("{REL_EX}beta")),
+        ],
+        "the answer must be the relation's rows, honoured from the registry — not the \
+         graph's differing graph_only/graph_only_team triple"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The custom-aggregate twin. An unregistered `Custom` aggregate IRI is refused at
+// PREPARE time (see `purrdf-sparql-eval`'s `aggregate_function_e2e.rs`), so there
+// is no registry-free "stale plan" shape to reuse here the way there is for a
+// property function: the reproduction instead needs TWO non-empty registries that
+// resolve the SAME IRI to DIFFERENT aggregates with IDENTICAL declared metadata
+// (arity, volatility, algebraic class, state bound) — declared metadata alone
+// cannot prove the two registries answer a call the same way.
+// ---------------------------------------------------------------------------
+
+const SUM_IRI: &str = "https://example.org/agg#sum";
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+
+/// A running integer sum over its single argument's lexical form.
+struct SumAccumulator {
+    total: i64,
+}
+
+impl AggregateAccumulator for SumAccumulator {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total += n;
+        }
+        Ok(())
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.total.to_string(),
+            XSD_INTEGER,
+        )))
+    }
+}
+
+struct SumAggregate;
+
+impl CustomAggregate for SumAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        0
+    }
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        Box::new(SumAccumulator { total: 0 })
+    }
+}
+
+/// Declares IDENTICALLY to [`SumAggregate`] (arity, volatility, algebraic class,
+/// state bound) but computes a PRODUCT — the oracle: a SUM over the fixture below
+/// is 15, a PRODUCT is 40, so the two cannot be confused by accident.
+struct ProductAccumulator {
+    total: i64,
+}
+
+impl AggregateAccumulator for ProductAccumulator {
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total *= n;
+        }
+        Ok(())
+    }
+
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if let Some(TermValue::Literal { lexical_form, .. }) = other.finish()?
+            && let Ok(n) = lexical_form.parse::<i64>()
+        {
+            self.total *= n;
+        }
+        Ok(())
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        Ok(Some(TermValue::typed_literal(
+            self.total.to_string(),
+            XSD_INTEGER,
+        )))
+    }
+}
+
+struct ProductAggregate;
+
+impl CustomAggregate for ProductAggregate {
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+    fn algebraic_class(&self) -> AlgebraicClass {
+        AlgebraicClass::Commutative
+    }
+    fn state_bound(&self) -> u64 {
+        0
+    }
+    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        Box::new(ProductAccumulator { total: 1 })
+    }
+}
+
+fn sum_registry() -> AggregateRegistry {
+    let mut registry = AggregateRegistry::new();
+    registry.register(SUM_IRI, Arc::new(SumAggregate));
+    registry
+}
+
+fn product_registry() -> AggregateRegistry {
+    let mut registry = AggregateRegistry::new();
+    registry.register(SUM_IRI, Arc::new(ProductAggregate));
+    registry
+}
+
+fn with_aggregates(registry: &AggregateRegistry) -> QueryOptions<'_> {
+    QueryOptions {
+        aggregates: registry,
+        ..QueryOptions::EMPTY
+    }
+}
+
+/// `ex:val` = {1, 2, 2, 10}: SUM = 15, PRODUCT = 40 — a PRODUCT answer here could
+/// only come from silently running under the mismatched registry.
+fn aggregate_dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let val = b.intern_iri(&format!("{REL_EX}val"));
+    for (index, n) in [1i64, 2, 2, 10].into_iter().enumerate() {
+        let s = b.intern_iri(&format!("{REL_EX}s{index}"));
+        let v = b.intern_literal(RdfLiteral::typed(n.to_string(), XSD_INTEGER.to_owned()));
+        b.push_quad(s, val, v, None);
+    }
+    b.freeze().expect("freeze fixture")
+}
+
+fn agg_query() -> String {
+    format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{REL_EX}val> ?v }}")
+}
+
+fn total_cell<D: purrdf_core::DatasetView + Sync>(outcome: InternedOutcome<'_, '_, D>) -> i64 {
+    let InternedOutcome::Solutions(solutions) = outcome else {
+        panic!("expected solutions");
+    };
+    assert_eq!(solutions.len(), 1, "one row, no GROUP BY");
+    let row = &solutions.rows()[0];
+    let total = solutions.column("total").expect("?total is projected");
+    match solutions.cell(row, total).expect("bound") {
+        TermValue::Literal { lexical_form, .. } => lexical_form.parse().expect("integer literal"),
+        other => panic!("expected an integer literal, got {other:?}"),
+    }
+}
+
+/// (a) THE INVALID CASE and (b) its neighbouring VALID case for a custom
+/// aggregate: registry A (SUM) admits and arity-checks the call at prepare time;
+/// executing under registry B (PRODUCT, declared identically) must be refused —
+/// never silently computed under B's different accumulator. The SAME registry
+/// instance at both prepare and execute must still work.
+#[test]
+fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers()
+ {
+    let _guard = measure_lock();
+    let engine = NativeSparqlEngine::new();
+    let registry_a = sum_registry();
+    let registry_b = product_registry();
+
+    // The reproduction only means what it claims if the two registries' DECLARED
+    // metadata is byte-identical for this IRI — confirm that first.
+    assert_eq!(
+        registry_a.describe().expect("no panic"),
+        registry_b.describe().expect("no panic"),
+        "the two registries must declare identically for this to be a meaningful \
+         reproduction of the declaration-only fingerprint gap"
+    );
+
+    let ds = aggregate_dataset();
+    let query = agg_query();
+
+    // (a) Prepared under registry A (SUM), executed under registry B (PRODUCT).
+    let mut prepared = engine
+        .prepare_execution(&query, None, &[], with_aggregates(&registry_a))
+        .expect("registry A admits and arity-checks the call");
+    let refused = engine.execute(&mut prepared, &*ds, with_aggregates(&registry_b), |_| ());
+    let error = refused.expect_err(
+        "a plan prepared under registry A must be refused when executed under registry B, \
+         never silently computed under B's different accumulator",
+    );
+    assert_eq!(error.code, "native-sparql-aggregate-function");
+
+    // (b) The neighbour: the SAME registry instance at both prepare and execute.
+    let mut matched = engine
+        .prepare_execution(&query, None, &[], with_aggregates(&registry_a))
+        .expect("registry A admits and arity-checks the call");
+    let total = engine
+        .execute(&mut matched, &*ds, with_aggregates(&registry_a), total_cell)
+        .expect("the SAME registry instance must be accepted at execution");
+    assert_eq!(total, 15, "1 + 2 + 2 + 10, never the PRODUCT's 40");
 }
