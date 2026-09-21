@@ -183,16 +183,23 @@ def python_offences(path: Path, text: str) -> list[str]:
 # Two launchers, two delimiters:
 #   python3 -c '<body>'          -- the body is the single-quoted argument
 #   python3 - [args] <<'DELIM'   -- the body runs to a line that is exactly DELIM
-# A SHELL SINGLE-QUOTED STRING CANNOT CONTAIN A SINGLE QUOTE, so the body is simply
-# everything up to the next one -- which covers the single-line and multi-line spellings
-# with one pattern and no line-position assumption.
+# THE CLAIM "A SHELL SINGLE-QUOTED STRING CANNOT CONTAIN A SINGLE QUOTE" IS TRUE OF THE
+# STRING AND FALSE OF THE WORD. `'\''` is exactly how shell puts a quote inside one, and
+# `[^']*` truncated at it -- which produced BOTH failure directions from one mis-extraction:
+# the truncated fragment fails to parse and is reported as an offence, so a legitimate script
+# is refused with a nonsense diagnostic, while the genuine nested read later in the same body
+# is never seen at all.
 #
-# This is the THIRD narrow pattern in this function. First it required `-c '` plus an
-# immediate newline (3 of 12 `-c` sites, no heredocs). Then `^'` for the closing quote,
-# which silently required a MULTI-line body and missed all four single-line sites -- where
-# the nested-call and two-argument shapes this file exists to catch passed in silence. Each
-# time the replacement was a slightly wider guess at the syntax instead of the syntax rule.
-_QUOTED_BODY = re.compile(r"python3 -c '([^']*)'")
+# This is the fourth pattern here. The first three were progressively wider guesses at the
+# syntax (`-c '` plus a newline; `^'` for the closing quote; `[^']*`); this one encodes the
+# escape rule, which is the thing that was actually being got wrong.
+_QUOTE_ESCAPE = "'\\''"
+_QUOTED_BODY = re.compile(r"python3 -c '((?:[^']|'\\'')*)'")
+# `python3 -c "..."` is a third launcher spelling. No tracked script uses it, and the comment
+# that used to say "two launchers, two delimiters" was a claim about this repository dressed
+# as a claim about shell.
+_DQUOTED_BODY = re.compile(r'python3 -c "((?:[^"\\]|\\.)*)"')
+
 _HEREDOC_OPEN = re.compile(r"python3 -[^\n]*<<[-]?'?(\w+)'?[^\n]*$", re.MULTILINE)
 
 
@@ -203,7 +210,8 @@ def embedded_programs(text: str) -> list[tuple[int, str]]:
     name the shell line rather than a line number inside a fragment nobody can locate.
     """
     programs: list[tuple[int, str]] = []
-    for match in _QUOTED_BODY.finditer(text):
+    for pattern in (_QUOTED_BODY, _DQUOTED_BODY):
+      for match in pattern.finditer(text):
         # A SHELL COMMENT MENTIONING THE IDIOM IS NOT AN INVOCATION. `# see python3 -c
         # 'h.read(4194304)' for the idiom` produced a false offence -- an over-refusal that
         # would flag a comment documenting the very rule this gate enforces. Only the line
@@ -211,7 +219,10 @@ def embedded_programs(text: str) -> list[tuple[int, str]]:
         line_start = text.rfind("\n", 0, match.start()) + 1
         if text[line_start : match.start()].lstrip().startswith("#"):
             continue
-        programs.append((text[: match.start(1)].count("\n"), match.group(1)))
+        # The escape becomes the quote it stands for, so the body is the program the shell
+        # would actually hand to Python.
+        body = match.group(1).replace(_QUOTE_ESCAPE, "'")
+        programs.append((text[: match.start(1)].count("\n"), body))
     lines = text.splitlines()
     for match in _HEREDOC_OPEN.finditer(text):
         delimiter = match.group(1)
@@ -402,6 +413,21 @@ def self_test() -> int:
             "python3 - \"$1\" <<'PY'\nimport sys\nh.read(int(4194304))\nPY\n"
         ),
         "a shape the line scanner could not see": "python3 -c '\nh.read(int(4194304))\n'\n",
+        # SINGLE-LINE BODIES, which every other fixture here is not. Reverting the body
+        # pattern to the previous `^'` form -- which silently required a MULTI-line body --
+        # left this self-test fully green, so the repair could not be observed to fail. Each
+        # of these is NESTED on purpose: a plain `read(4194304)` passes through the line
+        # scanner whether or not extraction happened, so it would not distinguish.
+        "a single-line `-c` body, nested": "python3 -c 'h.read(int(4194304))'\n",
+        "a single-line `-c` body, two-arg": "python3 -c 'os.read(fd, 4194304)'\n",
+        "a single-line `-c` body, parenthesised": "python3 -c 'h.read((4194304))'\n",
+        # A double-quoted body is a third launcher spelling.
+        "a double-quoted `-c` body, nested": 'python3 -c "h.read(int(4194304))"\n',
+        # THE POSIX QUOTE ESCAPE continues the body rather than closing it. Truncating at it
+        # produced a false refusal (the fragment does not parse) AND missed the real read.
+        "a nested read after the POSIX quote escape": (
+            "python3 -c 'msg = '\\''go'\\''; h.read(int(4194304))'\n"
+        ),
         "a shell-native read": '    chunk = "$(dd bs=4194304)"\n    h.read(4194304)\n',
     }
     missed = [label for label, body in shell_refused.items() if not shell_offences(here, body)]
@@ -417,6 +443,15 @@ def self_test() -> int:
             "python3 - \"$1\" <<'PY'\nh.read(chunk_bytes)\nPY\n"
         ),
         "a small fixed-width field": "python3 -c '\nh.read(2)\n'\n",
+        "a single-line `-c` body, named": "python3 -c 'h.read(int(sys.argv[2]))'\n",
+        "the quote escape with a named read": (
+            "python3 -c 'msg = '\\''go'\\''; h.read(chunk_bytes)'\n"
+        ),
+        # A COMMENT MENTIONING THE IDIOM IS DOCUMENTATION, not an invocation. Deleting both
+        # halves of that fix left the self-test green, because it shipped with no fixture.
+        "a comment mentioning the idiom": "# see python3 -c 'h.read(4194304)' for the idiom\n",
+        "an indented comment mentioning it": "    # python3 -c 'h.read(4194304)'\n",
+        "a comment mentioning a bare read": "# h.read(4194304) is the wrong spelling\n",
         "shell with no read at all": 'echo "no reads here"\n',
     }
     wrongly = [label for label, body in shell_accepted.items() if shell_offences(here, body)]
