@@ -71,3 +71,11 @@ With no path it reports forward-parser scaling on the generated fixture.
 
 [MEASUREMENTS.md](MEASUREMENTS.md) records the measured corpus, scaling and
 allocation results with the exact command lines and representation choices.
+
+## License
+
+Licensed under any one of the following, at your option:
+
+- [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)

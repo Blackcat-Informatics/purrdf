@@ -473,10 +473,25 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
     for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
         data = tomllib.loads(manifest.read_text(encoding="utf-8"))
         package = data.get("package", {})
-        if package.get("readme") != "README.md" or package.get("publish") is False:
+        if package.get("publish") is False:
             continue
         readme = manifest.parent / "README.md"
         name = manifest.parent.name
+        # WHAT CARGO PUBLISHES, not what the manifest spells out. The first version
+        # required an explicit `readme = "README.md"`, and cargo AUTO-DISCOVERS `README.md`
+        # when the key is absent -- so `crates/hnsw` and `crates/json` published READMEs
+        # with no licence offer at all and the gate could not see either. The gate checked
+        # a proxy for the property (an explicit key) instead of the property (does a README
+        # reach crates.io), which is the same mistake as reading a self-test's result for a
+        # gate's result.
+        key = package.get("readme")
+        if key is False:
+            continue
+        if key is None:
+            if not readme.is_file():
+                continue
+        elif key != "README.md":
+            continue
         if not readme.is_file():
             offenders.append(f"crates/{name}: publishes README.md and it does not exist")
             continue

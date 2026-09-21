@@ -5,7 +5,7 @@
 """Refuse a streamed read whose chunk size is written out instead of named.
 
 Six copies of one number lived under two names across five files, and two had
-already drifted -- one to a quarter of the shared size, one to a sixteenth. That
+already drifted -- one to a quarter of the shared size, one to a sixty-fourth. That
 is the reason this is a gate rather than only a fix: every chunk size produces a
 correct digest, so no run fails and no test reddens, and the only symptom is that
 one site issues sixty-four times as many reads as its siblings. The drift had
@@ -318,7 +318,7 @@ def main() -> int:
             "FAIL: a streamed read writes its chunk size out instead of naming it:\n  "
             + "\n  ".join(found)
             + "\n  Six copies under two names across five files, two already drifted (one to a "
-            "quarter\n  of the shared size, one to a sixteenth), is how this went wrong the first "
+            "quarter\n  of the shared size, one to a sixty-fourth), is how this went wrong the first "
             "time —\n  and every chunk size produces a correct digest, so nothing reports it."
         )
     print(f"OK: every streamed read under {SCRIPTS.name}/ names its chunk size")

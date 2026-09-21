@@ -16,8 +16,11 @@ for numbers that depend on the host.
 Be exact about the boundary, because it has moved. `make check` does drive both lanes —
 fourteen tests invoke `make lubm`/`make watdiv` — but every one stops at the binary
 probe or a knob validator, because past that point a lane wants the network and a JDK.
-And several printed numbers ARE now asserted, against pins: both corpus digests, both
-query-set digests, two counts, and LUBM's published answers for Q1 and Q14.
+And several printed numbers ARE now asserted, against pins: both corpus digests, the
+WatDiv entity census, both query-set digests, two counts, LUBM's published answers for
+Q1 and Q14, and **all twenty WatDiv per-query row counts** — the largest block of the
+three, and the one an earlier version of this sentence omitted while presenting itself as
+an enumeration.
 
 What remains unguarded is everything a lane does from step 1 onward on a real corpus.
 **A defect there is invisible to every gate here**: the lane will print a well-formed

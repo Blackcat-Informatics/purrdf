@@ -9,7 +9,7 @@ before a rename promotes it. Both had multiple implementations that drifted or w
 about to.
 
 Six copies of this number lived under two names across five files, and two of them
-had already drifted -- one to a quarter of the shared size and one to a sixteenth.
+had already drifted -- one to a quarter of the shared size and one to a sixty-fourth.
 It survives because every chunk size produces a correct digest: no run fails, no
 test reddens, and the only symptom is that one site issues sixty-four times as
 many reads as its siblings.

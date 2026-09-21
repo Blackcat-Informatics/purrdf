@@ -142,7 +142,7 @@ _U64 = (1 << 64) - 1
 # `benchmark-acquire.py`. This digest decides a cache hit, so it is not a free choice.
 # THE CHUNK SIZE IS NOT DEFINED HERE. Six copies lived under two names across five
 # files, two of them already drifted -- one to a quarter of the shared size and one
-# to a sixteenth. Every chunk size produces a correct digest, so nothing reported
+# to a sixty-fourth. Every chunk size produces a correct digest, so nothing reported
 # that divergence. The number
 # now lives in `scripts/lane_chunk.py` and nothing restates it. The path insert is
 # explicit rather than relying on `sys.path[0]`, because this module is also loaded

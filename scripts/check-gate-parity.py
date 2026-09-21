@@ -373,7 +373,8 @@ def divergence(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
                 "repository can be in -- the recipe is empty, renamed, or unparseable"]
     # MERGE-BLOCKING WORKFLOWS, not all of them. Direction 1's stated subject is "cannot
     # block a merge", and subtracting the union of all seven workflows checks something
-    # weaker: three are tag-triggered, one is a weekly cron, one is path-filtered, so a
+    # weaker: three are tag-triggered and two are scheduled (`benchmarks.yaml` weekly,
+    # `cnschema-probe.yaml` weekly), so a
     # gate present only in `benchmarks.yaml` would pass parity and block no merge. The
     # union is kept as a secondary, weaker message so a gate that at least runs SOMEWHERE
     # is distinguished from one that runs nowhere at all.

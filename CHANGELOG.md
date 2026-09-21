@@ -22,7 +22,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   reasons, under a register that may only shrink.
   `scripts/check-stream-chunk.py` refuses a streamed read whose chunk size is written out
   instead of named; six copies of that number lived under two names across five files,
-  two already drifted to a quarter and a sixteenth of the shared size, and because every
+  two already drifted to a quarter and a sixty-fourth of the shared size, and because every
   chunk size produces a correct digest nothing reported it.
   `scripts/check-tracked-paths.py` refuses a tracked path that misrepresents itself to the
   tools that read it -- a component beginning with `-`, which a glob hands to a command as

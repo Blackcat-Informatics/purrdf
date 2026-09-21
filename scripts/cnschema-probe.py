@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # THE CHUNK SIZE IS NOT DEFINED HERE. Six copies lived under two names across five
 # files, two of them already drifted -- one to a quarter of the shared size and one
-# to a sixteenth. Every chunk size produces a correct digest, so nothing reported
+# to a sixty-fourth. Every chunk size produces a correct digest, so nothing reported
 # it. (The comment that stood here claimed this file was "the last 1 MiB holdout
 # after those were unified", which was false in both halves: this file was at 4 MiB
 # already, and two sites in `scale-corpus.sh` were still below it.) The number

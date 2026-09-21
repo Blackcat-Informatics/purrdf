@@ -135,7 +135,7 @@ lane_track_stray() {
 # the embedded Python blocks as an argument -- which is what keeps the shell sites
 # and the Python sites from being two definitions again. They were: six copies under
 # two names across five files, two of them already drifted -- one to a quarter of the
-# shared size and one to a sixteenth -- and because every chunk size produces a
+# shared size and one to a sixty-fourth -- and because every chunk size produces a
 # correct digest, that divergence had nothing to report it.
 LANE_STREAM_CHUNK_BYTES="$(python3 "$(dirname "${BASH_SOURCE[0]}")/lane_chunk.py")" ||
   die "cannot read the shared stream chunk size from scripts/lane_chunk.py"

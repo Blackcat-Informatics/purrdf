@@ -184,3 +184,11 @@ make wasm                                 # builds the crate for wasm32-unknown-
 make hnsw-determinism                     # proves native and wasm32 bytes are identical
 cargo bench -p purrdf-hnsw --bench recall # recall/work/latency against the exact oracle
 ```
+
+## License
+
+Licensed under any one of the following, at your option:
+
+- [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
