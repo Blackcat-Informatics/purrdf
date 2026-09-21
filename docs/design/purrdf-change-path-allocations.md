@@ -61,9 +61,9 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 | surface | allocations per focus node |
 |---|---:|
 | `sh:sparql` constraint | 83 |
-| custom `sh:ask` component | 172 |
+| custom `sh:ask` component | 170 |
 | custom `sh:select` component | 98 |
-| `sh:expression` function call | 190 |
+| `sh:expression` function call | 188 |
 
 The term is flat in the size of the data graph, so it is the price of executing a
 query once per focus node, not a scan. That distinction matters: a scan would be
@@ -84,7 +84,7 @@ evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
 and the slopes cannot be differenced. Figures are against the baseline of
 96 / 214 / 116 / 194 that held when the decomposition was taken; the reductions
-described in the next section have since moved them to 83 / 172 / 98 / 190, by
+described in the next section have since moved them to 83 / 170 / 98 / 188, by
 emptying part of the term-materialization row and most of the rebuild cost inside
 the pushdown, seed and expression-walk rows.
 
@@ -208,6 +208,13 @@ in-place forms rather than second implementations of the same descent — two wa
 carrying the same rule about where the core begins would mean a pattern variant
 added later has to be handled twice, and a walk that missed it would still compile
 and still return an answer. That took the term to 83 / 172 / 98 / 190.
+
+The third: the **empty variable schema** is a constant, and it is reached on every
+execution — an empty BGP is the identity table `Z`, and the unit sequence standing
+for it seeds every group pattern that starts from nothing. It is now a
+process-wide shared `Arc`, which is sound because nothing in the crate reaches a
+`VarSchema` through `Arc::make_mut` or `Arc::get_mut`. That took the term to
+83 / 170 / 98 / 188.
 
 The clone itself stays. The substituted query must not poison the shared
 plan-cache entry, so each execution rewrites its own copy; what is gone is

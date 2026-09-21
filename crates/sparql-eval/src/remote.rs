@@ -952,7 +952,7 @@ fn silent_or_err<I: ViewTermId>(
 /// so a swallowed `SERVICE SILENT` leaves the surrounding query unchanged.
 fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
     SolutionSeq {
-        schema: Arc::new(VarSchema::new()),
+        schema: VarSchema::empty_shared(),
         rows: vec![smallvec::smallvec![]],
     }
 }

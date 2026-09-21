@@ -142,6 +142,26 @@ pub struct SolutionSeq<I: ViewTermId = TermId> {
     pub rows: Vec<Solution<I>>,
 }
 
+impl VarSchema {
+    /// The shared empty schema.
+    ///
+    /// The empty schema is a constant, and it is reached on every execution: an
+    /// empty BGP is the identity table `Z`, and the unit sequence that represents it
+    /// seeds every group pattern that starts from nothing. Minting it charged one
+    /// heap allocation per call — on the SHACL change path, several per focus node —
+    /// for a value that is the same every time.
+    ///
+    /// Shared by `Arc` rather than cloned, which is sound because nothing anywhere in
+    /// the crate reaches a `VarSchema` through `Arc::make_mut` or `Arc::get_mut`: a
+    /// schema is built, wrapped, and thereafter only read. This is the same
+    /// process-wide-constant device `crate::bgp` uses for the `rdf:reifies` lookup
+    /// value and for the single-pattern join order.
+    pub fn empty_shared() -> Arc<Self> {
+        static EMPTY: std::sync::OnceLock<Arc<VarSchema>> = std::sync::OnceLock::new();
+        Arc::clone(EMPTY.get_or_init(|| Arc::new(Self::new())))
+    }
+}
+
 impl<I: ViewTermId> SolutionSeq<I> {
     /// An empty sequence over `schema` (zero solutions).
     pub fn empty(schema: Arc<VarSchema>) -> Self {
@@ -156,7 +176,7 @@ impl<I: ViewTermId> SolutionSeq<I> {
     /// identity, so this is the correct seed for an empty group pattern.
     pub fn unit() -> Self {
         Self {
-            schema: Arc::new(VarSchema::new()),
+            schema: VarSchema::empty_shared(),
             rows: vec![Solution::new()],
         }
     }
