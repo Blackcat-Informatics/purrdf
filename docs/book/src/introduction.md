@@ -13,7 +13,7 @@ and C, with one exception stated up front: the GTS container reaches Rust, the C
 package. Every published crate builds for `wasm32-unknown-unknown`, so the engine
 that answers a query on a server answers it, byte for byte, in a browser tab.
 It is developed by Blackcat Informatics® Inc. and published under
-MIT OR Apache-2.0.
+MIT OR Apache-2.0 OR MulanPSL-2.0.
 
 > **One RDF engine. One behavior. Every language.**
 

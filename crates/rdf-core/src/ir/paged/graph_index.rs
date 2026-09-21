@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! [`GraphPageIndex`] — the dataset-level "which pages carry graph G" index, derived
 //! from every [`PageSlot`]'s [`PageSummary`](super::summary::PageSummary) without

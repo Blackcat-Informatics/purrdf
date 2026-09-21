@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The **permissive RDF 1.2 ingestion protocol** (purrdf P6): the neutral
 //! event seam that an RDF *source* (a parser, a GTS reader, a frozen-dataset
@@ -9,7 +9,7 @@
 //! This crate has **zero dependencies** on purpose. It is the contract that both the
 //! IR engine (`purrdf-core`) and the GTS container (`purrdf-gts`) depend ON — so a
 //! pure parse→serialize path that touches only these traits stays under the
-//! workspace `MIT OR Apache-2.0` license. Its value types ([`EventTerm`],
+//! workspace `MIT OR Apache-2.0 OR MulanPSL-2.0` license. Its value types ([`EventTerm`],
 //! [`EventQuad`], …) are therefore **self-contained**:
 //! it carries its OWN [`EventTermId`] term ids, not the engine's dataset-local
 //! `TermId`.

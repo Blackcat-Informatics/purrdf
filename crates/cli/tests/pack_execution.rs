@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! End-to-end pack-execution coverage, driving the BUILT `purrdf` binary
 //! (`env!("CARGO_BIN_EXE_purrdf")`) — never the library — so every assertion pins the

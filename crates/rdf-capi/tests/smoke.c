@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT OR Apache-2.0 */
+/* SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 */
 /* A C smoke test for libpurrdf: it links the real C-ABI (header + shared
  * library), exercises a full round-trip, and returns non-zero on any failure.
  * Driven from tests/c_smoke.rs via the system C compiler. */

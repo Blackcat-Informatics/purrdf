@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-SPDX-License-Identifier: MIT OR Apache-2.0
+SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 -->
 
 # Vendored W3C OWL 2 conformance corpus
@@ -184,7 +184,7 @@ are vendored verbatim and are **not** relicensed. Rather than 522 per-file
 `.license` sidecars, the tree declares them with two `REUSE.toml` glob
 annotations (`REUSE.toml`), both naming `LicenseRef-W3C-Test-Suite`; the license
 text is in `LICENSES/LicenseRef-W3C-Test-Suite.txt`. This document and the
-grader that reads the tree are PurRDF-authored (MIT OR Apache-2.0).
+grader that reads the tree are PurRDF-authored (MIT OR Apache-2.0 OR MulanPSL-2.0).
 
 ## Re-vendoring
 

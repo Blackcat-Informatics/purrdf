@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! W3C RDF 1.2 syntax-suite **round-trip** conformance gate for the native
 //! `purrdf` text codecs (acceptance: "W3C syntax test suites round-trip").

@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 """Execute emitted Pydantic models and compare their live JSON Schema surface."""
 
@@ -348,7 +348,7 @@ def _assert_strict_routed_types(root: Path) -> None:
     consumer = root / "routed_consumer.py"
     consumer.write_text(
         """# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 from routed_oracle_models.catalog.enums import Color, Empty, State
 from routed_oracle_models.common.paths import PathWithToken
 from routed_oracle_models.cycles.left import CycleLeft

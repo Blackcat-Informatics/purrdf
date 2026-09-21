@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Serializer parity across `DatasetView` backends: the native RDF serializer
 //! ([`serialize_dataset_to_format`]) is generic over any [`DatasetView`], so the SAME

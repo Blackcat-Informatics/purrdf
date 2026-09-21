@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # Drive the LUBM comparison workload end to end: acquire, generate, convert, query.
 #
@@ -13,7 +13,7 @@
 # NOTHING IS VENDORED
 # ===================
 #
-# The UBA generator is GPL-2.0-or-later and this tree is MIT OR Apache-2.0, so the
+# The UBA generator is GPL-2.0-or-later and this tree is MIT OR Apache-2.0 OR MulanPSL-2.0, so the
 # generator is RUN, NEVER COPIED IN. The ontology and the 14 queries carry no
 # redistribution grant at all. All of it is fetched by digest into an ignored cache
 # under `target/` by scripts/benchmark-acquire.py, used from there, and left there.

@@ -191,7 +191,7 @@ counterpart: the disjunctive-TGD shape carrying atomic, conjunctive, disjunctive
 and empty heads in one type was designed for this crate.
 
 The source is licensed `AGPL-3.0-only`; the port is relicensed
-`MIT OR Apache-2.0` under common ownership by the copyright holder. Every ported
+`MIT OR Apache-2.0 OR MulanPSL-2.0` under common ownership by the copyright holder. Every ported
 file carries a fresh SPDX header and no upstream licence text survives.
 
 The port is not a transcription. Three couplings were removed rather than
@@ -230,7 +230,7 @@ already established in this crate — so the port introduces no new dependency a
 no new interning idiom.
 
 The relicensing statement is the same as above: the source is licensed
-`AGPL-3.0-only`; the port is relicensed `MIT OR Apache-2.0` under common
+`AGPL-3.0-only`; the port is relicensed `MIT OR Apache-2.0 OR MulanPSL-2.0` under common
 ownership by the copyright holder, with a fresh SPDX header on every file and no
 upstream licence text retained.
 
@@ -310,7 +310,7 @@ physical primitives: `../gmeow-ontology` at
 `8906e41b15d5adaeccede35dab7e36c7eab86147`, upstream module
 `crates/logic/src/slme/mod.rs` (+ `slme/tests.rs`). The same relicensing basis
 applies: the source is `AGPL-3.0-only`, the port is relicensed
-`MIT OR Apache-2.0` under common ownership by the copyright holder, every ported
+`MIT OR Apache-2.0 OR MulanPSL-2.0` under common ownership by the copyright holder, every ported
 file carries a fresh SPDX header, and no upstream licence text survives. An
 earlier revision of this file omitted this row; the omission is exactly the
 provenance error the datalog section's own correction note warns about, and the

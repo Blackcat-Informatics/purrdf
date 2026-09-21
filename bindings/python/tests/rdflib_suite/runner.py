@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Subprocess entrypoint: run rdflib's OWN tests against the purrdf shim.
 
 This module is executed as ``python -m tests.rdflib_suite.runner`` (or via

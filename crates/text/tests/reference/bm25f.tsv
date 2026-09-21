@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 # name	population	field totals	weight:b raw	df	term fields tf:length	score raw
 average	4	16	1000000000000:750000000000	2	1:4	693147180559
 repeat	4	16	1000000000000:750000000000	2	2:4	953077373268

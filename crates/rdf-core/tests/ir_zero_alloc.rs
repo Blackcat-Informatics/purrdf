@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Gate 1 (C1): `RdfDataset::quads()` performs **zero allocations** and never
 //! clones or formats a term, and `quad_refs()` resolves terms without allocating.

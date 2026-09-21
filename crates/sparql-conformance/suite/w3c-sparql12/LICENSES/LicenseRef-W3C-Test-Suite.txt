@@ -14,4 +14,4 @@ The canonical, authoritative license text is published at:
 The files are vendored verbatim and are NOT relicensed. See PROVENANCE.md in the
 parent directory for the exact upstream source (w3c/rdf-tests, sparql/sparql11/)
 and fetch date. The PURRDF-authored selector manifests and expected-result
-reconstructions in this tree are licensed MIT OR Apache-2.0 (see their SPDX headers).
+reconstructions in this tree are licensed MIT OR Apache-2.0 OR MulanPSL-2.0 (see their SPDX headers).

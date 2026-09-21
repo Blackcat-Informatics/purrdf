@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // Node real-execution conformance for the purrdf wasm package: drives the ACTUAL
 // compiled wasm through the public RDF/JS surface, including the RDF-1.2 wedge

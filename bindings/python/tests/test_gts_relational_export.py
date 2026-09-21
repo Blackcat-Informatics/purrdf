@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """The three GTS relational export writers: SQLite, DuckDB and Parquet.
 
 Each writer is checked against the SAME oracle — `gts_relational_rows_from_bytes`,

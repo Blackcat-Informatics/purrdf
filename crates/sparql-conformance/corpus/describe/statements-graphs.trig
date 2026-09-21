@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # Clause 4 of the symmetric CBD crossed with GRAPH SCOPE. `statements.ttl` is
 # default-graph-only, so no case reading it can observe where a described
