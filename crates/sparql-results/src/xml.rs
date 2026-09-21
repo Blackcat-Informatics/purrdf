@@ -79,6 +79,7 @@ use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_core::sink::TextOut;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
@@ -152,12 +153,24 @@ pub fn to_xml(
 }
 
 /// Write the full SRX document (root + head + body + optional provenance).
-fn write_srx(
+/// The one wording for the CONSTRUCT-graph refusal, so the pre-emission check and
+/// the (now unreachable) match arm cannot report it differently.
+const GRAPH_IS_UNDEFINED_IN_SRX: &str =
+    "SPARQL Results XML is undefined for CONSTRUCT graphs; serialize the graph as RDF";
+
+pub(crate) fn write_srx<W: TextOut + ?Sized>(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: Option<&ProvenanceNamespace>,
-    out: &mut String,
+    out: &mut W,
 ) -> Result<(), Error> {
+    // Decided BEFORE the declaration and root element are emitted. Eagerly the
+    // partial document was discarded on refusal; an incremental sink has already
+    // sent those bytes downstream, so a kind-level refusal must precede byte one.
+    if matches!(result, SparqlResult::Graph(_)) {
+        return Err(Error::Format(GRAPH_IS_UNDEFINED_IN_SRX.to_string()));
+    }
+
     out.push_str("<?xml version=\"1.0\"?>\n");
     if result_has_directional_literal(result) {
         // The spec's DEFAULT (root-declared) style — see the module docs.
@@ -184,11 +197,10 @@ fn write_srx(
             out.push_str(if *value { "true" } else { "false" });
             out.push_str("</boolean>\n");
         }
+        // Refused above, before any byte was emitted. Retained so the match stays
+        // exhaustive without a panic site, and so both spellings cannot drift.
         SparqlResult::Graph(_) => {
-            return Err(Error::Format(
-                "SPARQL Results XML is undefined for CONSTRUCT graphs; serialize the graph as RDF"
-                    .to_string(),
-            ));
+            return Err(Error::Format(GRAPH_IS_UNDEFINED_IN_SRX.to_string()));
         }
     }
 
@@ -203,7 +215,7 @@ fn write_srx(
 }
 
 /// Write the `<head>` of `<variable>` declarations.
-fn write_head(variables: &[String], out: &mut String) -> Result<(), Error> {
+fn write_head<W: TextOut + ?Sized>(variables: &[String], out: &mut W) -> Result<(), Error> {
     if variables.is_empty() {
         out.push_str("  <head></head>\n");
         return Ok(());
@@ -219,10 +231,10 @@ fn write_head(variables: &[String], out: &mut String) -> Result<(), Error> {
 }
 
 /// Write the `<results>` block (one `<result>` per row; unbound cells omitted).
-fn write_results(
+fn write_results<W: TextOut + ?Sized>(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
-    out: &mut String,
+    out: &mut W,
 ) -> Result<(), Error> {
     out.push_str("  <results>\n");
     for row in rows {
@@ -249,7 +261,7 @@ fn write_results(
 }
 
 /// Write a single bound term element (`<uri>`/`<bnode>`/`<literal>`/`<triple>`).
-fn write_term(value: &TermValue, out: &mut String) -> Result<(), Error> {
+fn write_term<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(), Error> {
     match value {
         TermValue::Iri(iri) => {
             out.push_str("<uri>");
@@ -318,11 +330,11 @@ fn write_term(value: &TermValue, out: &mut String) -> Result<(), Error> {
 
 /// Write the additive `<{prefix}:provenance>` element (only present fields),
 /// under the caller-supplied [`ProvenanceNamespace`].
-fn write_provenance(
+fn write_provenance<W: TextOut + ?Sized>(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: &ProvenanceNamespace,
-    out: &mut String,
+    out: &mut W,
 ) -> Result<(), Error> {
     let prefix = namespace.prefix();
     out.push_str("  <");
@@ -411,14 +423,14 @@ fn query_form(result: &SparqlResult) -> &'static str {
 }
 
 /// Append lossless XML 1.0 character data, refusing unrepresentable scalars.
-fn xml_escape_text(value: &str, out: &mut String) -> Result<(), Error> {
-    purrdf_core::xml_escape::push(value, purrdf_core::xml_escape::Context::Text, out)
+fn xml_escape_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), Error> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
         .map_err(|error| Error::Format(error.to_string()))
 }
 
 /// Append a lossless double-quoted XML 1.0 attribute value.
-fn xml_escape_attr(value: &str, out: &mut String) -> Result<(), Error> {
-    purrdf_core::xml_escape::push(value, purrdf_core::xml_escape::Context::Attribute, out)
+fn xml_escape_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), Error> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
         .map_err(|error| Error::Format(error.to_string()))
 }
 

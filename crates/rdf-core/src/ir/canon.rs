@@ -2577,9 +2577,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             self.write_component(comp, render, &mut s);
             lines.insert(s);
         });
-        let mut out = String::new();
-        for line in &lines {
-            out.push_str(line);
+        // CONSUMED rather than borrowed. Iterating by reference held every line
+        // alongside the concatenation that was being built from it, so the peak was
+        // the document twice over plus one allocation per line. Taking the set by
+        // value frees each line as it is appended, so the two halves trade off
+        // instead of stacking.
+        let mut out = String::with_capacity(lines.iter().map(String::len).sum());
+        for line in lines {
+            out.push_str(&line);
         }
         out
     }

@@ -49,9 +49,10 @@
 
 use crate::SerializeOutcome;
 use crate::error::Error;
-use crate::graph::dataset_to_nquads;
+use crate::graph::write_dataset_nquads;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_core::sink::TextOut;
 use purrdf_core::{SparqlResult, TermValue};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
@@ -106,37 +107,37 @@ pub fn to_json(
 
 /// Write the full SRJ document (base object + optional provenance extension).
 ///
-/// The base object is written first, then — when `provenance` is non-empty AND
-/// `namespace` is supplied — the `namespace.prefix`-keyed member is inserted
-/// just before the document's final closing `}` so the resulting object stays
-/// valid for all three result kinds. Either condition failing means no
-/// extension is written at all (PurRDF mints no vocabulary IRIs of its own).
-fn write_srj(
+/// The base object's members are written first WITHOUT their enclosing `}`, then —
+/// when `provenance` is non-empty AND `namespace` is supplied — the
+/// `namespace.prefix`-keyed member, and finally the one closing brace. Either
+/// condition failing means no extension is written at all (PurRDF mints no
+/// vocabulary IRIs of its own).
+///
+/// The brace is emitted here rather than by the base writers and retracted with
+/// `pop` when an extension follows. The bytes are identical either way — every
+/// base branch ended in exactly the root `}`, so withholding it and appending it
+/// here reproduces the same sequence from the same producers — but a rewind is not
+/// available to an incremental sink that may already have drained the brace
+/// downstream. The former `Error::Internal` guard checked that the branch just
+/// called had ended with `}`; that is now a property of the split rather than a
+/// runtime assertion, so the arm is gone.
+pub(crate) fn write_srj<W: TextOut + ?Sized>(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: Option<&ProvenanceNamespace>,
-    out: &mut String,
+    out: &mut W,
 ) -> Result<(), Error> {
-    write_base(result, out)?;
+    write_base_body(result, out)?;
 
-    if provenance.is_empty() {
-        return Ok(());
+    if !provenance.is_empty()
+        && let Some(namespace) = namespace
+    {
+        out.push(',');
+        json_string(namespace.prefix(), out);
+        out.push(':');
+        write_provenance_body(result, provenance, namespace, out);
     }
-    let Some(namespace) = namespace else {
-        return Ok(());
-    };
 
-    // Remove the trailing `}` of the base object, append the additive member,
-    // then re-close. The base writers always end the object with `}`.
-    if out.pop() != Some('}') {
-        return Err(Error::Internal(
-            "SRJ base object did not end with a closing brace".to_string(),
-        ));
-    }
-    out.push(',');
-    json_string(namespace.prefix(), out);
-    out.push(':');
-    write_provenance_body(result, provenance, namespace, out);
     out.push('}');
     Ok(())
 }
@@ -144,12 +145,11 @@ fn write_srj(
 /// Write the pure-W3C SRJ object (no provenance extension at the top level). This
 /// is the byte-identity contract with the legacy rdf-capi emitter, save for the
 /// `Graph` branch and the additive per-literal SPARQL 1.2 `"its:dir"` key.
-fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
+fn write_base_body<W: TextOut + ?Sized>(result: &SparqlResult, out: &mut W) -> Result<(), Error> {
     match result {
         SparqlResult::Boolean(value) => {
             out.push_str("{\"head\":{},\"boolean\":");
             out.push_str(if *value { "true" } else { "false" });
-            out.push('}');
         }
         SparqlResult::Solutions {
             variables, rows, ..
@@ -190,17 +190,26 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
                 }
                 out.push('}');
             }
-            out.push_str("]}}");
+            // `]}` closes `bindings` and `results`; the root `}` is `write_srj`'s.
+            out.push_str("]}");
         }
         SparqlResult::Graph(graph) => {
             // Wasm-clean deviation from rdf-capi: render N-Quads directly from
             // the rdf-core kernel (no oxigraph), additionally carrying
             // reifier/annotation lines and every row's graph slot (see
             // [`crate::graph`] for why this envelope widens rather than refuses).
-            let nq = dataset_to_nquads(graph.as_ref());
-            out.push_str("{\"graph\":");
-            json_string(&nq, out);
-            out.push('}');
+            //
+            // Rendered STRAIGHT THROUGH the escaper rather than rendered whole and
+            // escaped afterwards. A CONSTRUCT answer is the one SPARQL result that is
+            // dataset-sized, so building the N-Quads document first held the entire
+            // graph twice over — once as the dataset, once as its rendering — before a
+            // byte could reach the sink, and the sink's window bounded neither.
+            //
+            // The quotes are written here because the adapter escapes fragments and
+            // cannot know where the string begins or ends.
+            out.push_str("{\"graph\":\"");
+            write_dataset_nquads(graph.as_ref(), &mut JsonEscaping(out));
+            out.push('"');
         }
     }
     Ok(())
@@ -217,11 +226,11 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
 /// resolve this member by namespace identity instead of trusting that the
 /// top-level key it happens to be spelled under (`namespace.prefix()`, a bare
 /// string with no uniqueness guarantee) was never reused by an unrelated caller.
-fn write_provenance_body(
+fn write_provenance_body<W: TextOut + ?Sized>(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: &ProvenanceNamespace,
-    out: &mut String,
+    out: &mut W,
 ) {
     out.push_str("{\"namespace\":");
     json_string(namespace.iri(), out);
@@ -291,10 +300,55 @@ const fn json_trigger_byte(b: u8) -> bool {
 }
 
 /// Append a JSON-escaped string literal (including the surrounding quotes).
-fn json_string(value: &str, out: &mut String) {
-    use core::fmt::Write as _;
-
+fn json_string<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     out.push('"');
+    json_escape_body(value, out);
+    out.push('"');
+}
+
+/// A [`TextOut`] that JSON-escapes every fragment pushed through it.
+///
+/// This is what lets a dataset-sized value become a JSON string without ever being
+/// one: the kernel's N-Quads writers push term by term, each push is escaped on its
+/// way past, and nothing between the producer and the drain holds the document.
+///
+/// It emits NO quotes — see [`json_escape_body`] for why escaping fragment-wise is
+/// exact, and the graph arm of [`write_srj_body`] for the caller that writes them.
+struct JsonEscaping<'a, W: TextOut + ?Sized>(&'a mut W);
+
+impl<W: TextOut + ?Sized> std::fmt::Write for JsonEscaping<'_, W> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        json_escape_body(text, self.0);
+        Ok(())
+    }
+}
+
+impl<W: TextOut + ?Sized> TextOut for JsonEscaping<'_, W> {
+    fn push_str(&mut self, text: &str) {
+        json_escape_body(text, self.0);
+    }
+
+    fn push(&mut self, ch: char) {
+        let mut buffer = [0u8; 4];
+        json_escape_body(ch.encode_utf8(&mut buffer), self.0);
+    }
+
+    /// Forwarded, so an emitter polling a dead drain through this adapter sees the
+    /// same answer it would see through the sink itself. Reporting `false` here
+    /// would cost a whole document of formatting per failed write.
+    fn failed(&self) -> bool {
+        self.0.failed()
+    }
+}
+
+/// A JSON string's BODY — everything that goes between the quotes.
+///
+/// Split out from [`json_string`] so a caller that is assembling one JSON string
+/// from many fragments can write the quotes itself and escape each fragment as it
+/// is produced. Fragment-wise escaping is exact here because every rule below maps
+/// one `char` independently: a `&str` fragment can never split a `char`, so
+/// escaping the pieces and escaping the concatenation give the same bytes.
+fn json_escape_body<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     let mut rest = value;
     while !rest.is_empty() {
         // Bulk-copy the clean run in one `push_str` rather than one `push`
@@ -322,14 +376,11 @@ fn json_string(value: &str, out: &mut String) {
         }
         rest = &rest[ch.len_utf8()..];
     }
-    out.push('"');
 }
 
 /// The original per-`char` escaper, kept as the oracle for [`json_string`].
 #[cfg(test)]
-fn json_string_reference(value: &str, out: &mut String) {
-    use core::fmt::Write as _;
-
+fn json_string_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     out.push('"');
     for ch in value.chars() {
         match ch {
@@ -357,7 +408,7 @@ fn json_string_reference(value: &str, out: &mut String) {
 /// Returns [`crate::error::Error::MalformedTerm`] if a [`TermValue::Triple`]
 /// arm's predicate is not an IRI. RDF predicates must be IRIs; emitting a
 /// non-IRI predicate would produce structurally invalid SRJ output.
-fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
+fn json_binding<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(), Error> {
     match value {
         TermValue::Iri(iri) => {
             out.push_str("{\"type\":\"uri\",\"value\":");

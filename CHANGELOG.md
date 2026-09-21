@@ -10,6 +10,67 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **serialization:** an incremental `io::Write` path beside the byte-vector one,
+  for the native RDF codecs and the SPARQL-results serializers. `TextSink` stages
+  into a bounded 64 KiB window over a pluggable `ByteDrain`; `WriterDrain` adapts
+  `io::Write`, `Measure` reports a document's length without the document, `Digest`
+  reports its SHA-256 without it, and `Tee` forwards to two drains so a document can
+  be written and digested in one pass over the emitter. The eager whole-output APIs
+  are unchanged and are expressed THROUGH the streaming body, so byte identity
+  between the two spellings is a property of the structure rather than something a
+  test establishes afterwards. `TextSink` deliberately exposes no `truncate`, `pop`,
+  `clear` or read-back: a sink cannot un-write a drained byte, so the affordance that
+  would silently break streaming is not expressible.
+
+- **build:** `scripts/check-serializer-rewinds.py`, wired into `make check` and
+  `make serializer-rewind-hygiene`. Three serializers decided what to emit by
+  emitting it and taking it back — a retracted Turtle prefix header, a popped SRJ
+  root brace, an XML escaper truncating on an unrepresentable scalar — and each works
+  perfectly until a document is large enough for a window to drain. The gate reports
+  candidates rather than verdicts, against a reasoned allowlist naming each receiver
+  that is not an output buffer, because `pop` on an element stack and `pop` on an
+  output buffer are the same six characters and a gate that refuses both teaches
+  authors to route around it.
+
+### Measured
+
+Peak allocator bytes, from the deterministic counting allocator rather than timings.
+
+- The serialization graph's interner memoized on an owned copy of every term's
+  value, so each term's text existed twice for the life of a build. Building a
+  40,000-quad graph fell from a 32,449,626-byte peak to 17,986,057 (-44.6%) at
+  200,013 allocations down to 80,012, with the retained graph and the interned term
+  count both unchanged — the evidence that the dedup relation did not move. This was
+  the ceiling that made N-Quads and TriG report byte-identical serialization peaks
+  for documents differing by 931,240 bytes, and with it gone streaming measurably
+  helps for the first time: N-Quads streamed now costs 5,153,092 bytes less than
+  eager, where it previously measured 65,536 bytes worse.
+
+- Compacting a JSON-LD document cloned the whole carrier to reach a `&mut` through a
+  `&self` receiver. On a 1,147,788-byte document the peak fell from 12,379,601 to
+  9,310,041.
+
+- YAML-LD serialized to a JSON `String`, reparsed it into a `serde_json::Value` and
+  converted that, holding four representations at once. It now emits straight from
+  the carrier. The reparse had been credited with producing sorted key order; the
+  carrier already emitted sorted keys, which was verified byte-for-byte against the
+  old path before the reparse was removed.
+
+- The SPARQL-results CONSTRUCT arm rendered a whole N-Quads document and JSON-escaped
+  it afterwards. It now renders through the escaper, so nothing between the producer
+  and the drain holds the answer.
+
+### Fixed
+
+- **cli:** a failed write could unlink a symlinked output path, destroying the link
+  and leaving the half-written bytes in its target — the exact loss the guard's own
+  comment described preventing. The guard asked the descriptor, which `File::create`
+  had already resolved through the link; it now asks the path.
+
+- **python:** `serialize(output=…)` called `write` once and discarded the returned
+  count, silently truncating the document whenever a file-like object accepted less
+  than it was given.
+
 - **build:** three hygiene gates, each wired into both `make check` and CI because the
   first of them exists to make that pairing checkable.
   `scripts/check-gate-parity.py` takes the AGREEMENT between `make check` and the
@@ -43,7 +104,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   rather than restating it, so the next license change cannot leave a file behind
   at the old offer. `docs/book/book.toml` is registered as deliberately CC-BY-4.0
   with its reason, under a register that only shrinks.
-
 - **build:** `scripts/check-python-binding-tests.py`, wired into `make check`,
   `make pytest`, `make python-binding-hygiene` and CI. It fails if a `test`
   predicate appears in any `cfg` invocation, or a `#[test]` attribute anywhere,

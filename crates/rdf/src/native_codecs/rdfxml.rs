@@ -35,9 +35,9 @@
 //! expansion, node/property striping, base-IRI resolution, and `xmlns` prefix
 //! scoping.
 
+use purrdf_core::sink::{TextOut, TextSink};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use roxmltree::{Document, Node};
@@ -70,15 +70,17 @@ impl RdfCodec for RdfXmlCodec {
         super::parse::parse_rdfxml_without_panicking(text, base)
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
-        // Built whole, then appended. Unlike the four text formats, this one's document
-        // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
-        // cannot emit a prefix before it knows what follows, and appending would mean
-        // rebuilding the construction itself rather than redirecting its output. The
-        // sink still earns its place here: the caller's buffer is the only one that
-        // outlives the call, and this is the seam a streaming writer replaces.
-        out.push_str(&serialize_ser_graph_to_rdfxml(graph)?);
-        Ok(())
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        // Emitted subject by subject after two pre-passes: a grouping index, and the
+        // namespace collection XML genuinely requires up front because every `xmlns:`
+        // declaration lands on the root element. Both hold IDENTIFIERS and prefixes,
+        // not document text, so neither is the output allocation — and removing the
+        // output allocation is independent of them.
+        write_rdfxml(graph, out)
     }
 }
 
@@ -1120,10 +1122,10 @@ enum XmlLiteralStep<'a, 'input> {
 /// Pre-order with an owed end tag reproduces the recursive walk's bytes exactly: children are
 /// pushed in reverse so they pop in document order, and the [`XmlLiteralStep::Close`] pushed
 /// before them pops after the whole subtree.
-fn serialize_xml_node(
+fn serialize_xml_node<W: TextOut + ?Sized>(
     node: Node<'_, '_>,
     apex_ns: Option<&[(String, String)]>,
-    out: &mut String,
+    out: &mut W,
 ) -> Result<(), RdfDiagnostic> {
     let mut stack = vec![XmlLiteralStep::Open(node, true)];
     while let Some(step) = stack.pop() {
@@ -1138,7 +1140,7 @@ fn serialize_xml_node(
         };
         if node.is_text() {
             if let Some(text) = node.text() {
-                out.push_str(&escape_xml_text(text)?);
+                push_xml_text(text, out)?;
             }
             continue;
         }
@@ -1151,9 +1153,13 @@ fn serialize_xml_node(
         if let Some(namespaces) = apex_ns.filter(|_| is_apex) {
             for (prefix, iri) in namespaces {
                 if prefix.is_empty() {
-                    let _ = write!(out, " xmlns=\"{}\"", escape_xml_attr(iri)?);
+                    push_xml_attribute("xmlns", iri, out)?;
                 } else {
-                    let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(iri)?);
+                    out.push_str(" xmlns:");
+                    out.push_str(prefix);
+                    out.push_str("=\"");
+                    push_xml_attr(iri, out)?;
+                    out.push('"');
                 }
             }
         }
@@ -1161,7 +1167,7 @@ fn serialize_xml_node(
             out.push(' ');
             out.push_str(&raw_attr_name(node, attr));
             out.push_str("=\"");
-            out.push_str(&escape_xml_attr(attr.value())?);
+            push_xml_attr(attr.value(), out)?;
             out.push('"');
         }
         // Canonical XML has no self-closing form: always emit a start/end pair.
@@ -1202,16 +1208,39 @@ fn qualify(node: Node<'_, '_>, namespace: Option<&str>, local: &str) -> String {
     }
 }
 
-/// Lossless XML character data under the shared XML 1.0 law.
-fn escape_xml_text(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Text)
+/// Append lossless XML character data STRAIGHT INTO the sink.
+///
+/// `push_into` rather than `escape`: the allocating spelling returns a `Cow` that
+/// allocates whenever any character needs replacing, once per term, on a path whose
+/// whole purpose is to not accumulate the document. The extra scan `push_into` pays is
+/// the trade this codec was converted to make.
+fn push_xml_text<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Text, out)
         .map_err(|error| serialize_err(error.to_string()))
 }
 
-/// Lossless double-quoted XML attribute value.
-fn escape_xml_attr(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
-    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
+/// Append a lossless double-quoted XML attribute value straight into the sink.
+fn push_xml_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), RdfDiagnostic> {
+    purrdf_core::xml_escape::push_into(value, purrdf_core::xml_escape::Context::Attribute, out)
         .map_err(|error| serialize_err(error.to_string()))
+}
+
+/// Append ` name="value"` with the value escaped on its way into the sink.
+///
+/// The interpolating spelling — `write!(out, " name=\"{}\"", escape(value)?)` — is what
+/// forced the allocation: a format argument has to exist as a value before it can be
+/// interpolated. Naming the shape instead lets the escaped bytes go straight through.
+fn push_xml_attribute<W: TextOut + ?Sized>(
+    name: &str,
+    value: &str,
+    out: &mut W,
+) -> Result<(), RdfDiagnostic> {
+    out.push(' ');
+    out.push_str(name);
+    out.push_str("=\"");
+    push_xml_attr(value, out)?;
+    out.push('"');
+    Ok(())
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -1249,7 +1278,7 @@ enum PropertyItem {
 ///
 /// Subject GROUPING keys ([`subject_key`]) stay on the absolute IRI, so the emitted
 /// element order is the same whether or not a base is in force.
-pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+fn write_rdfxml<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), RdfDiagnostic> {
     let named = graph.quads.iter().any(|(_, _, _, g)| g.is_some())
         || graph.reifiers.iter().any(|(_, _, g)| g.is_some())
         || graph.annotations.iter().any(|(_, _, _, g)| g.is_some());
@@ -1304,19 +1333,23 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
     // the root just as much as a top-level one does.
     let reifier_index = graph.reifier_index();
     let namespaces = serializer_namespaces(graph, &subjects, &reifier_index)?;
-    let mut out = String::from(
+    out.push_str(
         "<?xml version=\"1.0\"?>\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema#\"",
     );
     for (namespace, prefix) in &namespaces {
         if prefix != "rdf" && prefix != "xsd" {
-            let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(namespace)?);
+            out.push_str(" xmlns:");
+            out.push_str(prefix);
+            out.push_str("=\"");
+            push_xml_attr(namespace, out)?;
+            out.push('"');
         }
     }
     // The document base, when one is in force: `xml:base` on the root scopes it to the
     // whole document, which is what every relativized `rdf:about` / `rdf:resource` below
     // resolves against on re-read.
     if let Some(base) = graph.base() {
-        let _ = write!(out, " xml:base=\"{}\"", escape_xml_attr(base.as_str())?);
+        push_xml_attribute("xml:base", base.as_str(), out)?;
     }
     // Declare RDF 1.2 so a round-trip preserves triple terms and base direction (their
     // parse is gated on `rdf:version="1.2"`).
@@ -1324,13 +1357,13 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
 
     for (subject, properties) in subjects.into_values() {
         out.push_str("  <rdf:Description");
-        write_node_attribute(&mut out, graph, subject)?;
+        write_node_attribute(out, graph, subject)?;
         out.push_str(">\n");
         for property in properties {
             match property {
                 PropertyItem::Pair(predicate, object) => {
                     write_property(
-                        &mut out,
+                        out,
                         "    ",
                         graph,
                         &reifier_index,
@@ -1340,14 +1373,7 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
                     )?;
                 }
                 PropertyItem::Reifies(s, p, o) => {
-                    write_reifies(
-                        &mut out,
-                        "    ",
-                        graph,
-                        &reifier_index,
-                        (s, p, o),
-                        &namespaces,
-                    )?;
+                    write_reifies(out, "    ", graph, &reifier_index, (s, p, o), &namespaces)?;
                 }
             }
         }
@@ -1355,14 +1381,14 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
     }
 
     out.push_str("</rdf:RDF>\n");
-    Ok(out)
+    Ok(())
 }
 
 /// Render an `rdf:reifies` binding to the quoted triple `(s, p, o)` as a
 /// `parseType="Triple"` property, matching the prior path's
 /// `<rid> rdf:reifies <<( s p o )>>` rendering.
-fn write_reifies(
-    out: &mut String,
+fn write_reifies<W: TextOut + ?Sized>(
+    out: &mut W,
     indent: &str,
     graph: &SerGraph,
     reifier_index: &ReifierIndex,
@@ -1399,26 +1425,18 @@ fn subject_key(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
 ///
 /// `rdf:about` is an IRI REFERENCE, so it is spelled against the document base declared
 /// as `xml:base` on the root; `rdf:nodeID` is a blank-node label and is not.
-fn write_node_attribute(
-    out: &mut String,
+fn write_node_attribute<W: TextOut + ?Sized>(
+    out: &mut W,
     graph: &SerGraph,
     tid: usize,
 ) -> Result<(), RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = write!(
-                out,
-                " rdf:about=\"{}\"",
-                escape_xml_attr(&iri_reference(graph, ser_value(term)?))?
-            );
+            push_xml_attribute("rdf:about", &iri_reference(graph, ser_value(term)?), out)?;
         }
         SerTermKind::Bnode => {
-            let _ = write!(
-                out,
-                " rdf:nodeID=\"{}\"",
-                escape_xml_attr(ser_value(term)?)?
-            );
+            push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
         }
         other => {
             return Err(serialize_err(format!(
@@ -1553,8 +1571,8 @@ fn enqueue_quoted_triple(
 /// [`SerGraph`] guarantees that, and the one that takes a caller-supplied graph
 /// (`crate::gts::gts_to_ser`) proves it, refusing a self-reaching table with
 /// `gts-self-reaching-term`. See `ser_model::write_term`.
-fn write_property(
-    out: &mut String,
+fn write_property<W: TextOut + ?Sized>(
+    out: &mut W,
     indent: &str,
     graph: &SerGraph,
     reifier_index: &ReifierIndex,
@@ -1568,35 +1586,35 @@ fn write_property(
         SerTermKind::Iri => {
             // `rdf:resource` is an IRI reference and resolves against `xml:base`, so it
             // is spelled against the document base exactly as `rdf:about` is.
-            let _ = writeln!(
-                out,
-                "{indent}<{name} rdf:resource=\"{}\"/>",
-                escape_xml_attr(&iri_reference(graph, ser_value(term)?))?
-            );
+            out.push_str(indent);
+            out.push('<');
+            out.push_str(&name);
+            push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
+            out.push_str("/>\n");
         }
         SerTermKind::Bnode => {
-            let _ = writeln!(
-                out,
-                "{indent}<{name} rdf:nodeID=\"{}\"/>",
-                escape_xml_attr(ser_value(term)?)?
-            );
+            out.push_str(indent);
+            out.push('<');
+            out.push_str(&name);
+            push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+            out.push_str("/>\n");
         }
         SerTermKind::Literal => {
             let _ = write!(out, "{indent}<{name}");
             if let Some(language) = &term.lang {
-                let _ = write!(out, " xml:lang=\"{}\"", escape_xml_attr(language)?);
+                push_xml_attribute("xml:lang", language, out)?;
             }
             if let Some(direction) = &term.direction {
                 let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
             }
             if let Some(datatype) = term.datatype {
-                let _ = write!(
-                    out,
-                    " rdf:datatype=\"{}\"",
-                    escape_xml_attr(ser_value(ser_term(graph, datatype)?)?)?
-                );
+                push_xml_attribute("rdf:datatype", ser_value(ser_term(graph, datatype)?)?, out)?;
             }
-            let _ = writeln!(out, ">{}</{name}>", escape_xml_text(ser_value(term)?)?);
+            out.push('>');
+            push_xml_text(ser_value(term)?, out)?;
+            out.push_str("</");
+            out.push_str(&name);
+            out.push_str(">\n");
         }
         SerTermKind::Triple => {
             let (s, p, o) = term
@@ -1618,8 +1636,8 @@ fn write_property(
     Ok(())
 }
 
-fn write_triple_node(
-    out: &mut String,
+fn write_triple_node<W: TextOut + ?Sized>(
+    out: &mut W,
     indent: &str,
     graph: &SerGraph,
     reifier_index: &ReifierIndex,

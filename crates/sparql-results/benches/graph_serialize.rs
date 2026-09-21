@@ -40,7 +40,8 @@ use std::sync::Arc;
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_sparql_results::{
-    ResultProvenance, SparqlResult, from_json, to_csv, to_json, to_tsv, to_xml,
+    ResultProvenance, SparqlResult, SparqlResultsFormat, from_json, serialize_into, to_csv,
+    to_json, to_tsv, to_xml,
 };
 
 /// Quad count. Large enough that the writer's amortized behavior (not fixture
@@ -158,6 +159,34 @@ fn bench_results_serialize(c: &mut Criterion) {
             black_box(outcome);
         });
     });
+    // The STREAMED spelling of each, into a discarding writer.
+    //
+    // Report-only, and the PAIRING is the point rather than any single number: each
+    // eager arm's cost includes growing and handing back a document-sized `String`,
+    // the streamed arm's does not, and a reader comparing a pair is comparing the same
+    // emitter against two destinations. No assertion — this machine is not quiet
+    // enough for a wall-clock claim, and the memory claims this work rests on are made
+    // by allocator tests instead.
+    for (name, format) in [
+        ("to_json_5k_rows_streamed", SparqlResultsFormat::Json),
+        ("to_xml_5k_rows_streamed", SparqlResultsFormat::Xml),
+        ("to_csv_5k_rows_streamed", SparqlResultsFormat::Csv),
+        ("to_tsv_5k_rows_streamed", SparqlResultsFormat::Tsv),
+    ] {
+        group.bench_function(name, |bencher| {
+            bencher.iter(|| {
+                let outcome = serialize_into(
+                    black_box(&result),
+                    format,
+                    black_box(&provenance),
+                    None,
+                    &mut Discard,
+                )
+                .expect("serialize");
+                black_box(outcome.bytes_written);
+            });
+        });
+    }
     group.bench_function("from_json_5k_rows_escaping", |bencher| {
         bencher.iter(|| {
             let parsed = from_json(black_box(&json.bytes)).expect("parse");
@@ -233,3 +262,17 @@ fn bench_graph_serialize(c: &mut Criterion) {
 
 criterion_group!(benches, bench_graph_serialize, bench_results_serialize);
 criterion_main!(benches);
+
+/// A writer that keeps nothing, so a streamed arm measures the emitter rather than
+/// the bench's own accumulation of what it produced.
+struct Discard;
+
+impl std::io::Write for Discard {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

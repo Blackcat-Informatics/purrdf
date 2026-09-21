@@ -167,6 +167,77 @@ pub fn serialize(
     }
 }
 
+/// What a STREAMING serialization reports in place of [`SerializeOutcome`].
+///
+/// The same exit-gate flag, plus the byte count — the bytes themselves went to the
+/// caller's writer and were never held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "provenance_dropped is an exit gate; discarding it discards the report"]
+pub struct StreamOutcome {
+    /// Bytes handed to the writer. Meaningful only on `Ok`.
+    pub bytes_written: u64,
+    /// Identical in meaning, and identically computed, to
+    /// [`SerializeOutcome::provenance_dropped`].
+    pub provenance_dropped: bool,
+}
+
+/// Serialize a result INTO `writer`: the same bytes as [`serialize`], written
+/// incrementally rather than accumulated.
+///
+/// Peak residency on the output side is the sink's fixed staging window rather than
+/// the document. What that does NOT bound is the result itself: a `Solutions` value
+/// holds its rows by construction, and this writes them out — it does not make the
+/// answer smaller.
+///
+/// # Errors
+///
+/// Every per-format [`Error`] [`serialize`] reports, plus [`Error::Write`] when
+/// `writer` fails. Format- and kind-level refusals are all decided before the first
+/// byte; a per-term failure or a write failure may leave a PREFIX of the document
+/// already written, and the caller must discard the target.
+pub fn serialize_into(
+    result: &SparqlResult,
+    format: SparqlResultsFormat,
+    provenance: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
+    writer: &mut dyn std::io::Write,
+) -> Result<StreamOutcome, Error> {
+    let mut drain = purrdf_core::sink::WriterDrain(writer);
+    let mut out = purrdf_core::sink::TextSink::to_drain(&mut drain);
+    match format {
+        SparqlResultsFormat::Json => json::write_srj(result, provenance, namespace, &mut out)?,
+        SparqlResultsFormat::Xml => xml::write_srx(result, provenance, namespace, &mut out)?,
+        SparqlResultsFormat::Csv => csv::write_csv(result, provenance, &mut out)?,
+        SparqlResultsFormat::Tsv => tsv::write_tsv(result, provenance, &mut out)?,
+    }
+    let finished = out.finish().map_err(|error| Error::Write {
+        kind: error.kind(),
+        message: error.message().to_owned(),
+    })?;
+    Ok(StreamOutcome {
+        bytes_written: finished.written,
+        provenance_dropped: provenance_dropped(format, provenance, namespace),
+    })
+}
+
+/// Whether the provenance extension was requested but could not be emitted.
+///
+/// Computed at ONE site, so the eager and streaming outcomes cannot disagree about
+/// it. CSV and TSV have no extension point at all, so a requested provenance is
+/// always dropped there.
+fn provenance_dropped(
+    format: SparqlResultsFormat,
+    provenance: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
+) -> bool {
+    match format {
+        SparqlResultsFormat::Json | SparqlResultsFormat::Xml => {
+            !provenance.is_empty() && namespace.is_none()
+        }
+        SparqlResultsFormat::Csv | SparqlResultsFormat::Tsv => !provenance.is_empty(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

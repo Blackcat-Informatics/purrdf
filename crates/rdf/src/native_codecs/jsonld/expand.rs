@@ -23,17 +23,24 @@ const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
 pub(super) fn expand_document(
-    document: &JsonValue,
+    mut document: JsonValue,
     context: &CompiledJsonLdContext,
 ) -> Result<Document, RdfDiagnostic> {
-    let mut builder = Builder::new(document);
-    match document {
+    // The reserved-label pre-pass reads the whole parsed document, for the same
+    // reason the lowering pass does: a minted blank label must not collide with one
+    // used anywhere. It retains labels, not values.
+    let mut builder = Builder::new(&document);
+    match &mut document {
+        // Top-level entries are DRAINED, so each parsed entry is released as soon as
+        // it has been expanded rather than the whole parsed document standing beside
+        // the whole carrier. The expansion itself is unchanged — same entries, same
+        // order, same context.
         JsonValue::Array(entries) => {
-            for entry in entries {
-                builder.expand_graph_entry(entry, None, context)?;
+            for mut entry in core::mem::take(entries) {
+                builder.expand_graph_entry(&mut entry, None, context)?;
             }
         }
-        JsonValue::Object(_) => builder.expand_graph_entry(document, None, context)?,
+        JsonValue::Object(_) => builder.expand_graph_entry(&mut document, None, context)?,
         _ => {
             return Err(decode(
                 "JSON-LD document must be an object or array of objects",
@@ -79,15 +86,26 @@ pub(super) fn document_base(
     Ok(base)
 }
 
-pub(super) fn carrier_to_dataset(document: &Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let mut lowerer = Lowerer::new(document);
-    for node in &document.default_nodes {
-        lowerer.lower_node(node, None)?;
+pub(super) fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    // The reserved-label pre-pass reads the whole carrier, and has to: a minted
+    // list node must not collide with a blank label used ANYWHERE in the document,
+    // which is not knowable from one node. But what it retains is labels — an
+    // index — not node bodies, so it does not stand in the way of releasing each
+    // node once its quads exist.
+    let mut lowerer = Lowerer::new(&document);
+
+    // Nodes are DRAINED rather than borrowed. Each is dropped as soon as it has
+    // been lowered, so the carrier shrinks while the quad table grows instead of
+    // the two standing at full size together. The emitted quads are unchanged:
+    // this is the same walk in the same order, differing only in who owns the node
+    // while it happens.
+    for node in core::mem::take(&mut document.default_nodes) {
+        lowerer.lower_node(&node, None)?;
     }
-    for graph in &document.named_graphs {
+    for mut graph in core::mem::take(&mut document.named_graphs) {
         let graph_name = id_term(&graph.id)?;
-        for node in &graph.nodes {
-            lowerer.lower_node(node, Some(&graph_name))?;
+        for node in core::mem::take(&mut graph.nodes) {
+            lowerer.lower_node(&node, Some(&graph_name))?;
         }
     }
     crate::dataset_from_quads(&lowerer.quads)
@@ -185,72 +203,151 @@ impl Builder {
         self.merge_node(graph, node);
     }
 
+    /// Takes `&mut` so `@graph` can be DRAINED rather than walked in place.
+    ///
+    /// A document's `@graph` array is the bulk of it, and expanding it by reference
+    /// left the whole parsed tree standing beside the whole carrier being built from
+    /// it — both resident at once, which is what made parsing cost multiples of the
+    /// document. Taking each node out as it is expanded lets the tree shrink while the
+    /// carrier grows, so the two trade off instead of stacking.
+    ///
+    /// Only `@graph` is drained, and only because `expand_node` demonstrably ignores
+    /// it: its keyword match has an empty `"@graph" | "@index" => {}` arm, with a
+    /// comment saying this function processes the member first. `@included` is NOT
+    /// drained — `expand_node` does handle that one — so its (rare, small) values are
+    /// cloned for the recursion and left where the node path expects to find them.
+    ///
+    /// Emission ORDER is unchanged: graph nodes, then `@included`, then co-resident
+    /// node members. Blank-node labels are minted in walk order, so reordering these
+    /// would silently relabel every anonymous node in the output.
     fn expand_graph_entry(
+        &mut self,
+        entry: &mut JsonValue,
+        graph: Option<&str>,
+        context: &CompiledJsonLdContext,
+    ) -> Result<(), RdfDiagnostic> {
+        // `object_context` borrows the PARENT context, not the entry, so the active
+        // context outlives the entry borrow that produced it.
+        let active = {
+            let object = entry
+                .as_object()
+                .ok_or_else(|| decode("JSON-LD graph entry must be an object"))?;
+            object_context(context, object)?
+        };
+
+        // Everything the drain and the tail need, captured as OWNED data so the read
+        // of `entry` ends before the write to it begins. `@graph` may be reached
+        // through a term alias, so what is taken out is the ORIGINAL key that expanded
+        // to it rather than the literal `"@graph"`.
+        let plan = {
+            let object = entry
+                .as_object()
+                .ok_or_else(|| decode("JSON-LD graph entry must be an object"))?;
+            let members = expanded_members(&active, object)?;
+            member(&members, "@graph").map(|graph_value| {
+                let has_node_members = members.iter().any(|entry| {
+                    !matches!(
+                        entry.expanded.as_str(),
+                        "@context" | "@graph" | "@id" | "@included" | "@index"
+                    )
+                });
+                GraphEntryPlan {
+                    graph_key: graph_value.original.to_owned(),
+                    id_value: member(&members, "@id").map(|entry| entry.value.clone()),
+                    included: member(&members, "@included").map(|entry| entry.value.clone()),
+                    has_node_members,
+                }
+            })
+        };
+
+        let Some(plan) = plan else {
+            return self
+                .expand_node(entry, graph, &active, NodeDisposition::Merge)
+                .map(|_| ());
+        };
+
+        // Minted BEFORE the recursion, exactly as before: blank-node labels are
+        // issued in walk order, so moving this would relabel anonymous nodes.
+        let graph_id = if let Some(id) = &plan.id_value {
+            Some(expand_id_value(&active, id)?)
+        } else if plan.has_node_members {
+            Some(self.fresh_blank_node())
+        } else {
+            graph.map(str::to_owned)
+        };
+
+        // THE DRAIN. Each node is released as it is expanded, so the parsed tree
+        // shrinks while the carrier grows instead of the two standing at full size
+        // together — which is what made parsing cost a multiple of the document.
+        //
+        // Removing the member is safe precisely here: `expand_node` ignores `@graph`
+        // (its keyword match has an empty `"@graph" | "@index" => {}` arm, with a
+        // comment saying this function processes the member first), so the tail below
+        // sees exactly what it saw before. `@included` is NOT removed — `expand_node`
+        // does handle that one — so it is cloned for the recursion and left in place.
+        let drained = entry
+            .as_object_mut()
+            .and_then(|object| object.remove(&plan.graph_key))
+            .unwrap_or(JsonValue::Null);
+        for mut node in into_values(drained) {
+            self.expand_graph_entry(&mut node, graph_id.as_deref(), &active.child_context())?;
+        }
+        if let Some(included) = plan.included {
+            for included in non_null_values(&included) {
+                self.expand_graph_entry_in_place(included, graph, &active.child_context())?;
+            }
+        }
+
+        // A graph object may also be a node object. Its @type, ordinary properties,
+        // @reverse, and @nest members describe the graph name in the containing graph
+        // and must not disappear merely because @graph is present. A pure @id/@graph
+        // wrapper, however, contributes no node statement of its own.
+        if plan.has_node_members {
+            if plan.id_value.is_some() {
+                self.expand_node(entry, graph, &active, NodeDisposition::Merge)?;
+            } else {
+                let object = entry
+                    .as_object()
+                    .ok_or_else(|| decode("JSON-LD graph entry must be an object"))?;
+                let mut node = object.clone();
+                insert_expanded_control(
+                    &mut node,
+                    &active,
+                    "@id",
+                    JsonValue::String(
+                        graph_id.expect("mixed graph object minted a graph identifier"),
+                    ),
+                )?;
+                self.expand_node(
+                    &JsonValue::Object(node),
+                    graph,
+                    &active,
+                    NodeDisposition::Merge,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// [`Builder::expand_graph_entry`] for a value the caller holds only by reference.
+    ///
+    /// It CLONES, and that is worth stating plainly rather than dressing up: the
+    /// draining entry point needs `&mut` to take `@graph` out, and a nested graph
+    /// value — an `@graph` inside a value object, or an `@index`/`@id` container —
+    /// arrives as a borrowed member of a structure the caller is still walking.
+    ///
+    /// What makes it acceptable HERE and not at the document level is the bound. A
+    /// nested graph value is bounded by the value object holding it; the document's
+    /// own `@graph` is bounded by nothing, which is why draining that one is the
+    /// entire point. Cloning the bounded case to keep one code path is a better trade
+    /// than a second expander that could drift from this one.
+    fn expand_graph_entry_in_place(
         &mut self,
         entry: &JsonValue,
         graph: Option<&str>,
         context: &CompiledJsonLdContext,
     ) -> Result<(), RdfDiagnostic> {
-        let object = entry
-            .as_object()
-            .ok_or_else(|| decode("JSON-LD graph entry must be an object"))?;
-        let active = object_context(context, object)?;
-        let members = expanded_members(&active, object)?;
-        if let Some(graph_value) = member(&members, "@graph") {
-            let has_node_members = members.iter().any(|entry| {
-                !matches!(
-                    entry.expanded.as_str(),
-                    "@context" | "@graph" | "@id" | "@included" | "@index"
-                )
-            });
-            let graph_id = if let Some(id) = member(&members, "@id") {
-                Some(expand_id_value(&active, id.value)?)
-            } else if has_node_members {
-                Some(self.fresh_blank_node())
-            } else {
-                graph.map(str::to_owned)
-            };
-            for node in as_values(graph_value.value) {
-                self.expand_graph_entry(node, graph_id.as_deref(), &active.child_context())?;
-            }
-            if let Some(included) = member(&members, "@included") {
-                for included in as_values(included.value) {
-                    self.expand_graph_entry(included, graph, &active.child_context())?;
-                }
-            }
-
-            // A graph object may also be a node object. Its @type, ordinary
-            // properties, @reverse, and @nest members describe the graph name in the
-            // containing graph and must not disappear merely because @graph is
-            // present. A pure @id/@graph wrapper, however, contributes no node
-            // statement of its own.
-            if has_node_members {
-                if member(&members, "@id").is_some() {
-                    self.expand_node(entry, graph, &active, NodeDisposition::Merge)?;
-                } else {
-                    let mut node = object.clone();
-                    insert_expanded_control(
-                        &mut node,
-                        &active,
-                        "@id",
-                        JsonValue::String(
-                            graph_id
-                                .clone()
-                                .expect("mixed graph object minted a graph identifier"),
-                        ),
-                    )?;
-                    self.expand_node(
-                        &JsonValue::Object(node),
-                        graph,
-                        &active,
-                        NodeDisposition::Merge,
-                    )?;
-                }
-            }
-            return Ok(());
-        }
-        self.expand_node(entry, graph, &active, NodeDisposition::Merge)
-            .map(|_| ())
+        self.expand_graph_entry(&mut entry.clone(), graph, context)
     }
 
     fn expand_node(
@@ -651,7 +748,7 @@ impl Builder {
     ) -> Result<(), RdfDiagnostic> {
         self.graphs.entry(Some(graph_id.to_owned())).or_default();
         for entry in non_null_values(raw) {
-            self.expand_graph_entry(entry, Some(graph_id), &context.child_context())?;
+            self.expand_graph_entry_in_place(entry, Some(graph_id), &context.child_context())?;
         }
         Ok(())
     }
@@ -1121,6 +1218,21 @@ fn object_context<'a>(
     )
 }
 
+/// What [`Builder::expand_graph_entry`] reads out of an entry before it writes to it.
+///
+/// Owned, deliberately: the drain needs a mutable borrow of the entry, so everything
+/// the read phase learned has to survive the end of the immutable one.
+struct GraphEntryPlan {
+    /// The original (possibly aliased) key that expanded to `@graph`.
+    graph_key: String,
+    /// The `@id` member's value, when present.
+    id_value: Option<JsonValue>,
+    /// The `@included` member's value, when present.
+    included: Option<JsonValue>,
+    /// Whether the entry carries node members beside its graph members.
+    has_node_members: bool,
+}
+
 struct ExpandedMember<'a> {
     original: &'a str,
     expanded: String,
@@ -1206,6 +1318,16 @@ fn expand_id_value(
         Ok(value.to_owned())
     } else {
         expand_required(context, value, false, true)
+    }
+}
+
+/// [`as_values`]' owning twin: yields the values so each can be released as it is
+/// consumed, rather than borrowed out of a tree that has to outlive the walk.
+fn into_values(value: JsonValue) -> Vec<JsonValue> {
+    match value {
+        JsonValue::Array(values) => values,
+        JsonValue::Null => Vec::new(),
+        value => vec![value],
     }
 }
 

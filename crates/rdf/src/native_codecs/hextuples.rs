@@ -20,6 +20,7 @@
 //! order, one canonical JSON array per line. HexTuples is a CLASSIC quad syntax with no
 //! RDF-1.2 triple-term surface: a triple term in a serialize request is a HARD error.
 
+use purrdf_core::sink::{TextOut, TextSink};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -55,15 +56,16 @@ impl RdfCodec for HexTuplesCodec {
         })
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
-        // Built whole, then appended. Unlike the four text formats, this one's document
-        // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
-        // cannot emit a prefix before it knows what follows, and appending would mean
-        // rebuilding the construction itself rather than redirecting its output. The
-        // sink still earns its place here: the caller's buffer is the only one that
-        // outlives the call, and this is the seam a streaming writer replaces.
-        out.push_str(&serialize_ser_graph_to_hextuples(graph)?);
-        Ok(())
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        // Appended row by row. HexTuples is NDJSON — one flat array per line, with no
+        // document-scope structure at all — so the writer never needs to know what
+        // follows, and nothing is held but the row being written. The ingress side
+        // already treats it as line-oriented; this is the egress half of the same fact.
+        write_hextuples(graph, out)
     }
 }
 
@@ -393,10 +395,15 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
 /// order (one canonical JSON array per line); annotation rows follow as plain triples.
 /// A quoted-triple (RDF-1.2) term is a HARD error — HexTuples has no triple-term
 /// surface.
-pub(super) fn serialize_ser_graph_to_hextuples(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
-    let mut out = String::new();
+fn write_hextuples<W: TextOut + ?Sized>(
+    graph: &SerGraph,
+    out: &mut W,
+) -> Result<(), RdfDiagnostic> {
     for &(s, p, o, g) in &graph.quads {
-        write_line(&mut out, graph, s, p, o, g)?;
+        if out.failed() {
+            return Ok(());
+        }
+        write_line(out, graph, s, p, o, g)?;
     }
     for &(rid, _, _) in &graph.reifiers {
         if is_self_reifier(graph, rid) {
@@ -407,9 +414,12 @@ pub(super) fn serialize_ser_graph_to_hextuples(graph: &SerGraph) -> Result<Strin
         ));
     }
     for &(r, p, v, g) in &graph.annotations {
-        write_line(&mut out, graph, r, p, v, g)?;
+        if out.failed() {
+            return Ok(());
+        }
+        write_line(out, graph, r, p, v, g)?;
     }
-    Ok(out)
+    Ok(())
 }
 
 fn is_self_reifier(graph: &SerGraph, rid: usize) -> bool {
@@ -419,8 +429,8 @@ fn is_self_reifier(graph: &SerGraph, rid: usize) -> bool {
         .is_some_and(|t| t.kind == SerTermKind::Triple && t.reifier == Some(rid))
 }
 
-fn write_line(
-    out: &mut String,
+fn write_line<W: TextOut + ?Sized>(
+    out: &mut W,
     graph: &SerGraph,
     s: usize,
     p: usize,

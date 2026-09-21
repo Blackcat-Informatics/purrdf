@@ -142,14 +142,68 @@ def _misrendering(component: str) -> str | None:
 
 # Characters that render blank without being a space and without a category that says so,
 # so a name containing one is indistinguishable from a name without it.
+# CHARACTERS THAT RENDER AS NOTHING ON THEIR OWN. The set is deliberately narrow, and it
+# was wrong in both directions when first written.
+#
+# U+FE0F was in it, and U+FE0F is VARIATION SELECTOR-16: it SELECTS emoji presentation for
+# the character before it. It renders nothing by itself because it is not a character on
+# its own -- and refusing it rejected `❤️.md`, `⚠️-warning.md` and `🏳️‍🌈.md`, ordinary
+# emoji paths. The accept-side fixture was `🐈.md`, which carries no variation selector, so
+# it could not observe the hazard the rule introduced: a neighbour that cannot distinguish
+# the case it exists for. U+FE00-FE0E are the same block and are equally excluded.
+#
+# The Hangul and Khmer fillers and U+180E stay: those are format-class blanks with no
+# preceding character to modify, and they are what let two paths render identically. U+034F
+# (COMBINING GRAPHEME JOINER) also stays -- it is invisible and carries no orthographic
+# requirement in any script this repository documents.
 _BLANK_BUT_NOT_SPACE = frozenset(
-    "\u3164\u2800\u115f\u1160\u17b4\u17b5\uffa0\u034f\ufe0f\u180e"
+    "\u3164\u2800\u115f\u1160\u17b4\u17b5\uffa0\u034f\u180e"
 )
+
+
+def collisions(paths: list[str]) -> list[str]:
+    """Every pair of tracked paths that name the same file to a filesystem or a reader.
+
+    THIS IS THE GATE'S OWN STATED GROUND, APPLIED TO PAIRS. Every other rule here refuses a
+    single path for rendering as something it is not; two paths differing only by Unicode
+    normalisation render IDENTICALLY and were both accepted, because the per-path rules
+    cannot see a pair. `café.md` in NFC (U+00E9) and in NFD (e + U+0301) are different byte
+    strings, the same rendering, and the SAME FILE on APFS and HFS+ -- so a checkout there
+    silently loses one tracked file with no error at all.
+
+    Case-insensitive filesystems collapse `README.md` and `Readme.md` the same way. Both
+    checks take the whole list, which is why they live here rather than beside the others.
+    """
+    found: list[str] = []
+    by_normal: dict[str, set[str]] = {}
+    by_fold: dict[str, set[str]] = {}
+    # DISTINCT PATHS ONLY. A path does not collide with itself, and `git ls-files` emits one
+    # entry per index STAGE -- so during an unresolved merge a single conflicted file appears
+    # three times and read as a three-way collision with itself. Caught by running the gate
+    # mid-merge, which is the one state that produces it.
+    for path in sorted(set(paths)):
+        by_normal.setdefault(unicodedata.normalize("NFC", path), set()).add(path)
+        by_fold.setdefault(unicodedata.normalize("NFC", path).casefold(), set()).add(path)
+    for normal, members in sorted(by_normal.items()):
+        if len(members) > 1:
+            found.append(
+                f"{sorted(members)!r} differ only by Unicode normalisation, so they render "
+                f"identically and are the SAME FILE on APFS and HFS+ -- a checkout there "
+                f"loses one of them with no error. Normalise to NFC: {normal!r}"
+            )
+    for folded, members in sorted(by_fold.items()):
+        distinct = {unicodedata.normalize("NFC", member) for member in members}
+        if len(members) > 1 and len(distinct) > 1:
+            found.append(
+                f"{sorted(members)!r} differ only by case, so they are the same file on a "
+                f"case-insensitive filesystem and a checkout there loses one"
+            )
+    return found
 
 
 def offences(paths: list[str]) -> list[str]:
     """Every tracked path that a shell cannot hand to a command unambiguously."""
-    found: list[str] = []
+    found: list[str] = collisions(paths)
     for path in paths:
         for component in path.split("/"):
             if component.startswith("-"):
@@ -266,6 +320,12 @@ def self_test() -> int:
         "docs/fa/می\u200cروم.md",
         "docs/emoji/🐈.md",
         "docs/he/עברית.md",
+        # VARIATION SELECTORS ARE NOT BLANKS. Each of these was refused by a rule that
+        # called U+FE0F "a character that renders as nothing at all"; the previous accept
+        # fixture was a cat with no variation selector, which could not observe it.
+        "docs/emoji/❤️.md",
+        "docs/emoji/⚠️-warning.md",
+        "docs/emoji/🏳️‍🌈.md",
     ]
     wrongly = [path for path in accepted if offences([path])]
     if wrongly:
@@ -302,7 +362,8 @@ def main() -> int:
     print(
         f"OK: none of the {len(paths)} tracked paths begins a component with '-', contains a "
         "character that does not render as what it is (a control, an invisible format "
-        "character, a line separator), or begins or ends a component with whitespace"
+        "character, a line separator), begins or ends a component with whitespace, or "
+        "collides with another tracked path under Unicode normalisation or case folding"
     )
     return 0
 
