@@ -1085,9 +1085,8 @@ fn a_binary_that_cannot_run_is_refused_for_every_lane_at_once() {
 // with an empty capture, which is what a killed interpreter looks like.
 #[test]
 fn the_digest_fallback_names_the_directory_once_and_quotes_the_status_it_has() {
-    let (code, out) = in_lane_common(
-        "python3() { return 137; }\nlane_query_set_digest /some/arena",
-    );
+    let (code, out) =
+        in_lane_common("python3() { return 137; }\nlane_query_set_digest /some/arena");
     assert_ne!(code, 0, "a failing digest must refuse; output:\n{out}");
     assert!(
         out.contains("at '/some/arena'"),
@@ -1129,7 +1128,13 @@ fn a_capture_taken_outside_the_scratch_directory_is_still_swept_on_a_signal() {
     );
     let leaked: Vec<String> = std::fs::read_dir(&root)
         .expect("enumerate the private TMPDIR")
-        .map(|entry| entry.expect("read a TMPDIR entry").file_name().to_string_lossy().into_owned())
+        .map(|entry| {
+            entry
+                .expect("read a TMPDIR entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .filter(|name| name.starts_with("tmp."))
         .collect();
     assert!(
@@ -1156,7 +1161,13 @@ fn a_capture_taken_outside_the_scratch_directory_is_still_swept_on_a_signal() {
     );
     let survivors: Vec<String> = std::fs::read_dir(&root)
         .expect("enumerate the private TMPDIR")
-        .map(|entry| entry.expect("read a TMPDIR entry").file_name().to_string_lossy().into_owned())
+        .map(|entry| {
+            entry
+                .expect("read a TMPDIR entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .filter(|name| name.starts_with("tmp."))
         .collect();
     assert!(
@@ -1188,7 +1199,10 @@ fn an_unwritable_capture_path_is_a_scratch_failure_named_as_one() {
         "lane_reset_capture '{}'\necho REACHED-THE-QUERY",
         unwritable.display()
     ));
-    assert_ne!(code, 0, "an uncreatable capture path must refuse; output:\n{out}");
+    assert_ne!(
+        code, 0,
+        "an uncreatable capture path must refuse; output:\n{out}"
+    );
     assert!(
         !out.contains("REACHED-THE-QUERY"),
         "the refusal must precede the redirect that depends on the path; output:\n{out}"
@@ -1215,7 +1229,10 @@ fn an_unwritable_capture_path_is_a_scratch_failure_named_as_one() {
          lane_reset_capture \"${LANE_TMP}/query.err\"\n\
          printf 'size=%s\\n' \"$(wc -c <\"${LANE_TMP}/query.err\")\"",
     );
-    assert_eq!(code, 0, "a usable capture path must be accepted; output:\n{out}");
+    assert_eq!(
+        code, 0,
+        "a usable capture path must be accepted; output:\n{out}"
+    );
     assert!(
         out.contains("size=0"),
         "and resetting it must truncate, so one query cannot inherit the previous query's \
@@ -1236,7 +1253,10 @@ fn a_capture_is_read_only_when_there_is_something_to_read() {
 
     // The ordinary case, and the one the unconditional `cat` got wrong: a binary that succeeded
     // said nothing. That must be the empty string and NOT a `cat:` line on the lane's stderr.
-    for (path, label) in [(&empty, "an empty capture"), (&missing, "a capture never created")] {
+    for (path, label) in [
+        (&empty, "an empty capture"),
+        (&missing, "a capture never created"),
+    ] {
         let (code, out) = in_lane_common(&format!(
             "said=\"$(lane_capture_stderr '{}')\"\nprintf 'said=[%s]\\n' \"${{said}}\"",
             path.display()

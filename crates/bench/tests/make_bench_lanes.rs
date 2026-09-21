@@ -951,7 +951,12 @@ fn the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute() {
 fn run_stand_in(binary: &Path, cwd: &Path, args: &[&str]) -> (i32, String, Vec<String>) {
     let before: std::collections::BTreeSet<String> = std::fs::read_dir(cwd)
         .expect("enumerate the working directory")
-        .map(|e| e.expect("read an entry").file_name().to_string_lossy().into_owned())
+        .map(|e| {
+            e.expect("read an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     let output = Command::new(binary)
         .args(args)
@@ -960,7 +965,12 @@ fn run_stand_in(binary: &Path, cwd: &Path, args: &[&str]) -> (i32, String, Vec<S
         .expect("run the stand-in");
     let after: std::collections::BTreeSet<String> = std::fs::read_dir(cwd)
         .expect("enumerate the working directory")
-        .map(|e| e.expect("read an entry").file_name().to_string_lossy().into_owned())
+        .map(|e| {
+            e.expect("read an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     (
         output.status.code().unwrap_or(-1),
@@ -988,7 +998,14 @@ fn a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names() {
         let (code, err, created) = run_stand_in(
             &binary,
             &workdir,
-            &["query", "--data", "/nonexistent.pack", "--results-format", "json", query_text],
+            &[
+                "query",
+                "--data",
+                "/nonexistent.pack",
+                "--results-format",
+                "json",
+                query_text,
+            ],
         );
         assert!(
             created.is_empty(),
@@ -1002,16 +1019,28 @@ fn a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names() {
         );
 
         // 2. A flag-shaped destination, which is the shape the name itself had.
-        let (code, err, created) =
-            run_stand_in(&binary, &workdir, &["convert", "--from", "ntriples", "--manifest"]);
-        assert_eq!(code, 3, "{label}: a flag-shaped destination must be refused; stderr:\n{err}");
+        let (code, err, created) = run_stand_in(
+            &binary,
+            &workdir,
+            &["convert", "--from", "ntriples", "--manifest"],
+        );
+        assert_eq!(
+            code, 3,
+            "{label}: a flag-shaped destination must be refused; stderr:\n{err}"
+        );
         assert!(created.is_empty(), "{label}: created {created:?}");
 
         // 3. A relative destination. A lane never passes one, and a relative path is precisely
         //    what lands in whatever directory the harness happened to be standing in.
-        let (code, err, created) =
-            run_stand_in(&binary, &workdir, &["convert", "--from", "ntriples", "in.nt", "out.nq"]);
-        assert_eq!(code, 3, "{label}: a relative destination must be refused; stderr:\n{err}");
+        let (code, err, created) = run_stand_in(
+            &binary,
+            &workdir,
+            &["convert", "--from", "ntriples", "in.nt", "out.nq"],
+        );
+        assert_eq!(
+            code, 3,
+            "{label}: a relative destination must be refused; stderr:\n{err}"
+        );
         assert!(created.is_empty(), "{label}: created {created:?}");
 
         // 4. An absolute destination whose directory does not exist. A lane creates its arena
@@ -1020,7 +1049,13 @@ fn a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names() {
         let (code, err, created) = run_stand_in(
             &binary,
             &workdir,
-            &["convert", "--from", "ntriples", "/in.nt", nowhere.to_str().expect("utf-8 path")],
+            &[
+                "convert",
+                "--from",
+                "ntriples",
+                "/in.nt",
+                nowhere.to_str().expect("utf-8 path"),
+            ],
         );
         assert_eq!(code, 3, "{label}: stderr:\n{err}");
         assert!(created.is_empty(), "{label}: created {created:?}");
@@ -1032,7 +1067,13 @@ fn a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names() {
         let (code, err, created) = run_stand_in(
             &binary,
             &workdir,
-            &["convert", "--from", "ntriples", "/in.nt", wanted.to_str().expect("utf-8 path")],
+            &[
+                "convert",
+                "--from",
+                "ntriples",
+                "/in.nt",
+                wanted.to_str().expect("utf-8 path"),
+            ],
         );
         assert_eq!(
             code, 0,
