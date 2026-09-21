@@ -247,9 +247,21 @@ def embedded_programs(text: str) -> list[tuple[int, str, str]]:
         body = re.sub(r"\\([$`\"\\])", r"\1", body)
         programs.append((text[: match.start(1)].count("\n"), raw, body))
 
+    # A HEREDOC OPENER INSIDE AN ALREADY-EXTRACTED BODY IS PYTHON, NOT SHELL. A `-c` body
+    # that merely MENTIONS one -- `print("run: python3 - <<EOF")` -- matched the opener
+    # pattern, and the phantom body ran to the end of the file because its delimiter never
+    # appeared. The ordinary shell that followed is not Python, so the whole script was
+    # refused as unparseable: a false refusal triggered by a program describing the idiom.
+    consumed = [
+        (text.index(raw), text.index(raw) + len(raw)) for _offset, raw, _body in programs
+    ]
+
+    def _inside_a_body(at: int) -> bool:
+        return any(start <= at < end for start, end in consumed)
+
     lines = text.splitlines()
     for match in _HEREDOC_OPEN.finditer(text):
-        if _commented(match.start()):
+        if _commented(match.start()) or _inside_a_body(match.start()):
             continue
         strips_tabs = match.group(1) == "-"
         delimiter = match.group(2)
@@ -528,6 +540,15 @@ def self_test() -> int:
         "a comment mentioning the idiom": "# see python3 -c 'h.read(4194304)' for the idiom\n",
         "an indented comment mentioning it": "    # python3 -c 'h.read(4194304)'\n",
         "a comment mentioning a bare read": "# h.read(4194304) is the wrong spelling\n",
+        # A PROGRAM THAT MENTIONS A HEREDOC OPENER IS STILL ONE PROGRAM. The opener pattern
+        # matched inside an already-extracted body, and the phantom body ran to the end of
+        # the file because its delimiter never appeared -- so the ordinary shell that
+        # followed was parsed as Python and the whole script refused. A false refusal
+        # triggered by a program describing the idiom this gate enforces.
+        "a `-c` body mentioning a heredoc opener": (
+            "python3 -c '\nprint(\"run: python3 - <<EOF\")\nh.read(chunk_bytes)\n'\n"
+            'if [[ -n "${x}" ]]; then\n  echo hi\nfi\n'
+        ),
         "shell with no read at all": 'echo "no reads here"\n',
     }
     wrongly = [label for label, body in shell_accepted.items() if shell_offences(here, body)]
