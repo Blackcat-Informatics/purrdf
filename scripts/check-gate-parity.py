@@ -47,10 +47,65 @@ MAKEFILE = REPO_ROOT / "Makefile"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CI_WORKFLOW = WORKFLOWS / "ci.yaml"
 
-# The workflows that gate a pull request. A tag-triggered release workflow, a weekly
-# cron and a path-filtered job all run real gates and none of them can stop a merge,
-# so a gate that appears only there is not enforced in the sense this file means.
-MERGE_BLOCKING_WORKFLOWS = frozenset({"ci.yaml"})
+# WHICH WORKFLOWS GATE A PULL REQUEST IS READ, NOT LISTED. This was
+# `frozenset({"ci.yaml"})`, which is narrower than the sentence above it: `docs.yaml`
+# also triggers on `pull_request` and runs real gates through `make check-i18n`, so a
+# hardcoded set both under-counted the blocking surface and would go stale the first
+# time a workflow was added. Same defect shape as the two hand-maintained lists this
+# whole gate exists to compare.
+ON_PULL_REQUEST = re.compile(r"^on:\s*$.*?^\s{2}pull_request:", re.MULTILINE | re.DOTALL)
+
+
+# GATES A PULL-REQUEST WORKFLOW RUNS AND `make check` DELIBERATELY DOES NOT, with the
+# reason. Each needs something `make check` does not take on -- a wasm32 toolchain, an
+# mdbook install, or half an hour of corpus evaluation -- and forcing them in would make
+# the local gate unrunnable, which is how a gate stops being run at all.
+#
+# This register may only SHRINK. An entry that no longer diverges is reported as stale, so
+# an exemption cannot outlive its reason, and a NEW divergence is still a failure. That is
+# the difference between a stated exception and the silence this file was written to end.
+ONE_SIDED_BY_DESIGN: dict[str, str] = {
+    "scripts/check-geo-determinism.sh": (
+        "cross-checks native against wasm32 output, so it needs the pinned wasm toolchain "
+        "that only the wasm job installs"
+    ),
+    "scripts/check-hnsw-determinism.sh": (
+        "same as the geo determinism check: a native-versus-wasm32 comparison needing the "
+        "wasm toolchain"
+    ),
+    "scripts/check-i18n-render.py --self-test": (
+        "renders the book to check the translation, so it needs mdbook and the pinned "
+        "mdbook-i18n-helpers; `make check-i18n` is the local entry point and says so"
+    ),
+    "scripts/conformance-matrix.py": (
+        "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
+        "entry point; only its `--self-test` arm is cheap enough for `make check`"
+    ),
+}
+
+
+def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:
+    """Every registered exemption that no longer describes a divergence."""
+    return [
+        f"`{call}` is registered as deliberately one-sided ({reason}), but it now runs in "
+        f"`make check` too -- the registration is stale, so delete it"
+        for call, reason in sorted(ONE_SIDED_BY_DESIGN.items())
+        if call in local
+    ] + [
+        f"`{call}` is registered as deliberately one-sided ({reason}), but no pull-request "
+        f"workflow runs it either -- so nothing runs it, which the registration hides"
+        for call, reason in sorted(ONE_SIDED_BY_DESIGN.items())
+        if call not in local and call not in reachable
+    ]
+
+
+def merge_blocking(workflow_texts: dict[str, str]) -> dict[str, str]:
+    """The workflows whose `on:` block includes `pull_request`, so they can block a merge."""
+    return {
+        name: text
+        for name, text in workflow_texts.items()
+        if ON_PULL_REQUEST.search(text) is not None
+    }
 
 # `python3 scripts/x.py --flag`, `bash scripts/x.sh --flag`. The interpreter is
 # part of the match but not of the identity: what matters is which program runs
@@ -94,7 +149,7 @@ def _normalise(program: str, rest: str) -> str:
     return " ".join((program + " " + rest).split())
 
 
-def check_recipe(text: str, target: str) -> str:
+def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
     """The recipe body of one `make` target, tab-indented lines only.
 
     Split on a blank line would end the recipe early at the first blank line
@@ -114,12 +169,38 @@ def check_recipe(text: str, target: str) -> str:
                 else:
                     break
             return "\n".join(body)
-    sys.exit(f"FAIL: no `{target}:` target in {MAKEFILE}")
+    if missing_is_fatal:
+        sys.exit(f"FAIL: no `{target}:` target in {MAKEFILE}")
+    # A `$(MAKE) <name>` that resolves to no recipe in THIS Makefile is not an error --
+    # it may be a phony alias or defined by an include. Skipping is right; hard-failing
+    # refused a legitimate Makefile.
+    return ""
+
+
+# `make <target>` inside a workflow step, including inside a `run: |` block. A workflow
+# that reaches a gate this way was INVISIBLE to the comparison, and one does: `docs.yaml`
+# runs `make check-i18n` on every pull request, which reaches
+# `check-i18n-render.py --self-test` -- a gate absent from `make check` and from ci.yaml,
+# so a contributor could not reproduce that red locally. That is direction 2's own stated
+# motivation, still live after this gate was written for it.
+WORKFLOW_MAKE = re.compile(r"(?:^|\s)make\s+([\w-]+)", re.MULTILINE)
 
 
 def invocations(text: str) -> set[str]:
     """Every in-repo program invocation in a blob of Makefile or YAML text."""
     return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(text)}
+
+
+def workflow_invocations(text: str, makefile_text: str) -> set[str]:
+    """Every invocation a workflow reaches, following its `make <target>` steps.
+
+    A workflow's gates are not only the ones it spells out. Resolving its `make` steps
+    through the Makefile is what makes "runs in CI" mean what the comparison assumes.
+    """
+    found = invocations(text)
+    for target in set(WORKFLOW_MAKE.findall(text)):
+        found |= invocations_with_recursion(makefile_text, target)
+    return found
 
 
 # `$(MAKE) <target>` inside a recipe. `make check` recurses into `rdf-core-hygiene` and
@@ -128,7 +209,11 @@ def invocations(text: str) -> set[str]:
 # the reason that applies to cargo and node steps -- CI spells those differently across
 # jobs -- which does not apply to an in-repo make target at all. That was an annotated gap
 # wearing the word "scope", and `check_recipe` already existed to close it.
-MAKE_RECURSION = re.compile(r"\$\(MAKE\)\s+([\w-]+)")
+# `$(MAKE) [flags] <target>`. `[\w-]+` matched `--no-print-directory`, which this
+# Makefile uses at line 170, and the recursion then hard-failed with "no
+# `--no-print-directory:` target" -- refusing a legitimate Makefile and blaming a target
+# that does not exist.
+MAKE_RECURSION = re.compile(r"\$\(MAKE\)((?:\s+-{1,2}[\w-]+)*)\s+([\w-]+)")
 
 
 def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] | None = None) -> set[str]:
@@ -141,9 +226,9 @@ def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] |
     if target in seen:
         return set()
     seen.add(target)
-    body = check_recipe(makefile_text, target)
+    body = check_recipe(makefile_text, target, missing_is_fatal=False)
     found = invocations(body)
-    for nested in MAKE_RECURSION.findall(body):
+    for _flags, nested in MAKE_RECURSION.findall(body):
         found |= invocations_with_recursion(makefile_text, nested, seen)
     return found
 
@@ -166,18 +251,18 @@ def divergence(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
     # gate present only in `benchmarks.yaml` would pass parity and block no merge. The
     # union is kept as a secondary, weaker message so a gate that at least runs SOMEWHERE
     # is distinguished from one that runs nowhere at all.
-    blocking = {
-        name: text
-        for name, text in workflow_texts.items()
-        if name in MERGE_BLOCKING_WORKFLOWS
-    }
+    blocking = merge_blocking(workflow_texts)
     everywhere: set[str] = set()
     for text in blocking.values():
-        everywhere |= invocations(text)
+        everywhere |= workflow_invocations(text, makefile_text)
     anywhere: set[str] = set()
     for text in workflow_texts.values():
-        anywhere |= invocations(text)
-    ci_gates = gates_only(invocations(workflow_texts.get(CI_WORKFLOW.name, "")))
+        anywhere |= workflow_invocations(text, makefile_text)
+    # Direction 2 asks which gates a PULL-REQUEST workflow runs that `make check` does
+    # not, which is more than ci.yaml: `docs.yaml` gates translations on every PR.
+    ci_gates: set[str] = set()
+    for text in blocking.values():
+        ci_gates |= gates_only(workflow_invocations(text, makefile_text))
 
     problems: list[str] = []
     for call in sorted(local - everywhere):
@@ -188,16 +273,22 @@ def divergence(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
         problems.append(
             f"`{call}` runs in `make check` and {where}, so it cannot block a merge"
         )
-    for call in sorted(ci_gates - local):
+    problems.extend(stale_exemptions(local, ci_gates))
+    for call in sorted(ci_gates - local - set(ONE_SIDED_BY_DESIGN)):
         problems.append(
-            f"`{call}` runs in {CI_WORKFLOW.name} and NOT in `make check`, so a red merge "
-            "cannot be reproduced locally"
+            f"`{call}` runs in a pull-request workflow and NOT in `make check`, so a red "
+            "merge cannot be reproduced locally"
         )
     return problems
 
 
 def _workflow_texts() -> dict[str, str]:
-    return {path.name: path.read_text(encoding="utf-8") for path in sorted(WORKFLOWS.glob("*.yaml"))}
+    # `*.yml` as well as `*.yaml`: a workflow under the other spelling was invisible to
+    # both directions, which is a surface the gate never inspected.
+    return {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted([*WORKFLOWS.glob("*.yaml"), *WORKFLOWS.glob("*.yml")])
+    }
 
 
 def self_test() -> int:
@@ -250,6 +341,41 @@ def self_test() -> int:
         print(f"SELF-TEST FAIL: a CI-only gate was not refused (reported: {found})")
         ok = False
 
+    # THE REGISTER IS SHRINK-ONLY, in both directions. Without these two, an exemption
+    # would outlive its reason silently -- and the second is the worse one: a registration
+    # for a gate nothing runs at all reads exactly like a deliberate design choice.
+    # One exemption is pretended to have moved into `make check`; the others are told they
+    # are still reachable, so exactly one branch can fire and the check is about that branch.
+    moved = next(iter(ONE_SIDED_BY_DESIGN))
+    others = set(ONE_SIDED_BY_DESIGN) - {moved}
+    found = stale_exemptions({moved}, others)
+    if any(moved in problem and "runs in `make check` too" in problem for problem in found):
+        print("OK: self-test — an exemption whose gate is now in `make check` is refused")
+    else:
+        print(f"SELF-TEST FAIL: a stale exemption was not refused ({found})")
+        ok = False
+
+    found = stale_exemptions(set(), set())
+    if len(found) == len(ONE_SIDED_BY_DESIGN):
+        print(
+            f"OK: self-test — all {len(found)} exemptions are refused when nothing runs "
+            "them, so a registration cannot hide a gate that runs nowhere"
+        )
+    else:
+        print(f"SELF-TEST FAIL: an unrun exemption was not refused ({found})")
+        ok = False
+
+    # And the neighbour: the register as it stands, against the real tree, is silent.
+    real_local = gates_only(invocations_with_recursion(real_makefile, "check"))
+    real_reachable: set[str] = set()
+    for text in merge_blocking(real_workflows).values():
+        real_reachable |= gates_only(workflow_invocations(text, real_makefile))
+    if stale_exemptions(real_local, real_reachable):
+        print(f"SELF-TEST FAIL: the register as committed is stale: {stale_exemptions(real_local, real_reachable)}")
+        ok = False
+    else:
+        print("OK: self-test — every registered exemption still describes a real divergence")
+
     # A gate present in BOTH but with different arguments is a divergence too:
     # `--self-test` and the bare run are different rules.
     argument_drift = real_makefile.replace(
@@ -292,8 +418,15 @@ def main() -> int:
             + "\n  Two lists is two rules. Add the missing step so both lists say the same "
             "thing;\n  a gate only one of them runs is a gate that does not hold."
         )
-    local = gates_only(invocations(check_recipe(MAKEFILE.read_text(encoding="utf-8"), "check")))
-    print(f"OK: all {len(local)} hygiene gates in `make check` also run in CI, and vice versa")
+    # THE SAME FUNCTION THAT DECIDED THE VERDICT. This line used to call plain
+    # `invocations(check_recipe(...))` while `divergence()` used the recursive form, so the
+    # first gate added under `rdf-core-hygiene` would have been compared and not counted.
+    # They agree today only because the recursive set currently adds nothing.
+    local = gates_only(invocations_with_recursion(MAKEFILE.read_text(encoding="utf-8"), "check"))
+    print(
+        f"OK: all {len(local)} hygiene gates in `make check` also run in a pull-request "
+        "workflow, and vice versa"
+    )
     return 0
 
 
