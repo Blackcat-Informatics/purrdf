@@ -31,6 +31,7 @@ guards nothing:
 """
 
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -47,14 +48,12 @@ SCRIPTS = REPO_ROOT / "scripts"
 # or four-plus bare digits, so three legal spellings of the same number were accepted --
 # and `read(1000)` was refused despite the docstring stating a kibibyte cutoff, because
 # the decimal arm counted DIGITS where the rule is about VALUE.
-LITERAL_READ = re.compile(
-    r"\bread\(\s*("
-    r"\d[\d_]*\s*<<\s*\d+"
-    r"|0[xX][0-9a-fA-F_]+"
-    r"|\d[\d_]*(?:\s*\*\s*\d[\d_]*)+"
-    r"|\d[\d_]*"
-    r")\s*\)"
-)
+# A `read(...)` call whose argument is a literal expression. The argument text is then
+# EVALUATED rather than pattern-matched, because the first version alternated over
+# spellings and three legal ones for the very number it exists to catch -- `0o20000000`,
+# `0b1000...`, `4 * 1024**2` -- walked straight through. A spelling list is a denylist, and
+# a denylist over syntax is the wrong shape.
+READ_CALL = re.compile(r"\bread\(\s*([^)\n]+?)\s*\)")
 
 # The one definition, and the shell variable carrying it into an embedded block.
 DEFINING_FILE = "lane_chunk.py"
@@ -65,34 +64,63 @@ DEFINING_FILE = "lane_chunk.py"
 GATE_FILE = Path(__file__).name
 
 
-def _literal_value(literal: str) -> int | None:
-    """The integer a matched literal denotes, or None if it cannot be read as one."""
-    cleaned = literal.replace("_", "").strip()
+def _literal_value(literal: str) -> tuple[int | None, bool]:
+    """`(value, unparseable)` for a read's argument.
+
+    `(None, False)` means "not a literal at all" -- a variable or a name, which already
+    names its size and is exactly what this gate wants. `(None, True)` means "a literal
+    this gate cannot evaluate", which is reported rather than skipped.
+
+    Evaluated with `ast` rather than matched: the previous alternation missed `0o20000000`,
+    `0b1000...` and `4 * 1024**2`, three legal spellings of the number it exists to catch.
+    """
     try:
-        if "<<" in cleaned:
-            base, shift = (part.strip() for part in cleaned.split("<<"))
-            return int(base, 0) << int(shift)
-        if "*" in cleaned:
-            product = 1
-            for factor in cleaned.split("*"):
-                product *= int(factor.strip(), 0)
-            return product
-        return int(cleaned, 0)
-    except ValueError:
+        tree = ast.parse(literal, mode="eval")
+    except SyntaxError:
+        # `0123` is a syntax error in Python 3 and a plausible typo for a chunk size, so it
+        # is a literal that cannot be evaluated rather than a name.
+        return None, bool(re.fullmatch(r"[0-9][0-9_]*", literal.strip()))
+
+    def fold(node: ast.expr) -> int | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        if isinstance(node, ast.BinOp):
+            left, right = fold(node.left), fold(node.right)
+            if left is None or right is None:
+                return None
+            if isinstance(node.op, ast.LShift):
+                return left << right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Pow):
+                return left**right
+            if isinstance(node.op, ast.Add):
+                return left + right
         return None
+
+    return fold(tree.body), False
 
 
 def offences(path: Path, text: str) -> list[str]:
     """Every literal-sized streamed read in one file, as a diagnosis per hit."""
     found: list[str] = []
     for number, line in enumerate(text.splitlines(), start=1):
-        for match in LITERAL_READ.finditer(line):
+        for match in READ_CALL.finditer(line):
             literal = match.group(1)
-            # JUDGED ON VALUE, in every spelling, because the stated rule is a value: a
-            # chunk size is at least a kibibyte and nothing here reads a 1024-byte
-            # fixed-width field. Counting digits instead made `read(1000)` an offence and
-            # `read(0x400000)` acceptable, both contradicting the docstring.
-            value = _literal_value(literal)
+            # JUDGED ON VALUE, because the stated rule is a value: a chunk size is at least
+            # a kibibyte and nothing here reads a 1024-byte fixed-width field.
+            value, unparseable = _literal_value(literal)
+            if unparseable:
+                # A LITERAL THAT CANNOT BE EVALUATED IS REPORTED, not skipped. `int("0123",
+                # 0)` raises on a leading zero, and swallowing that to `None` made
+                # `read(0123)` a silent pass -- a gate declining to judge the one shape it
+                # was looking at.
+                found.append(
+                    f"{path.name}:{number}: `read({literal})` is a literal this gate cannot "
+                    f"evaluate, so it cannot be judged. Name it instead: "
+                    f"`STREAM_CHUNK_BYTES` from scripts/{DEFINING_FILE}."
+                )
+                continue
             if value is None or value < 1024:
                 continue
             found.append(
@@ -131,6 +159,12 @@ def self_test() -> int:
         "    data = handle.read(4_194_304)",
         "    data = handle.read(0x400000)",
         "    data = handle.read(4 * 1024 * 1024)",
+        # Three more legal spellings of 4194304 that the alternation accepted outright.
+        "    data = handle.read(0o20000000)",
+        "    data = handle.read(0b10000000000000000000000)",
+        "    data = handle.read(4 * 1024**2)",
+        # A literal that cannot be evaluated is reported rather than skipped.
+        "    data = handle.read(0123)",
     ]
     for line in refused:
         if not offences(here, line):

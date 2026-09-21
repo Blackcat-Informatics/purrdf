@@ -541,6 +541,48 @@ lane_capture_stderr() {
   lane_flatten_detail "$(cat "${path}")"
 }
 
+# A PIN LOOKUP, WITH THE TWO FAILURE MODES KEPT APART, in one implementation.
+#
+# `benchmark-acquire.py --workload-pin` exits 2 for "recorded nowhere" and anything else
+# means the lookup itself is broken -- a renamed flag, a syntax error in the pin table. Both
+# lanes grew a byte-identical `require_pin` and two more sites re-implemented its core
+# inline: four implementations of one rule, in the change that moved `fsync_path` to shared
+# ground on the argument that "the same law, in the same shape" IS duplication.
+#
+# `$1` is the repository root (the lanes each resolve their own), `$2` the pin name, `$3` how
+# to describe it in a refusal.
+lane_require_pin() {
+  local root="$1" name="$2" what="$3" value status=0
+  value="$(python3 "${root}/scripts/benchmark-acquire.py" --workload-pin "${name}")" ||
+    status=$?
+  ((status != 2)) ||
+    die "no ${what} is recorded under '${name}'.
+  This lane will not proceed on an unpinned value."
+  ((status == 0)) ||
+    die "looking up '${name}' exited ${status}, which is neither success nor the 2 that
+  means no pin is recorded. The pin lookup itself is broken, so nothing has been
+  checked -- run the command by hand to see what it says. Do not add a pin for this."
+  printf '%s' "${value}"
+}
+
+# THE OPTIONAL FORM, for a pin whose ABSENCE is a reportable state rather than a failure:
+# a version-keyed pin is expected to be missing the first time a new binary runs. Sets
+# `LANE_PIN_VALUE` and returns 0 when found, returns 1 when the pin is recorded nowhere, and
+# DIES when the lookup itself is broken -- which is the distinction the two inline copies
+# existed to make.
+lane_lookup_pin() {
+  local root="$1" name="$2" status=0
+  LANE_PIN_VALUE=""
+  LANE_PIN_VALUE="$(python3 "${root}/scripts/benchmark-acquire.py" --workload-pin "${name}")" ||
+    status=$?
+  ((status == 0 || status == 2)) ||
+    die "looking up '${name}' exited ${status}, which is neither success nor the 2 that
+  means no pin is recorded. The pin lookup itself is broken, so nothing about this value
+  has been checked. Run the command by hand to see what it says."
+  ((status == 0)) || return 1
+  return 0
+}
+
 # A GENERATOR REPORTING SUCCESS IS NOT A FULL QUERY SET. `$1` is the directory,
 # `$2` the count the pinned workload is defined to have, `$3` the knob that named
 # the arena. No digest is published for a set that is not the whole set: a partial

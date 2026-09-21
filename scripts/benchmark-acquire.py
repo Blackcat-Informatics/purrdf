@@ -117,6 +117,7 @@ import sys
 import http.client
 import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -304,7 +305,18 @@ WATDIV_DATASET_ROWS: dict[str, int] = {"10M": 10_916_457}
 # denominator of its report -- and three typed literals are three chances to
 # disagree. `docs/design/purrdf-bench-lane-laws.md` says a denominator is only a true
 # statement if it is derived rather than typed; this is where it is derived from.
-WATDIV_BASIC_TEMPLATES: int = 20
+# The twenty published basic templates, by id. A COUNT cannot see a RENAME: changing
+# `rows.C2` to `rows.C9` keeps the count at 20 and the sum at 434748, both assertions green,
+# while the lane reports "19 of 20 queries matched ...; no pin is recorded for: C2" and exits
+# 0 -- the exact outcome the count was added to prevent. The set is the property; the count
+# is derived from it, so there is still one definition.
+WATDIV_BASIC_TEMPLATE_IDS: tuple[str, ...] = (
+    "C1", "C2", "C3",
+    "F1", "F2", "F3", "F4", "F5",
+    "L1", "L2", "L3", "L4", "L5",
+    "S1", "S2", "S3", "S4", "S5", "S6", "S7",
+)
+WATDIV_BASIC_TEMPLATES: int = len(WATDIV_BASIC_TEMPLATE_IDS)
 
 # How many queries LUBM publishes. Pinned for the same reason as the template count
 # above and read the same way: the LUBM lane enforced it at two shell sites and
@@ -491,7 +503,14 @@ def pin_version_suffix(version_line: str) -> str:
     from an unexpected banner names a pin nobody recorded -- which reads as "no pin
     for this binary" and is indistinguishable from a pass.
     """
-    match = re.fullmatch(r"([a-z0-9-]+) (\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)", version_line.strip())
+    # THE FULL SEMVER GRAMMAR. `[-+][0-9A-Za-z.-]+` permits a prerelease OR build metadata
+    # and not both, so `purrdf 2.0.2-alpha+build.1` -- legal semver, legal in Cargo.toml --
+    # was refused and the message blamed the binary's banner for a legal manifest. An
+    # over-refusal inside the check added to prevent an under-refusal.
+    match = re.fullmatch(
+        r"([a-z0-9-]+) (\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)",
+        version_line.strip(),
+    )
     if match is None:
         sys.exit(
             f"FAIL: cannot build a pin-key suffix from {version_line.strip()!r}.\n"
@@ -1282,7 +1301,7 @@ def self_test() -> int:
     elif not per_query:
         print("SELF-TEST FAIL: no per-query WatDiv pin is recorded, so the total stands alone")
         ok = False
-    elif len(per_query) != WATDIV_BASIC_TEMPLATES:
+    elif {k.split(".rows.")[1].split(".")[0] for k in per_query} != set(WATDIV_BASIC_TEMPLATE_IDS):
         # THE SUM ALONE CANNOT SEE A MISSING ZERO, and five of these pins are zero.
         # Deleting the pin for C2 (0 rows) leaves the sum at 434748 and the check above
         # green, and the lane then prints "19 of 20 queries matched ...; no pin is
@@ -1292,9 +1311,13 @@ def self_test() -> int:
         # The comment above says nothing else in the tree can catch this; that was true
         # of the count as well as the sum.
         print(
-            f"SELF-TEST FAIL: {len(per_query)} per-query WatDiv pins are recorded and the "
-            f"workload has {WATDIV_BASIC_TEMPLATES} templates. The sum cannot see a missing "
-            f"zero-valued pin, and five of these are zero."
+            f"SELF-TEST FAIL: the per-query WatDiv pins do not cover the published "
+            f"templates. Missing: "
+            f"{sorted(set(WATDIV_BASIC_TEMPLATE_IDS) - {k.split('.rows.')[1].split('.')[0] for k in per_query})}; "
+            f"unexpected: "
+            f"{sorted({k.split('.rows.')[1].split('.')[0] for k in per_query} - set(WATDIV_BASIC_TEMPLATE_IDS))}. "
+            f"Neither the count nor the sum can see a RENAMED key -- both stay correct while "
+            f"one template silently loses its pin."
         )
         ok = False
     elif sum(per_query.values()) != int(WORKLOAD_PINS[total_key]):
@@ -1314,14 +1337,21 @@ def self_test() -> int:
     # serves will report "no pin recorded" for the binary it just built -- a pin that
     # is recorded and unreachable, which is worse than one that is absent.
     version_keyed = [k for k in WORKLOAD_PINS if ".purrdf-" in k]
+    # PARSED, NOT LINE-SCANNED. The same defect `check-licenses.py` documents and fixes:
+    # taking the first line anywhere starting `version = ` meant a `[package.metadata.*]
+    # version` above the workspace one silently became the expected pin suffix, and every
+    # version-keyed pin was then reported absent while exiting 0. And `split('"')[1]` raised
+    # IndexError on `version = '2.0.2'`, a legal TOML literal string. Fixed in the sibling
+    # this round and left here, which is the shape this whole change is about.
     workspace_version = None
     cargo_toml = REPO_ROOT / "Cargo.toml"
     if cargo_toml.exists():
-        for line in cargo_toml.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("version = "):
-                workspace_version = stripped.split('"')[1]
-                break
+        try:
+            workspace_version = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))[
+                "workspace"
+            ]["package"]["version"]
+        except (KeyError, TypeError, tomllib.TOMLDecodeError):
+            workspace_version = None
     if not version_keyed:
         print("SELF-TEST FAIL: no version-keyed pin is recorded, so nothing pins the serializer")
         ok = False

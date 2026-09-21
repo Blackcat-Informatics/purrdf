@@ -174,26 +174,6 @@ require_nonempty_file() {
   lane_require_nonempty_file "$1" "$2"
 }
 
-# A REQUIRED PIN, WITH THE TWO FAILURE MODES KEPT APART. `--workload-pin` exits 2 for
-# "recorded nowhere" and anything else means the lookup itself is broken -- a renamed
-# flag, a syntax error in the pin table. Five call sites collapsed both into
-# `|| die "no ... pin is recorded"`, which names a cause the lane has not established
-# and, where the advice is "record one", sends the reader to add a pin that is already
-# there. `$1` is the pin name, `$2` how to describe it in the refusal.
-require_pin() {
-  local name="$1" what="$2" value status=0
-  value="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --workload-pin "${name}")" ||
-    status=$?
-  ((status != 2)) ||
-    die "no ${what} is recorded under '${name}'.
-  This lane will not proceed on an unpinned value."
-  ((status == 0)) ||
-    die "looking up '${name}' exited ${status}, which is neither success nor the 2 that
-  means no pin is recorded. The pin lookup itself is broken, so nothing has been
-  checked -- run the command by hand to see what it says. Do not add a pin for this."
-  printf '%s' "${value}"
-}
-
 step() {
   echo ""
   echo "=== $* ==="
@@ -651,14 +631,11 @@ if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" &&
   # skip is indistinguishable from a pass. The lookup exits 2 for "recorded nowhere" and
   # anything else is itself broken, so only the first is branched on.
   corpus_pin_key="lubm.1.0.seed0.corpus.sha256.${PURRDF_PIN_SUFFIX}"
-  corpus_pin_status=0
-  expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-    --workload-pin "${corpus_pin_key}")" || corpus_pin_status=$?
-  ((corpus_pin_status == 0 || corpus_pin_status == 2)) ||
-    die "looking up the corpus pin exited ${corpus_pin_status}, which is neither success
-  nor the 2 that means no pin is recorded. The pin lookup itself is broken, so nothing
-  about this corpus has been checked. Run the command by hand to see what it says."
-  if ((corpus_pin_status == 0)); then
+  corpus_pin_found=0
+  lane_lookup_pin "${REPO_ROOT}" "${corpus_pin_key}" && corpus_pin_found=1
+  expected_corpus="${LANE_PIN_VALUE}"
+  if ((corpus_pin_found == 1)); then
+
     [[ "${data_sha}" == "${expected_corpus}" ]] ||
       die "the converted LUBM corpus does not match the pin recorded for these knobs
   and this binary.
@@ -735,7 +712,7 @@ echo "sha256(queries) = ${queries_sha}"
 # query set, and asserting the default's digest against it would be an
 # over-refusal, so that case says what it is doing instead.
 if [[ "${ONTO}" == "${LUBM_DEFAULT_ONTO}" ]]; then
-  expected_queries="$(require_pin lubm.queries.sha256 \
+  expected_queries="$(lane_require_pin "${REPO_ROOT}" lubm.queries.sha256 \
     "query-set pin for the default LUBM namespace")"
   [[ "${queries_sha}" == "${expected_queries}" ]] ||
     die "the normalised LUBM query set does not match its recorded pin.
@@ -1053,7 +1030,7 @@ fi
 # other scale or seed these are not the published numbers.
 if [[ "${UNIVERSITIES}" == "1" && "${INDEX}" == "0" && "${SEED}" == "0" ]]; then
   for oracle in Q1 Q14; do
-    want="$(require_pin "lubm.1.0.seed0.rows.${oracle}" \
+    want="$(lane_require_pin "${REPO_ROOT}" "lubm.1.0.seed0.rows.${oracle}" \
       "published LUBM answer for ${oracle}")"
     got="${ANSWERED[${oracle}]:-}"
     [[ -n "${got}" ]] ||

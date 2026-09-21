@@ -128,26 +128,6 @@ require_nonempty_file() {
 # queried those eight bytes.
 readonly PACK_MAGIC="PURRPCK1"
 
-# A REQUIRED PIN, WITH THE TWO FAILURE MODES KEPT APART. `--workload-pin` exits 2 for
-# "recorded nowhere" and anything else means the lookup itself is broken -- a renamed
-# flag, a syntax error in the pin table. Five call sites collapsed both into
-# `|| die "no ... pin is recorded"`, which names a cause the lane has not established
-# and, where the advice is "record one", sends the reader to add a pin that is already
-# there. `$1` is the pin name, `$2` how to describe it in the refusal.
-require_pin() {
-  local name="$1" what="$2" value status=0
-  value="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --workload-pin "${name}")" ||
-    status=$?
-  ((status != 2)) ||
-    die "no ${what} is recorded under '${name}'.
-  This lane will not proceed on an unpinned value."
-  ((status == 0)) ||
-    die "looking up '${name}' exited ${status}, which is neither success nor the 2 that
-  means no pin is recorded. The pin lookup itself is broken, so nothing has been
-  checked -- run the command by hand to see what it says. Do not add a pin for this."
-  printf '%s' "${value}"
-}
-
 step() {
   echo ""
   echo "=== $* ==="
@@ -434,9 +414,9 @@ expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --dataset-r
 # pools, so it reaches every substitution and every row count now asserted against a pin.
 # It comes out of the same digest-verified tarball as the corpus, which is what made
 # recording it cost one line rather than a fetch. Annotating a gap is not closing one.
-expected_corpus="$(require_pin "watdiv.${SCALE}.corpus.sha256" \
+expected_corpus="$(lane_require_pin "${REPO_ROOT}" "watdiv.${SCALE}.corpus.sha256" \
   "extracted-corpus digest for WatDiv scale ${SCALE}")"
-expected_census="$(require_pin "watdiv.${SCALE}.census.sha256" \
+expected_census="$(lane_require_pin "${REPO_ROOT}" "watdiv.${SCALE}.census.sha256" \
   "entity-census digest for WatDiv scale ${SCALE}")"
 actual_census="$(lane_sha256_file "${CENSUS}")"
 [[ "${actual_census}" == "${expected_census}" ]] ||
@@ -503,7 +483,7 @@ echo "provenance: ${QUERIES}/provenance.txt"
 echo "sha256(queries @ seed ${SEED}) = ${queries_sha}"
 echo "  ^ the reproducibility check: this dataset and this seed must reproduce it"
 if [[ "${SCALE}" == "10M" && "${SEED}" == "0" ]]; then
-  expected_queries="$(require_pin "watdiv.10M.seed0.queries.sha256" \
+  expected_queries="$(lane_require_pin "${REPO_ROOT}" "watdiv.10M.seed0.queries.sha256" \
     "query-set pin for WatDiv 10M at seed 0")"
   [[ "${queries_sha}" == "${expected_queries}" ]] ||
     die "the instantiated WatDiv query set does not match its recorded pin.
@@ -854,18 +834,11 @@ for id in "${IDS[@]}"; do
   # here made a renamed flag, a syntax error and an absent pin one observable, and all
   # three then produced a silent skip. The status distinguishes them: 2 is "recorded
   # nowhere", anything else is the lookup itself failing and is a lane failure.
-  pin_status=0
-  expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-    --workload-pin "${pin_key}")" || pin_status=$?
-  if ((pin_status == 2)); then
+  if ! lane_lookup_pin "${REPO_ROOT}" "${pin_key}"; then
     unpinned+=("${id}")
     continue
   fi
-  ((pin_status == 0)) ||
-    die "looking up the answer pin for ${id} exited ${pin_status}.
-  That is not the same as no pin being recorded, which exits 2 -- so this is the pin
-  lookup itself failing, not a missing pin, and nothing about the engine's answers has
-  been checked. Run the command above by hand to see what it says."
+  expected_rows="${LANE_PIN_VALUE}"
   got="${ANSWERED[${id}]:-}"
   [[ -n "${got}" ]] ||
     die "${id} did not execute, and its answer over ${SCALE} at seed ${SEED} is pinned at

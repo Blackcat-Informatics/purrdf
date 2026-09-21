@@ -35,7 +35,7 @@ whole rendered line, and a bidi override reorders the characters around it -- th
 trojan-source filename case -- so both defeat review strictly harder than ``\\r``
 does. Refusing ``\\r`` while accepting ``\\x1b`` was the same unfounded distinction
 as refusing ``\\t`` while accepting ``\\r``, one round earlier. Measured rather than
-assumed: all 10765 tracked paths pass.
+assumed: every tracked path passes, and the success line carries the live count.
 
 **Leading or trailing whitespace is refused for INVISIBILITY, not for splitting.**
 Measured in a directory holding ``' lead'``, ``'mid space'`` and ``'trail '``:
@@ -65,6 +65,7 @@ caller to be.
 
 import argparse
 import subprocess
+import unicodedata
 import sys
 from pathlib import Path
 
@@ -88,6 +89,47 @@ def tracked_paths() -> list[str]:
     return [entry for entry in result.stdout.split("\0") if entry]
 
 
+def _misrendering(component: str) -> str | None:
+    """Why *component* does not render as what it is, or None.
+
+    THE RULE GOES WHERE ITS GROUND GOES. The first version refused a newline, a tab and a
+    carriage return; the second added the C0 controls and the bidi overrides. Both stopped
+    short of the stated ground -- "two distinct tracked paths render identically" and "one
+    path becomes two entries in any line-oriented tool" -- which is satisfied strictly
+    harder by characters both versions accepted:
+
+    * ``U+200B`` (zero width space), ``U+FEFF`` (zero width no-break space), ``U+3164``
+      (Hangul filler) and ``U+2800`` (blank Braille pattern) render as NOTHING, including
+      leading, so two paths are indistinguishable in every listing, diff and review;
+    * ``U+200E``/``U+200F`` (LRM/RLM) are in Rust's own trojan-source lint set and GitHub's
+      advisory, and were accepted while ``U+202E`` was refused;
+    * ``U+2028``/``U+2029`` are line and paragraph separators, and ``"a\u2028b".splitlines()``
+      returns two entries -- which is the exact reason a newline is refused.
+
+    Judged by Unicode general category where one exists, so the rule is a property rather
+    than a list that stops wherever attention ran out. Measured, not assumed: every tracked
+    path passes.
+    """
+    for char in component:
+        code = ord(char)
+        if code < 0x20 or code == 0x7F:
+            return f"the control character U+{code:04X}"
+        category = unicodedata.category(char)
+        if category == "Cf":
+            # Format characters: bidi controls, joiners, the byte-order mark.
+            return f"the invisible format character U+{code:04X} ({category})"
+        if category in {"Zl", "Zp"}:
+            return f"the line or paragraph separator U+{code:04X} ({category})"
+        if char in _BLANK_BUT_NOT_SPACE:
+            return f"U+{code:04X}, which renders as nothing at all"
+    return None
+
+
+# Characters that render blank without being a space and without a category that says so,
+# so a name containing one is indistinguishable from a name without it.
+_BLANK_BUT_NOT_SPACE = frozenset("\u3164\u2800\u115f\u1160\u17b4\u17b5")
+
+
 def offences(paths: list[str]) -> list[str]:
     """Every tracked path that a shell cannot hand to a command unambiguously."""
     found: list[str] = []
@@ -105,22 +147,11 @@ def offences(paths: list[str]) -> list[str]:
             # accepting `\x1b` is the same unfounded distinction the `\t`-versus-`\r` split
             # was, one round later.
             #
-            # Over-refusal risk is measured, not assumed: all 10765 tracked paths pass.
+            # Over-refusal risk is measured, not assumed: every tracked path passes, and the success line carries the live count.
             named = {"\n": "a newline", "\t": "a tab", "\r": "a carriage return"}
             hit = next((name for char, name in named.items() if char in component), None)
             if hit is None:
-                control = next((c for c in component if ord(c) < 0x20 or ord(c) == 0x7F), None)
-                if control is not None:
-                    hit = f"the control character U+{ord(control):04X}"
-            if hit is None:
-                # U+202A–U+202E and U+2066–U+2069 reorder the characters AROUND them, so a
-                # name can render as a completely different one.
-                bidi = next(
-                    (c for c in component if 0x202A <= ord(c) <= 0x202E or 0x2066 <= ord(c) <= 0x2069),
-                    None,
-                )
-                if bidi is not None:
-                    hit = f"the bidirectional override U+{ord(bidi):04X}"
+                hit = _misrendering(component)
             if hit is not None:
                 found.append(
                     f"{path!r}: component {component!r} contains {hit}, so the name a tool "
@@ -162,6 +193,18 @@ def self_test() -> int:
         "has\x7fdel",
         # The trojan-source filename case: the name renders in a different order.
         "has\u202eoverride",
+        # Invisible: two distinct paths that render identically, which is the stated ground.
+        "has\u200bzerowidth",
+        "\u200bleading-zero-width",
+        "has\ufeffbom",
+        "has\u3164hangulfiller",
+        "has\u2800blankbraille",
+        # In Rust's trojan-source lint set, and accepted while U+202E was refused.
+        "has\u200elrm",
+        "has\u200frlm",
+        # `"a\u2028b".splitlines()` returns two entries, which is why `\n` is refused.
+        "has\u2028lineseparator",
+        "has\u2029paragraphseparator",
     ]
     for path in refused:
         if not offences([path]):
@@ -223,8 +266,8 @@ def main() -> int:
     # surface is covered when it is not, which is the failure this file exists inside.
     print(
         f"OK: none of the {len(paths)} tracked paths begins a component with '-', contains a "
-        "control character or a bidirectional override, or begins or ends a component with "
-        "whitespace"
+        "character that does not render as what it is (a control, an invisible format "
+        "character, a line separator), or begins or ends a component with whitespace"
     )
     return 0
 
