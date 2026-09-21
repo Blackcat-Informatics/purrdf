@@ -1005,12 +1005,27 @@ fn evaluate_shape_focus_nodes(
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
 ) -> Result<Vec<crate::report::ValidationResult>, String> {
+    // The function bodies, bound against the extension environment in force. Bound
+    // ONCE, here, above both the serial and the chunked branch, and installed by
+    // `Arc` clone afterwards — never re-bound per branch or per chunk. Two reasons,
+    // and both are correctness rather than cost:
+    //
+    // 1. A bind is where a body's predicate IRIs are classified as data or as calls.
+    //    Binding separately per chunk would let that classification depend on which
+    //    chunk asked, which is a scheduling-dependent verdict — the same class of
+    //    defect the relation snapshot below already exists to prevent.
+    // 2. A body that cannot be admitted (a declared-but-unregistered relation, a
+    //    chain no access mode serves) must fail before any focus node is visited, so
+    //    the message names the declaration rather than arriving mid-validation on
+    //    whichever row happened to reach it first.
+    let bound_functions = crate::sparql::bind_in_current_env(&shapes.functions)?;
+
     // One validation owns one ordered governor ledger. Letting focus workers charge that
     // shared state directly would make the first trip and its consumed vector depend on
     // rayon scheduling rather than focus order. Governed validation is therefore serial;
     // the ordinary path keeps the established deterministic chunk parallelism.
     if let Some(governors) = crate::sparql::current_governors() {
-        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&bound_functions));
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         let _governor_scope = crate::sparql::enter_governor_scope(governors);
         let mut out = Vec::new();
@@ -1043,7 +1058,7 @@ fn evaluate_shape_focus_nodes(
         focus_nodes,
         || {
             (
-                crate::sparql::enter_function_scope(Arc::clone(&shapes.functions)),
+                crate::sparql::enter_function_scope(Arc::clone(&bound_functions)),
                 relations
                     .clone()
                     .map(crate::sparql::enter_property_function_scope),
@@ -1111,7 +1126,8 @@ where
     // This orchestration-thread scope covers target resolution; each focus chunk
     // installs the same SHACL-AF function and custom-aggregate registries on its
     // worker.
-    let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+    let _function_scope =
+        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut all_results = Vec::new();
 
@@ -1521,7 +1537,9 @@ impl PreparedValidator {
 
     fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, String> {
         let shapes = Arc::clone(&prepared.shapes);
-        let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+        let _function_scope = crate::sparql::enter_function_scope(
+            crate::sparql::bind_in_current_env(&shapes.functions)?,
+        );
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
         let bound = BoundShapes::bind(

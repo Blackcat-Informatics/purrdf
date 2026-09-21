@@ -244,8 +244,9 @@ pub use service::{
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
-    Arity, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody, NativeFunction, NodeKind,
-    TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
+    Arity, BindStamp, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
+    NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
+    UserFunctionRegistry, Volatility,
 };
 // The evidence channel the relation seam feeds: what each invoked relation attested,
 // carried out on the governed receipt's `RelationIdentity`. Re-exported beside the

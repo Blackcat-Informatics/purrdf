@@ -434,7 +434,8 @@ fn a_list_parameter_function_resolves_from_sparql_query_text() {
                 substitutions: &[],
             },
             QueryOptions {
-                functions: &shapes.functions,
+                functions: &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                    .expect("the fixture's bodies parse and admit"),
                 focus_graph: Some(&data),
                 ..QueryOptions::EMPTY
             },
@@ -477,7 +478,8 @@ fn a_registered_function_without_a_focus_graph_refuses_rather_than_answering() {
                 substitutions: &[],
             },
             QueryOptions {
-                functions: &shapes.functions,
+                functions: &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                    .expect("the fixture's bodies parse and admit"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -516,7 +518,8 @@ fn the_focus_node_of_a_sparql_call_is_the_function_s_own_iri() {
                 substitutions: &[],
             },
             QueryOptions {
-                functions: &shapes.functions,
+                functions: &purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+                    .expect("the fixture's bodies parse and admit"),
                 focus_graph: Some(&data),
                 ..QueryOptions::EMPTY
             },

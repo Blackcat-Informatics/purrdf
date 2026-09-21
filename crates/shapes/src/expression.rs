@@ -2666,16 +2666,16 @@ mod tests {
                     constraint: TypeConstraint::default(),
                 }],
                 required: 1,
-                body: Arc::new(
-                    purrdf_sparql_algebra::SparqlParser::new()
-                        .parse_query("SELECT ((?x * 2) AS ?result) WHERE {}")
-                        .expect("body parses"),
-                ),
+                body: Arc::from("SELECT ((?x * 2) AS ?result) WHERE {}"),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
         );
-        let _scope = crate::sparql::enter_function_scope(Arc::new(registry));
+        // Bound through the production path: a body becomes algebra against the
+        // environment in force, never at declaration time.
+        let _scope = crate::sparql::enter_function_scope(
+            crate::sparql::bind_in_current_env(&registry).expect("the body parses and admits"),
+        );
 
         let data = load_data("");
         let mut guard = RecursionGuard::new();

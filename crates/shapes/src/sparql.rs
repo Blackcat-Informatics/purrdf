@@ -18,14 +18,15 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, RdfDataset};
 use purrdf_sparql_eval::{
-    AggregateRegistry, GovernorState, InternedGoverned, InternedOutcome, InternedRequest,
-    InternedSolutions, NativeSparqlEngine, Prebinding, PropertyFunctionRegistry, QueryOptions,
-    ShaclPrebinding, UserFunctionRegistry, ValueAggregate, fold_values, order_values,
+    AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, InternedGoverned,
+    InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine, Prebinding,
+    PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, UserFunctionRegistry, ValueAggregate,
+    fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -516,7 +517,7 @@ thread_local! {
     /// the same registry without shared mutation. Parallel FILTER workers inside
     /// the SPARQL engine do NOT read this — they receive the registry through
     /// `EvalCtx` (propagated in `fork_for_worker`).
-    static CURRENT_FUNCTIONS: RefCell<Option<Arc<UserFunctionRegistry>>> = const { RefCell::new(None) };
+    static CURRENT_FUNCTIONS: RefCell<Option<Arc<BoundFunctionRegistry>>> = const { RefCell::new(None) };
 
     /// The property-function registry in scope for the current validation, set by
     /// [`enter_property_function_scope`]. [`run_query_view`] snapshots it into the
@@ -704,7 +705,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
     // carries drop glue, which blocks Rust's rvalue static promotion for a reference
     // that must outlive this one statement (it is read again below, once per branch),
     // so it needs a genuine `'static` place to borrow from.
-    static EMPTY_FUNCTIONS: UserFunctionRegistry = UserFunctionRegistry::EMPTY;
+    static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
     static EMPTY_RELATIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
     static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
     let registry = functions.as_deref().unwrap_or(&EMPTY_FUNCTIONS);
@@ -788,7 +789,7 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource, R>(
 #[must_use]
 #[derive(Debug)]
 pub struct FunctionScope {
-    previous: Option<Arc<UserFunctionRegistry>>,
+    previous: Option<Arc<BoundFunctionRegistry>>,
     /// A thread-local restoration guard must be dropped on the thread where it
     /// was created; this marker makes that invariant compile-time enforced.
     _not_send: PhantomData<Rc<()>>,
@@ -801,9 +802,90 @@ impl Drop for FunctionScope {
     }
 }
 
+/// The extension environment the ambient scopes describe: the relation registry a
+/// lowered call resolves against and the aggregate registry a `Custom` aggregate is
+/// admitted against, with this crate's base parser options.
+///
+/// An absent scope and the canonical empty registry are the same value here for the
+/// same reason they are the same value in [`run_query_view`]'s options — there is
+/// one spelling of "nothing registered", not two.
+///
+/// # Errors
+///
+/// A message if a registered relation's or aggregate's declaration methods panic.
+pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
+    static EMPTY_RELATIONS: LazyLock<Arc<PropertyFunctionRegistry>> =
+        LazyLock::new(|| Arc::new(PropertyFunctionRegistry::EMPTY));
+    static EMPTY_AGGREGATES: LazyLock<Arc<AggregateRegistry>> =
+        LazyLock::new(|| Arc::new(AggregateRegistry::EMPTY));
+    let relations = current_property_functions().unwrap_or_else(|| Arc::clone(&EMPTY_RELATIONS));
+    let aggregates = current_aggregates().unwrap_or_else(|| Arc::clone(&EMPTY_AGGREGATES));
+    ExtensionEnv::new(
+        purrdf_sparql_algebra::ParserOptions::default(),
+        relations,
+        aggregates,
+    )
+    .map(Arc::new)
+    .map_err(|e| format!("extension environment: {e}"))
+}
+
+/// Bind `functions`' SPARQL bodies against the extension environment currently in
+/// force — the only route from a parsed shapes graph's declarations to something
+/// the evaluator will accept.
+///
+/// Binding is deliberately NOT done at shapes-load time. A `Shapes` value is parsed
+/// once and validated many times, each validation under whatever relation registry
+/// its caller installed; there is no single parse of a body that is correct for all
+/// of them, and the parse that used to happen at load time was correct for none of
+/// them that used a relation. It happens here, where the declarations and the
+/// environment finally meet.
+///
+/// Repeated calls under the same environment are cheap rather than wasteful: the
+/// engine's plan cache is keyed on the body text and the environment's identity, so
+/// the second bind of a body is a cache hit and reuses the first bind's prepared,
+/// feasibility-ordered plan.
+///
+/// # Errors
+///
+/// A message naming the function whose body failed to parse or to admit — a body
+/// naming a declared-but-unregistered relation IRI, or one whose relation chain no
+/// declared access mode can serve, fails HERE, once, rather than per row during
+/// evaluation.
+pub fn bind_in_current_env(
+    functions: &UserFunctionRegistry,
+) -> Result<Arc<BoundFunctionRegistry>, String> {
+    // Nothing declared, nothing to bind — and an empty bound registry is compatible
+    // with every environment, because it bound no body and so cannot have bound one
+    // against the wrong one (see `BoundFunctionRegistry::EMPTY`).
+    //
+    // Taken BEFORE the environment is built, not after, and that is the whole point
+    // of the exit: constructing an environment computes two registry fingerprints
+    // and a content digest, and a shapes graph that declares no `sh:SPARQLFunction`
+    // — which is most of them — must not pay for a seam it does not use. One shared
+    // value rather than a fresh allocation per call, for the same reason every other
+    // canonical empty registry in this workspace is shared.
+    static EMPTY: LazyLock<Arc<BoundFunctionRegistry>> =
+        LazyLock::new(|| Arc::new(BoundFunctionRegistry::EMPTY));
+    if functions.is_empty() {
+        return Ok(Arc::clone(&EMPTY));
+    }
+    let env = current_env()?;
+    SPARQL_ENGINE
+        .with(|engine| engine.bind_functions(functions.clone(), &env))
+        .map(Arc::new)
+        .map_err(|e| e.to_string())
+}
+
 /// Install `registry` as the current SHACL-AF function table, returning a guard that
 /// restores the previous table when dropped.
-pub fn enter_function_scope(registry: Arc<UserFunctionRegistry>) -> FunctionScope {
+///
+/// Takes a [`BoundFunctionRegistry`], not a [`UserFunctionRegistry`]: a function
+/// body is SPARQL, so which of its predicate IRIs are calls to registered relations
+/// is decided by the extension environment in force, and a registry that has not
+/// been bound to one has no answer to that question. Requiring the bound form here
+/// is what makes "installed but never bound" unrepresentable rather than a runtime
+/// check somebody has to remember. Use [`bind_in_current_env`] to get one.
+pub fn enter_function_scope(registry: Arc<BoundFunctionRegistry>) -> FunctionScope {
     let previous = CURRENT_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
     FunctionScope {
         previous,

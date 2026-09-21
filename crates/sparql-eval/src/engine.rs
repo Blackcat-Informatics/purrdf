@@ -1543,6 +1543,73 @@ impl NativeSparqlEngine {
             .prepare_with_relations(query, base_iri, &options, relations, aggregates)
     }
 
+    /// Bind every SPARQL-bodied function in `functions` against `env`: parse each
+    /// body under the environment's effective [`ParserOptions`] and
+    /// feasibility-order it against the environment's relation registry.
+    ///
+    /// # Why binding is a separate step, and why it happens here
+    ///
+    /// A `sh:SPARQLFunction` declaration is read once, when a shapes graph is
+    /// loaded. The relation registry it must be interpreted against is a
+    /// call-scoped table a host installs per validation, and the same shapes graph
+    /// is routinely validated many times under different ones. There is therefore
+    /// no single parse of a body that is correct for every validation, and a body
+    /// parsed at load time — as one was, under no options at all — silently lowered
+    /// every registered relation IRI to an ordinary triple pattern. Binding is the
+    /// moment the two finally meet, and it is the only moment at which the answer
+    /// is knowable.
+    ///
+    /// It lives on the engine because the engine owns the [`PlanCache`], and a body
+    /// is a SPARQL text like any other: memoized on the same key, admitted by the
+    /// same `admit_algebra`, feasibility-ordered by the same pass, and accounted
+    /// against the same eviction and memory ceilings. A private cache for function
+    /// bodies would have been a second, unevicted, unaccounted copy of machinery
+    /// that already exists and is already correct.
+    ///
+    /// Binding also moves a class of error earlier. A body naming a relation IRI
+    /// that is declared but unregistered, or whose relation chain no declared
+    /// access mode can serve, now fails HERE — once, before any focus node is
+    /// visited — rather than per row, deep inside an evaluation, as a failure whose
+    /// message names a row rather than a declaration.
+    ///
+    /// # Errors
+    ///
+    /// An [`RdfDiagnostic`] naming the function whose body failed, wrapping the
+    /// parse or admission diagnostic. A registry with no SPARQL-bodied functions
+    /// reads nothing and cannot fail.
+    pub fn bind_functions(
+        &self,
+        functions: crate::user_fn::UserFunctionRegistry,
+        env: &crate::extension_env::ExtensionEnv,
+    ) -> Result<crate::user_fn::BoundFunctionRegistry, RdfDiagnostic> {
+        let mut bodies = crate::DetHashMap::with_hasher(crate::DetHasher::new());
+        for (iri, func) in functions.sparql_bodied() {
+            let prepared = self
+                .cache
+                .borrow_mut()
+                .prepare_in_env(&func.body, None, env)
+                .map_err(|e| {
+                    // The engine's own diagnostic names the offending IRI inside the
+                    // body; the declaration that carried it is knowable only here,
+                    // and a shapes author needs both to find the edit to make. The
+                    // code is preserved so the failure still classifies as whatever
+                    // it actually was — a parse error, an unregistered relation, an
+                    // infeasible chain — rather than collapsing into one code that
+                    // means "something about a function".
+                    RdfDiagnostic::error(
+                        e.code,
+                        format!("SHACL-AF function <{iri}> body: {}", e.message),
+                    )
+                })?;
+            bodies.insert(iri.clone(), prepared);
+        }
+        Ok(crate::user_fn::BoundFunctionRegistry::from_prepared(
+            functions,
+            bodies,
+            env.id(),
+        ))
+    }
+
     /// This engine's [`ParserOptions`] run through
     /// [`crate::extension_env::derive_parser_options`], the one implementation of
     /// the registry-to-parse-configuration derivation in this crate. That function's
@@ -1724,7 +1791,7 @@ impl NativeSparqlEngine {
         dataset: &D,
         query_text: &str,
         base_iri: Option<&str>,
-        functions: &crate::user_fn::UserFunctionRegistry,
+        functions: &crate::user_fn::BoundFunctionRegistry,
         relations: &crate::property_fn::PropertyFunctionRegistry,
         aggregates: &crate::agg_fn::AggregateRegistry,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
@@ -2323,7 +2390,7 @@ pub struct QueryOptions<'a> {
     /// [`UserFunctionRegistry::EMPTY`](crate::user_fn::UserFunctionRegistry::EMPTY) —
     /// the default — behaves exactly like the registry-free entries; there is no
     /// separate "no registry" spelling to disagree with it.
-    pub functions: &'a crate::user_fn::UserFunctionRegistry,
+    pub functions: &'a crate::user_fn::BoundFunctionRegistry,
     /// The property-function registry in scope.
     /// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY) —
     /// the default — behaves exactly like every other empty registry (see
@@ -2379,7 +2446,7 @@ impl QueryOptions<'_> {
     /// depth. What every entry did before it took options.
     pub const EMPTY: Self = Self {
         prebinding: ShaclPrebinding::None,
-        functions: &crate::user_fn::UserFunctionRegistry::EMPTY,
+        functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
         property_functions: &crate::property_fn::PropertyFunctionRegistry::EMPTY,
         aggregates: &crate::agg_fn::AggregateRegistry::EMPTY,
         bnode_mint_prefix: None,

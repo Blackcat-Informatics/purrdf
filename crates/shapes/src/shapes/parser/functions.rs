@@ -313,10 +313,26 @@ impl Parser<'_> {
             }
         };
         let body_text = format!("{}{raw_body}", self.prefix_header(&[id]));
-        let query = SparqlParser::new()
+        // A GRAMMAR check, and deliberately only that.
+        //
+        // This parse runs under default options — no registered relation IRIs —
+        // which is exactly why its result is thrown away. Whether a predicate IRI
+        // in this body is a data edge or a call to a registered relation is decided
+        // by the extension environment in force at VALIDATION time, and a shapes
+        // graph is loaded once and validated many times under different ones. There
+        // is no parse here that would be right for all of them.
+        //
+        // What is knowable here is whether the text is SPARQL at all and whether
+        // its form matches the `sh:select`/`sh:ask` the author declared. Both are
+        // properties of the text alone, both are author errors, and both are worth
+        // failing at load rather than at first validation. So the text is kept and
+        // the algebra is discarded — the same division
+        // `purrdf-retrieval`'s `hoistable_clauses` documents: the blind parse is
+        // about grammar, and the registry-aware parse stays the authority.
+        let form = SparqlParser::new()
             .parse_query(&body_text)
             .map_err(|e| format!("sh:SPARQLFunction <{id}> has an unparsable body query: {e}"))?;
-        match (&query, kind) {
+        match (&form, kind) {
             (Query::Select { .. }, UserFnBody::Select) | (Query::Ask { .. }, UserFnBody::Ask) => {}
             _ => {
                 return Err(format!(
@@ -333,7 +349,7 @@ impl Parser<'_> {
         Ok(UserFunction {
             params,
             required,
-            body: Arc::new(query),
+            body: Arc::from(body_text),
             kind,
             return_constraint,
         })
