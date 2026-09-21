@@ -390,20 +390,31 @@ template_count=$(find "${TESTSUITE}" -maxdepth 1 -type f -name '*.txt' | wc -l)
 # is still exactly one copy of the number.
 expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --dataset-rows "${SCALE}")" ||
   die "no extracted row count is pinned for WatDiv scale ${SCALE}"
-# AND THE CORPUS DIGEST AGAINST A PIN, not only against the stamp this arena wrote.
+# AND BOTH EXTRACTED FILES AGAINST A PIN, not only against the stamp this arena wrote.
 # The stamp detects later change; it cannot detect a first extraction that was
 # already wrong, because that extraction is what wrote it.
 #
-# WHAT REMAINS TRUST-ON-FIRST-USE, stated rather than glossed: `saved.txt`. Its digest
-# is recorded on line 3 of the stamp and re-derived on every reuse, so a later edit is
-# caught -- but nothing pins what it should be, so a first extraction that produced a
-# wrong census would be certified by its own record. It comes out of the same
-# digest-verified tarball as the corpus, which is why that is a narrow gap rather than
-# an open door; it is not zero, and an earlier version of this comment claimed the pin
-# "removes the TOFU entirely", which was false.
+# `saved.txt` was the last file here still certified only by its own record, and the
+# comment that stood in its place said so -- calling it "a narrow gap rather than an open
+# door" and noting it was "not zero". Both were true and neither was a reason. The census
+# is the only external audit of the candidate scrape that exists; it drives the candidate
+# pools, so it reaches every substitution and every row count now asserted against a pin.
+# It comes out of the same digest-verified tarball as the corpus, which is what made
+# recording it cost one line rather than a fetch. Annotating a gap is not closing one.
 expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
   --workload-pin "watdiv.${SCALE}.corpus.sha256")" ||
   die "no extracted-corpus digest is pinned for WatDiv scale ${SCALE}"
+expected_census="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+  --workload-pin "watdiv.${SCALE}.census.sha256")" ||
+  die "no entity-census digest is pinned for WatDiv scale ${SCALE}"
+actual_census="$(lane_sha256_file "${CENSUS}")"
+[[ "${actual_census}" == "${expected_census}" ]] ||
+  die "the extracted WatDiv ${SCALE} entity census does not match its recorded pin.
+  expected ${expected_census}
+  found    ${actual_census}
+  saved.txt is the only external audit of the candidate scrape, so every candidate pool,
+  every substitution and every pinned row count below is drawn against it. The tarball
+  matched its own digest, so the extraction is what disagrees."
 actual_corpus="$(lane_sha256_file "${DATASET}")"
 [[ "${actual_corpus}" == "${expected_corpus}" ]] ||
   die "the extracted WatDiv ${SCALE} corpus does not match its recorded pin.

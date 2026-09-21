@@ -360,6 +360,25 @@ WORKLOAD_PINS: dict[str, str] = {
     "watdiv.10M.corpus.sha256": (
         "7cfe0341d578a677d3b5d562eaaf94d67aff8587d9e0ef3d83cc82765b77cddd"
     ),
+    # AND THE CENSUS BESIDE IT, which was the last trust-on-first-use in this lane and
+    # was left annotated rather than closed. `saved.txt` is the entity census: it is the
+    # only external audit of the candidate scrape that exists, it drives the candidate
+    # pools, and therefore every substitution and every row count now asserted against a
+    # pin. Its digest was recorded on line 3 of the arena's own stamp and re-derived on
+    # reuse -- so a later edit was caught -- but nothing said what it SHOULD be, so a
+    # first extraction that produced a wrong census was certified by the record that
+    # extraction wrote. Exactly the gap the corpus pin six lines up removes, in the file
+    # beside it.
+    #
+    # The comment that stood in the lane called this "a narrow gap rather than an open
+    # door" and noted it was "not zero". Both were true and neither is a reason: the
+    # value comes out of the same digest-verified tarball, so recording it costs one
+    # line. Derived from that tarball at its pinned digest
+    # (1d0a8a4725c98974eb7347ce3e6d9cab44f9f40389589809674254151b745af6), which is the
+    # same provenance the corpus pin has.
+    "watdiv.10M.census.sha256": (
+        "8ac40d776b37f026ad04f6c154e9f92c4759ebb3682ac0a185de4eae2c945aa7"
+    ),
     # sha256 over the concatenated LUBM corpus at the default knobs -- AND FOR A
     # NAMED BINARY, which is why the version is in the key.
     #
