@@ -43,6 +43,7 @@
 //! the explicit recourse operations (`canonical_relabel` / `skolemize` /
 //! `deskolemize`).
 
+use crate::sink::TextOut;
 use crate::{
     QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple,
     TermId, TermRef,
@@ -119,7 +120,7 @@ fn escape_literal(value: &str) -> String {
     out
 }
 
-fn write_literal_escaped(value: &str, out: &mut String) {
+fn write_literal_escaped<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     for ch in value.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
@@ -173,7 +174,7 @@ fn escape_iri(iri: &str) -> String {
     out
 }
 
-fn write_iri_escaped(iri: &str, out: &mut String) {
+fn write_iri_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
     for ch in iri.chars() {
         if is_iriref_escape_required(ch) {
             let _ = write!(out, "\\u{:04X}", ch as u32);
@@ -190,7 +191,7 @@ fn write_iri_escaped(iri: &str, out: &mut String) {
 /// rendered string. The blank node's `(label, scope)` pair is encoded into the
 /// Turtle `BLANK_NODE_LABEL` alphabet in ONE step (via [`encode_blank_label`]),
 /// so the buffer always holds a re-parsable term.
-pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
+pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId, out: &mut W) {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => {
             out.push('<');
@@ -242,7 +243,7 @@ pub fn write_dataset_term(dataset: &RdfDataset, id: TermId, out: &mut String) {
     }
 }
 
-fn write_dataset_predicate(dataset: &RdfDataset, id: TermId, out: &mut String) {
+fn write_dataset_predicate<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId, out: &mut W) {
     let TermRef::Iri(iri) = dataset.resolve(id) else {
         unreachable!("predicate must resolve to an IRI")
     };
@@ -263,13 +264,13 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// node in the RDF 1.2 abstract syntax, but it is rendered through the same total
 /// [`write_dataset_term`] as every other position rather than a partial match, for
 /// the same reason that function is total.
-fn write_dataset_statement(
+fn write_dataset_statement<W: TextOut + ?Sized>(
     dataset: &RdfDataset,
     subject: TermId,
     predicate: TermId,
     object: TermId,
     graph: Option<TermId>,
-    out: &mut String,
+    out: &mut W,
 ) {
     write_dataset_term(dataset, subject, out);
     out.push(' ');
@@ -284,12 +285,12 @@ fn write_dataset_statement(
 }
 
 /// Append `<reifier> rdf:reifies <statement> [g] .\n`.
-fn write_dataset_reifier_statement(
+fn write_dataset_reifier_statement<W: TextOut + ?Sized>(
     dataset: &RdfDataset,
     reifier: TermId,
     statement: TermId,
     graph: Option<TermId>,
-    out: &mut String,
+    out: &mut W,
 ) {
     write_dataset_term(dataset, reifier, out);
     out.push_str(" <");
@@ -310,7 +311,7 @@ fn write_dataset_reifier_statement(
 /// Ignoring the graph is only honest for a caller that has already established it
 /// has nowhere to put one. A caller rendering a graph-CARRYING dataset wants
 /// [`write_dataset_nquad`], which spells the slot out instead of dropping it.
-pub fn write_dataset_quad(dataset: &RdfDataset, quad: QuadIds, out: &mut String) {
+pub fn write_dataset_quad<W: TextOut + ?Sized>(dataset: &RdfDataset, quad: QuadIds, out: &mut W) {
     write_dataset_statement(dataset, quad.s, quad.p, quad.o, None, out);
 }
 
@@ -322,7 +323,7 @@ pub fn write_dataset_quad(dataset: &RdfDataset, quad: QuadIds, out: &mut String)
 /// no graph term IS the N-Triples line — which is why widening a triple-only
 /// egress to this writer never changes an existing document, and only ever adds
 /// the term that was being dropped.
-pub fn write_dataset_nquad(dataset: &RdfDataset, quad: QuadIds, out: &mut String) {
+pub fn write_dataset_nquad<W: TextOut + ?Sized>(dataset: &RdfDataset, quad: QuadIds, out: &mut W) {
     write_dataset_statement(dataset, quad.s, quad.p, quad.o, quad.g, out);
 }
 
@@ -330,12 +331,12 @@ pub fn write_dataset_nquad(dataset: &RdfDataset, quad: QuadIds, out: &mut String
 ///
 /// The annotation's own graph slot is dropped, exactly as [`write_dataset_quad`]
 /// drops a base quad's; [`write_dataset_annotation_nquad`] keeps it.
-pub fn write_dataset_annotation(
+pub fn write_dataset_annotation<W: TextOut + ?Sized>(
     dataset: &RdfDataset,
     reifier: TermId,
     predicate: TermId,
     object: TermId,
-    out: &mut String,
+    out: &mut W,
 ) {
     write_dataset_statement(dataset, reifier, predicate, object, None, out);
 }
@@ -347,13 +348,13 @@ pub fn write_dataset_annotation(
 /// annotated independently in two graphs — so an annotation's graph is content,
 /// not decoration, and a graph-carrying egress that dropped it would silently
 /// merge two graphs' annotations of the same reifier.
-pub fn write_dataset_annotation_nquad(
+pub fn write_dataset_annotation_nquad<W: TextOut + ?Sized>(
     dataset: &RdfDataset,
     reifier: TermId,
     predicate: TermId,
     object: TermId,
     graph: Option<TermId>,
-    out: &mut String,
+    out: &mut W,
 ) {
     write_dataset_statement(dataset, reifier, predicate, object, graph, out);
 }
@@ -362,11 +363,11 @@ pub fn write_dataset_annotation_nquad(
 ///
 /// The declaration's own graph slot is dropped;
 /// [`write_dataset_reifier_nquad`] keeps it.
-pub fn write_dataset_reifier(
+pub fn write_dataset_reifier<W: TextOut + ?Sized>(
     dataset: &RdfDataset,
     reifier: TermId,
     statement: TermId,
-    out: &mut String,
+    out: &mut W,
 ) {
     write_dataset_reifier_statement(dataset, reifier, statement, None, out);
 }
@@ -374,12 +375,12 @@ pub fn write_dataset_reifier(
 /// Append one ID-native reifier binding as an N-Quads statement, carrying the graph
 /// slot the declaration was made in (see [`write_dataset_annotation_nquad`] for why
 /// that slot is content).
-pub fn write_dataset_reifier_nquad(
+pub fn write_dataset_reifier_nquad<W: TextOut + ?Sized>(
     dataset: &RdfDataset,
     reifier: TermId,
     statement: TermId,
     graph: Option<TermId>,
-    out: &mut String,
+    out: &mut W,
 ) {
     write_dataset_reifier_statement(dataset, reifier, statement, graph, out);
 }

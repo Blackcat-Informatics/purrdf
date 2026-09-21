@@ -28,43 +28,64 @@
 //! an N-Quads line with no graph term IS the N-Triples line, so every
 //! default-graph-only result renders byte-for-byte as it did before.
 
+use purrdf_core::sink::TextOut;
 use purrdf_core::{
     RdfDataset, write_dataset_annotation_nquad, write_dataset_nquad, write_dataset_reifier_nquad,
 };
 
 /// Serialize a CONSTRUCT-result dataset to N-Quads (plus RDF-1.2-star
-/// annotations and reifiers, each in the graph it was asserted in). Each kernel
-/// writer already terminates its line with `\n`, so the parts are concatenated
-/// in order: quads, then annotations, then reifiers.
+/// annotations and reifiers, each in the graph it was asserted in), INTO `out`.
+///
+/// Each kernel writer already terminates its line with `\n`, so the parts are
+/// emitted in order: quads, then annotations, then reifiers.
 ///
 /// Total: every emitted line re-lexes as N-Quads because the kernel writers
 /// escape a scope-qualified blank-node label outside the Turtle
 /// `BLANK_NODE_LABEL` alphabet into it (deterministically and injectively), so
 /// no dataset can fail to serialize on label syntax.
-pub(crate) fn dataset_to_nquads(dataset: &RdfDataset) -> String {
-    let statement_count =
-        dataset.quad_count() + dataset.annotations().count() + dataset.reifiers().count();
-    let mut out = String::with_capacity(statement_count.saturating_mul(96));
+///
+/// This is the ONLY spelling. It used to return the `String` instead, which made the
+/// whole N-Quads rendering resident before its first byte could be escaped or
+/// written — and a CONSTRUCT answer is the one SPARQL result that is dataset-sized,
+/// so a bounded egress window placed after a whole-document intermediate bounds
+/// nothing. A collecting spelling survives only as a test helper, deliberately: a
+/// second production path that materializes is exactly what would drift.
+///
+/// The kernel writers are generic over [`TextOut`], so `out` may be a sink draining
+/// to a writer, an escaping adapter, or a plain `String`.
+pub(crate) fn write_dataset_nquads<W: TextOut + ?Sized>(dataset: &RdfDataset, out: &mut W) {
     for quad in dataset.quads() {
-        write_dataset_nquad(dataset, quad, &mut out);
+        write_dataset_nquad(dataset, quad, out);
     }
     for (reifier, predicate, object, graph) in dataset.annotations_with_graph() {
-        write_dataset_annotation_nquad(dataset, reifier, predicate, object, graph, &mut out);
+        write_dataset_annotation_nquad(dataset, reifier, predicate, object, graph, out);
     }
     for (reifier, statement, graph) in dataset.reifiers_with_graph() {
-        write_dataset_reifier_nquad(dataset, reifier, statement, graph, &mut out);
+        write_dataset_reifier_nquad(dataset, reifier, statement, graph, out);
     }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`write_dataset_nquads`] collected into an owned `String`.
+    ///
+    /// A test asserting on a whole rendering needs one; production does not, and no
+    /// longer has one. Keeping the collecting spelling out of the library is the
+    /// point: the only reason it existed was that the SRJ graph arm could not stream,
+    /// and a second production path that materializes is exactly what would drift.
     use pretty_assertions::assert_eq;
     use purrdf_core::{
         BlankScope, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, emit_annotation, emit_quad,
         emit_reifier,
     };
+
+    fn dataset_to_nquads(dataset: &RdfDataset) -> String {
+        let mut out = String::new();
+        write_dataset_nquads(dataset, &mut out);
+        out
+    }
 
     /// A default-graph row carries no fourth term, so the N-Quads line IS the
     /// N-Triples line — the byte-identity that makes widening this writer free.

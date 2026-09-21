@@ -42,6 +42,12 @@ purrdf-core = { workspace = true }
 purrdf-iri = { workspace = true }
 
 [dev-dependencies]
+# The workspace counting allocator. A bounded-egress claim about the CONSTRUCT
+# arm is a claim about RESIDENCY, and residency is invisible to a test that
+# watches writes: an intermediate String drains through the sink in bounded
+# windows exactly as a streamed document does. Only an allocator can tell them
+# apart. Dev-only, so no release crate and no wasm build ever sees it.
+purrdf-alloc-probe = { workspace = true }
 pretty_assertions = { workspace = true }
 insta = { workspace = true }
 # Borrowed-writer streaming N-Triples serialization hot-path baseline. Defaults

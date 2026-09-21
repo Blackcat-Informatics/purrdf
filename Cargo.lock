@@ -1730,6 +1730,7 @@ dependencies = [
  "criterion",
  "insta",
  "pretty_assertions",
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-iri",
 ]

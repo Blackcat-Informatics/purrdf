@@ -49,7 +49,7 @@
 
 use crate::SerializeOutcome;
 use crate::error::Error;
-use crate::graph::dataset_to_nquads;
+use crate::graph::write_dataset_nquads;
 use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::TextOut;
@@ -198,9 +198,18 @@ fn write_base_body<W: TextOut + ?Sized>(result: &SparqlResult, out: &mut W) -> R
             // the rdf-core kernel (no oxigraph), additionally carrying
             // reifier/annotation lines and every row's graph slot (see
             // [`crate::graph`] for why this envelope widens rather than refuses).
-            let nq = dataset_to_nquads(graph.as_ref());
-            out.push_str("{\"graph\":");
-            json_string(&nq, out);
+            //
+            // Rendered STRAIGHT THROUGH the escaper rather than rendered whole and
+            // escaped afterwards. A CONSTRUCT answer is the one SPARQL result that is
+            // dataset-sized, so building the N-Quads document first held the entire
+            // graph twice over — once as the dataset, once as its rendering — before a
+            // byte could reach the sink, and the sink's window bounded neither.
+            //
+            // The quotes are written here because the adapter escapes fragments and
+            // cannot know where the string begins or ends.
+            out.push_str("{\"graph\":\"");
+            write_dataset_nquads(graph.as_ref(), &mut JsonEscaping(out));
+            out.push('"');
         }
     }
     Ok(())
@@ -293,6 +302,53 @@ const fn json_trigger_byte(b: u8) -> bool {
 /// Append a JSON-escaped string literal (including the surrounding quotes).
 fn json_string<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     out.push('"');
+    json_escape_body(value, out);
+    out.push('"');
+}
+
+/// A [`TextOut`] that JSON-escapes every fragment pushed through it.
+///
+/// This is what lets a dataset-sized value become a JSON string without ever being
+/// one: the kernel's N-Quads writers push term by term, each push is escaped on its
+/// way past, and nothing between the producer and the drain holds the document.
+///
+/// It emits NO quotes — see [`json_escape_body`] for why escaping fragment-wise is
+/// exact, and the graph arm of [`write_srj_body`] for the caller that writes them.
+struct JsonEscaping<'a, W: TextOut + ?Sized>(&'a mut W);
+
+impl<W: TextOut + ?Sized> std::fmt::Write for JsonEscaping<'_, W> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        json_escape_body(text, self.0);
+        Ok(())
+    }
+}
+
+impl<W: TextOut + ?Sized> TextOut for JsonEscaping<'_, W> {
+    fn push_str(&mut self, text: &str) {
+        json_escape_body(text, self.0);
+    }
+
+    fn push(&mut self, ch: char) {
+        let mut buffer = [0u8; 4];
+        json_escape_body(ch.encode_utf8(&mut buffer), self.0);
+    }
+
+    /// Forwarded, so an emitter polling a dead drain through this adapter sees the
+    /// same answer it would see through the sink itself. Reporting `false` here
+    /// would cost a whole document of formatting per failed write.
+    fn failed(&self) -> bool {
+        self.0.failed()
+    }
+}
+
+/// A JSON string's BODY — everything that goes between the quotes.
+///
+/// Split out from [`json_string`] so a caller that is assembling one JSON string
+/// from many fragments can write the quotes itself and escape each fragment as it
+/// is produced. Fragment-wise escaping is exact here because every rule below maps
+/// one `char` independently: a `&str` fragment can never split a `char`, so
+/// escaping the pieces and escaping the concatenation give the same bytes.
+fn json_escape_body<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     let mut rest = value;
     while !rest.is_empty() {
         // Bulk-copy the clean run in one `push_str` rather than one `push`
@@ -320,7 +376,6 @@ fn json_string<W: TextOut + ?Sized>(value: &str, out: &mut W) {
         }
         rest = &rest[ch.len_utf8()..];
     }
-    out.push('"');
 }
 
 /// The original per-`char` escaper, kept as the oracle for [`json_string`].
