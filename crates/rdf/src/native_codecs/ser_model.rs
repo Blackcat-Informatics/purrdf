@@ -18,7 +18,7 @@ use purrdf_iri::BaseIri;
 use crate::{FastHasher, FastMap, RdfDiagnostic};
 
 /// The kind of a serialization term.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SerTermKind {
     Iri,
     Bnode,
@@ -27,7 +27,10 @@ pub(crate) enum SerTermKind {
 }
 
 /// A single RDF term in the serialization model, carried by integer id.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Hash` is derived so the interner can memoize on the EMITTED shape rather than on
+/// a second owned copy of every term's text — see `SerGraphInterner::memo`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SerTerm {
     /// Term kind.
     pub kind: SerTermKind,

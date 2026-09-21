@@ -43,7 +43,7 @@
 //! statement-layer axis wearing a function name, so it is gone: pass
 //! [`StatementLayer::Project`] instead.
 
-use std::collections::HashMap;
+use hashbrown::HashTable;
 use std::io::Write;
 
 use super::jsonld::JsonLdSerializeOptions;
@@ -51,9 +51,7 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerAnnotationRow, SerGraph, SerReifierRow, SerTerm, SerTermKind};
 use crate::dataset_view::ViewTermId;
 use crate::ir::TermRef;
-use crate::{
-    DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue,
-};
+use crate::{DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::{TextSink, WriterDrain};
 use purrdf_iri::BaseIri;
@@ -854,9 +852,28 @@ struct SerGraphInterner<I: ViewTermId> {
     /// quoted-triple terms (skipped by the N-Quads serializer).
     reifiers: Vec<SerReifierRow>,
     annotations: Vec<SerAnnotationRow>,
-    /// Value → term-id memo so equal terms collapse to one term, matching the fold the
-    /// reader produces.
-    memo: HashMap<TermValue, usize>,
+    /// Emitted-shape → term-id memo, so equal terms collapse to one term, matching
+    /// the fold the reader produces.
+    ///
+    /// Keyed by a HASH of the already-stored [`SerTerm`] rather than by an owned
+    /// `TermValue`. The owned spelling meant every term's text existed twice for the
+    /// life of the build — once in `terms`, once as a memo key — and the duplicate was
+    /// freed only when the interner was dropped at the very end. Metered on a
+    /// 40,000-quad dataset it was the difference between a 32.4 MB peak and a 13.0 MB
+    /// retained graph: the ceiling a document then grows underneath, and the reason
+    /// N-Quads and TriG report BYTE-IDENTICAL serialization peaks for documents that
+    /// differ in size — they build the same graph, so they duplicate the same text.
+    ///
+    /// Collisions resolve against `terms`, so the text lives in exactly one place.
+    memo: HashTable<usize>,
+    /// Component-indices → term-id memo for quoted triples.
+    ///
+    /// A triple's identity is its `(s, p, o)`, and those are already interned, so
+    /// three `usize`s identify it exactly — no text, and no recursion through a value
+    /// tree. Separate from `memo` because a triple's `SerTerm` carries a
+    /// self-referential `reifier` index that differs per occurrence, so hashing the
+    /// stored shape would never match two structurally equal triples.
+    triple_memo: FastMap<(usize, usize, usize), usize>,
     /// IR-id → term-id memo probed BEFORE the value memo. `resolve(id)` is a pure
     /// function of the (frozen, immutable) view for the whole build, so an id seen
     /// once maps to the same value — and thus the same term-id — every time. Without
@@ -877,7 +894,8 @@ impl<I: ViewTermId> SerGraphInterner<I> {
             terms: Vec::with_capacity(term_count),
             reifiers: Vec::new(),
             annotations: Vec::new(),
-            memo: HashMap::with_capacity(term_count),
+            memo: HashTable::with_capacity(term_count),
+            triple_memo: FastMap::default(),
             id_memo: FastMap::with_capacity_and_hasher(term_count, FastHasher::default()),
             alphabet,
         }
@@ -894,13 +912,11 @@ impl<I: ViewTermId> SerGraphInterner<I> {
         if let Some(&idx) = self.id_memo.get(&id) {
             return Ok(idx);
         }
-        let value = term_value(dataset, id);
-        if let Some(&idx) = self.memo.get(&value) {
-            self.id_memo.insert(id, idx);
-            return Ok(idx);
-        }
+        // The emitted shape is built ONCE and is what the memo probes against. On a
+        // miss it becomes the `terms` entry; on a hit it is dropped. Either way the
+        // term's text is allocated once, never twice.
         let idx = match dataset.resolve(id) {
-            TermRef::Iri(iri) => self.push_term(SerTerm {
+            TermRef::Iri(iri) => self.intern_shaped(SerTerm {
                 kind: SerTermKind::Iri,
                 value: Some(iri.to_owned()),
                 datatype: None,
@@ -915,7 +931,7 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                 // deterministic, injective envelope, so serialization is total
                 // and blank-node co-reference survives exactly.
                 let emitted = encode_blank_label(label, scope, self.alphabet).into_owned();
-                self.push_term(SerTerm {
+                self.intern_shaped(SerTerm {
                     kind: SerTermKind::Bnode,
                     value: Some(emitted),
                     datatype: None,
@@ -941,7 +957,7 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                 } else {
                     Some(self.intern_iri_string(datatype_iri))
                 };
-                self.push_term(SerTerm {
+                self.intern_shaped(SerTerm {
                     kind: SerTermKind::Literal,
                     value: Some(lexical.to_owned()),
                     datatype: datatype_slot,
@@ -957,43 +973,63 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                 let s = self.intern(dataset, s)?;
                 let p = self.intern(dataset, p)?;
                 let o = self.intern(dataset, o)?;
-                let triple_id = self.terms.len();
-                self.terms.push(SerTerm {
-                    kind: SerTermKind::Triple,
-                    value: None,
-                    datatype: None,
-                    lang: None,
-                    direction: None,
-                    reifier: Some(triple_id),
-                });
-                // Self-reifier sentinel for an inline quoted-triple TERM — never a
-                // graph-scoped statement-layer row, so its graph slot is `None`.
-                self.reifiers.push((triple_id, (s, p, o), None));
-                triple_id
+                self.intern_triple(s, p, o)
             }
         };
-        self.memo.insert(value, idx);
         self.id_memo.insert(id, idx);
         Ok(idx)
+    }
+
+    /// Intern a non-triple term by its emitted shape, pushing it only on a miss.
+    fn intern_shaped(&mut self, term: SerTerm) -> usize {
+        let hash = shape_hash(&term);
+        let terms = &self.terms;
+        if let Some(&idx) = self.memo.find(hash, |&idx| terms[idx] == term) {
+            return idx;
+        }
+        let idx = self.push_term(term);
+        let terms = &self.terms;
+        self.memo
+            .insert_unique(hash, idx, |&other| shape_hash(&terms[other]));
+        idx
+    }
+
+    /// Intern a quoted-triple term by its component indices.
+    ///
+    /// Those are already interned, so three `usize`s identify the triple exactly —
+    /// the same relation the old value-tree comparison expressed, reached without
+    /// rebuilding the tree.
+    fn intern_triple(&mut self, s: usize, p: usize, o: usize) -> usize {
+        if let Some(&idx) = self.triple_memo.get(&(s, p, o)) {
+            return idx;
+        }
+        let triple_id = self.terms.len();
+        self.terms.push(SerTerm {
+            kind: SerTermKind::Triple,
+            value: None,
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: Some(triple_id),
+        });
+        // Self-reifier sentinel for an inline quoted-triple TERM — never a
+        // graph-scoped statement-layer row, so its graph slot is `None`.
+        self.reifiers.push((triple_id, (s, p, o), None));
+        self.triple_memo.insert((s, p, o), triple_id);
+        triple_id
     }
 
     /// Intern an IRI by value, deduplicating through the memo. Used for literal
     /// datatype terms, which the IR does not surface as standalone term ids.
     fn intern_iri_string(&mut self, iri: &str) -> usize {
-        let value = TermValue::Iri(iri.to_owned());
-        if let Some(&idx) = self.memo.get(&value) {
-            return idx;
-        }
-        let idx = self.push_term(SerTerm {
+        self.intern_shaped(SerTerm {
             kind: SerTermKind::Iri,
             value: Some(iri.to_owned()),
             datatype: None,
             lang: None,
             direction: None,
             reifier: None,
-        });
-        self.memo.insert(value, idx);
-        idx
+        })
     }
 
     /// Resolve a triple-term id to the `(s, p, o)` term indices of its components
@@ -1024,40 +1060,23 @@ impl<I: ViewTermId> SerGraphInterner<I> {
     }
 }
 
-/// The dataset-independent value of an IR term, for the interner memo.
-fn term_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => TermValue::Literal {
-            lexical_form: lexical.to_owned(),
-            datatype: iri_of(dataset, datatype).unwrap_or_default(),
-            language: language.map(str::to_owned),
-            direction,
-        },
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(term_value(dataset, s)),
-            p: Box::new(term_value(dataset, p)),
-            o: Box::new(term_value(dataset, o)),
-        },
-    }
+/// The hash a [`SerTerm`] is memoized under.
+///
+/// One function so the probe and the insert cannot drift: `hashbrown` needs the hash
+/// of an already-stored entry to rehash on growth, and a second spelling of "how a
+/// term hashes" is exactly the kind of divergence that shows up as a silently larger
+/// term table rather than as a failure.
+fn shape_hash(term: &SerTerm) -> u64 {
+    use core::hash::BuildHasher;
+    FastHasher::default().hash_one(term)
 }
 
-/// Resolve an IR term id known to be an IRI (a literal datatype) to its IRI string.
-fn iri_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<String, RdfDiagnostic> {
-    iri_str_of(dataset, id).map(str::to_owned)
-}
-
-/// Borrowing twin of [`iri_of`]: the IRI straight out of the view, for callers that
-/// only compare or copy it into the term table (no intermediate `String`).
+/// The IRI straight out of the view, for callers that only compare it or copy it into
+/// the term table.
+///
+/// There is no owning twin. The one that existed served the interner's value memo,
+/// which allocated an owned copy of every datatype IRI purely to build a key — the
+/// duplication that memo no longer performs.
 fn iri_str_of<D: DatasetView>(dataset: &D, id: D::Id) -> Result<&str, RdfDiagnostic> {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => Ok(iri),
@@ -1252,5 +1271,79 @@ mod serialize_to_format_tests {
                 "{format:?} carries the base direction — nothing dropped"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod build_residency {
+    use super::build_ser_graph;
+    use crate::{NativeRdfFormat, SerializeGraph};
+    use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, RdfTerm};
+
+    #[global_allocator]
+    static GLOBAL: CountingAllocator = CountingAllocator;
+
+    /// Building the serialization graph must not transiently allocate more than the
+    /// graph itself.
+    ///
+    /// This is the ceiling a serialized document then grows underneath, and it is why
+    /// N-Quads and TriG used to report BYTE-IDENTICAL serialization peaks for
+    /// documents differing by a megabyte: the peak was not the output at all, it was
+    /// the build, and both formats build the same graph.
+    ///
+    /// The cause was the interner memoizing on an owned copy of every term's value, so
+    /// the text existed twice for the life of the build. The memo now keys on a hash of
+    /// the already-stored term.
+    ///
+    /// Stated against the graph's own retained size rather than an absolute, so the bar
+    /// moves with the fixture instead of rotting. Before the fix the transient was
+    /// 19.5 MB against a 13.0 MB graph; after, 5.0 MB.
+    #[test]
+    fn building_the_graph_does_not_hold_the_terms_twice() {
+        let mut builder = RdfDatasetBuilder::new();
+        for i in 0..40_000 {
+            let subject = builder
+                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")));
+            let predicate = builder.intern_iri("https://example.org/predicate");
+            let object =
+                builder.intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        let dataset = builder.freeze().expect("dataset freezes");
+
+        let window = CurrentThreadWindow::open();
+        let graph = build_ser_graph(
+            &*dataset,
+            NativeRdfFormat::NQuads,
+            SerializeGraph::Dataset,
+            true,
+            None,
+        )
+        .expect("the serialization graph builds");
+        let measured = window.close();
+
+        assert!(
+            measured.retained_bytes > 8 * 1024 * 1024,
+            "the fixture must build a graph large enough for the comparison to mean \
+             anything; retained {} bytes",
+            measured.retained_bytes
+        );
+        let transient = measured.peak_working_bytes - measured.retained_bytes;
+        assert!(
+            transient < measured.retained_bytes,
+            "building the graph peaked {transient} bytes above the {} bytes it \
+             retained. A transient at graph scale means every term's text is being \
+             held twice, which is what sets the serialization peak.",
+            measured.retained_bytes
+        );
+        // The term table must be unchanged by how the memo is keyed. If the dedup
+        // relation moved, this is where it shows: a coarser memo collapses terms, a
+        // finer one splits them, and either changes emitted blank labels and indices.
+        assert_eq!(
+            graph.terms.len(),
+            80_001,
+            "the interned term table changed size, so the dedup relation moved"
+        );
     }
 }
