@@ -128,6 +128,26 @@ require_nonempty_file() {
 # queried those eight bytes.
 readonly PACK_MAGIC="PURRPCK1"
 
+# A REQUIRED PIN, WITH THE TWO FAILURE MODES KEPT APART. `--workload-pin` exits 2 for
+# "recorded nowhere" and anything else means the lookup itself is broken -- a renamed
+# flag, a syntax error in the pin table. Five call sites collapsed both into
+# `|| die "no ... pin is recorded"`, which names a cause the lane has not established
+# and, where the advice is "record one", sends the reader to add a pin that is already
+# there. `$1` is the pin name, `$2` how to describe it in the refusal.
+require_pin() {
+  local name="$1" what="$2" value status=0
+  value="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --workload-pin "${name}")" ||
+    status=$?
+  ((status != 2)) ||
+    die "no ${what} is recorded under '${name}'.
+  This lane will not proceed on an unpinned value."
+  ((status == 0)) ||
+    die "looking up '${name}' exited ${status}, which is neither success nor the 2 that
+  means no pin is recorded. The pin lookup itself is broken, so nothing has been
+  checked -- run the command by hand to see what it says. Do not add a pin for this."
+  printf '%s' "${value}"
+}
+
 step() {
   echo ""
   echo "=== $* ==="
@@ -414,12 +434,10 @@ expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --dataset-r
 # pools, so it reaches every substitution and every row count now asserted against a pin.
 # It comes out of the same digest-verified tarball as the corpus, which is what made
 # recording it cost one line rather than a fetch. Annotating a gap is not closing one.
-expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-  --workload-pin "watdiv.${SCALE}.corpus.sha256")" ||
-  die "no extracted-corpus digest is pinned for WatDiv scale ${SCALE}"
-expected_census="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-  --workload-pin "watdiv.${SCALE}.census.sha256")" ||
-  die "no entity-census digest is pinned for WatDiv scale ${SCALE}"
+expected_corpus="$(require_pin "watdiv.${SCALE}.corpus.sha256" \
+  "extracted-corpus digest for WatDiv scale ${SCALE}")"
+expected_census="$(require_pin "watdiv.${SCALE}.census.sha256" \
+  "entity-census digest for WatDiv scale ${SCALE}")"
 actual_census="$(lane_sha256_file "${CENSUS}")"
 [[ "${actual_census}" == "${expected_census}" ]] ||
   die "the extracted WatDiv ${SCALE} entity census does not match its recorded pin.
@@ -485,9 +503,8 @@ echo "provenance: ${QUERIES}/provenance.txt"
 echo "sha256(queries @ seed ${SEED}) = ${queries_sha}"
 echo "  ^ the reproducibility check: this dataset and this seed must reproduce it"
 if [[ "${SCALE}" == "10M" && "${SEED}" == "0" ]]; then
-  expected_queries="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-    --workload-pin "watdiv.10M.seed0.queries.sha256")" ||
-    die "no query-set pin is recorded for WatDiv 10M at seed 0"
+  expected_queries="$(require_pin "watdiv.10M.seed0.queries.sha256" \
+    "query-set pin for WatDiv 10M at seed 0")"
   [[ "${queries_sha}" == "${expected_queries}" ]] ||
     die "the instantiated WatDiv query set does not match its recorded pin.
   expected ${expected_queries}

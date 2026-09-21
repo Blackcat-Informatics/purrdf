@@ -26,8 +26,16 @@ none noticed, because they all walk a file list rather than a glob.
 what it is.** A newline makes one path two entries in any line-oriented tool; a
 tab splits a field in any tab-separated one; a carriage return makes the DISPLAYED
 name differ from the real one — a file called ``has\\rcr`` prints as ``hascr``, so
-a reviewer cannot see what they are approving. ``\\t`` was refused here and
-``\\r`` was not, which had no basis.
+a reviewer cannot see what they are approving.
+
+That ground reaches further than the three characters first named, and the rule now
+goes where the ground goes: every C0 control and DEL, plus the bidirectional
+overrides U+202A-U+202E and U+2066-U+2069. An ANSI escape can erase and rewrite a
+whole rendered line, and a bidi override reorders the characters around it -- the
+trojan-source filename case -- so both defeat review strictly harder than ``\\r``
+does. Refusing ``\\r`` while accepting ``\\x1b`` was the same unfounded distinction
+as refusing ``\\t`` while accepting ``\\r``, one round earlier. Measured rather than
+assumed: all 10765 tracked paths pass.
 
 **Leading or trailing whitespace is refused for INVISIBILITY, not for splitting.**
 Measured in a directory holding ``' lead'``, ``'mid space'`` and ``'trail '``:
@@ -89,8 +97,30 @@ def offences(paths: list[str]) -> list[str]:
                 found.append(f"{path!r}: component {component!r} begins with '-', so a glob "
                             f"expanding to it is read as a FLAG")
                 break
-            misrendering = {"\n": "a newline", "\t": "a tab", "\r": "a carriage return"}
-            hit = next((name for char, name in misrendering.items() if char in component), None)
+            # EVERY CHARACTER THAT MAKES A NAME MISREPRESENT ITSELF, not the three that
+            # happened to come to mind. The stated ground for refusing `\r` -- "a reviewer
+            # cannot see what they are approving" -- is satisfied strictly harder by an ANSI
+            # escape, which can erase and rewrite a whole rendered line, and by a bidi
+            # override, which is the trojan-source filename case. Refusing `\r` while
+            # accepting `\x1b` is the same unfounded distinction the `\t`-versus-`\r` split
+            # was, one round later.
+            #
+            # Over-refusal risk is measured, not assumed: all 10765 tracked paths pass.
+            named = {"\n": "a newline", "\t": "a tab", "\r": "a carriage return"}
+            hit = next((name for char, name in named.items() if char in component), None)
+            if hit is None:
+                control = next((c for c in component if ord(c) < 0x20 or ord(c) == 0x7F), None)
+                if control is not None:
+                    hit = f"the control character U+{ord(control):04X}"
+            if hit is None:
+                # U+202A–U+202E and U+2066–U+2069 reorder the characters AROUND them, so a
+                # name can render as a completely different one.
+                bidi = next(
+                    (c for c in component if 0x202A <= ord(c) <= 0x202E or 0x2066 <= ord(c) <= 0x2069),
+                    None,
+                )
+                if bidi is not None:
+                    hit = f"the bidirectional override U+{ord(bidi):04X}"
             if hit is not None:
                 found.append(
                     f"{path!r}: component {component!r} contains {hit}, so the name a tool "
@@ -124,6 +154,14 @@ def self_test() -> int:
         # difference. It is the worst of the three for review: `has\rcr` prints as
         # `hascr`, so the rendered name is not the name.
         "has\rcr",
+        # An ANSI escape can erase and rewrite the rendered line, which is strictly worse
+        # than a carriage return by the docstring's own stated ground.
+        "has\x1besc",
+        "has\bbackspace",
+        "has\x0cformfeed",
+        "has\x7fdel",
+        # The trojan-source filename case: the name renders in a different order.
+        "has\u202eoverride",
     ]
     for path in refused:
         if not offences([path]):
@@ -185,7 +223,8 @@ def main() -> int:
     # surface is covered when it is not, which is the failure this file exists inside.
     print(
         f"OK: none of the {len(paths)} tracked paths begins a component with '-', contains a "
-        "newline, tab or carriage return, or begins or ends a component with whitespace"
+        "control character or a bidirectional override, or begins or ends a component with "
+        "whitespace"
     )
     return 0
 
