@@ -79,6 +79,21 @@ use crate::content_store::ContentDigest;
 /// buffer and is dwarfed by any document worth streaming. This is the workspace's
 /// one egress window constant — the ingress side consumes it rather than defining
 /// a second.
+///
+/// # Measured against a `LineWriter`, which is what `stdout()` is
+///
+/// The size above was chosen to match the ingress buffer rather than measured, and
+/// the destination it most often meets is the case that could have made it
+/// pointless: Rust's `stdout()` is a `LineWriter`, which forwards only up to the
+/// LAST NEWLINE in whatever it is handed. A line-oriented document is nothing but
+/// newlines, so staging 64 KiB and then handing it downstream a line at a time
+/// would be the buffer doing no work at all.
+///
+/// It does not. `LineWriter` batches to its last newline and holds the tail for the
+/// next window, so a window costs at most two forwards. Measured on a
+/// 537,780-byte N-Triples document: 9 windows, 17 forwards, 4,000 rows — two per
+/// window as that analysis predicts, and 235x fewer than one per line. Pinned by
+/// `crates/rdf/tests/drain_window_through_a_line_writer.rs`.
 pub const DRAIN_BUFFER_BYTES: usize = 64 << 10;
 
 /// Why a drain refused the bytes handed to it.
