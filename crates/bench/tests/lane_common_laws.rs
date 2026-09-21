@@ -1464,8 +1464,7 @@ fn regex_lite_capture() -> impl Fn(&str) -> Option<String> {
         // whole line return None, so a real capture after it was invisible — and
         // invisible without incrementing the counter, so the floor could not fire either.
         line.match_indices("2>")
-            .filter_map(|(at, _)| capture_target(line, at))
-            .next()
+            .find_map(|(at, _)| capture_target(line, at))
     }
 }
 
