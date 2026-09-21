@@ -82,25 +82,57 @@ The decomposition below was taken by inserting **one extra, discarded copy** of
 each slice into the live path and differencing against the baseline, with the
 evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
-and the slopes cannot be differenced. Figures are against the baseline of
-100 / 218 / 120 / 200 that held before the contained reductions described in the
-next section.
+and the slopes cannot be differenced. Figures are against the current baseline of
+96 / 214 / 116 / 194.
+
+Slices that nest are differenced against each other rather than summed, so no
+allocation is counted twice: an extra `apply_shacl_prebinding` contains an extra
+`apply_substitutions`, which contains an extra algebra clone and an extra probe
+build; and the evaluation root contains every node beneath it.
 
 | component | `sh:sparql` | `sh:ask` | `sh:select` | `sh:expression` |
 |---|---:|---:|---:|---:|
-| pre-binding rewrite, total | 39 | 112 | 51 | 56 |
+| pre-binding rewrite, total | 37 | 110 | 49 | 52 |
 | — the algebra clone | 6 | 8 | 6 | 8 |
 | — term and string materialization | 11 | 48 | 18 | 30 |
-| — pushdown, seed and expression walks | 22 | 56 | 27 | 18 |
-| **evaluator per-query execution setup** | **53** | **86** | **58** | **92** |
+| — pushdown and seed descent | 8 | 12 | 8 | 14 |
+| — expression walk and the second ground-term conversion | 12 | 42 | 17 | — |
+| evaluation context construction | 1 | 2 | 1 | 2 |
+| query-context preparation | 4 | 8 | 4 | 8 |
+| **evaluating the freshly minted tree** | **46** | **74** | **51** | **80** |
+| — of which the seed `VALUES` node | 6 | 22 | 8 | 16 |
+| — of which the seed join and its operands | 26 | 38 | 29 | 32 |
+| — of which the `Bgp` | 12 | 4 | 12 | 4 |
+| — of which per-node `VarSchema` construction | 6 | — | 6 | 6 |
 | SHACL-side remainder | 8 | 20 | 11 | 52 |
 
-The algebra clone is four to six percent of the term. The string round trip is
-eleven to twenty-two percent. The largest single component — thirty-nine to
-fifty-three percent, and larger than the entire pre-binding rewrite on three of
-the four surfaces — is the evaluator's per-query execution setup: the plan-cache
-key, the evaluation context, the solution schema, and what a query allocates
-simply by running once.
+Three of the components the earlier reading named are **not on the measured path
+at all**, and each was measured at zero rather than assumed away.
+
+The **plan-cache probe** is already free. A hit returns without allocating, which
+is what the key-scratch buffer described in the next section was for; doubling
+the probe moves no figure. The first bullet of the per-query-execution-setup
+list is therefore already discharged.
+
+The **governed prelude** — the algebra re-validation, its dropped IRI `String`
+per IRI in the query, the duplicated plan-depth walk, and the relation-identity
+receipt — never runs here. `crates/shapes/src/sparql.rs` takes the governed lane
+only when an operation installs governors, and validating a focus set does not.
+That work is real and worth removing, but it is not part of this term and must
+not be credited against these figures.
+
+The **evaluation context** allocates exactly once per execution, which the table
+confirms: one for the two surfaces that run a single query per focus node, two
+for the two that run a query per value node or per argument tuple. The context is
+already minimal; every other field is lazy, borrowed, or `Copy`.
+
+So the dominant term is not *setting up* an execution. It is **evaluating a tree
+that was minted for this focus node and will be dropped at the end of it** — the
+seed `VALUES` the rewrite just built, the join onto it, and the `VarSchema` every
+`Project` and `Bgp` node rebuilds because the node it belongs to is a fresh heap
+temporary. Together with the rewrite that produced that tree, those two account
+for the whole per-focus-node figure, to within the SHACL-side remainder the last
+row names.
 
 There is an irony worth recording. The pre-binding path round-trips an identity
 through a string and back to the same identity: a term id becomes an owned term
