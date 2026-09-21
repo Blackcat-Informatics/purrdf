@@ -471,12 +471,28 @@ pub fn serialize_dataset_with_jsonld_options<D: DatasetView>(
     .map(|outcome| outcome.bytes)
 }
 
-/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) into the given writer.
+/// Serialize a frozen [`RdfDataset`](crate::RdfDataset) into the given writer,
+/// incrementally.
+///
+/// This is the body behind [`RdfSerializerBackend::serialize`](purrdf_core::RdfSerializer),
+/// which is the workspace's `W: Write` serialization seam — the one an abstraction-layer
+/// caller reaches rather than naming a format function directly.
+///
+/// It used to build the whole document with [`serialize_dataset_with`] and then
+/// `write_all` it. That made the seam's shape a lie: every caller who reached
+/// serialization through the trait — the spelling that most looks like streaming, and the
+/// one a bounded-memory caller would pick precisely because it takes a writer — got the
+/// entire document resident anyway. A `W: Write` parameter that buffers is worse than an
+/// honest `-> Vec<u8>`, because the signature tells the caller the opposite of the truth.
 ///
 /// `base_iri` is the egress base and is honored exactly as on every other seam: a format
 /// whose registry row can express a base emits it and relativizes against it; one that
 /// cannot emits absolute IRIs. A base that is not an absolute IRI is a hard failure here,
 /// not a silent fall back to absolute output.
+///
+/// The [`SerializeReport`] is discarded because the trait returns `()`. That is unchanged
+/// — the eager spelling discarded the same counts — and it is the reason a caller who
+/// needs the drop counts reaches [`serialize_dataset_to_writer_with`] directly.
 pub(crate) fn serialize_into<D: DatasetView, W: Write>(
     dataset: &D,
     media_type: &str,
@@ -484,7 +500,7 @@ pub(crate) fn serialize_into<D: DatasetView, W: Write>(
     base_iri: Option<&str>,
     mut output: W,
 ) -> Result<(), RdfDiagnostic> {
-    let bytes = serialize_dataset_with(
+    serialize_dataset_to_writer_with(
         dataset,
         classify(media_type)?,
         base_iri,
@@ -493,11 +509,9 @@ pub(crate) fn serialize_into<D: DatasetView, W: Write>(
             statement_layer: StatementLayer::Emit,
             jsonld_options: None,
         },
-    )?
-    .bytes;
-    output
-        .write_all(&bytes)
-        .map_err(|e| RdfDiagnostic::error("native-codec-write", e.to_string()))
+        &mut output,
+    )
+    .map(|_| ())
 }
 
 /// Every count a serialization produces, for the caller whose bytes went to a
