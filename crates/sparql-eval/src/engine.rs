@@ -1943,6 +1943,15 @@ impl NativeSparqlEngine {
             options.property_functions,
             options.aggregates,
         )?;
+        // The whole admission check, run ONCE here rather than on every run of this
+        // execution: the two algebra soundness walks, the feasibility replanning walk,
+        // and the agreement between this plan and `options`' registries. Nothing it
+        // establishes can come undone — the plan behind the `Arc` is immutable and
+        // unreachable for mutation, and a later run that supplied DIFFERENT registries
+        // is caught by the fingerprint comparison the run still performs. This is the
+        // same refusal a first run would have produced, raised earlier; see
+        // [`check_prepared_registries_unchanged`].
+        check_plan_matches_relations(&prepared, options)?;
         Ok(PreparedExecution {
             prepared,
             parameters: parameters
@@ -1995,7 +2004,7 @@ impl NativeSparqlEngine {
                 format!("parameters still unbound: {}", unbound.join(", ")),
             ));
         }
-        check_plan_matches_relations(&execution.prepared, options)?;
+        check_prepared_registries_unchanged(&execution.prepared, options)?;
         let prepared = Arc::clone(&execution.prepared);
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
@@ -2008,6 +2017,89 @@ impl NativeSparqlEngine {
             }
         };
         Ok(visit(borrow_outcome(&outcome, &ctx)))
+    }
+
+    /// [`Self::execute`] under an operation budget: the governed twin, and the entry
+    /// a SHACL validation running with governors installed uses.
+    ///
+    /// [`Self::execute`] is to [`Self::query_interned_view`] exactly what this is to
+    /// [`Self::query_governed_interned_in_operation`] — same admission, same budget,
+    /// same receipt, and the only difference from the `&str` door is where the plan
+    /// and the bindings come from.
+    ///
+    /// # Why this exists rather than a flag on [`Self::execute`]
+    ///
+    /// A caller that can run governed or ungoverned has to be able to spell BOTH on
+    /// the prepared door, or it keeps the `&str` door alive for one of the two
+    /// branches — and a module whose queries reach the engine through two different
+    /// doors can grow a third that quietly runs ungoverned. The SHACL side collapses
+    /// every one of its queries into a single function precisely so governor
+    /// inheritance is a property of the module rather than of separately-remembered
+    /// call sites; without a governed prepared entry, preparing anything would split
+    /// that door back open.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::execute`]: [`RdfDiagnostic`] if any parameter is still unbound, if
+    /// `options` names a property-function or custom-aggregate registry that
+    /// disagrees with the one `execution` was prepared against, or if evaluation
+    /// fails. A tripped governor is **not** an error — it surfaces as
+    /// [`InternedGoverned::BudgetExhausted`] carrying its certified partial answers,
+    /// and `visit` does not run, exactly as on the `&str` door.
+    pub fn execute_governed_in_operation<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d>,
+        state: &Arc<GovernorState>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<InternedGoverned<R>, RdfDiagnostic> {
+        let unbound = execution.unbound();
+        if !unbound.is_empty() {
+            return Err(RdfDiagnostic::error(
+                "native-sparql-execution-parameter",
+                format!("parameters still unbound: {}", unbound.join(", ")),
+            ));
+        }
+        check_prepared_registries_unchanged(&execution.prepared, options)?;
+        let prepared = Arc::clone(&execution.prepared);
+        let identity = relation_identity(&prepared, options.property_functions)?;
+        if let Some(refused) = self.admit_refusal(
+            dataset,
+            &prepared.query,
+            options.property_functions,
+            state,
+            &identity,
+        ) {
+            return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
+        }
+        let mut ctx = self.governed_ctx(dataset, None, state, options)?;
+        let evaluated = match options.prebinding {
+            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
+                &prepared,
+                execution.prebindings(),
+                &mut ctx,
+            )?,
+            ShaclPrebinding::None => {
+                evaluate_governed_with_substitutions(&prepared, execution.prebindings(), &mut ctx)?
+            }
+        };
+        Ok(
+            match resolve_governed(evaluated, &mut ctx, state, identity) {
+                GovernedResolution::Complete {
+                    outcome,
+                    evidence,
+                    relations,
+                } => InternedGoverned::Complete {
+                    value: visit(borrow_outcome(&outcome, &ctx)),
+                    evidence,
+                    relations,
+                },
+                GovernedResolution::Exhausted(exhausted) => {
+                    InternedGoverned::BudgetExhausted(Box::new(exhausted))
+                }
+            },
+        )
     }
 
     /// [`Self::query_with_options_view`] on the **interned** egress: `visit` is
@@ -2514,6 +2606,85 @@ fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
 ) -> Result<(), RdfDiagnostic> {
+    check_plan_soundness(prepared)?;
+    check_plan_matches_registries(prepared, options)
+}
+
+/// A prepared execution's per-run admission check: the registries have not changed
+/// since [`NativeSparqlEngine::prepare_execution`] admitted this plan against them.
+///
+/// # Why this is the whole check here, and would not be anywhere else
+///
+/// [`check_plan_matches_relations`] does three things: two soundness walks over the
+/// algebra, a feasibility replanning walk, and a comparison of `options`' registry
+/// fingerprints against the plan's. The first two allocate a traversal stack each and
+/// grow it with the query, and on a prepared execution they are pure waste — they
+/// re-derive per run a fact that was established before the first run and cannot have
+/// come undone. `prepare_execution` runs all three, once; a
+/// [`PreparedExecution`] then holds that plan behind an `Arc<PreparedQuery>` it never
+/// hands out mutably, so the algebra those walks were performed over is the algebra
+/// every run evaluates.
+///
+/// What a run CAN change is its `options`, which arrive from the run rather than from
+/// the preparation. So the fingerprints are compared every time, and a run that
+/// supplies different registries is refused by name exactly as before. Fingerprint
+/// equality is already this module's standard for "the same registry for planning
+/// purposes" — it is the criterion [`check_plan_matches_relations`] itself ends with —
+/// so equal fingerprints mean the admission that passed at preparation is the
+/// admission this run needs.
+///
+/// **This reasoning is available here and nowhere else in this file.** It rests
+/// entirely on `PreparedExecution`'s construction: its plan was parsed and admitted
+/// under the fingerprints it carries, and cannot afterwards be replaced. Every other
+/// entry takes a `&PreparedQuery` whose provenance it cannot know — a caller may
+/// assemble one by hand, prepare a trivial query and overwrite `PreparedQuery::query`
+/// with an algebra that was never parsed under the fingerprints beside it — so those
+/// entries must keep running the full check, and do.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] (`native-sparql-property-function` or
+/// `native-sparql-aggregate-function`) when either registry differs from the one this
+/// plan was admitted against, or when reading a registry's declarations to compute its
+/// fingerprint fails.
+fn check_prepared_registries_unchanged(
+    prepared: &PreparedQuery,
+    options: QueryOptions<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+    if supplied != prepared.relations {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-property-function",
+            "this prepared execution was prepared against a different property-function \
+             registry than the one supplied for its evaluation; prepare it with \
+             `NativeSparqlEngine::prepare_execution` under the SAME `QueryOptions` the \
+             evaluation uses, because the registry is what decides which predicates are calls",
+        ));
+    }
+    let supplied_aggregates = crate::agg_fn::registry_fingerprint(options.aggregates)
+        .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+    if supplied_aggregates != prepared.aggregates {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-aggregate-function",
+            "this prepared execution was prepared against a different custom-aggregate \
+             registry than the one supplied for its evaluation; prepare it with \
+             `NativeSparqlEngine::prepare_execution` under the SAME `QueryOptions` the \
+             evaluation uses, because the registry is what a `Custom` aggregate IRI resolves \
+             against",
+        ));
+    }
+    Ok(())
+}
+
+/// The **plan-only** half of [`check_plan_matches_relations`]: the two soundness
+/// walks over the algebra itself, which depend on nothing but the plan.
+///
+/// # Errors
+///
+/// An [`RdfDiagnostic`] if the algebra is invalid (`native-sparql-algebra`) or nests
+/// past the evaluator's depth limit.
+fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
     prepared
         .query
         .validate()
@@ -2526,7 +2697,25 @@ fn check_plan_matches_relations(
                 eval_diagnostic_code(&e, "native-sparql-query-eval"),
                 e.to_string(),
             )
-        })?;
+        })
+}
+
+/// The **options-dependent** half of [`check_plan_matches_relations`]: the plan must
+/// agree with the registries supplied for this evaluation.
+///
+/// This is the half a prepared execution must still run per call, because `options`
+/// is supplied by the run rather than by the preparation — see
+/// [`NativeSparqlEngine::execute`], which runs it once at PREPARATION and then only
+/// confirms per run that the registries have not changed — see
+/// [`check_prepared_registries_unchanged`].
+///
+/// # Errors
+///
+/// As [`check_plan_matches_relations`], for the registry half.
+fn check_plan_matches_registries(
+    prepared: &PreparedQuery,
+    options: QueryOptions<'_>,
+) -> Result<(), RdfDiagnostic> {
     let planned = crate::property_fn_plan::plan_query(
         &prepared.query,
         options.property_functions,

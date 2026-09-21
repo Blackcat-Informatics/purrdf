@@ -2694,19 +2694,33 @@ fn eval_constraint<'a, S: ResultSink>(
 /// shape's path rendered in SPARQL property-path surface syntax. A node-shape
 /// constraint (`path == None`) and a query without the placeholder pass
 /// through unchanged.
-pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> String {
+///
+/// "Unchanged" is returned BORROWED, and that is the point of the [`Cow`]. This runs
+/// once per focus node, and both pass-through cases are the common ones — every node
+/// shape takes the first, and every property shape whose query does not mention the
+/// placeholder takes the second. Returning `String` charged each of those focus nodes
+/// a fresh copy of the entire query text, which for the shapes that carry a
+/// `sh:sparql` is the largest single allocation on the path.
+///
+/// [`Cow`]: std::borrow::Cow
+pub(crate) fn substitute_path_placeholder<'q>(
+    select: &'q str,
+    path: Option<&Path>,
+) -> Cow<'q, str> {
     static PATH_PLACEHOLDER: OnceLock<regex::Regex> = OnceLock::new();
     let Some(path) = path else {
-        return select.to_owned();
+        return Cow::Borrowed(select);
     };
     let re = PATH_PLACEHOLDER
         .get_or_init(|| regex::Regex::new(r"[$?]PATH\b").expect("static regex is valid"));
     if !re.is_match(select) {
-        return select.to_owned();
+        return Cow::Borrowed(select);
     }
     let rendered = path::path_to_sparql(path);
-    re.replace_all(select, regex::NoExpand(&rendered))
-        .into_owned()
+    Cow::Owned(
+        re.replace_all(select, regex::NoExpand(&rendered))
+            .into_owned(),
+    )
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────

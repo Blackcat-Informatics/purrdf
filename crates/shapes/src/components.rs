@@ -275,29 +275,65 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
         return Err("expected ASK validator, got SELECT".to_owned());
     };
     let mut results = Vec::with_capacity(value_nodes.len());
-    // Every substitution but `$value` is a constant of this component invocation:
-    // the focus node, the parameter bindings, and the shape context. So is every
-    // NAME, `$value`'s included — the names are shape text, not data. The whole
-    // list is therefore built ONCE and only the one varying cell is overwritten per
-    // value node; rebuilding it per value node re-allocated `"this"`, `"value"` and
-    // every parameter name, plus their term values, for every value in the set.
+    // Every pre-binding but `$value` is a constant of this component invocation: the
+    // focus node, the parameter bindings, and the shape context. So is every NAME,
+    // `$value`'s included — the names are shape text, not data — and so is the ASK
+    // TEXT. The name list is therefore built once here and the value-node loop below
+    // writes the terms straight into a prepared handle's slots, instead of re-hashing
+    // the whole ASK text to probe the plan cache and re-interning every name per
+    // value node.
+    //
+    // This worker's CACHED handle, not a local one, even though the loop below is
+    // serial: this function is called once per focus node and loops over that focus
+    // node's value nodes, so a local handle would pay a fresh preparation per focus
+    // node to save a probe on the two or three runs inside it — a preparation the
+    // cache amortizes over the whole focus set instead.
+    //
+    // # The repeated-name fallback, and why it is not optional
+    //
+    // A component declares its own `sh:parameter`s. `this`, `path`, `PATH` and
+    // `value` are refused as parameter names at shapes LOAD, so those four never
+    // arrive here — but `shapesGraph` and `currentShape` are not on that list, and
+    // SHACL pre-binds both around every validator. A component declaring a parameter
+    // whose local name is either presents this function with that name TWICE, which a
+    // handle cannot express: it has no single slot to bind, and `prepare_execution`
+    // refuses it. The `&str` door SUPPORTS that case with a defined answer (two seeds
+    // binding one variable to different terms are incompatible, so it keeps a
+    // per-variable path and yields the empty solution). So a repeated name falls back
+    // to the `&str` door UNCHANGED rather than becoming an error: refusing a query
+    // that has an answer would be the mirror of silently dropping one.
+    //
+    // The fallback's own pre-binding list is built only ON that path. Building both
+    // eagerly would materialize every parameter's `TermValue` twice per focus node,
+    // which costs more than the handle saves.
     const VALUE_SLOT: usize = 1;
-    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(4 + bindings.len());
-    subs.push(Prebinding {
-        variable: "this",
-        value: focus.to_term_value(),
-    });
-    subs.push(Prebinding {
-        variable: "value",
-        value: TermValue::Iri(String::new()),
-    });
-    for (name, value) in bindings {
+    let mut names: Vec<&str> = Vec::with_capacity(4 + bindings.len());
+    names.push("this");
+    names.push("value");
+    names.extend(bindings.iter().map(|(name, _)| name.as_str()));
+    crate::sparql::push_shape_context_names(&mut names, shapes_graph_iri, current_shape);
+    let prepared = crate::sparql::parameters_are_distinct(&names);
+    let mut subs: Vec<Prebinding<'_>> = if prepared {
+        Vec::new()
+    } else {
+        let mut subs = Vec::with_capacity(4 + bindings.len());
         subs.push(Prebinding {
-            variable: name.as_str(),
-            value: value.to_term_value(),
+            variable: "this",
+            value: focus.to_term_value(),
         });
-    }
-    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
+        subs.push(Prebinding {
+            variable: "value",
+            value: TermValue::Iri(String::new()),
+        });
+        for (name, value) in bindings {
+            subs.push(Prebinding {
+                variable: name.as_str(),
+                value: value.to_term_value(),
+            });
+        }
+        crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
+        subs
+    };
     // The violating branch's template buffer, hoisted for the same reason: its
     // parameter half does not vary, so it is filled once and only the trailing
     // `value` entry is replaced.
@@ -309,31 +345,66 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     } else {
         Vec::new()
     };
-    for v in value_nodes {
-        subs[VALUE_SLOT].value = v.to_term_value();
-        let conforms = run_ask_with_shacl_prebinding_view(dataset, ask, &subs)?;
-        if !conforms {
-            let message = message.map(|m| {
-                let slot = template_bindings
-                    .last_mut()
-                    .expect("the template buffer is non-empty whenever a message is present");
-                slot.1 = v.clone();
-                substitute_message_templates(m, &template_bindings)
-            });
-            results.push(ValidationResult {
-                focus_node: focus.clone(),
-                result_path: path.map(path::path_to_term),
-                path_structure: path.filter(|p| !matches!(p, Path::Predicate(_))).cloned(),
-                value: Some(v.clone()),
-                source_constraint_component: component.clone(),
-                source_shape: source_shape.clone(),
-                severity: severity.clone(),
-                message,
-                source_box_roles: vec![],
-                path_box_roles: vec![],
-                result_box_roles: vec![],
-                attributions: vec![],
-            });
+    // One reporting step, called from whichever door computed the verdict, so the two
+    // doors cannot grow two different notions of what a violation looks like.
+    let mut report = |v: &Term, results: &mut Vec<ValidationResult>| {
+        let message = message.map(|m| {
+            let slot = template_bindings
+                .last_mut()
+                .expect("the template buffer is non-empty whenever a message is present");
+            slot.1 = v.clone();
+            substitute_message_templates(m, &template_bindings)
+        });
+        results.push(ValidationResult {
+            focus_node: focus.clone(),
+            result_path: path.map(path::path_to_term),
+            path_structure: path.filter(|p| !matches!(p, Path::Predicate(_))).cloned(),
+            value: Some(v.clone()),
+            source_constraint_component: component.clone(),
+            source_shape: source_shape.clone(),
+            severity: severity.clone(),
+            message,
+            source_box_roles: vec![],
+            path_box_roles: vec![],
+            result_box_roles: vec![],
+            attributions: vec![],
+        });
+    };
+
+    // The prepared handle is checked out ONCE for the whole value-node set: `$this`,
+    // the declared parameters and the shape context are constants of this invocation,
+    // so they are bound once and only `$value` is rewritten per run. Re-binding them
+    // per value node would re-materialize every one of their `TermValue`s — the exact
+    // per-value-node cost the hoisted `subs` list was introduced to remove, and which
+    // a bind-per-run door would have reintroduced.
+    if prepared {
+        crate::sparql::with_cached_execution(ask, &names, |execution| {
+            // Every slot but `$value`, once. `with_cached_execution` cleared them all
+            // at checkout, so any slot this forgets is `None` and the engine refuses
+            // the run rather than answering with whatever a previous focus node left
+            // there.
+            execution.bind(0, focus.to_term_value())?;
+            let mut slot = VALUE_SLOT + 1;
+            for (_, value) in bindings {
+                execution.bind(slot, value.to_term_value())?;
+                slot += 1;
+            }
+            crate::sparql::bind_shape_context(execution, slot, shapes_graph_iri, current_shape)?;
+            for v in value_nodes {
+                // The one varying slot, written on every pass.
+                execution.bind(VALUE_SLOT, v.to_term_value())?;
+                if !crate::sparql::run_bound_ask_with_shacl_prebinding_view(dataset, execution)? {
+                    report(v, &mut results);
+                }
+            }
+            Ok(())
+        })?;
+    } else {
+        for v in value_nodes {
+            subs[VALUE_SLOT].value = v.to_term_value();
+            if !run_ask_with_shacl_prebinding_view(dataset, ask, &subs)? {
+                report(v, &mut results);
+            }
         }
     }
     Ok(results)
@@ -363,24 +434,21 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
     let ComponentValidator::Select { select } = validator else {
         return Err("expected SELECT validator, got ASK".to_owned());
     };
-    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3 + bindings.len());
-    subs.push(Prebinding {
-        variable: "this",
-        value: focus.to_term_value(),
-    });
-    for (name, value) in bindings {
-        subs.push(Prebinding {
-            variable: name.as_str(),
-            value: value.to_term_value(),
-        });
-    }
-    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
+    // The parameter NAMES for the prepared door: `$this`, each declared parameter,
+    // then the shape context, in the order the values are bound below. A component
+    // may declare a parameter whose local name is `currentShape` or `shapesGraph`,
+    // which a handle cannot express — see `eval_ask_validator` for why that falls back
+    // to the `&str` door unchanged rather than becoming an error.
+    let mut names: Vec<&str> = Vec::with_capacity(3 + bindings.len());
+    names.push("this");
+    names.extend(bindings.iter().map(|(name, _)| name.as_str()));
+    crate::sparql::push_shape_context_names(&mut names, shapes_graph_iri, current_shape);
     let query = crate::constraints::substitute_path_placeholder(select, path);
 
     let path_term = path.map(path::path_to_term);
     let path_structure = path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
 
-    run_select_with_shacl_prebinding_view(dataset, &query, &subs, |solutions| {
+    let project = |solutions: &purrdf_sparql_eval::InternedSolutions<'_, '_, D>| {
         let this_index = solutions.column("this");
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
@@ -446,7 +514,48 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
             });
         }
         Ok(results)
-    })
+    };
+
+    // One run per FOCUS NODE, from a loop `rayon` fans across workers, so no single
+    // handle can span the focus set: this uses the per-worker cached one. A repeated
+    // parameter name falls back to the `&str` door unchanged — see
+    // `eval_ask_validator`.
+    if crate::sparql::parameters_are_distinct(&names) {
+        return crate::sparql::run_cached_select_with_shacl_prebinding_view(
+            dataset,
+            &query,
+            &names,
+            |execution| {
+                execution.bind(0, focus.to_term_value())?;
+                let mut slot = 1;
+                for (_, value) in bindings {
+                    execution.bind(slot, value.to_term_value())?;
+                    slot += 1;
+                }
+                crate::sparql::bind_shape_context(
+                    execution,
+                    slot,
+                    shapes_graph_iri,
+                    current_shape,
+                )?;
+                Ok(())
+            },
+            project,
+        );
+    }
+    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3 + bindings.len());
+    subs.push(Prebinding {
+        variable: "this",
+        value: focus.to_term_value(),
+    });
+    for (name, value) in bindings {
+        subs.push(Prebinding {
+            variable: name.as_str(),
+            value: value.to_term_value(),
+        });
+    }
+    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, current_shape);
+    run_select_with_shacl_prebinding_view(dataset, &query, &subs, project)
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

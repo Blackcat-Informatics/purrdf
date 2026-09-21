@@ -70,9 +70,8 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
+use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
-use purrdf_sparql_eval::Prebinding;
 
 use crate::constraints::conforms_with_plan;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
@@ -826,60 +825,73 @@ fn sparql_rule_producer(
     let focus_nodes = plan.focus_nodes(data)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     // SHACL-AF pre-binds `$this`, `$shapesGraph` and `$currentShape` for a
-    // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path. Two
-    // of the three are constants of the RULE and so is every NAME, so the list is
-    // built once here and only `$this` is overwritten per focus node.
+    // `sh:SPARQLRule` CONSTRUCT, mirroring the SHACL-SPARQL constraint path. Two of
+    // the three are constants of the RULE and so is every NAME — and so is the
+    // CONSTRUCT text. So the query is PREPARED once for the whole focus set: the shape
+    // context is bound once, above the loop, and only `$this` is rewritten per focus
+    // node. The three names are `$this` and the shape context, so they cannot repeat
+    // and the handle always applies.
+    //
+    // The handle is checked out of this worker's cache rather than minted here, so a
+    // rule re-evaluated on every round of the fixpoint prepares once rather than once
+    // per round, and so every slot starts unbound — see `with_cached_execution`.
     const THIS_SLOT: usize = 0;
-    let mut subs: Vec<Prebinding<'_>> = Vec::with_capacity(3);
-    subs.push(Prebinding {
-        variable: "this",
-        value: TermValue::Iri(String::new()),
-    });
-    crate::sparql::push_shape_context(&mut subs, shapes_graph_iri, Some(&shape.id));
-    for focus in &focus_nodes {
-        if !conditions_hold(data, focus, &plan)? {
-            continue;
-        }
-        subs[THIS_SLOT].value = focus.to_term_value();
-        // A CONSTRUCT template blank is minted from a per-evaluation counter that
-        // resets each call, so two focus nodes would both mint `_:c1` and
-        // conflate. The evaluation therefore mints under a per-focus prefix
-        // (`tag`, installed on the engine below, already carrying its trailing
-        // `_` separator): every minted label is spelled `{tag}c{n}` AT MINT
-        // TIME, so distinct focus nodes mint distinct blanks while data blanks
-        // carried through CONSTRUCT variables pass through untouched —
-        // preserving their co-reference with the base graph across fixpoint
-        // rounds. The tag is deterministic, so a re-derivation in a later round
-        // produces the identical label and the fixpoint converges. The identity
-        // must be encoded injectively (a lossy sanitization would conflate foci
-        // such as `<urn:x/y>` and `<urn:x#y>`) and every byte must stay inside
-        // the serializable BLANK_NODE_LABEL alphabet, or the entailed dataset
-        // cannot round-trip.
-        let tag = focus_tag(focus);
-        let graph = crate::sparql::run_construct_with_shacl_prebinding_view(
-            data.sparql_view(),
-            construct,
-            &subs,
-            Some(tag.as_str()),
+    let parameters = crate::sparql::this_and_shape_context_names(shapes_graph_iri, Some(&shape.id));
+    crate::sparql::with_cached_execution(construct, parameters, |execution| {
+        crate::sparql::bind_shape_context(
+            execution,
+            THIS_SLOT + 1,
+            shapes_graph_iri,
+            Some(&shape.id),
         )?;
-        for quad in quads_for_pattern_ids(graph.as_ref(), None, None, None, GraphFilter::AnyGraph) {
-            let s = term_id_to_native(graph.as_ref(), quad.s);
-            let p = term_id_to_native(graph.as_ref(), quad.p);
-            let o = term_id_to_native(graph.as_ref(), quad.o);
-            if !s.is_subject() {
-                return Err(format!(
-                    "sh:SPARQLRule {rule_id} CONSTRUCT produced an illegal subject {s}"
-                ));
+        for focus in &focus_nodes {
+            if !conditions_hold(data, focus, &plan)? {
+                continue;
             }
-            let Term::NamedNode(_) = &p else {
-                return Err(format!(
-                    "sh:SPARQLRule {rule_id} CONSTRUCT produced an illegal predicate {p}"
-                ));
-            };
-            out.push([s, p, o]);
+            // A CONSTRUCT template blank is minted from a per-evaluation counter that
+            // resets each call, so two focus nodes would both mint `_:c1` and
+            // conflate. The evaluation therefore mints under a per-focus prefix
+            // (`tag`, installed on the engine below, already carrying its trailing
+            // `_` separator): every minted label is spelled `{tag}c{n}` AT MINT
+            // TIME, so distinct focus nodes mint distinct blanks while data blanks
+            // carried through CONSTRUCT variables pass through untouched —
+            // preserving their co-reference with the base graph across fixpoint
+            // rounds. The tag is deterministic, so a re-derivation in a later round
+            // produces the identical label and the fixpoint converges. The identity
+            // must be encoded injectively (a lossy sanitization would conflate foci
+            // such as `<urn:x/y>` and `<urn:x#y>`) and every byte must stay inside
+            // the serializable BLANK_NODE_LABEL alphabet, or the entailed dataset
+            // cannot round-trip.
+            let tag = focus_tag(focus);
+            // Only `$this` varies; the shape context was bound above the loop and is
+            // never cleared between iterations.
+            execution.bind(THIS_SLOT, focus.to_term_value())?;
+            let graph = crate::sparql::run_bound_construct_with_shacl_prebinding_view(
+                data.sparql_view(),
+                execution,
+                Some(tag.as_str()),
+            )?;
+            for quad in
+                quads_for_pattern_ids(graph.as_ref(), None, None, None, GraphFilter::AnyGraph)
+            {
+                let s = term_id_to_native(graph.as_ref(), quad.s);
+                let p = term_id_to_native(graph.as_ref(), quad.p);
+                let o = term_id_to_native(graph.as_ref(), quad.o);
+                if !s.is_subject() {
+                    return Err(format!(
+                        "sh:SPARQLRule {rule_id} CONSTRUCT produced an illegal subject {s}"
+                    ));
+                }
+                let Term::NamedNode(_) = &p else {
+                    return Err(format!(
+                        "sh:SPARQLRule {rule_id} CONSTRUCT produced an illegal predicate {p}"
+                    ));
+                };
+                out.push([s, p, o]);
+            }
         }
-    }
-    Ok(out)
+        Ok(out)
+    })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -1027,7 +1039,7 @@ fn conditions_hold(data: &ShaclData, focus: &Term, plan: &RulePlan<'_>) -> Resul
 /// The focus node's identity encoded into the blank-node-label alphabet,
 /// followed by the `_` separator that terminates the mint-time prefix — the
 /// returned string IS the evaluation's blank-mint prefix, ready to hand to
-/// [`crate::sparql::run_construct_with_shacl_prebinding_view`] unmodified.
+/// [`crate::sparql::run_bound_construct_with_shacl_prebinding_view`] unmodified.
 ///
 /// Every ASCII-alphanumeric byte of the focus rendering passes through; every
 /// other byte becomes `-` plus two lowercase hex digits. The encoding is

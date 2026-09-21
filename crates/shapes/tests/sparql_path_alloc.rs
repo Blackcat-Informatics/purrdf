@@ -55,16 +55,44 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 70 | 1,277,672 | 5,499 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 144 | 16,156 | 10,948 |
-//! | custom `sh:select` component | 2,738 | 82 | 1,278,972 | 6,361 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 164 | 13,393 | 10,309 |
+//! | `sh:sparql` constraint | 2,695 | 68 | 1,277,672 | 4,878 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 144 | 16,156 | 10,548 |
+//! | custom `sh:select` component | 2,738 | 81 | 1,278,972 | 5,693 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 151 | 13,393 | 10,309 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
-//! cheaper, and the pins move with it. The four surfaces last dropped by 26, 70,
-//! 34 and 30 allocations respectively (from 96, 214, 116 and 194) through six
-//! changes: the pre-binding rewrite stopped grounding every pre-bound value twice,
+//! cheaper, and the pins move with it.
+//!
+//! The four surfaces last dropped by 2, 0, 1 and 13 allocations respectively (from
+//! 70, 144, 82 and 164) when SHACL stopped reaching the evaluator through query
+//! TEXT. Every one of these surfaces runs the same query over and over, changing
+//! only the terms pre-bound into it, so each surface now holds a prepared execution
+//! — parsed and admitted once, its parameter names interned once, its bindings
+//! written into slots — checked out of a per-worker table keyed by query text and
+//! parameter list. Three changes made that pay rather than cost:
+//!
+//! * the two algebra soundness walks the run path performed (a full `validate` and
+//!   a graph-pattern depth check, each allocating a traversal stack and growing it
+//!   with the query) are properties of the PLAN, so a prepared execution runs them
+//!   once at preparation instead of once per run;
+//! * the replanning walk that checks a plan against the supplied registries returns
+//!   immediately when no registry is configured on either side, which is decidable
+//!   without walking anything and is the configuration a SHACL host normally has;
+//! * `$PATH` substitution returns `Cow`, so the two pass-through cases — a node
+//!   shape, and a property shape whose query does not mention the placeholder —
+//!   stop copying the whole query text per focus node.
+//!
+//! The `sh:ask` figure is unchanged rather than improved, and that is the honest
+//! reading: its validator already hoisted its pre-binding list out of the value-node
+//! loop, so what the handle removed there (the plan-cache probe and the name
+//! interning per value node) is matched by what it added (the parameter-name list
+//! per focus node). What the handle does NOT touch on any surface is the dominant
+//! term — the pre-binding rewrite still clones the admitted algebra and rewrites it
+//! per run, because a prepared execution caches the plan, not the substituted plan.
+//!
+//! Before that, the four surfaces dropped by 26, 70, 34 and 30 allocations
+//! respectively (from 96, 214, 116 and 194) through six changes: the pre-binding rewrite stopped grounding every pre-bound value twice,
 //! once for the `VALUES` seed and again for the expression-position walk; it
 //! stopped rebuilding the algebra in order to rewrite it, both halves now mutating
 //! a clone of the prepared plan in place so a visited node costs no fresh `Box`;
@@ -328,7 +356,7 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 70,
+        per_focus_node: 68,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -366,7 +394,7 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 82,
+        per_focus_node: 81,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -381,7 +409,7 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 164,
+        per_focus_node: 151,
         results_per_violation: 1,
     },
 ];
