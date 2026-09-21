@@ -55,34 +55,87 @@ impl Document {
     ///
     /// Every caller builds its carrier locally and hands it over exactly once, so the
     /// move costs them nothing.
-    pub(super) fn write_compacted_json<W: Write>(
-        mut self,
+    /// The same document as [`Document::write_expanded_json`], emitted as YAML.
+    ///
+    /// Straight from the carrier, exactly as the JSON spelling is. YAML-LD used to
+    /// reach this point by serializing the whole JSON document to a `String`,
+    /// reparsing it into a `serde_json::Value`, and converting that — so it held the
+    /// `SerGraph`, the carrier, the JSON text and the value tree at once, which is
+    /// strictly more resident than the eager path it replaced.
+    pub(super) fn write_expanded_yaml<W: Write>(
+        &self,
         writer: W,
-        context: &CompiledJsonLdContext,
+        context: &JsonValue,
     ) -> Result<(), RdfDiagnostic> {
-        let prepared = &mut self;
-        let graph_index_plans = plan_graph_index_containers(prepared, context)?;
-        consume_graph_index_metadata(&mut prepared.default_nodes, None, &graph_index_plans);
-        for graph in &mut prepared.named_graphs {
+        serde_yaml::to_writer(
+            writer,
+            &ExpandedDocument {
+                document: self,
+                context,
+            },
+        )
+        .map_err(|source| decode(format!("YAML-LD serialization: {source}")))
+    }
+
+    /// Rewrite this document into its compacted form, in place.
+    ///
+    /// Takes `self` BY VALUE because compaction mutates: it consumes graph-index
+    /// metadata and relocates reverse properties. Reaching those passes from a
+    /// `&self` receiver meant cloning the whole carrier for no reason other than the
+    /// receiver's shape.
+    fn compact(
+        mut self,
+        context: &CompiledJsonLdContext,
+    ) -> Result<(Self, GraphIndexPlans), RdfDiagnostic> {
+        let graph_index_plans = plan_graph_index_containers(&self, context)?;
+        consume_graph_index_metadata(&mut self.default_nodes, None, &graph_index_plans);
+        for graph in &mut self.named_graphs {
             consume_graph_index_metadata(
                 &mut graph.nodes,
                 Some(graph.id.as_str()),
                 &graph_index_plans,
             );
         }
-        relocate_reverse_properties(&mut prepared.default_nodes, context)?;
-        for graph in &mut prepared.named_graphs {
+        relocate_reverse_properties(&mut self.default_nodes, context)?;
+        for graph in &mut self.named_graphs {
             relocate_reverse_properties(&mut graph.nodes, context)?;
         }
+        Ok((self, graph_index_plans))
+    }
+
+    pub(super) fn write_compacted_json<W: Write>(
+        self,
+        writer: W,
+        context: &CompiledJsonLdContext,
+    ) -> Result<(), RdfDiagnostic> {
+        let (prepared, graph_index_plans) = self.compact(context)?;
         serde_json::to_writer_pretty(
             writer,
             &CompactedDocument {
-                document: prepared,
+                document: &prepared,
                 context,
                 graph_index_plans: &graph_index_plans,
             },
         )
         .map_err(|source| decode(format!("JSON-LD serialization: {source}")))
+    }
+
+    /// The same document as [`Document::write_compacted_json`], emitted as YAML.
+    pub(super) fn write_compacted_yaml<W: Write>(
+        self,
+        writer: W,
+        context: &CompiledJsonLdContext,
+    ) -> Result<(), RdfDiagnostic> {
+        let (prepared, graph_index_plans) = self.compact(context)?;
+        serde_yaml::to_writer(
+            writer,
+            &CompactedDocument {
+                document: &prepared,
+                context,
+                graph_index_plans: &graph_index_plans,
+            },
+        )
+        .map_err(|source| decode(format!("YAML-LD serialization: {source}")))
     }
 }
 

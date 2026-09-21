@@ -24,7 +24,8 @@
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral, RdfTerm};
 use purrdf_rdf::{
-    JsonLdSerializeOptions, NativeRdfFormat, serialize_dataset_to_format_with_jsonld_options,
+    JsonLdSerializeOptions, NativeRdfFormat, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options,
 };
 
 #[global_allocator]
@@ -144,5 +145,51 @@ fn compaction_output_is_unchanged_by_taking_the_carrier_by_value() {
     assert!(
         text.contains("@context"),
         "a derived-context document must carry the context it derived"
+    );
+}
+
+/// YAML-LD costs about what JSON-LD costs, rather than that plus two more copies.
+///
+/// YAML-LD used to serialize the whole JSON-LD document to a `String`, reparse it into
+/// a `serde_json::Value`, and convert that — holding the `SerGraph`, the carrier, the
+/// JSON text and the value tree at once. It was the one format whose comment said its
+/// intermediate document could not be removed, and it was strictly more resident than
+/// the eager path it replaced.
+///
+/// JSON-LD over the same dataset is the control: it builds the same carrier and emits
+/// straight from it. The two now differ by their emitters, so their peaks should be
+/// comparable. Held whole, YAML-LD's peak carried the JSON document and its parsed
+/// tree on top of everything the control holds.
+#[test]
+fn yamlld_does_not_cost_a_json_document_plus_its_parse_tree() {
+    let dataset = dataset(2_000);
+
+    let control = CurrentThreadWindow::open();
+    let json = serialize_dataset_to_format(&*dataset, NativeRdfFormat::JsonLd, None)
+        .expect("a JSON-LD document");
+    let control = control.close();
+
+    let window = CurrentThreadWindow::open();
+    let yaml = serialize_dataset_to_format(&*dataset, NativeRdfFormat::YamlLd, None)
+        .expect("a YAML-LD document");
+    let measured = window.close();
+
+    let json_bytes = json.bytes.len();
+    assert!(
+        json_bytes > 512 * 1024 && yaml.bytes.len() > 512 * 1024,
+        "both documents must be large enough for the comparison to mean anything"
+    );
+
+    // Stated against the control rather than as an absolute, for the same reason as
+    // above: unrelated growth moves both sides and the bar keeps its meaning. The
+    // previous shape put YAML-LD a whole JSON document plus its value tree above the
+    // control; allowing half a document of headroom separates that by a wide margin
+    // while leaving room for the emitters genuinely differing.
+    let extra = measured.peak_working_bytes - control.peak_working_bytes;
+    assert!(
+        extra < (json_bytes / 2) as i64,
+        "YAML-LD peaked {extra} bytes above JSON-LD on the same dataset, against a \
+         {json_bytes}-byte JSON document. A figure at document scale means the JSON \
+         text and its parse tree are still being held."
     );
 }
