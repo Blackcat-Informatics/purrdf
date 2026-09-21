@@ -318,16 +318,60 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
 // is in the binary, and the binary is checked before anything is fetched.
 // ---------------------------------------------------------------------------------------------
 
+/// WRITE ONLY WHERE A LANE ASKED — the shared preamble both stand-ins use before writing.
+///
+/// A stand-in wrote to the last argument it was given, whatever it was. Pointed at a lane whose
+/// final argument is a FLAG, it deposited a 71-byte file named `--manifest` at the repository
+/// root — tracked, and breaking every `*` glob there until someone noticed.
+///
+/// The first repair refused a flag-shaped last argument and was claimed to close the hole. It did
+/// not: BOTH lanes pass the query TEXT as the final argument of `query`, so
+/// `standin query --data … --results-format json 'SELECT ?s WHERE { ?s ?p ?o } LIMIT 1'` still
+/// wrote 71 bytes into the CWD under that name — the identical artifact, and a name the
+/// tracked-path gate accepts. Meanwhile the sibling `convert_stand_in` had no guard at all. The
+/// law was stated in a comment over a two-shape blocklist, in a file whose opening paragraph warns
+/// about laws that hold in one place and not its sibling.
+///
+/// So the guard is derived from what a real destination IS, not from what a wrong one looks like,
+/// and it lives in one place both stand-ins interpolate. Every property below is true of every
+/// destination either lane passes (`convert --from … --to … IN OUT`, with the probe's pair inside
+/// `LANE_TMP` and the corpus pair inside the arena):
+///
+/// 1. only `convert` writes a file — `query` writes to standard output, and its last argument is
+///    the query text, which is how the 71 bytes got out;
+/// 2. the destination is neither empty nor flag-shaped;
+/// 3. it is ABSOLUTE — a lane never passes a relative destination, and a relative one is what
+///    lands in whatever directory the harness happened to be in;
+/// 4. its parent directory already exists — a lane creates its arena before converting into it.
+///
+/// A SPARQL query fails 1, 3 and 4; `--manifest` fails 1, 2 and 3.
+const STAND_IN_GUARD: &str = r#"
+if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9 (stand-in)'; exit 0; fi
+if [ "$1" != "convert" ]; then
+  echo "stand-in: '$1' writes no file; only convert does" >&2
+  exit 0
+fi
+for a in "$@"; do last="$a"; done
+case "$last" in
+  ""|-*) echo "stand-in refusing to write to non-path argument: $last" >&2; exit 3 ;;
+  /*) ;;
+  *) echo "stand-in refusing to write to a relative destination: $last" >&2; exit 3 ;;
+esac
+if [ ! -d "$(dirname "$last")" ]; then
+  echo "stand-in refusing to write where no directory exists: $last" >&2
+  exit 3
+fi
+"#;
+
 /// A stand-in `purrdf` that answers `--version` and performs `convert` by writing `payload` to
-/// the last argument. `payload` is a `printf` format string run through `/bin/sh`, so `""` is the
+/// the destination. `payload` is a `printf` format string run through `/bin/sh`, so `""` is the
 /// silent-drop shape and `PURRPCK1...` is a credible pack.
 fn convert_stand_in(path: PathBuf, payload: &str) -> PathBuf {
     write_executable(
         path,
         &format!(
             r#"#!/bin/sh
-if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9 (stand-in)'; exit 0; fi
-for a in "$@"; do last="$a"; done
+{STAND_IN_GUARD}
 printf '%s' '{payload}' >"$last"
 exit 0
 "#
@@ -343,16 +387,7 @@ fn credible_stand_in(path: PathBuf) -> PathBuf {
         path,
         &format!(
             r#"#!/bin/sh
-if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9 (stand-in)'; exit 0; fi
-for a in "$@"; do last="$a"; done
-# WRITE ONLY WHERE A LANE ASKED. This wrote to the last argument whatever it was, so
-# pointing it at a lane whose final argument is a FLAG deposited a file named `--manifest`
-# at the repository root — tracked, and breaking every `*` glob there until someone
-# noticed. A stand-in that can write outside its scratch space turns an abandoned
-# experiment into a committed artifact.
-case "$last" in
-  -*|"") echo "stand-in refusing to write to non-path argument: $last" >&2; exit 3 ;;
-esac
+{STAND_IN_GUARD}
 case "$last" in
   *.pack) printf '{PACK_MAGIC}and then some payload bytes' >"$last" ;;
   *) printf '%s\n' '<http://example.org/s> <http://example.org/p> <http://example.org/o> .' >"$last" ;;
@@ -895,4 +930,127 @@ fn the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute() {
         "make lubm: the failure must name the arena knob, showing the ontology was \
          accepted; output:\n{combined}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE STAND-INS THEMSELVES ARE UNDER TEST, because one of them committed an artifact.
+//
+// The `--manifest` incident was this file's stand-in writing to the last argument it was given.
+// The repair refused a flag-shaped last argument, and the claim that both holes were closed was
+// false: both lanes pass the query TEXT last, so the same 71 bytes still landed in the working
+// directory under the same name — and the sibling `convert_stand_in` had no guard at all.
+//
+// That survived because the refusal had NO OBSERVING TEST. `grep` for its message found only the
+// fixture that emits it. A refusal nothing executes is a comment.
+// ---------------------------------------------------------------------------------------------
+
+/// Runs a stand-in with `args` from inside `cwd`, returning `(status, stderr, files created)`.
+///
+/// The created-file list is what makes this an observation rather than a status check: the defect
+/// was never a wrong exit code, it was a file appearing somewhere nobody looked.
+fn run_stand_in(binary: &Path, cwd: &Path, args: &[&str]) -> (i32, String, Vec<String>) {
+    let before: std::collections::BTreeSet<String> = std::fs::read_dir(cwd)
+        .expect("enumerate the working directory")
+        .map(|e| e.expect("read an entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    let output = Command::new(binary)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("run the stand-in");
+    let after: std::collections::BTreeSet<String> = std::fs::read_dir(cwd)
+        .expect("enumerate the working directory")
+        .map(|e| e.expect("read an entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        after.difference(&before).cloned().collect(),
+    )
+}
+
+#[test]
+fn a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names() {
+    let root = scratch("stand-in-destinations");
+    let workdir = root.join("cwd");
+    std::fs::create_dir_all(&workdir).expect("create the working directory");
+
+    // BOTH stand-ins, because the defect was present in one and the guard in the other, and that
+    // asymmetry is the failure shape this whole file opens by warning about.
+    for (label, binary) in [
+        ("credible", credible_stand_in(root.join("credible"))),
+        ("silent-drop", convert_stand_in(root.join("dropper"), "")),
+    ] {
+        // 1. The exact invocation that produced the committed `--manifest`: a lane's `query`,
+        //    whose final argument is the query text. 71 bytes, in the CWD, under a name the
+        //    tracked-path gate ACCEPTS — which is why the gate alone did not close this.
+        let query_text = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1";
+        let (code, err, created) = run_stand_in(
+            &binary,
+            &workdir,
+            &["query", "--data", "/nonexistent.pack", "--results-format", "json", query_text],
+        );
+        assert!(
+            created.is_empty(),
+            "{label}: `query` must create no file; it created {created:?} (this is the \
+             71-byte artifact that was committed). stderr:\n{err}"
+        );
+        assert_eq!(
+            code, 0,
+            "{label}: refusing to write is not an error for `query` — it writes to standard \
+             output. stderr:\n{err}"
+        );
+
+        // 2. A flag-shaped destination, which is the shape the name itself had.
+        let (code, err, created) =
+            run_stand_in(&binary, &workdir, &["convert", "--from", "ntriples", "--manifest"]);
+        assert_eq!(code, 3, "{label}: a flag-shaped destination must be refused; stderr:\n{err}");
+        assert!(created.is_empty(), "{label}: created {created:?}");
+
+        // 3. A relative destination. A lane never passes one, and a relative path is precisely
+        //    what lands in whatever directory the harness happened to be standing in.
+        let (code, err, created) =
+            run_stand_in(&binary, &workdir, &["convert", "--from", "ntriples", "in.nt", "out.nq"]);
+        assert_eq!(code, 3, "{label}: a relative destination must be refused; stderr:\n{err}");
+        assert!(created.is_empty(), "{label}: created {created:?}");
+
+        // 4. An absolute destination whose directory does not exist. A lane creates its arena
+        //    before converting into it, so this is a harness mistake, not a lane instruction.
+        let nowhere = root.join("no-such-dir").join("out.nq");
+        let (code, err, created) = run_stand_in(
+            &binary,
+            &workdir,
+            &["convert", "--from", "ntriples", "/in.nt", nowhere.to_str().expect("utf-8 path")],
+        );
+        assert_eq!(code, 3, "{label}: stderr:\n{err}");
+        assert!(created.is_empty(), "{label}: created {created:?}");
+
+        // THE NEIGHBOUR, and it is the half that decides whether any of this is usable: the
+        // destination a lane really does pass must still be written. Guard the four shapes above
+        // by refusing everything and every lane test in this file goes green for the wrong reason.
+        let wanted = root.join("wanted.nq");
+        let (code, err, created) = run_stand_in(
+            &binary,
+            &workdir,
+            &["convert", "--from", "ntriples", "/in.nt", wanted.to_str().expect("utf-8 path")],
+        );
+        assert_eq!(
+            code, 0,
+            "{label}: an absolute destination in an existing directory is what every lane passes \
+             and must be honoured; stderr:\n{err}"
+        );
+        assert!(
+            wanted.is_file(),
+            "{label}: the destination must actually be written, or these tests prove nothing \
+             about the lanes"
+        );
+        assert!(
+            created.is_empty(),
+            "{label}: and nothing may appear in the working directory even on the accepted \
+             path; created {created:?}"
+        );
+        std::fs::remove_file(&wanted).expect("remove the accepted destination");
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
 }
