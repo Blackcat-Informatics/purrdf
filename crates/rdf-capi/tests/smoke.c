@@ -19,6 +19,35 @@
         }                                                                       \
     } while (0)
 
+/* Accumulates the windows a streaming serialization hands out, so the result can be
+ * compared byte-for-byte against the eager spelling. */
+struct ChunkSink {
+    uint8_t *bytes;
+    size_t len;
+    size_t calls;
+};
+
+static int32_t collect_chunk(const uint8_t *chunk, size_t len, void *user_data) {
+    struct ChunkSink *sink = (struct ChunkSink *)user_data;
+    uint8_t *grown = (uint8_t *)realloc(sink->bytes, sink->len + len);
+    if (grown == NULL) {
+        return 1;
+    }
+    memcpy(grown + sink->len, chunk, len);
+    sink->bytes = grown;
+    sink->len += len;
+    sink->calls += 1;
+    return 0;
+}
+
+/* Refuses every window. The serialization must fail rather than truncate. */
+static int32_t refuse_chunk(const uint8_t *chunk, size_t len, void *user_data) {
+    (void)chunk;
+    (void)len;
+    (void)user_data;
+    return 7;
+}
+
 static uint8_t *read_file(const char *path, size_t *length) {
     FILE *stream = fopen(path, "rb");
     if (stream == NULL) {
@@ -511,6 +540,47 @@ int main(int argc, char **argv) {
     CHECK(purrdf_buffer_data(serialized, &sbytes, &slen) == PURRDF_STATUS_OK,
           "buffer_data");
     CHECK(slen > 0, "serialized bytes present");
+
+    /* The streaming twin: the same bytes, delivered a window at a time.
+     *
+     * This is why the sink's destination is a trait rather than a Rust writer — a C
+     * function pointer is not `io::Write`, and a caller behind this boundary would
+     * otherwise have to take delivery of a whole document before writing a byte of
+     * it. The assertion is byte equality against the buffer above, because the only
+     * thing that may differ between the two spellings is the delivery. */
+    struct ChunkSink streamed = {0};
+    size_t s_dropped = 99, s_directional = 99, s_named = 99;
+    rc = purrdf_serialize_to_callback(dataset, "application/n-triples", NULL,
+                                      collect_chunk, &streamed, &s_dropped,
+                                      &s_directional, &s_named, &error);
+    CHECK(rc == PURRDF_STATUS_OK, "serialize_to_callback");
+    CHECK(streamed.calls > 0, "the callback was actually invoked");
+    CHECK(streamed.len == slen, "streamed length equals eager length");
+    CHECK(memcmp(streamed.bytes, sbytes, slen) == 0,
+          "streamed bytes equal eager bytes");
+    CHECK(s_dropped == dropped && s_directional == directional &&
+              s_named == named_graph_rows,
+          "streamed loss counts equal eager loss counts");
+    free(streamed.bytes);
+
+    /* A callback that refuses must surface as an error, not as a short document.
+     * Accepting-and-discarding would return OK with the caller holding a truncated
+     * answer and no way to know. */
+    struct ChunkSink refusing = {0};
+    rc = purrdf_serialize_to_callback(dataset, "application/n-triples", NULL,
+                                      refuse_chunk, &refusing, NULL, NULL, NULL,
+                                      &error);
+    CHECK(rc != PURRDF_STATUS_OK, "a refusing callback must fail the call");
+    purrdf_error_free(error);
+    error = NULL;
+
+    /* A null callback is a usage error, not a silent no-op. */
+    rc = purrdf_serialize_to_callback(dataset, "application/n-triples", NULL, NULL,
+                                      NULL, NULL, NULL, NULL, &error);
+    CHECK(rc == PURRDF_STATUS_NULL_POINTER, "a null callback is refused");
+    purrdf_error_free(error);
+    error = NULL;
+
     purrdf_buffer_free(serialized);
 
     /* A graph-carrying dataset meeting a single-graph syntax.

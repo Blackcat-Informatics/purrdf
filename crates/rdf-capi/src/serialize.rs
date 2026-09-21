@@ -6,12 +6,14 @@
 //! statement layer, dropped base directions, and rows the single-graph flattening
 //! discarded (MAXIMAL INFORMATION FLOW).
 
-use std::os::raw::c_char;
+use std::io::Write as _;
+use std::os::raw::{c_char, c_void};
 use std::sync::Arc;
 
 use purrdf_rs::{
-    CompiledJsonLdContext, JsonLdSerializeMode, JsonLdSerializeOptions, classify,
-    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    CompiledJsonLdContext, JsonLdSerializeMode, JsonLdSerializeOptions, SerializeGraph,
+    SerializeOptions, StatementLayer, classify, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -305,6 +307,135 @@ pub unsafe extern "C" fn purrdf_serialize(
                 *out_named_graph_rows_dropped = outcome.named_graph_rows_dropped;
             }
             *out_buffer = PurrdfBuffer::into_raw(outcome.bytes);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// A C callback receiving ONE WINDOW of a serialized document.
+///
+/// Called repeatedly as the document is produced, never once with the whole thing.
+/// Return `0` to accept the window; any other value aborts the serialization and
+/// surfaces as [`PurrdfStatus::SerializeError`], carrying the value returned.
+///
+/// The pointer and length are valid only for the duration of the call: the bytes are
+/// the serializer's staging window and are reused immediately afterwards. A callback
+/// that needs to keep them must copy them.
+/// The alias itself carries the `Option`, which is what lets cbindgen emit a plain
+/// nullable C function pointer. Spelled `Option<PurrdfWriteCallback>` at the
+/// parameter instead, cbindgen cannot see through the alias and emits an opaque
+/// `Option_PurrdfWriteCallback` struct — a header that compiles and that no C caller
+/// can actually pass a function to.
+pub type PurrdfWriteCallback =
+    Option<unsafe extern "C" fn(chunk: *const u8, len: usize, user_data: *mut c_void) -> i32>;
+
+/// Adapts a C callback to the writer the streaming serializer expects.
+struct CallbackWriter {
+    on_chunk: unsafe extern "C" fn(chunk: *const u8, len: usize, user_data: *mut c_void) -> i32,
+    user_data: *mut c_void,
+}
+
+impl std::io::Write for CallbackWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // SAFETY: the caller of `purrdf_serialize_to_callback` promises `on_chunk` is
+        // callable with `user_data` for the duration of the call. `buf` is borrowed
+        // from the sink's staging window and outlives this call.
+        let code = unsafe { (self.on_chunk)(buf.as_ptr(), buf.len(), self.user_data) };
+        if code == 0 {
+            Ok(buf.len())
+        } else {
+            Err(std::io::Error::other(format!(
+                "the write callback refused a {}-byte window, returning {code}",
+                buf.len()
+            )))
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Serialize a dataset INCREMENTALLY, handing each window to `on_chunk`.
+///
+/// The streaming twin of [`purrdf_serialize`], and the reason the sink's destination
+/// is a trait rather than a Rust writer: a C function pointer is not `io::Write`, and
+/// a caller embedding PurRDF behind a C boundary otherwise had to take delivery of the
+/// whole document before it could write a byte of it. Peak memory here tracks the
+/// serializer's staging window instead of the document's size.
+///
+/// The bytes are IDENTICAL to what [`purrdf_serialize`] produces; only the delivery
+/// differs. The loss counts mean exactly what they mean there.
+///
+/// # Safety
+/// `dataset` must be a live handle; the `c_char` pointers must be null or
+/// NUL-terminated; `on_chunk` must be callable with `user_data` for the duration of
+/// the call; the out-params must be null or writable.
+#[unsafe(no_mangle)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C ABI names each input and each independently-nullable loss count explicitly"
+)]
+pub unsafe extern "C" fn purrdf_serialize_to_callback(
+    dataset: *const PurrdfDataset,
+    media_type: *const c_char,
+    base_iri: *const c_char,
+    on_chunk: PurrdfWriteCallback,
+    user_data: *mut c_void,
+    out_statement_rows_dropped: *mut usize,
+    out_directional_literals_dropped: *mut usize,
+    out_named_graph_rows_dropped: *mut usize,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || media_type.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_serialize_to_callback",
+                ));
+            }
+            let Some(on_chunk) = on_chunk else {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "purrdf_serialize_to_callback requires a write callback",
+                ));
+            };
+            let media = cstr_to_str(media_type)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+            let format = classify(media).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
+            })?;
+
+            let mut writer = CallbackWriter {
+                on_chunk,
+                user_data,
+            };
+            let report = serialize_dataset_to_writer_with(
+                PurrdfDataset::dataset(dataset),
+                format,
+                base_iri,
+                &SerializeOptions {
+                    selection: SerializeGraph::Dataset,
+                    statement_layer: StatementLayer::PerFormatCapability,
+                    jsonld_options: None,
+                },
+                &mut writer,
+            )
+            .map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+            })?;
+            let _ = writer.flush();
+
+            if !out_statement_rows_dropped.is_null() {
+                *out_statement_rows_dropped = report.statement_rows_dropped;
+            }
+            if !out_directional_literals_dropped.is_null() {
+                *out_directional_literals_dropped = report.directional_literals_dropped;
+            }
+            if !out_named_graph_rows_dropped.is_null() {
+                *out_named_graph_rows_dropped = report.named_graph_rows_dropped;
+            }
             Ok(PurrdfStatus::Ok)
         })
     }

@@ -974,6 +974,24 @@ typedef struct {
 } PurrdfGovernedEntailmentEvidence;
 
 /**
+ * A C callback receiving ONE WINDOW of a serialized document.
+ *
+ * Called repeatedly as the document is produced, never once with the whole thing.
+ * Return `0` to accept the window; any other value aborts the serialization and
+ * surfaces as [`PurrdfStatus::SerializeError`], carrying the value returned.
+ *
+ * The pointer and length are valid only for the duration of the call: the bytes are
+ * the serializer's staging window and are reused immediately afterwards. A callback
+ * that needs to keep them must copy them.
+ * The alias itself carries the `Option`, which is what lets cbindgen emit a plain
+ * nullable C function pointer. Spelled `Option<PurrdfWriteCallback>` at the
+ * parameter instead, cbindgen cannot see through the alias and emits an opaque
+ * `Option_PurrdfWriteCallback` struct — a header that compiles and that no C caller
+ * can actually pass a function to.
+ */
+typedef int32_t (*PurrdfWriteCallback)(const uint8_t *chunk, size_t len, void *user_data);
+
+/**
  * The SemVer ABI version reported by `purrdf_abi_version`.
  */
 typedef struct {
@@ -2509,6 +2527,33 @@ int32_t purrdf_serialize(const PurrdfDataset *dataset,
                          size_t *out_directional_literals_dropped,
                          size_t *out_named_graph_rows_dropped,
                          PurrdfError **out_error);
+
+/**
+ * Serialize a dataset INCREMENTALLY, handing each window to `on_chunk`.
+ *
+ * The streaming twin of [`purrdf_serialize`], and the reason the sink's destination
+ * is a trait rather than a Rust writer: a C function pointer is not `io::Write`, and
+ * a caller embedding PurRDF behind a C boundary otherwise had to take delivery of the
+ * whole document before it could write a byte of it. Peak memory here tracks the
+ * serializer's staging window instead of the document's size.
+ *
+ * The bytes are IDENTICAL to what [`purrdf_serialize`] produces; only the delivery
+ * differs. The loss counts mean exactly what they mean there.
+ *
+ * # Safety
+ * `dataset` must be a live handle; the `c_char` pointers must be null or
+ * NUL-terminated; `on_chunk` must be callable with `user_data` for the duration of
+ * the call; the out-params must be null or writable.
+ */
+int32_t purrdf_serialize_to_callback(const PurrdfDataset *dataset,
+                                     const char *media_type,
+                                     const char *base_iri,
+                                     PurrdfWriteCallback on_chunk,
+                                     void *user_data,
+                                     size_t *out_statement_rows_dropped,
+                                     size_t *out_directional_literals_dropped,
+                                     size_t *out_named_graph_rows_dropped,
+                                     PurrdfError **out_error);
 
 /**
  * Validate a data graph (N-Triples) against a shapes graph (Turtle) and write
