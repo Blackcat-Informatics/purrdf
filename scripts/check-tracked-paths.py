@@ -134,9 +134,14 @@ def _misrendering(component: str) -> str | None:
             # TWELVE ASCII CHARACTERS DO HAVE STANDARDIZED EMOJI VARIATION SEQUENCES: the
             # keycap bases `#`, `*` and `0`-`9`. `1️⃣` is U+0031 U+FE0F U+20E3, and refusing
             # it was an over-refusal whose diagnostic asserted a falsehood -- "which has no
-            # variant to select" -- about a path that does NOT render like `1.md`. The rule's
-            # own stated ground was not met, which is the tell.
-            if base in _KEYCAP_BASES:
+            # variant to select" -- about a path that does NOT render like `1.md`.
+            #
+            # THE WHOLE SEQUENCE, NOT JUST THE BASE. Exempting the base alone reopened the
+            # silent drop one character over: `docs/v1<VS16>.md` with no U+20E3 renders
+            # exactly like `docs/v1.md` and was accepted. A keycap is base + VS16 + U+20E3,
+            # so the terminator is what distinguishes a real sequence from an invisible
+            # selector that happens to follow a digit.
+            if base in _KEYCAP_BASES and component[index + 1 : index + 2] == "\u20e3":
                 continue
             if base == "" or base.isascii():
                 return (
@@ -303,6 +308,10 @@ def self_test() -> int:
         # identically to `docs/README.md` -- two tracked paths, one rendering. The wholesale
         # U+FE0F exclusion accepted it, trading an over-refusal for a silent drop.
         "docs/README\ufe0f.md",
+        # A KEYCAP BASE WITHOUT ITS TERMINATOR. `v1<VS16>` renders exactly like `v1`, so
+        # exempting the base alone traded the keycap over-refusal for the silent drop again.
+        "docs/v1\ufe0f.md",
+        "docs/x#\ufe0f.md",
         "docs/README\ufe0e.md",
         "docs/a\ufe00b.md",
         "docs/reserved\u2065.md",
@@ -356,7 +365,9 @@ def self_test() -> int:
         "docs/emoji/❤️.md",
         "docs/emoji/⚠️-warning.md",
         "docs/emoji/🏳️‍🌈.md",
-        # The keycap sequences, whose ASCII base DOES have an emoji variant.
+        # The keycap sequences, whose ASCII base DOES have an emoji variant. The U+20E3
+        # terminator is part of what makes them legitimate -- see the refused list for the
+        # bare selector that renders as nothing.
         "docs/1️⃣-first.md",
         "docs/#️⃣-hash.md",
     ]

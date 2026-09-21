@@ -204,6 +204,13 @@ def embedded_programs(text: str) -> list[tuple[int, str]]:
     """
     programs: list[tuple[int, str]] = []
     for match in _QUOTED_BODY.finditer(text):
+        # A SHELL COMMENT MENTIONING THE IDIOM IS NOT AN INVOCATION. `# see python3 -c
+        # 'h.read(4194304)' for the idiom` produced a false offence -- an over-refusal that
+        # would flag a comment documenting the very rule this gate enforces. Only the line
+        # the match STARTS on matters: a `#` inside an extracted body is Python, not shell.
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        if text[line_start : match.start()].lstrip().startswith("#"):
+            continue
         programs.append((text[: match.start(1)].count("\n"), match.group(1)))
     lines = text.splitlines()
     for match in _HEREDOC_OPEN.finditer(text):
@@ -239,6 +246,15 @@ def shell_offences(path: Path, text: str) -> list[str]:
     masked = text
     for line_offset, body in embedded_programs(text):
         masked = masked.replace(body, "\n" * body.count("\n"), 1)
+    # A WHOLE-LINE SHELL COMMENT IS DOCUMENTATION, not a read. Without this, a comment
+    # mentioning the idiom this gate enforces -- `# see python3 -c 'h.read(4194304)'` -- was
+    # itself an offence: an over-refusal against prose describing the rule. Blanked rather
+    # than dropped, so every later line number survives, and only in the SHELL path, where a
+    # line-initial `#` is unambiguous. A `#` inside an extracted body is Python and is judged
+    # by the walker, which is why this runs after the bodies are removed.
+    masked = "\n".join(
+        "" if line.lstrip().startswith("#") else line for line in masked.split("\n")
+    )
     found.extend(offences(path, masked))
     return found
 
