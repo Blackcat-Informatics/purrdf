@@ -47,7 +47,7 @@
 //!
 //! [`INNER_CONSTRAINT`] is therefore a `sh:sparql` SELECT, which is the one class
 //! of constraint in this crate whose conforming evaluation has a real, pinned
-//! per-focus-node cost — 83 allocations for exactly this surface, per
+//! per-focus-node cost — 78 allocations for exactly this surface, per
 //! `tests/sparql_path_alloc.rs`. Skipping one of those is an event an allocation
 //! count can see, and the figures below are the size of one query evaluation
 //! rather than of a rounding difference.

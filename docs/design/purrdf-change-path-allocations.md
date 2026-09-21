@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 83 |
-| custom `sh:ask` component | 170 |
-| custom `sh:select` component | 98 |
-| `sh:expression` function call | 188 |
+| `sh:sparql` constraint | 78 |
+| custom `sh:ask` component | 164 |
+| custom `sh:select` component | 92 |
+| `sh:expression` function call | 180 |
 
 The term is flat in the size of the data graph, so it is the price of executing a
 query once per focus node, not a scan. That distinction matters: a scan would be
@@ -84,7 +84,7 @@ evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
 and the slopes cannot be differenced. Figures are against the baseline of
 96 / 214 / 116 / 194 that held when the decomposition was taken; the reductions
-described in the next section have since moved them to 83 / 170 / 98 / 188, by
+described in the next section have since moved them to 78 / 164 / 92 / 180, by
 emptying part of the term-materialization row and most of the rebuild cost inside
 the pushdown, seed and expression-walk rows.
 
@@ -215,6 +215,16 @@ for it seeds every group pattern that starts from nothing. It is now a
 process-wide shared `Arc`, which is sound because nothing in the crate reaches a
 `VarSchema` through `Arc::make_mut` or `Arc::get_mut`. That took the term to
 83 / 170 / 98 / 188.
+
+The fourth: a `VarSchema` carried a hash index for what is almost always a
+handful of columns, and every `Project`, `Values` and `Bgp` node builds one on
+every execution. Below nine columns the ordinal is now found by scanning the
+column vector, and a `DetHashMap` that never takes an insert never allocates a
+table — the same argument `crate::substitute`'s `ExprSubs` already makes one layer
+up. Above the threshold the index is still built and is still authoritative, so a
+wide schema keeps its O(1) lookup; nothing reads a column ordinal inside a per-row
+loop, so the scan is not on a quadratic path. That took the term to
+78 / 164 / 92 / 180.
 
 The clone itself stays. The substituted query must not poison the shared
 plan-cache entry, so each execution rewrites its own copy; what is gone is

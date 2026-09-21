@@ -55,21 +55,22 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 83 | 1,277,672 | 6,423 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 170 | 16,156 | 12,582 |
-//! | custom `sh:select` component | 2,738 | 98 | 1,278,972 | 7,544 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 188 | 13,393 | 11,885 |
+//! | `sh:sparql` constraint | 2,695 | 78 | 1,277,672 | 5,843 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 164 | 16,156 | 11,486 |
+//! | custom `sh:select` component | 2,738 | 92 | 1,278,972 | 6,748 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 180 | 13,393 | 10,957 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
-//! cheaper, and the pins move with it. The four surfaces last dropped by 13, 44,
-//! 18 and 6 allocations respectively (from 96, 214, 116 and 194) through three
+//! cheaper, and the pins move with it. The four surfaces last dropped by 18, 50,
+//! 24 and 14 allocations respectively (from 96, 214, 116 and 194) through four
 //! changes: the pre-binding rewrite stopped grounding every pre-bound value twice,
 //! once for the `VALUES` seed and again for the expression-position walk; it
 //! stopped rebuilding the algebra in order to rewrite it, both halves now mutating
 //! a clone of the prepared plan in place so a visited node costs no fresh `Box`;
-//! and the empty variable schema, which is a constant reached on every execution,
-//! became a process-wide shared one.
+//! the empty variable schema, a constant reached on every execution, became a
+//! process-wide shared one; and a variable schema narrower than nine columns
+//! stopped building a hash index it can answer by scanning.
 //!
 //! # The two big rows and the two small ones are two different findings
 //!
@@ -323,7 +324,7 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 83,
+        per_focus_node: 78,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -340,7 +341,7 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 170,
+        per_focus_node: 164,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -361,7 +362,7 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 98,
+        per_focus_node: 92,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -376,7 +377,7 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 188,
+        per_focus_node: 180,
         results_per_violation: 1,
     },
 ];

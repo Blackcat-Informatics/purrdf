@@ -33,9 +33,32 @@ use crate::scratch::SolutionTerm;
 pub struct VarSchema {
     /// column ordinal → variable.
     cols: Vec<Variable>,
-    /// variable → column ordinal.
+    /// variable → column ordinal, built only once [`INDEXED_ABOVE`] is exceeded.
+    ///
+    /// Empty means "not built": below the threshold the ordinal is found by scanning
+    /// [`Self::cols`], and a `DetHashMap` that has never had an insert has never
+    /// allocated a table.
     index: DetHashMap<Variable, usize>,
 }
+
+/// Above this many columns a schema builds a hash index; at or below it, lookups
+/// scan the column vector.
+///
+/// The same argument `crate::substitute`'s `ExprSubs` makes, one layer down and on a
+/// hotter path: hashing a string to find one of three entries is slower than
+/// comparing three short strings, and it charges a heap allocation for the table.
+/// Every `Project`, `Values` and `Bgp` node builds a schema on every execution, so
+/// on the SHACL change path that table was allocated several times per focus node
+/// for a handful of columns. `Variable` is `Arc<str>`-backed and every column of a
+/// given query comes from one parse, so the scan's comparisons are usually pointer
+/// equality.
+///
+/// The threshold is not a tolerance. Above it the index is built and is
+/// authoritative, so a wide schema keeps its O(1) lookup; this only decides which
+/// representation answers, never what the answer is. Nothing reads `index_of` inside
+/// a per-ROW loop — every caller resolves a column once per node — so the scan is
+/// not on a quadratic path.
+const INDEXED_ABOVE: usize = 8;
 
 impl VarSchema {
     /// An empty schema (zero columns) — the schema of the identity table `Z`.
@@ -56,25 +79,40 @@ impl VarSchema {
 
     /// Append a variable as a new column if absent; return its column ordinal.
     pub fn push(&mut self, var: Variable) -> usize {
-        if let Some(&i) = self.index.get(&var) {
+        if let Some(i) = self.index_of(&var) {
             return i;
         }
-        let i = self.cols.len();
-        self.index.insert(var.clone(), i);
+        let ordinal = self.cols.len();
         self.cols.push(var);
-        i
+        if self.cols.len() > INDEXED_ABOVE {
+            if self.index.is_empty() {
+                // Crossing the threshold: index everything accumulated so far, this
+                // column included, so the map is authoritative from here on.
+                self.index.reserve(self.cols.len());
+                for (i, col) in self.cols.iter().enumerate() {
+                    self.index.insert(col.clone(), i);
+                }
+            } else {
+                self.index.insert(self.cols[ordinal].clone(), ordinal);
+            }
+        }
+        ordinal
     }
 
     /// The column ordinal of `var`, if it is in the schema.
     #[inline]
     pub fn index_of(&self, var: &Variable) -> Option<usize> {
-        self.index.get(var).copied()
+        if self.index.is_empty() {
+            self.cols.iter().position(|col| col == var)
+        } else {
+            self.index.get(var).copied()
+        }
     }
 
     /// Whether `var` is a column of this schema.
     #[inline]
     pub fn contains(&self, var: &Variable) -> bool {
-        self.index.contains_key(var)
+        self.index_of(var).is_some()
     }
 
     /// The columns in order.
@@ -226,6 +264,67 @@ mod tests {
 
     fn term(i: u32) -> Option<SolutionTerm> {
         Some(SolutionTerm::Existing(TermId::from_index(i)))
+    }
+
+    /// **The two lookup representations answer identically, on both sides of the
+    /// threshold and across the crossing.**
+    ///
+    /// [`INDEXED_ABOVE`] chooses between scanning the column vector and consulting a
+    /// hash index. That choice is invisible only if both answer the same for every
+    /// column and every non-column, so this drives a schema one variable at a time
+    /// from empty to well past the threshold and checks every ordinal after each
+    /// push — including the ordinals assigned BEFORE the index existed, which the
+    /// crossing has to carry over rather than renumber.
+    #[test]
+    fn schema_lookup_agrees_on_both_sides_of_the_index_threshold() {
+        let names: Vec<String> = (0..INDEXED_ABOVE * 3).map(|i| format!("v{i}")).collect();
+        let mut schema = VarSchema::new();
+        for (expected_ordinal, name) in names.iter().enumerate() {
+            assert_eq!(schema.push(var(name)), expected_ordinal);
+            assert!(
+                schema.len() <= INDEXED_ABOVE || !schema.index.is_empty(),
+                "a schema wider than the threshold must have built its index"
+            );
+            assert!(
+                schema.len() > INDEXED_ABOVE || schema.index.is_empty(),
+                "a schema at or below the threshold must not have allocated an index"
+            );
+            // Every column placed so far, including those numbered before the
+            // crossing, still resolves to the ordinal it was given.
+            for (ordinal, seen) in names[..=expected_ordinal].iter().enumerate() {
+                assert_eq!(
+                    schema.index_of(&var(seen)),
+                    Some(ordinal),
+                    "column {seen} moved at width {}",
+                    schema.len()
+                );
+                assert!(schema.contains(&var(seen)));
+            }
+            assert_eq!(schema.index_of(&var("absent")), None);
+            assert!(!schema.contains(&var("absent")));
+        }
+    }
+
+    /// A repeated variable is still deduplicated once the index is authoritative.
+    #[test]
+    fn schema_dedups_above_the_index_threshold() {
+        let wide: Vec<Variable> = (0..INDEXED_ABOVE * 2)
+            .map(|i| var(&format!("v{i}")))
+            .collect();
+        let mut schema = VarSchema::from_vars(wide.clone());
+        let width = schema.len();
+        assert!(
+            width > INDEXED_ABOVE,
+            "the fixture must cross the threshold"
+        );
+        for (ordinal, v) in wide.iter().enumerate() {
+            assert_eq!(
+                schema.push(v.clone()),
+                ordinal,
+                "re-push must not add a column"
+            );
+        }
+        assert_eq!(schema.len(), width);
     }
 
     #[test]
