@@ -2596,6 +2596,74 @@ fn file_target_partial_output_is_removed_on_failure() {
     );
 }
 
+/// A symlinked output target keeps its LINK when the write fails part way.
+///
+/// This is the control's opposite number, and the pair is the point: the test
+/// above proves a plain regular file IS unlinked, this one proves a symlink is
+/// NOT. A guard that simply stopped unlinking anything would pass here and fail
+/// there, so neither test can be satisfied by doing nothing.
+///
+/// What makes the distinction load-bearing rather than fussy: `remove_file` on a
+/// symlink path removes the LINK, never the target. Unlinking here would destroy
+/// the only name the caller gave us and leave the half-written bytes sitting in
+/// the file the link pointed at — losing the reference while keeping the damage,
+/// which is strictly worse than keeping both.
+#[cfg(unix)]
+#[test]
+fn file_target_symlink_is_not_unlinked() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("in.nt");
+    // The same mid-document refusal the control uses: many good rows, then a
+    // literal carrying U+FFFF, which XML 1.0 cannot represent by any escape. The
+    // failure therefore lands after bytes have already reached the file.
+    use std::fmt::Write as _;
+    let mut doc = String::new();
+    for i in 0..500 {
+        let _ = writeln!(
+            doc,
+            "<https://example.org/s{i}> <https://example.org/p> \"value {i}\" ."
+        );
+    }
+    doc.push_str("<https://example.org/bad> <https://example.org/p> \"bad\\uFFFF\" .\n");
+    std::fs::write(&source, doc).expect("write source");
+
+    let target = dir.path().join("real.rdf");
+    std::fs::write(&target, b"").expect("seed the link target");
+    let link = dir.path().join("link.rdf");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_purrdf"))
+        .args(["convert", "--from", "nt", "--to", "rdfxml"])
+        .arg(&source)
+        .arg(&link)
+        .output()
+        .expect("run convert");
+
+    assert!(
+        !result.status.success(),
+        "an XML-unrepresentable scalar must still be refused through a symlink; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let link_meta = std::fs::symlink_metadata(&link)
+        .expect("the symlink must still exist after a failed write through it");
+    assert!(
+        link_meta.file_type().is_symlink(),
+        "the output path must still be the symlink the caller named"
+    );
+    assert!(
+        target.exists(),
+        "the link's target must still exist; unlinking the link would strand it"
+    );
+    // The message must not claim a removal that did not happen. An error that
+    // misreports cleanup is worse than one that reports none: it tells the caller
+    // the partial bytes are gone when they are still on disk under another name.
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        !stderr.contains("was removed"),
+        "nothing was removed through a symlink; the message must not say otherwise; got: {stderr}"
+    );
+}
+
 /// Overwriting an existing file truncates it, leaving no tail of the old contents.
 ///
 /// `fs::write` gave this for free; streaming has to keep it.

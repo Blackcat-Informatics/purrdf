@@ -121,7 +121,21 @@ impl OutTarget {
         // Only a REGULAR file may be unlinked on failure. A FIFO, a device node or
         // `/dev/stdout` would otherwise be removed by an error path, and a symlink
         // would lose the LINK while its target kept the half-written bytes.
-        let unlink_on_abandon = file.metadata().is_ok_and(|meta| meta.file_type().is_file());
+        //
+        // This asks the PATH, not the descriptor, and the difference is the whole
+        // guard. `File::create` above followed the link, so `file.metadata()` is an
+        // `fstat` describing whatever the link RESOLVED TO — for a symlink pointing
+        // at an ordinary file that reports a regular file, the guard opens, and
+        // `remove_file` on the path then unlinks the LINK and leaves the
+        // half-written target in place. Precisely the loss the comment above
+        // describes, performed by the code meant to prevent it.
+        //
+        // `symlink_metadata` is an `lstat`: it describes the path itself. A symlink
+        // reports `is_symlink()`, so `is_file()` is false and the guard stays shut —
+        // as it already did for a FIFO or a device node, which is why only the
+        // symlink leg was wrong.
+        let unlink_on_abandon =
+            std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file());
         Ok(Self::File {
             file,
             path,
