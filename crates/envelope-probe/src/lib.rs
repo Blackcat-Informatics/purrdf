@@ -77,6 +77,19 @@ pub struct Profile {
     pub paged_max_pages: u64,
     /// Byte budget for the bounded paged query.
     pub paged_max_bytes: u64,
+    /// The allocator peak the `roundtrip` workload must stay under, when one has
+    /// been established for this profile.
+    ///
+    /// This is a WORKLOAD budget, not the process ceiling. The process ceiling stays
+    /// pinned by the harness around the probe (a cgroup `MemoryMax`, a wasm linear
+    /// memory maximum) and this crate still only measures it; what this adds is one
+    /// workload whose own peak is an acceptance criterion rather than a reading.
+    ///
+    /// `None` means the envelope for this profile has not been measured yet, and the
+    /// report says so rather than passing quietly. It is NOT an opt-out: a profile
+    /// that has a number must meet it. Refusing a profile merely because nobody has
+    /// measured it yet would reject a valid run — the mirror of the silent pass.
+    pub roundtrip_peak_ceiling_bytes: Option<u64>,
 }
 
 /// The named profiles of the envelope proposal, plus `smoke` for tests and
@@ -90,6 +103,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 64,
         paged_max_pages: 4,
         paged_max_bytes: 8 << 20,
+        roundtrip_peak_ceiling_bytes: Some(4 << 20),
     },
     Profile {
         name: "wasm-browser",
@@ -98,6 +112,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 2_000,
         paged_max_pages: 8,
         paged_max_bytes: 64 << 20,
+        roundtrip_peak_ceiling_bytes: Some(150_000_000),
     },
     Profile {
         name: "sbc-32-small",
@@ -106,6 +121,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 15_625,
         paged_max_pages: 32,
         paged_max_bytes: 128 << 20,
+        roundtrip_peak_ceiling_bytes: None,
     },
     Profile {
         name: "sbc-64",
@@ -114,6 +130,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 78_125,
         paged_max_pages: 64,
         paged_max_bytes: 512 << 20,
+        roundtrip_peak_ceiling_bytes: None,
     },
     Profile {
         name: "edge-gateway",
@@ -122,6 +139,7 @@ pub const PROFILES: &[Profile] = &[
         paged_rows_per_page: 78_125,
         paged_max_pages: 64,
         paged_max_bytes: 1 << 30,
+        roundtrip_peak_ceiling_bytes: None,
     },
 ];
 

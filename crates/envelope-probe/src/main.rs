@@ -70,6 +70,21 @@ struct WorkloadRow {
     duration_ms: u128,
     peak_bytes: i64,
     retained_delta_bytes: i64,
+    /// The budget this workload's peak was held to, when the profile declares one.
+    ceiling_bytes: Option<u64>,
+}
+
+/// Whether `row` exceeded the budget its profile set for it.
+///
+/// The probe reports; this one workload also ACCEPTS or REFUSES, because the
+/// round-trip peak is an acceptance criterion rather than a reading. A profile with
+/// no measured envelope yet is reported as unchecked — refusing it would reject a
+/// valid run for the sole reason that nobody has measured it, which is the mirror of
+/// letting a real overrun pass.
+fn exceeds_ceiling(row: &WorkloadRow) -> Option<(i64, u64)> {
+    let ceiling = row.ceiling_bytes?;
+    let peak = u64::try_from(row.peak_bytes).unwrap_or(0);
+    (peak > ceiling).then_some((row.peak_bytes, ceiling))
 }
 
 fn print_report(profile: &Profile, rows: &[WorkloadRow]) {
@@ -80,8 +95,11 @@ fn print_report(profile: &Profile, rows: &[WorkloadRow]) {
     println!("  \"workloads\": [");
     for (index, row) in rows.iter().enumerate() {
         let comma = if index + 1 == rows.len() { "" } else { "," };
+        let ceiling = row
+            .ceiling_bytes
+            .map_or_else(|| "null".to_owned(), |bytes| bytes.to_string());
         print!(
-            "    {{\"name\": \"{}\", \"duration_ms\": {}, \"alloc_peak_bytes\": {}, \"retained_delta_bytes\": {}, ",
+            "    {{\"name\": \"{}\", \"duration_ms\": {}, \"alloc_peak_bytes\": {}, \"retained_delta_bytes\": {}, \"peak_ceiling_bytes\": {ceiling}, ",
             row.name, row.duration_ms, row.peak_bytes, row.retained_delta_bytes
         );
         match &row.status {
@@ -154,9 +172,24 @@ fn main() -> ExitCode {
             duration_ms,
             peak_bytes,
             retained_delta_bytes,
+            ceiling_bytes: (*workload == "roundtrip")
+                .then_some(active.roundtrip_peak_ceiling_bytes)
+                .flatten(),
         });
     }
+    // Reported BEFORE the verdict, so an overrun is announced beside the numbers that
+    // establish it rather than as a bare exit code.
     print_report(&active, &rows);
+    for row in &rows {
+        if let Some((peak, ceiling)) = exceeds_ceiling(row) {
+            eprintln!(
+                "envelope-probe: {} peaked at {peak} bytes against a {ceiling}-byte \
+                 ceiling for profile {}",
+                row.name, active.name
+            );
+            failed = true;
+        }
+    }
     if failed {
         ExitCode::FAILURE
     } else {
