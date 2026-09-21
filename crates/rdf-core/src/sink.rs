@@ -68,6 +68,10 @@
 
 use core::fmt;
 
+use sha2::{Digest as _, Sha256};
+
+use crate::content_store::ContentDigest;
+
 /// The staging window a draining sink holds between writes.
 ///
 /// Sized to amortize the per-window call and syscall without making the bounded
@@ -264,6 +268,59 @@ impl Measure {
 impl ByteDrain for Measure {
     fn drain(&mut self, chunk: &[u8]) -> Result<(), DrainError> {
         self.0 = self.0.saturating_add(chunk.len() as u64);
+        Ok(())
+    }
+}
+
+/// A [`ByteDrain`] that hashes what passes through and keeps none of it.
+///
+/// The SHA-256 of a document without the document. `ContentDigest::of` takes a
+/// `&[u8]`, so every caller that only wants a digest has had to materialize the
+/// whole thing first purely to hand it over — the canonical-form graph digest does
+/// exactly that, building a full N-Quads rendering and then reading it once.
+///
+/// This is the other half of [`Measure`]: that one answers "how long would the
+/// document be?" without building it, this one answers "what does it hash to?".
+/// Both make a decision that used to require the document decidable without it.
+///
+/// Pair it with [`Tee`] to write a document and digest it in one pass over the
+/// emitter, rather than materializing it and walking the bytes twice.
+pub struct Digest(Sha256);
+
+impl Digest {
+    /// A fresh SHA-256 drain.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Sha256::new())
+    }
+
+    /// The digest of everything drained so far.
+    #[must_use]
+    pub fn finish(self) -> ContentDigest {
+        let out = self.0.finalize();
+        let mut raw = [0u8; 32];
+        raw.copy_from_slice(&out);
+        ContentDigest::from_raw(raw)
+    }
+}
+
+impl Default for Digest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for Digest {
+    /// Deliberately opaque: a hasher's interior state is not meaningful to a
+    /// reader, and printing it would invite comparing two of them.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Digest(..)")
+    }
+}
+
+impl ByteDrain for Digest {
+    fn drain(&mut self, chunk: &[u8]) -> Result<(), DrainError> {
+        self.0.update(chunk);
         Ok(())
     }
 }
@@ -739,5 +796,91 @@ mod tests {
         expected.extend_from_slice("\u{4e2d}".as_bytes());
         expected.extend_from_slice(b"tail");
         assert_eq!(collected, expected);
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::{ByteDrain, Digest, Measure, Tee};
+    use crate::content_store::ContentDigest;
+    use core::fmt::Write as _;
+
+    /// Digesting a document in windows equals digesting it whole.
+    ///
+    /// This is the property the drain exists for: a caller that only wants the hash
+    /// no longer has to materialize the bytes to get one. If the two ever disagreed,
+    /// every digest computed through a sink would silently differ from every digest
+    /// computed the old way, and nothing else would notice.
+    #[test]
+    fn a_drained_digest_equals_the_whole_document_digest() {
+        let mut document = String::new();
+        for i in 0..4_000 {
+            let _ = writeln!(
+                document,
+                "<https://example.org/s{i}> <https://example.org/p> \"{i}\" ."
+            );
+        }
+
+        let mut drain = Digest::new();
+        // Deliberately uneven windows, including one that splits a multi-byte run,
+        // so the test would catch a drain that reset or mis-ordered its state.
+        let bytes = document.as_bytes();
+        let steps = [1usize, 7, 64, 4096, 3, 100_000];
+        let mut at = 0;
+        let mut windows = 0;
+        while at < bytes.len() {
+            let end = (at + steps[windows % steps.len()]).min(bytes.len());
+            drain
+                .drain(&bytes[at..end])
+                .expect("a digest never refuses");
+            at = end;
+            windows += 1;
+        }
+        assert!(
+            windows > steps.len(),
+            "the fixture must take more windows than there are step sizes, or the \
+             uneven-window property is not being exercised; took {windows}"
+        );
+
+        assert_eq!(
+            drain.finish(),
+            ContentDigest::of(document.as_bytes()),
+            "a windowed digest must equal the whole-document digest"
+        );
+    }
+
+    /// The neighbour: two different documents must not digest alike.
+    ///
+    /// Without this, a drain that ignored its input entirely would pass the test
+    /// above for every fixture, because both sides would be the digest of nothing.
+    #[test]
+    fn two_documents_do_not_share_a_drained_digest() {
+        let mut first = Digest::new();
+        first
+            .drain(b"<https://example.org/a> <https://example.org/p> \"1\" .\n")
+            .unwrap();
+        let mut second = Digest::new();
+        second
+            .drain(b"<https://example.org/b> <https://example.org/p> \"1\" .\n")
+            .unwrap();
+        assert_ne!(
+            first.finish(),
+            second.finish(),
+            "a drain that ignored its bytes would make every document hash alike"
+        );
+    }
+
+    /// `Tee` digests and measures in ONE pass, which is what it is for.
+    #[test]
+    fn a_tee_digests_and_measures_the_same_bytes() {
+        let document = "<https://example.org/s> <https://example.org/p> \"value\" .\n";
+        let mut measure = Measure::default();
+        let mut digest = Digest::new();
+        {
+            let mut tee = Tee(&mut measure, &mut digest);
+            tee.drain(document.as_bytes()).expect("tee never refuses");
+        }
+        assert_eq!(measure.bytes(), document.len() as u64);
+        assert_eq!(digest.finish(), ContentDigest::of(document.as_bytes()));
     }
 }
