@@ -253,6 +253,45 @@ impl Write for OutTarget {
 /// `src_codec` is the source format's loss-ledger codec name when known (`None`
 /// for a pack source or a codec-less syntax); it seeds the contract-loss half of
 /// the returned ledger.
+/// Stream a SPARQL result to `out`, under the same policy [`write_rdf`] applies to a
+/// dataset.
+///
+/// This exists so the results lane and the RDF lane share ONE answer to the two things
+/// that differ between a pipe and a file — a downstream reader closing early, and what a
+/// failure leaves behind. Before it, `query` built the whole results document and handed
+/// the bytes to `write_out`, which meant the sink the results serializers were given had
+/// no caller anywhere in the shipped binary: the capability existed and nothing reached
+/// it. It also meant `purrdf query … | head -1` formatted every row of an answer nobody
+/// was reading.
+///
+/// The `StreamOutcome` is discarded here for the same reason the eager lane discarded
+/// its `SerializeOutcome`: this lane reports an empty ledger, because a tabular or
+/// boolean result performs no lossy transcode. `provenance_dropped` is not a transcode
+/// loss and is refused up front rather than reported after the fact.
+pub(crate) fn write_results(
+    out: &str,
+    result: &purrdf_sparql_results::SparqlResult,
+    format: purrdf_sparql_results::SparqlResultsFormat,
+    provenance: &purrdf_sparql_results::ResultProvenance,
+    namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
+) -> Result<(), CliError> {
+    let mut target = OutTarget::open(out)?;
+    match purrdf_sparql_results::serialize_into(
+        result,
+        format,
+        provenance,
+        namespace,
+        target.writer(),
+    ) {
+        Ok(_) => target.finish(),
+        Err(error) => match target.abandon(error.into()) {
+            // The reader went away; what it asked for is complete enough for it.
+            CliError::DownstreamClosed => Ok(()),
+            other => Err(other),
+        },
+    }
+}
+
 pub(crate) fn write_rdf<D: DatasetView>(
     view: &D,
     out: &str,

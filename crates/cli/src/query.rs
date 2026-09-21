@@ -132,9 +132,7 @@ use purrdf_sparql_eval::{
     AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     PropertyFunctionRegistry, QueryExplanation, QueryGovernors, QueryOptions as EngineQueryOptions,
 };
-use purrdf_sparql_results::{
-    ProvenanceNamespace, ResultProvenance, SparqlResultsFormat, serialize,
-};
+use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, SparqlResultsFormat};
 use sha2::{Digest, Sha256};
 
 use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
@@ -449,8 +447,12 @@ fn emit_result(
             // `--provenance-namespace` + CSV/TSV is refused up front by
             // `refuse_unenforceable_combinations`, before this lane ever runs the query.
             let provenance = build_query_provenance(provenance_namespace, query);
-            let outcome = serialize(result, fmt, &provenance, provenance_namespace)?;
-            sink::write_out("-", &outcome.bytes)?;
+            // Streamed, like the RDF lane beside it: the document is written as it is
+            // produced rather than accumulated and handed over. This is what gives the
+            // results serializers' sink a caller in the shipped binary at all, and it is
+            // what makes `purrdf query … | head -1` stop within a row instead of
+            // formatting every row of an answer nobody is reading.
+            sink::write_results("-", result, fmt, &provenance, provenance_namespace)?;
             // A tabular/boolean result performs no lossy transcode; honor the flag
             // uniformly with an empty ledger.
             ledger::surface(ledger_target, &LossLedger::new())
