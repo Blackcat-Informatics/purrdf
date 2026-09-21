@@ -87,6 +87,9 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	cargo check --workspace --lib --tests --locked
 	python3 scripts/check-no-features.py
 	python3 scripts/check-toolchain-pin.py
+	python3 scripts/check-toolchain-pin.py --self-test
+	python3 scripts/check-gate-parity.py --self-test
+	python3 scripts/check-gate-parity.py
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
 	python3 scripts/check-iri-resolver-singleton.py

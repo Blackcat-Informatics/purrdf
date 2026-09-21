@@ -44,6 +44,12 @@ jobs:
       - name: Check the toolchain-pin gate can still fail
         run: python3 scripts/check-toolchain-pin.py --self-test
 
+      - name: Check the gate-parity gate can still fail
+        run: python3 scripts/check-gate-parity.py --self-test
+
+      - name: Check `make check` and this workflow run the same hygiene gates
+        run: python3 scripts/check-gate-parity.py
+
       - name: Check the build-profile gate can still fail
         run: python3 scripts/check-build-profiles.py --self-test
 
@@ -58,6 +64,27 @@ jobs:
 
       - name: Check no Rust test module hides in the PyO3 extension crate
         run: python3 scripts/check-python-binding-tests.py
+
+      - name: Check the terminal-predicate gate can still fail
+        run: python3 scripts/check-terminal-predicates.py --self-test
+
+      - name: Check no terminal predicate is re-derived outside its owning surface
+        run: python3 scripts/check-terminal-predicates.py
+
+      - name: Check the tracked-path gate can still fail
+        run: python3 scripts/check-tracked-paths.py --self-test
+
+      - name: Check no tracked path is unsafe to pass to a command
+        run: python3 scripts/check-tracked-paths.py
+
+      - name: Check the workload acquisition pins and refusals hold (offline)
+        run: python3 scripts/benchmark-acquire.py --self-test
+
+      - name: Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+        run: python3 scripts/watdiv-queries.py --offline-self-test
+
+      - name: Check the LUBM query normalisation and its controls hold (offline)
+        run: python3 scripts/lubm-queries.py --offline-self-test
 
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
