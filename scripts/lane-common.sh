@@ -377,19 +377,6 @@ lane_query_set_digest() {
 import hashlib, pathlib, stat, sys
 
 root = pathlib.Path(sys.argv[1])
-# THE DIRECTORY VANISHING IS THE STATE THIS DIGEST EXISTS TO DIAGNOSE, so it must
-# not be the one state that produces a traceback. A concurrent run deletes this
-# directory at the top of its own instantiation step, and `iterdir()` then raises
-# FileNotFoundError -- so the carefully written "another run is almost certainly
-# using the same arena" message never printed in precisely the case it was
-# written for. No apostrophes in here: this block is single-quoted to the shell.
-if not root.is_dir():
-    sys.exit(f"FAIL: {root} is not a directory; it was removed or replaced underneath this run")
-# AND THE CHECK ABOVE GUARDS NOTHING BELOW IT. `is_dir()` answers about one instant; the
-# enumeration, the lstat and the read all happen after it, and a concurrent run removing
-# the directory or a single query file between them produced a traceback instead of the
-# arena-conflict diagnostic -- which is the same defect the check was added to fix, one
-# statement later. Every filesystem call is therefore inside the handler.
 # A DIAGNOSIS MUST NOT NAME A CAUSE THE LANE HAS NOT ESTABLISHED, which is a law in
 # docs/design/purrdf-bench-lane-laws.md -- and the first version of these three handlers
 # broke it. They reported EVERY OSError as "removed or replaced underneath this run /
@@ -417,6 +404,28 @@ def explain(error, subject):
         "denial, which are the two states this lane knows how to explain."
     )
 
+# THE DIRECTORY VANISHING IS THE STATE THIS DIGEST EXISTS TO DIAGNOSE, so it must
+# not be the one state that produces a traceback. A concurrent run deletes this
+# directory at the top of its own instantiation step, and `iterdir()` then raises
+# FileNotFoundError -- so the carefully written "another run is almost certainly
+# using the same arena" message never printed in precisely the case it was
+# written for. No apostrophes in here: this block is single-quoted to the shell.
+try:
+    root_is_dir = root.is_dir()
+except OSError as error:
+    # `Path.is_dir()` swallows ENOENT/ENOTDIR and RAISES EACCES, so an unsearchable PARENT
+    # directory produced a traceback here -- outside every handler, six lines above a
+    # comment claiming every filesystem call was inside one. The traceback then landed on
+    # stderr, made the capture non-empty, and was published as the diagnostic of this lane:
+    # verbatim the outcome the comment above says must not happen.
+    sys.exit("FAIL: " + explain(error, str(root)))
+if not root_is_dir:
+    sys.exit(f"FAIL: {root} is not a directory; it was removed or replaced underneath this run")
+# AND THE CHECK ABOVE GUARDS NOTHING BELOW IT. `is_dir()` answers about one instant; the
+# enumeration, the lstat and the read all happen after it, and a concurrent run removing
+# the directory or a single query file between them produced a traceback instead of the
+# arena-conflict diagnostic -- which is the same defect the check was added to fix, one
+# statement later. Every filesystem call is therefore inside the handler.
 records = []
 try:
     entries = sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8"))

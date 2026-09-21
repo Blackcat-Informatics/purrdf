@@ -53,7 +53,25 @@ SCRIPTS = REPO_ROOT / "scripts"
 # spellings and three legal ones for the very number it exists to catch -- `0o20000000`,
 # `0b1000...`, `4 * 1024**2` -- walked straight through. A spelling list is a denylist, and
 # a denylist over syntax is the wrong shape.
+# A LINE SCAN IS THE FALLBACK, NOT THE METHOD. `[^)\n]+?` truncated at the first `)`, so
+# every call that matters was invisible -- and invisible as a SILENT SKIP, because the
+# truncated text fails to parse and an unparseable fragment reads the same as a name:
+#
+#   handle.read((4194304))          -> group `(4194304`     skipped
+#   handle.read(int(4194304))       -> group `int(4194304`  skipped
+#   os.read(fd, 4194304)            -> group `fd, 4194304`  skipped
+#   handle.read(\n    4 * 1024 * 1024\n)                    not matched at all
+#   scripts/lane-common.sh:310, `handle.read(int(sys.argv[2]))` -- this repository's own
+#   non-trivial read site, skipped
+#
+# Python files are therefore parsed and walked. Shell files keep the line scan, because
+# their embedded Python lives inside a single-quoted shell string and is not a module --
+# stated rather than left as a silent difference in coverage.
 READ_CALL = re.compile(r"\bread\(\s*([^)\n]+?)\s*\)")
+
+# A shift or exponent large enough to hang the fold. `read(2**10**10)` made `make check`
+# compute a number with ten billion digits; the gate's own denial-of-service.
+_MAX_EXPONENT = 64
 
 # The one definition, and the shell variable carrying it into an embedded block.
 DEFINING_FILE = "lane_chunk.py"
@@ -81,24 +99,79 @@ def _literal_value(literal: str) -> tuple[int | None, bool]:
         # is a literal that cannot be evaluated rather than a name.
         return None, bool(re.fullmatch(r"[0-9][0-9_]*", literal.strip()))
 
+    too_large = False
+
     def fold(node: ast.expr) -> int | None:
+        nonlocal too_large
         if isinstance(node, ast.Constant) and isinstance(node.value, int):
             return node.value
+        # `int(4194304)` is a chunk size written out with a no-op conversion around it.
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") in {"int", "round"}
+            and len(node.args) == 1
+        ):
+            return fold(node.args[0])
         if isinstance(node, ast.BinOp):
             left, right = fold(node.left), fold(node.right)
             if left is None or right is None:
                 return None
-            if isinstance(node.op, ast.LShift):
-                return left << right
             if isinstance(node.op, ast.Mult):
                 return left * right
-            if isinstance(node.op, ast.Pow):
-                return left**right
             if isinstance(node.op, ast.Add):
                 return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.FloorDiv) and right != 0:
+                return left // right
+            # BOUNDED, because an unbounded fold is the gate hanging itself: `2**10**10`
+            # asked `make check` for a number with ten billion digits.
+            # BOUNDED, AND REPORTED RATHER THAN SKIPPED. An unbounded fold is the gate
+            # hanging itself -- `2**10**10` asked `make check` for a number with ten
+            # billion digits -- and returning None for it would be a silent pass for a
+            # shape that is unmistakably a written-out size.
+            if isinstance(node.op, (ast.LShift, ast.Pow)) and right > _MAX_EXPONENT:
+                too_large = True
+                return None
+            if isinstance(node.op, ast.LShift):
+                return left << right
+            if isinstance(node.op, ast.Pow):
+                return left**right
         return None
 
-    return fold(tree.body), False
+    value = fold(tree.body)
+    return value, too_large
+
+
+def python_offences(path: Path, text: str) -> list[str]:
+    """Every literal-sized read in a Python file, found by parsing rather than matching."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as error:
+        return [f"{path.name}: cannot be parsed, so its reads cannot be judged ({error})"]
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        if name != "read":
+            continue
+        # `os.read(fd, n)` puts the count second; `handle.read(n)` first.
+        arguments = node.args[1:] if name == "read" and len(node.args) == 2 else node.args
+        for argument in arguments:
+            value, unparseable = _literal_value(ast.unparse(argument))
+            if unparseable:
+                found.append(
+                    f"{path.name}:{node.lineno}: `read({ast.unparse(argument)})` is a literal "
+                    f"this gate cannot evaluate, so it cannot be judged. Name it instead."
+                )
+            elif value is not None and value >= 1024:
+                found.append(
+                    f"{path.name}:{node.lineno}: `read({ast.unparse(argument)})` writes the "
+                    f"chunk size out. Name it: `STREAM_CHUNK_BYTES` from "
+                    f"scripts/{DEFINING_FILE}, or `${{LANE_STREAM_CHUNK_BYTES}}`."
+                )
+    return found
 
 
 def offences(path: Path, text: str) -> list[str]:
@@ -137,11 +210,14 @@ def scan() -> list[str]:
     # RECURSIVE. `iterdir()` left any future `scripts/<subdir>/*.py` unscanned, which is
     # the "a surface the gate never inspects" shape this file is one instance of.
     for path in sorted(SCRIPTS.rglob("*")):
-        if not path.is_file() or path.name in {DEFINING_FILE, GATE_FILE}:
+        # BY RELATIVE PATH, not by bare name: `scripts/vendor/lane_chunk.py` carrying a
+        # drifted constant would have been fully exempt while its neighbour was flagged.
+        if not path.is_file() or path.relative_to(SCRIPTS) in {Path(DEFINING_FILE), Path(GATE_FILE)}:
             continue
         if path.suffix not in {".py", ".sh"}:
             continue
-        found.extend(offences(path, path.read_text(encoding="utf-8")))
+        text = path.read_text(encoding="utf-8")
+        found.extend(python_offences(path, text) if path.suffix == ".py" else offences(path, text))
     return found
 
 
@@ -165,37 +241,55 @@ def self_test() -> int:
         "    data = handle.read(4 * 1024**2)",
         # A literal that cannot be evaluated is reported rather than skipped.
         "    data = handle.read(0123)",
+        # Every shape the regex finder could not see. Each is a chunk size written out.
+        "    data = handle.read((4194304))",
+        "    data = handle.read(int(4194304))",
+        "    data = os.read(fd, 4194304)",
+        "    data = handle.read(8388608 // 2)",
+        # A fold this gate refuses to compute is reported, not skipped: it asked for a
+        # number with ten billion digits and hung `make check`.
+        "    data = handle.read(2**10**10)",
     ]
     for line in refused:
-        if not offences(here, line):
+        # THROUGH THE PATH A PYTHON FILE ACTUALLY TAKES. These fixtures used to be judged
+        # by the line scanner while the gate walks the AST for `.py` -- a self-test
+        # proving a code path the gate does not use on the files it mostly reads.
+        if not python_offences(here, line.strip()):
             print(f"SELF-TEST FAIL: not refused: {line.strip()}")
             ok = False
     if ok:
         print(f"OK: self-test — all {len(refused)} written-out chunk sizes are refused")
 
-    # THE VALID NEIGHBOURS. Each of these is a real line from this repository or a
-    # shape indistinguishable from one, and a rule that refused any of them would
-    # pass the block above while making the gate unusable.
-    accepted = [
-        "        for chunk in iter(lambda: handle.read(STREAM_CHUNK_BYTES), b''):",
-        '    chunk = sys.stdin.buffer.read(chunk_bytes)',
-        "    text = handle.read()",
-        "const FLUSH_EVERY_BYTES: usize = 1 << 20;",
+    # THE VALID NEIGHBOURS, split by the path that actually judges them. A `for` clause
+    # and a Rust line are not standalone Python, so they belong to the line scanner that
+    # reads `.sh` files; the rest go through the AST walker that reads `.py`. Running them
+    # all through one path is how the first version of this split reported a correct
+    # fixture as unparseable.
+    accepted_python = [
+        "chunk = iter(lambda: handle.read(STREAM_CHUNK_BYTES), b'')",
+        "chunk = sys.stdin.buffer.read(chunk_bytes)",
+        "text = handle.read()",
         "_U64 = (1 << 64) - 1",
-        "    marker = handle.read(1)",
-        "    width = handle.read(2)",
-        # Below the stated kibibyte cutoff, so a fixed-width field read rather than a
-        # stream. The digit-counting rule refused this one while the docstring said
-        # otherwise.
-        "    header = handle.read(1000)",
+        "marker = handle.read(1)",
+        "width = handle.read(2)",
         "DIGEST = 1 << 22  # a bare definition is not a read",
+        # Below the stated kibibyte cutoff, so a fixed-width field read, not a stream.
+        "header = handle.read(1000)",
+        "rest = handle.read(-1)",
     ]
-    wrongly = [line for line in accepted if offences(here, line)]
+    accepted_other = [
+        # Not Python at all: a write-side figure in Rust with its own name and reason.
+        "const FLUSH_EVERY_BYTES: usize = 1 << 20;",
+        "    chunk = sys.stdin.buffer.read(chunk_bytes)",
+    ]
+    wrongly = [line for line in accepted_python if python_offences(here, line)]
+    wrongly += [line for line in accepted_other if offences(here, line)]
     if wrongly:
         print(f"SELF-TEST FAIL: these must be accepted and were refused: {wrongly}")
         ok = False
     else:
-        print(f"OK: self-test — all {len(accepted)} named or non-streaming reads are accepted")
+        total = len(accepted_python) + len(accepted_other)
+        print(f"OK: self-test — all {total} named or non-streaming reads are accepted")
 
     # And the tree as it stands, which is the neighbour for the whole gate.
     standing = scan()

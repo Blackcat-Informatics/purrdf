@@ -1324,6 +1324,8 @@ def shell_comments(src: str) -> list[tuple[int, int, str]]:
         n = len(line)
         i = 0
         quote: str | None = None
+        # The quotes a backtick substitution interrupted, innermost last.
+        pending: list[str | None] = []
         while i < n:
             c = line[i]
             if quote == "'":
@@ -1337,16 +1339,26 @@ def shell_comments(src: str) -> list[tuple[int, int, str]]:
                     i += 2
                     continue
                 # A BACKTICK INSIDE DOUBLE QUOTES OPENS COMMAND SUBSTITUTION, and code in
-                # that substitution can carry a comment. Treating the whole double-quoted
-                # region as opaque made `echo "A`# c`B"` invisible -- and the first attempt
-                # added the backtick to the word-start set, which does nothing here because
-                # the scanner never leaves the quoted state. Leaving the quote is the fix.
+                # that substitution can carry a comment. A STACK, not a toggle: the first
+                # attempt set `quote = None` and nothing restored the double quote at the
+                # CLOSING backtick, so every later quote on the line toggled the wrong way.
+                # That produced a false negative (`echo "A`date`B"  # fixes #NNN` became
+                # invisible -- the exact hiding place this scanner exists to close) and a
+                # false positive (`echo "A`date` # data"` reported a comment that is not
+                # one). Both demonstrated; neither was caught, because the neighbour that
+                # would have caught them was claimed in a commit message and never written.
                 if c == "`":
+                    pending.append(quote)
                     quote = None
                     i += 1
                     continue
                 if c == '"':
                     quote = None
+                i += 1
+                continue
+            if c == "`" and pending:
+                # The closing backtick of a substitution that began inside a quote.
+                quote = pending.pop()
                 i += 1
                 continue
             if c in "\"'":
@@ -1648,6 +1660,30 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         ".sh",
         'echo "A`# tracked at ' + _SHIPPED_URL + '`B"\n',
         _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # THE NEIGHBOUR THE LAST COMMIT CLAIMED AND NEVER WROTE, which is exactly why the
+        # backtick fix shipped inverting quote parity for the rest of the line. A comment
+        # AFTER a closed substitution must still be seen.
+        "an issue URL after a closed backtick substitution on the same line",
+        ".sh",
+        'echo "A`date`B"  # tracked at ' + _SHIPPED_URL + "\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # And its mirror: a `#` that is DATA inside the quoted string must stay silent.
+        # The first backtick fix reported this as a comment.
+        "a hash inside a quoted string following a substitution",
+        ".sh",
+        'echo "A`date` # this is data, not a comment"\n',
+        None,
+    ),
+    (
+        # A single-quoted `#` is data too, and no case covered it.
+        "a hash inside a single-quoted string",
+        ".sh",
+        "echo 'a # b'\n",
+        None,
     ),
     (
         # THE NEIGHBOUR: ordinary shell must not be flagged. `${#array[@]}` is a length,
