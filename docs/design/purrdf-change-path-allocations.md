@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 78 |
-| custom `sh:ask` component | 164 |
-| custom `sh:select` component | 92 |
-| `sh:expression` function call | 180 |
+| `sh:sparql` constraint | 74 |
+| custom `sh:ask` component | 148 |
+| custom `sh:select` component | 86 |
+| `sh:expression` function call | 172 |
 
 The term is flat in the size of the data graph, so it is the price of executing a
 query once per focus node, not a scan. That distinction matters: a scan would be
@@ -84,7 +84,7 @@ evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
 and the slopes cannot be differenced. Figures are against the baseline of
 96 / 214 / 116 / 194 that held when the decomposition was taken; the reductions
-described in the next section have since moved them to 78 / 164 / 92 / 180, by
+described in the next section have since moved them to 74 / 148 / 86 / 172, by
 emptying part of the term-materialization row and most of the rebuild cost inside
 the pushdown, seed and expression-walk rows.
 
@@ -229,6 +229,16 @@ loop, so the scan is not on a quadratic path. That took the term to
 The clone itself stays. The substituted query must not poison the shared
 plan-cache entry, so each execution rewrites its own copy; what is gone is
 rebuilding that copy a second time in order to change it.
+
+The fifth: a `Variable` for a pre-binding NAME was rebuilt from a borrow on every
+focus node. `Variable::new` takes `impl Into<String>`, so building one from a `&str`
+allocates a `String` and then the `Arc<str>` it converts into — twice per pre-bound
+variable, per focus node, for shape text that is the same on every focus node in the
+run. `Prebinding::variable` is a `&str` precisely to avoid owning that text, and the
+rewrite was re-owning it one layer down. Names are now interned per worker in a table
+keyed by `Box<str>` and probed by `&str`, so a hit hashes the borrowed name and
+allocates nothing and only a first sighting owns a copy — the same borrowed-probe
+shape the plan cache's key buffer uses. That took the term to 74 / 148 / 86 / 172.
 
 One candidate was declined rather than taken. The single allocation left in
 constructing an evaluation context is the expression barrier's shared cell, and it

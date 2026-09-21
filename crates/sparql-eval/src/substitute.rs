@@ -119,6 +119,57 @@ pub(crate) fn apply_substitutions(
     Ok(apply_probes(query, probes))
 }
 
+/// How many distinct pre-binding names one worker keeps interned.
+///
+/// A pre-binding name is shape text — `$this`, `$value`, `$PATH`, a component's
+/// declared parameters — so a workload's whole vocabulary is a few dozen entries.
+/// The cap exists so a process that evaluates an unbounded stream of distinct query
+/// texts cannot grow this without limit; reaching it clears rather than evicts,
+/// because the table is a memo of a pure function and losing it costs one
+/// reconstruction rather than a wrong answer.
+const INTERNED_VARIABLE_CAP: usize = 1_024;
+
+thread_local! {
+    /// `Variable`s for pre-binding names, interned per worker.
+    ///
+    /// `Variable::new` takes `impl Into<String>`, so building one from a borrowed
+    /// name allocates a `String` AND the `Arc<str>` it converts into — twice per
+    /// pre-bound variable, per focus node, for a name that is constant across every
+    /// focus node in the run. `Prebinding::variable` is a `&str` precisely to avoid
+    /// owning that text; this stops the rewrite re-owning it one layer down.
+    ///
+    /// Keyed by `Box<str>` and probed by `&str`: `Box<str>: Borrow<str>`, so a HIT
+    /// hashes the borrowed name and allocates nothing, and only a MISS owns a copy.
+    /// That is the same borrowed-probe shape the plan cache's key buffer uses.
+    ///
+    /// Thread-local rather than engine-owned because the value it caches has no
+    /// lifetime relation to any engine, and because `NativeSparqlEngine` is itself
+    /// held in a thread-local by every parallel caller — so per-worker is what
+    /// engine-owned would have given anyway, without threading a cache reference
+    /// through four call layers into a free function. Like
+    /// `crate::parallel`'s sequencing flag it is per-worker state with no staleness
+    /// dimension: a name maps to one `Variable` forever, and nothing about a dataset
+    /// or a plan is captured in it.
+    static INTERNED_VARIABLES: std::cell::RefCell<crate::DetHashMap<Box<str>, Variable>> =
+        std::cell::RefCell::new(crate::DetHashMap::default());
+}
+
+/// The [`Variable`] for `name`, interned per worker.
+fn interned_variable(name: &str) -> Variable {
+    INTERNED_VARIABLES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(var) = cache.get(name) {
+            return var.clone();
+        }
+        if cache.len() >= INTERNED_VARIABLE_CAP {
+            cache.clear();
+        }
+        let var = Variable::new(name);
+        cache.insert(Box::from(name), var.clone());
+        var
+    })
+}
+
 /// Ground every pre-binding once: one [`Variable`] per name, one [`GroundTerm`] per
 /// value.
 ///
@@ -137,10 +188,7 @@ fn build_probes(
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
     let mut probes = Vec::with_capacity(substitutions.len());
     for (name, value) in substitutions.iter() {
-        probes.push((
-            Variable::new(name.to_owned()),
-            ground_term_from_value(value)?,
-        ));
+        probes.push((interned_variable(name), ground_term_from_value(value)?));
     }
     Ok(probes)
 }
