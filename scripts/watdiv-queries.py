@@ -712,9 +712,24 @@ def read_candidates(path: Path, dataset_sha256: str) -> Candidates | None:
         # hand -- while the sibling reuse stamps treat a mismatch as a cache miss and
         # re-derive. A cache is scratch: the cheap, self-healing answer is to rescrape,
         # and refusing instead is an over-refusal on the one axis the stamps get right.
+        #
+        # AND THE BYTES ARE KEPT, which is `benchmark-acquire.py`'s quarantine law
+        # arriving here in the shape a cache can take it. That sibling holds a file
+        # that failed its digest as evidence and names where; this printed a path and
+        # then let the rescrape overwrite it, so the one message telling an operator
+        # something had edited their cache pointed at a file that no longer existed by
+        # the time they looked. A cache does not need to REFUSE to be inspectable.
+        held = path.with_name(f"{path.name}.mismatched")
+        try:
+            os.replace(path, held)
+            where = f"the bytes that failed are held at {held}"
+        except OSError as error:
+            # Failing to preserve evidence must not fail the run: the rescrape is still
+            # the correct answer and is still what happens.
+            where = f"the bytes that failed could not be set aside ({error})"
         print(
             f"  candidates cache at {path} no longer digests to what its header records; "
-            "rescraping rather than trusting it",
+            f"rescraping rather than trusting it. {where}",
             file=sys.stderr,
         )
         return None
@@ -1284,6 +1299,22 @@ def offline_self_test() -> int:
         check(
             read_candidates(tampered, pool.dataset_sha256) is None,
             "a candidates cache whose body was edited is a miss, not a hit",
+        )
+
+        #    AND THE FAILED BYTES ARE KEPT. The sibling that installs pinned artifacts
+        #    quarantines a file that fails its digest and names where; this printed a
+        #    path and then let the rescrape overwrite it, so the one message telling an
+        #    operator something had edited their cache pointed at a file that was gone
+        #    by the time they looked.
+        check(
+            tampered.with_name(f"{tampered.name}.mismatched").is_file(),
+            "a cache whose body was edited is set aside as evidence rather than simply "
+            "overwritten by the rescrape",
+        )
+        check(
+            not tampered.exists(),
+            "and it is out of the way, so the rescrape writes a clean cache rather than "
+            "reading the edited one again",
         )
 
         # 6. THE SWEEP DOES NOT DESTROY A LIVE RUN'S SCRATCH. Two runs share the arena

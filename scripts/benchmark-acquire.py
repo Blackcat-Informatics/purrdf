@@ -501,6 +501,21 @@ def _scratch_for(dest: Path) -> Path:
     return dest.with_name(f"{dest.name}.part.{os.getpid()}")
 
 
+def _fsync_path(path: Path) -> None:
+    """Flush *path*'s contents to the storage device.
+
+    Opened read-only on purpose: the writer has already closed its handle by the time a
+    candidate is verified, and reopening for writing to force a flush would mean a second
+    chance to truncate the very file being made durable. POSIX permits ``fsync`` on a
+    read-only descriptor and Linux and macOS both honour it.
+    """
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _verify_and_install(tmp: Path, dest: Path, artifact: Artifact) -> None:
     """Promote *tmp* to *dest* only if every pinned identity matches.
 
@@ -549,6 +564,20 @@ def _verify_and_install(tmp: Path, dest: Path, artifact: Artifact) -> None:
                     "  the sha256 pin matched, so the PIN is what is wrong here, not the download"
                 )
 
+        # DURABLE BEFORE THE RENAME, so "verified or absent" survives a host crash and
+        # not merely a killed process. `os.replace` is atomic with respect to other
+        # processes the moment it returns, which is what the comments above are about;
+        # it says nothing about a power loss between the write and the rename reaching
+        # the disk, and the outcome there is a file at the artifact's real name whose
+        # contents were never the verified bytes. That is the one state this whole
+        # function exists to make impossible.
+        #
+        # This was added to the WatDiv candidates CACHE first and not here, which is the
+        # wrong way round: a cache that loses its bytes is rescraped, and a pinned
+        # artifact that loses its bytes is read as pinned. Both install paths --
+        # `_install_verified_bytes` and the streamed `_download_verified` -- promote
+        # through this function, so one call covers both and cannot drift from itself.
+        _fsync_path(tmp)
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)

@@ -113,6 +113,17 @@ def _download_verified(dest: Path) -> bool:
             tmp.write_bytes(response.read())
         if sha256_of(tmp) != SOURCE_SHA256:
             return False
+        # Durable before the rename, matching `scripts/benchmark-acquire.py`. `os.replace`
+        # is atomic with respect to other processes; it says nothing about a power loss
+        # between the write and the rename reaching the disk, and the outcome there is a
+        # file at the pinned artifact's real name whose contents were never the verified
+        # bytes. This is the same law as the sibling's, in the same shape, because this is
+        # the same kind of file: a pinned byte, not a cache that can be rescraped.
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(tmp, dest)
         return True
     finally:
