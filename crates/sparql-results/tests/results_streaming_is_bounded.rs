@@ -316,3 +316,74 @@ impl Write for Discard {
         Ok(())
     }
 }
+
+/// A write failure reaches the caller CLASSIFIED, not just described.
+///
+/// The distinction a caller streaming to a pipe has to make is a downstream reader
+/// closing early — not a failure — against every other write error, which is. Before
+/// the kind was carried, that distinction existed only inside the CLI, as a flag set
+/// out of band; a library caller had a `String` and no way to act on it except by
+/// matching on prose.
+#[test]
+fn a_write_failure_carries_its_classification() {
+    use purrdf_core::sink::DrainErrorKind;
+    use purrdf_sparql_results::Error;
+
+    let result = solutions_result(4_000);
+    let provenance = ResultProvenance::default();
+
+    let hangup = serialize_into(
+        &result,
+        SparqlResultsFormat::Json,
+        &provenance,
+        None,
+        &mut Failing(std::io::ErrorKind::BrokenPipe),
+    )
+    .expect_err("a broken pipe must surface");
+    assert!(
+        matches!(
+            hangup,
+            Error::Write {
+                kind: DrainErrorKind::BrokenPipe,
+                ..
+            }
+        ),
+        "a downstream hangup must be classified as one; got {hangup:?}"
+    );
+
+    // The neighbour, and the reason the classification is worth carrying: a REAL
+    // write failure must not be reported as a hangup. A caller that treats
+    // `BrokenPipe` as success would otherwise swallow this one and exit clean.
+    let broken = serialize_into(
+        &result,
+        SparqlResultsFormat::Json,
+        &provenance,
+        None,
+        &mut Failing(std::io::ErrorKind::PermissionDenied),
+    )
+    .expect_err("a permission failure must surface");
+    assert!(
+        matches!(
+            broken,
+            Error::Write {
+                kind: DrainErrorKind::Other,
+                ..
+            }
+        ),
+        "a genuine write failure must NOT be classified as a downstream hangup; \
+         got {broken:?}"
+    );
+}
+
+/// A writer that accepts nothing and fails with the kind it was built from.
+struct Failing(std::io::ErrorKind);
+
+impl Write for Failing {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(self.0, "the destination refused"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

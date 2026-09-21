@@ -210,9 +210,10 @@ pub fn serialize_into(
         SparqlResultsFormat::Csv => csv::write_csv(result, provenance, &mut out)?,
         SparqlResultsFormat::Tsv => tsv::write_tsv(result, provenance, &mut out)?,
     }
-    let finished = out
-        .finish()
-        .map_err(|error| Error::Write(error.to_string()))?;
+    let finished = out.finish().map_err(|error| Error::Write {
+        kind: error.kind(),
+        message: error.message().to_owned(),
+    })?;
     Ok(StreamOutcome {
         bytes_written: finished.written,
         provenance_dropped: provenance_dropped(format, provenance, namespace),
