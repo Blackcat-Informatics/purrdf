@@ -148,7 +148,7 @@ _U64 = (1 << 64) - 1
 # explicit rather than relying on `sys.path[0]`, because this module is also loaded
 # by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lane_chunk import STREAM_CHUNK_BYTES  # noqa: E402  # pyright: ignore[reportMissingImports]
+from lane_chunk import STREAM_CHUNK_BYTES, fsync_path  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
 # ── The selection function ──────────────────────────────────────────────────────
@@ -642,8 +642,7 @@ def write_candidates(candidates: Candidates, path: Path) -> None:
     # and not merely across a killed process.
     with scratch.open("w", encoding="utf-8") as handle:
         handle.write(header + "\n" + body)
-        handle.flush()
-        os.fsync(handle.fileno())
+    fsync_path(scratch)
     os.replace(scratch, path)
 
 

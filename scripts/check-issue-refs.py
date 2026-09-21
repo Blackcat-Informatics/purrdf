@@ -1309,11 +1309,14 @@ def shell_comments(src: str) -> list[tuple[int, int, str]]:
     as string data and scan none of them, which reproduces the omission this whole
     scanner exists to fix, one level down.
 
-    The cost of resetting per line is a ``#`` inside a single-line quoted string being
-    read as a comment. That is a false-positive risk only for text carrying an issue
-    token or a process phrase, and such a hit is reported with its line so a reader can
-    see it immediately -- the opposite failure, a surface inspected by nothing, is the one
-    that stayed hidden for the whole of this change.
+    The stated cost used to be "a ``#`` inside a single-line quoted string being read as
+    a comment", and that does not happen: quote state IS tracked within a line, so
+    ``echo "see # 28"`` yields no comment (measured). The real cost is the CONTINUATION
+    line of a multi-line quoted string, where the opening quote is out of view -- and
+    that is the mechanism making embedded-Python scanning work, not a defect to remove.
+    A false positive there needs the text to carry a token or a process phrase, and the
+    hit is reported with its line; the opposite failure, a surface inspected by nothing,
+    is the one that stayed hidden through this whole change.
     """
     comments: list[tuple[int, int, str]] = []
 
@@ -1341,7 +1344,13 @@ def shell_comments(src: str) -> list[tuple[int, int, str]]:
                 quote = c
                 i += 1
                 continue
-            if c == "#" and (i == 0 or line[i - 1] in " \t"):
+            # A `#` opens a comment at the start of a WORD, which is more than "after
+            # whitespace": `;#`, `|#`, `&&#`, `(#` and `<#` all open one. Verified against
+            # bash 5.3 -- `bash -c 'echo A;# c'` prints A. No occurrence in the tree today,
+            # so this was a latent false-negative surface rather than a live miss; but the
+            # docstring stated the wrong law, and a scanner is only as good as its lexing.
+            # (YAML's own scanner below keeps "after whitespace", which IS its rule.)
+            if c == "#" and (i == 0 or line[i - 1] in " \t;|&()<>"):
                 comments.append((line_no, i + 1, line[i:]))
                 break
             i += 1

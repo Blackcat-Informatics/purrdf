@@ -41,7 +41,20 @@ SCRIPTS = REPO_ROOT / "scripts"
 # `read(1 << 22)`, `read(4194304)`, `.read(1<<20)` — a literal count, decimal or
 # shifted, handed to a read. `\b` on `read` keeps `handle.read` and bare `read`
 # while excluding `spread(`.
-LITERAL_READ = re.compile(r"\bread\(\s*(\d+\s*<<\s*\d+|\d{4,})\s*\)")
+# A literal byte count handed to a read, in any spelling this repository could use: a
+# shift (`1 << 22`), a plain or underscored decimal (`4194304`, `4_194_304`), hex
+# (`0x400000`), or a product (`4 * 1024 * 1024`). The first version matched only a shift
+# or four-plus bare digits, so three legal spellings of the same number were accepted --
+# and `read(1000)` was refused despite the docstring stating a kibibyte cutoff, because
+# the decimal arm counted DIGITS where the rule is about VALUE.
+LITERAL_READ = re.compile(
+    r"\bread\(\s*("
+    r"\d[\d_]*\s*<<\s*\d+"
+    r"|0[xX][0-9a-fA-F_]+"
+    r"|\d[\d_]*(?:\s*\*\s*\d[\d_]*)+"
+    r"|\d[\d_]*"
+    r")\s*\)"
+)
 
 # The one definition, and the shell variable carrying it into an embedded block.
 DEFINING_FILE = "lane_chunk.py"
@@ -52,18 +65,36 @@ DEFINING_FILE = "lane_chunk.py"
 GATE_FILE = Path(__file__).name
 
 
+def _literal_value(literal: str) -> int | None:
+    """The integer a matched literal denotes, or None if it cannot be read as one."""
+    cleaned = literal.replace("_", "").strip()
+    try:
+        if "<<" in cleaned:
+            base, shift = (part.strip() for part in cleaned.split("<<"))
+            return int(base, 0) << int(shift)
+        if "*" in cleaned:
+            product = 1
+            for factor in cleaned.split("*"):
+                product *= int(factor.strip(), 0)
+            return product
+        return int(cleaned, 0)
+    except ValueError:
+        return None
+
+
 def offences(path: Path, text: str) -> list[str]:
     """Every literal-sized streamed read in one file, as a diagnosis per hit."""
     found: list[str] = []
     for number, line in enumerate(text.splitlines(), start=1):
         for match in LITERAL_READ.finditer(line):
             literal = match.group(1)
-            # A fixed-width field read is not a streamed chunk. `\d{4,}` already
-            # excludes `read(1)`; a shift form is judged on its value.
-            if "<<" in literal:
-                base, shift = (part.strip() for part in literal.split("<<"))
-                if int(base) << int(shift) < 1024:
-                    continue
+            # JUDGED ON VALUE, in every spelling, because the stated rule is a value: a
+            # chunk size is at least a kibibyte and nothing here reads a 1024-byte
+            # fixed-width field. Counting digits instead made `read(1000)` an offence and
+            # `read(0x400000)` acceptable, both contradicting the docstring.
+            value = _literal_value(literal)
+            if value is None or value < 1024:
+                continue
             found.append(
                 f"{path.name}:{number}: `read({literal})` writes the chunk size out. "
                 f"Name it: `STREAM_CHUNK_BYTES` from scripts/{DEFINING_FILE}, or "
@@ -75,7 +106,9 @@ def offences(path: Path, text: str) -> list[str]:
 def scan() -> list[str]:
     """Every offence across the scripts directory, skipping the defining file."""
     found: list[str] = []
-    for path in sorted(SCRIPTS.iterdir()):
+    # RECURSIVE. `iterdir()` left any future `scripts/<subdir>/*.py` unscanned, which is
+    # the "a surface the gate never inspects" shape this file is one instance of.
+    for path in sorted(SCRIPTS.rglob("*")):
         if not path.is_file() or path.name in {DEFINING_FILE, GATE_FILE}:
             continue
         if path.suffix not in {".py", ".sh"}:
@@ -94,6 +127,10 @@ def self_test() -> int:
         "    chunk = sys.stdin.buffer.read(1 << 20)",
         "    data = handle.read(4194304)",
         "    data = handle.read(65536)",
+        # Three legal spellings of the same number that the digit-counting rule accepted.
+        "    data = handle.read(4_194_304)",
+        "    data = handle.read(0x400000)",
+        "    data = handle.read(4 * 1024 * 1024)",
     ]
     for line in refused:
         if not offences(here, line):
@@ -113,6 +150,10 @@ def self_test() -> int:
         "_U64 = (1 << 64) - 1",
         "    marker = handle.read(1)",
         "    width = handle.read(2)",
+        # Below the stated kibibyte cutoff, so a fixed-width field read rather than a
+        # stream. The digit-counting rule refused this one while the docstring said
+        # otherwise.
+        "    header = handle.read(1000)",
         "DIGEST = 1 << 22  # a bare definition is not a read",
     ]
     wrongly = [line for line in accepted if offences(here, line)]

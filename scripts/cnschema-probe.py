@@ -41,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # explicit rather than relying on `sys.path[0]`, because this module is also loaded
 # by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lane_chunk import STREAM_CHUNK_BYTES  # noqa: E402  # pyright: ignore[reportMissingImports]
+from lane_chunk import STREAM_CHUNK_BYTES, fsync_path  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 PINNED_COMMIT = "ecfa596d50b0578d1a28df8f9c76bdafe7069ec6"
 EXPORT_URL = (
@@ -119,11 +119,7 @@ def _download_verified(dest: Path) -> bool:
         # file at the pinned artifact's real name whose contents were never the verified
         # bytes. This is the same law as the sibling's, in the same shape, because this is
         # the same kind of file: a pinned byte, not a cache that can be rescraped.
-        fd = os.open(tmp, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        fsync_path(tmp)
         os.replace(tmp, dest)
         return True
     finally:

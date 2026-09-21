@@ -23,13 +23,18 @@ failure names itself in the job list. That is a reasonable choice, and it is
 exactly what creates the second list. So this gate's subject is the AGREEMENT
 between the lists rather than either list's contents.
 
-Scope, stated rather than implied: only invocations of a ``scripts/`` (or
-in-repo ``crates/.../*.py``) program are compared. ``cargo`` steps, ``$(MAKE)``
-recursions and the ``node`` schema oracles are deliberately out of scope — CI
-distributes those across jobs (``wasm``, ``pytest``, ``capi``) and spells several
-of them differently on purpose, so requiring textual equality there would refuse
-a correct workflow. A gate that over-refuses gets disabled, and then it guards
-nothing.
+Scope, stated rather than implied: only invocations of a ``scripts/`` (or in-repo
+``crates/.../*.py``) program are compared. ``cargo`` steps and the ``node`` schema
+oracles are out of scope — CI distributes those across jobs (``wasm``, ``pytest``,
+``capi``) and spells several differently on purpose, so requiring textual equality
+there would refuse a correct workflow. A gate that over-refuses gets disabled, and
+then it guards nothing.
+
+``$(MAKE)`` recursions ARE followed, within this Makefile. They were listed above
+as "deliberately out of scope" under the reason that applies to cargo and node —
+which does not apply to an in-repo make target. ``make check`` recurses into
+``rdf-core-hygiene``, so a hygiene gate added to the hygiene target was invisible
+to this comparison. That was an annotated gap wearing the word "scope".
 """
 
 import argparse
@@ -42,16 +47,41 @@ MAKEFILE = REPO_ROOT / "Makefile"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CI_WORKFLOW = WORKFLOWS / "ci.yaml"
 
+# The workflows that gate a pull request. A tag-triggered release workflow, a weekly
+# cron and a path-filtered job all run real gates and none of them can stop a merge,
+# so a gate that appears only there is not enforced in the sense this file means.
+MERGE_BLOCKING_WORKFLOWS = frozenset({"ci.yaml"})
+
 # `python3 scripts/x.py --flag`, `bash scripts/x.sh --flag`. The interpreter is
 # part of the match but not of the identity: what matters is which program runs
 # with which arguments, and the Makefile and the workflow must agree on that.
-INVOCATION = re.compile(r"\b(?:python3|bash)\s+((?:scripts|crates)/[^\s]+)([^\n]*)")
+# The argument run stops at a shell separator. `([^\n]*)` was greedy to end of line, so
+# `python3 scripts/a.py && python3 scripts/b.py` produced the single identity
+# `scripts/a.py && python3 scripts/b.py` -- the second program never seen, and one list
+# spelling a pair on one line while the other spells it on two reported divergence in BOTH
+# directions over an equivalent spelling. No such line today; the regex is the hazard.
+INVOCATION = re.compile(r"\b(?:python3|bash)\s+((?:scripts|crates)/[^\s]+)([^\n;&|]*)")
 
 # Release workflows legitimately run publish scripts with real arguments
 # (`publish-release-crates.sh "${VERSION#rust-v}"`), which `make check` must not
 # do. Only the `scripts/` programs whose names mark them as gates are required to
 # appear on both sides.
-GATE_NAME = re.compile(r"^(?:scripts/(?:check-|conformance-matrix|.*-self-test)|crates/)")
+# TWO WAYS AN INVOCATION IS A GATE, stated separately because they are different rules.
+#
+# By NAME: a `check-*` program, the conformance matrix, the workload acquirer, a query
+# instantiator, or an in-repo `crates/**` reference oracle.
+GATE_BY_NAME = re.compile(
+    r"^(?:scripts/(?:check-|conformance-matrix|benchmark-acquire|[\w-]+-queries)|crates/)"
+)
+# By ARGUMENT: a `--self-test` or `--offline-self-test` run is a gate whatever the program
+# is called. `publish-release-crates.sh` and `bootstrap-crates-io.sh` PUBLISH when invoked
+# bare and are gates only in this form, which is exactly why the two rules cannot be one.
+#
+# The original single pattern had a `.*-self-test` arm that matched the argument while the
+# comment said it matched the name. That was right in effect and wrong in description --
+# and narrowing it to the name alone silently dropped those two gates, taking the agreed
+# count from 40 to 38.
+GATE_BY_ARGUMENT = re.compile(r"\s--(?:offline-)?self-test\b")
 
 
 def _normalise(program: str, rest: str) -> str:
@@ -92,23 +122,71 @@ def invocations(text: str) -> set[str]:
     return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(text)}
 
 
+# `$(MAKE) <target>` inside a recipe. `make check` recurses into `rdf-core-hygiene` and
+# `wasm`, so a gate added to one of those was invisible to this comparison. The original
+# scope note called `$(MAKE)` recursions "deliberately out of scope" and justified it with
+# the reason that applies to cargo and node steps -- CI spells those differently across
+# jobs -- which does not apply to an in-repo make target at all. That was an annotated gap
+# wearing the word "scope", and `check_recipe` already existed to close it.
+MAKE_RECURSION = re.compile(r"\$\(MAKE\)\s+([\w-]+)")
+
+
+def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] | None = None) -> set[str]:
+    """Every invocation reachable from `target`, following `$(MAKE)` into this Makefile.
+
+    `seen` guards against a recipe cycle: a target that recurses into itself, directly or
+    through another, would otherwise recurse forever rather than report.
+    """
+    seen = set() if seen is None else seen
+    if target in seen:
+        return set()
+    seen.add(target)
+    body = check_recipe(makefile_text, target)
+    found = invocations(body)
+    for nested in MAKE_RECURSION.findall(body):
+        found |= invocations_with_recursion(makefile_text, nested, seen)
+    return found
+
+
 def gates_only(found: set[str]) -> set[str]:
     """The invocations whose program name marks them as a repository gate."""
-    return {call for call in found if GATE_NAME.match(call)}
+    return {
+        call
+        for call in found
+        if GATE_BY_NAME.match(call) or GATE_BY_ARGUMENT.search(call)
+    }
 
 
 def divergence(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
     """Every gate one list runs and the other does not, in both directions."""
-    local = gates_only(invocations(check_recipe(makefile_text, "check")))
+    local = gates_only(invocations_with_recursion(makefile_text, "check"))
+    # MERGE-BLOCKING WORKFLOWS, not all of them. Direction 1's stated subject is "cannot
+    # block a merge", and subtracting the union of all seven workflows checks something
+    # weaker: three are tag-triggered, one is a weekly cron, one is path-filtered, so a
+    # gate present only in `benchmarks.yaml` would pass parity and block no merge. The
+    # union is kept as a secondary, weaker message so a gate that at least runs SOMEWHERE
+    # is distinguished from one that runs nowhere at all.
+    blocking = {
+        name: text
+        for name, text in workflow_texts.items()
+        if name in MERGE_BLOCKING_WORKFLOWS
+    }
     everywhere: set[str] = set()
-    for text in workflow_texts.values():
+    for text in blocking.values():
         everywhere |= invocations(text)
+    anywhere: set[str] = set()
+    for text in workflow_texts.values():
+        anywhere |= invocations(text)
     ci_gates = gates_only(invocations(workflow_texts.get(CI_WORKFLOW.name, "")))
 
     problems: list[str] = []
     for call in sorted(local - everywhere):
+        where = "in NO workflow at all" if call not in anywhere else (
+            "only in a workflow that does not gate a pull request (a tag, cron or "
+            "path-filtered trigger)"
+        )
         problems.append(
-            f"`{call}` runs in `make check` and in NO workflow, so it cannot block a merge"
+            f"`{call}` runs in `make check` and {where}, so it cannot block a merge"
         )
     for call in sorted(ci_gates - local):
         problems.append(

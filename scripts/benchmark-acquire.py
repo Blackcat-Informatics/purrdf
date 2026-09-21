@@ -141,7 +141,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # explicit rather than relying on `sys.path[0]`, because this module is also loaded
 # by `check-doc-claims.py` through importlib, where `sys.path[0]` is the caller's.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lane_chunk import STREAM_CHUNK_BYTES  # noqa: E402  # pyright: ignore[reportMissingImports]
+from lane_chunk import STREAM_CHUNK_BYTES, fsync_path  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 # The one place anything is written. Everything under ``target/`` is build
 # output; no artifact fetched here is ever written anywhere else in the tree.
@@ -559,21 +559,6 @@ def _scratch_for(dest: Path) -> Path:
     return dest.with_name(f"{dest.name}.part.{os.getpid()}")
 
 
-def _fsync_path(path: Path) -> None:
-    """Flush *path*'s contents to the storage device.
-
-    Opened read-only on purpose: the writer has already closed its handle by the time a
-    candidate is verified, and reopening for writing to force a flush would mean a second
-    chance to truncate the very file being made durable. POSIX permits ``fsync`` on a
-    read-only descriptor and Linux and macOS both honour it.
-    """
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def _verify_and_install(tmp: Path, dest: Path, artifact: Artifact) -> None:
     """Promote *tmp* to *dest* only if every pinned identity matches.
 
@@ -635,7 +620,7 @@ def _verify_and_install(tmp: Path, dest: Path, artifact: Artifact) -> None:
         # artifact that loses its bytes is read as pinned. Both install paths --
         # `_install_verified_bytes` and the streamed `_download_verified` -- promote
         # through this function, so one call covers both and cannot drift from itself.
-        _fsync_path(tmp)
+        fsync_path(tmp)
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
