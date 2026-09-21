@@ -250,6 +250,43 @@ five, and the shape that answers it is a reusable execution artifact — the
 substituted shape decided once per query and per pre-bound variable name, with only
 the values written per focus node.
 
+## The sibling walk does not carry the same scan, and its leaves stay untouched
+
+The scan this path fixed — a pre-bound variable bound only by a `VALUES` join, so a
+leaf with a bound position enumerated every statement with that predicate — has an
+obvious suspect one module over. `crate::expr`'s per-row `Replace` walk, which an
+expression-correlated `EXISTS` and a `LATERAL` right arm both use, clones its `Bgp`
+patterns UNCHANGED and joins a single-row `VALUES` onto them, and `eval_join`
+evaluates both of its operands in full before hash-joining. That is the same shape,
+at row scale instead of focus-node scale.
+
+It was measured rather than read, and it is not there. Two slopes are needed,
+because one alone cannot tell a per-row pass over the graph from a once-per-query
+one:
+
+| shape | cost slope in data-graph size | marginal cost per additional outer row |
+|---|---:|---:|
+| correlated `FILTER EXISTS` | 25x over a 32x graph, ONCE | 6.4 |
+| correlated `LATERAL` right arm | 1.1x over a 32x graph | 41 |
+
+`EXISTS` answers from a memoized probe: it evaluates its inner once and answers
+every outer row from that, so the pass over the graph is amortized across rows and
+each additional row costs six allocations. Measured against a single outer row the
+one-time pass is indistinguishable from a per-row scan, which is a fact about that
+fixture and not about the code. Neither shape re-scans per row.
+
+Pushing constants into the leaf there was tried anyway, since it would have made
+`LATERAL`'s per-row cost exactly flat in the graph. It is wrong, and the crate's
+own tests say so in words: *"the leaf itself must be untouched — Values Insertion
+joins a row onto it rather than rewriting its terms."* The reason is SPARQL
+§18.5. Both sides of a `MINUS` must keep a shared variable as a real schema column
+for the domain-disjointness test to read the truth, and rewriting a term out of a
+leaf takes that column away. Values Insertion is also total over every RDF 1.2 term
+kind, including blank nodes, which a term rewrite is not. The two walks diverge
+here deliberately; `crate::enf`'s "The SHACL pre-binding fork" is the statement of
+it, and this is the measurement that says the divergence costs nothing worth
+reclaiming.
+
 ## The instrument's blind spot
 
 An allocation count cannot see work that was skipped if the skipped work allocates
