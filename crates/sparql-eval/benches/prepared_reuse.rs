@@ -9,10 +9,13 @@ use purrdf_core::ir::pack::dataset_from_view;
 use purrdf_core::{
     BlankScope, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, canonical_relabel,
 };
-use purrdf_sparql_eval::{NativeSparqlEngine, PlanCache, QueryOptions};
+use purrdf_sparql_eval::{InternedOutcome, NativeSparqlEngine, PlanCache, QueryOptions};
 use std::hint::black_box;
 
 const QUERY: &str = "SELECT ?s ?value WHERE { ?s <http://example.org/p> ?value } ORDER BY ?s";
+
+/// The same query with the subject left as a parameter a prepared execution binds.
+const PARAMETERIZED: &str = "SELECT ?value WHERE { ?s <http://example.org/p> ?value }";
 
 fn bench(c: &mut Criterion) {
     let mut builder = RdfDatasetBuilder::new();
@@ -47,6 +50,32 @@ fn bench(c: &mut Criterion) {
                     .query_prepared(black_box(&data), &prepared, &[], QueryOptions::EMPTY)
                     .expect("execute"),
             )
+        });
+    });
+    // Build once, bind and run many: the shape a caller running one query per row
+    // has. Report-only, like every arm here — nothing in this file asserts a
+    // threshold, and a figure from it is evidence for a reader rather than a gate.
+    let mut execution = engine
+        .prepare_execution(PARAMETERIZED, None, &["s"], QueryOptions::EMPTY)
+        .expect("prepare execution");
+    group.bench_function("execute_prepared_parameterized", |b| {
+        let mut index = 0_usize;
+        b.iter(|| {
+            index = (index + 1) % 64;
+            execution
+                .bind(
+                    0,
+                    purrdf_core::TermValue::Iri(format!("http://example.org/s{index}")),
+                )
+                .expect("bind");
+            engine
+                .execute(
+                    &mut execution,
+                    black_box(&*data),
+                    QueryOptions::EMPTY,
+                    |outcome| black_box(matches!(outcome, InternedOutcome::Solutions(_))),
+                )
+                .expect("execute");
         });
     });
     group.bench_function("execute_warm_text", |b| {

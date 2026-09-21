@@ -820,6 +820,80 @@ impl<'ast> syn::visit::Visit<'ast> for TestFns {
 /// distinguishes "this test forgot to take the lock" from "this test never
 /// needed it", so the only place the distinction is visible is the source
 /// itself.
+/// `text` with comment markers and line breaks flattened away, so a claim that
+/// wraps across lines is one searchable string.
+fn flattened(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            line.trim_start()
+                .trim_start_matches("///")
+                .trim_start_matches("//!")
+                .trim()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// **Every prose site that quotes these figures quotes the CURRENT ones.**
+///
+/// The four constants below are assertion-bearing: a stale one fails loudly. The
+/// SENTENCES that quote them are not — nothing anywhere re-reads them, so a
+/// reduction that moved the constants and forgot a README would leave the crate
+/// stating a number it no longer measures. That is not hypothetical: an
+/// unqualified version of this claim shipped false once already, and the figures
+/// moved six times in the change that added this test.
+///
+/// So the claims are checked against the constants rather than against a reader's
+/// memory. Whitespace and comment markers are flattened first, because the same
+/// sentence is wrapped differently in Markdown and in rustdoc.
+#[test]
+fn every_claim_about_these_figures_quotes_the_measured_ones() {
+    let _guard = measure_lock();
+
+    let readme = flattened(include_str!("../README.md"));
+    let rustdoc = flattened(include_str!("../src/engine.rs"));
+
+    // The long form, spelled identically in the crate README and in
+    // `validate_focus_nodes`' rustdoc.
+    let long = format!(
+        "**{}** for a `sh:sparql` SELECT constraint, **{}** for a custom `sh:ask` \
+         component over a two-valued path, **{}** for a custom `sh:select` component, \
+         and **{}** for a `sh:expression` function call over two argument tuples.",
+        CASES[0].per_focus_node,
+        CASES[1].per_focus_node,
+        CASES[2].per_focus_node,
+        CASES[3].per_focus_node,
+    );
+    let long = flattened(&long);
+    assert!(
+        readme.contains(&long),
+        "crates/shapes/README.md no longer quotes the measured figures.\n  expected: \
+         {long}"
+    );
+    assert!(
+        rustdoc.contains(&long),
+        "validate_focus_nodes' rustdoc no longer quotes the measured figures.\n  \
+         expected: {long}"
+    );
+
+    // The short form on `validate_focus_node_ids`.
+    let short = format!(
+        "{} / {} / {} / {} allocations by",
+        CASES[0].per_focus_node,
+        CASES[1].per_focus_node,
+        CASES[2].per_focus_node,
+        CASES[3].per_focus_node,
+    );
+    assert!(
+        rustdoc.contains(&short),
+        "validate_focus_node_ids' rustdoc no longer quotes the measured figures.\n  \
+         expected: {short}"
+    );
+}
+
 #[test]
 fn every_test_in_this_binary_takes_the_measure_lock_first() {
     let _guard = measure_lock();
