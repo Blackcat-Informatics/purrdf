@@ -169,7 +169,8 @@ def python_offences(path: Path, text: str) -> list[str]:
                 found.append(
                     f"{path.name}:{node.lineno}: `read({ast.unparse(argument)})` writes the "
                     f"chunk size out. Name it: `STREAM_CHUNK_BYTES` from "
-                    f"scripts/{DEFINING_FILE}, or `${{LANE_STREAM_CHUNK_BYTES}}`."
+                    f"scripts/{DEFINING_FILE}, or `${{LANE_STREAM_CHUNK_BYTES}}` passed "
+                    f"in by lane-common.sh."
                 )
     return found
 
@@ -487,6 +488,13 @@ def self_test() -> int:
         ),
         # `<<-` strips leading tabs. Accepting the spelling and keeping the tabs made every
         # such body `unexpected indent`.
+        # A PLAIN HEREDOC ENDS ONLY ON AN EXACT DELIMITER LINE. Comparing with `.strip()`
+        # terminated the body at an indented look-alike inside a triple-quoted string, so
+        # everything after it -- including this read -- was never parsed. Verified against
+        # bash: a tab-indented `PY` does NOT close a plain `<<'PY'`.
+        "a delimiter look-alike inside a triple-quoted string": (
+            'python3 - <<\'PY\'\ndoc = """\n\tPY\n"""\nh.read(int(4194304))\nPY\n'
+        ),
         "a tab-indented `<<-` heredoc body": (
             "python3 - <<-'PY'\n\th.read(int(4194304))\n\tPY\n"
         ),
