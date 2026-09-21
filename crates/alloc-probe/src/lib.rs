@@ -641,9 +641,10 @@ impl WholeProcessWindow {
     /// early run reported a workload peak falling to 122 MB, and none of it was
     /// real.
     ///
-    /// The fold is `fetch_max`/`fetch_min` rather than a store, so a recorder on
-    /// another thread that moved a mark between the reads below and the restore
-    /// is not clobbered.
+    /// Both ends are recorder-safe against a concurrent thread: the marks are
+    /// established with `swap` and folded back with `fetch_max`/`fetch_min`, so no
+    /// update can be lost in a gap between a read and a write. What a leg cannot do
+    /// is decide WHICH region an allocation on another thread belongs to — see below.
     ///
     /// # What a leg charges
     ///
@@ -652,17 +653,27 @@ impl WholeProcessWindow {
     /// unrelated traffic on another thread during the leg lands in the leg; a
     /// leg is a time slice of a process-wide ledger, not a thread of it.
     pub fn metered<T>(&self, leg: impl FnOnce() -> T) -> (T, Measurement) {
-        let enclosing_peak = PROCESS_PEAK_BYTES.load(Ordering::Relaxed);
-        let enclosing_trough = PROCESS_TROUGH_BYTES.load(Ordering::Relaxed);
         let allocations_before = PROCESS_ALLOCATIONS.load(Ordering::Relaxed);
         let requested_before = PROCESS_REQUESTED_BYTES.load(Ordering::Relaxed);
         let live_before = PROCESS_LIVE_BYTES.load(Ordering::Relaxed);
 
-        // Both marks anchor at the level live bytes hold NOW, so the leg's span
-        // is measured from where the leg starts rather than from where the
-        // enclosing window opened.
-        PROCESS_PEAK_BYTES.store(live_before, Ordering::Relaxed);
-        PROCESS_TROUGH_BYTES.store(live_before, Ordering::Relaxed);
+        // Both marks anchor at the level live bytes hold NOW, so the leg's span is
+        // measured from where the leg starts rather than from where the enclosing
+        // window opened.
+        //
+        // SWAPPED rather than read-then-written, and that is not a style choice. A
+        // load followed by a store leaves a gap: a recorder on another thread that
+        // raises the peak inside it has its update read back as the enclosing value
+        // (so it is not preserved) and then overwritten (so it is not kept either),
+        // and neither the snapshot before nor the leg's own reading afterwards can
+        // recover it. The peak simply goes missing, which under-reports BOTH this
+        // leg and the window enclosing it — silently, and only under concurrency, so
+        // a single-threaded workload would never show it.
+        //
+        // `swap` reads and writes in one atomic step, so there is no instant at
+        // which an update can land unobserved.
+        let enclosing_peak = PROCESS_PEAK_BYTES.swap(live_before, Ordering::AcqRel);
+        let enclosing_trough = PROCESS_TROUGH_BYTES.swap(live_before, Ordering::AcqRel);
 
         let value = leg();
 
