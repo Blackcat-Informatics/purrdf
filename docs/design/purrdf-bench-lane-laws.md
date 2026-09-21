@@ -59,7 +59,12 @@ would necessarily discard the knob name, which the third lane already disproves.
 The laws that are genuinely shared, and therefore hold for every lane. This table is an
 INVENTORY, not an illustration: a law added to `lane-common.sh` and not added here is a
 law the next lane author will not find, and five rows were missing when that was last
-checked — including the two the immediately preceding changes had created.
+checked — including the two the immediately preceding changes had created. It is no longer
+hand-checked: `crates/bench/tests/lane_common_laws.rs` compares this table against the
+functions `scripts/lane-common.sh` defines, in both directions, so a helper absent here and
+a row naming a helper that no longer exists are both failures. The hand count that preceded
+that test reported 23 of the 24 helpers, because the pattern used to find them spelled the
+name class without digits and silently skipped `lane_sha256_file`.
 
 | law | shared implementation |
 | --- | --- |

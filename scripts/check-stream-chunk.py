@@ -174,6 +174,43 @@ def python_offences(path: Path, text: str) -> list[str]:
     return found
 
 
+# A `python3 -c '...'` argument inside a shell script. The delimiter is stable in this tree:
+# the body opens after `python3 -c '` and closes at a line that is exactly `'` followed by
+# the arguments. Both lanes and `scale-corpus.sh` use that shape.
+EMBEDDED_PYTHON = re.compile(r"python3 -c '\n(.*?)\n'", re.DOTALL)
+
+
+def shell_offences(path: Path, text: str) -> list[str]:
+    """Every literal-sized read in a shell script, including its embedded Python.
+
+    THE WEAKER PATH WAS THE ONE THAT MATTERED. `.py` files are parsed and walked; `.sh`
+    files kept a line scan whose regex truncates at the first `)`, so a truncated fragment
+    failed to parse and read as a name -- a silent pass. And the lanes' embedded Python is
+    exactly where the non-trivial reads live: `scripts/lane-common.sh`'s own
+    `handle.read(int(sys.argv[2]))` was invisible to the gate, which the file's comment block
+    cites as a reason for the AST rewrite it then did not apply here.
+    """
+    found: list[str] = []
+    # The embedded programs, parsed with the same walker the `.py` path uses.
+    for match in EMBEDDED_PYTHON.finditer(text):
+        body = match.group(1)
+        line_offset = text[: match.start()].count("\n") + 1
+        for problem in python_offences(path, body):
+            # Re-base the reported line onto the shell file, so the location is usable.
+            found.append(_rebase_line(problem, line_offset))
+    # And the shell's own reads, which the line scan is right for.
+    found.extend(offences(path, EMBEDDED_PYTHON.sub("", text)))
+    return found
+
+
+def _rebase_line(problem: str, offset: int) -> str:
+    """Shift a `name:LINE:` prefix by *offset*, so an embedded finding names the shell line."""
+    parts = problem.split(":", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        return f"{parts[0]}:{int(parts[1]) + offset}:{parts[2]}"
+    return problem
+
+
 def offences(path: Path, text: str) -> list[str]:
     """Every literal-sized streamed read in one file, as a diagnosis per hit."""
     found: list[str] = []
@@ -217,7 +254,9 @@ def scan() -> list[str]:
         if path.suffix not in {".py", ".sh"}:
             continue
         text = path.read_text(encoding="utf-8")
-        found.extend(python_offences(path, text) if path.suffix == ".py" else offences(path, text))
+        found.extend(
+            python_offences(path, text) if path.suffix == ".py" else shell_offences(path, text)
+        )
     return found
 
 

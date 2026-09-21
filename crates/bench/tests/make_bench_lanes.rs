@@ -101,9 +101,11 @@ fn run_make(args: &[&str]) -> (i32, String, String) {
 
 // WHAT THE NEGATIVE ASSERTIONS BELOW CAN AND CANNOT CATCH.
 //
-// Every test in this file stops the lane before step 1 — at the binary probe or at a
-// knob validator; six of the fourteen also point the arena somewhere uncreatable, and
-// the rest do not need to because the probe comes first — so a
+// Every LANE-DRIVING test in this file stops the lane before step 1 — at the binary probe
+// or at a knob validator; six of the fourteen also point the arena somewhere uncreatable,
+// and the rest do not need to because the probe comes first. ("Every test" was the earlier
+// wording and is false: `a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names`
+// drives no lane at all, and the same sentence's "fourteen" shows the count was known.) So a
 // `!contains("<a step-5 message>")` assertion is TRIVIALLY TRUE
 // for the run it is made about. Nine such assertions live here. They are not controls
 // for the behaviour their surrounding test is named for, and an earlier audit of this
@@ -125,7 +127,8 @@ fn run_make(args: &[&str]) -> (i32, String, String) {
 // shared helpers directly instead of driving a lane.
 
 /// The two lanes this file can drive: the `make` target, the knob that names the binary, and
-/// the arena knob, so each test runs in a private arena.
+/// the arena knob, so each test runs in a private arena and never touches `target/lubm`
+/// or `target/watdiv`.
 ///
 /// `scale-corpus` shares the same laws through the same helpers and is deliberately NOT
 /// here: it probes a `bench-corpus` binary that must print a whole-run manifest, so the
@@ -134,8 +137,6 @@ fn run_make(args: &[&str]) -> (i32, String, String) {
 /// `make_scale_corpus.rs` (directory-as-binary, printed-NOTHING, the write guard, the
 /// arena knob), and the probe law that file did not cover is now proved once for every
 /// lane in `lane_common_laws.rs`.
-/// the arena knob, so each test runs in a private arena and never touches `target/lubm` or
-/// `target/watdiv`.
 const LANES: &[(&str, &str, &str)] = &[
     ("lubm", "LUBM_BIN", "LUBM_OUT"),
     ("watdiv", "WATDIV_BIN", "WATDIV_OUT"),

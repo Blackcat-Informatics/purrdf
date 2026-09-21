@@ -1562,3 +1562,83 @@ fn capture_target(line: &str, at: usize) -> Option<String> {
         Some(target)
     }
 }
+
+// THE SHARED-LAW INVENTORY IS TWO LISTS, AND NOTHING COMPARED THEM.
+//
+// `docs/design/purrdf-bench-lane-laws.md` states the rule itself: the table is "an INVENTORY,
+// not an illustration: a law added to `lane-common.sh` and not added here is a law the next
+// lane author will not find". By its own admission the list had already drifted once — five
+// rows were missing, including two the immediately preceding changes had created — and it was
+// repaired by hand.
+//
+// That is verbatim the failure `scripts/check-gate-parity.py` exists to refuse, which is this
+// change's headline artifact: two hand-maintained lists, each internally consistent, nothing
+// comparing them. Leaving it unclosed one directory over would be the parity rule holding in
+// one place and not its sibling — the law this whole file opens by stating.
+#[test]
+fn every_shared_lane_helper_appears_in_the_design_doc_inventory() {
+    let shared = std::fs::read_to_string(repo_root().join("scripts/lane-common.sh"))
+        .expect("read the shared lane laws");
+    let doc = std::fs::read_to_string(repo_root().join("docs/design/purrdf-bench-lane-laws.md"))
+        .expect("read the lane-laws design document");
+
+    // A function definition at column zero: `lane_name() {`. The digits matter — a pattern of
+    // `[a-z_]` alone silently missed `lane_sha256_file`, which is how a hand count of these
+    // came out at 23 when there are 24.
+    let defined: Vec<String> = shared
+        .lines()
+        .filter_map(|line| {
+            let name = line.strip_suffix("() {")?;
+            (!name.starts_with(char::is_whitespace)
+                && name.starts_with("lane_")
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .then(|| name.to_string())
+        })
+        .collect();
+
+    assert!(
+        defined.len() >= 20,
+        "expected the shared file to define at least twenty `lane_*` helpers; found {} — a \
+         coverage test that finds nothing passes for the wrong reason",
+        defined.len()
+    );
+
+    let absent: Vec<&String> = defined
+        .iter()
+        .filter(|name| !doc.contains(name.as_str()))
+        .collect();
+    assert!(
+        absent.is_empty(),
+        "these shared helpers are defined in `scripts/lane-common.sh` and named nowhere in \
+         `docs/design/purrdf-bench-lane-laws.md`, so the inventory the document calls an \
+         inventory is not one:\n  {}",
+        absent
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+
+    // AND THE OTHER DIRECTION: a row naming a helper that no longer exists sends a reader to
+    // a function that is not there. A one-way check would let the table rot that way.
+    let mut stale: Vec<String> = Vec::new();
+    for line in doc
+        .lines()
+        .filter(|line| line.trim_start().starts_with('|'))
+    {
+        for token in line.split('`') {
+            if token.starts_with("lane_")
+                && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !shared.contains(&format!("{token}() {{"))
+            {
+                stale.push(token.to_string());
+            }
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "the inventory names these helpers and `scripts/lane-common.sh` defines none of \
+         them:\n  {}",
+        stale.join("\n  ")
+    );
+}
