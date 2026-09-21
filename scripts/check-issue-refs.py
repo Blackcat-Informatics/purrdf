@@ -1336,6 +1336,15 @@ def shell_comments(src: str) -> list[tuple[int, int, str]]:
                 if c == "\\":
                     i += 2
                     continue
+                # A BACKTICK INSIDE DOUBLE QUOTES OPENS COMMAND SUBSTITUTION, and code in
+                # that substitution can carry a comment. Treating the whole double-quoted
+                # region as opaque made `echo "A`# c`B"` invisible -- and the first attempt
+                # added the backtick to the word-start set, which does nothing here because
+                # the scanner never leaves the quoted state. Leaving the quote is the fix.
+                if c == "`":
+                    quote = None
+                    i += 1
+                    continue
                 if c == '"':
                     quote = None
                 i += 1
@@ -1345,12 +1354,13 @@ def shell_comments(src: str) -> list[tuple[int, int, str]]:
                 i += 1
                 continue
             # A `#` opens a comment at the start of a WORD, which is more than "after
-            # whitespace": `;#`, `|#`, `&&#`, `(#` and `<#` all open one. Verified against
-            # bash 5.3 -- `bash -c 'echo A;# c'` prints A. No occurrence in the tree today,
+            # whitespace": `;#`, `|#`, `&&#`, `(#`, `<#` and a backtick all open one --
+            # the backtick was missed when this list was first written down and presented
+            # as complete. Verified against bash 5.3. No occurrence in the tree today,
             # so this was a latent false-negative surface rather than a live miss; but the
             # docstring stated the wrong law, and a scanner is only as good as its lexing.
             # (YAML's own scanner below keeps "after whitespace", which IS its rule.)
-            if c == "#" and (i == 0 or line[i - 1] in " \t;|&()<>"):
+            if c == "#" and (i == 0 or line[i - 1] in " \t;|&()<>`"):
                 comments.append((line_no, i + 1, line[i:]))
                 break
             i += 1
@@ -1627,6 +1637,16 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         "an issue URL in a comment inside an embedded python3 -c program",
         ".sh",
         "python3 -c '\nimport sys\n# tracked at " + _SHIPPED_URL + "\nprint(1)\n'\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # Inside a backtick command substitution, itself inside double quotes. The
+        # word-start list was written down and presented as complete and had missed this;
+        # adding the backtick to that list changed nothing, because the lexer never left
+        # the quoted state.
+        "an issue URL in a comment inside a backtick substitution",
+        ".sh",
+        'echo "A`# tracked at ' + _SHIPPED_URL + '`B"\n',
         _SHIPPED_URL_TOKEN,
     ),
     (

@@ -10,6 +10,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **build:** three hygiene gates, each wired into both `make check` and CI because the
+  first of them exists to make that pairing checkable.
+  `scripts/check-gate-parity.py` takes the AGREEMENT between `make check` and the
+  pull-request workflows as its subject: CI does not run `make check`, it enumerates each
+  gate as a named step, so the two lists encode one rule and nothing compared them. It
+  found three pre-existing divergences on its first run -- `check-terminal-predicates.py`
+  and its `--self-test` ran locally and in no workflow at all, and
+  `check-toolchain-pin.py --self-test` ran in CI and not locally -- and a fourth that was
+  live behind a workflow `make` step. Four one-sided gates are registered with their
+  reasons, under a register that may only shrink.
+  `scripts/check-stream-chunk.py` refuses a streamed read whose chunk size is written out
+  instead of named; six copies of that number lived under two names across five files,
+  two already drifted to a quarter and a sixteenth of the shared size, and because every
+  chunk size produces a correct digest nothing reported it.
+  `scripts/check-tracked-paths.py` refuses a tracked path that misrepresents itself to the
+  tools that read it -- a component beginning with `-`, which a glob hands to a command as
+  a FLAG, or a character that does not render as what it is. A flag-shaped artifact had
+  been committed at the repository root and swept past roughly thirty hygiene scripts,
+  because they all walk a file list rather than a glob.
+
 - **license:** MulanPSL-2.0 is offered as a third option alongside MIT and
   Apache-2.0, at the user's choice. `LICENSE-MULAN` and
   `LICENSES/MulanPSL-2.0.txt` carry the text, pinned by SHA-256 in

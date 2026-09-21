@@ -36,5 +36,3 @@ Licensed under any one of the following, at your option:
 - MIT license
 - Apache License, Version 2.0
 - Mulan Permissive Software License, Version 2 (MulanPSL-2.0)
-
-at your option.
