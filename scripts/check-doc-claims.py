@@ -107,6 +107,7 @@ import tomllib
 from typing import Protocol
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
@@ -248,14 +249,31 @@ def _int(text: str) -> int:
     ungated. The word forms are `_SPELLED` read backwards, so there is one
     table rather than two that can fall out of step.
     """
-    # Commas, the narrow no-break space this repository's prose prefers, and a
-    # plain ASCII space -- all three are thousands separators an author
-    # reaches for, and a claim written with the one this did not strip failed
-    # to parse rather than failing to match, which reads as a broken gate
-    # rather than as an ungated number.
-    cleaned = text.replace(",", "").replace(" ", "").replace(" ", "")
+    # EVERY SPACE SEPARATOR, BY CATEGORY, not the three that came to mind. Commas plus a
+    # hand-picked pair of spaces left U+00A0 -- the most common non-breaking thousands
+    # separator typography tooling emits -- and U+2009 raising a bare `ValueError`: a
+    # Python traceback out of `make check` rather than a diagnosis. That is the failure
+    # mode the previous comment here described and then reproduced one separator over, so
+    # the rule is the Unicode property now rather than a list.
+    cleaned = "".join(
+        character
+        for character in text.replace(",", "")
+        if unicodedata.category(character) != "Zs"
+    )
     spelled = _CARDINAL.get(cleaned.lower())
-    return spelled if spelled is not None else int(cleaned)
+    if spelled is not None:
+        return spelled
+    try:
+        return int(cleaned)
+    except ValueError:
+        # A DIAGNOSIS, NOT A TRACEBACK. A documented count this cannot parse is a gate
+        # failure that must name the text it choked on, because the alternative reads as
+        # the gate being broken rather than as a number nobody can check.
+        raise SystemExit(
+            f"check-doc-claims: cannot read {text!r} as a count. Separators are stripped "
+            f"by Unicode category, so this is neither digits nor a spelled cardinal -- "
+            f"fix the claim, or add its spelling to the cardinal table."
+        ) from None
 
 
 # A run of whitespace, and the one thing every arm of the entailment-overclaim ban does to
@@ -5057,8 +5075,17 @@ class _PinnedArtifact(Protocol):
     size: int
 
 
+@lru_cache(maxsize=1)
 def _acquisition_module():
-    """Load scripts/benchmark-acquire.py once, so its pins have one reader here."""
+    """Load scripts/benchmark-acquire.py once, so its pins have one reader here.
+
+    The cache is what makes "once" true. Without it this executed the whole acquisition
+    script at each of its two call sites, so there were two readers -- and "one reader" is
+    the reason the function exists, not a note about cost. The module is pure at import
+    today, so both executions agreed; the day it gains import-time state the two readers
+    could disagree and a documented number would be judged against a value the other
+    reader never saw. `lru_cache` is already used seven times in this file.
+    """
     path = _REPO / "scripts" / "benchmark-acquire.py"
     spec = importlib.util.spec_from_file_location("_benchmark_acquire", path)
     if spec is None or spec.loader is None:
