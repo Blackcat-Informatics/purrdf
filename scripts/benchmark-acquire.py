@@ -395,6 +395,49 @@ WORKLOAD_PINS: dict[str, str] = {
     # legible refusal than a second hex string. "434748 rows, expected 434748" says
     # what is wrong; two digests say only that something is.
     "watdiv.10M.seed0.total_rows.purrdf-2.0.2": "434748",
+    # AND PER QUERY, because the aggregate alone was disabled by the very failure it
+    # most needed to survive. The total was asserted only when every query executed --
+    # defensible in itself, since a query that cannot run makes a SUM incomparable --
+    # but the consequence was a blanket skip: one CANNOT-EXECUTE query at the default
+    # knobs printed "NOT checked against a pin", a full SUMMARY and exit 0. A pack that
+    # broke one query and changed the answers to others passed, where before this
+    # branch's own change it had failed.
+    #
+    # Per-query counts have no such coupling. A query that does not execute fails
+    # against ITS OWN pin, by name, and says which one; the other nineteen are still
+    # asserted. This is the shape the sibling lane already used for Q1/Q14, and it is
+    # what makes "a non-executing query is a reported result, not an abandoned run"
+    # compatible with asserting every answer that was produced.
+    #
+    # Same reasoning as the total for the version key: these are this engine's own
+    # measurements over pinned inputs, not reference answers WatDiv publishes. The
+    # self-test asserts they sum to the total pin, so a transcription error in one of
+    # twenty-one numbers cannot hide in the table.
+    #
+    # A zero is a REAL ANSWER here and is pinned as one. WatDiv's deliberate skew
+    # concentrates a property on some entities and leaves others without it, so a
+    # pattern demanding several at once legitimately matches none -- and pinning that
+    # zero is what turns "matched nothing" from an unfalsifiable note into a claim.
+    "watdiv.10M.seed0.rows.C1.purrdf-2.0.2": "16",
+    "watdiv.10M.seed0.rows.C2.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.C3.purrdf-2.0.2": "434169",
+    "watdiv.10M.seed0.rows.F1.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.F2.purrdf-2.0.2": "2",
+    "watdiv.10M.seed0.rows.F3.purrdf-2.0.2": "8",
+    "watdiv.10M.seed0.rows.F4.purrdf-2.0.2": "36",
+    "watdiv.10M.seed0.rows.F5.purrdf-2.0.2": "13",
+    "watdiv.10M.seed0.rows.L1.purrdf-2.0.2": "1",
+    "watdiv.10M.seed0.rows.L2.purrdf-2.0.2": "103",
+    "watdiv.10M.seed0.rows.L3.purrdf-2.0.2": "36",
+    "watdiv.10M.seed0.rows.L4.purrdf-2.0.2": "56",
+    "watdiv.10M.seed0.rows.L5.purrdf-2.0.2": "269",
+    "watdiv.10M.seed0.rows.S1.purrdf-2.0.2": "8",
+    "watdiv.10M.seed0.rows.S2.purrdf-2.0.2": "25",
+    "watdiv.10M.seed0.rows.S3.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.S4.purrdf-2.0.2": "1",
+    "watdiv.10M.seed0.rows.S5.purrdf-2.0.2": "0",
+    "watdiv.10M.seed0.rows.S6.purrdf-2.0.2": "5",
+    "watdiv.10M.seed0.rows.S7.purrdf-2.0.2": "0",
     # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
     "watdiv.10M.seed0.queries.sha256": (
         "2fabc0ef56b5d18bb9a7c9d6a4aa5c661043500103d6f133087d39d41fa59301"
@@ -1050,12 +1093,102 @@ def self_test() -> int:
     else:
         print(f"OK: self-test — all {len(digests)} digest pin(s) are 64 lowercase hex characters")
 
-    counts = {k: v for k, v in WORKLOAD_PINS.items() if ".rows." in k}
-    if not counts or any(not v.isdigit() or int(v) <= 0 for v in counts.values()):
-        print(f"SELF-TEST FAIL: a published-answer pin is not a positive integer: {counts}")
+    # THE EXIT CODES ARE LOAD-BEARING AND THEREFORE EXECUTED. Both lanes now branch on
+    # 2 meaning "recorded nowhere" and die on anything else, so a refactor that made an
+    # absent pin exit 1 would turn every pin check in both lanes into a lane failure,
+    # and one that made a broken lookup exit 2 would turn it into a silent skip. Neither
+    # is visible from inside this function; only running the entry point shows it.
+    here = str(Path(__file__).resolve())
+    absent = subprocess.run(
+        [sys.executable, here, "--workload-pin", "no.such.pin.recorded.anywhere"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if absent.returncode != 2:
+        print(
+            f"SELF-TEST FAIL: an absent pin exited {absent.returncode}, not 2 — the lanes "
+            "cannot distinguish 'no pin for this binary' from 'the lookup is broken'"
+        )
+        ok = False
+    elif "FAIL: no workload pin named" not in absent.stderr:
+        print(f"SELF-TEST FAIL: an absent pin exited 2 but said nothing: {absent.stderr!r}")
         ok = False
     else:
-        print(f"OK: self-test — all {len(counts)} published-answer pin(s) are positive integers")
+        print("OK: self-test — an absent workload pin exits 2 and says which name was asked for")
+
+    # THE NEIGHBOUR: a recorded pin still prints its value on stdout and exits 0. Without
+    # this, "exit 2 for everything" would pass the check above while breaking every lane.
+    present_key = "watdiv.10M.seed0.total_rows.purrdf-2.0.2"
+    present = subprocess.run(
+        [sys.executable, here, "--workload-pin", present_key],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if present.returncode != 0 or present.stdout.strip() != WORKLOAD_PINS[present_key]:
+        print(
+            f"SELF-TEST FAIL: {present_key} exited {present.returncode} with stdout "
+            f"{present.stdout!r}, expected 0 and {WORKLOAD_PINS[present_key]!r}"
+        )
+        ok = False
+    else:
+        print("OK: self-test — a recorded pin exits 0 and prints only its value")
+
+    counts = {k: v for k, v in WORKLOAD_PINS.items() if ".rows." in k}
+    if not counts or any(not v.isdigit() for v in counts.values()):
+        print(f"SELF-TEST FAIL: an answer pin is not a decimal count: {counts}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {len(counts)} answer pin(s) are decimal counts")
+
+    # A ZERO IS A REAL ANSWER for a regression pin and NOT for an oracle, and the
+    # distinction is the whole difference between the two kinds. WatDiv's skew
+    # concentrates a property on some entities and leaves others without it, so a
+    # pattern demanding several at once legitimately matches none -- pinning that zero
+    # is what turns "matched nothing" from an unfalsifiable note into a claim. LUBM's
+    # Q1/Q14 are PUBLISHED answers used as an oracle, and an oracle of zero is
+    # satisfied by an engine that answers nothing, so those must be positive.
+    oracle_counts = {k: v for k, v in counts.items() if k.startswith("lubm.")}
+    if not oracle_counts:
+        print("SELF-TEST FAIL: no published-answer oracle is pinned")
+        ok = False
+    elif any(int(v) <= 0 for v in oracle_counts.values()):
+        zero = [k for k, v in oracle_counts.items() if int(v) <= 0]
+        print(f"SELF-TEST FAIL: an oracle pin is zero, which any engine satisfies: {zero}")
+        ok = False
+    else:
+        print(
+            f"OK: self-test — all {len(oracle_counts)} published-answer oracle pin(s) are "
+            "positive, so no engine satisfies one by answering nothing"
+        )
+
+    # AND THE TWENTY-ONE NUMBERS MUST AGREE WITH EACH OTHER. The per-query pins and the
+    # aggregate are recorded separately, so a transcription error in any one of them is
+    # invisible from inside its own row: a lane comparing 20 counts and a total against
+    # a table that does not sum reports a failure against whichever it checks second.
+    # Nothing else in the tree can catch this, because both sides of the comparison are
+    # in this file.
+    per_query = {k: int(v) for k, v in counts.items() if ".rows." in k and k.startswith("watdiv.")}
+    total_key = "watdiv.10M.seed0.total_rows.purrdf-2.0.2"
+    if total_key not in WORKLOAD_PINS:
+        print(f"SELF-TEST FAIL: {total_key} is not recorded, so the per-query pins sum to nothing")
+        ok = False
+    elif not per_query:
+        print("SELF-TEST FAIL: no per-query WatDiv pin is recorded, so the total stands alone")
+        ok = False
+    elif sum(per_query.values()) != int(WORKLOAD_PINS[total_key]):
+        print(
+            f"SELF-TEST FAIL: the {len(per_query)} per-query pins sum to "
+            f"{sum(per_query.values())}, and {total_key} records "
+            f"{WORKLOAD_PINS[total_key]} — the table disagrees with itself"
+        )
+        ok = False
+    else:
+        print(
+            f"OK: self-test — the {len(per_query)} per-query pins sum to "
+            f"{WORKLOAD_PINS[total_key]}, matching the aggregate pin"
+        )
 
     # The binary-keyed pin must name the version this workspace builds, or the lane it
     # serves will report "no pin recorded" for the binary it just built -- a pin that
@@ -1301,11 +1434,21 @@ def main() -> int:
     if args.workload_pin is not None:
         value = WORKLOAD_PINS.get(args.workload_pin)
         if value is None:
-            sys.exit(
+            # EXIT 2, NOT 1, and that distinction is load-bearing. A lane asking for a
+            # pin has two questions, and "no pin is recorded for this binary" is a
+            # reportable state while "the lookup itself failed" is a lane failure. The
+            # lanes could not tell them apart: both arrived as a non-zero status behind
+            # a `2>/dev/null`, so a renamed flag, a syntax error in this file and an
+            # absent pin all produced the same silent skip — and a skip looks exactly
+            # like a pass. `2` says "recorded nowhere"; anything else is this tool
+            # breaking, and the lanes now die on it.
+            print(
                 f"FAIL: no workload pin named {args.workload_pin!r}.\n"
                 f"  Recorded: {', '.join(sorted(WORKLOAD_PINS))}.\n"
-                "  This tool will not invent a value for a workload it has not recorded."
+                "  This tool will not invent a value for a workload it has not recorded.",
+                file=sys.stderr,
             )
+            return 2
         print(value)
         return 0
     if args.dataset_rows is not None:

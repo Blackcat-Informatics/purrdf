@@ -668,6 +668,12 @@ nonempty=0
 total_rows=0
 declare -a NOTES=()
 declare -a EMPTY=()
+# Every template id in the order the index lists them, and the row count each one
+# that EXECUTED returned. Two arrays rather than one sentinel value: "answered zero
+# rows" and "did not execute" are different facts about a query, and a per-query pin
+# must be able to fail on the second without reading it as the first.
+declare -a IDS=()
+declare -A ANSWERED=()
 
 while IFS=$'\t' read -r id _regime mappings file; do
   [[ "${id}" != "id" ]] || continue
@@ -697,9 +703,14 @@ while IFS=$'\t' read -r id _regime mappings file; do
   ms="$(printf '%s' "${result}" | cut -f3)"
   detail="$(printf '%s' "${result}" | cut -f4)"
 
+  IDS+=("${id}")
   if [[ "${status}" == "OK" ]]; then
     eval_ms=$((ms - OPEN_MS))
     ((eval_ms >= 0)) || eval_ms=0
+    # RECORDED PER QUERY, so a pin can be checked per query. A zero is recorded as
+    # the real answer it is; absence from this array means the query did not
+    # execute, which is a different fact and must not read as zero rows.
+    ANSWERED["${id}"]="${rows}"
     executed=$((executed + 1))
     total_ms=$((total_ms + ms))
     total_rows=$((total_rows + rows))
@@ -772,36 +783,77 @@ fi
 # fast … suspect the prefix table, the load, or the instantiation" -- became dead code in
 # precisely the case it was written for.
 #
-# It is also gated on a COMPLETE run. `total_rows` accumulates only for queries that
-# executed, and this lane treats a query that cannot run as a RESULT it reports rather
-# than a reason to abandon the run. So one non-executing query made the total short of
-# the pin and killed the run under "the engine answered them differently" -- a cause not
-# established, which is the law this lane states elsewhere.
-#
 # It is engine output, so neither the corpus pin nor the query-set pin covers it: a wrong
 # pack built from the right corpus would publish wrong counts and `nonempty > 0` would
 # wave them through. WatDiv publishes no reference answers, so this is a regression pin
 # rather than an oracle, and the key carries the binary version for the same reason the
 # LUBM corpus pin does.
-answers_pin_key="watdiv.${SCALE}.seed${SEED}.total_rows.${PURRDF_VERSION// /-}"
-if ((unexecuted == 0)) &&
-  expected_rows_total="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
-    --workload-pin "${answers_pin_key}" 2>/dev/null)"; then
-  ((total_rows == expected_rows_total)) ||
-    die "the twenty queries returned ${total_rows} rows in total; the pin for
-  ${answers_pin_key} is ${expected_rows_total}.
-  All twenty executed, and the corpus and the query set both matched their pins -- so
-  what differs is the answers this binary produced over them. No row count is published
-  for a run that disagrees with its recorded answers."
-  echo "answers: ${total_rows} rows in total, matching the pin for ${answers_pin_key}"
-elif ((unexecuted != 0)); then
-  echo "answers: ${total_rows} rows across ${executed} queries, NOT checked against a pin:"
-  echo "  ${unexecuted} query/queries did not execute, so the total is not comparable to"
-  echo "  one recorded for a complete run. The rows above still say what each returned."
+#
+# IT IS CHECKED PER QUERY, and the earlier revision of this block is why. That one
+# asserted the AGGREGATE and gated it on `unexecuted == 0`, which is defensible in
+# itself -- a query that cannot run makes a SUM incomparable, and blaming the engine for
+# a short total is naming a cause the lane has not established. But the consequence was
+# a blanket skip: ONE non-executing query at the default knobs printed "NOT checked
+# against a pin", a full SUMMARY and exit 0, so a pack that broke one query and changed
+# the answers to the others passed. Before that revision it had failed. A check disabled
+# by the failure most likely to need it is worse than the coarse guard it replaced.
+#
+# Per-query counts have no such coupling. A query that does not execute fails against
+# ITS OWN pin, by name; the other nineteen are still asserted. That is the shape the
+# sibling lane already used for Q1/Q14, and it is what makes "a query that cannot run is
+# a reported result, not an abandoned run" compatible with asserting every answer the
+# run actually produced.
+answers_pin_stem="watdiv.${SCALE}.seed${SEED}.rows"
+answers_pin_suffix="${PURRDF_VERSION// /-}"
+pinned=0
+unpinned=()
+for id in "${IDS[@]}"; do
+  pin_key="${answers_pin_stem}.${id}.${answers_pin_suffix}"
+  # A LOOKUP THAT FAILS FOR ANY OTHER REASON MUST NOT READ AS "NO PIN". `2>/dev/null`
+  # here made a renamed flag, a syntax error and an absent pin one observable, and all
+  # three then produced a silent skip. The status distinguishes them: 2 is "recorded
+  # nowhere", anything else is the lookup itself failing and is a lane failure.
+  pin_status=0
+  expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --workload-pin "${pin_key}")" || pin_status=$?
+  if ((pin_status == 2)); then
+    unpinned+=("${id}")
+    continue
+  fi
+  ((pin_status == 0)) ||
+    die "looking up the answer pin for ${id} exited ${pin_status}.
+  That is not the same as no pin being recorded, which exits 2 -- so this is the pin
+  lookup itself failing, not a missing pin, and nothing about the engine's answers has
+  been checked. Run the command above by hand to see what it says."
+  got="${ANSWERED[${id}]:-}"
+  [[ -n "${got}" ]] ||
+    die "${id} did not execute, and its answer over ${SCALE} at seed ${SEED} is pinned at
+  ${expected_rows} rows for this binary. A pinned query that cannot run is a failure, not
+  a note: the row above says why it could not run, and that reason is the defect."
+  ((got == expected_rows)) ||
+    die "${id} returned ${got} rows; the pin for ${pin_key} is ${expected_rows}.
+  The corpus and the query set both matched their pins, so what differs is the answer
+  this binary produced over them. No row count is published for a run that disagrees
+  with its recorded answers."
+  pinned=$((pinned + 1))
+done
+
+if ((${#unpinned[@]} == 0)); then
+  echo "answers: every one of the ${pinned} queries matched its recorded row count"
+  echo "  (${answers_pin_stem}.<id>.${answers_pin_suffix}), ${total_rows} rows in total"
+elif ((pinned == 0)); then
+  echo "answers: ${total_rows} rows across ${executed} queries, NOT checked against pins:"
+  echo "  none is recorded under ${answers_pin_stem}.<id>.${answers_pin_suffix}. A"
+  echo "  different scale, seed or binary is a different workload, and this binary's"
+  echo "  answers over it have not been recorded."
 else
-  echo "answers: ${total_rows} rows in total, NOT checked against a pin: none is recorded"
-  echo "  for ${answers_pin_key}. A different scale, seed or binary is a different"
-  echo "  workload, and this binary's answers over it have not been recorded."
+  # A PARTIAL PIN SET IS REPORTED AS ONE. It is the state a half-finished pin update
+  # leaves behind, and reading it as either extreme would be wrong: saying "every query
+  # matched" over nineteen pins is a false claim, and saying "not checked" discards
+  # nineteen assertions that did hold.
+  echo "answers: ${pinned} of ${#IDS[@]} queries matched their recorded row counts;"
+  echo "  no pin is recorded for: ${unpinned[*]}"
+  echo "  A partial pin set is reported rather than rounded either way."
 fi
 
 cat <<REPORT
