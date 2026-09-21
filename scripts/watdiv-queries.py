@@ -109,6 +109,7 @@ against another engine answering THE SAME query under the same conditions.
 import argparse
 import hashlib
 import os
+import time
 import subprocess
 import re
 import sys
@@ -414,6 +415,10 @@ _ENTITY_LOCAL = re.compile(r"^([A-Za-z]+?)(\d+)$")
 
 # Bumped to v2 when the body digest was added: a v1 file has no digest line, so an
 # older cache is a MISS rather than something read under a format it does not follow.
+# How old a `.part.*` scratch file must be before this process will remove one it does
+# not own. See `write_candidates` for why a blanket sweep was wrong.
+_STALE_SCRATCH_SECONDS = 3600
+
 CANDIDATES_HEADER = "# purrdf-watdiv-candidates-v2"
 
 
@@ -605,12 +610,34 @@ def write_candidates(candidates: Candidates, path: Path) -> None:
     # later run until an operator deleted the file by hand -- an over-refusal on the
     # one axis the sibling stamps self-heal. A temporary file plus `os.replace` means a
     # cache is either wholly there or absent.
-    # Any scratch left by a killed run is swept first: `os.replace` makes the cache
-    # itself atomic, but nothing removed the partial files, so they accumulated in the
-    # arena unreported.
-    for stale in path.parent.glob(f"{path.name}.part.*"):
-        stale.unlink(missing_ok=True)
+    # Scratch left by a KILLED run is swept; scratch belonging to a LIVE one is not.
+    #
+    # The first version of this swept every `.part.*` in the directory, which is a defect
+    # I introduced while fixing a smaller one. Two runs share the arena at the default
+    # knobs -- a case this lane's shared law file handles explicitly elsewhere -- and the
+    # sweep deleted the other run's in-flight scratch, so its `os.replace` raised a bare
+    # `FileNotFoundError` naming a path and no lane. Housekeeping that destroys live work
+    # is worse than the accumulation it was tidying.
+    #
+    # Two things are safe to remove, and nothing else is. This process's OWN scratch name
+    # (a predecessor with the same pid, which we are about to overwrite anyway), and a
+    # file old enough that no run could still be inside the few hundred milliseconds
+    # between creating it and replacing it. The threshold is written down rather than
+    # implied, with the cost of being wrong stated: an hour is four orders of magnitude
+    # more than this write takes, and guessing high merely leaves an abandoned file for
+    # one more run to find.
     scratch = path.with_name(f"{path.name}.part.{os.getpid()}")
+    cutoff = time.time() - _STALE_SCRATCH_SECONDS
+    for stale in path.parent.glob(f"{path.name}.part.*"):
+        if stale == scratch:
+            stale.unlink(missing_ok=True)
+            continue
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            # It vanished, or cannot be stat'd. Either way it is not ours to force.
+            continue
     # `fsync` before the rename, so "wholly there or absent" holds across a host crash
     # and not merely across a killed process.
     with scratch.open("w", encoding="utf-8") as handle:
@@ -1257,6 +1284,47 @@ def offline_self_test() -> int:
         check(
             read_candidates(tampered, pool.dataset_sha256) is None,
             "a candidates cache whose body was edited is a miss, not a hit",
+        )
+
+        # 6. THE SWEEP DOES NOT DESTROY A LIVE RUN'S SCRATCH. Two runs share the arena
+        #    at the default knobs, and the first version of this sweep removed every
+        #    `.part.*` it found -- so the other run's `os.replace` raised a bare
+        #    `FileNotFoundError` naming a path and no lane. Housekeeping that destroys
+        #    live work is worse than the accumulation it was tidying, and that was a
+        #    defect introduced while fixing a smaller one.
+        #
+        #    This check lives HERE rather than in the network self-test because the
+        #    network one is run by no gate at all: it needs the fetched tarball, so
+        #    `make check` and CI both run only the offline half. Cache laws need no
+        #    tarball, so there is no reason for one to sit behind that.
+        swept = Path(raw) / "sweep" / "candidates.tsv"
+        swept.parent.mkdir(parents=True, exist_ok=True)
+        in_flight = swept.with_name(f"{swept.name}.part.999999")
+        in_flight.write_text("another run is mid-write\n", encoding="utf-8")
+        abandoned = swept.with_name(f"{swept.name}.part.999998")
+        abandoned.write_text("a killed run left this\n", encoding="utf-8")
+        # Backdated past the threshold, which is what distinguishes the two cases.
+        # Without it the test could not tell "swept because stale" from "swept because
+        # present" -- and the defect was a sweep that could not tell them apart either.
+        stale_time = time.time() - (_STALE_SCRATCH_SECONDS * 2)
+        os.utime(abandoned, (stale_time, stale_time))
+
+        write_candidates(pool, swept)
+
+        check(
+            in_flight.exists(),
+            "a concurrent run's in-flight scratch survives the sweep, so its os.replace "
+            "does not fail with a bare FileNotFoundError",
+        )
+        check(
+            not abandoned.exists(),
+            "scratch older than the stated threshold is still swept, so a killed run "
+            "does not leave files accumulating unreported",
+        )
+        check(
+            read_candidates(swept, pool.dataset_sha256) is not None,
+            "and the cache was written while both of those held, so neither check is "
+            "satisfied by a function that did nothing",
         )
 
     # THE PREFIX REFUSAL, BOTH DIRECTIONS, ON THE PRODUCTION FUNCTION.
