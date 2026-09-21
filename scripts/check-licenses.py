@@ -20,6 +20,7 @@ vendored root and is enforced with zero changes here.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -130,6 +131,122 @@ def check_mulan_text(root: Path) -> list[str]:
     return problems
 
 
+
+# ── First-party headers must name the whole license offer ─────────────────────
+#
+# The MulanPSL-2.0 addition rewrote the SPDX identifier in 1707 files. A branch
+# in flight at the time merged it without one conflict -- correctly, because its
+# new files had no counterpart to conflict with -- and five of them stayed at
+# `MIT OR Apache-2.0` while every other file in the tree offered three licenses.
+#
+# Nothing here reported that. The vendored-root check below asks whether a file
+# DECLARES a license; it never asked whether a first-party file declares the
+# RIGHT one. So a contributor adding a file during any future license change
+# ships a file under a narrower offer than the project makes, and every gate is
+# green. That is not a hypothetical: it happened, and it was found by a one-off
+# grep, which is exactly the kind of proof this repository does not accept.
+#
+# The expression is READ FROM `Cargo.toml`, never restated. `[workspace.package]
+# license` is what cargo publishes to crates.io and therefore what the project's
+# offer actually IS; a copy here would be a second place to change and would
+# diverge in precisely the situation this exists to catch.
+
+
+def workspace_license(root: Path) -> str:
+    """The license expression `Cargo.toml` declares, which is the project's offer."""
+    for line in (root / "Cargo.toml").read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("license = "):
+            return stripped.split('"')[1]
+    sys.exit("check-licenses: no `license = ` in Cargo.toml; cannot derive the offer")
+
+
+# Suffixes whose first-party files carry a header this gate judges. Kept to the
+# languages the tree actually writes: a suffix added here without being checked
+# would widen the gate's apparent scope over a surface it never inspects.
+HEADER_SUFFIXES = (".rs", ".py", ".pyi", ".sh", ".mjs", ".js", ".toml", ".yaml", ".yml")
+
+# First-party files that DELIBERATELY declare a different license, with the reason.
+# This register may only SHRINK: an entry whose file no longer declares something
+# else is reported as stale, so an exemption cannot outlive its justification.
+#
+# The alternative -- dropping the whole rule because one file is different -- is how
+# a gate with one awkward case becomes no gate at all.
+DELIBERATE_OTHER_LICENSE: dict[str, str] = {
+    # The book is PROSE, licensed CC-BY-4.0 so it can be quoted and translated on
+    # terms that suit documentation rather than code. Its configuration declares the
+    # license of the thing it builds, which is not the license of the tree.
+    "docs/book/book.toml": "CC-BY-4.0",
+}
+
+
+def first_party_header_offenders(root: Path, expected: str) -> list[str]:
+    """Every first-party file whose SPDX identifier is not the project's offer.
+
+    A file with NO identifier is not reported: requiring one everywhere is a
+    different rule with a different scope, and adding it here silently would be
+    the over-refusal that gets a gate disabled. What is reported is a file that
+    states an offer and states the wrong one.
+
+    Vendored payload is excluded by the same `LICENSES/` marker the rest of this
+    file uses, because a vendored file's identifier is UPSTREAM's statement and
+    must not be rewritten to match ours.
+    """
+    vendored = find_vendored_roots(root)
+    listing = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        sys.exit(f"check-licenses: git ls-files failed: {listing.stderr.strip()}")
+
+    offenders: list[str] = []
+    for rel in sorted(part for part in listing.stdout.split("\0") if part):
+        path = root / rel
+        if path.suffix not in HEADER_SUFFIXES or not path.is_file():
+            continue
+        if any(vendored_root in path.parents for vendored_root in vendored):
+            continue
+        try:
+            head = path.read_text(encoding="utf-8").splitlines()[:8]
+        except (UnicodeDecodeError, OSError):
+            continue
+        for line in head:
+            marker = "SPDX-License-Identifier:"
+            if marker in line:
+                declared = line.split(marker, 1)[1].strip()
+                allowed = DELIBERATE_OTHER_LICENSE.get(rel)
+                if allowed is not None:
+                    if declared != allowed:
+                        offenders.append(
+                            f"{rel}: is registered as deliberately {allowed!r} but now declares "
+                            f"{declared!r} — the registration is stale, so re-judge it rather "
+                            f"than widening it"
+                        )
+                elif declared != expected:
+                    offenders.append(f"{rel}: declares {declared!r}, the project offers {expected!r}")
+                break
+
+    # A REGISTERED EXEMPTION THAT NO LONGER APPLIES IS ITSELF A FINDING. Without this
+    # the register only ever grows, and a path that was deleted or brought back into
+    # line keeps a permanent hole open behind it.
+    for registered, allowed in sorted(DELIBERATE_OTHER_LICENSE.items()):
+        candidate = root / registered
+        if not candidate.is_file():
+            offenders.append(
+                f"{registered}: registered as deliberately {allowed!r} but the file is gone"
+            )
+        elif "SPDX-License-Identifier:" not in candidate.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            offenders.append(
+                f"{registered}: registered as deliberately {allowed!r} but declares no license"
+            )
+    return offenders
+
+
 def main() -> int:
     root = repo_root()
     mulan_problems = check_mulan_text(root)
@@ -158,8 +275,24 @@ def main() -> int:
             print(f"  {path.relative_to(root)}", file=sys.stderr)
         return 1
 
+    expected = workspace_license(root)
+    header_offenders = first_party_header_offenders(root, expected)
+    if header_offenders:
+        print(
+            "License hygiene FAILED: first-party file(s) declare a different license offer\n"
+            f"than Cargo.toml's {expected!r}. A file added during a license change merges\n"
+            "cleanly and keeps the old offer, which is how this went unnoticed once already:",
+            file=sys.stderr,
+        )
+        for problem in header_offenders:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
+
     total = sum(1 for _ in roots)
-    print(f"OK: {total} vendored root(s) license-clean; MulanPSL-2.0 text matches its pin.")
+    print(
+        f"OK: {total} vendored root(s) license-clean; MulanPSL-2.0 text matches its pin; "
+        f"every first-party SPDX header declares {expected!r}."
+    )
     return 0
 
 
