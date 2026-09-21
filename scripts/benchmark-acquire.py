@@ -124,6 +124,13 @@ from typing import Callable, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# One chunk size for every streamed digest in this repository's benchmark surface.
+# `lane_sha256_file` reads 4 MiB and this file read 1 MiB, which is exactly the drift
+# the shared helper was introduced to end -- in the path that verifies every pinned
+# byte. No digest was ever wrong; the point is that two numbers for one decision is how
+# they start to differ in ways that do matter.
+_DIGEST_CHUNK = 1 << 22
+
 # The one place anything is written. Everything under ``target/`` is build
 # output; no artifact fetched here is ever written anywhere else in the tree.
 CACHE = REPO_ROOT / "target" / "bench-artifacts"
@@ -358,6 +365,19 @@ WORKLOAD_PINS: dict[str, str] = {
     "lubm.1.0.seed0.corpus.sha256.purrdf-2.0.2": (
         "b3fbfcc822092428fcf6e03757f0ca555e39c2b29304bc8638c9d9d05f875308"
     ),
+    # The total answer rows the twenty WatDiv queries return at the default scale and
+    # seed. This is ENGINE OUTPUT, so neither pin-verified digest covers it: a wrong
+    # pack built from the right corpus would publish wrong row counts that nothing
+    # caught, and WatDiv's `nonempty > 0` guard is the "one non-zero row anywhere"
+    # floor that LUBM's Q1/Q14 oracle replaced.
+    #
+    # This is a REGRESSION pin, not an oracle -- WatDiv publishes no reference answers,
+    # so the value is this engine's own measurement over pinned inputs. It is also why
+    # the pack's digest is not pinned separately: the pack is determined by the pinned
+    # corpus and the keyed binary version, and a row count is a cheaper and far more
+    # legible refusal than a second hex string. "434748 rows, expected 434748" says
+    # what is wrong; two digests say only that something is.
+    "watdiv.10M.seed0.total_rows": "434748",
     # sha256 over the instantiated WatDiv query set, at scale 10M and seed 0.
     "watdiv.10M.seed0.queries.sha256": (
         "2fabc0ef56b5d18bb9a7c9d6a4aa5c661043500103d6f133087d39d41fa59301"
@@ -368,7 +388,7 @@ WORKLOAD_PINS: dict[str, str] = {
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
+        for chunk in iter(lambda: handle.read(_DIGEST_CHUNK), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -383,7 +403,7 @@ def md5_of(path: Path) -> str:
     """
     digest = hashlib.md5(usedforsecurity=False)  # noqa: S324 - publisher-published checksum, not a security primitive
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
+        for chunk in iter(lambda: handle.read(_DIGEST_CHUNK), b""):
             digest.update(chunk)
     return digest.hexdigest()
 

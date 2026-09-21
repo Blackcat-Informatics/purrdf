@@ -778,3 +778,211 @@ fn digesting_a_file_is_streamed_stable_and_refuses_what_it_cannot_read() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn the_query_set_digest_refuses_a_symlink_so_the_certificate_stays_closed() {
+    // `is_file()` follows symlinks, so the first version of this refusal accepted a link
+    // whose target lived OUTSIDE the directory — and the published digest then moved
+    // when that outside file changed, while `find -maxdepth 1 -type f` counted one
+    // fewer entry than the manifest recorded. A certificate closed over a directory
+    // cannot depend on bytes that are not in it.
+    let root = scratch("symlink");
+    let queries = root.join("queries");
+    let outside = root.join("outside");
+    std::fs::create_dir_all(&queries).expect("create the query directory");
+    std::fs::create_dir_all(&outside).expect("create the outside directory");
+    write(&queries.join("a.rq"), b"SELECT 1\n");
+
+    // THE VALID NEIGHBOUR FIRST: a flat directory of regular files must be accepted, or
+    // every lane loses its certificate.
+    let (code, out) = in_lane_common(&format!("lane_query_set_digest '{}'", queries.display()));
+    assert_eq!(
+        code, 0,
+        "a flat directory of regular files must be accepted; output:\n{out}"
+    );
+    let flat_digest = out.trim().to_string();
+
+    let target = outside.join("target.rq");
+    write(&target, b"ORIGINAL\n");
+    std::os::unix::fs::symlink(&target, queries.join("link.rq")).expect("create the symlink");
+
+    let (code, out) = in_lane_common(&format!("lane_query_set_digest '{}'", queries.display()));
+    assert_ne!(
+        code, 0,
+        "a symlink in the query set must be refused: following it makes this digest \
+         depend on bytes outside the directory it certifies, and makes the manifest \
+         disagree with the `-maxdepth 1 -type f` count the query-count guard uses; \
+         output:\n{out}"
+    );
+    assert!(
+        out.contains("symbolic link"),
+        "the refusal must say it is a symlink, not merely 'not a regular file' — the \
+         two have different remedies; output:\n{out}"
+    );
+
+    // And removing it must restore exactly the earlier digest, so the refusal is about
+    // the link and not about having touched the directory.
+    std::fs::remove_file(queries.join("link.rq")).expect("remove the symlink");
+    let (code, out) = in_lane_common(&format!("lane_query_set_digest '{}'", queries.display()));
+    assert_eq!(code, 0, "output:\n{out}");
+    assert_eq!(
+        out.trim(),
+        flat_digest,
+        "removing the link must restore the original digest; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_query_set_digest_names_a_vanished_directory_instead_of_raising() {
+    // The state this digest exists to diagnose: a concurrent run deletes the arena at
+    // the top of its own instantiation step. The first version raised
+    // `FileNotFoundError`, so the carefully written "another run is using the same
+    // arena" message never printed in precisely the case it was written for — and the
+    // replacement had no observer either.
+    let root = scratch("vanished");
+    let (code, out) = in_lane_common(&format!(
+        "lane_query_set_digest '{}'",
+        root.join("gone").display()
+    ));
+    assert_ne!(code, 0, "output:\n{out}");
+    assert!(
+        out.contains("is not a directory") && out.contains("probe:"),
+        "the refusal must name the lane and say the directory is gone, rather than \
+         surfacing as a Python traceback; output:\n{out}"
+    );
+    assert!(
+        !out.contains("Traceback"),
+        "a traceback here would replace the diagnosis with a stack; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_write_that_cannot_be_opened_names_the_knob_and_not_the_payload() {
+    // Claimed once to "run before step 1" and to be asserted in the lane-driving tests.
+    // Both were false: its earliest call site is step 5 in one lane and after step 3 in
+    // the other, and its message was asserted in neither of this PR's test files — it is
+    // covered for `scale-corpus` only. Proved here directly.
+    let root = scratch("write-checked");
+    // A regular file as the parent directory makes the open fail with ENOTDIR for every
+    // uid, including root — the same trick the lane tests use for an uncreatable arena.
+    let blocker = root.join("not-a-directory");
+    write(&blocker, b"");
+    let destination = blocker.join("manifest.txt");
+
+    let (code, out) = in_lane_common(&format!(
+        "lane_write_checked '{}' 'the manifest' \"PROBE_OUT='x'\" printf 'payload\\n'",
+        destination.display()
+    ));
+    assert_ne!(
+        code, 0,
+        "an unopenable destination must be refused; output:\n{out}"
+    );
+    assert!(
+        out.contains("cannot write the manifest") && out.contains("PROBE_OUT"),
+        "the refusal must name WHAT was being written and WHICH knob supplied the path, \
+         rather than surfacing as a bare shell redirection error; output:\n{out}"
+    );
+    assert!(
+        !out.contains("payload"),
+        "the payload must not be reported as the fault — the write failed, the command \
+         that produced the bytes did not; output:\n{out}"
+    );
+
+    // THE VALID NEIGHBOUR: an openable destination writes the bytes and says nothing.
+    let good = root.join("manifest.txt");
+    let (code, out) = in_lane_common(&format!(
+        "lane_write_checked '{}' 'the manifest' \"PROBE_OUT='x'\" printf 'payload\\n'",
+        good.display()
+    ));
+    assert_eq!(
+        code, 0,
+        "an openable destination must succeed; output:\n{out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&good).expect("read the written manifest"),
+        "payload\n",
+        "the command's stdout must land in the file verbatim"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_binary_that_cannot_run_is_refused_for_every_lane_at_once() {
+    // This law was asserted per-lane, and only for two of the three: `make_scale_corpus`
+    // covers the directory-as-binary and printed-NOTHING laws but never the unrunnable
+    // probe. Proving the shared helper covers all three lanes at once, which is the
+    // point of the helper being shared.
+    let root = scratch("probe");
+
+    // A binary that exits non-zero must be refused, naming what it was asked and
+    // saying the check ran before anything was fetched — so no downstream failure can
+    // be blamed on the corpus.
+    let (code, out) =
+        in_lane_common("lane_run_probe \"the binary '/bin/false'\" 'for its version' /bin/false");
+    assert_ne!(
+        code, 0,
+        "a binary that exits non-zero must be refused; output:\n{out}"
+    );
+    assert!(
+        out.contains("is not a working probe binary") && out.contains("for its version"),
+        "the refusal must name the KIND of binary and what it was asked, so the lane's \
+         own noun appears rather than a generic failure; output:\n{out}"
+    );
+    assert!(
+        out.contains("nothing has been fetched"),
+        "and it must say the check ran before the lane's first step, which is what stops \
+         a later failure being blamed on the corpus; output:\n{out}"
+    );
+
+    // A binary that exits 0 and says nothing is refused too — exiting 0 is not working.
+    let silent = write_executable(root.join("silent"), "#!/bin/sh\nexit 0\n");
+    let (code, out) = in_lane_common(&format!(
+        "lane_run_probe \"the binary\" 'for its version' '{}'\n\
+         lane_require_probe_said_something \"the binary\" 'for its version' \
+         'A binary that says nothing is not the one under test.'",
+        silent.display()
+    ));
+    assert_ne!(code, 0, "a silent binary must be refused; output:\n{out}");
+    assert!(
+        out.contains("printed NOTHING"),
+        "the refusal must say it printed nothing rather than that it failed — it did \
+         not fail, which is the whole trap; output:\n{out}"
+    );
+
+    // THE VALID NEIGHBOUR: a binary that answers is accepted, and its answer is
+    // captured. An over-refusing probe would reject every wrapper an operator writes.
+    let talker = write_executable(root.join("talker"), "#!/bin/sh\necho 'probe 9.9.9'\n");
+    let (code, out) = in_lane_common(&format!(
+        "lane_run_probe \"the binary\" 'for its version' '{}'\n\
+         lane_require_probe_said_something \"the binary\" 'for its version' 'unused'\n\
+         echo \"CAPTURED=${{LANE_PROBE_OUT}}\"",
+        talker.display()
+    ));
+    assert_eq!(
+        code, 0,
+        "a binary that answers must be accepted; output:\n{out}"
+    );
+    assert!(
+        out.contains("CAPTURED=probe 9.9.9"),
+        "and what it said must be captured, because that string becomes the provenance \
+         of every number the lane prints; output:\n{out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Writes `contents` to `path`, makes it executable, and returns `path`.
+fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
+    std::fs::write(&path, contents).expect("write the executable script");
+    let mut permissions = std::fs::metadata(&path)
+        .expect("stat the freshly written script")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).expect("make the script executable");
+    path
+}

@@ -392,8 +392,15 @@ expected_rows="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --dataset-r
   die "no extracted row count is pinned for WatDiv scale ${SCALE}"
 # AND THE CORPUS DIGEST AGAINST A PIN, not only against the stamp this arena wrote.
 # The stamp detects later change; it cannot detect a first extraction that was
-# already wrong, because that extraction is what wrote it. With the pin there is no
-# trust-on-first-use left in this lane.
+# already wrong, because that extraction is what wrote it.
+#
+# WHAT REMAINS TRUST-ON-FIRST-USE, stated rather than glossed: `saved.txt`. Its digest
+# is recorded on line 3 of the stamp and re-derived on every reuse, so a later edit is
+# caught -- but nothing pins what it should be, so a first extraction that produced a
+# wrong census would be certified by its own record. It comes out of the same
+# digest-verified tarball as the corpus, which is why that is a narrow gap rather than
+# an open door; it is not zero, and an earlier version of this comment claimed the pin
+# "removes the TOFU entirely", which was false.
 expected_corpus="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
   --workload-pin "watdiv.${SCALE}.corpus.sha256")" ||
   die "no extracted-corpus digest is pinned for WatDiv scale ${SCALE}"
@@ -753,6 +760,26 @@ fi
 # are the failure mode this whole workload exists to expose.
 ((executed > 0)) ||
   die "not one of the 20 queries executed; this lane measured nothing"
+# THE AGGREGATE ANSWER COUNT IS ASSERTED, at the default knobs. It is engine output, so
+# neither the corpus pin nor the query-set pin covers it -- a wrong pack built from the
+# right corpus would publish wrong counts and `nonempty > 0` would wave them through,
+# which is the floor LUBM's published-answer oracle replaced. WatDiv publishes no
+# reference answers, so this is a regression pin rather than an oracle, and it is
+# checked only where its inputs are pinned.
+if [[ "${SCALE}" == "10M" && "${SEED}" == "0" ]]; then
+  expected_rows_total="$(python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+    --workload-pin "watdiv.10M.seed0.total_rows")" ||
+    die "no total-row pin is recorded for WatDiv 10M at seed 0"
+  ((total_rows == expected_rows_total)) ||
+    die "the twenty queries returned ${total_rows} rows in total; the pin for WatDiv 10M
+  at seed 0 is ${expected_rows_total}. The corpus and the query set both matched their
+  pins, so the engine answered them differently -- no row count is published for a run
+  that disagrees with its recorded answers."
+  echo "answers: ${total_rows} rows in total, matching the pin for 10M at seed 0"
+else
+  echo "answers: ${total_rows} rows in total, NOT checked against a pin (scale ${SCALE},"
+  echo "  seed ${SEED} is a different workload)."
+fi
 ((nonempty > 0)) ||
   die "all ${executed} queries executed and every one matched zero rows.
   That is vacuous, not fast: 20 basic graph patterns over ${data_rows} triples cannot

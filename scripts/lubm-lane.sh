@@ -340,8 +340,17 @@ gen_start="$(now_ms)"
   cd "${WORK}"
   java -cp "${UBA}/classes" edu.lehigh.swat.bench.uba.Generator \
     -univ "${UNIVERSITIES}" -index "${INDEX}" -seed "${SEED}" -onto "${ONTO}"
-) >"${ARENA}/generator.stdout" 2>&1 ||
-  die "the UBA generator failed; its output is in ${ARENA}/generator.stdout"
+) >"${ARENA}/generator.stdout" 2>&1 || generator_status=$?
+# A DIAGNOSIS MUST NOT NAME A CAUSE THIS HAS NOT ESTABLISHED. If the redirection above
+# cannot be opened, bash never runs java at all -- so blaming the generator and pointing
+# the operator at a file that does not exist names the wrong cause twice.
+if ((${generator_status:-0} != 0)); then
+  [[ -f "${ARENA}/generator.stdout" ]] ||
+    die "could not open '${ARENA}/generator.stdout' (under LUBM_OUT='${OUT}') to capture
+  the generator's output, so the generator was never run. Nothing is known about it."
+  die "the UBA generator exited ${generator_status}; its output is in
+  ${ARENA}/generator.stdout"
+fi
 gen_ms=$(($(now_ms) - gen_start))
 
 # The Windows-separator pathology: the files are in ARENA, named `work\NAME`.
@@ -886,9 +895,9 @@ done <"${QUERIES}/regimes.tsv"
 verify_query_set "while the 14 queries were running"
 query_total=$((executed + unexecuted))
 ((query_total == EXPECTED_QUERIES)) ||
-  die "read ${query_total} row(s) from ${QUERIES}/regimes.tsv, not 14. The 14 .rq
-  files were written and counted, so the index that drives this loop disagrees with
-  them. No SUMMARY is printed for a run that measured part of the workload under
+  die "read ${query_total} row(s) from ${QUERIES}/regimes.tsv, not ${EXPECTED_QUERIES}.
+  The ${EXPECTED_QUERIES} .rq files were written and counted, so the index that drives
+  this loop disagrees with them. No SUMMARY is printed for a run that measured part of the workload under
   the whole workload's name."
 
 echo ""

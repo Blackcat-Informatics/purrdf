@@ -108,6 +108,7 @@ against another engine answering THE SAME query under the same conditions.
 
 import argparse
 import hashlib
+import os
 import subprocess
 import re
 import sys
@@ -563,14 +564,20 @@ def _candidates_body(candidates: Candidates) -> str:
 def write_candidates(candidates: Candidates, path: Path) -> None:
     """Persist the scrape so re-running at another seed need not re-read 1.5 GB.
 
-    THE BODY CARRIES ITS OWN DIGEST, because this file IS the workload. Every `%vN%`
-    substitution indexes into these pools, so an edited cache is a different query set
-    -- and the dataset digest in the header says only which corpus it was scraped
-    FROM, not that the rows are still what the scrape produced. Per-type counts are no
-    better: swapping one IRI for another of the same type preserves every count, keeps
-    the cache a hit, passes the census cross-check, and silently changes an emitted
-    query. A cross-run cache a later run consults instead of re-deriving is a
-    certificate by this repository's own definition, so it carries one.
+    THE BODY CARRIES ITS OWN DIGEST, and it is worth being exact about what that does
+    and does not buy. It detects an ACCIDENTAL edit: a truncated write, a hand
+    modification, a partially written file. It is NOT a certificate, because the digest
+    is written by the same run that writes the body -- recompute both and the cache is
+    accepted again, which was demonstrated. Calling it one would be the
+    trust-on-first-use overclaim this repository argues against elsewhere.
+
+    What actually certifies the workload is the query-set pin
+    (`watdiv.10M.seed0.queries.sha256`), and only at the default scale and seed. At any
+    other seed -- the cache's whole reason to exist -- an adversarially rewritten cache
+    with a recomputed digest is not caught by anything here, and the honest remedy is to
+    delete the cache when its provenance is in doubt. The header carries the dataset
+    digest so a cache from other bytes is a miss, and the version so an older format is
+    a miss rather than something read under a format it does not follow.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     body = _candidates_body(candidates)
@@ -581,7 +588,14 @@ def write_candidates(candidates: Candidates, path: Path) -> None:
             f"# body-sha256 {hashlib.sha256(body.encode('utf-8')).hexdigest()}",
         ]
     )
-    path.write_text(header + "\n" + body, encoding="utf-8")
+    # WRITTEN ATOMICALLY. A killed run used to leave a truncated cache whose body no
+    # longer matched its recorded digest, and the body check then hard-failed every
+    # later run until an operator deleted the file by hand -- an over-refusal on the
+    # one axis the sibling stamps self-heal. A temporary file plus `os.replace` means a
+    # cache is either wholly there or absent.
+    scratch = path.with_name(f"{path.name}.part.{os.getpid()}")
+    scratch.write_text(header + "\n" + body, encoding="utf-8")
+    os.replace(scratch, path)
 
 
 def check_against_census(
@@ -1142,7 +1156,65 @@ def offline_self_test() -> int:
             "a cache taken from a different dataset is a miss",
         )
 
-        # 3. A TAMPERED BODY is refused, which per-type counts could never catch.
+        # 3. THE CANONICAL RE-SORT, which is the load-bearing half and had no observer.
+        #    Order IS the workload: every substitution indexes into these tuples, so a
+        #    cache written in another order emits a different query set at one seed.
+        #    Deleting the sort in `read_candidates` used to turn nothing red. The body
+        #    digest alone cannot catch this, because a cache written in another order
+        #    carries a matching digest for that order -- so the fixture recomputes it.
+        reordered = Path(raw) / "reordered.tsv"
+        rows = good.read_text(encoding="utf-8").splitlines()
+        body_rows = list(reversed(rows[3:]))
+        reordered_body = "".join(f"{row}\n" for row in body_rows)
+        reordered.write_text(
+            "\n".join(
+                [
+                    CANDIDATES_HEADER,
+                    f"# dataset-sha256 {pool.dataset_sha256}",
+                    f"# body-sha256 {hashlib.sha256(reordered_body.encode('utf-8')).hexdigest()}",
+                ]
+            )
+            + "\n"
+            + reordered_body,
+            encoding="utf-8",
+        )
+        back = read_candidates(reordered, pool.dataset_sha256)
+        check(
+            back is not None and back.by_type == pool.by_type,
+            "a cache whose rows are in another order reloads canonically, so the order "
+            "is a property of this program rather than of a file under target/",
+        )
+
+        # 4. AN OLDER HEADER VERSION IS A MISS, not a file read under a format it does
+        #    not follow. The version was bumped when the body digest was added and
+        #    nothing asserted the bump does anything.
+        #    The fixture is a file that is WELL FORMED IN EVERY OTHER RESPECT -- three
+        #    header lines, the right dataset digest, a correct body digest -- and carries
+        #    only the wrong version. A real v1 file also lacks the body-digest line, so a
+        #    fixture shaped like one is rejected by the structural check whether or not
+        #    the version is compared, and proves nothing about the version. (Checked: it
+        #    stays green with the version comparison deleted.)
+        body = _candidates_body(pool)
+        legacy = Path(raw) / "legacy.tsv"
+        legacy.write_text(
+            "\n".join(
+                [
+                    "# purrdf-watdiv-candidates-v1",
+                    f"# dataset-sha256 {pool.dataset_sha256}",
+                    f"# body-sha256 {hashlib.sha256(body.encode('utf-8')).hexdigest()}",
+                ]
+            )
+            + "\n"
+            + body,
+            encoding="utf-8",
+        )
+        check(
+            read_candidates(legacy, pool.dataset_sha256) is None,
+            "a cache under an older header version is a miss even when everything else "
+            "about it is well formed",
+        )
+
+        # 5. A TAMPERED BODY is refused, which per-type counts could never catch.
         #    Swapping one IRI for another of the same type preserves every count,
         #    keeps the dataset digest intact, passes the census cross-check, and
         #    changes every query drawn from that pool. This is the case a reordering

@@ -9,12 +9,20 @@ Referenced from `scripts/lane-common.sh`, which implements these, and from
 [BENCHMARKS.md](../BENCHMARKS.md), which documents the lanes they govern.
 
 The comparison lanes — `scripts/scale-corpus.sh`, `scripts/lubm-lane.sh` and
-`scripts/watdiv-lane.sh` — are report-only by construction. No gate runs them and
-no number they print is asserted anywhere, which is the right posture for a
-workload whose timings depend on the host. It also means **a defect in a lane is
-invisible to every gate in this repository**: the lane will happily print a
-well-formed report about nothing, and the only reader who can tell is a human who
-already knew what the number should be.
+`scripts/watdiv-lane.sh` — are report-only where it counts: **no gate runs a lane past
+step 1**, and no timing or answer row is asserted anywhere, which is the right posture
+for numbers that depend on the host.
+
+Be exact about the boundary, because it has moved. `make check` does drive both lanes —
+fourteen tests invoke `make lubm`/`make watdiv` — but every one stops at the binary
+probe or a knob validator, because past that point a lane wants the network and a JDK.
+And several printed numbers ARE now asserted, against pins: both corpus digests, both
+query-set digests, two counts, and LUBM's published answers for Q1 and Q14.
+
+What remains unguarded is everything a lane does from step 1 onward on a real corpus.
+**A defect there is invisible to every gate here**: the lane will print a well-formed
+report about nothing, and the only reader who can tell is one who already knew what the
+number should be.
 
 Everything below exists because of that asymmetry. A lane cannot be trusted to be
 correct because it passed; it can only be trusted because it refuses.
@@ -29,9 +37,11 @@ the third carrying the defect, and the binary check had drifted in five places
 between two copies of itself.
 
 Two of the three lanes then define a handful of same-named helpers — `write_checked`,
-`mkdir_checked`, `require_nonempty_file` — and these are **adapters, not copies**.
-Their entire body delegates to the `lane_*` implementation, passing the one thing
-that genuinely differs: which knob supplied the path, so the diagnostic can quote
+`mkdir_checked`, `require_nonempty_file` — and the first two are **adapters, not
+copies**. Their entire body delegates to the `lane_*` implementation, passing the one
+thing that genuinely differs: which knob supplied the path. (`require_nonempty_file`
+injects nothing and is a bare alias; it is kept only so the three read alike at their
+call sites, and nothing would be lost by calling the shared helper directly.), so the diagnostic can quote
 `LUBM_OUT` or `WATDIV_OUT` back at the operator instead of emitting a bare
 `mkdir: cannot create directory`.
 
@@ -118,15 +128,17 @@ invites them to disagree. "A digest covers it" is only a valid answer when that 
 **pin** on the path in question. A digest re-derived and compared against a stamp
 the arena itself wrote is trust-on-first-use: it detects later change, which is
 worth having, but it cannot detect a first extraction that was already wrong,
-because that extraction is what wrote the record. So the WatDiv lane asserts its
-template count, its query count and its corpus row count, each against a value
-pinned beside the artifact pins rather than restated at the point of use — the
-template and query counts are one pinned number read once, because they are one
-fact, and three typed literals were three chances to disagree.
+because that extraction is what wrote the record.
+
+The WatDiv corpus digest IS pinned now, so the row count beside it is no longer
+justified by that exception — and it is kept anyway for a different and better reason:
+a count is a cheaper and far more legible refusal than a digest mismatch. "10,916,457
+triples, expected 10,916,457" tells an operator what is wrong; two 64-character hex
+strings tell them only that something is. Where both are available, assert both.
 
 This law was written before the code obeyed it, and briefly licensed its own
 violation — the row count was left reported on the argument that the corpus digest
-subsumed it, when that digest answers to a stamp rather than a pin. The rule is
+subsumed it, when that digest then answered to a stamp rather than a pin. The rule is
 the one to keep; the exception was the mistake.
 
 This extends past artifact counts to the rows of the report itself. A lane that

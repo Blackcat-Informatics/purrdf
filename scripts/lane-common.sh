@@ -131,9 +131,11 @@ lane_cleanup() {
 }
 trap lane_cleanup EXIT
 
-# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. Every redirection a lane
-# makes goes through here, so an unopenable destination is a LANE failure that
-# names the knob and quotes the bytes back — never a bare `scripts/<lane>.sh:
+# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. Every redirection that writes
+# an ARTIFACT goes through here, so an unopenable destination is a LANE failure that
+# names the knob and quotes the bytes back. (Redirections into `LANE_TMP` do not: that
+# directory is created by this file and removed by its trap, so a failure there is not
+# a knob error. The claim used to read "every redirection", which was false.) — never a bare `scripts/<lane>.sh:
 # line N: ...: Is a directory` with no hint which knob supplied the path.
 #
 # `$1` is the destination, `$2` WHAT is being written, `$3` how to name WHERE it
@@ -298,7 +300,7 @@ lane_flatten_detail() {
 lane_query_set_digest() {
   local directory="$1"
   python3 -c '
-import hashlib, pathlib, sys
+import hashlib, pathlib, stat, sys
 
 root = pathlib.Path(sys.argv[1])
 # THE DIRECTORY VANISHING IS THE STATE THIS DIGEST EXISTS TO DIAGNOSE, so it must
@@ -316,10 +318,17 @@ for path in sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8")):
     # excluded from the certificate that is also the concurrency tripwire, silently.
     # Refusing keeps the certificate closed over what is actually there, and matches
     # the `-maxdepth 1` the count uses.
-    if not path.is_file():
+    # `is_file()` FOLLOWS SYMLINKS, so filtering on it accepted a link whose target
+    # lives outside this directory -- and the certificate then moved when that outside
+    # file changed, while `find -maxdepth 1 -type f` counted one fewer entry than the
+    # manifest recorded. A certificate closed over a directory cannot depend on bytes
+    # that are not in it. `lstat` asks about the entry itself.
+    if not stat.S_ISREG(path.lstat().st_mode):
+        kind = "a symbolic link" if path.is_symlink() else "not a regular file"
         sys.exit(
-            f"FAIL: {root} holds {path.name!r}, which is not a regular file. A query set "
-            "is a flat directory of files; nothing else can be certified here."
+            f"FAIL: {root} holds {path.name!r}, which is {kind}. A query set is a flat "
+            "directory of regular files: anything else either cannot be certified, or "
+            "would make this digest depend on bytes outside the directory it certifies."
         )
     if "\n" in path.name or "\x00" in path.name:
         sys.exit(
@@ -333,7 +342,14 @@ if not records:
         "an empty manifest would certify a workload of no queries."
     )
 print(hashlib.sha256(("\n".join(records) + "\n").encode("utf-8")).hexdigest())
-' "${directory}"
+' "${directory}" 2>"${LANE_TMP}/digest.err" || {
+    # EVERY DIAGNOSTIC NAMES THE LANE, including the ones this helper raises from
+    # Python. `sys.exit` inside the embedded block writes a bare `FAIL:` line and
+    # bash then dies on the failed substitution, so the refusal arrived without the
+    # lane's name on it -- which is the first law in this file, broken by the helper
+    # that enforces several of the others.
+    die "$(lane_flatten_detail "$(cat "${LANE_TMP}/digest.err")")"
+  }
 }
 
 # A GENERATOR REPORTING SUCCESS IS NOT A FULL QUERY SET. `$1` is the directory,
