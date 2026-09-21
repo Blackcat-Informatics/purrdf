@@ -390,15 +390,38 @@ if not root.is_dir():
 # the directory or a single query file between them produced a traceback instead of the
 # arena-conflict diagnostic -- which is the same defect the check was added to fix, one
 # statement later. Every filesystem call is therefore inside the handler.
+# A DIAGNOSIS MUST NOT NAME A CAUSE THE LANE HAS NOT ESTABLISHED, which is a law in
+# docs/design/purrdf-bench-lane-laws.md -- and the first version of these three handlers
+# broke it. They reported EVERY OSError as "removed or replaced underneath this run /
+# another run is almost certainly using the same arena", so a volume owned by another uid
+# on a CI runner sent the reader hunting a phantom concurrent run. The errno is the
+# evidence, so it decides the wording.
+def explain(error, subject):
+    import errno as _errno
+    if error.errno in (_errno.ENOENT, _errno.ENOTDIR):
+        return (
+            f"{subject} vanished ({error.strerror}). A concurrent run deletes this "
+            "directory at the top of its own instantiation step, so another run is the "
+            "likeliest cause -- two runs at once want two arenas."
+        )
+    if error.errno in (_errno.EACCES, _errno.EPERM):
+        return (
+            f"{subject} cannot be read ({error.strerror}). It EXISTS, so this is a "
+            "permissions problem rather than a concurrent run: check the mode and owner "
+            "of the path and of every directory above it. Nothing about the corpus, the "
+            "binary or any knob you set is at fault."
+        )
+    return (
+        f"{subject} could not be read ({error.strerror}, errno {error.errno}). The cause "
+        "is not established here -- this is neither a missing path nor a permissions "
+        "denial, which are the two states this lane knows how to explain."
+    )
+
 records = []
 try:
     entries = sorted(root.iterdir(), key=lambda p: p.name.encode("utf-8"))
 except OSError as error:
-    sys.exit(
-        f"FAIL: {root} could not be enumerated ({error.strerror}); it was removed or "
-        "replaced underneath this run. Another run is almost certainly using the same "
-        "arena -- two runs at once want two arenas."
-    )
+    sys.exit("FAIL: " + explain(error, str(root)))
 for path in entries:
     # A NON-REGULAR ENTRY IS REFUSED, not skipped. Filtering to `is_file()` made the
     # claim above false: a subdirectory queued alongside the queries had its contents
@@ -421,10 +444,8 @@ for path in entries:
     try:
         mode = path.lstat().st_mode
     except OSError as error:
-        sys.exit(
-            f"FAIL: {path.name!r} vanished from {root} while it was being certified "
-            f"({error.strerror}). Another run is almost certainly using the same arena."
-        )
+        subject = "%r in %s" % (path.name, root)
+        sys.exit("FAIL: " + explain(error, subject))
     if not stat.S_ISREG(mode):
         kind = "a symbolic link" if path.is_symlink() else "not a regular file"
         sys.exit(
@@ -440,12 +461,10 @@ for path in entries:
     try:
         content = path.read_bytes()
     except OSError as error:
-        sys.exit(
-            f"FAIL: {path.name!r} in {root} could not be read while it was being certified "
-            f"({error.strerror}). A digest is a certificate, so a file it cannot read is a "
-            "refusal rather than an omission -- and a concurrent run in this arena is the "
-            "likeliest cause."
-        )
+        # A digest is a certificate, so a file it cannot read is a refusal and never an
+        # omission -- whatever the reason turns out to be.
+        subject = "%r in %s" % (path.name, root)
+        sys.exit("FAIL: " + explain(error, subject))
     records.append(f"{hashlib.sha256(content).hexdigest()}  {path.name}")
 if not records:
     sys.exit(

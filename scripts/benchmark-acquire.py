@@ -692,8 +692,23 @@ def _download_verified(artifact: Artifact, dest: Path) -> None:
             # Only a response that DECLARES a larger length is treated as retryable. A
             # server that declares nothing has said nothing to contradict, and inventing a
             # short-body verdict there would retry every chunked transfer.
-            if declared is not None and received < int(declared):
-                raise http.client.IncompleteRead(b"", expected=int(declared) - received)
+            if declared is not None:
+                # PARSED INSIDE THE HANDLER, because a header is upstream input. `int()`
+                # sat outside the `except` tuple, so `Content-Length: 1,024` from a proxy
+                # or captive portal produced a ValueError traceback instead of a named
+                # refusal -- and because the handler never ran, the scratch file was left
+                # behind in the cache. A traceback and a leak, in the function whose whole
+                # subject is not misdiagnosing a transfer failure.
+                try:
+                    expected_length = int(declared)
+                except ValueError:
+                    raise http.client.HTTPException(
+                        f"the server sent an unparseable Content-Length: {declared!r}"
+                    ) from None
+                if received < expected_length:
+                    raise http.client.IncompleteRead(
+                        b"", expected=expected_length - received
+                    )
             break
         # `http.client.IncompleteRead` is an HTTPException, NOT an OSError, so the
         # commonest mid-transfer truncation -- the exact failure the retry below
