@@ -1356,6 +1356,14 @@ def shell_comments(src: str) -> list[tuple[int, int, str]]:
                     quote = None
                 i += 1
                 continue
+            # AN ESCAPE AT TOP LEVEL. The quoted arms handled `\\` and this one did not, so
+            # `echo \\" ok  # tracked at <URL>` set the quote state for the rest of the line
+            # and the real comment was never reached -- and inside a substitution the phantom
+            # quote inverted `pending`, so the closing backtick opened a new one. Four cases
+            # were hidden; all four are now reported.
+            if c == "\\":
+                i += 2
+                continue
             if c == "`" and pending:
                 # The closing backtick of a substitution that began inside a quote.
                 quote = pending.pop()

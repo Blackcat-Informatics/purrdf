@@ -1372,6 +1372,32 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
     // A coverage test that can be evaded is worth less than no coverage test, because it
     // reports the absence of a problem it cannot see.
     let redirect = regex_lite_capture();
+    // A DESCRIPTOR BOUND BY `exec` IS A CAPTURE TOO, and neither of its two lines carries a
+    // `2>` a scanner would notice: `exec {fd}>"${log}"` binds the file, and the command then
+    // writes stderr into it with `>&"${fd}" 2>&1`. Both are live in `scripts/lubm-lane.sh`,
+    // and the test asserting every capture is guarded could see neither.
+    //
+    // The `exec` form is guarded by its own `|| die`, which proves writability before the
+    // descriptor is used -- the same property `lane_reset_capture` establishes, by a
+    // different mechanism. So it is recognised and accepted when that guard is present, and
+    // reported when it is not. Accepting it silently would be the same hole one level out.
+    let exec_binding = |line: &str| {
+        let head = line.trim_start();
+        let after = head.strip_prefix("exec ")?.trim_start();
+        let (_descriptor, rest) = after.split_once('>')?;
+        let rest = rest.trim_start_matches('>').trim_start();
+        if rest.starts_with('&') {
+            return None;
+        }
+        let target: String = if let Some(stripped) = rest.strip_prefix('"') {
+            stripped.chars().take_while(|c| *c != '"').collect()
+        } else {
+            rest.chars()
+                .take_while(|c| !c.is_whitespace() && !matches!(c, ')' | ';' | '|' | '&' | '"'))
+                .collect()
+        };
+        (!target.is_empty()).then_some(target)
+    };
     // A HEADER IS A SHAPE, NOT A SUFFIX. Requiring the line to END with `{` missed a
     // header carrying a trailing comment and one with the brace on the next line — and
     // each miss widened the search window so a reset inside a DIFFERENT, already-closed
@@ -1413,6 +1439,23 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
             if line.trim_start().starts_with('#') {
                 continue;
             }
+            if exec_binding(line).is_some() {
+                found += 1;
+                let guarded = line.contains("|| die")
+                    || line.trim_end().ends_with("||")
+                    || lines[index..(index + 3).min(lines.len())]
+                        .iter()
+                        .any(|near| near.trim_start().starts_with("die "));
+                if !guarded {
+                    unguarded.push(format!(
+                        "{script}:{}: {} (an `exec` binding with no `|| die`, so an \
+                         unopenable path is not proven before the descriptor is used)",
+                        index + 1,
+                        line.trim()
+                    ));
+                }
+                continue;
+            }
             let Some(target) = redirect(line) else {
                 continue;
             };
@@ -1439,8 +1482,8 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
     }
 
     assert!(
-        found >= 4,
-        "expected at least the four known capture sites; found {found}. A coverage test \
+        found >= 5,
+        "expected at least the five known capture sites; found {found}. A coverage test \
          that covers nothing must fail loudly rather than pass — this floor is what caught \
          the detector missing two of three sites on its first attempt."
     );
