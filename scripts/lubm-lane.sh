@@ -346,24 +346,39 @@ mkdir_checked "${WORK}"
 # command runs, so the capture is empty and the guard falls through to blaming the
 # generator anyway. Verified by running it.
 #
-# Creating the log up front settles it. If that write fails the lane dies naming the log
-# and the knob, and the generator is never run; if it succeeds, a later non-zero status
-# is the generator's, because the only other party has already reported.
-# `write_checked` is this lane's ADAPTER: it injects the knob-naming `where` itself, so
-# it takes (destination, role, command...). Passing a `where` as the third argument makes
-# it the command -- which is how the first attempt at this turned a working lane into one
-# that died at step 4 with "No such file or directory" about a path that was fine.
-write_checked "${ARENA}/generator.stdout" "the generator's captured output" true
+# THE LOG IS OPENED ONCE, ON ITS OWN DESCRIPTOR, and the generator inherits it.
+#
+# Three earlier attempts at this got it wrong in three different ways, all of them the
+# same mistake: asserting which party a failure belonged to instead of arranging for the
+# answer to be knowable. `-f` on the log cannot distinguish a write that failed from one
+# that never happened. Capturing the subshell's stderr cannot see a redirect failure,
+# because bash reports THAT on its own stderr, outside the capture. And pre-creating the
+# log with `write_checked` and then appending left the claim "a later non-zero status is
+# the generator's" false: a failed `>>` -- the log removed between the two steps, the
+# filesystem filling -- yields status 1, and the lane then named the generator as the
+# cause and pointed at a file that might not exist. Demonstrated:
+# `gs=0; (echo hi) >>/nonexistent/log 2>&1 || gs=$?` sets `gs=1`.
+#
+# Opening the descriptor first makes the claim TRUE rather than asserted. The only
+# redirect left at the command is `>&` on an already-open descriptor, which cannot fail
+# for a filesystem reason -- so a non-zero status after it really is the generator's.
+# `exec {fd}>` also truncates, which is what was wanted all along: with the log
+# pre-created and then appended to, a re-run inside one arena could add to stale bytes.
+gen_log="${ARENA}/generator.stdout"
+exec {gen_log_fd}>"${gen_log}" ||
+  die "cannot open the generator's log at '${gen_log}' (under LUBM_OUT='${OUT}').
+  The generator was not started, so nothing about it has been measured."
 gen_start="$(now_ms)"
 generator_status=0
 (
   cd "${WORK}"
   java -cp "${UBA}/classes" edu.lehigh.swat.bench.uba.Generator \
     -univ "${UNIVERSITIES}" -index "${INDEX}" -seed "${SEED}" -onto "${ONTO}"
-) >>"${ARENA}/generator.stdout" 2>&1 || generator_status=$?
+) >&"${gen_log_fd}" 2>&1 || generator_status=$?
+exec {gen_log_fd}>&-
 ((generator_status == 0)) ||
   die "the UBA generator exited ${generator_status}; its output is in
-  ${ARENA}/generator.stdout"
+  ${gen_log}"
 gen_ms=$(($(now_ms) - gen_start))
 
 # The Windows-separator pathology: the files are in ARENA, named `work\NAME`.
