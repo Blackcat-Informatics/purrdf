@@ -166,10 +166,11 @@ fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     // binding. That case keeps the original per-variable path — its own pushdown
     // descent, then one `substitute_variable` per pre-binding — so its behaviour is
     // unchanged rather than approximated.
+    let mut query = query;
     if has_repeated_variable(&probes) {
-        let mut query = query.map_core_pattern(|core| push_probe_constants(core, &probes));
+        query.map_core_pattern_mut(|core| push_probe_constants(core, &probes));
         for (var, ground) in probes {
-            query = query.substitute_variable(&var, ground);
+            query.substitute_variable_mut(&var, ground);
         }
         return query;
     }
@@ -187,22 +188,23 @@ fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     // (`push_probes` maps every arm onto its own variant, and `at_core_root`
     // suppresses the restoring `Values` there), so the second descent could only
     // ever have stopped where the first one did.
-    query.map_core_pattern(move |core| {
-        let core = push_probe_constants(core, &probes);
+    query.map_core_pattern_mut(move |core| {
+        push_probe_constants(core, &probes);
         let mut variables = Vec::with_capacity(probes.len());
         let mut row = Vec::with_capacity(probes.len());
         for (var, ground) in probes {
             variables.push(var);
             row.push(Some(ground));
         }
-        GraphPattern::Join {
+        purrdf_sparql_algebra::substitute::take_and_replace(core, |core| GraphPattern::Join {
             left: Box::new(GraphPattern::Values {
                 variables,
                 bindings: vec![row],
             }),
             right: Box::new(core),
-        }
-    })
+        });
+    });
+    query
 }
 
 /// Whether any variable is pre-bound twice, which is the one shape the combined
@@ -279,11 +281,11 @@ fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 /// particular dataset blank, so writing one into a triple pattern would widen the
 /// match to every term rather than narrow it to the focus node. Blank-node focus
 /// nodes keep the `VALUES`-join path, which interns the blank as the term it is.
-fn push_probe_constants(core: GraphPattern, probes: &[(Variable, GroundTerm)]) -> GraphPattern {
+fn push_probe_constants(core: &mut GraphPattern, probes: &[(Variable, GroundTerm)]) {
     if probes.is_empty() {
-        return core;
+        return;
     }
-    push_probes(core, probes, true)
+    push_probes(core, probes, true);
 }
 
 /// [`push_probe_constants`]'s recursion.
@@ -295,99 +297,58 @@ fn push_probe_constants(core: GraphPattern, probes: &[(Variable, GroundTerm)]) -
 /// $this <p> ?v . FILTER(...) }` lowers to `Project(Filter(Bgp))` and
 /// `map_core_pattern` descends both wrappers — so the hot path pays for no extra
 /// algebra node at all.
-fn push_probes(
-    pattern: GraphPattern,
-    probes: &[(Variable, GroundTerm)],
-    at_core_root: bool,
-) -> GraphPattern {
+fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at_core_root: bool) {
     match pattern {
         GraphPattern::Bgp { patterns } => {
             let mut probed = Vec::new();
-            let patterns = patterns
-                .into_iter()
-                .map(|triple| probe_triple_pattern(triple, probes, &mut probed))
-                .collect();
-            restore_probed_bindings(
-                GraphPattern::Bgp { patterns },
-                &probed,
-                probes,
-                at_core_root,
-            )
+            for triple in patterns.iter_mut() {
+                probe_triple_pattern(triple, probes, &mut probed);
+            }
+            restore_probed_bindings(pattern, &probed, probes, at_core_root);
         }
         GraphPattern::Path {
-            subject,
-            path,
-            object,
+            subject, object, ..
         } => {
             let mut probed = Vec::new();
-            let leaf = GraphPattern::Path {
-                subject: probe_term_pattern(subject, probes, &mut probed),
-                path,
-                object: probe_term_pattern(object, probes, &mut probed),
-            };
-            restore_probed_bindings(leaf, &probed, probes, at_core_root)
+            probe_term_pattern(subject, probes, &mut probed);
+            probe_term_pattern(object, probes, &mut probed);
+            restore_probed_bindings(pattern, &probed, probes, at_core_root);
         }
-        GraphPattern::Join { left, right } => GraphPattern::Join {
-            left: Box::new(push_probes(*left, probes, false)),
-            right: Box::new(push_probes(*right, probes, false)),
-        },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(push_probes(*left, probes, false)),
-            right: Box::new(push_probes(*right, probes, false)),
-        },
-        GraphPattern::Graph { name, inner } => GraphPattern::Graph {
-            name,
-            inner: Box::new(push_probes(*inner, probes, false)),
-        },
-        GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr,
-            inner: Box::new(push_probes(*inner, probes, false)),
-        },
+        GraphPattern::Join { left, right } | GraphPattern::Union { left, right } => {
+            push_probes(left, probes, false);
+            push_probes(right, probes, false);
+        }
+        GraphPattern::Graph { inner, .. } | GraphPattern::Filter { inner, .. } => {
+            push_probes(inner, probes, false);
+        }
         GraphPattern::Extend {
-            inner,
-            variable,
-            expression,
+            inner, variable, ..
         } => {
             // `variable` is this node's own binding, so it is not bound in `inner`
             // and there is nothing there to narrow. Narrowing the candidate set is
             // only ever needed for an ill-formed query the parser would reject, and
             // costs one allocation on a branch no well-formed query takes.
             let narrowed: Vec<(Variable, GroundTerm)>;
-            let inner_probes = if probes.iter().any(|(var, _)| *var == variable) {
+            let inner_probes = if probes.iter().any(|(var, _)| var == &*variable) {
                 narrowed = probes
                     .iter()
-                    .filter(|(var, _)| *var != variable)
+                    .filter(|(var, _)| var != &*variable)
                     .cloned()
                     .collect();
                 &narrowed
             } else {
                 probes
             };
-            GraphPattern::Extend {
-                inner: Box::new(push_probes(*inner, inner_probes, false)),
-                variable,
-                expression,
-            }
+            push_probes(inner, inner_probes, false);
         }
-        // Left operand only — see [`push_probe_constants`]'s soundness note.
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => GraphPattern::LeftJoin {
-            left: Box::new(push_probes(*left, probes, false)),
-            right,
-            expression,
-        },
-        GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Box::new(push_probes(*left, probes, false)),
-            right,
-        },
-        GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Box::new(push_probes(*left, probes, false)),
-            right,
-        },
-        other => other,
+        // Left operand only — see [`push_probe_constants`]'s soundness note. The
+        // right arms are not merely left unrecursed: they are never reached through
+        // this match at all, which is what makes the boundary a property of the
+        // shape of this function rather than of remembering to stop.
+        GraphPattern::LeftJoin { left, .. }
+        | GraphPattern::Minus { left, .. }
+        | GraphPattern::Lateral { left, .. } => push_probes(left, probes, false),
+        _ => {}
     }
 }
 
@@ -396,23 +357,23 @@ fn push_probes(
 /// `probed` holds the indices into `probes` of the variables this leaf really
 /// replaced, so a leaf that matched none is returned untouched and costs nothing.
 fn restore_probed_bindings(
-    leaf: GraphPattern,
+    leaf: &mut GraphPattern,
     probed: &[usize],
     probes: &[(Variable, GroundTerm)],
     at_core_root: bool,
-) -> GraphPattern {
+) {
     if probed.is_empty() || at_core_root {
-        return leaf;
+        return;
     }
     let variables = probed.iter().map(|&i| probes[i].0.clone()).collect();
     let row = probed.iter().map(|&i| Some(probes[i].1.clone())).collect();
-    GraphPattern::Join {
+    purrdf_sparql_algebra::substitute::take_and_replace(leaf, |leaf| GraphPattern::Join {
         left: Box::new(leaf),
         right: Box::new(GraphPattern::Values {
             variables,
             bindings: vec![row],
         }),
-    }
+    });
 }
 
 /// Push constants into a triple pattern's subject and object, recording which
@@ -420,43 +381,42 @@ fn restore_probed_bindings(
 /// pre-binding that reached it would be pre-binding a PREDICATE variable, which
 /// [`substitute_in_named_node_pattern`] already handles on the SHACL path.
 fn probe_triple_pattern(
-    triple: TriplePattern,
+    triple: &mut TriplePattern,
     probes: &[(Variable, GroundTerm)],
     probed: &mut Vec<usize>,
-) -> TriplePattern {
-    TriplePattern {
-        subject: probe_term_pattern(triple.subject, probes, probed),
-        predicate: triple.predicate,
-        object: probe_term_pattern(triple.object, probes, probed),
-    }
+) {
+    probe_term_pattern(&mut triple.subject, probes, probed);
+    probe_term_pattern(&mut triple.object, probes, probed);
 }
 
 /// Replace one term position with its pre-bound constant, recursing into a quoted
 /// triple's own positions. A position that is not a candidate variable is returned
 /// unchanged.
 fn probe_term_pattern(
-    term: TermPattern,
+    term: &mut TermPattern,
     probes: &[(Variable, GroundTerm)],
     probed: &mut Vec<usize>,
-) -> TermPattern {
+) {
     match term {
         TermPattern::Variable(var) => {
-            let found = probes.iter().position(|(candidate, _)| *candidate == var);
-            let Some(index) = found else {
-                return TermPattern::Variable(var);
+            // Both early exits leave `probed` alone as well as the term. Recording an
+            // index here without writing the constant would emit a restoring `VALUES`
+            // for a column the leaf never consumed; for a blank-node pre-binding that
+            // is the difference between the injection-only `VALUES` path and matching
+            // every term in the graph.
+            let Some(index) = probes.iter().position(|(candidate, _)| candidate == var) else {
+                return;
             };
             let Some(constant) = term_pattern_from_ground(&probes[index].1) else {
-                return TermPattern::Variable(var);
+                return;
             };
             if !probed.contains(&index) {
                 probed.push(index);
             }
-            constant
+            *term = constant;
         }
-        TermPattern::Triple(triple) => {
-            TermPattern::Triple(Box::new(probe_triple_pattern(*triple, probes, probed)))
-        }
-        other => other,
+        TermPattern::Triple(triple) => probe_triple_pattern(triple, probes, probed),
+        _ => {}
     }
 }
 
@@ -518,10 +478,11 @@ pub(crate) fn apply_shacl_prebinding(
     }
     let expr_subs = ExprSubs(entries);
 
-    let query = apply_probes(query, probes);
-    Ok(map_patterns_in_query(query, |pattern| {
-        substitute_in_graph_pattern(pattern, &expr_subs)
-    }))
+    let mut query = apply_probes(query, probes);
+    map_patterns_in_query(&mut query, |pattern| {
+        substitute_in_graph_pattern(pattern, &expr_subs);
+    });
+    Ok(query)
 }
 
 /// What each pre-bound variable becomes in an EXPRESSION position, keyed by the
@@ -578,169 +539,80 @@ fn expression_from_ground(ground: &GroundTerm) -> Option<Expression> {
 
 /// Walk and rebuild the whole [`Query`], applying `f` to every [`GraphPattern`]
 /// contained in it (including sub-queries).
-fn map_patterns_in_query(query: Query, mut f: impl FnMut(GraphPattern) -> GraphPattern) -> Query {
+fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
     match query {
-        Query::Select {
-            pattern,
-            dataset,
-            base_iri,
-            version,
-        } => Query::Select {
-            pattern: f(pattern),
-            dataset,
-            base_iri,
-            version,
-        },
-        Query::Construct {
-            template,
-            pattern,
-            dataset,
-            base_iri,
-            version,
-        } => Query::Construct {
-            template,
-            pattern: f(pattern),
-            dataset,
-            base_iri,
-            version,
-        },
-        Query::Describe {
-            pattern,
-            targets,
-            dataset,
-            base_iri,
-            version,
-        } => Query::Describe {
-            pattern: f(pattern),
-            targets,
-            dataset,
-            base_iri,
-            version,
-        },
-        Query::Ask {
-            pattern,
-            dataset,
-            base_iri,
-            version,
-        } => Query::Ask {
-            pattern: f(pattern),
-            dataset,
-            base_iri,
-            version,
-        },
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. } => f(pattern),
     }
 }
 
 /// Recursively substitute pre-bound variables into a [`GraphPattern`].
-fn substitute_in_graph_pattern(pattern: GraphPattern, expr_subs: &ExprSubs<'_>) -> GraphPattern {
+fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs<'_>) {
+    // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
+    // compile here rather than silently pass through unsubstituted.
     match pattern {
-        GraphPattern::Bgp { patterns } => GraphPattern::Bgp { patterns },
-        GraphPattern::Path {
-            subject,
-            path,
-            object,
-        } => GraphPattern::Path {
-            subject,
-            path,
-            object,
-        },
-        GraphPattern::Join { left, right } => GraphPattern::Join {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
-        },
+        // A leaf's term positions are matched against the graph, not evaluated, and
+        // `apply_substitutions`' pushdown has already written the pre-bound constants
+        // into the ones that can carry them. A `Values` block's cells are data for the
+        // same reason.
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
+        // BOTH arms, unlike the pushdown. Replacing a variable with a constant
+        // EXPRESSION removes no column from any schema, so the divergence that stops
+        // the pushdown at an `OPTIONAL`'s or a `MINUS`'s right arm does not arise here.
+        // See `crate::enf`'s "The SHACL pre-binding fork".
+        GraphPattern::Join { left, right }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::Union { left, right }
+        | GraphPattern::Minus { left, right } => {
+            substitute_in_graph_pattern(left, expr_subs);
+            substitute_in_graph_pattern(right, expr_subs);
+        }
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
-        } => GraphPattern::LeftJoin {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
-            expression: expression.map(|e| substitute_in_expression(e, expr_subs)),
-        },
-        GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
-        },
-        GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
-            expr: substitute_in_expression(expr, expr_subs),
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-        },
-        GraphPattern::Union { left, right } => GraphPattern::Union {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
-        },
-        GraphPattern::Graph { name, inner } => GraphPattern::Graph {
-            name: substitute_in_named_node_pattern(name, expr_subs),
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-        },
+        } => {
+            substitute_in_graph_pattern(left, expr_subs);
+            substitute_in_graph_pattern(right, expr_subs);
+            if let Some(expression) = expression {
+                substitute_in_expression(expression, expr_subs);
+            }
+        }
+        GraphPattern::Filter { expr, inner } => {
+            substitute_in_expression(expr, expr_subs);
+            substitute_in_graph_pattern(inner, expr_subs);
+        }
+        GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+            substitute_in_named_node_pattern(name, expr_subs);
+            substitute_in_graph_pattern(inner, expr_subs);
+        }
+        // The operand and the expression are substituted; the target bindings
+        // (`Extend`'s `variable`, `Unfold`'s `element`/`companion`) are this node's
+        // OWN and are carried through untouched.
         GraphPattern::Extend {
-            inner,
-            variable,
-            expression,
-        } => GraphPattern::Extend {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-            variable,
-            expression: substitute_in_expression(expression, expr_subs),
-        },
-        // The operand is substituted; the two targets are this nodes OWN bindings
-        // and are carried through untouched, exactly as `Extend`s target is.
-        GraphPattern::Unfold {
-            inner,
-            expression,
-            element,
-            companion,
-        } => GraphPattern::Unfold {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-            expression: substitute_in_expression(expression, expr_subs),
-            element,
-            companion,
-        },
-        GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Box::new(substitute_in_graph_pattern(*left, expr_subs)),
-            right: Box::new(substitute_in_graph_pattern(*right, expr_subs)),
-        },
-        GraphPattern::Service {
-            name,
-            inner,
-            silent,
-        } => GraphPattern::Service {
-            name: substitute_in_named_node_pattern(name, expr_subs),
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-            silent,
-        },
-        GraphPattern::Values {
-            variables,
-            bindings,
-        } => GraphPattern::Values {
-            variables,
-            bindings,
-        },
-        GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-            expression: expression
-                .into_iter()
-                .map(|e| substitute_in_order_expression(e, expr_subs))
-                .collect(),
-        },
-        GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-            variables,
-        },
-        GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-        },
-        GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-        },
-        GraphPattern::Slice {
-            inner,
-            start,
-            length,
-        } => GraphPattern::Slice {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-            start,
-            length,
-        },
+            inner, expression, ..
+        }
+        | GraphPattern::Unfold {
+            inner, expression, ..
+        } => {
+            substitute_in_graph_pattern(inner, expr_subs);
+            substitute_in_expression(expression, expr_subs);
+        }
+        GraphPattern::OrderBy { inner, expression } => {
+            substitute_in_graph_pattern(inner, expr_subs);
+            for order in expression.iter_mut() {
+                substitute_in_order_expression(order, expr_subs);
+            }
+        }
+        // No `Project`-boundary narrowing: a SHACL pre-binding must reach an
+        // UNPROJECTED scope inside a nested sub-`SELECT`, which is divergence 1 in
+        // `crate::enf`'s module doc.
+        GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => substitute_in_graph_pattern(inner, expr_subs),
         // A property function's arguments are INVOCATION INPUTS, evaluated per row like
         // a function call's arguments rather than matched against the graph like a BGP
         // term — so they are substituted here, on the same rule and for the same reason
@@ -750,32 +622,28 @@ fn substitute_in_graph_pattern(pattern: GraphPattern, expr_subs: &ExprSubs<'_>) 
         // with. IRI and literal values substitute; blank-node and quoted-triple values
         // pass through to the VALUES join, exactly as in expression positions.
         GraphPattern::PropertyFunction(call) => {
-            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
-                iri: call.iri,
-                subject_args: call
-                    .subject_args
-                    .into_iter()
-                    .map(|term| substitute_in_term_pattern(term, expr_subs))
-                    .collect(),
-                object_args: call
-                    .object_args
-                    .into_iter()
-                    .map(|term| substitute_in_term_pattern(term, expr_subs))
-                    .collect(),
-            })
+            for term in call
+                .subject_args
+                .iter_mut()
+                .chain(call.object_args.iter_mut())
+            {
+                substitute_in_term_pattern(term, expr_subs);
+            }
         }
         GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => GraphPattern::Group {
-            inner: Box::new(substitute_in_graph_pattern(*inner, expr_subs)),
-            variables,
-            aggregates: aggregates
+            inner, aggregates, ..
+        } => {
+            substitute_in_graph_pattern(inner, expr_subs);
+            // `AggregateExpression` is rebuilt through its consuming `into_parts`, so
+            // the entries are taken by value and collected back. `Vec::into_iter().
+            // collect()` into the same element type reuses the buffer, so the take and
+            // the collect together allocate nothing.
+            let taken = std::mem::take(aggregates);
+            *aggregates = taken
                 .into_iter()
                 .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs)))
-                .collect(),
-        },
+                .collect();
+        }
     }
 }
 
@@ -786,153 +654,103 @@ fn substitute_in_graph_pattern(pattern: GraphPattern, expr_subs: &ExprSubs<'_>) 
 /// [`expression_from_term_value`]: a blank-node or quoted-triple pre-binding has no
 /// constant expression form and rides the VALUES join instead. A non-variable argument
 /// is already a constant and passes through unchanged.
-fn substitute_in_term_pattern(term: TermPattern, expr_subs: &ExprSubs<'_>) -> TermPattern {
-    let TermPattern::Variable(var) = &term else {
-        return term;
+fn substitute_in_term_pattern(term: &mut TermPattern, expr_subs: &ExprSubs<'_>) {
+    let TermPattern::Variable(var) = term else {
+        return;
     };
-    match expr_subs.get(var.as_str()) {
+    let replacement = match expr_subs.get(var.as_str()) {
         Some(Some(Expression::NamedNode(node))) => TermPattern::NamedNode(node.clone()),
         Some(Some(Expression::Literal(literal))) => TermPattern::Literal(literal.clone()),
-        _ => term,
-    }
+        _ => return,
+    };
+    *term = replacement;
 }
 
 /// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
-fn substitute_in_named_node_pattern(
-    pattern: NamedNodePattern,
-    expr_subs: &ExprSubs<'_>,
-) -> NamedNodePattern {
-    match pattern {
-        NamedNodePattern::Variable(var) => {
-            let name = var.as_str();
-            if expr_subs.contains_key(name)
-                && let Some(Some(Expression::NamedNode(node))) = expr_subs.get(name)
-            {
-                return NamedNodePattern::NamedNode(node.clone());
-            }
-            NamedNodePattern::Variable(var)
-        }
-        named @ NamedNodePattern::NamedNode(_) => named,
-    }
+fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &ExprSubs<'_>) {
+    let NamedNodePattern::Variable(var) = pattern else {
+        return;
+    };
+    let name = var.as_str();
+    let replacement = if expr_subs.contains_key(name)
+        && let Some(Some(Expression::NamedNode(node))) = expr_subs.get(name)
+    {
+        node.clone()
+    } else {
+        return;
+    };
+    *pattern = NamedNodePattern::NamedNode(replacement);
 }
 
 /// Recursively substitute pre-bound variables into an [`Expression`].
-fn substitute_in_expression(expr: Expression, expr_subs: &ExprSubs<'_>) -> Expression {
+fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs<'_>) {
+    // Wildcard-free on purpose, for the same reason the graph-pattern walk is.
     match expr {
         Expression::Variable(var) => {
-            let name = var.as_str();
-            if let Some(Some(subst)) = expr_subs.get(name) {
-                subst.clone()
-            } else {
-                Expression::Variable(var)
+            // Resolved before the assignment so `var`'s borrow of `*expr` has ended.
+            let replacement = expr_subs.get(var.as_str()).and_then(Clone::clone);
+            if let Some(subst) = replacement {
+                *expr = subst;
             }
         }
         Expression::Bound(var) => {
-            let name = var.as_str();
-            if expr_subs.contains_key(name) {
-                true_literal()
-            } else {
-                Expression::Bound(var)
+            // `contains_key`, not `get`: a variable pre-bound to a blank node or a
+            // quoted triple has NO expression form and so is absent from the value
+            // side, but it IS bound, and `BOUND()` must say so.
+            if expr_subs.contains_key(var.as_str()) {
+                *expr = true_literal();
             }
         }
-        Expression::NamedNode(node) => Expression::NamedNode(node),
-        Expression::Literal(lit) => Expression::Literal(lit),
-        Expression::Or(left, right) => Expression::Or(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::And(left, right) => Expression::And(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::Equal(left, right) => Expression::Equal(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::SameTerm(left, right) => Expression::SameTerm(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::Greater(left, right) => Expression::Greater(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::GreaterOrEqual(left, right) => Expression::GreaterOrEqual(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::Less(left, right) => Expression::Less(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::LessOrEqual(left, right) => Expression::LessOrEqual(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::Add(left, right) => Expression::Add(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::Subtract(left, right) => Expression::Subtract(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::Multiply(left, right) => Expression::Multiply(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::Divide(left, right) => Expression::Divide(
-            Box::new(substitute_in_expression(*left, expr_subs)),
-            Box::new(substitute_in_expression(*right, expr_subs)),
-        ),
-        Expression::UnaryPlus(inner) => {
-            Expression::UnaryPlus(Box::new(substitute_in_expression(*inner, expr_subs)))
+        Expression::NamedNode(_) | Expression::Literal(_) => {}
+        Expression::Or(left, right)
+        | Expression::And(left, right)
+        | Expression::Equal(left, right)
+        | Expression::SameTerm(left, right)
+        | Expression::Greater(left, right)
+        | Expression::GreaterOrEqual(left, right)
+        | Expression::Less(left, right)
+        | Expression::LessOrEqual(left, right)
+        | Expression::Add(left, right)
+        | Expression::Subtract(left, right)
+        | Expression::Multiply(left, right)
+        | Expression::Divide(left, right) => {
+            substitute_in_expression(left, expr_subs);
+            substitute_in_expression(right, expr_subs);
         }
-        Expression::UnaryMinus(inner) => {
-            Expression::UnaryMinus(Box::new(substitute_in_expression(*inner, expr_subs)))
+        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+            substitute_in_expression(inner, expr_subs);
         }
-        Expression::Not(inner) => {
-            Expression::Not(Box::new(substitute_in_expression(*inner, expr_subs)))
+        Expression::In(target, list) => {
+            substitute_in_expression(target, expr_subs);
+            for item in list.iter_mut() {
+                substitute_in_expression(item, expr_subs);
+            }
         }
-        Expression::In(target, list) => Expression::In(
-            Box::new(substitute_in_expression(*target, expr_subs)),
-            list.into_iter()
-                .map(|e| substitute_in_expression(e, expr_subs))
-                .collect(),
-        ),
-        Expression::If(cond, then_expr, else_expr) => Expression::If(
-            Box::new(substitute_in_expression(*cond, expr_subs)),
-            Box::new(substitute_in_expression(*then_expr, expr_subs)),
-            Box::new(substitute_in_expression(*else_expr, expr_subs)),
-        ),
-        Expression::Coalesce(list) => Expression::Coalesce(
-            list.into_iter()
-                .map(|e| substitute_in_expression(e, expr_subs))
-                .collect(),
-        ),
-        Expression::FunctionCall(function, args) => Expression::FunctionCall(
-            function,
-            args.into_iter()
-                .map(|e| substitute_in_expression(e, expr_subs))
-                .collect(),
-        ),
-        Expression::Exists(inner) => {
-            Expression::Exists(Box::new(substitute_in_graph_pattern(*inner, expr_subs)))
+        Expression::If(cond, then_expr, else_expr) => {
+            substitute_in_expression(cond, expr_subs);
+            substitute_in_expression(then_expr, expr_subs);
+            substitute_in_expression(else_expr, expr_subs);
         }
+        Expression::Coalesce(list) => {
+            for item in list.iter_mut() {
+                substitute_in_expression(item, expr_subs);
+            }
+        }
+        Expression::FunctionCall(_, args) => {
+            for arg in args.iter_mut() {
+                substitute_in_expression(arg, expr_subs);
+            }
+        }
+        // Back into graph-pattern territory: the two walks convert together.
+        Expression::Exists(inner) => substitute_in_graph_pattern(inner, expr_subs),
     }
 }
 
 /// Substitute inside an [`OrderExpression`] sort key.
-fn substitute_in_order_expression(
-    order: OrderExpression,
-    expr_subs: &ExprSubs<'_>,
-) -> OrderExpression {
+fn substitute_in_order_expression(order: &mut OrderExpression, expr_subs: &ExprSubs<'_>) {
     match order {
-        OrderExpression::Asc(expr) => {
-            OrderExpression::Asc(substitute_in_expression(expr, expr_subs))
-        }
-        OrderExpression::Desc(expr) => {
-            OrderExpression::Desc(substitute_in_expression(expr, expr_subs))
+        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
+            substitute_in_expression(expr, expr_subs);
         }
     }
 }
@@ -942,19 +760,17 @@ fn substitute_in_aggregate(
     agg: AggregateExpression,
     expr_subs: &ExprSubs<'_>,
 ) -> AggregateExpression {
-    let (function, args, scalarvals, order_by, distinct) = agg.into_parts();
-    let args = args
-        .into_iter()
-        .map(|e| substitute_in_expression(e, expr_subs))
-        .collect();
+    let (function, mut args, scalarvals, mut order_by, distinct) = agg.into_parts();
+    for arg in &mut args {
+        substitute_in_expression(arg, expr_subs);
+    }
     // A `FOLD`'s own sort keys are per-row expressions over the SAME solutions
     // its arguments read, so a substitution that rewrites `?x` in the argument
     // must rewrite it in the sort key too — leaving them alone would order the
     // fold by a variable the substituted query no longer binds.
-    let order_by = order_by
-        .into_iter()
-        .map(|order| substitute_in_order_expression(order, expr_subs))
-        .collect();
+    for order in &mut order_by {
+        substitute_in_order_expression(order, expr_subs);
+    }
     // `substitute_in_expression` rewrites each argument in place and never
     // changes the argument COUNT, and rewriting a sort key never removes one,
     // so this can never turn a valid `agg` into an invalid one.

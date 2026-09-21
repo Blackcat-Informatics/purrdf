@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 90 |
-| custom `sh:ask` component | 184 |
-| custom `sh:select` component | 105 |
-| `sh:expression` function call | 194 |
+| `sh:sparql` constraint | 83 |
+| custom `sh:ask` component | 172 |
+| custom `sh:select` component | 98 |
+| `sh:expression` function call | 190 |
 
 The term is flat in the size of the data graph, so it is the price of executing a
 query once per focus node, not a scan. That distinction matters: a scan would be
@@ -83,9 +83,10 @@ each slice into the live path and differencing against the baseline, with the
 evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
 and the slopes cannot be differenced. Figures are against the baseline of
-96 / 214 / 116 / 194 that held when the decomposition was taken; the reduction
-described in the next section has since moved three of them to 90 / 184 / 105,
-by removing part of the term-materialization row.
+96 / 214 / 116 / 194 that held when the decomposition was taken; the reductions
+described in the next section have since moved them to 83 / 172 / 98 / 190, by
+emptying part of the term-materialization row and most of the rebuild cost inside
+the pushdown, seed and expression-walk rows.
 
 Slices that nest are differenced against each other rather than summed, so no
 allocation is counted twice: an extra `apply_shacl_prebinding` contains an extra
@@ -181,8 +182,9 @@ time and re-measuring, and they are exactly additive:
   with the seed built around the pushdown's result so it still cannot come between
   the core and the peephole that is stated about it.
 
-A fourth has since been taken against the decomposition above. The SHACL rewrite
-grounded every pre-bound value **twice**: once into the `GroundTerm` the `VALUES`
+Two more have since been taken against the decomposition above.
+
+The first: the SHACL rewrite grounded every pre-bound value **twice**: once into the `GroundTerm` the `VALUES`
 seed carries, and again into the constant its expression-position walk writes into
 the pattern. The second conversion allocated, once per pre-bound value, per focus
 node — and it was unnecessary, because the algebra's `NamedNode` and `Literal` are
@@ -193,6 +195,23 @@ return it was missing for an empty pre-binding list, where it had been paying fo
 full walk-and-rebuild of the algebra to change nothing in it. `sh:expression` is
 unmoved because it reaches the plain substitution lane, which has no
 expression-position walk to feed.
+
+The second: **the rewrite rebuilt the algebra in order to rewrite it.** Both
+halves were `GraphPattern -> GraphPattern` by value, and every recursive child of
+a `GraphPattern` is a `Box`, so moving a child out and putting the rewritten node
+back allocated a fresh `Box` for every node the walk visited — the pushdown for
+each node on its path, and the expression walk for every node in the query. Both
+now take `&mut` and mutate a clone of the prepared plan in place; a visited node
+costs nothing. The algebra-side primitives converted with them, and the by-value
+`map_core_pattern` and `substitute_variable` are now thin wrappers over the
+in-place forms rather than second implementations of the same descent — two walks
+carrying the same rule about where the core begins would mean a pattern variant
+added later has to be handled twice, and a walk that missed it would still compile
+and still return an answer. That took the term to 83 / 172 / 98 / 190.
+
+The clone itself stays. The substituted query must not poison the shared
+plan-cache entry, so each execution rewrites its own copy; what is gone is
+rebuilding that copy a second time in order to change it.
 
 One candidate was declined rather than taken. The single allocation left in
 constructing an evaluation context is the expression barrier's shared cell, and it
