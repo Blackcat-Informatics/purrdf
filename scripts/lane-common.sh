@@ -440,7 +440,7 @@ print(hashlib.sha256(("\n".join(records) + "\n").encode("utf-8")).hexdigest())
     # named a case that cannot arrive here: a missing interpreter writes "command
     # not found" INTO the capture, so `-s` is true and `detail` is used instead.
     #
-    # What actually reaches this branch is a non-zero status with nothing written,
+    # What actually reaches this arm is a non-zero status with nothing written,
     # which is characteristically a killed interpreter. So the status is quoted --
     # it is the only evidence there is -- and the advice names that.
     if [[ -n "${detail}" ]]; then

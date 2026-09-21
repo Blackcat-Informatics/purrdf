@@ -656,7 +656,7 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
     for rel in sorted(part for part in out.split("\0") if part):
         suffix = Path(rel).suffix
         if suffix not in (
-            ".rs", ".md", ".toml", ".py", ".pyi", ".yaml", ".yml", *RDF_SUFFIXES
+            ".rs", ".md", ".toml", ".py", ".pyi", ".sh", ".yaml", ".yml", *RDF_SUFFIXES
         ):
             continue
         if _is_vendored_payload(rel):
@@ -678,6 +678,15 @@ def iter_scan_paths(root: Path) -> Iterator[Path]:
             # `crates/*/corpus/` holds the first-party conformance corpora, whose
             # comments, `mf:name` strings and fixture IRIs were unguarded entirely.
             if not _is_first_party_rdf_text(segments):
+                continue
+        elif suffix == ".sh":
+            # `.sh` WAS NOT SCANNED AT ALL, and the three benchmark lanes plus every
+            # release and hygiene shell script live here. The omission was invisible in
+            # the worst way: a change consisting almost entirely of shell prose reported
+            # this gate clean, and a commit message then credited the registry with
+            # absorbing two phrases the registry had never been shown. Same scope as
+            # `.py` -- these are the maintenance scripts this lint most wants to cover.
+            if top not in PY_SCAN_DIRS:
                 continue
         elif suffix in (".py", ".pyi"):
             # `.pyi` is SHIPPED: it is the PEP 561 stub inside every published wheel,
@@ -1287,6 +1296,64 @@ def scan_python(src: str) -> list[tuple[int, int, str, str, str]]:
     )
 
 
+def shell_comments(src: str) -> list[tuple[int, int, str]]:
+    """Extract shell ``#`` comments as ``(start_line, start_col, text)``.
+
+    A ``#`` opens a comment at line start or after whitespace, and not inside a quoted
+    word. ``${#var}`` is safe without a special case: the ``#`` there follows ``{``.
+
+    QUOTE STATE IS PER LINE, deliberately, and the benchmark lanes are why. Each of them
+    passes a multi-line Python program as one single-quoted argument to ``python3 -c``,
+    and that program carries its own ``#`` comments -- real first-party prose, several
+    paragraphs of it. A lexer tracking quotes across lines would treat every one of those
+    as string data and scan none of them, which reproduces the omission this whole
+    scanner exists to fix, one level down.
+
+    The cost of resetting per line is a ``#`` inside a single-line quoted string being
+    read as a comment. That is a false-positive risk only for text carrying an issue
+    token or a process phrase, and such a hit is reported with its line so a reader can
+    see it immediately -- the opposite failure, a surface inspected by nothing, is the one
+    that stayed hidden for the whole of this change.
+    """
+    comments: list[tuple[int, int, str]] = []
+
+    for line_no, line in enumerate(src.splitlines(), start=1):
+        n = len(line)
+        i = 0
+        quote: str | None = None
+        while i < n:
+            c = line[i]
+            if quote == "'":
+                # Single quotes take no escapes in shell: the next `'` always closes.
+                if c == "'":
+                    quote = None
+                i += 1
+                continue
+            if quote == '"':
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == '"':
+                    quote = None
+                i += 1
+                continue
+            if c in "\"'":
+                quote = c
+                i += 1
+                continue
+            if c == "#" and (i == 0 or line[i - 1] in " \t"):
+                comments.append((line_no, i + 1, line[i:]))
+                break
+            i += 1
+
+    return comments
+
+
+def scan_shell(src: str) -> list[tuple[int, int, str, str, str]]:
+    """Return violations found in shell source text."""
+    return scan_comments(shell_comments(src))
+
+
 def yaml_comments(src: str) -> list[tuple[int, int, str]]:
     """Extract YAML ``#`` comments as ``(start_line, start_col, text)``.
 
@@ -1459,6 +1526,11 @@ def scan_source(suffix: str, src: str) -> list[tuple[int, int, str, str, str]]:
         # `.pyi` is SHIPPED (the PEP 561 stub inside every published wheel), which is
         # why it is enumerated at all.
         return scan_python(src)
+    if suffix == ".sh":
+        # Shell was enumerated by nothing at all, in a repository whose three benchmark
+        # lanes, release scripts and hygiene scripts are shell. See `shell_comments` for
+        # why its quote state is per line rather than per file.
+        return scan_shell(src)
     if suffix in (".yaml", ".yml"):
         return scan_yaml(src)
     raise SystemExit(
@@ -1527,6 +1599,34 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         ".ttl",
         f"<{_SHIPPED_URL}> a ex:Case .\n",
         _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # THE HOLE THAT SHIPPED FOR SHELL: `.sh` was enumerated by nothing, in a
+        # repository whose three benchmark lanes, release scripts and hygiene scripts
+        # are all shell. A change consisting almost entirely of shell prose reported
+        # this gate clean over every line of it.
+        "an issue URL in a shell comment",
+        ".sh",
+        f"set -euo pipefail\n# tracked at {_SHIPPED_URL}\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # And inside an embedded Python block, which is how these lanes are written: a
+        # multi-line program passed as ONE single-quoted argument. A lexer tracking
+        # quote state across lines reads all of that as string data and scans none of
+        # it -- the same omission one level down.
+        "an issue URL in a comment inside an embedded python3 -c program",
+        ".sh",
+        "python3 -c '\nimport sys\n# tracked at " + _SHIPPED_URL + "\nprint(1)\n'\n",
+        _SHIPPED_URL_TOKEN,
+    ),
+    (
+        # THE NEIGHBOUR: ordinary shell must not be flagged. `${#array[@]}` is a length,
+        # a `#` inside a quoted word is data, and a URL with no issue path is just a URL.
+        "ordinary shell with a length expansion, a quoted hash and a plain URL",
+        ".sh",
+        'n="${#files[@]}"\nsep="#"\necho "see https://example.org/docs/guide"\n',
+        None,
     ),
     (
         "an issue URL in a SPARQL comment",
