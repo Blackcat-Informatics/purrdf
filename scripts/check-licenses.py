@@ -21,8 +21,10 @@ vendored root and is enforced with zero changes here.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
+import tempfile
 import sys
 import tomllib
 from pathlib import Path
@@ -300,6 +302,23 @@ def first_party_header_offenders(root: Path, expected: str) -> list[str]:
     return offenders
 
 
+def _fixture_repo(root: Path) -> None:
+    """Make *root* a git repository, so `git ls-files` can enumerate a fixture.
+
+    `first_party_header_offenders` walks `git ls-files`, which is the right enumeration for
+    the real tree -- it is exactly the set that ships. A fixture therefore has to be a
+    repository, and two offline git calls are a smaller price than giving the function a
+    second code path that the real run would not take.
+    """
+    for command in (["init", "-q"], ["add", "-A"]):
+        subprocess.run(
+            ["git", "-C", str(root), *command],
+            check=True,
+            capture_output=True,
+            env={"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "PATH": os.environ.get("PATH", "")},
+        )
+
+
 def self_test() -> int:
     """The four directions the header rule needs, executed rather than described.
 
@@ -327,20 +346,34 @@ def self_test() -> int:
     else:
         print(f"OK: self-test — the tree as committed declares {expected!r} throughout")
 
-    # 2. A file at the OLD offer is caught. Checked against a real tracked file so the
-    #    scan's own path handling is exercised, not a fixture the scan never walks.
-    probe = root / "scripts" / "lane_chunk.py"
-    original = probe.read_text(encoding="utf-8")
-    try:
-        probe.write_text(original.replace(expected, "MIT OR Apache-2.0", 1), encoding="utf-8")
-        found = first_party_header_offenders(root, expected)
-        if any("lane_chunk.py" in problem and "MIT OR Apache-2.0'" in problem for problem in found):
+    # 2. A file at the OLD offer is caught. IN A FIXTURE ROOT, because a gate must not
+    #    write the tree it judges. The first version mutated three TRACKED files -- one of
+    #    them the root `Cargo.toml`, replacing the workspace licence with "Zlib OR WTFPL"
+    #    -- and restored them in a `finally`, which does not run on SIGKILL. On a host whose
+    #    background shells are reaped under memory pressure, a killed `make check` left a
+    #    32-member workspace declaring the wrong licence: discovered later as a mystery
+    #    diff, or published. In the change whose entire subject is not misrepresenting the
+    #    offer. Every function here already takes `root` as a parameter, so no mutation was
+    #    ever needed.
+    with tempfile.TemporaryDirectory(prefix="check-licenses-selftest-") as raw:
+        fixture = Path(raw)
+        (fixture / "scripts").mkdir()
+        (fixture / "scripts" / "probe.py").write_text(
+            f"# SPDX-License-Identifier: MIT OR Apache-2.0\n", encoding="utf-8"
+        )
+        (fixture / "scripts" / "fine.py").write_text(
+            f"# SPDX-License-Identifier: {expected}\n", encoding="utf-8"
+        )
+        _fixture_repo(fixture)
+        found = first_party_header_offenders(fixture, expected)
+        if any("probe.py" in problem and "MIT OR Apache-2.0'" in problem for problem in found):
             print("OK: self-test — a first-party file left at a narrower offer is refused")
         else:
             print(f"SELF-TEST FAIL: a stale offer was not refused (reported: {found[:2]})")
             ok = False
-    finally:
-        probe.write_text(original, encoding="utf-8")
+        if any("fine.py" in problem for problem in found):
+            print("SELF-TEST FAIL: a file AT the offer was refused alongside it")
+            ok = False
 
     # 3. A STALE REGISTRATION is caught. The register may only shrink, so an entry whose
     #    file has come back into line must be reported rather than silently honoured.
@@ -374,31 +407,45 @@ def self_test() -> int:
     #    new defect on the same surface: 17 pages with a doubled sentence, then one crate
     #    offering a tri-licensed library under two licences and one publishing no offer at
     #    all. All three shapes execute here.
-    probe = root / "crates" / "iri" / "README.md"
-    original = probe.read_text(encoding="utf-8")
-    try:
+    # IN A FIXTURE ROOT, for the same reason as case 2: this mutated the tracked
+    # `crates/iri/README.md` and relied on a `finally` to put it back.
+    with tempfile.TemporaryDirectory(prefix="check-licenses-readme-") as raw:
+        fixture = Path(raw)
+        crate = fixture / "crates" / "probe"
+        crate.mkdir(parents=True)
+        (crate / "Cargo.toml").write_text(
+            '[package]\nname = "probe"\nreadme = "README.md"\n', encoding="utf-8"
+        )
+        full = (
+            "# probe\n\n## License\n\nLicensed under any one of the following, at your "
+            "option:\n\n- MIT license\n- Apache License, Version 2.0\n- Mulan Permissive "
+            "Software License, Version 2 (MulanPSL-2.0)\n"
+        )
         for mutation, label, needle in (
-            (original.replace("## License", "## Notes", 1), "no licence section", "no licence section"),
+            (full.replace("## License", "## Notes", 1), "no licence section", "no licence section"),
             (
-                original.replace(
-                    "- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)]"
-                    "(https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)\n",
-                    "",
-                    1,
+                full.replace(
+                    "- Mulan Permissive Software License, Version 2 (MulanPSL-2.0)\n", "", 1
                 ),
                 "a proper subset of the offer",
                 "proper subset",
             ),
         ):
-            probe.write_text(mutation, encoding="utf-8")
-            found = published_readme_offenders(root, expected)
-            if any("crates/iri" in problem and needle in problem for problem in found):
+            (crate / "README.md").write_text(mutation, encoding="utf-8")
+            found = published_readme_offenders(fixture, expected)
+            if any("crates/probe" in problem and needle in problem for problem in found):
                 print(f"OK: self-test — a published README with {label} is refused")
             else:
                 print(f"SELF-TEST FAIL: {label} was not refused ({found[:1]})")
                 ok = False
-    finally:
-        probe.write_text(original, encoding="utf-8")
+        # And the fixture stating the full offer is accepted, so the two refusals above
+        # are not satisfied by a rule that refuses every fixture.
+        (crate / "README.md").write_text(full, encoding="utf-8")
+        if published_readme_offenders(fixture, expected):
+            print("SELF-TEST FAIL: a fixture README stating the full offer was refused")
+            ok = False
+        else:
+            print("OK: self-test — a fixture README stating the full offer is accepted")
 
     # AND THE NEIGHBOUR: every published README as committed is accepted. Without this a
     # rule that refused everything would pass both cases above.
@@ -411,38 +458,40 @@ def self_test() -> int:
     else:
         print("OK: self-test — every published crate README as committed states the full offer")
 
-    # 5. THE EXPRESSION IS READ FROM Cargo.toml, not restated here. This is the property
-    #    the whole design rests on: a copy in this file would be a second place to change
-    #    and would diverge in exactly the situation the gate exists to catch.
-    try:
-        (root / "Cargo.toml").write_text(
-            real.replace(f'license = "{expected}"', 'license = "Zlib OR WTFPL"', 1),
-            encoding="utf-8",
+    # 5. THE EXPRESSION IS READ FROM Cargo.toml, not restated here -- proven by pointing
+    #    the reader at a FIXTURE manifest rather than by rewriting the real one. The first
+    #    version wrote `license = "Zlib OR WTFPL"` into the root `Cargo.toml` and restored
+    #    it in a `finally`; see case 2 for why that is not acceptable in a gate.
+    with tempfile.TemporaryDirectory(prefix="check-licenses-expr-") as raw:
+        fixture = Path(raw)
+        (fixture / "Cargo.toml").write_text(
+            '[workspace.package]\nlicense = "Zlib OR WTFPL"\n', encoding="utf-8"
         )
-        moved = workspace_license(root)
-        found = first_party_header_offenders(root, moved)
-        if moved == "Zlib OR WTFPL" and len(found) > 100:
+        moved = workspace_license(fixture)
+        # And the expectation is a PARAMETER, so the real tree judged against that other
+        # expression must offend everywhere -- which is the property the mutation was
+        # trying to demonstrate.
+        against_other = first_party_header_offenders(root, moved)
+        if moved == "Zlib OR WTFPL" and len(against_other) > 100:
             print(
-                f"OK: self-test — changing Cargo.toml's field moves the expectation "
-                f"({len(found)} files then offend), so it is read rather than restated"
+                f"OK: self-test — the expectation follows Cargo.toml ({len(against_other)} "
+                f"files offend against {moved!r}), so it is read rather than restated"
             )
         else:
             print(f"SELF-TEST FAIL: the expectation did not follow Cargo.toml (got {moved!r})")
             ok = False
-    finally:
-        (root / "Cargo.toml").write_text(real, encoding="utf-8")
 
     # 6. A literal-string license parses. `split('"')[1]` raised IndexError here.
-    scratch = root / "target" / "check-licenses-selftest"
-    scratch.mkdir(parents=True, exist_ok=True)
-    (scratch / "Cargo.toml").write_text(
-        "[workspace.package]\nlicense = 'MIT OR Apache-2.0'\n", encoding="utf-8"
-    )
-    if workspace_license(scratch) == "MIT OR Apache-2.0":
-        print("OK: self-test — a TOML literal-string license parses instead of crashing")
-    else:
-        print("SELF-TEST FAIL: a literal-string license did not parse")
-        ok = False
+    with tempfile.TemporaryDirectory(prefix="check-licenses-toml-") as raw:
+        fixture = Path(raw)
+        (fixture / "Cargo.toml").write_text(
+            "[workspace.package]\nlicense = 'MIT OR Apache-2.0'\n", encoding="utf-8"
+        )
+        if workspace_license(fixture) == "MIT OR Apache-2.0":
+            print("OK: self-test — a TOML literal-string license parses instead of crashing")
+        else:
+            print("SELF-TEST FAIL: a literal-string license did not parse")
+            ok = False
 
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
@@ -463,7 +512,22 @@ def self_test() -> int:
 # that section must name every term of the offer. Naming a PROPER SUBSET is the
 # defect that matters: the metadata says three, the page a human reads says two,
 # and the page is the one they believe.
-LICENCE_HEADING = re.compile(r"^##+\s+Licen[cs]e", re.MULTILINE)
+# `Licensing` as well as `License`/`Licence`, and a single `#` as well as `##`. The first
+# pattern was `^##+\s+Licen[cs]e`, which refused a section headed `## Licensing` -- the name
+# of this repository's own LICENSING.md -- and a top-level `# License`.
+LICENCE_HEADING = re.compile(r"^(#{1,6})\s+Licen[cs]", re.MULTILINE)
+
+# HOW EACH TERM MAY BE WRITTEN. `term.split("-")[0]` reduced the needles to `MIT`,
+# `Apache` and `MulanPSL`, so the VERSION was never checked: a section naming
+# `Apache-1.1 OR MulanPSL-1.0` passed, and so did one reading "MIT only. NOT offered under
+# Apache-2.0 or MulanPSL-2.0" -- a section explicitly REFUSING two of the three, accepted
+# as stating all three. A term with no entry here is a hard failure rather than a fallback
+# to substring matching, so a future licence cannot be silently unchecked.
+LICENCE_ALIASES: dict[str, tuple[str, ...]] = {
+    "MIT": (r"\bMIT\b",),
+    "Apache-2.0": (r"Apache-2\.0", r"Apache License,? Version 2\.0"),
+    "MulanPSL-2.0": (r"MulanPSL-2\.0", r"Mulan Permissive Software License,? Version 2"),
+}
 
 
 def published_readme_offenders(root: Path, expected: str) -> list[str]:
@@ -473,7 +537,8 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
     for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
         data = tomllib.loads(manifest.read_text(encoding="utf-8"))
         package = data.get("package", {})
-        if package.get("publish") is False:
+        # `publish = []` is cargo's other spelling of "never publish", and it was missed.
+        if package.get("publish") in (False, []):
             continue
         readme = manifest.parent / "README.md"
         name = manifest.parent.name
@@ -506,11 +571,47 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
         # SCOPED TO THE SECTION, not the whole file. Reading the body let the file's own
         # SPDX header -- which names all three by construction -- satisfy a section that
         # named two, so the subset case the gate exists for could never fire.
+        #
+        # The section ends at a heading of the SAME OR SHALLOWER depth. `^##+\s` matched
+        # `###` too, so a legitimate sub-heading inside a licence section truncated it to
+        # nothing -- and the diagnostic then reported all three terms missing, telling the
+        # author the opposite of the truth about a page that stated the offer in full.
+        depth = len(heading.group(1))
         section = body[heading.end():]
-        next_heading = re.search(r"^##+\s", section, re.MULTILINE)
+        next_heading = re.search(rf"^#{{1,{depth}}}\s", section, re.MULTILINE)
         if next_heading is not None:
             section = section[: next_heading.start()]
-        missing = [term for term in terms if term.split("-")[0] not in section]
+        unknown = [term for term in terms if term not in LICENCE_ALIASES]
+        if unknown:
+            sys.exit(
+                f"check-licenses: no spelling is recorded for licence term(s) {unknown}, so "
+                "a README section naming them cannot be checked. Add them to "
+                "LICENCE_ALIASES rather than letting the check fall back to a substring."
+            )
+        missing = [
+            term
+            for term in terms
+            if not any(re.search(alias, section) for alias in LICENCE_ALIASES[term])
+        ]
+        # A TERM NAMED IN ORDER TO REFUSE IT IS NOT AN OFFER. Presence matching cannot see
+        # this on its own: "MIT only. NOT offered under Apache-2.0 or MulanPSL-2.0" contains
+        # all three spellings and passed as stating all three. The phrase list is
+        # deliberately short and literal -- a general negation detector over prose would
+        # over-refuse, and the shapes that matter are few.
+        negation = re.search(
+            r"\b(?:not|never)\s+(?:offered|available|licen[cs]ed|usable|provided)\b"
+            r"|\bexcept\s+under\b|\bonly\b(?=[^.]*\bnot\b)",
+            section,
+            re.IGNORECASE,
+        )
+        if negation is not None:
+            offenders.append(
+                f"crates/{name}/README.md: its licence section contains {negation.group(0)!r}, "
+                f"so it names a term in order to REFUSE it. A section that lists every term "
+                f"and then withdraws one states a narrower offer than the metadata does, and "
+                f"naming a licence is not offering it."
+            )
+            continue
         if missing:
             offenders.append(
                 f"crates/{name}/README.md: its licence section does not name {missing}; the "
