@@ -31,12 +31,15 @@
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, TermValue};
-use purrdf_sparql_eval::{InternedOutcome, NativeSparqlEngine, PreparedExecution, QueryOptions};
+use purrdf_sparql_eval::{
+    AggregateRegistry, InternedOutcome, NativeSparqlEngine, PreparedExecution,
+    PropertyFunctionRegistry, StandpointPredicates,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use super::query::materialize_results;
+use super::query::{borrowed_options, materialize_results};
 use super::term::{extract_term, rdf_term_to_value};
 
 /// A SPARQL query parsed and admitted once, run many times with different bindings.
@@ -53,6 +56,33 @@ pub(crate) struct PyPreparedQuery {
     /// re-reading the store per run would make two runs of one prepared query
     /// silently disagree for a reason the caller never asked about.
     dataset: Arc<RdfDataset>,
+    /// The property-function registry `execution`'s plan was admitted under —
+    /// `None` when `prepare` declared none.
+    ///
+    /// **Load-bearing, not incidental.** `execution` was parsed and admitted against
+    /// this exact registry's identity (`Store.prepare`'s `relations` /
+    /// `relations_from_graph` / `path_relations`): a plan admitted with no registry
+    /// in scope already lowered a registered relation's predicate to an ORDINARY
+    /// triple pattern, so [`run`](Self::run) must hand the engine this SAME registry
+    /// back rather than, say, `PropertyFunctionRegistry::EMPTY` — otherwise the
+    /// engine's own `check_plan_matches_relations` guard (which compares a
+    /// content-derived fingerprint, not object identity) refuses the run rather than
+    /// silently answering short.
+    property_functions: Option<PropertyFunctionRegistry>,
+    /// The custom-aggregate registry `execution`'s plan was admitted under — the
+    /// exact twin of [`Self::property_functions`], for a `Custom` aggregate call
+    /// admitted (its arity checked) against this registry at prepare time.
+    aggregates: Option<AggregateRegistry>,
+    /// The `(according_to, sharpens)` predicate table `Store.prepare` was given.
+    ///
+    /// Unlike the two registries above, this is not *admission* configuration — it is
+    /// read at EVALUATION time, off the engine, by `heldIn` and loss-aware
+    /// `CONSTRUCT` (see [`purrdf_sparql_eval::NativeSparqlEngine::with_standpoint_predicates`]).
+    /// [`run`](Self::run) builds a fresh engine per call (see its own doc comment for
+    /// why one cannot be held on this object), so this is what lets that fresh engine
+    /// answer `heldIn` the same way the engine `prepare` admitted the plan under
+    /// would have.
+    standpoint_predicates: Option<(String, String)>,
 }
 
 #[pymethods]
@@ -84,6 +114,12 @@ impl PyPreparedQuery {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
             }
         }
+        // Built from direct field accesses (not through a `&self` method) so this
+        // borrow of `property_functions` / `aggregates` stays disjoint from the
+        // `&mut self.execution` borrow just below — both are held live across the
+        // `py.detach` call.
+        let options = borrowed_options(self.property_functions.as_ref(), self.aggregates.as_ref());
+        let standpoint_predicates = self.standpoint_predicates.clone();
         let execution = &mut self.execution;
         let dataset = &self.dataset;
         // The engine is built HERE rather than held, because it is deliberately
@@ -93,10 +129,22 @@ impl PyPreparedQuery {
         // does no parse, no admission and no cache probe. What a fresh engine gives
         // up is the join-order memo between runs, which is a plan-shaped hint rather
         // than the plan.
+        //
+        // `options` carries the SAME property-function and custom-aggregate
+        // registries `execution`'s plan was admitted under (see
+        // `PyPreparedQuery::property_functions` / `::aggregates`); running under a
+        // different pair is what the engine's own `check_plan_matches_relations`
+        // guard inside `execute` refuses. `standpoint_predicates` is reapplied to
+        // this fresh engine for the same reason — it is read at evaluation time, off
+        // the engine, not admitted into the plan.
         let result = py.detach(move || {
-            let engine = NativeSparqlEngine::new();
+            let mut engine = NativeSparqlEngine::new();
+            if let Some((according_to, sharpens)) = standpoint_predicates {
+                engine = engine
+                    .with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
+            }
             engine
-                .execute(execution, &**dataset, QueryOptions::EMPTY, |outcome| {
+                .execute(execution, &**dataset, options, |outcome| {
                     materialize_interned(&outcome)
                 })
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
@@ -143,16 +191,29 @@ fn materialize_interned<D: purrdf_core::DatasetView + Sync>(
     }
 }
 
-/// Build a prepared query over `dataset`.
+/// Build a prepared query over `dataset`, admitting it against `property_functions` /
+/// `aggregates` — the SAME registries [`PyPreparedQuery::run`] must later evaluate
+/// under, which is why both are stored on the returned object rather than dropped once
+/// admission succeeds.
 pub(super) fn prepare(
     dataset: Arc<RdfDataset>,
     engine: &NativeSparqlEngine,
     query: &str,
     parameters: &[String],
+    property_functions: Option<PropertyFunctionRegistry>,
+    aggregates: Option<AggregateRegistry>,
+    standpoint_predicates: Option<(String, String)>,
 ) -> PyResult<PyPreparedQuery> {
     let borrowed: Vec<&str> = parameters.iter().map(String::as_str).collect();
+    let options = borrowed_options(property_functions.as_ref(), aggregates.as_ref());
     let execution = engine
-        .prepare_execution(query, None, &borrowed, QueryOptions::EMPTY)
+        .prepare_execution(query, None, &borrowed, options)
         .map_err(|e| PyValueError::new_err(format!("query preparation failed: {e}")))?;
-    Ok(PyPreparedQuery { execution, dataset })
+    Ok(PyPreparedQuery {
+        execution,
+        dataset,
+        property_functions,
+        aggregates,
+        standpoint_predicates,
+    })
 }

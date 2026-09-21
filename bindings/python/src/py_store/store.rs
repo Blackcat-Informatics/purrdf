@@ -29,8 +29,8 @@ use super::io::{
 };
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
-    PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
-    materialize_entailment_outcome, materialize_outcome, materialize_results,
+    PyUpdateOutcome, borrowed_options, build_aggregates, build_engine, build_relations,
+    collect_relations, materialize_entailment_outcome, materialize_outcome, materialize_results,
     materialize_update_outcome, registry_over, run_governed,
 };
 use super::term::{
@@ -266,15 +266,7 @@ impl PyStore {
                         base_iri: None,
                         substitutions: &subs,
                     },
-                    purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
-                        ..purrdf_sparql_eval::QueryOptions::EMPTY
-                    },
+                    borrowed_options(registry.as_ref(), aggregates.as_ref()),
                 )
                 .map_err(|e| PyValueError::new_err(format!("query evaluation error: {e}")))
         })?;
@@ -303,22 +295,85 @@ impl PyStore {
     /// A prepared query must not be shared between threads: a run borrows it
     /// uniquely, because a query body can re-enter the evaluator and a handle
     /// reachable twice while in flight is one two evaluations can disagree about.
-    #[pyo3(signature = (query, *, parameters=None))]
+    ///
+    /// Engine configuration and relation/aggregate registration behave exactly as on
+    /// [`query`](Self::query) — `extension_namespaces`, `property_fn_namespaces`,
+    /// `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
+    /// and `aggregate_namespace` all admit the plan and are then CARRIED by the
+    /// returned object, so [`PreparedQuery::run`](super::prepared::PyPreparedQuery::run)
+    /// evaluates under the SAME registries the plan was admitted under. Nothing here
+    /// widens what a registered relation reaches — running under a different registry
+    /// than the one a plan was prepared against is refused, not silently answered
+    /// short, exactly as [`query`](Self::query) would refuse it if asked to.
+    ///
+    /// `substitutions` has no seat here, deliberately: a prepared query's whole point
+    /// is that the values that change between runs arrive per-run through
+    /// [`run`](super::prepared::PyPreparedQuery::run)'s parameter bindings, and a
+    /// second, prepare-time door onto the same values would be redundant at best and,
+    /// since only `run`'s bindings are actually honoured, silently ignored at worst.
+    #[pyo3(signature = (
+        query,
+        *,
+        parameters=None,
+        extension_namespaces=None,
+        property_fn_namespaces=None,
+        standpoint_predicates=None,
+        relations=None,
+        relations_from_graph=None,
+        path_relations=None,
+        aggregate_namespace=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each engine-configuration axis is named explicitly at the call site, exactly \
+                  as on `query`"
+    )]
     fn prepare(
         &self,
+        py: Python<'_>,
         query: &str,
         parameters: Option<Vec<String>>,
+        extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
-        let dataset = self
-            .inner
-            .freeze()
-            .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-        let engine = build_engine(EngineConfig {
-            extension_namespaces: None,
-            property_fn_namespaces: None,
-            standpoint_predicates: None,
-        });
-        super::prepared::prepare(dataset, &engine, query, &parameters.unwrap_or_default())
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+        // Carried forward to the returned object for `run` to rebuild an engine
+        // under (see [`super::prepared::PyPreparedQuery`]) — `config` below moves
+        // `standpoint_predicates` into the engine this call admits the plan with, so
+        // the value itself has to be cloned before that move.
+        let standpoint_for_run = standpoint_predicates.clone();
+        let config = EngineConfig {
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+        };
+        let parameters = parameters.unwrap_or_default();
+        let inner = &self.inner;
+        // Snapshot + engine build + admission run detached (GIL released), exactly as
+        // `query` does: this does the same freeze, registry build and parse/admit
+        // work `query` does on every call, just once instead of per run.
+        py.detach(move || {
+            let dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+            let registry = build_relations(specs, &dataset)?;
+            let aggregates = build_aggregates(aggregate_namespace);
+            let engine = build_engine(config);
+            super::prepared::prepare(
+                dataset,
+                &engine,
+                query,
+                &parameters,
+                registry,
+                aggregates,
+                standpoint_for_run,
+            )
+        })
     }
 
     /// Run a SPARQL query under caller-supplied execution governors, returning a

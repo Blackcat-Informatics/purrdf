@@ -676,8 +676,27 @@ class Store:
     #
     # The returned `PreparedQuery` holds a SNAPSHOT of this store taken now; a later
     # mutation is not visible to it, and it is not thread-safe — see `PreparedQuery`.
+    #
+    # Engine configuration and relation/aggregate registration behave exactly as on
+    # `query` below — `extension_namespaces`, `property_fn_namespaces`,
+    # `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
+    # and `aggregate_namespace` all admit the plan and are then CARRIED by the
+    # returned `PreparedQuery`, so `PreparedQuery.run` evaluates under the SAME
+    # registries the plan was admitted under. `substitutions` has no seat here: a
+    # prepared query's whole point is that the values that change between runs
+    # arrive per-run through `parameters` / `PreparedQuery.run`'s bindings.
     def prepare(
-        self, query: str, *, parameters: list[str] | None = ...
+        self,
+        query: str,
+        *,
+        parameters: list[str] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
+        aggregate_namespace: str | None = ...,
     ) -> PreparedQuery: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF

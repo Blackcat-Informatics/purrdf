@@ -666,6 +666,36 @@ pub(super) fn build_aggregates(namespace: Option<String>) -> Option<AggregateReg
     Some(registry)
 }
 
+/// Assemble the [`purrdf_sparql_eval::QueryOptions`] a call evaluates under from the two
+/// optional registries [`build_relations`] and [`build_aggregates`] produced, falling
+/// back to each registry's own `EMPTY` — never a second "no registry" spelling — exactly
+/// as every other options-carrying entry point on this seam does.
+///
+/// Shared by [`super::store::PyStore::query`] and the prepare/run pair in
+/// [`super::prepared`] so the two cannot drift apart on how a registry pair becomes the
+/// options an evaluation actually runs under: a prepared plan's registry IDENTITY is
+/// exactly what [`purrdf_sparql_eval`]'s `check_plan_matches_relations` compares at run
+/// time, so the run must build `QueryOptions` the identical way prepare did.
+pub(super) fn borrowed_options<'a>(
+    property_functions: Option<&'a PropertyFunctionRegistry>,
+    aggregates: Option<&'a AggregateRegistry>,
+) -> purrdf_sparql_eval::QueryOptions<'a> {
+    // The fallback references are read off `QueryOptions::EMPTY` itself rather than
+    // written as `&PropertyFunctionRegistry::EMPTY` / `&AggregateRegistry::EMPTY`
+    // here: those registries own a `HashMap` (drop glue), so a fresh borrow of the
+    // const in a function body is an ordinary temporary scoped to this call, not a
+    // promoted `'static` one — and this function must RETURN a reference that
+    // outlives it. `QueryOptions::EMPTY` was built the promotable way, as another
+    // `const`'s initializer, so copying its (`Copy`) reference fields out keeps
+    // their genuine `'static` lifetime.
+    let empty = purrdf_sparql_eval::QueryOptions::EMPTY;
+    purrdf_sparql_eval::QueryOptions {
+        property_functions: property_functions.unwrap_or(empty.property_functions),
+        aggregates: aggregates.unwrap_or(empty.aggregates),
+        ..empty
+    }
+}
+
 /// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.
 #[pyclass(name = "QuerySolutions")]
 #[derive(Debug)]

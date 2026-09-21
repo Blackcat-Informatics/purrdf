@@ -21,6 +21,18 @@ These tests hold that surface to three promises:
 Each refusal is paired with the neighbouring case that must still succeed. A
 refusal that can never be satisfied is indistinguishable from one that is never
 right.
+
+A fourth promise is added here: **``Store.prepare`` carries the SAME engine
+configuration ``Store.query`` accepts** — ``relations`` / ``relations_from_graph`` /
+``path_relations`` and the rest — and ``PreparedQuery.run`` evaluates under the SAME
+registries the plan was admitted under. Before this was true, ``Store.prepare``
+accepted none of those keywords at all: a relation's predicate was lowered to an
+ordinary triple pattern at prepare time, with no registry ever in scope to reach it,
+and a run answered the empty bag with no error and no warning. The fixture below is
+built so that outcome and the honoured one are DIFFERENT IN CONTENT, not merely
+different in row count, per the repository's rule that a valid-neighbour assertion
+over a fixture that cannot distinguish "honoured" from "silently dropped" is
+laundering.
 """
 
 from __future__ import annotations
@@ -31,6 +43,118 @@ import purrdf
 
 EX = "http://example.org/"
 QUERY = f"SELECT ?o WHERE {{ ?this <{EX}p> ?o }}"
+
+REL = "http://example.org/rel/"
+MEMBER_OF = f"{REL}memberOf"
+SELECT_MEMBERS = f"SELECT ?person ?team WHERE {{ ?person <{MEMBER_OF}> ?team }}"
+
+
+def _member(local: str) -> purrdf.NamedNode:
+    return purrdf.NamedNode(f"{EX}{local}")
+
+
+def _member_rows() -> list[list[purrdf.NamedNode]]:
+    """The registered `memberOf` table: two members of one team, one of another."""
+    return [
+        [_member("ada"), _member("alpha")],
+        [_member("brian"), _member("alpha")],
+        [_member("chen"), _member("beta")],
+    ]
+
+
+def _member_relations() -> dict[str, object]:
+    """`memberOf` declared as a 1-subject / 1-object tuple relation."""
+    return {MEMBER_OF: (1, 1, _member_rows())}
+
+
+def _store_with_control_triple() -> purrdf.Store:
+    """A store holding one ORDINARY `memberOf` triple that names a pair absent from
+    every row of `_member_rows()`: `dede`/`gamma`.
+
+    This is the oracle a silently-dropped registry cannot pass. A relation that is
+    honoured answers exactly `_member_rows()`'s three pairs, none of which is
+    `dede`/`gamma` — those rows come from the relation's own table, never from the
+    graph. A registry that was silently dropped instead lowers `<MEMBER_OF>` to an
+    ordinary triple pattern, and the ONLY `memberOf` triple this graph holds is
+    `dede`/`gamma` — so a dropped registry answers exactly that one pair, and an
+    honoured one never does. The two outcomes cannot be confused for one another,
+    unlike a fixture that only differs by row COUNT.
+    """
+    store = purrdf.Store()
+    store.load(f"<{EX}dede> <{MEMBER_OF}> <{EX}gamma> .", purrdf.RdfFormat.N_TRIPLES)
+    return store
+
+
+def _pairs(solutions: object) -> set[tuple[str, str]]:
+    """A two-column SELECT result as a set of `(iri, iri)` pairs."""
+    return {(str(row[0].value), str(row[1].value)) for row in solutions}  # type: ignore[union-attr]
+
+
+_HONOURED_ROWS = {
+    (f"{EX}ada", f"{EX}alpha"),
+    (f"{EX}brian", f"{EX}alpha"),
+    (f"{EX}chen", f"{EX}beta"),
+}
+_DROPPED_ROW = (f"{EX}dede", f"{EX}gamma")
+
+
+def test_prepare_honours_relations_against_a_control_row_that_would_differ_if_dropped() -> (
+    None
+):
+    """(a) The honoured case, with an oracle that can fail.
+
+    `Store.prepare(..., relations=...)` must admit the plan under the SAME registry
+    `Store.query` would, and `PreparedQuery.run` must evaluate under it too — so the
+    rows answered are the relation's own table, and never the control triple a
+    dropped registry would have answered instead.
+    """
+    store = _store_with_control_triple()
+    prepared = store.prepare(SELECT_MEMBERS, relations=_member_relations())
+
+    rows = _pairs(prepared.run())
+
+    assert rows == _HONOURED_ROWS
+    assert _DROPPED_ROW not in rows
+
+
+def test_prepare_and_query_agree_under_the_same_relations() -> None:
+    """(b) The parity case — the regression oracle for the exact gap this closes.
+
+    `Store.query` and `Store.prepare` over identical query text and identical
+    `relations` configuration must answer the SAME rows. This is the exact
+    demonstration that opened the gap: `Store.query` answered the relation's rows,
+    `Store.prepare` silently answered the empty bag, with no error and no warning.
+    """
+    store = _store_with_control_triple()
+
+    direct = _pairs(store.query(SELECT_MEMBERS, relations=_member_relations()))
+    prepared = store.prepare(SELECT_MEMBERS, relations=_member_relations())
+    via_prepare = _pairs(prepared.run())
+
+    assert direct == via_prepare == _HONOURED_ROWS
+
+
+def test_a_relation_iri_with_no_relation_configured_answers_the_graphs_own_triples() -> (
+    None
+):
+    """(c) The refusal case — observed, not assumed.
+
+    An unregistered relation IRI is not a hard error on this surface, on `query` or
+    on `prepare`: with no `property_fn_namespaces` declared for it, it is an
+    ORDINARY predicate IRI, and the query answers whatever the graph actually holds
+    under that predicate — here, exactly the control triple. This is the SAME
+    behaviour `Store.query` has always had for an unregistered relation IRI; the
+    control triple below is only reachable this way, which is what makes this the
+    neighbour of the two tests above rather than an independent claim.
+    """
+    store = _store_with_control_triple()
+
+    prepared = store.prepare(SELECT_MEMBERS)
+
+    assert _pairs(prepared.run()) == {_DROPPED_ROW}
+    # The neighbour: `Store.query` (no `relations`) answers identically, so this is
+    # `prepare`'s existing "no registry configured" behaviour, not a new one.
+    assert _pairs(store.query(SELECT_MEMBERS)) == {_DROPPED_ROW}
 
 
 def _first(solutions) -> purrdf.NamedNode:
