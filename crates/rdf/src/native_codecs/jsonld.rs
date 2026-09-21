@@ -2320,3 +2320,62 @@ mod carrier_law_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod parse_residency {
+    use super::{parse_jsonld, serialize_dataset_to_jsonld};
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, RdfTerm};
+
+    /// Parsing must not hold the whole value tree beside the whole carrier.
+    ///
+    /// The expander walked the parsed document by reference, so the tree it was
+    /// reading and the carrier it was building both stood at full size until the
+    /// expansion finished. `@graph` is the bulk of a document, and draining it lets
+    /// the tree shrink as the carrier grows.
+    ///
+    /// The bar is a ratio against the document because the document is the only
+    /// quantity a caller controls, and it is stated wide because it is separating two
+    /// measured regimes rather than pinning a number: on this fixture the peak was
+    /// 18.0x the document before the drain and is 9.2x after. A parse that went back
+    /// to holding both would land above 12x again.
+    #[test]
+    fn parsing_does_not_hold_the_tree_and_the_carrier_at_once() {
+        let mut builder = RdfDatasetBuilder::new();
+        for i in 0..20_000 {
+            let subject = builder
+                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")));
+            let predicate = builder.intern_iri("https://example.org/predicate");
+            let object =
+                builder.intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        let dataset = builder.freeze().expect("dataset freezes");
+        let document = serialize_dataset_to_jsonld(&*dataset).expect("a JSON-LD document");
+        let bytes = document.as_bytes();
+        assert!(
+            bytes.len() > 1024 * 1024,
+            "the fixture must be large enough for the ratio to mean anything; {} bytes",
+            bytes.len()
+        );
+
+        let window = CurrentThreadWindow::open();
+        let parsed = parse_jsonld(bytes, None).expect("the document parses back");
+        let measured = window.close();
+
+        assert_eq!(
+            parsed.rdf_row_count(),
+            dataset.rdf_row_count(),
+            "the drain must not lose rows"
+        );
+        let ceiling = (bytes.len() as i64) * 12;
+        assert!(
+            measured.peak_working_bytes < ceiling,
+            "parsing a {}-byte document peaked at {} live bytes ({:.1}x). Above 12x \
+             means the parsed tree and the carrier are resident together again.",
+            bytes.len(),
+            measured.peak_working_bytes,
+            measured.peak_working_bytes as f64 / bytes.len() as f64
+        );
+    }
+}
