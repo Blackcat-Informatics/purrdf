@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-markdown.svg)](https://crates.io/crates/purrdf-markdown)
 [![docs.rs](https://docs.rs/purrdf-markdown/badge.svg)](https://docs.rs/purrdf-markdown)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-markdown` turns a Markdown document into RDF 1.2 along the

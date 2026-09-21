@@ -11,7 +11,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # `purrdf` — the PurRDF command-line interface
 
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf` is the native RDF 1.2 command-line tool of the PurRDF toolkit. It is a
@@ -950,6 +950,6 @@ has for carrying that distinction.
 
 ## License
 
-Licensed under either of [MIT](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
-or [Apache-2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
-at your option.
+Licensed under any one of [MIT](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT),
+[Apache-2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE),
+or [MulanPSL-2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN), at your option.

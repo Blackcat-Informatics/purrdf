@@ -18,7 +18,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 <p align="center">
   <a href="https://crates.io/crates/purrdf"><img src="https://img.shields.io/crates/v/purrdf.svg" alt="crates.io"></a>
   <a href="https://docs.rs/purrdf"><img src="https://docs.rs/purrdf/badge.svg" alt="docs.rs"></a>
-  <a href="https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg" alt="License"></a>
   <a href="https://github.com/Blackcat-Informatics/purrdf"><img src="https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg" alt="Repository"></a>
 </p>
 
@@ -221,9 +221,10 @@ workspace `rust-version` (currently 1.96, stable toolchain only).
 
 ## License
 
-Licensed under either of
+Licensed under any one of the following, at your option:
 
-- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+- [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+- [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
 
 at your option.

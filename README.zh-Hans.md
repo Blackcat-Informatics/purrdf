@@ -681,7 +681,8 @@ PurRDF 是一小族关联数据项目的库层：
 
 ## 许可
 
-以 [Apache License 2.0](./LICENSE-APACHE) 或 [MIT license](./LICENSE-MIT) 双许可发布，
-由使用者任选其一，详见 [`LICENSING.md`](./LICENSING.md)。
+以 [MIT](./LICENSE-MIT)、[Apache-2.0](./LICENSE-APACHE) 或
+[MulanPSL-2.0](./LICENSE-MULAN) 三种开源许可发布，由使用者任选其一，详见
+[`LICENSING.md`](./LICENSING.md)。
 
 若在研究中使用 PurRDF，请引用它——见 [`CITATION.cff`](./CITATION.cff)。

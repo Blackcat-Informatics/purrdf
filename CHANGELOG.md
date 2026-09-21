@@ -10,6 +10,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **license:** MulanPSL-2.0 is offered as a third option alongside MIT and
+  Apache-2.0, at the user's choice. `LICENSE-MULAN` and
+  `LICENSES/MulanPSL-2.0.txt` carry the text, pinned by SHA-256 in
+  `scripts/check-licenses.py` because the license's own section 6 makes its
+  Chinese text controlling -- a silently drifted copy would change the governing
+  terms. `scripts/check-licenses.py` also now refuses a first-party file whose
+  SPDX identifier is not the expression `Cargo.toml` declares, reading that field
+  rather than restating it, so the next license change cannot leave a file behind
+  at the old offer. `docs/book/book.toml` is registered as deliberately CC-BY-4.0
+  with its reason, under a register that only shrinks.
+
 - **build:** `scripts/check-python-binding-tests.py`, wired into `make check`,
   `make pytest`, `make python-binding-hygiene` and CI. It fails if a `test`
   predicate appears in any `cfg` invocation, or a `#[test]` attribute anywhere,

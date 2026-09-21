@@ -835,8 +835,8 @@ Brand assets and usage: [`docs/BRAND.md`](./docs/BRAND.md).
 
 ## License
 
-Licensed under either of [Apache License 2.0](./LICENSE-APACHE) or
-[MIT license](./LICENSE-MIT) at your option, as described in
-[`LICENSING.md`](./LICENSING.md).
+Licensed under any one of [MIT](./LICENSE-MIT), [Apache License
+2.0](./LICENSE-APACHE), or [MulanPSL-2.0](./LICENSE-MULAN), at your option, as
+described in [`LICENSING.md`](./LICENSING.md).
 
 If you use PurRDF in research, please cite it — see [`CITATION.cff`](./CITATION.cff).

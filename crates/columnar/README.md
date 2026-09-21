@@ -31,9 +31,10 @@ that annotated text and raw payloads surface as `VARCHAR` and `BLOB`.
 
 ## License
 
-Licensed under either of
+Licensed under any one of the following, at your option:
 
-- Apache License, Version 2.0, or
 - MIT license
+- Apache License, Version 2.0
+- Mulan Permissive Software License, Version 2 (MulanPSL-2.0)
 
 at your option.
