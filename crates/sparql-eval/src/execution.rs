@@ -686,9 +686,49 @@ impl PreparedExecution {
         if probes.is_empty() {
             return Ok(Substituted::Retained(prepared.query()));
         }
-        if let Some(memo) = memo.as_mut()
-            && memo.matches(lane, probes)
-        {
+        // Every mutation of `memo` and `pending` happens FIRST, and the borrow that
+        // leaves this function is taken LAST, once nothing after it touches either.
+        // Written that way deliberately: a reference returned from a branch is live
+        // for the whole body as far as the borrow checker is concerned, so a hit that
+        // returned early here would conflict with the bookkeeping below even though
+        // no execution path reaches both. Deciding first and borrowing once at the end
+        // says the same thing in a shape the oldest compiler this crate supports can
+        // also see.
+        let already_matches = memo.as_ref().is_some_and(|memo| memo.matches(lane, probes));
+        let mut just_built = false;
+        if !already_matches {
+            let seen_before = pending.as_ref().is_some_and(|seen| {
+                seen.lane == lane && PrebindMemo::shapes_match(&seen.shapes, probes)
+            });
+            if !seen_before {
+                *pending = Some(PendingShape {
+                    lane,
+                    shapes: PrebindMemo::shapes_of(probes),
+                    refused: false,
+                });
+            } else if memo.is_none() && pending.as_ref().is_some_and(|seen| !seen.refused) {
+                // A second consecutive sighting of one lane and shape list, and no memo
+                // yet: this is the run that pays for one. (A memo that already exists for
+                // ANOTHER shape list is left alone — one memo per execution, so the other
+                // shapes keep the ordinary rewrite rather than evicting a tree that is
+                // answering for the shape this execution mostly sees.)
+                if let Some(built) = PrebindMemo::build(prepared.query(), lane, probes) {
+                    *pending = None;
+                    *memo = Some(built);
+                    just_built = true;
+                } else if let Some(seen) = pending.as_mut() {
+                    seen.refused = true;
+                }
+            }
+        }
+        if just_built {
+            // Built FROM these probes, so its tree already carries these values and
+            // re-binding them would write what is already there.
+            let memo = memo.as_ref().expect("a memo was just inserted");
+            return Ok(Substituted::Retained(memo.query()));
+        }
+        if already_matches {
+            let memo = memo.as_mut().expect("a memo matched just above");
             let bound = memo.bind(probes);
             // The differential oracle: in a debug build, every memo hit is checked
             // against the rewrite it stands in for, not just trusted because
@@ -721,29 +761,6 @@ impl PreparedExecution {
                 );
             }
             return Ok(Substituted::Retained(bound));
-        }
-        let seen_before = pending.as_ref().is_some_and(|seen| {
-            seen.lane == lane && PrebindMemo::shapes_match(&seen.shapes, probes)
-        });
-        if !seen_before {
-            *pending = Some(PendingShape {
-                lane,
-                shapes: PrebindMemo::shapes_of(probes),
-                refused: false,
-            });
-        } else if memo.is_none() && pending.as_ref().is_some_and(|seen| !seen.refused) {
-            // A second consecutive sighting of one lane and shape list, and no memo
-            // yet: this is the run that pays for one. (A memo that already exists for
-            // ANOTHER shape list is left alone — one memo per execution, so the other
-            // shapes keep the ordinary rewrite rather than evicting a tree that is
-            // answering for the shape this execution mostly sees.)
-            if let Some(built) = PrebindMemo::build(prepared.query(), lane, probes) {
-                *pending = None;
-                return Ok(Substituted::Retained(memo.insert(built).query()));
-            }
-            if let Some(seen) = pending.as_mut() {
-                seen.refused = true;
-            }
         }
         Ok(Substituted::Fresh(Box::new(crate::prebind_memo::rewrite(
             prepared.query().clone(),

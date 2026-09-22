@@ -137,7 +137,7 @@ pub fn parse_uri(s: &str) -> Result<Iri> {
 ///
 /// Exactly `parse(s).map(|iri| iri.has_scheme())`, minus the copy of `s` that
 /// answer would have been read off and then dropped. Same grammar, same errors,
-/// same verdict — [`scan`] is the single body both run, so this cannot come to
+/// same verdict — the internal `scan` is the single body both run, so this cannot come to
 /// accept or reject anything [`parse`] does not.
 ///
 /// This is for the caller that asks nothing but "is this acceptable, and is it
