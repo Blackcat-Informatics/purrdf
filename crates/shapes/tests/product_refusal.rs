@@ -1341,7 +1341,7 @@ fn refusal_function_registry() -> ShapesProductError {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
-        &HostBindings::new(&fewer, &aggregates, &relations, IMPL_A),
+        &HostBindings::without_declarations(&fewer, &aggregates, &relations, IMPL_A),
     )
     .expect_err("a host that lost a native is not the host this product was prepared against")
 }
@@ -1365,7 +1365,7 @@ fn accepts_function_registry_neighbour() {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
-        &HostBindings::new(&reordered, &aggregates, &relations, IMPL_A),
+        &HostBindings::without_declarations(&reordered, &aggregates, &relations, IMPL_A),
     )
     .expect("the same natives in another order are the same registry");
 }
@@ -1389,7 +1389,7 @@ fn refusal_aggregate_registry() -> ShapesProductError {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &unary_aggregate_product(),
-        &HostBindings::new(&functions, &binary, &relations, IMPL_A),
+        &HostBindings::without_declarations(&functions, &binary, &relations, IMPL_A),
     )
     .expect_err("an aggregate of another arity is another aggregate")
 }
@@ -1412,7 +1412,7 @@ fn accepts_aggregate_registry_neighbour() {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &unary_aggregate_product(),
-        &HostBindings::new(&functions, &fresh, &relations, IMPL_A),
+        &HostBindings::without_declarations(&functions, &fresh, &relations, IMPL_A),
     )
     .expect("a different instance declaring the same aggregate is the same registry");
 }
@@ -1434,6 +1434,58 @@ fn relation_product(iris: &[&str]) -> Vec<u8> {
     splice_identity(&bytes, "property-function-registry", &required)
 }
 
+/// A parse configuration that declares one relation namespace.
+///
+/// Held as a `static` so a `HostBindings` borrowing it can outlive the expression
+/// that built it, exactly as the empty registries above are.
+static DECLARING_HOST: std::sync::LazyLock<purrdf_shapes::product::ParserOptions> =
+    std::sync::LazyLock::new(|| purrdf_shapes::product::ParserOptions {
+        property_fn_namespaces: vec!["http://example.org/rel/".to_owned()],
+        ..purrdf_shapes::product::ParserOptions::default()
+    });
+
+/// Provoke: the host DECLARES a relation namespace the product was not written under.
+///
+/// No splicing is needed. A product of the CORE profile declares nothing — a
+/// declaration is host wiring no shapes graph can describe — so a host that declares
+/// a namespace is asking for a different parse than the one the product was written
+/// with, and that is the whole condition.
+fn refusal_parse_configuration() -> ShapesProductError {
+    let functions = UserFunctionRegistry::new();
+    let aggregates = AggregateRegistry::new();
+    let relations = PropertyFunctionRegistry::new();
+    admit_with(
+        &product_of(PLAIN_SHAPES),
+        &HostBindings::new(&functions, &aggregates, &relations, &[], &DECLARING_HOST),
+    )
+    .expect_err("a host declaring a namespace the product never was is a different parse")
+}
+
+/// A declared namespace is refused, and NOT declaring one is not.
+///
+/// The second half is the case that matters: a declaration decides which predicate
+/// IRIs are calls for a whole prefix, so refusing on it is only correct if the
+/// overwhelmingly common host — the one that declared nothing — still restores. An
+/// over-refusal here would break every existing product.
+#[test]
+fn refuses_parse_configuration() {
+    assert_eq!(
+        refusal_parse_configuration().dimension(),
+        ProductDimension::ParseConfiguration,
+    );
+
+    let functions = UserFunctionRegistry::new();
+    let aggregates = AggregateRegistry::new();
+    let relations = PropertyFunctionRegistry::new();
+    admit_with(
+        &product_of(PLAIN_SHAPES),
+        &HostBindings::without_declarations(&functions, &aggregates, &relations, &[]),
+    )
+    .expect(
+        "a host that declares nothing is the parse configuration the product was written under",
+    );
+}
+
 /// Provoke: the host declares a different relation IRI than the product requires.
 fn refusal_property_function_registry() -> ShapesProductError {
     let functions = UserFunctionRegistry::new();
@@ -1441,7 +1493,7 @@ fn refusal_property_function_registry() -> ShapesProductError {
     let wrong = relations(&[RELATION_B]);
     admit_with(
         &relation_product(&[RELATION_A]),
-        &HostBindings::new(&functions, &aggregates, &wrong, &[]),
+        &HostBindings::without_declarations(&functions, &aggregates, &wrong, &[]),
     )
     .expect_err("a relation table declaring another IRI is another table")
 }
@@ -1460,7 +1512,7 @@ fn refuses_property_function_registry() {
     let wired = relations(&[RELATION_A]);
     let error = admit_with(
         &product_of(PLAIN_SHAPES),
-        &HostBindings::new(&functions, &aggregates, &wired, &[]),
+        &HostBindings::without_declarations(&functions, &aggregates, &wired, &[]),
     )
     .expect_err("a CORE product was not prepared against any host relation");
     assert_eq!(
@@ -1477,7 +1529,7 @@ fn accepts_property_function_registry_neighbour() {
     let reordered = relations(&[RELATION_B, RELATION_A]);
     admit_with(
         &relation_product(&[RELATION_A, RELATION_B]),
-        &HostBindings::new(&functions, &aggregates, &reordered, &[]),
+        &HostBindings::without_declarations(&functions, &aggregates, &reordered, &[]),
     )
     .expect("the same relations in another order are the same table");
 
@@ -1486,7 +1538,7 @@ fn accepts_property_function_registry_neighbour() {
     let fresh = PropertyFunctionRegistry::new();
     admit_with(
         &product_of(PLAIN_SHAPES),
-        &HostBindings::new(&functions, &aggregates, &fresh, &[]),
+        &HostBindings::without_declarations(&functions, &aggregates, &fresh, &[]),
     )
     .expect("a different but equally empty relation table must still admit");
 }
@@ -1520,7 +1572,7 @@ fn refusal_implementation_identity() -> ShapesProductError {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
-        &HostBindings::new(&same_declarations, &aggregates, &relations, IMPL_B),
+        &HostBindings::without_declarations(&same_declarations, &aggregates, &relations, IMPL_B),
     )
     .expect_err("another build of the same declarations is another host")
 }
@@ -1564,7 +1616,7 @@ fn accepts_the_same_implementation_build_neighbour() {
     let relations = PropertyFunctionRegistry::new();
     let restored = admit_with(
         &bytes,
-        &HostBindings::new(&injected, &aggregates, &relations, IMPL_A),
+        &HostBindings::without_declarations(&injected, &aggregates, &relations, IMPL_A),
     )
     .expect("the build a product was prepared against must restore it");
 
@@ -1607,7 +1659,7 @@ fn accepts_an_unidentified_common_path_neighbour() {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &bytes,
-        &HostBindings::new(&functions, &aggregates, &relations, &[]),
+        &HostBindings::without_declarations(&functions, &aggregates, &relations, &[]),
     )
     .expect("an empty implementation identity is the absent one");
 }
@@ -2076,7 +2128,7 @@ fn accepts_declared_functions_alongside_host_natives() {
     let relations = PropertyFunctionRegistry::new();
     let restored = admit_with(
         &bytes,
-        &HostBindings::new(&injected, &aggregates, &relations, IMPL_A),
+        &HostBindings::without_declarations(&injected, &aggregates, &relations, IMPL_A),
     )
     .expect("a declared population plus an injected one must restore");
 
@@ -2212,6 +2264,7 @@ fn provoked_dimensions() -> BTreeSet<ProductDimension> {
         refusal_property_function_registry(),
         refusal_implementation_identity(),
         refusal_class_catalog(),
+        refusal_parse_configuration(),
         refusal_unsupported_capability(),
         depth_boundary().1,
         refusal_malformed(),

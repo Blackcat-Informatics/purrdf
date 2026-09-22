@@ -362,7 +362,10 @@ pub fn admit_shapes_product_with_implementations(
 ) -> Result<PreparedShapes, ShapesProductError> {
     ShapesProduct::open(product)?.admit(
         &ShapesProfile::CORE,
-        &HostBindings::new(
+        // This surface takes no parse configuration, so it declares none. A host
+        // that declares a namespace binds it through `purrdf-shapes`' own
+        // `HostBindings` rather than through this convenience entry.
+        &HostBindings::without_declarations(
             functions,
             aggregates,
             property_functions,

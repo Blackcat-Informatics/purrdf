@@ -427,7 +427,7 @@ fn admit_installs_host_aggregates() {
 
     let functions = UserFunctionRegistry::new();
     let property_functions = PropertyFunctionRegistry::new();
-    let host = HostBindings::new(
+    let host = HostBindings::without_declarations(
         &functions,
         &aggregates,
         &property_functions,
@@ -517,7 +517,7 @@ fn core_profile_binds_the_empty_property_function_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &aggregates, &wired, &[]),
+            &HostBindings::without_declarations(&functions, &aggregates, &wired, &[]),
         )
         .expect_err("a CORE product was not prepared against any host relation");
     assert_eq!(
@@ -530,7 +530,7 @@ fn core_profile_binds_the_empty_property_function_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &aggregates, &fresh, &[]),
+            &HostBindings::without_declarations(&functions, &aggregates, &fresh, &[]),
         )
         .expect("a DIFFERENT but equally empty registry must still admit");
 }
@@ -559,7 +559,12 @@ fn admit_refuses_a_different_aggregate_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &none, &property_functions, IMPLEMENTATION_ID),
+            &HostBindings::without_declarations(
+                &functions,
+                &none,
+                &property_functions,
+                IMPLEMENTATION_ID,
+            ),
         )
         .expect_err("an empty aggregate registry is not the one this product was prepared with");
     assert_eq!(error.dimension(), ProductDimension::AggregateRegistry);
@@ -571,7 +576,7 @@ fn admit_refuses_a_different_aggregate_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(
+            &HostBindings::without_declarations(
                 &functions,
                 &aggregates,
                 &property_functions,
@@ -767,6 +772,7 @@ fn declared_identity_readable_without_admission() {
             "aggregate-registry",
             "property-function-registry",
             "class-catalog",
+            "parse-configuration",
         ],
         "the binding is DECODABLE, which is what lets a caller see which input moved",
     );

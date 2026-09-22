@@ -22,6 +22,7 @@ use std::sync::{Arc, LazyLock};
 
 use ::purrdf::TermValue;
 use ::purrdf::{DatasetView, RdfDataset};
+use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
     AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, InternedGoverned,
     InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine, Prebinding,
@@ -519,6 +520,20 @@ thread_local! {
     /// `EvalCtx` (propagated in `fork_for_worker`).
     static CURRENT_FUNCTIONS: RefCell<Option<Arc<BoundFunctionRegistry>>> = const { RefCell::new(None) };
 
+    /// The base parser options in scope for the current validation, set by
+    /// [`enter_parser_options_scope`].
+    ///
+    /// The engine this module memoizes (`SPARQL_ENGINE`) is built once per thread and
+    /// never reconfigured, so before this existed its `parser_options` were
+    /// `ParserOptions::default()` for every SHACL query there has ever been — which
+    /// meant `extension_fn_namespaces` and `property_fn_namespaces` were permanently
+    /// EMPTY on this surface. A host could register a relation and have it resolve by
+    /// exact IRI, but could not declare a NAMESPACE of relations, and could not spell
+    /// an extension function in any SHACL construct at all. Carrying the options on
+    /// the environment instead of on the engine is what makes them per-validation
+    /// rather than per-thread.
+    static CURRENT_PARSER_OPTIONS: RefCell<Option<Arc<ParserOptions>>> = const { RefCell::new(None) };
+
     /// The property-function registry in scope for the current validation, set by
     /// [`enter_property_function_scope`]. [`run_query_view`] snapshots it into the
     /// query options so a `sh:select`/`sh:ask` body whose predicate IRI sits under a
@@ -814,10 +829,11 @@ pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
 
     let relations = current_property_functions();
     let aggregates = current_aggregates();
+    let options = current_parser_options();
     let hit = CACHED_ENV.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .and_then(|cached| cached.matching(relations.as_ref(), aggregates.as_ref()))
+        slot.borrow().as_ref().and_then(|cached| {
+            cached.matching(relations.as_ref(), aggregates.as_ref(), options.as_ref())
+        })
     });
     if let Some(env) = hit {
         return Ok(env);
@@ -830,7 +846,10 @@ pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
     // registry instance for every purpose a plan's identity cares about.
     let env = Arc::new(
         ExtensionEnv::new(
-            purrdf_sparql_algebra::ParserOptions::default(),
+            options
+                .as_deref()
+                .cloned()
+                .unwrap_or_else(ParserOptions::default),
             relations
                 .as_deref()
                 .map_or_else(|| PropertyFunctionRegistry::EMPTY, Clone::clone),
@@ -844,6 +863,7 @@ pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
         *slot.borrow_mut() = Some(CachedEnv {
             relations,
             aggregates,
+            options,
             env: Arc::clone(&env),
         });
     });
@@ -862,6 +882,7 @@ pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
 struct CachedEnv {
     relations: Option<Arc<PropertyFunctionRegistry>>,
     aggregates: Option<Arc<AggregateRegistry>>,
+    options: Option<Arc<ParserOptions>>,
     env: Arc<ExtensionEnv>,
 }
 
@@ -877,6 +898,7 @@ impl CachedEnv {
         &self,
         relations: Option<&Arc<PropertyFunctionRegistry>>,
         aggregates: Option<&Arc<AggregateRegistry>>,
+        options: Option<&Arc<ParserOptions>>,
     ) -> Option<Arc<ExtensionEnv>> {
         fn same<T>(left: Option<&Arc<T>>, right: Option<&Arc<T>>) -> bool {
             match (left, right) {
@@ -885,8 +907,10 @@ impl CachedEnv {
                 _ => false,
             }
         }
-        (same(self.relations.as_ref(), relations) && same(self.aggregates.as_ref(), aggregates))
-            .then(|| Arc::clone(&self.env))
+        (same(self.relations.as_ref(), relations)
+            && same(self.aggregates.as_ref(), aggregates)
+            && same(self.options.as_ref(), options))
+        .then(|| Arc::clone(&self.env))
     }
 }
 
@@ -1023,6 +1047,58 @@ pub fn enter_aggregate_scope(registry: Arc<AggregateRegistry>) -> AggregateScope
         previous,
         _not_send: PhantomData,
     }
+}
+
+/// An RAII scope that installs `options` as the base parser options for the duration
+/// of a validation, restoring the previous value on drop (so nested validations
+/// compose). The exact twin of [`AggregateScope`].
+#[must_use]
+#[derive(Debug)]
+pub struct ParserOptionsScope {
+    previous: Option<Arc<ParserOptions>>,
+    /// A thread-local restoration guard must be dropped on the thread where it
+    /// was created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for ParserOptionsScope {
+    fn drop(&mut self) {
+        let restore = self.previous.take();
+        CURRENT_PARSER_OPTIONS.with(|slot| *slot.borrow_mut() = restore);
+    }
+}
+
+/// Install `options` as the base parser options every SHACL SPARQL parse in this
+/// validation reads, returning a guard that restores the previous value when dropped.
+///
+/// This is how a host declares a NAMESPACE — of relations
+/// ([`ParserOptions::property_fn_namespaces`]) or of extension functions
+/// ([`ParserOptions::extension_fn_namespaces`]) — to the SHACL surface. Registering a
+/// relation is enough to have its exact IRI recognized; declaring a namespace is how a
+/// host says "every IRI under this prefix is a call, and one I have not registered is
+/// a hard error rather than a silent data triple".
+///
+/// The registry-derived exact IRIs and these caller-declared namespaces are UNIONED,
+/// never conflated — see
+/// [`ExtensionEnv::new`](purrdf_sparql_eval::ExtensionEnv::new) for why folding a
+/// registered IRI in as a prefix would hijack an unrelated, merely-same-prefixed data
+/// predicate.
+pub fn enter_parser_options_scope(options: Arc<ParserOptions>) -> ParserOptionsScope {
+    let previous = CURRENT_PARSER_OPTIONS.with(|slot| slot.borrow_mut().replace(options));
+    ParserOptionsScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+/// The base parser options installed on this thread, if a validation installed any.
+///
+/// An absent scope and [`ParserOptions::default`] are the same value for every
+/// purpose a parse cares about — neither declares a namespace — so there is one
+/// spelling of "nothing declared, not two.
+#[must_use]
+pub fn current_parser_options() -> Option<Arc<ParserOptions>> {
+    CURRENT_PARSER_OPTIONS.with(|slot| slot.borrow().clone())
 }
 
 /// The custom-aggregate table installed on this thread, if a validation installed

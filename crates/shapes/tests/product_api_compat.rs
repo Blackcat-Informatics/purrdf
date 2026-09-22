@@ -271,9 +271,10 @@ const fn dimension_ordinal(dimension: ProductDimension) -> u8 {
         ProductDimension::AggregateRegistry => 14,
         ProductDimension::PropertyFunctionRegistry => 15,
         ProductDimension::ClassCatalog => 16,
-        ProductDimension::UnsupportedCapability => 17,
-        ProductDimension::DepthLimit => 18,
-        ProductDimension::Malformed => 19,
+        ProductDimension::ParseConfiguration => 17,
+        ProductDimension::UnsupportedCapability => 18,
+        ProductDimension::DepthLimit => 19,
+        ProductDimension::Malformed => 20,
     }
 }
 
@@ -349,7 +350,8 @@ fn public_constructors_keep_their_signatures() {
     let aggregates = AggregateRegistry::new();
     let relations = PropertyFunctionRegistry::new();
     let empty = HostBindings::empty();
-    let bound = HostBindings::new(&functions, &aggregates, &relations, b"build-id");
+    let bound =
+        HostBindings::without_declarations(&functions, &aggregates, &relations, b"build-id");
     assert_eq!(empty.implementation_identity(), b"");
     assert_eq!(bound.implementation_identity(), b"build-id");
 

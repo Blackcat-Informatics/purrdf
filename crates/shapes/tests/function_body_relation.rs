@@ -23,10 +23,22 @@
 //! implementation: the invocation counter moved, and the verdict names exactly the
 //! node the relation distinguished.
 //!
-//! Three neighbouring valid cases are executed alongside, because a refusal is a
-//! claim too: a body naming an unregistered predicate, a body naming a predicate that
-//! merely shares a registered one's prefix, and the same body with no registry
-//! installed. All three must still answer over the base graph exactly as before.
+//! Neighbouring valid cases are executed alongside every refusal, because a refusal
+//! is a claim too: a body naming an unregistered predicate, a body naming a predicate
+//! that merely shares a registered one's prefix, and the same body with no registry
+//! installed. Each must still answer over the base graph exactly as before.
+//!
+//! # Declared namespaces
+//!
+//! The last three tests cover the other half of the parse seam — a host declaring a
+//! relation NAMESPACE rather than registering an exact IRI. That distinction was
+//! unreachable from SHACL until the extension environment carried the parser options:
+//! this module's engine is built once per thread and never reconfigured, so
+//! `property_fn_namespaces` was permanently empty here however the host configured
+//! itself. A declared namespace is how a host says "everything under this prefix is a
+//! call, and one I have not registered is a hard error rather than a silent data
+//! triple" — so it is tested in all three of its states: declared-and-unregistered
+//! (refused, by name), undeclared (ordinary data), declared-and-registered (resolves).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,7 +47,8 @@ use purrdf::RdfDataset;
 use purrdf_core::TermValue;
 use purrdf_shapes::engine::validate_dataset;
 use purrdf_shapes::report::ValidationReport;
-use purrdf_shapes::sparql::enter_property_function_scope;
+use purrdf_shapes::sparql::{enter_parser_options_scope, enter_property_function_scope};
+use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
     PropertyFunctionRegistry, Volatility,
@@ -265,5 +278,86 @@ fn without_a_registry_the_same_body_is_ordinary_data() {
         reported(&report),
         vec![format!("<{EX}a>"), format!("<{EX}b>")],
         "with nothing registered the predicate matches nothing and both nodes fail"
+    );
+}
+
+/// The relation namespace a host declares in the three cases below.
+const REL_NS: &str = "http://example.org/rel/";
+
+/// An IRI under `REL_NS` that nobody registers.
+const REL_MISSING: &str = "http://example.org/rel/neverRegistered";
+
+/// Validate with `relations` installed AND `REL_NS` declared as a relation namespace.
+fn validate_under_declared_namespace(
+    predicate: &str,
+    relations: Arc<PropertyFunctionRegistry>,
+) -> Result<ValidationReport, String> {
+    let _relations = enter_property_function_scope(relations);
+    let _options = enter_parser_options_scope(Arc::new(ParserOptions {
+        property_fn_namespaces: vec![REL_NS.to_owned()],
+        ..ParserOptions::default()
+    }));
+    validate_dataset(&data(), &shapes(predicate))
+}
+
+/// A host-DECLARED namespace makes an unregistered IRI under it a hard error, not a
+/// silent data triple.
+///
+/// This is the distinction a namespace declaration exists to draw, and it was
+/// unreachable from SHACL before: the thread-local engine was built once with default
+/// parser options, so `property_fn_namespaces` was permanently empty on this surface
+/// however the host configured itself. A host could have an exact IRI recognized by
+/// registering it, and could not say "everything under this prefix is a call".
+#[test]
+fn a_declared_namespace_makes_an_unregistered_iri_under_it_a_hard_error() {
+    let (relations, opens) = registry();
+    let error = validate_under_declared_namespace(REL_MISSING, relations)
+        .expect_err("an unregistered IRI under a declared relation namespace is refused");
+    assert!(
+        error.contains(REL_MISSING),
+        "the refusal names the offending IRI: {error}"
+    );
+    assert_eq!(
+        opens.load(Ordering::Relaxed),
+        0,
+        "nothing was invoked; the call could not be resolved at all"
+    );
+}
+
+/// The neighbouring valid case, and the one that proves the refusal above is caused by
+/// the DECLARATION rather than by the fixture: the identical body, with no namespace
+/// declared, is ordinary data and answers over the base graph.
+#[test]
+fn without_the_declaration_the_same_iri_is_ordinary_data() {
+    let (relations, opens) = registry();
+    let report = validate_with(REL_MISSING, relations)
+        .expect("with nothing declared the predicate is an ordinary triple pattern");
+    assert_eq!(
+        opens.load(Ordering::Relaxed),
+        0,
+        "an ordinary predicate invokes no relation"
+    );
+    assert_eq!(
+        reported(&report),
+        vec![format!("<{EX}a>"), format!("<{EX}b>")],
+        "no node has the edge, so the ASK is false for both"
+    );
+}
+
+/// And the third case: an IRI under the declared namespace that IS registered resolves
+/// and decides the verdict, exactly as the exact-IRI path does.
+#[test]
+fn a_registered_iri_under_a_declared_namespace_still_reaches_its_relation() {
+    let (relations, opens) = registry();
+    let report = validate_under_declared_namespace(REL, relations)
+        .expect("the registered relation resolves");
+    assert!(
+        opens.load(Ordering::Relaxed) > 0,
+        "the relation was never opened"
+    );
+    assert_eq!(
+        reported(&report),
+        vec![format!("<{EX}b>")],
+        "the verdict still turns on the relation's rows"
     );
 }

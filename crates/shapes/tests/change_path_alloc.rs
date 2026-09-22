@@ -362,8 +362,31 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// How many allocations one prepared-product `admit` costs.
 ///
 /// The same kind of pin as [`BIND_ALLOC_CONST`], over the other once-per-snapshot
-/// seam, and here the figure really is constant: admission makes 284 allocations
+/// seam, and here the figure really is constant: admission makes 299 allocations
 /// with either seam dataset bound.
+///
+/// # Why it moved from 284
+///
+/// Because admission's *input* grew again, and for the same shape of reason. The
+/// product identity gained a `parse-configuration` component: the
+/// extension-function and relation NAMESPACES the writing host declared.
+///
+/// It has to be in there. A registry's keys decide which EXACT predicate IRIs are
+/// calls; a declared namespace decides it for a whole prefix, including IRIs no
+/// registry names — and an IRI under a declared namespace that no registry answers
+/// is a hard error rather than a silent data triple. Two hosts holding the identical
+/// registry can therefore still disagree about which predicates are calls, so the
+/// registry row alone cannot catch it: a product written under a declared relation
+/// namespace and restored under a host that declares nothing would read every
+/// prefixed relation IRI in its shapes graph as ordinary data, match nothing, and
+/// report conformance.
+///
+/// The component encodes three labelled, length-framed lists (one per parser-options
+/// axis), so it costs the buffer it is built in plus the framing of six parts even
+/// when every list is empty. Fifteen allocations is that.
+///
+/// The property this test is about is untouched: the figure is still identical for
+/// both seam datasets, which is the assertion above this one.
 ///
 /// # Why it moved from 282
 ///
@@ -386,7 +409,7 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// The property this test is actually about is untouched: the figure is still
 /// the same for both seam datasets, which is the assertion above this one, and
 /// which is what says admission does not read the data.
-const ADMIT_ALLOC_CONST: u64 = 284;
+const ADMIT_ALLOC_CONST: u64 = 299;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;

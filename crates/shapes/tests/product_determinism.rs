@@ -64,7 +64,7 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 ///
 /// This is the "intermediate bytes" measurement for the fixture, pinned as a fact
 /// the build checks rather than a figure quoted from a run nobody can reproduce.
-const GOLDEN_LEN: usize = 4_568;
+const GOLDEN_LEN: usize = 4_680;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See

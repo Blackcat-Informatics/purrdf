@@ -147,6 +147,7 @@ use purrdf_core::ir::pack::bits::{read_varint, write_varint};
 /// for that capability costs a caller no dependency on the evaluator crate that
 /// happens to define them — the alternative is an entry point nobody can call
 /// without first discovering which internal crate to add.
+pub use purrdf_sparql_algebra::ParserOptions;
 pub use purrdf_sparql_eval::{AggregateRegistry, PropertyFunctionRegistry, UserFunctionRegistry};
 
 use crate::engine::PreparedShapes;
@@ -232,6 +233,15 @@ static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
 
 /// The canonical empty property-function registry. See [`EMPTY_FUNCTIONS`].
 static EMPTY_PROPERTY_FUNCTIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
+
+/// The parse configuration that declares nothing — the value a host which never
+/// declared a namespace binds, and the one every product written before row 11
+/// existed is bound by.
+static EMPTY_PARSER_OPTIONS: ParserOptions = ParserOptions {
+    extension_fn_namespaces: Vec::new(),
+    property_fn_namespaces: Vec::new(),
+    property_fn_iris: Vec::new(),
+};
 
 // ---------------------------------------------------------------------------
 // Profile
@@ -347,6 +357,15 @@ pub struct HostBindings<'a> {
     /// the three registries' injected declarations. EMPTY means "nothing injected
     /// to identify".
     implementation_identity: &'a [u8],
+    /// The parse configuration the host declares: the extension-function and
+    /// relation NAMESPACES under which an IRI is a call.
+    ///
+    /// The other half of the seam `property_functions` covers. A registry's keys
+    /// decide which EXACT IRIs are calls; a declared namespace decides it for a whole
+    /// prefix, including IRIs no registry names. Two hosts holding the identical
+    /// registry can therefore still disagree about which predicates are calls, so
+    /// this is bound as its own identity row.
+    parser_options: &'a ParserOptions,
 }
 
 impl<'a> HostBindings<'a> {
@@ -374,13 +393,40 @@ impl<'a> HostBindings<'a> {
         aggregates: &'a AggregateRegistry,
         property_functions: &'a PropertyFunctionRegistry,
         implementation_identity: &'a [u8],
+        parser_options: &'a ParserOptions,
     ) -> Self {
         Self {
             functions,
             aggregates,
             property_functions,
             implementation_identity,
+            parser_options,
         }
+    }
+
+    /// [`Self::new`] for a host that declares no namespace: the three registries and
+    /// the implementation identity, with the parse configuration that declares
+    /// nothing.
+    ///
+    /// Most hosts. Registering a relation is enough to have its exact IRI recognized;
+    /// DECLARING a namespace is the deliberate extra step a host takes to say
+    /// "everything under this prefix is a call, and one I have not registered is a
+    /// hard error rather than a silent data triple". A host that has not taken that
+    /// step says so here, rather than naming an empty value.
+    #[must_use]
+    pub const fn without_declarations(
+        functions: &'a UserFunctionRegistry,
+        aggregates: &'a AggregateRegistry,
+        property_functions: &'a PropertyFunctionRegistry,
+        implementation_identity: &'a [u8],
+    ) -> Self {
+        Self::new(
+            functions,
+            aggregates,
+            property_functions,
+            implementation_identity,
+            &EMPTY_PARSER_OPTIONS,
+        )
     }
 
     /// The host's injected SPARQL function table.
@@ -408,6 +454,12 @@ impl<'a> HostBindings<'a> {
     pub const fn implementation_identity(&self) -> &'a [u8] {
         self.implementation_identity
     }
+
+    /// The parse configuration this host declares.
+    #[must_use]
+    pub const fn parser_options(&self) -> &'a ParserOptions {
+        self.parser_options
+    }
 }
 
 impl HostBindings<'static> {
@@ -426,6 +478,7 @@ impl HostBindings<'static> {
             &EMPTY_AGGREGATES,
             &EMPTY_PROPERTY_FUNCTIONS,
             &[],
+            &EMPTY_PARSER_OPTIONS,
         )
     }
 }
@@ -881,6 +934,10 @@ impl PreparedShapes {
             // relations are wiring no shapes graph can describe. See
             // `ShapesProfile::CORE`.
             &EMPTY_PROPERTY_FUNCTIONS,
+            // The CORE profile declares no namespace either, for the same reason it
+            // binds the empty relation registry: a declaration is host wiring no
+            // shapes graph can describe.
+            &EMPTY_PARSER_OPTIONS,
             implementation_identity,
             &classes,
         )?;

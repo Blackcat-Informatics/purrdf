@@ -59,6 +59,19 @@
 //! | 8 | the custom-aggregate registry, + the implementation identity | `aggregate-registry` | [`AggregateRegistry`] |
 //! | 9 | the property-function registry, + the implementation identity | `property-function-registry` | [`PropertyFunctionRegistry`] |
 //! | 10 | the class catalog's digest | `class-catalog` | [`ClassCatalog`] |
+//! | 11 | the declared parser options, each list **sorted** | `parse-configuration` | [`ParseConfiguration`] |
+//!
+//! Row 11 is the OTHER half of the seam row 9 covers. A registry's keys decide
+//! which EXACT predicate IRIs are calls; a declared namespace decides it for a whole
+//! prefix, including IRIs no registry names — and an IRI under a declared namespace
+//! that no registry answers is a hard error rather than a silent data triple. So a
+//! product written under a declared relation namespace and restored under a host that
+//! declares nothing would read every prefixed relation IRI in its shapes graph as
+//! ordinary data, match nothing, and report conformance. Row 9 alone does not catch
+//! that: both hosts can hold the identical registry and still disagree about which
+//! predicates are calls. Its three lists are sorted for the reason rows 2 and 5 are —
+//! a declaration is a SET, so two callers that declared the same namespaces in
+//! different order must not fail to open each other's products.
 //!
 //! Rows 2 and 5 are sorted because both sources are maps whose *order* is not part
 //! of their meaning: `ParseProvenance::doc_prefixes` deliberately preserves the
@@ -192,11 +205,13 @@
 //! [`AggregateRegistry`]: ProductDimension::AggregateRegistry
 //! [`PropertyFunctionRegistry`]: ProductDimension::PropertyFunctionRegistry
 //! [`ClassCatalog`]: ProductDimension::ClassCatalog
+//! [`ParseConfiguration`]: ProductDimension::ParseConfiguration
 
 use ::purrdf::PackDigest;
 use purrdf_core::ContentDigest;
 use purrdf_core::artifact::identity::{Identity, IdentityMismatch};
 use purrdf_core::ir::pack::bits::write_varint;
+use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{
     AggregateRegistry, EvalError, PropertyFunctionRegistry, UserFunctionRegistry, agg_fn,
@@ -237,7 +252,7 @@ pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 /// One table drives both [`build_identity`] (which pushes in this order) and
 /// [`check_identity`] (which indexes by position), so the labels and the dimensions
 /// cannot drift apart into two hand-maintained lists.
-const COMPONENTS: [(&str, ProductDimension); 11] = [
+const COMPONENTS: [(&str, ProductDimension); 12] = [
     ("source-dataset", ProductDimension::DatasetIdentity),
     ("shapes-graph", ProductDimension::ShapesGraph),
     ("doc-prefixes", ProductDimension::Prefixes),
@@ -258,6 +273,7 @@ const COMPONENTS: [(&str, ProductDimension); 11] = [
         ProductDimension::PropertyFunctionRegistry,
     ),
     ("class-catalog", ProductDimension::ClassCatalog),
+    ("parse-configuration", ProductDimension::ParseConfiguration),
 ];
 
 /// The positions of the three HOST-supplied rows in [`COMPONENTS`]: the injected
@@ -404,6 +420,33 @@ fn encode_vocab(vocab: Option<&BoxRoleVocab>) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
+/// The declared parser options, encoded for row 11.
+///
+/// Each of the three lists is SORTED and deduplicated before framing: a declaration
+/// is a set of prefixes, so its order is not part of its meaning, and two callers who
+/// declared the same namespaces in a different order must open each other's products.
+/// The lists are framed separately rather than concatenated, because the same string
+/// declared as an extension-function namespace and as a relation namespace configures
+/// two different seams.
+fn encode_parser_options(options: &ParserOptions) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (label, list) in [
+        ("extension-fn-namespaces", &options.extension_fn_namespaces),
+        ("property-fn-namespaces", &options.property_fn_namespaces),
+        ("property-fn-iris", &options.property_fn_iris),
+    ] {
+        push_part(&mut out, label.as_bytes());
+        let mut sorted: Vec<&str> = list.iter().map(String::as_str).collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        push_part(&mut out, &(sorted.len() as u64).to_be_bytes());
+        for value in sorted {
+            push_part(&mut out, value.as_bytes());
+        }
+    }
+    out
+}
+
 // The class-catalog digest
 // ---------------------------------------------------------------------------
 
@@ -466,6 +509,7 @@ pub(crate) fn build_identity(
     dataset: &PackDigest,
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<Identity, ShapesProductError> {
@@ -473,6 +517,7 @@ pub(crate) fn build_identity(
         dataset.as_bytes().as_slice(),
         shapes,
         property_functions,
+        parser_options,
         implementation_identity,
         classes,
     )
@@ -548,6 +593,7 @@ pub(crate) fn check_restored_identity(
     declared: &Identity,
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<(), ShapesProductError> {
@@ -559,6 +605,7 @@ pub(crate) fn check_restored_identity(
         declared_dataset,
         shapes,
         property_functions,
+        parser_options,
         implementation_identity,
         classes,
     )?;
@@ -703,6 +750,7 @@ fn assemble(
     dataset: &[u8],
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<Identity, ShapesProductError> {
@@ -732,6 +780,7 @@ fn assemble(
         aggregates,
         relations,
         class_catalog_digest(classes).as_bytes().to_vec(),
+        encode_parser_options(parser_options),
     ];
 
     let mut identity = Identity::new();
@@ -883,6 +932,15 @@ fn fix_for(dimension: ProductDimension) -> &'static str {
              predicates are calls rather than ordinary triple patterns and the implementation \
              identity is what says which build of the native code stands behind them"
         }
+        ProductDimension::ParseConfiguration => {
+            "this product was prepared under a different parse configuration than the one \
+             supplied for its execution; declare the SAME extension-function and relation \
+             NAMESPACES on the executing host, because a declared namespace decides which \
+             predicate IRIs are calls for a whole prefix — including IRIs no registry names, \
+             where an unregistered one is a hard error rather than an ordinary data triple — so \
+             two hosts holding the identical registries can still disagree about which \
+             predicates are calls"
+        }
         ProductDimension::ClassCatalog => {
             "the class analysis this product carries is not the one its own identity pins, so the \
              analysis a restore would compile its class-membership decisions against is not the \
@@ -933,6 +991,7 @@ mod tests {
     use crate::product::dataset::{certify_dataset, encode_dataset};
     use crate::product::error::ProductDimension;
     use crate::shapes::{Shapes, from_dataset_with_config_and_graph};
+    use purrdf_sparql_algebra::ParserOptions;
 
     // ── Fixtures (example.org, per the repository's fixture rule) ────────────────
 
@@ -1090,6 +1149,7 @@ mod tests {
             &digest_of(shapes),
             shapes,
             relations,
+            &ParserOptions::default(),
             implementation_identity,
             &catalog_of(shapes),
         )
@@ -1285,6 +1345,7 @@ mod tests {
                 "aggregate-registry",
                 "property-function-registry",
                 "class-catalog",
+                "parse-configuration",
             ],
             "the component order is part of the format; reordering breaks every product \
              already written",
@@ -1622,6 +1683,7 @@ mod tests {
             &digest_of(&shapes),
             &shapes,
             &PropertyFunctionRegistry::new(),
+            &ParserOptions::default(),
             &[],
             &stale,
         )
