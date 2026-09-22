@@ -205,16 +205,58 @@ impl Shapes {
             );
         }
 
+        let mut flight = InFlight::default();
         for shape in &self.node_shapes {
-            walk_shape(shape, &mut usage, env);
+            walk_shape(shape, &mut usage, env, &mut flight);
         }
         usage
     }
 }
 
+/// What one `extension_usage` walk is currently inside.
+///
+/// # Why one guard for the whole walk rather than one per expression
+///
+/// The shapes graph is a GRAPH, not a tree, and the two edges that make it one were
+/// both added when the shape-valued and custom-function-body fields started being
+/// followed: a node expression reaches a shape (`sh:filterShape`), and a shape
+/// reaches a node expression (`sh:expression`). Either alone is finite. Together they
+/// close a cycle -- a function whose body filters through a shape whose expression
+/// calls that function -- and a shapes graph may legally contain one, because the
+/// evaluator bounds the same recursion at run time with a depth limit rather than
+/// refusing it at load.
+///
+/// A guard scoped to a single node-expression walk cannot see that cycle: crossing
+/// into a shape starts a new walk, which starts a new guard, which has forgotten
+/// every function already in flight. The traversal then recurses until the process
+/// aborts -- and a stack overflow is an ABORT, not an error, so no caller can catch
+/// it and the Python surface simply dies. One guard for the whole walk is what makes
+/// the cycle visible at the point it closes.
+///
+/// Both stacks are STACKS, not visited sets: an entry is removed on the way out, so a
+/// shape or function reached twice from disjoint branches is still walked both times
+/// and the report stays complete. Only a cycle is cut.
+#[derive(Default)]
+struct InFlight {
+    /// Custom-function IRIs whose `sh:bodyExpression` is currently being walked.
+    fns: std::collections::BTreeSet<String>,
+    /// Shape ids currently being walked.
+    shapes: std::collections::BTreeSet<String>,
+}
+
 /// Record every SPARQL text one node shape and its descendants carry.
-fn walk_shape(shape: &Shape, usage: &mut ExtensionUsage, env: &ExtensionEnv) {
+fn walk_shape(
+    shape: &Shape,
+    usage: &mut ExtensionUsage,
+    env: &ExtensionEnv,
+    flight: &mut InFlight,
+) {
     let id = shape.id.to_string();
+    if !flight.shapes.insert(id.clone()) {
+        // Already in flight: this edge closes a cycle. Everything this shape carries
+        // is being recorded by the visit that is still on the stack above us.
+        return;
+    }
 
     for target in &shape.targets {
         if let Target::Sparql { select, .. } = target {
@@ -226,22 +268,28 @@ fn walk_shape(shape: &Shape, usage: &mut ExtensionUsage, env: &ExtensionEnv) {
             usage.record(format!("sh:rule on {id}"), construct, env);
         }
     }
-    walk_constraints(&shape.constraints, &id, usage, env);
+    walk_constraints(&shape.constraints, &id, usage, env, flight);
 
     for property in &shape.property_shapes {
-        walk_property(property, usage, env);
+        walk_property(property, usage, env, flight);
     }
+    flight.shapes.remove(&id);
 }
 
 /// Record every SPARQL text one property shape and its descendants carry.
-fn walk_property(property: &PropertyShape, usage: &mut ExtensionUsage, env: &ExtensionEnv) {
+fn walk_property(
+    property: &PropertyShape,
+    usage: &mut ExtensionUsage,
+    env: &ExtensionEnv,
+    flight: &mut InFlight,
+) {
     let id = property.id.to_string();
-    walk_constraints(&property.constraints, &id, usage, env);
+    walk_constraints(&property.constraints, &id, usage, env, flight);
     for nested in &property.property_shapes {
-        walk_property(nested, usage, env);
+        walk_property(nested, usage, env, flight);
     }
     for reifier in &property.reifier_shapes {
-        walk_shape(reifier, usage, env);
+        walk_shape(reifier, usage, env, flight);
     }
 }
 
@@ -252,6 +300,7 @@ fn walk_constraints(
     owner: &str,
     usage: &mut ExtensionUsage,
     env: &ExtensionEnv,
+    flight: &mut InFlight,
 ) {
     for constraint in constraints {
         match constraint {
@@ -259,7 +308,7 @@ fn walk_constraints(
                 usage.record(format!("sh:sparql on {owner}"), select, env);
             }
             Constraint::Expression { expr, .. } => {
-                walk_node_expr(expr, owner, usage, env);
+                walk_node_expr(expr, owner, usage, env, flight);
             }
             _ => {}
         }
@@ -267,26 +316,15 @@ fn walk_constraints(
 }
 
 /// Record the SPARQL texts one node expression carries, at any depth.
-fn walk_node_expr(expr: &NodeExpr, owner: &str, usage: &mut ExtensionUsage, env: &ExtensionEnv) {
-    let mut seen = std::collections::BTreeSet::new();
-    walk_node_expr_guarded(expr, owner, usage, env, &mut seen);
-}
-
-/// [`walk_node_expr`], carrying the set of custom-function IRIs already being walked.
 ///
-/// A custom function's `sh:bodyExpression` can call another custom function, and
-/// nothing stops it calling itself — directly or through a cycle. The shapes parser
-/// guards its own recursion the same way for the same reason: unbounded Rust
-/// recursion aborts the process, which is an uncatchable failure rather than an error
-/// a caller can handle. The set is a STACK (each entry removed on the way out), not a
-/// visited set, so one function called twice from disjoint branches is still walked
-/// both times.
-fn walk_node_expr_guarded(
+/// `flight` is the ONE guard for the whole walk; see [`InFlight`] for why it cannot
+/// be scoped to this call.
+fn walk_node_expr(
     expr: &NodeExpr,
     owner: &str,
     usage: &mut ExtensionUsage,
     env: &ExtensionEnv,
-    seen: &mut std::collections::BTreeSet<String>,
+    flight: &mut InFlight,
 ) {
     match expr {
         NodeExpr::Select { query, key, .. } => {
@@ -302,7 +340,7 @@ fn walk_node_expr_guarded(
             | crate::expression::FnCall::Sparql { args, .. },
         ) => {
             for arg in args {
-                walk_node_expr_guarded(arg, owner, usage, env, seen);
+                walk_node_expr(arg, owner, usage, env, flight);
             }
         }
         // Every remaining OPERAND-bearing variant, because a `sh:select` can sit
@@ -312,13 +350,13 @@ fn walk_node_expr_guarded(
         // had not finished reading.
         NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
             for item in items {
-                walk_node_expr_guarded(item, owner, usage, env, seen);
+                walk_node_expr(item, owner, usage, env, flight);
             }
         }
         NodeExpr::If { cond, then, els } => {
-            walk_node_expr_guarded(cond, owner, usage, env, seen);
-            walk_node_expr_guarded(then, owner, usage, env, seen);
-            walk_node_expr_guarded(els, owner, usage, env, seen);
+            walk_node_expr(cond, owner, usage, env, flight);
+            walk_node_expr(then, owner, usage, env, flight);
+            walk_node_expr(els, owner, usage, env, flight);
         }
         NodeExpr::Count { of, .. }
         | NodeExpr::Distinct(of)
@@ -327,43 +365,43 @@ fn walk_node_expr_guarded(
         | NodeExpr::Sum(of)
         | NodeExpr::Limit { of, .. }
         | NodeExpr::Offset { of, .. }
-        | NodeExpr::Exists(of) => walk_node_expr_guarded(of, owner, usage, env, seen),
+        | NodeExpr::Exists(of) => walk_node_expr(of, owner, usage, env, flight),
         NodeExpr::OrderBy { of, key, .. } => {
-            walk_node_expr_guarded(of, owner, usage, env, seen);
-            walk_node_expr_guarded(key, owner, usage, env, seen);
+            walk_node_expr(of, owner, usage, env, flight);
+            walk_node_expr(key, owner, usage, env, flight);
         }
         NodeExpr::Filter { nodes, shape }
         | NodeExpr::FindFirst { nodes, shape }
         | NodeExpr::MatchAll { nodes, shape } => {
-            walk_node_expr_guarded(nodes, owner, usage, env, seen);
-            walk_shape(shape, usage, env);
+            walk_node_expr(nodes, owner, usage, env, flight);
+            walk_shape(shape, usage, env, flight);
         }
         NodeExpr::Remove { nodes, remove } => {
-            walk_node_expr_guarded(nodes, owner, usage, env, seen);
-            walk_node_expr_guarded(remove, owner, usage, env, seen);
+            walk_node_expr(nodes, owner, usage, env, flight);
+            walk_node_expr(remove, owner, usage, env, flight);
         }
         NodeExpr::FlatMap { nodes, map } => {
-            walk_node_expr_guarded(nodes, owner, usage, env, seen);
-            walk_node_expr_guarded(map, owner, usage, env, seen);
+            walk_node_expr(nodes, owner, usage, env, flight);
+            walk_node_expr(map, owner, usage, env, flight);
         }
         NodeExpr::PathValues { focus, .. } => {
-            walk_node_expr_guarded(focus, owner, usage, env, seen);
+            walk_node_expr(focus, owner, usage, env, flight);
         }
         NodeExpr::ConformsToShape { node, shape } => {
-            walk_node_expr_guarded(node, owner, usage, env, seen);
+            walk_node_expr(node, owner, usage, env, flight);
             match shape {
-                crate::expression::ShapeArg::Named(shape) => walk_shape(shape, usage, env),
+                crate::expression::ShapeArg::Named(shape) => walk_shape(shape, usage, env, flight),
                 // The shape IRI is COMPUTED per evaluation, so which shape this
                 // reaches is not a fact about the graph; the expression that
                 // computes it is, and it is walked.
                 crate::expression::ShapeArg::Computed { expr, .. } => {
-                    walk_node_expr_guarded(expr, owner, usage, env, seen);
+                    walk_node_expr(expr, owner, usage, env, flight);
                 }
             }
         }
         NodeExpr::CustomCall { func, args } => {
             for (_, arg) in args {
-                walk_node_expr_guarded(arg, owner, usage, env, seen);
+                walk_node_expr(arg, owner, usage, env, flight);
             }
             // The function's own `sh:bodyExpression`. A `sh:select` inside it is
             // SPARQL this shapes graph carries and this environment will read, so
@@ -372,11 +410,15 @@ fn walk_node_expr_guarded(
             // whole graph has parsed, so an unfilled cell means the declaration never
             // linked and there is nothing to read.
             let iri = func.iri.as_str().to_owned();
-            if seen.insert(iri.clone())
-                && let Some(body) = func.body.get()
-            {
-                walk_node_expr_guarded(body, &format!("{owner} via <{iri}>"), usage, env, seen);
-                seen.remove(&iri);
+            if flight.fns.insert(iri.clone()) {
+                if let Some(body) = func.body.get() {
+                    walk_node_expr(body, &format!("{owner} via <{iri}>"), usage, env, flight);
+                }
+                // Removed whether or not a body was there. Leaving it in on the
+                // `None` arm would quietly turn this stack into a visited set for
+                // that one IRI, so a second, unrelated call to the same function
+                // later in the graph would be skipped and its body go unreported.
+                flight.fns.remove(&iri);
             }
         }
         // Leaves: no nested node expression, so nothing to walk. Spelled out rather
@@ -402,6 +444,6 @@ fn walk_node_expr_guarded(
         | NodeExpr::Arg(_)
         | NodeExpr::List(_)
         | NodeExpr::InstancesOf(_) => {}
-        NodeExpr::NodesMatching(shape) => walk_shape(shape, usage, env),
+        NodeExpr::NodesMatching(shape) => walk_shape(shape, usage, env, flight),
     }
 }

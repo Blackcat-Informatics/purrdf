@@ -112,3 +112,51 @@ ex:R
     # The neighbour: with nothing declared the identical graph reads completely.
     readable = rule_shapes.extension_usage()
     assert readable["complete"] is True, readable["unreadable"]
+
+
+def test_a_cycle_between_a_function_body_and_a_shape_does_not_kill_the_interpreter() -> None:
+    """A cyclic shapes graph returns a report instead of aborting the process.
+
+    A shapes graph is a graph, not a tree: a node expression reaches a shape
+    (``sh:filterShape``) and a shape reaches a node expression (``sh:expression``),
+    so a function whose body filters through a shape whose expression calls it back
+    closes a loop. Such a graph is legal -- the evaluator bounds the same recursion
+    at run time with a depth limit rather than refusing it at load -- so the
+    pre-flight walk owes it an answer.
+
+    A stack overflow in Rust ABORTS; it does not unwind into a Python exception. So
+    ``pytest.raises`` cannot express this and neither can a try/except: the process
+    simply dies and takes the test session with it. Reaching the final line IS the
+    assertion.
+    """
+    shapes = purrdf.shapes.Shapes(f"""
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix ex:    <http://example.org/ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+
+ex:recur
+    a sh:ListParameterExpressionFunction ;
+    rdfs:subClassOf sh:ListParameterExpression ;
+    sh:bodyExpression [ sh:filterShape ex:Inner ; sh:nodes sh:this ] ;
+    sh:parameter [ a sh:Parameter ; sh:path shnex:arg0 ; sh:nodeKind sh:IRI ] .
+
+ex:Inner
+    a sh:NodeShape ;
+    sh:expression [ ex:recur ( sh:this ) ] ;
+    sh:sparql [ a sh:SPARQLConstraint ; sh:select "SELECT $this ?v WHERE {{ $this <{REL}> ?v }}" ] .
+
+ex:Outer
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [ ex:recur ( sh:this ) ] .
+""")
+
+    usage = shapes.extension_usage(relation_iris=[REL])
+
+    # Cutting the cycle must not cost the report the constraint the cycle passes
+    # through: a guard that bailed out too eagerly would still terminate and would
+    # silently drop this, which is the under-report the surface exists to end.
+    assert any(
+        REL in used["calls"] for used in usage["sites"].values()
+    ), f"the constraint inside the cycle is still reported: {usage['sites']}"

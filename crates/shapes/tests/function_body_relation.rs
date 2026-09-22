@@ -1307,3 +1307,119 @@ ex:BodyShape
             .collect::<Vec<_>>()
     );
 }
+
+/// A cycle between a custom function's body and a shape TERMINATES.
+///
+/// The shapes graph is a graph, not a tree, and following both the shape-valued node
+/// expression fields and custom-function bodies is what closes the loop: a function
+/// whose body filters through a shape whose expression calls that function back. Such
+/// a graph is legal -- the evaluator bounds the same recursion at run time with a
+/// depth limit rather than refusing it at load -- so the pre-flight walk owes it an
+/// answer rather than a crash.
+///
+/// The assertion is simply that this RETURNS. A stack overflow aborts the process
+/// rather than unwinding, so it cannot be caught and there is nothing to assert
+/// against: a test that reaches its final line is the whole oracle, and one that does
+/// not takes the runner down with it. That is also why the guard has to cover the
+/// whole walk -- a guard reset at each shape boundary forgets every function already
+/// in flight, which is exactly the cycle it exists to see.
+#[test]
+fn a_cycle_between_a_function_body_and_a_shape_terminates() {
+    let turtle = format!(
+        r#"
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix ex:    <{EX}> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+
+ex:recur
+    a sh:ListParameterExpressionFunction ;
+    rdfs:subClassOf sh:ListParameterExpression ;
+    sh:bodyExpression [ sh:filterShape ex:Inner ; sh:nodes sh:this ] ;
+    sh:parameter [ a sh:Parameter ; sh:path shnex:arg0 ; sh:nodeKind sh:IRI ] .
+
+ex:Inner
+    a sh:NodeShape ;
+    sh:expression [ ex:recur ( sh:this ) ] ;
+    sh:sparql [ a sh:SPARQLConstraint ; sh:select """SELECT $this ?v WHERE {{ $this <{REL}> ?v }}""" ] .
+
+ex:Outer
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [ ex:recur ( sh:this ) ] .
+"#
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&turtle, None)
+        .unwrap_or_else(|error| panic!("the cyclic fixture is legal and must load: {error}"));
+
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("environment over the registry");
+
+    let usage = shapes.extension_usage(&env);
+
+    // Terminating is the oracle. Cutting the cycle must not cost the report the
+    // constraint the cycle passes through, so the relation inside `ex:Inner` is still
+    // named -- a guard that returned early too eagerly would pass the first assertion
+    // and silently fail this one.
+    assert!(
+        usage.reaches(REL),
+        "the constraint inside the cycle is still reported: {:?}",
+        usage
+            .sites()
+            .map(|(s, _)| s.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The same function called twice from DISJOINT branches is walked both times.
+///
+/// The guard is a stack, not a visited set. If an entry were left behind after a
+/// body was walked, a second unrelated call to the same function would be skipped and
+/// whatever its body names would vanish from the report -- the silent under-report
+/// this whole surface exists to end, reintroduced by its own cycle guard.
+#[test]
+fn a_function_called_from_two_branches_is_walked_both_times() {
+    let turtle = format!(
+        r#"
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix ex:    <{EX}> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+
+ex:shared
+    a sh:ListParameterExpressionFunction ;
+    rdfs:subClassOf sh:ListParameterExpression ;
+    sh:bodyExpression [ sh:select """SELECT ?result WHERE {{ $this <{REL}> ?result }}""" ] ;
+    sh:parameter [ a sh:Parameter ; sh:path shnex:arg0 ; sh:nodeKind sh:IRI ] .
+
+ex:First
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [ ex:shared ( sh:this ) ] .
+
+ex:Second
+    a sh:NodeShape ;
+    sh:targetNode ex:b ;
+    sh:expression [ ex:shared ( sh:this ) ] .
+"#
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&turtle, None)
+        .unwrap_or_else(|error| panic!("the fixture must load: {error}"));
+
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("environment over the registry");
+    let usage = shapes.extension_usage(&env);
+
+    let reached: Vec<String> = usage
+        .sites()
+        .filter(|(_, used)| used.calls.contains(REL))
+        .map(|(site, _)| site.to_string())
+        .collect();
+    assert_eq!(
+        reached.len(),
+        2,
+        "both call sites must be reported, not just the first: {reached:?}"
+    );
+}
