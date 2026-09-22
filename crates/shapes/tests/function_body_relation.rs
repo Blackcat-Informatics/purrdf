@@ -849,9 +849,11 @@ impl PropertyFunction for PartialRelation {
 /// produced by an attestation that travelled out of the function-body child context
 /// and onto the receipt the caller's validation read.
 ///
-/// If the witness were dropped at the boundary — the defect this branch exists to
-/// close, one layer up — the receipt would carry no incompleteness, the verdict would
-/// be computed anyway, and this validation would return a report instead of an error.
+/// If the witness were dropped at that boundary, the receipt would carry no
+/// incompleteness, the verdict would be computed over an index that was not whole,
+/// and this validation would return a report instead of an error. A dropped witness
+/// is therefore not a missing diagnostic but a wrong answer, which is why it is
+/// pinned here rather than left to the evaluator-level test alone.
 #[test]
 fn an_incomplete_index_declared_from_a_function_body_refuses_the_verdict() {
     let opens = Arc::new(AtomicU64::new(0));

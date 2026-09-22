@@ -156,7 +156,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   governed query, byte-frozen and content-addressed as
   `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST`. See its README for the band
   matrix and for what the corpus deliberately does not pin.
-- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 70 cases with
+- `crates/shapes/corpus/` — PurRDF's own frozen SHACL corpus: 71 cases with
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
@@ -262,7 +262,7 @@ make conformance                                      # the single matrix (all o
 cargo test -p purrdf-iri                               # IRI + RFC 3986 resolution
 cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
-cargo test -p purrdf-shapes --test conformance         # the 70-case frozen corpus
+cargo test -p purrdf-shapes --test conformance         # the 71-case frozen corpus
 cargo run -p purrdf-shapes --example schema_reverse --locked        # all five schema readers
 make pydantic-oracle linkml-oracle typescript-oracle graphql-oracle # independent schema runtimes
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
