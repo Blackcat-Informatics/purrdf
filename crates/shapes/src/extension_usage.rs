@@ -347,7 +347,7 @@ fn walk_node_expr_guarded(
             walk_node_expr_guarded(map, owner, usage, env, seen);
         }
         NodeExpr::PathValues { focus, .. } => {
-            walk_node_expr_guarded(focus, owner, usage, env, seen)
+            walk_node_expr_guarded(focus, owner, usage, env, seen);
         }
         NodeExpr::ConformsToShape { node, shape } => {
             walk_node_expr_guarded(node, owner, usage, env, seen);

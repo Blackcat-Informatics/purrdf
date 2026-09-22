@@ -1216,7 +1216,7 @@ fn filter_shape_ttl(inline: bool) -> String {
         )
     };
     format!(
-        r#"
+        r"
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <{EX}> .
 
@@ -1225,7 +1225,7 @@ ex:OuterShape
     a sh:NodeShape ;
     sh:targetNode ex:a ;
     sh:expression [ sh:filterShape {arg} ; sh:nodes sh:this ] .
-"#
+"
     )
 }
 
