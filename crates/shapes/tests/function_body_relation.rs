@@ -1194,3 +1194,116 @@ ex:NestedShape
         usage.data()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Shapes and function bodies the report used to walk past
+// ---------------------------------------------------------------------------
+
+/// A `sh:sparql` naming `REL`, inside a shape reached through `sh:filterShape`.
+///
+/// `inline` picks the half that matters: an anonymous shape written in place, versus
+/// the same constraint in a NAMED shape the graph also declares at top level.
+fn filter_shape_ttl(inline: bool) -> String {
+    let constraint = format!(
+        r#"sh:sparql [ a sh:SPARQLConstraint ; sh:select """SELECT $this ?v WHERE {{ $this <{REL}> ?v }}""" ]"#
+    );
+    let (decl, arg) = if inline {
+        (String::new(), format!("[ {constraint} ]"))
+    } else {
+        (
+            format!("ex:Inner a sh:NodeShape ; {constraint} .\n"),
+            "ex:Inner".to_owned(),
+        )
+    };
+    format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+
+{decl}
+ex:OuterShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [ sh:filterShape {arg} ; sh:nodes sh:this ] .
+"#
+    )
+}
+
+/// An INLINE shape's SPARQL is in the report, exactly as a named one's is.
+///
+/// The named case is the control, and it passed before this: a named shape is in
+/// `Shapes::node_shapes`, so the shape walk reaches it on its own. An anonymous shape
+/// is in no such list — `node_shapes` collects top-level ids — so nothing reached it,
+/// and `extension_usage` reported `reaches = false` and `is_complete() = true` about
+/// a graph whose evaluation invokes the relation. A confident wrong answer from the
+/// instrument whose entire purpose is to replace a silent one.
+///
+/// The two fixtures differ in exactly one respect, which is what makes this an
+/// oracle rather than a pair of smoke tests.
+#[test]
+fn an_inline_filter_shape_s_sparql_is_reported_like_a_named_one_s() {
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("environment over the registry");
+
+    for inline in [false, true] {
+        let shapes = purrdf_shapes::engine::parse_shapes(&filter_shape_ttl(inline), None)
+            .unwrap_or_else(|error| panic!("inline={inline}: the fixture must load: {error}"));
+        let usage = shapes.extension_usage(&env);
+        assert!(
+            usage.reaches(REL),
+            "inline={inline}: the constraint inside the filter shape names the relation, \
+             so the report must say so: sites={:?} complete={}",
+            usage
+                .sites()
+                .map(|(s, _)| s.to_string())
+                .collect::<Vec<_>>(),
+            usage.is_complete(),
+        );
+    }
+}
+
+/// A `sh:select` inside a custom node-expression function's own body is reported.
+///
+/// The function is declared with `sh:bodyExpression` and invoked from a shape. Its
+/// body is SPARQL the shapes graph carries and the environment reads, but it hangs
+/// off the function declaration rather than off any shape, so walking shapes alone
+/// never reached it and the report said the graph reached nothing.
+#[test]
+fn a_select_inside_a_custom_function_body_is_reported() {
+    let turtle = format!(
+        r#"
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix ex:    <{EX}> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+
+ex:viaBody
+    a sh:ListParameterExpressionFunction ;
+    rdfs:subClassOf sh:ListParameterExpression ;
+    sh:bodyExpression [ sh:select """SELECT ?result WHERE {{ $this <{REL}> ?result }}""" ] ;
+    sh:parameter [ a sh:Parameter ; sh:path shnex:arg0 ; sh:nodeKind sh:IRI ] .
+
+ex:BodyShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [ ex:viaBody ( sh:this ) ] .
+"#
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&turtle, None)
+        .unwrap_or_else(|error| panic!("the fixture must load: {error}"));
+
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("environment over the registry");
+    let usage = shapes.extension_usage(&env);
+
+    assert!(
+        usage.reaches(REL),
+        "the function's own body names the relation: sites={:?}",
+        usage
+            .sites()
+            .map(|(s, _)| s.to_string())
+            .collect::<Vec<_>>()
+    );
+}

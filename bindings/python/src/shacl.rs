@@ -202,6 +202,76 @@ impl PyShapes {
         }
     }
 
+    /// `extension_usage(*, relation_iris=(), relation_namespaces=(), extension_namespaces=())`.
+    ///
+    /// What the environment those declarations describe would make of every SPARQL
+    /// text this shapes graph carries — asked and answered BEFORE any validation runs.
+    ///
+    /// # The question this answers
+    ///
+    /// A host wires a relation, writes a shapes graph that names it, validates, and
+    /// gets `conforms: True`. Did the relation run? Running the validation cannot say:
+    /// an IRI the environment does not recognize becomes an ordinary triple pattern,
+    /// matches whatever the data holds for that predicate — usually nothing — and
+    /// answers, which is also exactly what a correctly-resolved relation over no
+    /// matching rows returns. The two are indistinguishable from the report.
+    ///
+    /// # Why this takes declarations rather than a registry
+    ///
+    /// Whether a predicate is a call is decided at PARSE time, by the IRI set and the
+    /// declared namespaces alone — never by what a relation would return. So this
+    /// needs no implementations, no registry and no data graph, which is what lets it
+    /// be asked before anything is wired: pass the IRIs and namespaces you INTEND to
+    /// register and find out what the parse will make of them.
+    ///
+    /// Returns `{"sites": {site: {"calls": [iri], "data": [iri]}}, "unreadable":
+    /// {site: reason}, "complete": bool}`. An IRI you believe you registered appearing
+    /// under `"data"` is the answer to "why did my relation never run?". A non-empty
+    /// `"unreadable"` means the graph and these declarations genuinely disagree and
+    /// validating under them will fail at those sites.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the declarations cannot form an environment.
+    #[pyo3(signature = (*, relation_iris=None, relation_namespaces=None, extension_namespaces=None))]
+    fn extension_usage<'py>(
+        &self,
+        py: Python<'py>,
+        relation_iris: Option<Vec<String>>,
+        relation_namespaces: Option<Vec<String>>,
+        extension_namespaces: Option<Vec<String>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let env =
+            purrdf_sparql_eval::ExtensionEnv::over_options(purrdf_sparql_eval::ParserOptions {
+                extension_fn_namespaces: extension_namespaces.unwrap_or_default(),
+                property_fn_namespaces: relation_namespaces.unwrap_or_default(),
+                property_fn_iris: relation_iris.unwrap_or_default(),
+            })
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("extension usage: {e}"))
+            })?;
+
+        let usage = py.detach(|| self.inner.extension_usage(&env));
+
+        let sites = PyDict::new(py);
+        for (site, used) in usage.sites() {
+            let entry = PyDict::new(py);
+            entry.set_item("calls", used.calls.iter().cloned().collect::<Vec<_>>())?;
+            entry.set_item("data", used.data.iter().cloned().collect::<Vec<_>>())?;
+            sites.set_item(site.as_str(), entry)?;
+        }
+        let unreadable = PyDict::new(py);
+        for (site, why) in usage.unreadable() {
+            unreadable.set_item(site.as_str(), why)?;
+        }
+
+        let out = PyDict::new(py);
+        out.set_item("sites", sites)?;
+        out.set_item("unreadable", unreadable)?;
+        out.set_item("complete", usage.is_complete())?;
+        Ok(out)
+    }
+
     /// Validate a borrowed native dataset against these parsed shapes.
     ///
     /// `data` is any object exposing the internal snapshot protocol — a

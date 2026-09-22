@@ -59,7 +59,7 @@
 //! | 8 | the custom-aggregate registry, + the implementation identity | `aggregate-registry` | [`AggregateRegistry`] |
 //! | 9 | the property-function registry, + the implementation identity | `property-function-registry` | [`PropertyFunctionRegistry`] |
 //! | 10 | the class catalog's digest | `class-catalog` | [`ClassCatalog`] |
-//! | 11 | the declared parser options, each list **sorted** | `parse-configuration` | [`ParseConfiguration`] |
+//! | 11 | the declared parser options: relation lists **sorted**, extension namespaces in **declaration order** | `parse-configuration` | [`ParseConfiguration`] |
 //!
 //! Row 11 is the OTHER half of the seam row 9 covers. A registry's keys decide
 //! which EXACT predicate IRIs are calls; a declared namespace decides it for a whole
@@ -69,9 +69,19 @@
 //! declares nothing would read every prefixed relation IRI in its shapes graph as
 //! ordinary data, match nothing, and report conformance. Row 9 alone does not catch
 //! that: both hosts can hold the identical registry and still disagree about which
-//! predicates are calls. Its three lists are sorted for the reason rows 2 and 5 are —
-//! a declaration is a SET, so two callers that declared the same namespaces in
-//! different order must not fail to open each other's products.
+//! predicates are calls.
+//!
+//! Its three lists are NOT folded alike, and that asymmetry is load-bearing. The two
+//! RELATION lists are sorted for the reason rows 2 and 5 are — recognition there is
+//! order-independent and nothing is stripped, so a declaration is a SET and two
+//! callers who declared the same namespaces in different order must not fail to open
+//! each other's products. `extension_fn_namespaces` is folded in DECLARATION ORDER,
+//! because its order is first-match-wins for prefix STRIPPING: with
+//! `["http://example.org/a/", "http://example.org/a/b/"]` the IRI
+//! `http://example.org/a/b/f` strips to `b/f`, and reversed it strips to `f` — two
+//! different function names for one IRI. Sorting it would encode both orders
+//! identically and admit a product into a host that resolves its extension-function
+//! calls differently, which is the very substitution this row exists to refuse.
 //!
 //! Rows 2 and 5 are sorted because both sources are maps whose *order* is not part
 //! of their meaning: `ParseProvenance::doc_prefixes` deliberately preserves the
@@ -457,7 +467,20 @@ fn encode_parser_options(options: &ParserOptions) -> Vec<u8> {
         property_fn_namespaces,
         property_fn_iris,
     } = options;
-    let mut out = Vec::new();
+    // Sized up front rather than grown. The three labels and three 8-byte counts are
+    // always written, even when every list is empty, so an empty configuration used to
+    // walk the doubling ladder from zero for a payload whose size is known before the
+    // loop starts -- allocations bought on the once-per-restore path for nothing. The
+    // reserve covers the fixed part; a host that actually declares namespaces grows
+    // past it, which is the case worth paying for.
+    const FIXED_PART: usize = 128;
+    let declared: usize = extension_fn_namespaces
+        .iter()
+        .chain(property_fn_namespaces)
+        .chain(property_fn_iris)
+        .map(|value| value.len() + 2)
+        .sum();
+    let mut out = Vec::with_capacity(FIXED_PART + declared);
     // `true` = this list's order is part of its meaning and is preserved.
     for (label, list, ordered) in [
         ("extension-fn-namespaces", extension_fn_namespaces, true),

@@ -268,6 +268,26 @@ fn walk_constraints(
 
 /// Record the SPARQL texts one node expression carries, at any depth.
 fn walk_node_expr(expr: &NodeExpr, owner: &str, usage: &mut ExtensionUsage, env: &ExtensionEnv) {
+    let mut seen = std::collections::BTreeSet::new();
+    walk_node_expr_guarded(expr, owner, usage, env, &mut seen);
+}
+
+/// [`walk_node_expr`], carrying the set of custom-function IRIs already being walked.
+///
+/// A custom function's `sh:bodyExpression` can call another custom function, and
+/// nothing stops it calling itself — directly or through a cycle. The shapes parser
+/// guards its own recursion the same way for the same reason: unbounded Rust
+/// recursion aborts the process, which is an uncatchable failure rather than an error
+/// a caller can handle. The set is a STACK (each entry removed on the way out), not a
+/// visited set, so one function called twice from disjoint branches is still walked
+/// both times.
+fn walk_node_expr_guarded(
+    expr: &NodeExpr,
+    owner: &str,
+    usage: &mut ExtensionUsage,
+    env: &ExtensionEnv,
+    seen: &mut std::collections::BTreeSet<String>,
+) {
     match expr {
         NodeExpr::Select { query, key, .. } => {
             usage.record(format!("{key} node expression on {owner}"), query, env);
@@ -282,7 +302,7 @@ fn walk_node_expr(expr: &NodeExpr, owner: &str, usage: &mut ExtensionUsage, env:
             | crate::expression::FnCall::Sparql { args, .. },
         ) => {
             for arg in args {
-                walk_node_expr(arg, owner, usage, env);
+                walk_node_expr_guarded(arg, owner, usage, env, seen);
             }
         }
         // Every remaining OPERAND-bearing variant, because a `sh:select` can sit
@@ -292,13 +312,13 @@ fn walk_node_expr(expr: &NodeExpr, owner: &str, usage: &mut ExtensionUsage, env:
         // had not finished reading.
         NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
             for item in items {
-                walk_node_expr(item, owner, usage, env);
+                walk_node_expr_guarded(item, owner, usage, env, seen);
             }
         }
         NodeExpr::If { cond, then, els } => {
-            walk_node_expr(cond, owner, usage, env);
-            walk_node_expr(then, owner, usage, env);
-            walk_node_expr(els, owner, usage, env);
+            walk_node_expr_guarded(cond, owner, usage, env, seen);
+            walk_node_expr_guarded(then, owner, usage, env, seen);
+            walk_node_expr_guarded(els, owner, usage, env, seen);
         }
         NodeExpr::Count { of, .. }
         | NodeExpr::Distinct(of)
@@ -307,39 +327,73 @@ fn walk_node_expr(expr: &NodeExpr, owner: &str, usage: &mut ExtensionUsage, env:
         | NodeExpr::Sum(of)
         | NodeExpr::Limit { of, .. }
         | NodeExpr::Offset { of, .. }
-        | NodeExpr::Exists(of) => walk_node_expr(of, owner, usage, env),
+        | NodeExpr::Exists(of) => walk_node_expr_guarded(of, owner, usage, env, seen),
         NodeExpr::OrderBy { of, key, .. } => {
-            walk_node_expr(of, owner, usage, env);
-            walk_node_expr(key, owner, usage, env);
+            walk_node_expr_guarded(of, owner, usage, env, seen);
+            walk_node_expr_guarded(key, owner, usage, env, seen);
         }
-        NodeExpr::Filter { nodes, .. }
-        | NodeExpr::FindFirst { nodes, .. }
-        | NodeExpr::MatchAll { nodes, .. } => walk_node_expr(nodes, owner, usage, env),
+        NodeExpr::Filter { nodes, shape }
+        | NodeExpr::FindFirst { nodes, shape }
+        | NodeExpr::MatchAll { nodes, shape } => {
+            walk_node_expr_guarded(nodes, owner, usage, env, seen);
+            walk_shape(shape, usage, env);
+        }
         NodeExpr::Remove { nodes, remove } => {
-            walk_node_expr(nodes, owner, usage, env);
-            walk_node_expr(remove, owner, usage, env);
+            walk_node_expr_guarded(nodes, owner, usage, env, seen);
+            walk_node_expr_guarded(remove, owner, usage, env, seen);
         }
         NodeExpr::FlatMap { nodes, map } => {
-            walk_node_expr(nodes, owner, usage, env);
-            walk_node_expr(map, owner, usage, env);
+            walk_node_expr_guarded(nodes, owner, usage, env, seen);
+            walk_node_expr_guarded(map, owner, usage, env, seen);
         }
-        NodeExpr::PathValues { focus, .. } => walk_node_expr(focus, owner, usage, env),
-        NodeExpr::ConformsToShape { node, .. } => walk_node_expr(node, owner, usage, env),
-        NodeExpr::CustomCall { args, .. } => {
+        NodeExpr::PathValues { focus, .. } => {
+            walk_node_expr_guarded(focus, owner, usage, env, seen)
+        }
+        NodeExpr::ConformsToShape { node, shape } => {
+            walk_node_expr_guarded(node, owner, usage, env, seen);
+            match shape {
+                crate::expression::ShapeArg::Named(shape) => walk_shape(shape, usage, env),
+                // The shape IRI is COMPUTED per evaluation, so which shape this
+                // reaches is not a fact about the graph; the expression that
+                // computes it is, and it is walked.
+                crate::expression::ShapeArg::Computed { expr, .. } => {
+                    walk_node_expr_guarded(expr, owner, usage, env, seen);
+                }
+            }
+        }
+        NodeExpr::CustomCall { func, args } => {
             for (_, arg) in args {
-                walk_node_expr(arg, owner, usage, env);
+                walk_node_expr_guarded(arg, owner, usage, env, seen);
+            }
+            // The function's own `sh:bodyExpression`. A `sh:select` inside it is
+            // SPARQL this shapes graph carries and this environment will read, so
+            // leaving it out made the report answer "reaches nothing" about a graph
+            // whose evaluation invokes the relation. The body is interned once the
+            // whole graph has parsed, so an unfilled cell means the declaration never
+            // linked and there is nothing to read.
+            let iri = func.iri.as_str().to_owned();
+            if seen.insert(iri.clone())
+                && let Some(body) = func.body.get()
+            {
+                walk_node_expr_guarded(body, &format!("{owner} via <{iri}>"), usage, env, seen);
+                seen.remove(&iri);
             }
         }
         // Leaves: no nested node expression, so nothing to walk. Spelled out rather
         // than wildcarded so a variant added later lands here as a compile error --
         // which is the property the `_ => {}` this replaced had thrown away.
         //
-        // The SHAPE-valued fields of `Filter`, `FindFirst`, `MatchAll`,
-        // `ConformsToShape` and `NodesMatching` are deliberately NOT followed. A
-        // shape is reached by the shape walk, which records its own constraints
-        // under its own site label; following it from here would report one
-        // constraint twice, under two owners, and inflate the report rather than
-        // complete it.
+        // The SHAPE-valued fields above ARE followed. The earlier reasoning -- that a
+        // shape is reached by the shape walk anyway, so following it here would
+        // double-report -- is false for the case that matters: an INLINE shape
+        // (`sh:filterShape [ ... ]`) is anonymous and never appears in
+        // `Shapes::node_shapes`, which collects top-level shape ids only, so nothing
+        // else reaches it and its `sh:sparql` vanished from the report entirely while
+        // the evaluator went on invoking the relation inside it.
+        //
+        // Following a NAMED shape twice is harmless rather than inflationary: a site
+        // is keyed by the shape's own id, so both visits land on one entry and merge
+        // set-wise. Recording the same predicate twice is the same report.
         NodeExpr::Constant(_)
         | NodeExpr::This
         | NodeExpr::Path(_)
@@ -347,7 +401,7 @@ fn walk_node_expr(expr: &NodeExpr, owner: &str, usage: &mut ExtensionUsage, env:
         | NodeExpr::Var(_)
         | NodeExpr::Arg(_)
         | NodeExpr::List(_)
-        | NodeExpr::InstancesOf(_)
-        | NodeExpr::NodesMatching(_) => {}
+        | NodeExpr::InstancesOf(_) => {}
+        NodeExpr::NodesMatching(shape) => walk_shape(shape, usage, env),
     }
 }

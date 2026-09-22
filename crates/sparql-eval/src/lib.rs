@@ -192,9 +192,10 @@ pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGov
 // [`PropertyFunction`]'s own signature (`modes`, `rows_per_invocation`, `admits`), so a
 // host implementing the trait cannot write the impl without naming it.
 pub use purrdf_core::binding_pattern::BindingPattern;
-// Re-exported so engine hosts can configure the extension-function namespace set
-// (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
-// front-end crate directly.
+// Re-exported so engine hosts can declare the extension-function namespace set
+// (see `ExtensionEnv::over_options` / `ExtensionEnv::new`, which is where parse
+// configuration lives -- the engine holds none) without depending on the front-end
+// crate directly.
 pub use purrdf_sparql_algebra::ParserOptions;
 // The property-function seam: the relation trait a host implements, the argument /
 // row / arity types its calls speak in, the registry evaluation resolves a predicate

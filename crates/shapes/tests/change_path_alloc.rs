@@ -362,7 +362,7 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// How many allocations one prepared-product `admit` costs.
 ///
 /// The same kind of pin as [`BIND_ALLOC_CONST`], over the other once-per-snapshot
-/// seam, and here the figure really is constant: admission makes 299 allocations
+/// seam, and here the figure really is constant: admission makes 296 allocations
 /// with either seam dataset bound.
 ///
 /// # Why it moved from 284
@@ -381,9 +381,22 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// prefixed relation IRI in its shapes graph as ordinary data, match nothing, and
 /// report conformance.
 ///
-/// The component encodes three labelled, length-framed lists (one per parser-options
-/// axis), so it costs the buffer it is built in plus the framing of six parts even
-/// when every list is empty. Fifteen allocations is that.
+/// The twelve are ATTRIBUTED rather than assumed, because a pin whose stated cause is
+/// wrong enshrines whatever waste is actually there. Emptying `encode_parser_options`
+/// so the component is present but carries no bytes measures 294, and the unmodified
+/// encoder measures 296. So:
+///
+/// * **10** are the row's EXISTENCE — one more component in the fixed-order table,
+///   its label, and its framing in the identity preimage. They are owed whether or
+///   not the writing host declared anything, because the row has to be there for the
+///   restore check to have a position to compare.
+/// * **2** are encoding the options themselves.
+///
+/// It was 15 before the encoder was sized. `encode_parser_options` always writes
+/// three labels and three 8-byte counts, even for a host that declared nothing, so
+/// building that known-size payload in a `Vec::new()` walked the doubling ladder from
+/// zero and bought three allocations on a once-per-restore path for nothing. The
+/// buffer is now reserved up front.
 ///
 /// The property this test is about is untouched: the figure is still identical for
 /// both seam datasets, which is the assertion above this one.
@@ -409,7 +422,7 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// The property this test is actually about is untouched: the figure is still
 /// the same for both seam datasets, which is the assertion above this one, and
 /// which is what says admission does not read the data.
-const ADMIT_ALLOC_CONST: u64 = 299;
+const ADMIT_ALLOC_CONST: u64 = 296;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;
