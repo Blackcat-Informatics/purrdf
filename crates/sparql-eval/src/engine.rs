@@ -4173,7 +4173,7 @@ mod tests {
                 .clone();
             assert_ne!(
                 &rewritten,
-                by_id.plan().query(),
+                by_id.prepared.query(),
                 "a {kind} pre-binding must actually rewrite the admitted plan"
             );
         }

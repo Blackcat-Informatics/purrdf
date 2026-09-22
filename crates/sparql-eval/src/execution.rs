@@ -356,10 +356,13 @@ impl PreparedExecution {
     /// capacity they keep between runs, not the values of any one run.
     ///
     /// The same figure charged to
-    /// [`PlanMemoryObserver`](crate::PlanMemoryObserver), readable per handle. A
-    /// host that pools executions is the caller this is for: the pool's footprint
-    /// is the sum of these, and it is a number that grew because the handle stopped
-    /// giving its tables back.
+    /// [`PlanMemoryObserver`](crate::PlanMemoryObserver), but not readable back out
+    /// of one: an observer's own [`stats`](crate::PlanMemoryObserver::stats) is an
+    /// engine- or thread-wide AGGREGATE across every execution charging into it, with
+    /// no way to isolate one handle's share. This accessor is what makes the figure
+    /// readable per handle instead. A host that pools executions is the caller this
+    /// is for: the pool's footprint is the sum of these, and it is a number that grew
+    /// because the handle stopped giving its tables back.
     ///
     /// It is also the one place the retention invariant is OBSERVABLE. Keeping the
     /// tables while failing to empty them would still answer correctly — the
@@ -380,13 +383,39 @@ impl PreparedExecution {
         &self.parameters
     }
 
-    /// The plan this execution runs.
-    #[must_use]
-    pub fn plan(&self) -> &PreparedQuery {
-        &self.prepared
-    }
-
     /// The slot of the parameter named `name`, if it was declared.
+    ///
+    /// # Resolve once, bind many: the point of taking a slot at all
+    ///
+    /// [`Self::bind`] and [`Self::bind_id`] take a `usize` rather than a name so
+    /// that a caller running the same execution once per row can pay the cost of
+    /// finding a parameter's position ONCE, outside the row loop, instead of on
+    /// every row — [`Self::bind_named`] exists for the caller who does not loop,
+    /// and internally does exactly the linear scan this method does, once per
+    /// call. `slot` is the other half of that trade: resolve a name to its slot
+    /// before the loop starts, then bind by slot inside it.
+    ///
+    /// ```
+    /// # use purrdf_core::TermValue;
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let mut execution = engine.prepare_execution(
+    ///     "SELECT ?o WHERE { ?this <http://example.org/p> ?o }",
+    ///     None,
+    ///     &["this"],
+    ///     QueryOptions::EMPTY,
+    /// )?;
+    ///
+    /// // Resolved once, before the loop.
+    /// let this_slot = execution.slot("this").expect("declared above");
+    ///
+    /// for subject in ["http://example.org/a", "http://example.org/b"] {
+    ///     // Bound by index inside the loop: no per-row name lookup.
+    ///     execution.bind(this_slot, TermValue::Iri(subject.to_owned()))?;
+    ///     // ... run `execution` here ...
+    /// }
+    /// # Ok::<(), purrdf_core::RdfDiagnostic>(())
+    /// ```
     #[must_use]
     pub fn slot(&self, name: &str) -> Option<usize> {
         self.parameters
@@ -483,28 +512,6 @@ impl PreparedExecution {
     pub fn bind_named(&mut self, name: &str, value: TermValue) -> Result<(), RdfDiagnostic> {
         let slot = self.declared_slot(name)?;
         self.write(slot, ParameterValue::Value(value))
-    }
-
-    /// Bind the parameter called `name` to the term `dataset` interns at `id`.
-    ///
-    /// [`Self::bind_id`] by name, standing in the same relation to it that
-    /// [`Self::bind_named`] stands in to [`Self::bind`] — including the refusal: an
-    /// undeclared name is refused here with the identical diagnostic the value door
-    /// gives, and for the identical reason.
-    ///
-    /// # Errors
-    ///
-    /// [`RdfDiagnostic`] if no parameter of that name was declared, or if the term
-    /// `dataset` holds at `id` cannot become an algebra term. See [`Self::bind_id`].
-    pub fn bind_named_id<D: DatasetView>(
-        &mut self,
-        name: &str,
-        dataset: &D,
-        id: D::Id,
-    ) -> Result<(), RdfDiagnostic> {
-        let slot = self.declared_slot(name)?;
-        let ground = crate::substitute::ground_term_from_id(dataset, id)?;
-        self.write(slot, ParameterValue::Ground(ground))
     }
 
     /// Write `value` into `slot`, or refuse the slot.

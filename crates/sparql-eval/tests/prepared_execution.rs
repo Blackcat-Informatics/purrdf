@@ -611,19 +611,24 @@ fn declaring_one_parameter_twice_is_refused() {
 // ---------------------------------------------------------------------------
 // The ID DOOR's refusal parity.
 //
-// `PreparedExecution::bind_id` / `bind_named_id` bind a parameter to the dataset's
-// own term id instead of to an owned value, to skip the round trip in which an id
-// becomes a term, the term becomes algebra, and the algebra is hashed back to the
-// id. It is an ADDITIONAL door, not a replacement, and the thing an additional door
-// most easily gets wrong is not its answers but its REFUSALS: a second entry that
+// `PreparedExecution::bind_id` binds a parameter to the dataset's own term id
+// instead of to an owned value, to skip the round trip in which an id becomes a
+// term, the term becomes algebra, and the algebra is hashed back to the id. It is
+// an ADDITIONAL door, not a replacement, and the thing an additional door most
+// easily gets wrong is not its answers but its REFUSALS: a second entry that
 // accepts what the first one refuses is a silent widening, and every refusal below
 // exists because accepting it would answer a question nobody asked.
 //
-// So each of the four refusals the value door has is executed through BOTH doors
-// and the two diagnostics compared, and each is paired with its neighbouring
-// accepted case — which must not merely succeed but ANSWER, over a fixture whose
-// subjects carry distinct objects, so "accepted" and "accepted and then silently
-// answered for the wrong subject" cannot be confused.
+// `bind_id` is slot-based only — there is no name-and-id door (a `bind_named_id`
+// was tried and removed: nothing in the workspace ever held a parameter name and
+// a dataset id without a slot already in hand — see `src/execution.rs`'s history
+// for `bind_id`). So the refusal an undeclared parameter NAME produces does not
+// apply to this door at all; what remains are the three refusals `bind_id` shares
+// with `bind` by taking the same kind of argument: unbound, out-of-range slot, and
+// repeated declaration. Each is executed through both `bind_id` and `bind` here,
+// paired with its neighbouring accepted case, which must not merely succeed but
+// ANSWER, over a fixture whose subjects carry distinct objects, so "accepted" and
+// "accepted and then silently answered for the wrong subject" cannot be confused.
 // ---------------------------------------------------------------------------
 
 /// This fixture's id for `:s{i}`.
@@ -702,43 +707,6 @@ fn the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does() {
     assert!(
         answers[0].contains("http://example.org/o1"),
         "the id door must answer for the subject it bound, not a neighbour: {answers:?}"
-    );
-}
-
-#[test]
-fn the_id_door_refuses_an_undeclared_name_exactly_as_the_value_door_does() {
-    let _guard = measure_lock();
-    let ds = dataset(4);
-    let engine = NativeSparqlEngine::new();
-    let mut execution = engine
-        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
-        .expect("prepare");
-
-    let through_id = execution
-        .bind_named_id("absent", &*ds, subject_id(&ds, 0))
-        .expect_err("an undeclared parameter name must be refused by the id door");
-    let through_value = execution
-        .bind_named("absent", iri(0))
-        .expect_err("an undeclared parameter name must be refused by the value door");
-    assert_eq!(
-        through_id.to_string(),
-        through_value.to_string(),
-        "the two doors must refuse an undeclared name identically"
-    );
-    assert!(
-        through_id.to_string().contains("absent"),
-        "the diagnostic must name the parameter: {through_id}"
-    );
-
-    // THE NEIGHBOUR: the declared name binds through the id door and answers.
-    execution
-        .bind_named_id("this", &*ds, subject_id(&ds, 3))
-        .expect("a declared parameter must bind by name through the id door");
-    let answers = run_answers(&engine, &mut execution, &ds);
-    assert_eq!(answers.len(), 1, "one subject, one object: {answers:?}");
-    assert!(
-        answers[0].contains("http://example.org/o3"),
-        "the named id door must answer for s3: {answers:?}"
     );
 }
 
