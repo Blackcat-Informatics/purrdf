@@ -322,7 +322,8 @@ fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
         },
         QueryEntailment::Rdfs,
         QueryOptions {
-            aggregates: &registry,
+            env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
+                .expect("the fixture declarations read cleanly"),
             ..QueryOptions::EMPTY
         },
         &ClosureRelations::NONE,

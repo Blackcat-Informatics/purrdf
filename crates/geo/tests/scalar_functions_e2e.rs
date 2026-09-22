@@ -9,8 +9,8 @@
 //! Two claims, and both are about the *seam* rather than about the geometry.
 //!
 //! **The scalar seam needs no parser configuration.** Every query below is
-//! evaluated by an engine holding [`ParserOptions::default()`] — no extension
-//! function namespace, no property function namespace, no IRI list — with
+//! evaluated under the default [`ExtensionEnv`](purrdf_sparql_eval::ExtensionEnv)
+//! — no extension function namespace, no property function namespace, no IRI list — with
 //! `QueryOptions::functions` as the single piece of wiring. A call-position IRI
 //! under no configured namespace lowers to `Function::Custom` and is resolved at
 //! *evaluation* time, so `geof:sfWithin(?a, ?b)` parses before anything has been
@@ -51,8 +51,7 @@ use purrdf_core::{
 use purrdf_geo::geom::Crs;
 use purrdf_geo::vocab::{GeoVocab, GeoVocabBuilder};
 use purrdf_geo::{GeoTerm, functions};
-use purrdf_sparql_algebra::ParserOptions;
-use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
+use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
 
 // ---------------------------------------------------------------------------
 // The caller's vocabulary — a fixture, never a default
@@ -207,14 +206,17 @@ fn geojson(lexical: &str) -> String {
 
 /// Evaluate `query` with the `geof:` registry as the ONLY configuration.
 ///
-/// The engine is handed [`ParserOptions::default()`] explicitly rather than
-/// implicitly: the whole claim of this file is that the scalar seam needs no
-/// parse-time declaration, and a default that silently changed would otherwise
-/// go unnoticed.
+/// The engine runs under [`QueryOptions::EMPTY`]'s default environment rather
+/// than a declared one: the whole claim of this file is that the scalar seam
+/// needs no parse-time declaration, and a default that silently changed would
+/// otherwise go unnoticed.
 fn run(query: &str) -> Result<Vec<Vec<Option<TermValue>>>, String> {
-    let registry = registry();
-    let result = NativeSparqlEngine::new()
-        .with_parser_options(ParserOptions::default())
+    let engine = NativeSparqlEngine::new();
+    // Native closures: binding reads nothing, and the evaluator takes only the bound form.
+    let registry = engine
+        .bind_functions(registry(), ExtensionEnv::empty())
+        .expect("a native-only registry has no body to bind");
+    let result = engine
         .query_with_options_view(
             &*dataset(),
             SparqlRequest {

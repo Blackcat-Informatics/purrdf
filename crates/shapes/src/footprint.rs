@@ -589,8 +589,31 @@ impl FootprintWalk {
             NodeExpr::Select { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),
             // A builtin and a `sparql:` operator are rendered as SPARQL
             // EXPRESSIONS over their already-evaluated operands — no graph pattern,
-            // so no read. A `sh:SPARQLFunction` body is a SELECT that may carry
-            // one, and this walk does not read it.
+            // so no read. A `sh:SPARQLFunction` body is a SELECT that may carry one.
+            //
+            // # Why the body stays opaque, and must
+            //
+            // Reading it would be more precise, and would be WRONG here. Whether a
+            // predicate IRI in that body is a data edge or a call to a registered
+            // relation is decided by the extension environment the body is bound
+            // against — and a relation's reads are not describable as graph paths
+            // from a focus node at all, so a body that reaches one is opaque no
+            // matter how carefully the rest of it is walked.
+            //
+            // That makes a precise footprint ENVIRONMENT-DEPENDENT. This walk runs
+            // at plan time, from a `Shapes` value alone, with no environment in
+            // scope; its result is cached on a `PreparedShapes` and reused across
+            // validations that may each install a different relation registry. A
+            // footprint derived under one environment and consumed under another
+            // would be a change-path analysis that is silently wrong for the
+            // validation using it — the same load-time-versus-validation-time split
+            // that made a load-parsed function body unable to reach a relation in
+            // the first place.
+            //
+            // So `OPAQUE_QUERY_TEXT` is not merely the conservative answer, it is
+            // the only sound one available at this seam: opaque is TOP, and TOP is
+            // correct under every environment simultaneously. The invariant is
+            // pinned by `plan::tests::a_function_body_s_footprint_does_not_depend_on_the_environment`.
             NodeExpr::Call(call) => match call {
                 FnCall::Builtin { .. } | FnCall::Sparql { .. } => {}
                 FnCall::UserDefined { .. } => self.mark_opaque(OPAQUE_QUERY_TEXT),

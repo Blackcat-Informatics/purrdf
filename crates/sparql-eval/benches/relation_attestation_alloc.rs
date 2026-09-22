@@ -62,7 +62,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, TermValue};
 use purrdf_sparql_eval::{
-    EvalError, IndexGeneration, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
+    EvalError, ExtensionEnv, IndexGeneration, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
     PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions, Volatility,
 };
 
@@ -274,7 +274,7 @@ const PER_ROW_CALL: &str = "PREFIX ex: <https://example.org/d/>\n\
                               ?s <https://example.org/rel/indexed> ?t\n\
                             }";
 
-fn registry(attests: Attests) -> PropertyFunctionRegistry {
+fn registry(attests: Attests) -> ExtensionEnv {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL_IRI.to_owned(),
@@ -284,12 +284,12 @@ fn registry(attests: Attests) -> PropertyFunctionRegistry {
             attests,
         }),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
-fn options(relations: &PropertyFunctionRegistry) -> QueryOptions<'_> {
+fn options(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        property_functions: relations,
+        env,
         ..QueryOptions::EMPTY
     }
 }

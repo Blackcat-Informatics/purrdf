@@ -427,7 +427,7 @@ fn admit_installs_host_aggregates() {
 
     let functions = UserFunctionRegistry::new();
     let property_functions = PropertyFunctionRegistry::new();
-    let host = HostBindings::new(
+    let host = HostBindings::without_declarations(
         &functions,
         &aggregates,
         &property_functions,
@@ -500,6 +500,96 @@ impl PropertyFunction for EmptyRelation {
 /// freshly constructed one whose instance id differs from the writer's. The binding
 /// is over the registry's CONTENT, so an over-strict check that compared instances
 /// would refuse every restore in a different process.
+/// A product WRITTEN against a relation registry restores under that registry, and
+/// only under it.
+///
+/// The companion to `core_profile_binds_the_empty_property_function_registry` below,
+/// and the two together say what the rule actually is. It is not "a product may never
+/// carry relations" — it is "a product binds the environment it was PREPARED against".
+/// A product written with `to_product` was prepared against nothing, so wiring a
+/// relation into its restore is a genuine disagreement. A product written with
+/// `to_product_for_host` was prepared against something, and says so.
+#[test]
+fn a_product_written_for_a_host_restores_under_that_host_s_relations() {
+    let functions = UserFunctionRegistry::new();
+    let aggregates = AggregateRegistry::new();
+    let mut wired = PropertyFunctionRegistry::new();
+    wired.register(
+        "http://example.org/ns#rel",
+        Arc::new(EmptyRelation {
+            modes: [BindingPattern::from_code("bf")],
+        }),
+    );
+    // A wired relation IS injected host implementation, so the host must also name
+    // the build behind it: without that, nothing at restore could tell this host from
+    // any other declaring the same IRI at the same arity. The writer refuses an empty
+    // identity here for exactly that reason.
+    let host =
+        HostBindings::without_declarations(&functions, &aggregates, &wired, IMPLEMENTATION_ID);
+
+    let bytes = PreparedShapes::new(Arc::new(shapes_of(PLAIN_SHAPES)))
+        .to_product_for_host(&ShapesProfile::CORE, &host)
+        .expect("a product bound to this host is representable");
+
+    // The same host restores it.
+    ShapesProduct::open(&bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &host)
+        .expect("the host the product was written for restores it");
+
+    // A host that names the SAME build but wires no relation does not. The
+    // implementation identity is held constant on purpose: it is folded into an
+    // EARLIER identity row than the relation registry, so varying both at once would
+    // report the earlier disagreement and say nothing about the relation.
+    let unwired = PropertyFunctionRegistry::new();
+    let error = ShapesProduct::open(&bytes)
+        .expect("opens")
+        .admit(
+            &ShapesProfile::CORE,
+            &HostBindings::without_declarations(
+                &functions,
+                &aggregates,
+                &unwired,
+                IMPLEMENTATION_ID,
+            ),
+        )
+        .expect_err("a product prepared against a relation is not restorable without it");
+    assert_eq!(
+        error.dimension(),
+        ProductDimension::PropertyFunctionRegistry
+    );
+}
+
+/// And the same for a DECLARED namespace, which is the other half of the parse seam:
+/// two hosts can hold the identical registry and still disagree about which
+/// predicates are calls.
+#[test]
+fn a_product_written_under_a_declared_namespace_restores_only_under_it() {
+    let functions = UserFunctionRegistry::new();
+    let aggregates = AggregateRegistry::new();
+    let relations = PropertyFunctionRegistry::new();
+    let declared = crate::product::ParserOptions {
+        property_fn_namespaces: vec!["http://example.org/rel/".to_owned()],
+        ..crate::product::ParserOptions::default()
+    };
+    let host = HostBindings::new(&functions, &aggregates, &relations, &[], &declared);
+
+    let bytes = PreparedShapes::new(Arc::new(shapes_of(PLAIN_SHAPES)))
+        .to_product_for_host(&ShapesProfile::CORE, &host)
+        .expect("a product bound to this host is representable");
+
+    ShapesProduct::open(&bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &host)
+        .expect("the host the product was written for restores it");
+
+    let error = ShapesProduct::open(&bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect_err("a host that declares nothing is a different parse configuration");
+    assert_eq!(error.dimension(), ProductDimension::ParseConfiguration);
+}
+
 #[test]
 fn core_profile_binds_the_empty_property_function_registry() {
     let bytes = product_of(PLAIN_SHAPES);
@@ -517,7 +607,7 @@ fn core_profile_binds_the_empty_property_function_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &aggregates, &wired, &[]),
+            &HostBindings::without_declarations(&functions, &aggregates, &wired, &[]),
         )
         .expect_err("a CORE product was not prepared against any host relation");
     assert_eq!(
@@ -530,7 +620,7 @@ fn core_profile_binds_the_empty_property_function_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &aggregates, &fresh, &[]),
+            &HostBindings::without_declarations(&functions, &aggregates, &fresh, &[]),
         )
         .expect("a DIFFERENT but equally empty registry must still admit");
 }
@@ -559,7 +649,12 @@ fn admit_refuses_a_different_aggregate_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &none, &property_functions, IMPLEMENTATION_ID),
+            &HostBindings::without_declarations(
+                &functions,
+                &none,
+                &property_functions,
+                IMPLEMENTATION_ID,
+            ),
         )
         .expect_err("an empty aggregate registry is not the one this product was prepared with");
     assert_eq!(error.dimension(), ProductDimension::AggregateRegistry);
@@ -571,7 +666,7 @@ fn admit_refuses_a_different_aggregate_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(
+            &HostBindings::without_declarations(
                 &functions,
                 &aggregates,
                 &property_functions,
@@ -767,6 +862,7 @@ fn declared_identity_readable_without_admission() {
             "aggregate-registry",
             "property-function-registry",
             "class-catalog",
+            "parse-configuration",
         ],
         "the binding is DECODABLE, which is what lets a caller see which input moved",
     );

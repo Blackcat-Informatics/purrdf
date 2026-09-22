@@ -18,9 +18,9 @@ use purrdf_sparql_algebra::{
     GraphPattern, Query, SparqlParser, TermPattern, Variable, pattern_to_select_query,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, ChargePoint, EvalError, GovernedOutcome, GovernedUpdateOutcome, GovernorState,
-    MemoryRelation, NativeSparqlEngine, NodeCharges, ParserOptions, PfArgs, PfArity, PfCursor,
-    PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
+    BindingPattern, ChargePoint, EvalError, ExtensionEnv, GovernedOutcome, GovernedUpdateOutcome,
+    GovernorState, MemoryRelation, NativeSparqlEngine, NodeCharges, ParserOptions, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
     ResourceDimension, TrippedGovernor, Volatility,
 };
 
@@ -46,7 +46,7 @@ fn options() -> ParserOptions {
 
 /// The host's relation: three (person, team) pairs, held in host memory and reachable
 /// from no graph.
-fn relations() -> PropertyFunctionRegistry {
+fn relations() -> ExtensionEnv {
     let iri = |local: &str| TermValue::iri(format!("{EX}{local}"));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -64,7 +64,7 @@ fn relations() -> PropertyFunctionRegistry {
             .expect("every row is two values wide"),
         ),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
 /// A dataset holding one unrelated triple: the answers below come from the relation,
@@ -132,7 +132,7 @@ fn a_configured_predicate_parses_to_a_call_and_answers_from_the_injected_relatio
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &relations(),
+                env: &relations(),
                 ..QueryOptions::EMPTY
             },
         )
@@ -314,7 +314,7 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &registry,
+                env: &env_of(registry),
                 ..QueryOptions::EMPTY
             },
         )
@@ -448,9 +448,14 @@ fn request(query: &str) -> SparqlRequest<'_> {
 }
 
 /// The options a host with relations in scope hands a governed entry.
-fn with_relations(registry: &PropertyFunctionRegistry) -> QueryOptions<'_> {
+/// The environment a fixture registry is interpreted in.
+fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
+    ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly")
+}
+
+fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        property_functions: registry,
+        env,
         ..QueryOptions::EMPTY
     }
 }
@@ -602,7 +607,7 @@ fn a_governed_entry_refuses_a_declared_huge_relation_on_a_small_cell_ceiling() {
         .query_governed(
             &dataset(),
             request(GOVERNED_QUERY),
-            with_relations(&registry),
+            with_relations(&env_of(registry)),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(8),
         )
         .expect("a refusal is an outcome, never an error");
@@ -885,7 +890,7 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
     // The reproduction only means what it claims if the two registries' DECLARED
     // metadata is byte-identical for this IRI — confirm that first.
     assert_eq!(
-        registry_a.describe().expect("no panic"),
+        registry_a.relations().describe().expect("no panic"),
         registry_b.describe().expect("no panic"),
         "the two registries must declare identically for this to be a meaningful \
          reproduction of the declaration-only fingerprint gap"
@@ -897,7 +902,12 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
         .expect("registry A admits and lowers the predicate to a call");
 
     let error = engine
-        .query_prepared(&dataset, &prepared, &[], with_relations(&registry_b))
+        .query_prepared(
+            &dataset,
+            &prepared,
+            &[],
+            with_relations(&env_of(registry_b)),
+        )
         .expect_err(
             "a plan prepared under registry A must be REFUSED under registry B, never silently \
              executed against B's different relation",
@@ -1032,12 +1042,21 @@ fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
 /// evaluation), and this run supplies none.
 #[test]
 fn an_update_where_call_with_no_registry_hard_errors_precisely() {
-    let engine = NativeSparqlEngine::new().with_parser_options(options());
+    let env =
+        ExtensionEnv::over_options(options()).expect("environment over declared parser options");
+    let engine = NativeSparqlEngine::new();
     let mut ds = dataset();
     let before = ds.quad_count();
 
     let error = engine
-        .update(&mut ds, request(UPDATE_TEXT))
+        .update_with_options(
+            &mut ds,
+            request(UPDATE_TEXT),
+            QueryOptions {
+                env: &env,
+                ..QueryOptions::EMPTY
+            },
+        )
         .expect_err("a call with nothing to resolve against must not read the graph instead");
     assert_eq!(error.code, "native-sparql-property-function");
     assert!(

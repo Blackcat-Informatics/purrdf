@@ -3476,8 +3476,14 @@ fn eval_function<D: DatasetView + Sync>(
             // free for the executor. Checked before the XSD-cast path so a function
             // IRI never collides with a datatype IRI. An EMPTY registry resolves
             // nothing, so this falls through exactly as an absent registry used to.
-            if let Some(func) = ctx.user_functions.resolve(iri.as_str()) {
-                let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
+            // The declaration and its bound body come back together: the
+            // declaration supplies the parameters the arguments bind to, the bound
+            // body is what the call evaluates. A registry that reaches here is
+            // bound by construction — `BoundFunctionRegistry` is the only type the
+            // evaluator accepts — so there is no unbound case to handle.
+            if let Some((func, body)) = ctx.user_functions.resolve(iri.as_str()) {
+                let result =
+                    crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
                 return Ok(result.and_then(|value| intern(ctx, value)));
             }
             // A caller-injected native (host-Rust closure) function, resolved from

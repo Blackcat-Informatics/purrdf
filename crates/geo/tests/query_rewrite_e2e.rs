@@ -52,7 +52,9 @@ use purrdf_geo::relation::{GeoIndex, GeoIndexConfig, GraphSelector, register};
 use purrdf_geo::vocab::{GeoVocab, GeoVocabBuilder};
 use purrdf_geo::{GeoTerm, RelationFamily};
 use purrdf_sparql_algebra::ParserOptions;
-use purrdf_sparql_eval::{NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
+use purrdf_sparql_eval::{
+    ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
 
 // ---------------------------------------------------------------------------
 // The caller's vocabulary — a fixture, never a default
@@ -311,7 +313,6 @@ fn run(
     query: &str,
 ) -> Result<Answer, String> {
     let result = NativeSparqlEngine::new()
-        .with_parser_options(options)
         .query_with_options_view(
             dataset,
             SparqlRequest {
@@ -320,7 +321,12 @@ fn run(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::new(
+                    options,
+                    registry.clone(),
+                    purrdf_sparql_eval::AggregateRegistry::EMPTY,
+                )
+                .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

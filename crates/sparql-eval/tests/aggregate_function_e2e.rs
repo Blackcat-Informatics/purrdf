@@ -13,7 +13,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
-    NativeSparqlEngine, QueryOptions, Volatility,
+    ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
 };
 
 const EX: &str = "http://example.org/d/";
@@ -157,7 +157,7 @@ impl CustomAggregate for WeightedSumAggregate {
     }
 }
 
-fn registry() -> AggregateRegistry {
+fn registry() -> ExtensionEnv {
     let mut registry = AggregateRegistry::new();
     registry.register(
         SUM_IRI,
@@ -172,12 +172,17 @@ fn registry() -> AggregateRegistry {
         }),
     );
     registry.register(WEIGHTED_SUM_IRI, Arc::new(WeightedSumAggregate));
-    registry
+    ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
 
-fn with_aggregates(registry: &AggregateRegistry) -> QueryOptions<'_> {
+/// The environment a fixture registry is interpreted in.
+fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv {
+    ExtensionEnv::over_aggregates(aggregates).expect("the fixture declarations read cleanly")
+}
+
+fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
-        aggregates: registry,
+        env,
         ..QueryOptions::EMPTY
     }
 }
@@ -424,17 +429,22 @@ fn custom_aggregate_arity_mismatch_is_refused_at_prepare_time_under_the_aggregat
 /// widened to swallow the property-function seam too.
 #[test]
 fn unregistered_property_function_still_reports_the_property_function_code() {
-    let engine = NativeSparqlEngine::new().with_parser_options(purrdf_sparql_eval::ParserOptions {
+    let env = ExtensionEnv::over_options(purrdf_sparql_eval::ParserOptions {
         extension_fn_namespaces: vec![],
         property_fn_namespaces: vec![format!("{EX}pf/")],
         property_fn_iris: Vec::new(),
-    });
+    })
+    .expect("environment over declared parser options");
+    let engine = NativeSparqlEngine::new();
     let ds = dataset();
     let error = engine
         .query_with_options_view(
             &*ds,
             request(&format!("SELECT ?s WHERE {{ ?s <{EX}pf/nope> ?v }}")),
-            QueryOptions::EMPTY,
+            QueryOptions {
+                env: &env,
+                ..QueryOptions::EMPTY
+            },
         )
         .expect_err("nothing is registered under the configured namespace");
     assert_eq!(
@@ -465,8 +475,8 @@ fn the_canonical_empty_registry_and_a_freshly_built_empty_registry_answer_identi
     let ds = dataset();
     let query = format!("SELECT ?s WHERE {{ ?s <{EX}val> ?v }} ORDER BY ?s");
     let canonical_empty_options = QueryOptions::EMPTY;
-    let fresh_empty_registry = AggregateRegistry::new();
-    let fresh_empty_options = with_aggregates(&fresh_empty_registry);
+    let fresh_empty_env = env_of(AggregateRegistry::new());
+    let fresh_empty_options = with_aggregates(&fresh_empty_env);
 
     let via_canonical = run(&ds, &query, canonical_empty_options);
     let via_fresh = run(&ds, &query, fresh_empty_options);
@@ -556,10 +566,10 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
 
 const STAT_NS: &str = "http://example.org/agg/";
 
-fn statistical_registry() -> AggregateRegistry {
+fn statistical_registry() -> ExtensionEnv {
     let mut registry = AggregateRegistry::new();
     registry.register_statistical_aggregates(STAT_NS);
-    registry
+    ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
 
 fn stat_lex(row: &[Option<TermValue>], index: usize) -> String {
@@ -951,10 +961,11 @@ impl CustomAggregate for ZeroArityAggregate {
 #[test]
 fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_counts() {
     const ZERO_ARITY_IRI: &str = "http://example.org/agg#zeroArity";
-    let mut reg = registry();
-    reg.register(ZERO_ARITY_IRI, Arc::new(ZeroArityAggregate));
+    let mut declarations = AggregateRegistry::new();
+    declarations.register(ZERO_ARITY_IRI, Arc::new(ZeroArityAggregate));
     // The registry itself is untroubled by the zero-arity declaration.
-    assert!(reg.resolve(ZERO_ARITY_IRI).is_some());
+    assert!(declarations.resolve(ZERO_ARITY_IRI).is_some());
+    let reg = env_of(declarations);
 
     // The SPARQL surface refuses `AGG(<iri>)` with no positional arguments —
     // this is `crates/sparql-algebra`'s own `agg_call_requires_at_least_one_argument`
@@ -1089,11 +1100,16 @@ fn a_plan_prepared_under_one_registry_refuses_to_execute_under_a_different_regis
     let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
 
     let prepared = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&registry_a))
+        .prepare_query_with_options(&query, None, with_aggregates(&env_of(registry_a.clone())))
         .expect("registry A admits and prepares the call");
 
     let error = engine
-        .query_prepared_view(&*ds, &prepared, &[], with_aggregates(&registry_b))
+        .query_prepared_view(
+            &*ds,
+            &prepared,
+            &[],
+            with_aggregates(&env_of(registry_b.clone())),
+        )
         .expect_err(
             "a plan prepared under registry A must be REFUSED under registry B, never silently \
              executed against B's different accumulator",

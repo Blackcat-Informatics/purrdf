@@ -616,7 +616,8 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
     // Declared SHACL-AF functions, and any caller-injected custom aggregates, are in
     // scope for node expressions and CONSTRUCT bodies for the whole run; the guards
     // restore the previous tables on drop.
-    let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
+    let _function_scope =
+        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
 
     let base = data.core_arc();

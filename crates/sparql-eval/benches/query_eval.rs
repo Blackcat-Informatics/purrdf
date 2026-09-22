@@ -101,7 +101,7 @@ use purrdf_core::{
     SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+    ExtensionEnv, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
 };
 
 /// Entity count. Each person contributes ~10 quads, so 30k people ≈ 303k quads
@@ -381,7 +381,7 @@ SELECT ?m WHERE { ex:person0 (^ex:reportsTo)* ?m }";
 const REL_NS: &str = "https://example.org/rel/";
 
 /// The relation case (k) calls: each of the 50 synthetic cities to one of 5 regions.
-fn city_regions() -> PropertyFunctionRegistry {
+fn city_regions() -> ExtensionEnv {
     let rows = (0..50)
         .map(|c| {
             vec![
@@ -395,7 +395,7 @@ fn city_regions() -> PropertyFunctionRegistry {
         format!("{REL_NS}cityRegion"),
         Arc::new(MemoryRelation::new(1, 1, rows).expect("every row is two values wide")),
     );
-    registry
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
 /// The full case list as `(criterion id, query text, minimum expected rows)`.
@@ -442,7 +442,7 @@ fn run_with_relations(
     engine: &NativeSparqlEngine,
     ds: &Arc<RdfDataset>,
     query: &str,
-    relations: &PropertyFunctionRegistry,
+    env: &ExtensionEnv,
 ) -> usize {
     let result = engine
         .query_with_options_view(
@@ -453,7 +453,7 @@ fn run_with_relations(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: relations,
+                env,
                 ..QueryOptions::EMPTY
             },
         )

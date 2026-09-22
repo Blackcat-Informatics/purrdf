@@ -2838,7 +2838,15 @@ mod tests {
             rendered.join(", ")
         );
         let dataset = empty_dataset();
-        let result = NativeSparqlEngine::new()
+        let engine = NativeSparqlEngine::new();
+        // A `geof:` function is a native Rust closure with no SPARQL body, so binding
+        // reads no declaration and cannot fail — but the evaluator accepts only a
+        // bound registry, which is what keeps "which environment was this interpreted
+        // against?" from having a second, unanswerable spelling.
+        let bound = engine
+            .bind_functions(registry.clone(), purrdf_sparql_eval::ExtensionEnv::empty())
+            .expect("a native-only registry has no body to bind");
+        let result = engine
             .query_with_options_view(
                 &dataset,
                 SparqlRequest {
@@ -2847,7 +2855,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    functions: registry,
+                    functions: &bound,
                     ..QueryOptions::EMPTY
                 },
             )

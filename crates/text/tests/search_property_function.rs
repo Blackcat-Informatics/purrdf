@@ -29,8 +29,8 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    IndexGeneration, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions,
+    ExtensionEnv, IndexGeneration, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
+    QueryGovernors, QueryOptions,
 };
 use purrdf_text::{
     Fixed, GraphSelector, RankingField, RankingProfile, TextIndex, TextIndexConfig,
@@ -218,7 +218,8 @@ fn answer(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -242,7 +243,6 @@ fn answer_with_options(
     query: &str,
 ) -> Vec<Vec<String>> {
     let result = NativeSparqlEngine::new()
-        .with_parser_options(options)
         .query_with_options_view(
             dataset,
             SparqlRequest {
@@ -251,7 +251,12 @@ fn answer_with_options(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::new(
+                    options,
+                    registry.clone(),
+                    purrdf_sparql_eval::AggregateRegistry::EMPTY,
+                )
+                .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -267,20 +272,23 @@ fn refusal(
     options: ParserOptions,
     query: &str,
 ) -> String {
-    let outcome = NativeSparqlEngine::new()
-        .with_parser_options(options)
-        .query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri: None,
-                substitutions: &[],
-            },
-            QueryOptions {
-                property_functions: registry,
-                ..QueryOptions::EMPTY
-            },
-        );
+    let outcome = NativeSparqlEngine::new().query_with_options_view(
+        dataset,
+        SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        },
+        QueryOptions {
+            env: &ExtensionEnv::new(
+                options,
+                registry.clone(),
+                purrdf_sparql_eval::AggregateRegistry::EMPTY,
+            )
+            .expect("the fixture declarations read cleanly"),
+            ..QueryOptions::EMPTY
+        },
+    );
     match outcome {
         Err(diagnostic) => diagnostic.message,
         Ok(result) => panic!(
@@ -857,7 +865,8 @@ fn attested_generations(
             query,
             None,
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -868,7 +877,8 @@ fn attested_generations(
             &prepared,
             &[],
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
             &QueryGovernors::UNBOUNDED,

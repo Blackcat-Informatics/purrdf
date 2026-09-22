@@ -26,7 +26,8 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    Arity, NativeSparqlEngine, QueryOptions, ShaclPrebinding, UserFunctionRegistry, Volatility,
+    Arity, ExtensionEnv, NativeSparqlEngine, QueryOptions, ShaclPrebinding, UserFunctionRegistry,
+    Volatility,
 };
 
 /// The fixture namespace (AGENTS.md: fixtures live under `example.org`).
@@ -88,6 +89,13 @@ fn tagged_by_a_native_function(tag: &str) -> Option<TermValue> {
         Volatility::Stable,
         Arc::new(move |_args: &[&TermValue]| Ok(Some(value.clone()))),
     );
+    // A native function is a Rust closure with no SPARQL body, so binding reads
+    // nothing and cannot fail — but the evaluator still accepts only a bound
+    // registry, which is what keeps "which environment was this interpreted
+    // against?" from having a second, unanswerable spelling.
+    let functions = NativeSparqlEngine::new()
+        .bind_functions(functions, ExtensionEnv::empty())
+        .expect("a native-only registry has no body to bind");
 
     let dataset = dataset();
     let query = format!("SELECT (<{EX}tagged>() AS ?v) WHERE {{ ?s ?p ?o }}");
@@ -159,6 +167,13 @@ fn a_refused_tag_costs_the_binding_and_nothing_else() {
         Volatility::Stable,
         Arc::new(move |_args: &[&TermValue]| Ok(Some(value.clone()))),
     );
+    // A native function is a Rust closure with no SPARQL body, so binding reads
+    // nothing and cannot fail — but the evaluator still accepts only a bound
+    // registry, which is what keeps "which environment was this interpreted
+    // against?" from having a second, unanswerable spelling.
+    let functions = NativeSparqlEngine::new()
+        .bind_functions(functions, ExtensionEnv::empty())
+        .expect("a native-only registry has no body to bind");
 
     let dataset = dataset();
     let query = format!("SELECT ?s (<{EX}tagged>() AS ?v) WHERE {{ ?s ?p ?o }}");

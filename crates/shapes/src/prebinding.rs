@@ -337,6 +337,107 @@ mod tests {
         check_select(&parse(q), &["this"])
     }
 
+    /// The pre-binding audit reaches the SAME verdict whether a relation IRI was
+    /// recognized as a call or left as an ordinary triple pattern.
+    ///
+    /// # Why this has to be pinned rather than assumed
+    ///
+    /// Every SHACL construct that carries SPARQL text is audited here at shapes-load
+    /// time, under DEFAULT parser options — no registered relation IRIs — while the
+    /// text it will actually evaluate is re-parsed later against the extension
+    /// environment in force. Two parses of the same text, and the audit only ever
+    /// sees one of them.
+    ///
+    /// That is sound today, and not by accident: `check_pattern` carries an explicit
+    /// `GraphPattern::PropertyFunction(_) => Ok(())` arm beside `Bgp`/`Path`, and the
+    /// parser assembles calls as left-deep `Lateral { Bgp, PropertyFunction }` chains
+    /// that the `Join | Lateral` arm recurses through. So a call node is audited as
+    /// the leaf it is, and the two parses agree.
+    ///
+    /// BOTH directions are asserted, because they fail differently:
+    ///
+    /// * blind-`Ok` but bound-`Err` would REFUSE a shapes graph a host can only load
+    ///   by un-registering its relations — an over-refusal, the mirror of the silent
+    ///   drop, and invisible because the gate stays green;
+    /// * blind-`Err` but bound-`Ok` would ACCEPT at evaluation what the loader
+    ///   rejected, which means the audit protecting pre-binding semantics is not
+    ///   auditing the query that runs.
+    #[test]
+    fn the_prebinding_audit_agrees_under_both_parses() {
+        use purrdf_sparql_algebra::ParserOptions;
+
+        const REL: &str = "http://example.org/rel/near";
+
+        let bound_options = ParserOptions {
+            property_fn_iris: vec![REL.to_owned()],
+            ..ParserOptions::default()
+        };
+
+        // Fixtures spanning the operators the audit actually decides on, each with
+        // the relation IRI in predicate position so the two parses genuinely differ.
+        let fixtures = [
+            format!("SELECT $this WHERE {{ $this <{REL}> ?o }}"),
+            format!("SELECT $this WHERE {{ $this ?p ?o OPTIONAL {{ $this <{REL}> ?o2 }} }}"),
+            format!("SELECT $this WHERE {{ {{ $this <{REL}> ?o }} UNION {{ $this ?p ?o }} }}"),
+            format!("SELECT $this WHERE {{ $this ?p ?o MINUS {{ $this <{REL}> ?o2 }} }}"),
+            format!("SELECT $this WHERE {{ VALUES ?x {{ 1 }} $this <{REL}> ?o }}"),
+            format!("SELECT $this WHERE {{ {{ SELECT $this WHERE {{ $this <{REL}> ?o }} }} }}"),
+            format!("SELECT $this WHERE {{ $this ?p ?o FILTER EXISTS {{ $this <{REL}> ?o2 }} }}"),
+            format!("SELECT $this WHERE {{ GRAPH ?g {{ $this <{REL}> ?o }} }}"),
+        ];
+
+        for text in &fixtures {
+            let blind = SparqlParser::new()
+                .parse_query(text)
+                .expect("the fixture parses under default options");
+            let bound = SparqlParser::new()
+                .parse_query_with(text, &bound_options)
+                .expect("the fixture parses under the relation-aware options");
+
+            // The two parses really are different algebra, or this asserts nothing.
+            assert_ne!(
+                blind, bound,
+                "the fixture must lower differently under the two option sets: {text}"
+            );
+
+            let blind_verdict = check_select(&blind, &["this"]);
+            let bound_verdict = check_select(&bound, &["this"]);
+            assert_eq!(
+                blind_verdict, bound_verdict,
+                "the audit's verdict moved between the blind and the bound parse of \
+                 the same text, so the load-time audit is not auditing the query that \
+                 runs: {text}",
+            );
+        }
+    }
+
+    /// The template-reading and projection-reading checks are environment-independent
+    /// by construction: a relation call is only ever lowered in a WHERE clause, so a
+    /// check that reads a CONSTRUCT template or a projection list cannot see one.
+    #[test]
+    fn a_construct_template_audit_is_unaffected_by_a_recognized_relation() {
+        use purrdf_sparql_algebra::ParserOptions;
+
+        const REL: &str = "http://example.org/rel/near";
+        let bound_options = ParserOptions {
+            property_fn_iris: vec![REL.to_owned()],
+            ..ParserOptions::default()
+        };
+        let text = format!(
+            "CONSTRUCT {{ $this <http://example.org/out> ?o }} WHERE {{ $this <{REL}> ?o }}"
+        );
+
+        let blind = SparqlParser::new().parse_query(&text).expect("parses");
+        let bound = SparqlParser::new()
+            .parse_query_with(&text, &bound_options)
+            .expect("parses");
+        assert_ne!(blind, bound, "the WHERE clause lowers differently");
+        assert_eq!(
+            check_construct(&blind, &["this"]),
+            check_construct(&bound, &["this"]),
+        );
+    }
+
     #[test]
     fn plain_bgp_and_filter_pass() {
         assert!(check("SELECT $this WHERE { $this ?p ?o . FILTER($this != ?o) }").is_ok());

@@ -2465,6 +2465,85 @@ ex:RootShape a sh:NodeShape ;
         }
     }
 
+    /// A `sh:SPARQLFunction` body's footprint is the same however the extension
+    /// environment is configured, because it is TOP either way.
+    ///
+    /// This is the invariant that makes `footprint`'s `OPAQUE_QUERY_TEXT` for a
+    /// user-defined call CORRECT rather than merely cautious, and the one a future
+    /// "let's read the body and be precise" change would break. A footprint is
+    /// derived here, at plan time, from a `Shapes` value with no environment in
+    /// scope, and it is cached on a `PreparedShapes` and reused across validations
+    /// that may each install a different relation registry. A footprint that varied
+    /// with the environment would therefore be consumed under an environment it was
+    /// not derived under — a change-path analysis silently wrong for the validation
+    /// using it, which is the same load-time-versus-validation-time split that made
+    /// a load-parsed function body unable to reach a relation at all.
+    ///
+    /// The fixture's body names an IRI a host might well register as a relation. The
+    /// assertion is that this makes no difference: lowering takes no environment, so
+    /// there is no environment for the answer to depend on.
+    #[test]
+    fn a_function_body_s_footprint_does_not_depend_on_the_environment() {
+        let shapes = parse_shapes(
+            &format!(
+                r#"{PREFIXES}
+ex:isFlagged a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:node ; sh:nodeKind sh:IRI ] ;
+    sh:ask "ASK {{ ?node <http://example.org/rel/flagged> ?why }}" .
+
+ex:FlagShape a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [ ex:isFlagged ( sh:this ) ] .
+"#
+            ),
+            None,
+        )
+        .expect("the fixture parses");
+
+        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let footprint = lowered.footprint();
+        assert_eq!(
+            footprint.opaque(),
+            Some(crate::footprint::OPAQUE_QUERY_TEXT),
+            "a body reachable through a user-defined call is TOP, which is the only \
+             answer correct under every environment at once",
+        );
+
+        // Now vary the thing the claim is about. The fixture's body names
+        // `<http://example.org/rel/flagged>`, so an environment that REGISTERS that
+        // IRI is precisely the environment under which the body means something
+        // different — a relation call rather than an ordinary triple pattern. If the
+        // walk ever started reading bound bodies, this is the input that would move
+        // the answer.
+        //
+        // Lowering the same shapes a second time under that registry and asserting
+        // the identical footprint is the falsifiable form of "does not depend on the
+        // environment". Re-lowering under no registry, as this used to do, compares a
+        // pure function against itself and cannot fail.
+        let registry = {
+            let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::default();
+            registry.register(
+                "http://example.org/rel/flagged",
+                Arc::new(
+                    purrdf_sparql_eval::MemoryRelation::new(1, 1, Vec::new())
+                        .expect("a relation over no rows is well-formed"),
+                ),
+            );
+            registry
+        };
+        let under_registry = {
+            let _scope = crate::sparql::enter_property_function_scope(Arc::new(registry));
+            lower_shapes(shapes.node_shapes.iter()).footprint().opaque()
+        };
+        assert_eq!(
+            under_registry,
+            footprint.opaque(),
+            "registering the IRI the body names must not move the footprint: lowering \
+             takes no environment, and a footprint cached on a PreparedShapes is reused \
+             across validations that each install a different one",
+        );
+    }
+
     /// Every class IRI a `LoweredConstraint::Class` names, read back out of the
     /// term row the walk filled.
     fn collect_class_slots<'a>(lowered: &'a super::LoweredShapes, out: &mut Vec<&'a str>) {

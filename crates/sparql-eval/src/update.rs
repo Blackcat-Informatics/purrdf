@@ -510,8 +510,8 @@ fn delete_insert(
     // pattern on a host that has not configured the seam) leaves `pattern` as parsed.
     let planned = crate::property_fn_plan::plan_where_pattern(
         pattern,
-        cfg.options.property_functions,
-        cfg.options.aggregates,
+        cfg.options.property_functions(),
+        cfg.options.aggregates(),
     )
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
@@ -556,7 +556,7 @@ fn delete_insert(
         &snap,
         &ctx.active_dataset,
         cfg.governors,
-        cfg.options.property_functions,
+        cfg.options.property_functions(),
     )?;
 
     // A truncated `WHERE` must apply NO mutation: a half-applied UPDATE is not an
@@ -1810,7 +1810,8 @@ mod tests {
         // for the query-path twin this mirrors.
         let registry = crate::property_fn::PropertyFunctionRegistry::new();
         let options = QueryOptions {
-            property_functions: &registry,
+            env: &crate::extension_env::ExtensionEnv::over_relations(registry)
+                .expect("the fixture declarations read cleanly"),
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {
@@ -1845,7 +1846,8 @@ mod tests {
         let mut registry = crate::agg_fn::AggregateRegistry::new();
         registry.register_statistical_aggregates("http://ex/agg#");
         let options = QueryOptions {
-            aggregates: &registry,
+            env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
+                .expect("the fixture declarations read cleanly"),
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {

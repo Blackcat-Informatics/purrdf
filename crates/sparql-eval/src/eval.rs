@@ -629,7 +629,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// Borrowed for the dataset lifetime (like
     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
     /// pointer, never a clone.
-    pub(crate) user_functions: &'d crate::user_fn::UserFunctionRegistry,
+    pub(crate) user_functions: &'d crate::user_fn::BoundFunctionRegistry,
     /// The caller-injected property-function table.
     /// [`crate::property_fn::PropertyFunctionRegistry::EMPTY`] (the default) means
     /// no relation is registered: a predicate IRI only reaches this table when the
@@ -852,8 +852,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         // blocks Rust's rvalue static promotion for a reference that has to live that
         // long (see `crate::agg_fn::AggregateRegistry::EMPTY`'s docs for why sharing
         // this one instance is the correct, not merely convenient, choice).
-        static EMPTY_FUNCTIONS: crate::user_fn::UserFunctionRegistry =
-            crate::user_fn::UserFunctionRegistry::EMPTY;
+        static EMPTY_FUNCTIONS: crate::user_fn::BoundFunctionRegistry =
+            crate::user_fn::BoundFunctionRegistry::EMPTY;
         static EMPTY_RELATIONS: crate::property_fn::PropertyFunctionRegistry =
             crate::property_fn::PropertyFunctionRegistry::EMPTY;
         static EMPTY_AGGREGATES: crate::agg_fn::AggregateRegistry =
@@ -1363,7 +1363,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// forget the others.
     pub(crate) fn safety_registries(&self) -> crate::parallel::SafetyRegistries<'d> {
         crate::parallel::SafetyRegistries {
-            functions: self.user_functions,
+            functions: self.user_functions.declarations(),
             relations: self.property_functions,
             aggregates: self.aggregates,
         }
@@ -2006,7 +2006,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     #[must_use]
     pub fn with_user_functions(
         mut self,
-        registry: &'d crate::user_fn::UserFunctionRegistry,
+        registry: &'d crate::user_fn::BoundFunctionRegistry,
     ) -> Self {
         self.user_functions = registry;
         self

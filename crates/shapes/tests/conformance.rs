@@ -19,6 +19,12 @@ use shacl_corpora::{first_party_box_role_vocab, first_party_cases};
 
 #[test]
 fn conformance_corpus() {
+    // The corpus relation, installed for every case. One case names it; no other case
+    // can, because it sits in its own namespace. Installing it for all of them is what
+    // keeps this harness and the product-equivalence harness grading the same corpus
+    // under the same environment.
+    let (corpus_relations, corpus_opens) = shacl_corpora::corpus_relations();
+    let _relations = purrdf_shapes::sparql::enter_property_function_scope(corpus_relations);
     let cases = first_party_cases();
 
     let mut failures: Vec<String> = Vec::new();
@@ -96,5 +102,16 @@ fn conformance_corpus() {
         "conformance_corpus: {} case(s) failed:\n{}",
         failures.len(),
         failures.join("\n\n")
+    );
+
+    // The relation was actually REACHED. Without this the relation case would pass
+    // over an environment that resolved nothing — the call lowered to an ordinary
+    // triple pattern, the body matching nothing — which is indistinguishable from a
+    // correctly-resolved relation over no matching rows, and is exactly the silent
+    // outcome the case exists to rule out.
+    assert!(
+        corpus_opens.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "no corpus case reached the corpus relation, so the relation case is grading \
+         an empty environment rather than a resolved call",
     );
 }

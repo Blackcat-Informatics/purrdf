@@ -63,15 +63,22 @@ const BASE: &str = "http://purrdf.test/manifest/";
 /// The extension-function namespace the conformance harness configures.
 const EXT_NS: &str = "https://example.org/ext/";
 
+/// The parse-time namespace declarations the conformance harness configures, shared
+/// with every [`purrdf_sparql_eval::ExtensionEnv`] built below so the engine-level
+/// and per-call halves of the seam can never disagree about which predicates are
+/// calls.
+fn parser_options() -> ParserOptions {
+    ParserOptions {
+        extension_fn_namespaces: vec![EXT_NS.to_owned()],
+        property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
+        property_fn_iris: Vec::new(),
+    }
+}
+
 /// An engine configured exactly as the conformance harness configures it, so a case that
 /// passes there is evaluable here.
 fn harness_engine() -> NativeSparqlEngine {
     NativeSparqlEngine::new()
-        .with_parser_options(ParserOptions {
-            extension_fn_namespaces: vec![EXT_NS.to_owned()],
-            property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
-            property_fn_iris: Vec::new(),
-        })
         .with_standpoint_predicates(StandpointPredicates::new(
             format!("{EXT_NS}accordingTo"),
             format!("{EXT_NS}sharpens"),
@@ -150,10 +157,16 @@ fn ungoverned(
     remote: Option<&purrdf_sparql_eval::InProcessServiceResolver>,
     aggregates: Option<&AggregateRegistry>,
 ) -> Result<SparqlResult, String> {
-    let empty_aggregates = AggregateRegistry::EMPTY;
+    // The declared parser options and both registries together, as the one
+    // environment the query text is read against.
+    let env = purrdf_sparql_eval::ExtensionEnv::new(
+        parser_options(),
+        purrdf_sparql_conformance::run::harness_relations().clone(),
+        aggregates.map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+    )
+    .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions {
-        property_functions: purrdf_sparql_conformance::run::harness_relations(),
-        aggregates: aggregates.unwrap_or(&empty_aggregates),
+        env: &env,
         ..QueryOptions::EMPTY
     };
     match remote {
@@ -216,8 +229,20 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
             };
 
             let case_aggregates = case_aggregates(&case);
-            let empty_aggregates = AggregateRegistry::EMPTY;
-            let aggregates_ref = case_aggregates.as_ref().unwrap_or(&empty_aggregates);
+            // ONE environment for both branches below. They previously disagreed: the
+            // `SERVICE` arm carried only the aggregate registry while the plain arm
+            // carried the relation table too, so a first-party relation case was
+            // compared against an oracle whose calls had resolved to nothing on one
+            // arm and to the relation on the other. Naming the environment once makes
+            // that disagreement unrepresentable.
+            let governed_env = purrdf_sparql_eval::ExtensionEnv::new(
+                parser_options(),
+                purrdf_sparql_conformance::run::harness_relations().clone(),
+                case_aggregates
+                    .as_ref()
+                    .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+            )
+            .expect("the harness declarations read cleanly");
 
             let expected = ungoverned(
                 &plain,
@@ -236,7 +261,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     request(&query),
                     source,
                     QueryOptions {
-                        aggregates: aggregates_ref,
+                        env: &governed_env,
                         ..QueryOptions::EMPTY
                     },
                     &QueryGovernors::UNBOUNDED,
@@ -251,8 +276,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     QueryOptions {
-                        property_functions: purrdf_sparql_conformance::run::harness_relations(),
-                        aggregates: aggregates_ref,
+                        env: &governed_env,
                         ..QueryOptions::EMPTY
                     },
                     &QueryGovernors::UNBOUNDED,

@@ -1513,6 +1513,28 @@ class _Shapes:
     def validate_store(self, data: Store | MutableDataset) -> _ValidationReport: ...
     # Analyze the shape tree once; the step a prepared PRODUCT is written from.
     def prepare(self) -> _PreparedShapes: ...
+    # What the environment these declarations describe would make of every SPARQL
+    # text the graph carries, asked BEFORE any validation runs. A relation IRI the
+    # environment does not recognize becomes an ordinary triple pattern, matches
+    # nothing, and conforms — which is also what a resolved relation over no rows
+    # does, so the report cannot tell the two apart afterwards.
+    #
+    # Declarations rather than a registry: whether a predicate is a call is settled
+    # at parse time by the IRI set and the declared namespaces alone, never by what
+    # a relation would return, so the question can be asked before anything is
+    # wired. An IRI you believe you registered appearing under `data` is the answer
+    # to why it never ran.
+    #
+    # Returns `{"sites": {site: {"calls": [iri], "data": [iri]}}, "unreadable":
+    # {site: reason}, "complete": bool}`. A non-empty `unreadable` means the graph
+    # and these declarations disagree and validating under them fails at those sites.
+    def extension_usage(
+        self,
+        *,
+        relation_iris: Sequence[str] | None = None,
+        relation_namespaces: Sequence[str] | None = None,
+        extension_namespaces: Sequence[str] | None = None,
+    ) -> dict[str, Any]: ...
 
 class _ShapesProductError(ValueError):
     """A refusal from the prepared-shapes-product admission boundary.

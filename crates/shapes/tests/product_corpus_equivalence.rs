@@ -171,7 +171,10 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// than a floor for the reason every count in this repository's conformance
 /// harnesses is exact: a floor absorbs a corpus that quietly shrank, and a lane
 /// that started erroring on a case it used to report on would slide under one.
-const AGREED_ON_REPORT_CASES: usize = 192;
+/// Moved from 192 when the first-party corpus gained its relation-reaching
+/// `sh:SPARQLFunction` case; see [`AGREED_WITH_RESULTS_CASES`] for why that case's
+/// arrival is visible in two counts rather than one.
+const AGREED_ON_REPORT_CASES: usize = 193;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -181,7 +184,22 @@ const AGREED_ON_REPORT_CASES: usize = 192;
 /// the count that says the three lanes found the SAME violations at the same
 /// focus nodes; the remaining agreed cases are the ones the corpus expects to
 /// conform.
-const AGREED_WITH_RESULTS_CASES: usize = 179;
+///
+/// # Why it moved from 179
+///
+/// The first-party corpus gained a case whose `sh:SPARQLFunction` body reaches the
+/// host-registered corpus relation, and this harness now installs that relation for
+/// the whole run.
+///
+/// The move IS the evidence. Before the relation was installed, the case still
+/// AGREED across all three lanes — on an empty report, because the call lowered to an
+/// ordinary triple pattern, matched nothing, and every focus node scored the same.
+/// Three lanes agreeing on the answer a resolved relation would never give is exactly
+/// the failure this count exists to catch, and the count is what caught it: the case
+/// counted toward `AGREED_ON_REPORT_CASES` and not toward this one. It now counts
+/// toward both, because the relation resolved and produced the violation the corpus
+/// expects.
+const AGREED_WITH_RESULTS_CASES: usize = 180;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 
@@ -442,6 +460,18 @@ fn line_diff(left: &str, right: &str) -> String {
 
 #[test]
 fn product_corpus_equivalence() {
+    // The corpus relation, installed for the whole run. The first-party corpus has a
+    // case whose `sh:SPARQLFunction` body reaches it, and this harness must grade that
+    // case under the SAME environment `conformance.rs` does — otherwise the three
+    // lanes here would agree with each other on an answer the conformance harness
+    // disagrees with, which is agreement without correctness.
+    //
+    // It changes nothing about ADMISSION: a product's identity is compared against the
+    // `HostBindings` handed to `admit`, not against this ambient scope, so a product
+    // written with `to_product` still restores under the empty host exactly as before.
+    // The scope affects only what the validations then read.
+    let (corpus_relations, corpus_opens) = shacl_corpora::corpus_relations();
+    let _relations = purrdf_shapes::sparql::enter_property_function_scope(corpus_relations);
     // Discovery first, and from the shared corpus reader, so this harness and the
     // two conformance harnesses cannot be looking at different corpora.
     let mut cases: Vec<Case> = Vec::new();
@@ -609,6 +639,12 @@ fn product_corpus_equivalence() {
         refused,
         REFUSAL_LEDGER.len(),
         "the refusal bucket must match its ledger exactly"
+    );
+    assert!(
+        corpus_opens.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "no case reached the corpus relation, so this harness is grading the relation \
+         case over an empty environment while `conformance.rs` grades it over a \
+         resolved call — three lanes agreeing here would prove nothing about it",
     );
     assert_eq!(
         agreed, AGREED_CASES,

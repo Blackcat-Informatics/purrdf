@@ -127,6 +127,7 @@ impl CertifiedParts {
             declared,
             &shapes,
             host.property_functions(),
+            host.parser_options(),
             host.implementation_identity(),
             &classes,
         )?;

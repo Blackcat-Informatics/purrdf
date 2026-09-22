@@ -603,7 +603,7 @@ pub unsafe extern "C" fn purrdf_query_governed(
                         substitutions: &[],
                     },
                     QueryOptions {
-                        aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                        env: &aggregate_env(aggregates.as_ref())?,
                         ..QueryOptions::EMPTY
                     },
                     &governors,
@@ -707,7 +707,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                 },
                 plan.entailment(),
                 QueryOptions {
-                    aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                    env: &aggregate_env(aggregates.as_ref())?,
                     ..QueryOptions::EMPTY
                 },
                 // This surface registers no relation at all, so there is none to re-derive
@@ -825,7 +825,7 @@ pub unsafe extern "C" fn purrdf_update_governed(
                         substitutions: &[],
                     },
                     QueryOptions {
-                        aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+                        env: &aggregate_env(aggregates.as_ref())?,
                         ..QueryOptions::EMPTY
                     },
                     &governors,
@@ -846,6 +846,31 @@ pub unsafe extern "C" fn purrdf_update_governed(
             Ok(PurrdfStatus::Ok)
         })
     }
+}
+
+/// The extension environment a query carrying `aggregates` is interpreted in.
+///
+/// One value rather than a loose registry: whether a predicate IRI in a query text
+/// is a data edge or a relation call is decided by the environment the text is read
+/// against, and a door that takes the registries separately is a door that can
+/// forget one.
+///
+/// # Errors
+///
+/// A [`PurrdfError`] if a registered aggregate's declaration methods panic — deriving
+/// the environment reads every declaration.
+fn aggregate_env(
+    aggregates: Option<&AggregateRegistry>,
+) -> Result<purrdf_sparql_eval::ExtensionEnv, PurrdfError> {
+    purrdf_sparql_eval::ExtensionEnv::over_aggregates(
+        aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
+    )
+    .map_err(|e| {
+        PurrdfError::new(
+            PurrdfStatus::QueryError,
+            format!("extension environment: {e}"),
+        )
+    })
 }
 
 #[cfg(test)]

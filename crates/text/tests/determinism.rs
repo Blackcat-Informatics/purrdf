@@ -28,7 +28,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
-use purrdf_sparql_eval::{NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
+use purrdf_sparql_eval::{
+    ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
 use purrdf_sparql_results::{ResultProvenance, to_json};
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 
@@ -113,7 +115,8 @@ fn evaluate(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: relations,
+                env: &ExtensionEnv::over_relations(relations.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

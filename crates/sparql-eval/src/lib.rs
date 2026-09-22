@@ -97,6 +97,7 @@ pub mod eval;
 #[cfg(test)]
 mod exists_admission_gate;
 mod expr;
+pub mod extension_env;
 mod fallible;
 mod governed;
 pub mod governor;
@@ -113,6 +114,7 @@ mod path;
 pub mod path_relation;
 mod plan_cache;
 mod plan_memory;
+pub mod predicate_use;
 pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
@@ -154,6 +156,7 @@ pub use error::{EvalError, UnsupportedKind};
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
+pub use extension_env::ExtensionEnv;
 pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 pub use governed::{
     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
@@ -173,6 +176,7 @@ pub use interned::{
 };
 pub use plan_cache::{CacheLimits, CacheStats};
 pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};
+pub use predicate_use::{PredicateUse, predicate_use};
 // The value-level entry points to the ORDER BY comparator and the built-in
 // aggregate accumulators, for a host that holds a bag of `TermValue`s (SHACL-AF's
 // `sh:min`/`sh:max`/`sh:sum`/`sh:orderby` node expressions are the motivating
@@ -188,9 +192,10 @@ pub use purrdf_core::{GovernorEvidence, ResourceDimension, StopCause, TrippedGov
 // [`PropertyFunction`]'s own signature (`modes`, `rows_per_invocation`, `admits`), so a
 // host implementing the trait cannot write the impl without naming it.
 pub use purrdf_core::binding_pattern::BindingPattern;
-// Re-exported so engine hosts can configure the extension-function namespace set
-// (see [`NativeSparqlEngine::with_parser_options`]) without depending on the
-// front-end crate directly.
+// Re-exported so engine hosts can declare the extension-function namespace set
+// (see `ExtensionEnv::over_options` / `ExtensionEnv::new`, which is where parse
+// configuration lives -- the engine holds none) without depending on the front-end
+// crate directly.
 pub use purrdf_sparql_algebra::ParserOptions;
 // The property-function seam: the relation trait a host implements, the argument /
 // row / arity types its calls speak in, the registry evaluation resolves a predicate
@@ -242,8 +247,9 @@ pub use service::{
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
-    Arity, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody, NativeFunction, NodeKind,
-    TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
+    Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
+    NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
+    UserFunctionRegistry, Volatility,
 };
 // The evidence channel the relation seam feeds: what each invoked relation attested,
 // carried out on the governed receipt's `RelationIdentity`. Re-exported beside the

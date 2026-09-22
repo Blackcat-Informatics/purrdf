@@ -268,7 +268,7 @@ impl NativeSparqlEngine {
             let dimension = ResourceDimension::IntermediateCells;
             if state.is_engaged_in(dimension) {
                 let estimate = self
-                    .survey_plan(dataset, &prepared.query, options.property_functions)?
+                    .survey_plan(dataset, &prepared.query, options.property_functions())?
                     .peak_cells();
                 let limit = state.limits().get(dimension);
                 if estimate > limit {
