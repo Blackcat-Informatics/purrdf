@@ -552,10 +552,7 @@ impl<'p> Lift<'p> {
     /// sibling this node's output depends on was ever evaluated. The empty bag is a
     /// sound lower bound in the second case and carries no claim at all in the first.
     pub(crate) fn withheld<I: ViewTermId>(self) -> Evaluated<I> {
-        let schema = self
-            .schema
-            .clone()
-            .unwrap_or_else(|| Arc::new(VarSchema::new()));
+        let schema = self.schema.clone().unwrap_or_else(VarSchema::empty_shared);
         self.finish(SolutionSeq::empty(schema))
     }
 
@@ -867,7 +864,7 @@ mod tests {
             expr: purrdf_sparql_algebra::Expression::Exists(boxed(bgp())),
             inner: boxed(bgp()),
         };
-        let barred = Truncation::<TermId>::barred_at(&filter, FUEL, Arc::new(VarSchema::new()));
+        let barred = Truncation::<TermId>::barred_at(&filter, FUEL, VarSchema::empty_shared());
         assert_eq!(barred.bound(), SpineClass::Unknown);
         assert!(barred.rows().is_empty());
         assert_eq!(

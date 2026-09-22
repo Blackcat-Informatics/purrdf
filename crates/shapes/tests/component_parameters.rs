@@ -381,3 +381,135 @@ fn validator_declarations_enforce_attachment_kind_and_query_datatype() {
         assert!(shapes(&body).is_err(), "accepted {validator}");
     }
 }
+
+/// **A component whose declared parameter collides with a name SHACL pre-binds
+/// itself still VALIDATES, and still yields the answer that collision defines.**
+///
+/// A prepared execution cannot express a repeated parameter name — it has no single
+/// slot to bind — so `prepare_execution` refuses one. The `&str` door supports it and
+/// has a defined answer: two single-row `VALUES` seeds binding the same variable to
+/// different terms are incompatible, so the solution bag is empty and an ASK is
+/// `false`. So the refusal must not propagate: the collision has to route back to the
+/// `&str` door rather than become an error.
+///
+/// # Which name actually collides
+///
+/// Not `$this` or `$value`. A component parameter's local name is checked at shapes
+/// load against a ban list that already contains `this`, `path`, `PATH` and `value`,
+/// so a declaration colliding with either of those never reaches evaluation — it is
+/// refused where it is written, which is the right place.
+///
+/// `$shapesGraph` and `$currentShape` are NOT on that list, and SHACL pre-binds them
+/// around every validator all the same. `currentShape` is the reachable one on every
+/// path: the component evaluator is handed the source shape unconditionally, so a
+/// component declaring a parameter whose local name is `currentShape` presents the
+/// evaluator with that name twice — once as its own parameter and once as the shape
+/// context — with two different terms.
+///
+/// # The two cases, and why the control can tell them apart
+///
+/// The two fixtures differ in ONE respect — the parameter's local name,
+/// `currentShape` versus `flag` — and are otherwise the same component, the same ASK
+/// body, the same shape and the same data. That makes the control a true neighbour of
+/// the treatment rather than a different test.
+///
+/// They must also produce DIFFERENT answers, or the assertion would pass just as
+/// happily if the prepared door had silently dropped the parameter binding on both.
+/// They do: the ASK is `true` for a literal value node, so the control CONFORMS and
+/// reports nothing; the treatment's collision empties the solution bag, so the ASK is
+/// `false` and it reports one violation per value node. A run that answered the
+/// treatment the way it answers the control — or that errored on either — fails here.
+#[test]
+fn a_parameter_colliding_with_the_shape_context_still_validates() {
+    /// The component, its shape and its data, parameterized on the parameter's
+    /// local name. Everything else is fixed.
+    fn fixture(parameter: &str) -> String {
+        format!(
+            "ex:Comp a sh:ConstraintComponent ;\n\
+             \x20   sh:parameter [ sh:path ex:{parameter} ] ;\n\
+             \x20   sh:validator [ a sh:SPARQLAskValidator ;\n\
+             \x20       sh:ask \"ASK {{ FILTER(isLiteral($value)) }}\" ] .\n\
+             ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;\n\
+             \x20   sh:property [ sh:path ex:p ; ex:{parameter} true ] .\n\
+             ex:focus ex:p \"a\", \"b\" .\n"
+        )
+    }
+
+    // The CONTROL: a parameter name that collides with nothing, so the component
+    // runs on the prepared door. The ASK sees a literal `$value` and answers true.
+    let control = dataset(&fixture("flag"));
+    let control_shapes = from_dataset(&control).expect("the control component loads");
+    let control_report =
+        validate_dataset(&control, &control_shapes).expect("the control validates");
+    assert!(
+        control_report.conforms,
+        "a component with a non-colliding parameter must still conform — the prepared \
+         door dropped or mis-slotted a binding: {:?}",
+        control_report.results
+    );
+
+    // The TREATMENT: the same component with its parameter renamed to `currentShape`,
+    // which is what SHACL pre-binds the source shape to. Two incompatible seeds for
+    // one variable, so the bag is empty and the ASK is false.
+    let treatment = dataset(&fixture("currentShape"));
+    let treatment_shapes =
+        from_dataset(&treatment).expect("a parameter named `currentShape` is a loadable component");
+    let treatment_report = validate_dataset(&treatment, &treatment_shapes)
+        .expect("a repeated pre-binding name is answered, not refused");
+    assert!(
+        !treatment_report.conforms,
+        "the collision empties the solution bag, so the ASK is false and the value \
+         nodes violate"
+    );
+    assert_eq!(
+        treatment_report.results.len(),
+        2,
+        "one violation per value node, which is what an ASK answering false for both \
+         means: {:?}",
+        treatment_report.results
+    );
+    for result in &treatment_report.results {
+        assert_eq!(
+            result.source_constraint_component.as_str(),
+            "http://example.org/Comp"
+        );
+    }
+}
+
+/// **A parameter whose local name is one SHACL pre-binds around every validator is
+/// refused at shapes LOAD, and its neighbour is not.**
+///
+/// The seam above depends on this one: `this`, `path`, `PATH` and `value` never reach
+/// evaluation as parameter names, which is why the prepared door's repeated-name
+/// fallback is reached through the shape context rather than through them. Stated as
+/// a test so that widening the ban list, or dropping it, cannot silently change which
+/// collisions the evaluator has to answer for.
+///
+/// The neighbouring case is executed too: a name that merely resembles a banned one
+/// must still load, or the ban would be quietly refusing ordinary components.
+#[test]
+fn parameter_names_shacl_pre_binds_are_refused_at_load_and_near_misses_are_not() {
+    fn load(parameter: &str) -> Result<Shapes, String> {
+        shapes(&format!(
+            "ex:Comp a sh:ConstraintComponent ;\n\
+             \x20   sh:parameter [ sh:path ex:{parameter} ] ;\n\
+             \x20   sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {{}}\" ] .\n"
+        ))
+    }
+
+    for banned in ["this", "path", "PATH", "value"] {
+        let error = load(banned)
+            .err()
+            .unwrap_or_else(|| panic!("a parameter named {banned:?} must be refused at load"));
+        assert!(
+            error.contains("invalid SPARQL variable name"),
+            "refusal for {banned:?} must name the reason: {error}"
+        );
+    }
+
+    // The near misses: same prefix, same suffix, different name. Every one must load.
+    for allowed in ["thisOne", "pathValue", "valued", "myValue", "currentShape"] {
+        load(allowed)
+            .unwrap_or_else(|e| panic!("a parameter named {allowed:?} must still load: {e}"));
+    }
+}

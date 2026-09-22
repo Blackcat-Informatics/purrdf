@@ -1334,7 +1334,7 @@ mod registry_fingerprint_tests {
         assert_eq!(registry_fingerprint(&fresh).expect("ok"), "");
     }
 
-    /// GAP (registry instance identity): two INDEPENDENTLY constructed registries
+    /// Registry instance identity: two INDEPENDENTLY constructed registries
     /// that register the SAME IRI to relations with byte-identical declared
     /// metadata (arity, volatility, modes, row bounds) — [`MemoryRelation`]s
     /// holding the SAME NUMBER of rows, so `describe()` reports identically, but

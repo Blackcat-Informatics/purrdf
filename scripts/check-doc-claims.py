@@ -4632,14 +4632,28 @@ _SPARQL_SURFACE_ROWS: tuple[tuple[str, str], ...] = (
     ("`sh:expression` function call", "sh:expression call"),
 )
 
+# The same four surfaces on the GOVERNED lane. The document spells each row with a
+# `, governed` suffix, which is not decoration: the two tables carry the same four
+# surfaces at different figures, and a row label shared between them would make each
+# pattern below match twice and check neither.
+_SPARQL_GOVERNED_ROWS: tuple[tuple[str, str], ...] = tuple(
+    (f"{row}, governed", case) for row, case in _SPARQL_SURFACE_ROWS
+)
 
-def load_sparql_surface_allocations() -> dict[str, int]:
+
+def load_sparql_surface_allocations(field: str = "per_focus_node") -> dict[str, int]:
     """Case name -> the allocations one conforming focus node costs that surface.
 
-    Read from the ``per_focus_node`` field of every ``SparqlCase`` in
+    Read from ``field`` on every ``SparqlCase`` in
     ``crates/shapes/tests/sparql_path_alloc.rs``'s ``CASES``, which the file asserts as
-    the slope of ``CHANGE_PATH_CONSTANT + per_focus_node * N`` over N and 2N focus
-    nodes. The design document restates the four numbers as a table.
+    the slope of a closed form over the focus population. ``per_focus_node`` is the
+    ungoverned lane's slope; ``governed_per_focus_node`` is the governed one's. The
+    design document restates each set as a table of its own.
+
+    The field is matched anchored at a line start so ``per_focus_node`` cannot also
+    match inside ``governed_per_focus_node`` and silently read the wrong lane's
+    figure into the other lane's table — which is exactly the shape of mistake this
+    gate exists to catch in prose.
     """
     text = _read(_SPARQL_PATH_TEST)
     rel = _SPARQL_PATH_TEST.relative_to(_REPO)
@@ -4652,11 +4666,11 @@ def load_sparql_surface_allocations() -> dict[str, int]:
     surfaces: dict[str, int] = {}
     for entry in block.group(1).split("SparqlCase {")[1:]:
         name = re.search(r'name: "([^"]+)",', entry)
-        cost = re.search(r"per_focus_node: (\d+),", entry)
+        cost = re.search(rf"\n *{field}: (\d+),", entry)
         if not name or not cost:
             raise SystemExit(
                 f"check-doc-claims: a `SparqlCase` in {rel} carries no `name` or no "
-                f"`per_focus_node`; the table row for it would be derived from nothing"
+                f"`{field}`; the table row for it would be derived from nothing"
             )
         surfaces[name.group(1)] = int(cost.group(1))
     if not surfaces:
@@ -4709,6 +4723,33 @@ def sparql_surface_table_claims(surfaces: dict[str, int]) -> list[Claim]:
             src,
         )
         for row, case in _SPARQL_SURFACE_ROWS
+        if case in surfaces
+    ]
+
+
+def sparql_governed_table_claims(surfaces: dict[str, int]) -> list[Claim]:
+    """The change-path document's GOVERNED per-focus-node table, row by row.
+
+    Checked beside the ungoverned table rather than instead of it. The governed lane
+    is a different entry in the evaluator over a different data view, so its figures
+    move independently — a document that restated one table's numbers under the
+    other's heading would read as consistent and be wrong about the lane a budgeted
+    host actually runs.
+    """
+    src = (
+        "the `governed_per_focus_node` field of each `SparqlCase` in "
+        "crates/shapes/tests/sparql_path_alloc.rs, asserted as the exact slope of the "
+        "governed closed form at three focus populations"
+    )
+    return [
+        Claim(
+            f"the {row} row of the governed per-focus-node table",
+            _CHANGE_PATH_DESIGN,
+            r"\| " + re.escape(row) + r" \| (?P<allocations>\d+) \|",
+            {"allocations": surfaces[case]},
+            src,
+        )
+        for row, case in _SPARQL_GOVERNED_ROWS
         if case in surfaces
     ]
 
@@ -4918,18 +4959,45 @@ def change_path_pin_claims(pins: dict[str, int]) -> list[Claim]:
 
 
 # The change-path document's allocation decomposition, by the row label it publishes.
-# The three `—` rows are the components of the row above them; the last two sit beside
-# it. Nothing in the repository measures this table — it was taken by inserting one
-# extra discarded copy of each slice into the live path and differencing — so what is
-# gated is the arithmetic it asserts about itself and the figures DERIVED from it,
-# which is every figure in the document that a later re-measurement would leave behind.
+# The four `—` rows are the components of the row above them; the evaluation-context,
+# query-context, evaluator and SHACL-side rows sit beside it, additive with it rather
+# than inside it. Nothing in the repository measures this table — it is taken by
+# inserting one extra discarded copy of each slice into the live path and differencing —
+# so what is gated is the arithmetic it asserts about itself and the figures DERIVED
+# from it, which is every figure in the document that a later re-measurement would
+# leave behind.
+#
+# The labels below are the CURRENT table's, re-taken against the 51 / 114 / 64 / 127
+# term. They are not the ones the first reading of this decomposition published
+# (`— the algebra clone` survives; `— term and string materialization`,
+# `— pushdown and seed descent` and `— expression walk and the second ground-term
+# conversion` named slices that a retained substituted plan has since merged or
+# removed). A row label that no longer exists in the document is a hard failure in
+# `_decomposition_row` rather than a silently skipped check, so this tuple and the
+# table cannot drift apart unnoticed.
 _DECOMPOSITION_TOTAL = "pre-binding rewrite, total"
 _DECOMPOSITION_PARTS = (
+    "— grounding this run's values into probes",
+    "— the memo probe and the value write",
     "— the algebra clone",
-    "— term and string materialization",
-    "— pushdown, seed and expression walks",
+    "— the pushdown, seed and expression walks",
 )
-_DECOMPOSITION_EVALUATOR = "**evaluator per-query execution setup**"
+_DECOMPOSITION_CONTEXT = "evaluation context construction"
+_DECOMPOSITION_QUERY_CONTEXT = "query-context preparation"
+_DECOMPOSITION_EVALUATOR = "**evaluating the substituted tree**"
+# The SHACL-side slices, itemised. The first reading reported all of this as one
+# undifferentiated remainder, which on `sh:expression` was 52 of 194 — a quarter of the
+# term, attributed to nothing. Each of these is a measured slice and every one of them
+# is summed into the baseline identity below, so an itemised row that stops being
+# measured cannot quietly move its allocations back into the residual.
+_DECOMPOSITION_SHACL = (
+    "SHACL-side focus and value-node materialization",
+    "SHACL-side binding writes",
+    "SHACL-side parameter-name list",
+    "SHACL-side node-expression argument marshalling",
+    "SHACL-side scalar-result materialization",
+    "SHACL-side handle checkout and restore",
+)
 _DECOMPOSITION_REMAINDER = "SHACL-side remainder"
 
 
@@ -4943,7 +5011,24 @@ def _decomposition_row(text: str, label: str) -> list[int]:
             f"in {rel}; the figures derived from that row cannot be checked, so do not "
             f"leave them unchecked"
         )
-    cells = [int(cell) for cell in re.findall(r"\d+", row.group(1))]
+    # An em-dash cell means "not applicable here" — a real, gated zero — not an
+    # absence to be dropped. `re.findall(r"\d+", ...)` used to drop it silently,
+    # which shrank the row's width instead of failing, so a width mismatch that
+    # should have caught a reworded table went undetected.
+    raw_cells = [cell.strip() for cell in row.group(1).split("|")]
+    raw_cells = [cell for cell in raw_cells if cell != ""]
+    cells: list[int] = []
+    for cell in raw_cells:
+        if cell.strip("*") == "—":
+            cells.append(0)
+            continue
+        found = re.search(r"\d+", cell)
+        if not found:
+            raise SystemExit(
+                f"check-doc-claims: the {label!r} row in {rel} has a cell "
+                f"{cell!r} that is neither a number nor an em-dash"
+            )
+        cells.append(int(found.group()))
     if not cells:
         raise SystemExit(
             f"check-doc-claims: the {label!r} row in {rel} carries no numbers"
@@ -4954,9 +5039,10 @@ def _decomposition_row(text: str, label: str) -> list[int]:
 def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
     """The decomposition table's own arithmetic, and the two figures derived from it.
 
-    Three identities hold by construction and are checked per surface: the three
-    component rows sum to the pre-binding total; the pre-binding total, the evaluator's
-    per-query setup and the SHACL-side remainder sum to the stated baseline; and the
+    Three identities hold by construction and are checked per surface: the four
+    component rows sum to the pre-binding total; the pre-binding total, the two
+    context rows, the cost of evaluating the substituted tree, every itemised
+    SHACL-side row and the SHACL-side remainder sum to the stated baseline; and the
     residual an id-native pre-binding would leave is the baseline less the pre-binding
     total. The document states that residual twice, in two different spellings, and
     both are derived here — a re-measurement that updates the table and not the
@@ -4967,8 +5053,12 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
     baseline_row = re.search(
         _flow(
             r"against the baseline of (?P<a>\d+) / (?P<b>\d+) / (?P<c>\d+) / (?P<d>\d+) "
-            r"that held before"
-        ),
+        )
+        # "that held" followed by whatever the clause says next — the doc has
+        # read "that held before" and "that held when the decomposition was
+        # taken", and a future rewording should not have to touch this anchor
+        # again, only the number in it.
+        + r"that held\b[^;,.\n]*",
         text,
     )
     if not baseline_row:
@@ -4979,11 +5069,23 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
     baseline = [int(value) for value in baseline_row.groups()]
     total = _decomposition_row(text, _DECOMPOSITION_TOTAL)
     parts = [_decomposition_row(text, label) for label in _DECOMPOSITION_PARTS]
+    context = _decomposition_row(text, _DECOMPOSITION_CONTEXT)
+    query_context = _decomposition_row(text, _DECOMPOSITION_QUERY_CONTEXT)
     evaluator = _decomposition_row(text, _DECOMPOSITION_EVALUATOR)
+    shacl = [_decomposition_row(text, label) for label in _DECOMPOSITION_SHACL]
     remainder = _decomposition_row(text, _DECOMPOSITION_REMAINDER)
-    widths = {len(baseline), len(total), len(evaluator), len(remainder)} | {
-        len(part) for part in parts
-    }
+    widths = (
+        {
+            len(baseline),
+            len(total),
+            len(context),
+            len(query_context),
+            len(evaluator),
+            len(remainder),
+        }
+        | {len(part) for part in parts}
+        | {len(row) for row in shacl}
+    )
     if len(widths) != 1:
         raise SystemExit(
             f"check-doc-claims: the allocation decomposition in {rel} has rows of "
@@ -4998,7 +5100,14 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
                 f"component rows sum to {summed}, but {_DECOMPOSITION_TOTAL!r} says "
                 f"{total[column]}"
             )
-        whole = total[column] + evaluator[column] + remainder[column]
+        whole = (
+            total[column]
+            + context[column]
+            + query_context[column]
+            + evaluator[column]
+            + sum(row[column] for row in shacl)
+            + remainder[column]
+        )
         if whole != baseline[column]:
             problems.append(
                 f"{rel}: the allocation decomposition's column {column + 1} — its rows "
@@ -6307,6 +6416,12 @@ def main(argv: list[str]) -> int:
     surfaces = load_sparql_surface_allocations()
     problems.extend(sparql_surface_coverage_claim(surfaces))
     checked += 1
+    # The governed lane's own slopes, read from the same cases. No second coverage arm:
+    # the two tables name the same four surfaces, so the arm above is already total over
+    # both, and `load_sparql_surface_allocations` refuses outright if a case carries no
+    # `governed_per_focus_node` — a surface measured on one lane and not the other cannot
+    # reach the rows below at all.
+    governed_surfaces = load_sparql_surface_allocations("governed_per_focus_node")
     decomposition_problems, decomposition_claims = change_path_decomposition_claims()
     watdiv_problems, watdiv_claims = watdiv_pin_claims()
     problems.extend(watdiv_problems)
@@ -6333,6 +6448,7 @@ def main(argv: list[str]) -> int:
         + jsonld_lens_claims()
         + rdf12_canon_profile_claim(matrix)
         + sparql_surface_table_claims(surfaces)
+        + sparql_governed_table_claims(governed_surfaces)
         + product_alloc_prose_claims(load_product_alloc_report())
         + change_path_pin_claims(load_change_path_pins())
         + decomposition_claims

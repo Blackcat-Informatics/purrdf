@@ -169,6 +169,30 @@ pub mod gts {
 /// SPARQL 1.1/1.2: parser + algebra ([`purrdf_sparql_algebra`]), evaluator
 /// ([`purrdf_sparql_eval`]), and results serialization
 /// ([`purrdf_sparql_results`]).
+///
+/// Includes the prepared-execution handle
+/// ([`sparql::PreparedExecution`], built with
+/// [`sparql::NativeSparqlEngine::prepare_execution`] and run with
+/// [`sparql::NativeSparqlEngine::execute`]) beside the plan cache's own
+/// [`sparql::PreparedQuery`]: a caller that runs one query text repeatedly with
+/// changing bindings reaches both from this facade alone, exactly as it reaches
+/// the ordinary `query`/`query_governed` doors.
+///
+/// ```rust
+/// use purrdf::sparql::{NativeSparqlEngine, PreparedExecution, QueryOptions};
+///
+/// let engine = NativeSparqlEngine::new();
+/// let mut execution: PreparedExecution = engine
+///     .prepare_execution(
+///         "SELECT ?o WHERE { ?this <https://example.org/p> ?o }",
+///         None,
+///         &["this"],
+///         QueryOptions::EMPTY,
+///     )
+///     .expect("prepare");
+/// assert_eq!(execution.parameters().len(), 1);
+/// assert_eq!(execution.slot("this"), Some(0));
+/// ```
 pub mod sparql {
     pub use purrdf_sparql_algebra::*;
     pub use purrdf_sparql_eval::*;

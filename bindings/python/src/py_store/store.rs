@@ -282,6 +282,157 @@ impl PyStore {
         materialize_results(py, result)
     }
 
+    /// Prepare a SPARQL query once, to be bound and run many times.
+    ///
+    /// `Store.query` parses and admits its text on every call. A caller running one
+    /// query per row therefore pays that cost per row to be handed back the same
+    /// plan — and a caller who instead splices the row's value into the text pays a
+    /// real re-parse, because a spliced query is a different query. A prepared query
+    /// is the alternative: the text is parsed and admitted here, and each run binds
+    /// parameters and evaluates.
+    ///
+    /// `parameters` names the variables `run` will bind, without the `?`/`$` sigil.
+    /// Each is pre-bound exactly as a `substitutions` entry is on
+    /// [`query`](Self::query), so a parameter stays projectable and reaches inside
+    /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation.
+    ///
+    /// What is prepared here is the PLAN, not the data: the returned object holds a
+    /// reference to THIS store and re-reads its current contents on every
+    /// [`run`](super::prepared::PyPreparedQuery::run), rather than freezing a
+    /// snapshot once now. A mutation made after `prepare` — including one made
+    /// between two `run` calls on the SAME handle — is visible to the next run. This
+    /// is what a rule fixpoint or an incremental SHACL revalidation needs: both
+    /// mutate their store every round and re-run the same plan against what the
+    /// mutation just produced, so a handle that answered over a one-time snapshot
+    /// would make that use case impossible — refusing staleness by refusing the
+    /// feature.
+    ///
+    /// A prepared query must not be shared between threads: a run borrows it
+    /// uniquely, because a query body can re-enter the evaluator and a handle
+    /// reachable twice while in flight is one two evaluations can disagree about.
+    ///
+    /// Engine configuration and relation/aggregate registration behave exactly as on
+    /// [`query`](Self::query) — `extension_namespaces`, `property_fn_namespaces`,
+    /// `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
+    /// and `aggregate_namespace` all admit the plan and are then CARRIED by the
+    /// returned object, so [`PreparedQuery::run`](super::prepared::PyPreparedQuery::run)
+    /// evaluates under the SAME registries the plan was admitted under. Nothing here
+    /// widens what a registered relation reaches — running under a different registry
+    /// than the one a plan was prepared against is refused, not silently answered
+    /// short, exactly as [`query`](Self::query) would refuse it if asked to.
+    ///
+    /// Two of those axes read the store's OWN GRAPH rather than a caller's constant:
+    /// `relations_from_graph` reads an `rdf:List` of `rdf:List`s written in the store,
+    /// and `path_relations` traverses the store's own edges. Their tables are
+    /// therefore rebuilt from each run's dataset and the plan re-admitted under the
+    /// rebuilt registry — see
+    /// [`GraphDerivedRelations`](super::prepared::GraphDerivedRelations) — so that
+    /// "the data is re-read on every run" holds for a relation's rows exactly as it
+    /// holds for an ordinary triple pattern, and one answer is never assembled from
+    /// two points in time. The other axes are caller-supplied constants and are
+    /// carried unchanged: re-deriving a constant is how a constant stops being one.
+    ///
+    /// `substitutions` has no seat here, deliberately: a prepared query's whole point
+    /// is that the values that change between runs arrive per-run through
+    /// [`run`](super::prepared::PyPreparedQuery::run)'s parameter bindings, and a
+    /// second, prepare-time door onto the same values would be redundant at best and,
+    /// since only `run`'s bindings are actually honoured, silently ignored at worst.
+    #[pyo3(signature = (
+        query,
+        *,
+        parameters=None,
+        extension_namespaces=None,
+        property_fn_namespaces=None,
+        standpoint_predicates=None,
+        relations=None,
+        relations_from_graph=None,
+        path_relations=None,
+        aggregate_namespace=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each engine-configuration axis is named explicitly at the call site, exactly \
+                  as on `query`"
+    )]
+    fn prepare(
+        slf: &Bound<'_, Self>,
+        query: &str,
+        parameters: Option<Vec<String>>,
+        extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
+    ) -> PyResult<super::prepared::PyPreparedQuery> {
+        let py = slf.py();
+        let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+        // Carried forward to the returned object for `run` to rebuild an engine
+        // under (see [`super::prepared::PyPreparedQuery`]) — `config` below moves
+        // `standpoint_predicates` into the engine this call admits the plan with, so
+        // the value itself has to be cloned before that move.
+        let standpoint_for_run = standpoint_predicates.clone();
+        let config = EngineConfig {
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+        };
+        let parameters = parameters.unwrap_or_default();
+        // Read off `config` BEFORE `build_engine` consumes it, exactly as `query`
+        // does: the namespace declarations are parse configuration, they belong to
+        // the extension environment rather than to the engine, and the environment
+        // this call admits the plan against is the one every later `run` evaluates
+        // under — so it is derived once, here, and carried.
+        let parser_options = engine_parser_options(&config);
+        // The relations whose ROWS come out of the store's own graph, kept as their
+        // SOURCE configuration for `run` to re-derive from the dataset it answers
+        // over. `None` when the caller registered none of them, which is the common
+        // case and rebuilds nothing. See `super::prepared::GraphDerivedRelations` for
+        // why a table read out of a graph cannot be built once and kept on a handle
+        // that re-reads its store every run.
+        let graph_derived = super::prepared::GraphDerivedRelations::for_specs(
+            &specs,
+            query,
+            &parameters,
+            &parser_options,
+            aggregate_namespace.as_ref(),
+        );
+        // A cheap owning handle to THIS store, taken under the GIL, for `run` to
+        // re-read on every call (see `Self::prepare`'s doc comment and
+        // `super::prepared::PyPreparedQuery::store`) — distinct from `guard` below,
+        // which only borrows `inner` for the ADMISSION-TIME freeze this call itself
+        // needs (building the relation registry and parsing/admitting the plan
+        // against a snapshot of what the store holds right now).
+        let store_handle: Py<Self> = slf.clone().unbind();
+        let guard = slf.borrow();
+        let inner = &guard.inner;
+        // Snapshot + engine build + admission run detached (GIL released), exactly as
+        // `query` does: this does the same freeze, registry build and parse/admit
+        // work `query` does on every call, just once instead of per run.
+        let result = py.detach(move || {
+            let dataset = inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+            let registry = build_relations(specs, &dataset)?;
+            let aggregates = build_aggregates(aggregate_namespace);
+            let engine = build_engine(config);
+            super::prepared::prepare(
+                store_handle,
+                &engine,
+                query,
+                &parameters,
+                parser_options,
+                registry.as_ref(),
+                aggregates.as_ref(),
+                standpoint_for_run,
+                graph_derived,
+            )
+        });
+        drop(guard);
+        result
+    }
+
     /// Run a SPARQL query under caller-supplied execution governors, returning a
     /// `QueryOutcome` rather than the results directly.
     ///
@@ -897,6 +1048,28 @@ impl PyStore {
 }
 
 impl PyStore {
+    /// Freeze this store's CURRENT contents into an immutable `Arc<RdfDataset>`
+    /// snapshot.
+    ///
+    /// Called fresh by [`PyPreparedQuery::run`](super::prepared::PyPreparedQuery::run)
+    /// on every run, rather than once at prepare time, so a prepared query's answer
+    /// reflects the store as it stands right now — the same freeze `query` and
+    /// `prepare` already do, exposed here so a held `Py<PyStore>` can repeat it. The
+    /// freeze itself (a real copy on a mutated store) runs with the GIL released;
+    /// only the borrow that reaches `self.inner` needs it held.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the store cannot be frozen.
+    pub(crate) fn freeze_snapshot(&self, py: Python<'_>) -> PyResult<Arc<RdfDataset>> {
+        let inner = &self.inner;
+        py.detach(|| {
+            inner
+                .freeze()
+                .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))
+        })
+    }
+
     /// An immutable snapshot of this store's copy-on-write DELTA — the base, the
     /// rows added on top of it, and the rows suppressed from it, read through one
     /// view rather than copied.

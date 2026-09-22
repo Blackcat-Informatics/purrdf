@@ -2468,24 +2468,26 @@ type SiblingCoverageEntry = (
 /// (`allocations(N) == CONSTANT + per_focus_node * N`) is pinned in that file
 /// instead.
 ///
-/// This is a recorded COST, not a permanent exemption, but the cost has since
-/// been decomposed and it is not one thing. Measured per focus node, the
-/// pre-binding rewrite — the algebra clone, the term materialization, the
-/// pushdown and the seed together — is 28% to 51% of the charge depending on
-/// the surface, and the algebra clone alone is only 4% to 6% of it. The
-/// remainder, 39% to 53%, is the SPARQL evaluator's per-query execution setup:
-/// the plan-cache key, the evaluation context, the solution schema and the
-/// intermediates a query allocates simply by running once. Removing the
-/// pre-binding charge entirely would still leave a per-focus-node term.
+/// This is a recorded COST, not a permanent exemption, but the cost has been
+/// decomposed against the historical baseline term of 96/214/116/194 — the
+/// figure this surface measured before the reductions recorded in
+/// `tests/sparql_path_alloc.rs`'s module documentation, which have since moved it
+/// to the current 51/114/64/127 — and it is not one
+/// thing. Per focus node the pre-binding rewrite — the algebra clone, the term
+/// materialization, the pushdown, the seed and the expression walk together — is
+/// 27% to 51% of the charge depending on the surface, and the algebra clone
+/// alone is only 4% to 7% of it. The larger share, 39% to 48%, is **evaluating
+/// the tree that rewrite just minted**: the seed `VALUES` node, the join onto it,
+/// and the `VarSchema` every `Project` and `Bgp` rebuilds because the node it
+/// belongs to is a fresh heap temporary. Removing the pre-binding charge
+/// entirely would still leave a per-focus-node term.
 ///
-/// Those shares were measured against a term of 100/218/120/200. Two of the
-/// components they name have since been removed — the plan-cache key is now
-/// built in a buffer the cache reuses and probed borrowed, so a cache hit does
-/// not allocate one, and the pre-binding rewrite's pushdown and seed join now
-/// ride a single descent over the core pattern instead of two — which is what
-/// took the term to the 96/214/116/194 the sibling file pins. The shares
-/// themselves have not been re-measured and are left as the reading that
-/// motivated those removals.
+/// Three components an earlier reading named are not on this path and each was
+/// measured at zero rather than assumed away: the plan-cache probe, which a hit
+/// already satisfies without allocating; the governed prelude, which validating a
+/// focus set never reaches because no governors are installed; and the evaluation
+/// context, which allocates exactly once per execution and is already minimal.
+/// `docs/design/purrdf-change-path-allocations.md` carries the full table.
 ///
 /// So these entries move OUT of `SIBLING_FILE_COVERAGE` and into `CASES` only
 /// when a focus node costs no allocation at all, which needs the evaluator's

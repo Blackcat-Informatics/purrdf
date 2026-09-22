@@ -1087,7 +1087,7 @@ fn refuses_expected_identity() {
         ProductDimension::ShapesGraph,
     );
 
-    // The GAP this closes, stated as a passing assertion: the very same product
+    // The gap this closes, stated as a passing assertion: the very same product
     // admits when nothing says which product was wanted. That is not a hole in
     // `admit` — it is the question `admit` cannot ask, and the reason the bound
     // entry point has to exist for a consumer to be able to ask it.

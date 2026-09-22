@@ -1466,10 +1466,18 @@ fn eval_node_expr_at_depth(
             let branch = match cond_nodes.as_slice() {
                 [] => (els, 2),
                 [t] => {
-                    let ebv = crate::sparql::eval_scalar_query_view(
+                    // A static query with a single, constant parameter name, reached
+                    // once per focus node from a loop `rayon` fans across workers —
+                    // so it runs on this worker's PREPARED handle rather than on the
+                    // `&str` door. The `&str` door had to be handed an owned
+                    // `(String, Term)` list, which allocated the vector, the name
+                    // `"c"` and a clone of the term on every probe; the handle takes
+                    // the term straight into its one slot.
+                    let ebv = crate::sparql::eval_cached_scalar_query_view(
                         store.sparql_view(),
                         EBV_PROBE_QUERY,
-                        &[("c".to_owned(), t.clone())],
+                        &["c"],
+                        |execution| execution.bind(0, t.to_term_value()),
                     )?;
                     match ebv {
                         Some(term) if term == bool_literal(true) => (then, 1),
@@ -1528,34 +1536,50 @@ fn eval_node_expr_at_depth(
             let mut out: Vec<Term> = Vec::new();
             if combinations > 0 {
                 // A non-zero product guarantees every value-set is non-empty. The
-                // argument keys — and their (reverse) positions in `bindings` — are
-                // invariant across combinations, so the buffer is built once and only
-                // the bound `Term` is overwritten each pass: no per-combination key
-                // formatting and no per-combination `Vec` allocation.
-                let mut bindings: Vec<(String, Term)> = arg_values
-                    .iter()
-                    .enumerate()
+                // argument names are invariant across combinations, so they are
+                // formatted once — and so is the QUERY, which is why the whole loop
+                // runs on ONE prepared handle: the `&str` door re-hashed the query
+                // text to probe the plan cache, and re-interned `?a0 … ?an`, on every
+                // tuple of the product. `a0 … a{n-1}` cannot repeat, so the handle
+                // always applies.
+                //
+                // This worker's CACHED handle, not a local one, even though the
+                // product loop is serial: this arm runs once per focus node over a
+                // product that is commonly a single tuple, so a local handle would pay
+                // a fresh preparation per focus node to save a probe on the one or two
+                // runs inside it — a preparation the cache amortizes over the whole
+                // focus set instead.
+                let names: Vec<String> = (0..arg_values.len())
                     .rev()
-                    .map(|(i, values)| (format!("a{i}"), values[0].clone()))
+                    .map(|i| format!("a{i}"))
                     .collect();
+                let parameters: Vec<&str> = names.iter().map(String::as_str).collect();
                 for k in 0..combinations {
-                    // Decode the linear index `k` into a mixed-radix tuple: the digit
-                    // for argument `i` is `(k / stride) % len`, iterating the last
-                    // argument fastest (row-major over the value-sets). `bindings` and
-                    // `arg_values.iter().rev()` share the same last-argument-first
-                    // order, so the slots line up with the reversed value-sets.
-                    let mut rem = k;
-                    for (slot, values) in bindings.iter_mut().zip(arg_values.iter().rev()) {
-                        let digit = rem % values.len();
-                        rem /= values.len();
-                        slot.1 = values[digit].clone();
-                    }
                     // A SPARQL error/unbound result is the correct SHACL-AF "no value"
                     // signal for that tuple — it contributes nothing, not a violation.
-                    if let Some(term) = crate::sparql::eval_scalar_query_view(
+                    if let Some(term) = crate::sparql::eval_cached_scalar_query_view(
                         store.sparql_view(),
                         query,
-                        &bindings,
+                        &parameters,
+                        |execution| {
+                            // Decode the linear index `k` into a mixed-radix tuple:
+                            // the digit for argument `i` is `(k / stride) % len`,
+                            // iterating the last argument fastest (row-major over the
+                            // value-sets). The slots and `arg_values.iter().rev()`
+                            // share the same last-argument-first order, which is the
+                            // order `names` was built in, so slot `s` is the name
+                            // `a{n-1-s}` and the reversed value-set at `s`.
+                            //
+                            // EVERY slot is written on every pass — the loop is over
+                            // all of them and none of its arms can skip one.
+                            let mut rem = k;
+                            for (slot, values) in arg_values.iter().rev().enumerate() {
+                                let digit = rem % values.len();
+                                rem /= values.len();
+                                execution.bind(slot, values[digit].to_term_value())?;
+                            }
+                            Ok(())
+                        },
                     )? {
                         out.push(term);
                     }

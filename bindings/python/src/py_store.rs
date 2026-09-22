@@ -54,6 +54,7 @@ mod canon;
 mod env;
 mod io;
 mod mutable;
+mod prepared;
 mod query;
 mod results;
 mod store;
@@ -85,6 +86,7 @@ pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {
 /// Register the native Store / term / SPARQL surface on the `purrdf` module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRdfFormat>()?;
+    m.add_class::<prepared::PyPreparedQuery>()?;
     m.add_class::<canon::PyCanonicalizationAlgorithm>()?;
     m.add_class::<term::PyNamedNode>()?;
     m.add_class::<term::PyBlankNode>()?;

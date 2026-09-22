@@ -114,6 +114,7 @@ mod path;
 pub mod path_relation;
 mod plan_cache;
 mod plan_memory;
+mod prebind_memo;
 pub mod predicate_use;
 pub mod property_fn;
 mod property_fn_eval;
@@ -127,6 +128,7 @@ mod row_ingest;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.
+pub mod execution;
 pub mod service;
 pub mod solution;
 pub mod stat_agg;
@@ -156,6 +158,13 @@ pub use error::{EvalError, UnsupportedKind};
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
 };
+pub use execution::PreparedExecution;
+// The debug-only escape hatch from `PreparedExecution`'s memo differential oracle,
+// re-exported at the crate root beside the handle it instruments. See
+// [`execution::set_memo_verification_enabled`] for why it exists and how narrow its
+// scope is; `crates/shapes/tests/sparql_path_alloc.rs` is its one caller.
+#[cfg(debug_assertions)]
+pub use execution::set_memo_verification_enabled;
 pub use extension_env::ExtensionEnv;
 pub use fallible::{CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult};
 pub use governed::{

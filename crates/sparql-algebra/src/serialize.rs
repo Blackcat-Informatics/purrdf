@@ -994,7 +994,7 @@ fn fmt_ground_term(s: &mut String, gt: &GroundTerm) {
         }
         GroundTerm::Literal(l) => fmt_literal(s, l),
         GroundTerm::Triple(t) => fmt_ground_triple(s, t),
-        // Injection-only (GAP-A): emitted as a blank-node label. The parser never
+        // Injection-only: emitted as a blank-node label. The parser never
         // produces this variant, and `purrdf-sparql-eval`'s `SERVICE` forwarding path
         // (`sanitize_forwarded_body` in `crates/sparql-eval/src/remote.rs`) strips every
         // `Values` column carrying one before a substituted `SERVICE` body is

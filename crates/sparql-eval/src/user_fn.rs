@@ -1226,7 +1226,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // was an ordinary triple pattern, and a body that needed reordering failed per
     // row rather than being ordered once.
     let substituted = crate::substitute::apply_substitutions(
-        body.query.clone(),
+        body.query().clone(),
         crate::substitute::Prebindings::Owned(&substitutions),
     )
     .map_err(|d| EvalError::function(d.to_string()))?;
@@ -1652,6 +1652,301 @@ mod tests {
             var: var.to_owned(),
             constraint: TypeConstraint::default(),
         }
+    }
+
+    // ── the pre-binding soundness envelope at THIS call site ──────────────────
+    //
+    // [`eval_user_function`] pre-binds a call's arguments into the declared body
+    // through `crate::substitute::apply_substitutions`. It is the third of the
+    // three pre-binding call sites, and it was the one with no envelope coverage:
+    // the engine's `&str` query door (`crate::engine`'s `prebinding_*` tests) and
+    // the prepared handle (`tests/prepared_execution.rs`) each pin this envelope
+    // already, and neither of them covers this one.
+    //
+    // They do not, and the reason is worth stating rather than assuming. The
+    // envelope is a property of the REWRITE, but what reaches the rewrite is a
+    // property of the CALL SITE: here the probe list is built from the function's
+    // declared parameters in call order, with an unbound optional argument dropped
+    // and a mandatory one short-circuiting the whole call — a construction neither
+    // other site performs. A defect in that construction (a parameter list that
+    // repeats a name, an argument whose kind the pushdown must refuse) produces a
+    // silently different ANSWER from this function, and no test of the other two
+    // doors can see it.
+    //
+    // Four of the envelope's five clauses are observable here and are pinned below.
+    // The fifth — that the pushdown runs BEFORE the seed — is not, and deliberately
+    // gets no test: once both halves have run, the order they ran in is invisible
+    // in the answer, which is exactly why `crate::engine`'s
+    // `prebinding_pushdown_runs_before_the_seed` asserts it against the PRODUCED
+    // ALGEBRA rather than against a result. This call site builds its rewritten body
+    // as a local and hands it straight to evaluation, exposing no algebra to assert
+    // on, so an answer-shaped test for that clause here would pass whether or not
+    // the rule held — a test that cannot fail for the reason it states. The clause
+    // is a property of `apply_substitutions` itself, and this site calls that very
+    // function, so it is pinned where it is observable and not restated where it is
+    // not.
+
+    /// The namespace of the pre-binding envelope fixture below.
+    const ENV: &str = "http://example.org/env#";
+    /// The function the envelope tests declare and call.
+    const EX_PROBE: &str = "http://example.org/env#probe";
+
+    /// Three subjects on one predicate with three DISTINCT objects, one subject a
+    /// BLANK NODE.
+    ///
+    /// Distinct objects are the observing oracle: every assertion below reads the
+    /// object a call answered, so a rewrite that widened the match answers a
+    /// NEIGHBOUR's object rather than answering nothing, and the two cannot be
+    /// confused. The blank subject is what makes the blank-node clause testable at
+    /// all — the pre-bound value has to be a blank the dataset really holds, not one
+    /// minted for the test.
+    fn envelope_dataset() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri(&format!("{ENV}p"));
+        let a = b.intern_iri(&format!("{ENV}a"));
+        let second = b.intern_iri(&format!("{ENV}b"));
+        let x = b.intern_iri(&format!("{ENV}x"));
+        let y = b.intern_iri(&format!("{ENV}y"));
+        let z = b.intern_iri(&format!("{ENV}z"));
+        let blank = b.intern_blank("bn", purrdf_core::BlankScope::DEFAULT);
+        b.push_quad(a, p, x, None);
+        b.push_quad(second, p, y, None);
+        b.push_quad(blank, p, z, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// Declare `ex:probe` with one parameter per name in `params` and `body`, then
+    /// evaluate `SELECT ((ex:probe(args)) AS ?v) WHERE { outer }` over
+    /// [`envelope_dataset`] and return what `?v` was bound to.
+    ///
+    /// `None` means the call produced NO VALUE, which is what an empty body result
+    /// set becomes (SHACL-AF §5.2) — the observable the unsatisfiable-repeat case
+    /// below turns on.
+    fn probe(params: &[&str], body: &str, args: &str, outer: &str) -> Option<TermValue> {
+        let declared: Vec<UserFnParam> = params.iter().map(|name| int_param(name)).collect();
+        let required = declared.len();
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(
+            EX_PROBE,
+            UserFunction {
+                params: declared,
+                required,
+                body: body_text(body),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        let ds = envelope_dataset();
+        let query = format!("SELECT ((<{EX_PROBE}>({args})) AS ?v) WHERE {{ {outer} }}");
+        let result = NativeSparqlEngine::new()
+            .query_with_options_view(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
+                    functions: &BoundFunctionRegistry::bound_for_test(registry),
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("the envelope fixture's outer query evaluates");
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("expected solutions");
+        };
+        assert_eq!(rows.len(), 1, "the fixture yields exactly one outer row");
+        rows[0][0].clone()
+    }
+
+    /// The integer a probe call answered.
+    fn probe_count(params: &[&str], body: &str, args: &str) -> i64 {
+        match probe(params, body, args, "") {
+            Some(TermValue::Literal { lexical_form, .. }) => {
+                lexical_form.parse().expect("an integer count")
+            }
+            other => panic!("expected an integer count, got {other:?}"),
+        }
+    }
+
+    /// The IRI a probe call answered.
+    fn probe_iri(value: Option<TermValue>) -> String {
+        match value {
+            Some(TermValue::Iri(iri)) => iri,
+            other => panic!("expected an IRI, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_user_function_argument_is_not_pushed_into_an_optional_right_arm() {
+        // `?s :p ?o OPTIONAL { ?s :p ?n }` with the argument :x.
+        //
+        // The right arm binds ?n to each subject's own object, so only :a's row
+        // carries ?n = :x and only it survives the seed join: ONE row.
+        //
+        // Restricting the right arm to `?s :p <x>` instead would leave it matching
+        // only :a; :b and the blank subject would become OPTIONAL MISSES, be
+        // null-padded with ?n UNBOUND, and an unbound cell is compatible with the
+        // seed — so all THREE rows would survive. Three against one: the divergence
+        // is the whole answer, not a rounding of it.
+        let count = probe_count(
+            &["n"],
+            &format!(
+                "SELECT (COUNT(*) AS ?c) WHERE {{ ?s <{ENV}p> ?o OPTIONAL {{ ?s <{ENV}p> ?n }} }}"
+            ),
+            &format!("<{ENV}x>"),
+        );
+        assert_eq!(
+            count, 1,
+            "only the subject whose object IS :x survives the seed join; 3 would mean \
+             the pushdown entered the OPTIONAL and turned matches into null-padded misses"
+        );
+    }
+
+    #[test]
+    fn a_user_function_argument_is_not_pushed_into_a_minus_right_arm() {
+        // `?s :p ?o MINUS { ?s :p ?n }` with the argument :x.
+        //
+        // The right arm produces one row per subject and shares ?s with the left, so
+        // MINUS removes EVERY left row: the count is zero. Restricting the right arm
+        // to `?s :p <x>` would leave it matching only :a, so :b and the blank subject
+        // would survive — two where the algebra says none.
+        let count = probe_count(
+            &["n"],
+            &format!(
+                "SELECT (COUNT(*) AS ?c) WHERE {{ ?s <{ENV}p> ?o MINUS {{ ?s <{ENV}p> ?n }} }}"
+            ),
+            &format!("<{ENV}x>"),
+        );
+        assert_eq!(
+            count, 0,
+            "every left row has a compatible right row, so MINUS removes all of them; \
+             a non-zero count would mean the pushdown narrowed the right arm"
+        );
+    }
+
+    #[test]
+    fn a_user_function_argument_that_is_a_blank_node_is_never_pushed() {
+        // A blank node in a query pattern is a NON-DISTINGUISHED VARIABLE (SPARQL
+        // 1.2 §4.1.4), not a request to match one particular dataset blank, so
+        // writing a pre-bound blank into a triple pattern would WIDEN the match to
+        // every subject instead of narrowing it to the one. `term_pattern_from_ground`
+        // refuses it and the `VALUES` seed binds it instead.
+        //
+        // The body sorts ASCENDING and the function returns the FIRST row, so the
+        // two outcomes are different IRIs rather than different row counts: the
+        // blank subject's object is :z (the LAST in sort order), and a pushed blank
+        // would match all three subjects and answer :x.
+        let body = format!("SELECT ?o WHERE {{ ?n <{ENV}p> ?o }} ORDER BY ?o");
+
+        // The argument is read out of the dataset rather than spelled in the call,
+        // because a blank node has no SPARQL surface syntax that denotes a
+        // particular dataset blank.
+        let blank_answer = probe(&["n"], &body, "?b", &format!("?b <{ENV}p> <{ENV}z>"));
+        assert_eq!(
+            probe_iri(blank_answer),
+            format!("{ENV}z"),
+            "a blank-node argument must be bound by the seed alone, matching only its \
+             own subject; :x would mean it was written into the pattern as an \
+             anonymous variable and matched everything"
+        );
+
+        // The neighbour, and the non-vacuity control: an IRI argument over the SAME
+        // body IS pushed, and still answers its own subject's object. Without this
+        // the test above is equally satisfied by a rewrite that pre-binds nothing at
+        // all — :z is also what an unconstrained `ORDER BY ?o DESC` would give, and
+        // more importantly "the blank is not pushed" and "nothing is ever pushed"
+        // read identically from one row.
+        let iri_answer = probe(&["n"], &body, &format!("<{ENV}a>"), "");
+        assert_eq!(
+            probe_iri(iri_answer),
+            format!("{ENV}x"),
+            "an IRI argument must still narrow the pattern to its own subject"
+        );
+    }
+
+    #[test]
+    fn a_user_function_argument_keeps_its_binding_for_an_inner_filter() {
+        // Two UNION arms, each a BGP on ?n guarded by a FILTER that reads ?n.
+        //
+        // The arms are BELOW the core pattern the seed joins onto, so the seed's
+        // binding is not in scope while they are evaluated. Writing the constant into
+        // their triple patterns removes ?n from their schema, so each rewritten leaf
+        // carries its own single-row `VALUES` restoring the column. Without that
+        // restore both FILTERs would compare an UNBOUND ?n, the body would answer
+        // nothing, and the call would have no value.
+        let answer = probe(
+            &["n"],
+            &format!(
+                "SELECT ?o WHERE {{ \
+                 {{ ?n <{ENV}p> ?o FILTER(?n = <{ENV}a>) }} UNION \
+                 {{ ?n <{ENV}p> ?o FILTER(?n = <{ENV}b>) }} }}"
+            ),
+            &format!("<{ENV}a>"),
+            "",
+        );
+        assert_eq!(
+            probe_iri(answer),
+            format!("{ENV}x"),
+            "the :a arm's guard holds and the :b arm's does not; NO VALUE would mean \
+             the inner FILTERs saw ?n unbound, so a rewritten leaf lost its binding \
+             instead of restoring it"
+        );
+    }
+
+    // ── the repeated-variable fallback, at this call site ─────────────────────
+    //
+    // A function's parameters are pre-bound by NAME, and nothing above this stops a
+    // declaration from naming one variable twice — a SHACL-AF declaration whose two
+    // `sh:parameter`s carry the same local name reaches
+    // [`eval_user_function`] as a probe list with a repeated `Variable`. That is the
+    // one shape the combined single-row seed cannot represent (a `VALUES` row has
+    // one cell per variable), so `apply_probes` keeps a per-variable path for it.
+    // The pair below is that branch: the shape the combined seed cannot spell, and
+    // its NEIGHBOUR, a repeat that IS satisfiable — because "the branch works" and
+    // "the branch refuses everything" are indistinguishable from the first alone.
+
+    #[test]
+    fn a_user_function_repeating_a_parameter_name_incompatibly_has_no_value() {
+        // Both parameters are `?n`, bound to :a AND to :b. Two single-row `Values`
+        // joins binding one variable to two different terms are incompatible, so the
+        // body's result set is empty — and an empty SELECT body is SHACL-AF's "no
+        // value", not an error.
+        let answer = probe(
+            &["n", "n"],
+            &format!("SELECT ?o WHERE {{ ?n <{ENV}p> ?o }}"),
+            &format!("<{ENV}a>, <{ENV}b>"),
+            "",
+        );
+        assert_eq!(
+            answer, None,
+            "binding one variable to two distinct terms is unsatisfiable, so the body \
+             answers nothing and the call has no value; a bound ?v would mean one of \
+             the two pre-bindings was dropped rather than joined"
+        );
+    }
+
+    #[test]
+    fn a_user_function_repeating_a_parameter_name_compatibly_still_answers() {
+        // The neighbour: the SAME parameter name twice, to the SAME term. This still
+        // takes the repeated-variable path — the branch looks at NAMES, not values —
+        // and the two seeds are compatible, so the body answers :a's object.
+        //
+        // :x is the control that makes this able to fail for its stated reason: the
+        // other two subjects' objects are :y and :z, so an answer of :x cannot have
+        // come from a dropped pre-binding widening the match.
+        let answer = probe(
+            &["n", "n"],
+            &format!("SELECT ?o WHERE {{ ?n <{ENV}p> ?o }}"),
+            &format!("<{ENV}a>, <{ENV}a>"),
+            "",
+        );
+        assert_eq!(
+            probe_iri(answer),
+            format!("{ENV}x"),
+            "a parameter repeated to the SAME term is satisfiable, so the \
+             repeated-variable path must still answer"
+        );
     }
 
     /// A SELECT-bodied function `inc(?n) = ?n + 1` returns the projected value.

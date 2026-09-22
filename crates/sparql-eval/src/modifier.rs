@@ -134,7 +134,7 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let schema = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
+    let schema = VarSchema::interned(variables);
     let width = schema.len();
     // `VALUES` is 1:1 with its inline bindings, in order, so the pushed row ceiling is
     // simply how many of them are worth interning. Interning is not free — every ground
@@ -196,10 +196,10 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        let schema = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
+        let schema = VarSchema::interned(variables);
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
-    let out = Arc::new(VarSchema::from_vars(variables.iter().cloned()));
+    let out = VarSchema::interned(variables);
     // For each projected column, the source column in the inner schema (if any).
     let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
     let rows = seq

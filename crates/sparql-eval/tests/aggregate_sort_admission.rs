@@ -83,7 +83,6 @@ fn calls_reachable_only_through_aggregate_sort_keys_require_admission() {
         )],
     };
     let engine = NativeSparqlEngine::new();
-    let data = RdfDatasetBuilder::new().freeze().unwrap();
     for (inner, code) in [
         (call, "native-sparql-property-function"),
         (custom, "native-sparql-aggregate-function"),
@@ -96,28 +95,29 @@ fn calls_reachable_only_through_aggregate_sort_keys_require_admission() {
                 .code,
             code
         );
-        assert!(PreparedQuery::rewritten(query.clone(), QueryOptions::EMPTY).is_err());
-        let mut prepared = PreparedQuery::rewritten(
-            ask(GraphPattern::Bgp { patterns: vec![] }),
-            QueryOptions::EMPTY,
-        )
-        .unwrap();
-        prepared.query = query;
-        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-        assert_eq!(
-            engine
-                .query_prepared_governed_in_operation(
-                    &*data,
-                    &prepared,
-                    &[],
-                    QueryOptions::EMPTY,
-                    &state,
-                )
-                .unwrap_err()
-                .code,
-            code
-        );
-        assert_eq!(state.evidence().consumed_in(ResourceDimension::Fuel), 0);
+        assert!(PreparedQuery::rewritten(query, QueryOptions::EMPTY).is_err());
+        // A third assertion used to stand here: build a trivially-admitted
+        // `PreparedQuery`, overwrite its `query` field by hand with the
+        // sort-key-only call above (bypassing admission entirely), and confirm
+        // `query_prepared_governed_in_operation` still refused it — proving that
+        // entry re-validates fully rather than trusting an already-admitted plan.
+        //
+        // `PreparedQuery::query` is now a private field with no setter (see
+        // `crates/sparql-eval/src/engine.rs`), so that construction no longer
+        // compiles, and there is no OTHER door that hands back a `PreparedQuery`
+        // whose algebra was never admitted: every constructor — `rewritten`
+        // above, `NativeSparqlEngine::prepare_algebra`, and every `PlanCache`
+        // door — runs `admit_algebra` before returning one, and this exact query
+        // is refused by all of them (see the two assertions above). The state the
+        // third assertion forged is therefore unreachable through the public API,
+        // not merely untested; the coverage it carried — that
+        // `query_prepared_governed_in_operation` fully re-validates a plan whose
+        // provenance it cannot know rather than trusting a stale admission — is
+        // preserved for plans that legitimately CAN disagree with a call's
+        // registries, in `crates/sparql-eval/tests/prepared_execution.rs`
+        // (`executing_a_prepared_plan_under_a_mismatched_*_registry_is_refused_…`).
+        // Nothing else in this workspace depended on the forged-state assertion
+        // that stood here.
     }
 }
 

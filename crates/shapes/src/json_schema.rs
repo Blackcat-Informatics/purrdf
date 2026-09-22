@@ -1027,7 +1027,7 @@ pub fn compile_with_value_vocab(
     ns: &Namespaces,
     projection: Option<&ValueVocabProjection<'_>>,
 ) -> Result<CompiledSchema, SchemaCompileError> {
-    // Keying invariant (Gap D, fail-closed): every primary-namespace `$def`
+    // Keying invariant (fail-closed): every primary-namespace `$def`
     // is keyed by the class LOCAL NAME and the `@type` discriminator is
     // `<primary_prefix>:<LocalName>`. That is sound ONLY while every target
     // class is in a declared namespace and no two distinct class IRIs share a
@@ -1884,7 +1884,7 @@ fn reserved_key_seed() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Enforce the keying precondition (Gap D): every active `sh:targetClass` /
+/// Enforce the keying precondition: every active `sh:targetClass` /
 /// implicit-class target is in a DECLARED namespace (so [`Namespaces::def_key`]
 /// yields a stable `$defs` key and [`node_def`] can rebuild its `@type` const)
 /// and those keys are collision-free. Returns the public typed compilation
@@ -3117,8 +3117,8 @@ mod tests {
     #[should_panic(expected = "target class has no declared namespace prefix")]
     fn unknown_namespace_target_class_hard_fails() {
         // A target class from an UNDECLARED namespace has no prefix CURIE to key
-        // its `$defs`/discriminator by; the keying guard must reject it loudly
-        // (Gap D). A DECLARED non-primary prefix (e.g. logic:) is accepted —
+        // its `$defs`/discriminator by; the keying guard must reject it loudly.
+        // A DECLARED non-primary prefix (e.g. logic:) is accepted —
         // see `logic_target_class_keyed_by_curie`.
         compile_ttl(
             r"

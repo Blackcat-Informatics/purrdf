@@ -136,5 +136,5 @@ pub mod terminals;
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};
 pub use error::{IriError, Result};
-pub use parse::{Iri, parse, parse_uri};
+pub use parse::{Iri, is_absolute, parse, parse_uri};
 pub use pos::{LineIndex, Position};

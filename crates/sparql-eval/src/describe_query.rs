@@ -23,8 +23,6 @@ use purrdf_core::describe::Describer;
 use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
-use std::sync::Arc;
-
 use crate::construct::ConstructedGraph;
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated, materialize_solutions};
@@ -86,7 +84,7 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
     } else {
         // A `DESCRIBE <iri>` with no variable target evaluates no pattern at all, and the
         // empty sequence is the honest statement of that.
-        (None, SolutionSeq::empty(Arc::new(VarSchema::new())))
+        (None, SolutionSeq::empty(VarSchema::empty_shared()))
     };
 
     let graph = Describer::new(ctx.dataset)

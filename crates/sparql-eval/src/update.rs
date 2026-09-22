@@ -101,7 +101,8 @@ use crate::governor::{ChargePoint, GovernorState, StopSignal};
 use crate::plan_cache::BoundedOrderCache;
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
-    instantiate_ground_term, instantiate_predicate, instantiate_term, positionally_ill_formed,
+    TripleOrdinal, instantiate_ground_term, instantiate_predicate, instantiate_term,
+    positionally_ill_formed, resolve_triple,
 };
 
 /// Why an UPDATE request stopped before applying.
@@ -580,6 +581,15 @@ fn delete_insert(
         .map_err(|truncation| UpdateAbort::Tripped(truncation.tripped()))?;
     let schema = seq.schema.clone();
 
+    // Each DELETE/INSERT template quad's column ordinals, resolved ONCE against
+    // `schema` — the schema is a plan constant for this whole operation, so this
+    // is the row loop's `index_of` cost paid exactly once per template position,
+    // not once per (row, position) pair. See `QuadOrdinal`'s doc comment.
+    let delete_ordinals: Vec<QuadOrdinal> =
+        delete.iter().map(|qp| resolve_quad(qp, &schema)).collect();
+    let insert_ordinals: Vec<QuadOrdinal> =
+        insert.iter().map(|qp| resolve_quad(qp, &schema)).collect();
+
     // Collect the mutations BEFORE touching `m`, so the snapshot stays valid for the
     // value resolution. DELETE before INSERT per row (SPARQL §3.1.3).
     let mut to_remove = Vec::new();
@@ -591,11 +601,11 @@ fn delete_insert(
     let mut ins_blanks: DetHashMap<String, String> = DetHashMap::default();
     for row in &seq.rows {
         del_blanks.clear();
-        for qp in delete {
+        for (qp, ordinal) in delete.iter().zip(&delete_ordinals) {
             if let Some(q) = instantiate_quad_with_default(
                 qp,
+                ordinal,
                 row,
-                &schema,
                 &mut del_blanks,
                 &mut ctx,
                 with_value.as_ref(),
@@ -608,11 +618,11 @@ fn delete_insert(
             }
         }
         ins_blanks.clear();
-        for qp in insert {
+        for (qp, ordinal) in insert.iter().zip(&insert_ordinals) {
             if let Some(q) = instantiate_quad_with_default(
                 qp,
+                ordinal,
                 row,
-                &schema,
                 &mut ins_blanks,
                 &mut ctx,
                 with_value.as_ref(),
@@ -943,23 +953,56 @@ fn instantiate_ground_quad(
     Some(QuadValues { s, p, o, g })
 }
 
+/// One `QuadPattern`'s column ordinals, resolved once against a fixed
+/// [`VarSchema`] — see [`crate::template::TermOrdinal`]'s doc comment for why
+/// this is hoisted out of the per-row loop in [`delete_insert`]. `graph` is the
+/// ordinal for a `Variable` graph slot only; it is unused (and left `None`, which
+/// is harmless because [`instantiate_quad_with_default`] only reads it inside the
+/// `Some(NamedNodePattern::Variable(_))` arm) when `qp.graph` is `None` or a
+/// ground IRI.
+struct QuadOrdinal {
+    triple: TripleOrdinal,
+    graph: Option<usize>,
+}
+
+/// Resolve one `QuadPattern`'s ordinals against `schema`. Called once per
+/// template quad, before the row loop.
+fn resolve_quad(qp: &QuadPattern, schema: &VarSchema) -> QuadOrdinal {
+    QuadOrdinal {
+        triple: resolve_triple(&qp.triple, schema),
+        graph: match &qp.graph {
+            Some(NamedNodePattern::Variable(v)) => schema.index_of(v),
+            Some(NamedNodePattern::NamedNode(_)) | None => None,
+        },
+    }
+}
+
 /// Instantiate one solution-driven `QuadPattern` (subject/pred/object + optional
 /// graph) into a concrete [`QuadValues`], with a `default_graph` (the WITH graph) used
 /// when the pattern's own graph slot is `None`. `None` if any position holds an unbound
 /// variable, or the result is positionally ill-formed (a non-IRI/blank asserted
 /// subject, a non-IRI predicate, or an ill-formed object triple term), or the graph
 /// slot is a variable bound to a non-IRI.
+///
+/// `ordinal` is `qp`'s [`QuadOrdinal`], resolved once per template — see that
+/// type's doc comment.
 fn instantiate_quad_with_default<D: purrdf_core::DatasetView + Sync>(
     qp: &QuadPattern,
+    ordinal: &QuadOrdinal,
     row: &Solution<D::Id>,
-    schema: &VarSchema,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
     default_graph: Option<&TermValue>,
 ) -> Option<QuadValues> {
-    let s = instantiate_term(&qp.triple.subject, row, schema, blanks, ctx)?;
-    let p = instantiate_predicate(&qp.triple.predicate, row, schema, ctx)?;
-    let o = instantiate_term(&qp.triple.object, row, schema, blanks, ctx)?;
+    let s = instantiate_term(
+        &qp.triple.subject,
+        &ordinal.triple.subject,
+        row,
+        blanks,
+        ctx,
+    )?;
+    let p = instantiate_predicate(&qp.triple.predicate, &ordinal.triple.predicate, row, ctx)?;
+    let o = instantiate_term(&qp.triple.object, &ordinal.triple.object, row, blanks, ctx)?;
 
     // Positional validity (§16.2 / template rules): an asserted subject that is not
     // an IRI or a blank node, a non-IRI predicate, or an object triple term whose own
@@ -971,8 +1014,8 @@ fn instantiate_quad_with_default<D: purrdf_core::DatasetView + Sync>(
     // Graph slot: explicit pattern graph → else the WITH default → else None.
     let g = match &qp.graph {
         Some(NamedNodePattern::NamedNode(n)) => Some(named_node_to_value(n)),
-        Some(NamedNodePattern::Variable(v)) => {
-            let term = schema.index_of(v).and_then(|c| row[c])?;
+        Some(NamedNodePattern::Variable(_)) => {
+            let term = ordinal.graph.and_then(|c| row[c])?;
             let value = ctx.scratch.value_of(ctx.dataset, term);
             // A graph name must be an IRI; a non-IRI binding makes the quad
             // ill-formed → skip.
@@ -1064,6 +1107,20 @@ mod tests {
         MutableDataset::new(b.freeze().expect("freeze base"))
     }
 
+    /// A fresh mutable dataset over `n` distinct `ex:knows` edges
+    /// (`ex:s{i} ex:knows ex:o{i}`), so a `WHERE { ?s ex:knows ?o }` matches
+    /// exactly `n` rows, each with a distinct subject/object pair.
+    fn mut_with_knows_n(n: usize) -> MutableDataset {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(&format!("{EX}knows"));
+        for i in 0..n {
+            let s = b.intern_iri(&format!("{EX}s{i}"));
+            let o = b.intern_iri(&format!("{EX}o{i}"));
+            b.push_quad(s, knows, o, None);
+        }
+        MutableDataset::new(b.freeze().expect("freeze base"))
+    }
+
     /// The effective quads as a comparable set of value tuples.
     fn quad_set(m: &MutableDataset) -> std::collections::BTreeSet<String> {
         m.quads_for_pattern(None, None, None, GraphMatchValue::Any)
@@ -1111,6 +1168,53 @@ mod tests {
         let frozen = m.freeze().expect("freeze");
         assert_eq!(frozen.quad_count(), 1);
         assert!(frozen.term_id_by_value(&iri("a")).is_some());
+    }
+
+    /// Regression guard for the UPDATE side (`crate::construct` carries
+    /// the `CONSTRUCT` twin): `instantiate_quad_with_default` must resolve its
+    /// template's column ordinals ONCE per template — before the
+    /// `for row in &seq.rows` loop in `delete_insert` — never once per (row,
+    /// position) pair. `VarSchema::index_of` is `O(columns)` below
+    /// `INDEXED_ABOVE`, so a per-row caller would make the mutation's per-row cost
+    /// scale with row count. Running the SAME two-variable INSERT template over
+    /// two different `WHERE`-matched row counts and asserting the `index_of` call
+    /// delta is IDENTICAL both times fails loudly if a future edit reintroduces
+    /// `index_of` into the row loop.
+    #[test]
+    fn index_of_is_not_called_per_update_row() {
+        let update_text = "INSERT { ?s ex:related ?o } WHERE { ?s ex:knows ?o }";
+
+        let mut small = mut_with_knows_n(3);
+        VarSchema::reset_index_of_calls();
+        run(update_text, &mut small);
+        let small_calls = VarSchema::index_of_call_count();
+        assert_eq!(
+            quads_of_target(&GraphTarget::Default, &small)
+                .iter()
+                .filter(|q| q.p == iri("related"))
+                .count(),
+            3
+        );
+
+        let mut large = mut_with_knows_n(300);
+        VarSchema::reset_index_of_calls();
+        run(update_text, &mut large);
+        let large_calls = VarSchema::index_of_call_count();
+        assert_eq!(
+            quads_of_target(&GraphTarget::Default, &large)
+                .iter()
+                .filter(|q| q.p == iri("related"))
+                .count(),
+            300
+        );
+
+        assert_eq!(
+            small_calls, large_calls,
+            "index_of call count must be independent of solution-row count \
+             (3 rows: {small_calls} calls, 300 rows: {large_calls} calls) — a \
+             per-row caller of index_of has come back, so the mutation's cost \
+             now scales with the row count instead of staying constant per template"
+        );
     }
 
     #[test]
