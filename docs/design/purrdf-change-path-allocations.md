@@ -97,39 +97,108 @@ every quad with that predicate and discarded all but one subject's.
 
 The obvious hypothesis was that this cost is dominated by cloning the prepared
 algebra once per focus node and by materializing pre-bound terms as strings. It
-is measurably not.
+is measurably not — and the reductions in the next section have since removed
+almost all of both, which is why the table below is a different table from the
+one the first reading produced rather than the same table with smaller numbers.
 
-The decomposition below was taken by inserting **one extra, discarded copy** of
-each slice into the live path and differencing against the baseline, with the
+The decomposition is taken by inserting **one extra, discarded copy** of each
+slice into the live path and differencing against the baseline, with the
 evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
 and the slopes cannot be differenced. Figures are against the baseline of
-96 / 214 / 116 / 194 that held when the decomposition was taken; the reductions
-described in the next section moved them to 70 / 144 / 82 / 164, by emptying part
-of the term-materialization row and most of the rebuild cost inside the pushdown,
-seed and expression-walk rows. Two further reductions, described at the end of the
-same section, have since moved them again to 51 / 114 / 64 / 127.
+51 / 114 / 64 / 127 that held when this table was re-taken — the ungoverned
+figures the previous section pins, not the 96 / 214 / 116 / 194 the FIRST reading
+of this decomposition was taken against. That earlier figure is named here
+deliberately and is **historical**: ten reductions separate it from the term this
+table describes, and a decomposition still summing to it would attribute today's
+cost to components that no longer carry it.
 
 Slices that nest are differenced against each other rather than summed, so no
-allocation is counted twice: an extra `apply_shacl_prebinding` contains an extra
-`apply_substitutions`, which contains an extra algebra clone and an extra probe
-build; and the evaluation root contains every node beneath it.
+allocation is counted twice: the pre-binding rewrite contains the probe build and
+the memo's value write; the evaluation root contains every node beneath it; and
+the seed join contains both of its operands.
+
+One slice needs its extra copy handled rather than merely inserted. A run mints
+the terms its query COMPUTES into the execution's scratch interner, and an
+interner de-duplicates — so an extra copy of the whole evaluation would leave the
+real one finding its own terms already there, and the difference would read LOWER
+than an evaluation costs. The probe therefore empties the interner between the
+discarded copy and the real one, keeping its capacity, which is exactly what
+`ExecutionWorkspace::check_in` does between runs. All three readings were taken
+and they agree: with the interner left populated the evaluation row reads
+41 / 70 / 45 / **70**, with a virgin interner (which pays two table growths per
+evaluation context that the retained one does not) it reads 43 / 74 / 47 / **78**,
+and emptied-but-retained — the state a real run sees — it reads 41 / 70 / 45 / 74.
+The three surfaces that compute nothing are identical across all three once those
+two growths per evaluation context are allowed for; only `sh:expression`, whose
+`?result` is a computed term, differs, and by exactly four, two per run.
 
 | component | `sh:sparql` | `sh:ask` | `sh:select` | `sh:expression` |
 |---|---:|---:|---:|---:|
-| pre-binding rewrite, total | 37 | 110 | 49 | 52 |
-| — the algebra clone | 6 | 8 | 6 | 8 |
-| — term and string materialization | 11 | 48 | 18 | 30 |
-| — pushdown and seed descent | 8 | 12 | 8 | 14 |
-| — expression walk and the second ground-term conversion | 12 | 42 | 17 | — |
+| pre-binding rewrite, total | 3 | 24 | 8 | 20 |
+| — grounding this run's values into probes | 3 | 24 | 8 | 20 |
+| — the memo probe and the value write | — | — | — | — |
+| — the algebra clone | — | — | — | — |
+| — the pushdown, seed and expression walks | — | — | — | — |
 | evaluation context construction | 1 | 2 | 1 | 2 |
-| query-context preparation | 4 | 8 | 4 | 8 |
-| **evaluating the freshly minted tree** | **46** | **74** | **51** | **80** |
-| — of which the seed `VALUES` node | 6 | 22 | 8 | 16 |
-| — of which the seed join and its operands | 26 | 38 | 29 | 32 |
-| — of which the `Bgp` | 12 | 4 | 12 | 4 |
-| — of which per-node `VarSchema` construction | 6 | — | 6 | 6 |
-| SHACL-side remainder | 8 | 20 | 11 | 52 |
+| query-context preparation | — | — | — | — |
+| **evaluating the substituted tree** | **41** | **70** | **45** | **74** |
+| — of which the per-evaluation admission and depth walk | 4 | 8 | 4 | 8 |
+| — of which the root modifier node and everything under it | 37 | 62 | 41 | 62 |
+| — of which minting the computed term the row above then finds interned | — | — | — | 4 |
+| SHACL-side focus and value-node materialization | 1 | 6 | 3 | 1 |
+| SHACL-side binding writes | 4 | 10 | 6 | 8 |
+| SHACL-side parameter-name list | — | 1 | 1 | — |
+| SHACL-side node-expression argument marshalling | — | — | — | 13 |
+| SHACL-side scalar-result materialization | — | — | — | 8 |
+| SHACL-side handle checkout and restore | — | — | — | — |
+| SHACL-side remainder | 1 | 1 | — | 1 |
+
+The table **closes to 98.0%, 99.1%, 100% and 99.2%** of the four measured terms.
+What the last row holds is one allocation on three of the four surfaces and none
+on the fourth. No inserted copy moved it, and one allocation is the smallest
+thing this instrument can attribute at all, so it is published as an
+unattributed residual rather than guessed onto a neighbouring row.
+
+Three further slices nest INSIDE the root modifier node and are listed here
+rather than as table rows, because they do not partition it: the seed join and
+its operands cost 20 / 26 / 22 / 22, of which the seed `VALUES` node is
+3 / 14 / 5 / 10 and the `Bgp` is 10 / 2 / 10 / 2. The `Bgp` row splits the four
+surfaces cleanly by whether their body contains a triple pattern at all:
+`sh:sparql` and the `sh:select` component both match `ex:name`, while the
+`sh:ask` validator is a bare `FILTER` and the expression call's wrapper is
+`SELECT (… AS ?result) WHERE {}`, so on those two the `Bgp` is empty and costs
+the two allocations an empty one costs.
+
+The six SHACL-side rows are the validator's own per-focus-node work, and the
+first reading reported all of it as one undifferentiated remainder — 52 of 194 on
+`sh:expression`, a quarter of the term attributed to nothing. Each is now a
+measured slice. **Focus and value-node materialization** is `FocusNode::to_term`
+and `ValueNode::to_term`: SHACL-SPARQL and the component validators speak owned
+terms, so the focus node the traversal carries as an id is spelled out once per
+focus node, and the ASK component's two value nodes with it. **Binding writes** is
+what those owned terms then cost to put in a handle's slots, including the one
+slot the ASK component rewrites per value node and the argument slots the
+expression call rewrites per tuple. **The parameter-name list** is the `Vec<&str>`
+the two component validators build per invocation; `sh:sparql` builds none,
+because `this_and_shape_context_names` returns one of four `'static` slices.
+**Node-expression argument marshalling** is the cartesian-product arm of
+`crates/shapes/src/expression.rs`: the per-argument value sets, the `a0 … an`
+names, and the borrowed parameter list it hands the prepared door. **Scalar-result
+materialization** is `project_scalar` converting the computed `?result` back into
+an owned `Term` — twice per focus node here, once per tuple. **Handle checkout and
+restore** is the per-worker prepared-handle cache, and it is free.
+
+Five rows are **zero, measured rather than assumed**, and doubling any of them
+moves no figure on any surface. Each is a reduction that landed rather than a
+slice nobody looked at: the algebra clone, the pushdown and seed descent and the
+expression walk are gone from the per-run path because a prepared execution
+retains its substituted tree (`crates/sparql-eval/src/prebind_memo.rs`); the
+memo's own probe-and-write is free because writing a value into a retained tree
+is a refcount bump; applying the run's `QueryOptions` to a freshly built
+evaluation context allocates nothing; and taking this worker's prepared handle
+out of the SHACL handle cache and putting it back allocates nothing either,
+because a hit probes both levels of that cache by borrowed key.
 
 Three of the components the earlier reading named are **not on the measured path
 at all**, and each was measured at zero rather than assumed away.
@@ -152,7 +221,29 @@ this term" was a statement about which table the work landed in, not about wheth
 it ran. The governed table above is the measurement, and it shows the prelude is
 not there either: a prepared execution re-admits only its REGISTRIES per run
 (`check_prepared_registries_unchanged`), and the walks that depend on nothing but
-the plan are paid once at preparation.
+the plan are paid once at preparation. That surviving re-admission is itself
+free: an extra discarded copy of it on the ungoverned lane moves no figure on any
+of the four surfaces, because a fingerprint over an empty registry allocates
+nothing and the comparison is against one the plan already holds.
+
+The **relation-identity receipt** was the one piece of that prelude with a
+plausible per-focus-node cost left in it, because `RelationIdentity` carries an
+`iris: Vec<String>` and a `Vec<String>` is an allocation per entry plus one for
+the vector. The hypothesis was that the receipt is what makes `sh:expression`
+carry a larger remainder than the other three surfaces. It is **refuted, twice
+over and by measurement rather than by reading**. `relation_identity` is reached
+only from `execute_governed_in_operation`, so it cannot be in the UNGOVERNED
+table at all — and on the lane where it does run, an extra discarded copy of it
+moves not one allocation at any of the three governed focus populations, on any
+of the four surfaces. The reason is in the function: `iris` is `Vec::new()` when
+the registry is empty, which costs nothing and allocates nothing, and the
+fingerprint beside it is a clone of one the plan already computed. A validation
+that registers a property function would pay for that vector — but it would pay
+once per RUN whatever the shape, so it is not what separates one surface from
+another either. What actually accounts for `sh:expression`'s larger figure is in
+the table: it runs the query twice per focus node, and it marshals its arguments
+and materializes its scalar result on the SHACL side, at 13 and 8 allocations
+per focus node respectively.
 
 The two remaining pieces were removed rather than relocated, and the lane they
 were removed from is the one a bare `&PreparedQuery` reaches —
@@ -189,32 +280,52 @@ confirms: one for the two surfaces that run a single query per focus node, two
 for the two that run a query per value node or per argument tuple. The context is
 already minimal; every other field is lazy, borrowed, or `Copy`.
 
-So the dominant term is not *setting up* an execution. It is **evaluating a tree
-that was minted for this focus node and will be dropped at the end of it** — the
-seed `VALUES` the rewrite just built, the join onto it, and the `VarSchema` every
-`Project` and `Bgp` node rebuilds because the node it belongs to is a fresh heap
-temporary — and it is larger than the entire pre-binding rewrite on three of the
-four surfaces. Together with the rewrite that produced that tree, those two
-account for the whole per-focus-node figure, to within the SHACL-side remainder
-the last row names.
+So the dominant term is not *setting up* an execution, and it is no longer
+*minting* a tree either — the memo retains the substituted tree across focus
+nodes, so the seed `VALUES` node and the join onto it are built once and the
+`VarSchema` every `Project` and `Bgp` reaches is interned by content. What is
+left is **evaluating** that tree: running the seed join, probing the index, and
+carrying the rows out. It is larger than the entire pre-binding rewrite on four
+of the four surfaces, and on every one of them it is more than half the whole
+term.
 
-There is an irony worth recording. The pre-binding path round-trips an identity
-through a string and back to the same identity: a term id becomes an owned term
-value, becomes a ground term in the algebra, is rewritten into the pattern, and
-is then resolved by the compiler back to the same term id it started as. That
-round trip is real and it is wasteful. It is also a minority of the cost, which
-is why removing it was not the fix it appeared to be.
+The other half of the honest reading is that the remainder is no longer all
+inside the evaluator. On `sh:ask` and `sh:expression` the SHACL side now carries
+17 and 30 allocations per focus node — binding writes, argument marshalling and
+result materialization — against a pre-binding rewrite of 24 and 20. The next
+reduction on those two surfaces is a SHACL-side one.
+
+There is an irony worth recording, and the tenth reduction removed exactly the
+half of it that had an identity to carry. The pre-binding path round-trips an
+identity through a string and back to the same identity: a term id becomes an
+owned term value, becomes a ground term in the algebra, is rewritten into the
+pattern, and is then resolved by the compiler back to the same term id it
+started as. For `$this` that round trip is gone — the id door resolves straight
+into the algebra term. What the pre-binding row holds TODAY is the same round
+trip for every OTHER pre-binding: `$currentShape`, `$value`, and a custom
+component's declared parameter values, each of which SHACL still spells as an
+owned `TermValue` and the rewrite still re-grounds on every run. That is why the
+row follows the count of non-id bindings times the number of runs per focus node
+— 3 for one IRI-valued context binding on a single run, 24 for two literals and
+a context binding across two runs — rather than following the size of the query.
 
 ## Why an id-native pre-binding does not reach zero
 
 Carrying an identity through the pre-binding interface, taken to its theoretical
-maximum, removes the whole pre-binding row. That leaves 59, 104, 67 and 142
+maximum, removes the whole pre-binding row. That leaves 48, 90, 56 and 107
 allocations per focus node. The goal of no growth term is unreachable from that
-path — not narrowly, but by a factor of one and a half to two and a half on the
-residual alone, because nothing in the pre-binding path, taken alone, can reach
+path — not narrowly, but by between three and sixteen times the entire row that
+would be removed, because nothing in the pre-binding path, taken alone, can reach
 the evaluator's per-execution cost. That bounds identity-carrying pre-binding
 specifically; it does not bound every mechanism that could stand in for it, and
 the paragraph below is where a different one reached past it.
+
+Against the **historical** 96 / 214 / 116 / 194 baseline this same ceiling stood
+at 59 / 104 / 67 / 142, and that is the figure the two paragraphs below were
+decided against. It is recorded because the decisions were taken under it, not
+because it is a live number: the ceiling has fallen with the term, and it fell
+because the mechanism that reached past it is also what shrank the row the
+ceiling subtracts.
 
 At the time this section was first written, the contained version of that change
 did not exist either. The pushdown's boundary is a function of the query and the
@@ -227,7 +338,7 @@ then known both re-derive where the boundary sits: either the
 right-arm-of-`OPTIONAL`-and-`MINUS` rule in two further places, which is the
 change most likely to introduce a silent soundness difference, or a
 sentinel-marking scheme plus a second plan cache plus a side table threaded
-through four subsystems — for a ceiling that is still 59 / 104 / 67 / 142.
+through four subsystems — for a ceiling that is still 48 / 90 / 56 / 107.
 
 A third spelling avoids re-deriving the boundary at all, which is why it carries
 neither hazard the paragraph above named. `crates/sparql-eval/src/prebind_memo.rs`
@@ -240,9 +351,10 @@ discarded, and that run takes the ordinary path instead of a silently wrong one.
 Because it retains the whole substituted tree rather than only the pre-binding
 row, it is not bounded by this section's ceiling at all — that ceiling assumed the
 evaluator still mints a fresh tree every focus node, which a retained tree does
-not do. `sh:sparql`, `sh:select` and `sh:expression` now sit at or below
-59 / 104 / 67 / 142, one of the three exactly at it, and only `sh:ask` remains
-above, by 18 allocations, which the next section's numbers explain.
+not do. Measured against the 59 / 104 / 67 / 142 that ceiling stood at before the
+change, three of the four surfaces now sit below it — `sh:sparql` by 8,
+`sh:select` by 3 and `sh:expression` by 15 — and only `sh:ask` remains above, by
+10 allocations, which the next section's numbers account for.
 
 ## What was taken, and what is left
 
@@ -436,16 +548,19 @@ ungoverned fallback into a silently dropped truncation. One allocation per query
 is the cheaper side of that trade.
 
 What was left after the sixth belonged to `purrdf-sparql-eval` rather than to the
-validator, and the decomposition above said which part. Not the plan-cache probe,
-already free on a hit, and not the evaluation context, which allocates exactly
-once. What remained was the **tree minted for one focus node and dropped at the
-end of it**: the rewrite that builds it, the seed `VALUES` node it plants, the
-join onto that node, and the `VarSchema` every `Project` and `Bgp` rebuilds
-because the node it belongs to is a fresh heap temporary rather than a stable one.
-Those were one problem, not five, and the eighth reduction above is the shape
-that answers it: a reusable execution artifact, the substituted shape decided once
-per query and per pre-bound variable-name set, with only the values written per
-focus node.
+validator, and the decomposition as it stood at the historical
+96 / 214 / 116 / 194 baseline said which part. Not the plan-cache probe, already
+free on a hit, and not the evaluation context, which allocates exactly once. What
+remained was the **tree minted for one focus node and dropped at the end of it**:
+the rewrite that builds it, the seed `VALUES` node it plants, the join onto that
+node, and the `VarSchema` every `Project` and `Bgp` rebuilds because the node it
+belongs to is a fresh heap temporary rather than a stable one. Those were one
+problem, not five, and the eighth reduction above is the shape that answers it: a
+reusable execution artifact, the substituted shape decided once per query and per
+pre-bound variable-name set, with only the values written per focus node. The
+decomposition at the top of this document has since been re-taken against the
+term that shape left behind, and its pre-binding row — 3 / 24 / 8 / 20 against the
+37 / 110 / 49 / 52 it was — is the measurement of what that answer removed.
 
 ## The sibling walk does not carry the same scan, and its leaves stay untouched
 

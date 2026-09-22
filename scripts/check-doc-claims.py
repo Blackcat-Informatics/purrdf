@@ -4927,22 +4927,45 @@ def change_path_pin_claims(pins: dict[str, int]) -> list[Claim]:
 
 
 # The change-path document's allocation decomposition, by the row label it publishes.
-# The four `—` rows are the components of the row above them; the evaluation-context
-# and query-context rows sit beside it, additive with it rather than inside it. Nothing
-# in the repository measures this table — it was taken by inserting one extra discarded
-# copy of each slice into the live path and differencing — so what is gated is the
-# arithmetic it asserts about itself and the figures DERIVED from it, which is every
-# figure in the document that a later re-measurement would leave behind.
+# The four `—` rows are the components of the row above them; the evaluation-context,
+# query-context, evaluator and SHACL-side rows sit beside it, additive with it rather
+# than inside it. Nothing in the repository measures this table — it is taken by
+# inserting one extra discarded copy of each slice into the live path and differencing —
+# so what is gated is the arithmetic it asserts about itself and the figures DERIVED
+# from it, which is every figure in the document that a later re-measurement would
+# leave behind.
+#
+# The labels below are the CURRENT table's, re-taken against the 51 / 114 / 64 / 127
+# term. They are not the ones the first reading of this decomposition published
+# (`— the algebra clone` survives; `— term and string materialization`,
+# `— pushdown and seed descent` and `— expression walk and the second ground-term
+# conversion` named slices that a retained substituted plan has since merged or
+# removed). A row label that no longer exists in the document is a hard failure in
+# `_decomposition_row` rather than a silently skipped check, so this tuple and the
+# table cannot drift apart unnoticed.
 _DECOMPOSITION_TOTAL = "pre-binding rewrite, total"
 _DECOMPOSITION_PARTS = (
+    "— grounding this run's values into probes",
+    "— the memo probe and the value write",
     "— the algebra clone",
-    "— term and string materialization",
-    "— pushdown and seed descent",
-    "— expression walk and the second ground-term conversion",
+    "— the pushdown, seed and expression walks",
 )
 _DECOMPOSITION_CONTEXT = "evaluation context construction"
 _DECOMPOSITION_QUERY_CONTEXT = "query-context preparation"
-_DECOMPOSITION_EVALUATOR = "**evaluating the freshly minted tree**"
+_DECOMPOSITION_EVALUATOR = "**evaluating the substituted tree**"
+# The SHACL-side slices, itemised. The first reading reported all of this as one
+# undifferentiated remainder, which on `sh:expression` was 52 of 194 — a quarter of the
+# term, attributed to nothing. Each of these is a measured slice and every one of them
+# is summed into the baseline identity below, so an itemised row that stops being
+# measured cannot quietly move its allocations back into the residual.
+_DECOMPOSITION_SHACL = (
+    "SHACL-side focus and value-node materialization",
+    "SHACL-side binding writes",
+    "SHACL-side parameter-name list",
+    "SHACL-side node-expression argument marshalling",
+    "SHACL-side scalar-result materialization",
+    "SHACL-side handle checkout and restore",
+)
 _DECOMPOSITION_REMAINDER = "SHACL-side remainder"
 
 
@@ -4986,12 +5009,12 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
 
     Three identities hold by construction and are checked per surface: the four
     component rows sum to the pre-binding total; the pre-binding total, the two
-    context rows, the cost of evaluating the freshly minted tree, and the SHACL-side
-    remainder sum to the stated baseline; and the residual an id-native pre-binding
-    would leave is the baseline less the pre-binding total. The document states that
-    residual twice, in two different spellings, and both are derived here — a
-    re-measurement that updates the table and not the sentences is precisely the
-    edit this catches.
+    context rows, the cost of evaluating the substituted tree, every itemised
+    SHACL-side row and the SHACL-side remainder sum to the stated baseline; and the
+    residual an id-native pre-binding would leave is the baseline less the pre-binding
+    total. The document states that residual twice, in two different spellings, and
+    both are derived here — a re-measurement that updates the table and not the
+    sentences is precisely the edit this catches.
     """
     text = _read(_CHANGE_PATH_DESIGN)
     rel = _CHANGE_PATH_DESIGN.relative_to(_REPO)
@@ -5017,15 +5040,20 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
     context = _decomposition_row(text, _DECOMPOSITION_CONTEXT)
     query_context = _decomposition_row(text, _DECOMPOSITION_QUERY_CONTEXT)
     evaluator = _decomposition_row(text, _DECOMPOSITION_EVALUATOR)
+    shacl = [_decomposition_row(text, label) for label in _DECOMPOSITION_SHACL]
     remainder = _decomposition_row(text, _DECOMPOSITION_REMAINDER)
-    widths = {
-        len(baseline),
-        len(total),
-        len(context),
-        len(query_context),
-        len(evaluator),
-        len(remainder),
-    } | {len(part) for part in parts}
+    widths = (
+        {
+            len(baseline),
+            len(total),
+            len(context),
+            len(query_context),
+            len(evaluator),
+            len(remainder),
+        }
+        | {len(part) for part in parts}
+        | {len(row) for row in shacl}
+    )
     if len(widths) != 1:
         raise SystemExit(
             f"check-doc-claims: the allocation decomposition in {rel} has rows of "
@@ -5045,6 +5073,7 @@ def change_path_decomposition_claims() -> tuple[list[str], list[Claim]]:
             + context[column]
             + query_context[column]
             + evaluator[column]
+            + sum(row[column] for row in shacl)
             + remainder[column]
         )
         if whole != baseline[column]:
