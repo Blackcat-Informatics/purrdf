@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Variable **pre-binding** by algebra rewrite (purrdf S5,  GAP-A).
+//! Variable **pre-binding** by algebra rewrite (purrdf S5).
 //!
 //! This is the native replacement for the oxigraph-family
 //! `PreparedSparqlQuery::substitute_variable`, which SHACL-AF uses to inject the

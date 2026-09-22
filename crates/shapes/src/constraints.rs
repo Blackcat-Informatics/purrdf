@@ -5430,7 +5430,7 @@ mod tests {
         assert!(component_iri(&results)[0].contains("MinCount"));
     }
 
-    // ── xsd lexical validators (Gap D fix) ────────────────────────────────────
+    // ── xsd lexical validators ─────────────────────────────────────────────────
 
     #[test]
     fn xsd_integer_accepts_large_value() {

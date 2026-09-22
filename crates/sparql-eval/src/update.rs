@@ -1170,7 +1170,7 @@ mod tests {
         assert!(frozen.term_id_by_value(&iri("a")).is_some());
     }
 
-    /// GAP D1's regression guard for the UPDATE side (`crate::construct` carries
+    /// Regression guard for the UPDATE side (`crate::construct` carries
     /// the `CONSTRUCT` twin): `instantiate_quad_with_default` must resolve its
     /// template's column ordinals ONCE per template — before the
     /// `for row in &seq.rows` loop in `delete_insert` — never once per (row,
@@ -1212,7 +1212,8 @@ mod tests {
             small_calls, large_calls,
             "index_of call count must be independent of solution-row count \
              (3 rows: {small_calls} calls, 300 rows: {large_calls} calls) — a \
-             per-row caller of index_of regressed GAP D1"
+             per-row caller of index_of has come back, so the mutation's cost \
+             now scales with the row count instead of staying constant per template"
         );
     }
 

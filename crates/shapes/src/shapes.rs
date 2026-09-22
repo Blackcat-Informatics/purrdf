@@ -2853,8 +2853,7 @@ mod tests {
     #[test]
     fn test_ignored_properties_non_iri_member_errors() {
         // A non-IRI sh:ignoredProperties member (a literal) is malformed: the
-        // shapes graph must HARD-fail to load rather than silently dropping it
-        // (Gap H).
+        // shapes graph must HARD-fail to load rather than silently dropping it.
         let ttl = format!(
             r#"{PREFIXES}
             ex:ClosedShape a sh:NodeShape ;

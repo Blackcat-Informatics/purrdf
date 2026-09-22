@@ -142,12 +142,13 @@ impl Drop for PlanCharge {
 /// Thread-local, matching the tables it serves: both are per-worker state with
 /// no staleness dimension (see their own doc comments — `NativeSparqlEngine`
 /// itself is held in a thread-local by every parallel caller, so per-worker is
-/// what an engine-owned observer would have given anyway). GAP F4 was that this
-/// memory — bounded individually per table by
-/// `INTERNED_VARIABLE_CAP`/`INTERNED_SCHEMA_CAP` — was invisible to the SAME
+/// what an engine-owned observer would have given anyway). Each interner
+/// table is bounded individually by `INTERNED_VARIABLE_CAP`/`INTERNED_SCHEMA_CAP`,
+/// but that entry cap alone leaves its bytes invisible to the SAME
 /// [`PlanMemoryStats`] a caller already reads to bound one worker's
 /// [`crate::PlanCache`], so a deployment's `CacheLimits` could look satisfied
-/// while this memory grew unbounded beside it. Returns a cheap `Arc` clone of the
+/// while this memory grew unbounded beside it — this observer is what closes
+/// that gap. Returns a cheap `Arc` clone of the
 /// calling thread's observer, not a fresh one — every caller on one thread reads
 /// and charges the SAME totals.
 pub(crate) fn interner_memory_observer() -> PlanMemoryObserver {

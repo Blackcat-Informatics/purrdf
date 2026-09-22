@@ -16,7 +16,7 @@
 //! Implemented: logical `&&`/`||`/`!` (Kleene three-valued), comparisons and
 //! `sameTerm`, `BOUND`, `IN`, `IF`, `COALESCE`, `EXISTS`, the string/type/RDF
 //! built-ins the corpus uses, **numeric arithmetic** (`+ - * /`, unary sign),
-//! **`ABS`/`CEIL`/`FLOOR`/`ROUND`**, and (Gap 4) **`ENCODE_FOR_URI`**,
+//! **`ABS`/`CEIL`/`FLOOR`/`ROUND`**, **`ENCODE_FOR_URI`**,
 //! **`NOW`**, **`YEAR`/`MONTH`/`DAY`/`HOURS`/`MINUTES`/`SECONDS`**,
 //! **`TIMEZONE`/`TZ`/`ADJUST`**, **`MD5`/`SHA1`/`SHA256`/`SHA384`/`SHA512`**,
 //! **`RAND`**, and **`UUID`/`STRUUID`**. `SERVICE` and property paths are NOT this
@@ -4627,7 +4627,8 @@ fn unary_numeric_fn<D: DatasetView + Sync>(
 }
 
 // ---------------------------------------------------------------------------
-// Gap 4 helper functions
+// Helper functions for ENCODE_FOR_URI, the hash builtins, date/time component
+// extraction, NOW, RAND, and UUID/STRUUID
 // ---------------------------------------------------------------------------
 
 /// Splitmix64 step: advance the PRNG state and return the next pseudo-random u64.
@@ -6069,7 +6070,7 @@ mod tests {
         assert_eq!(subjects(&ds, &seq, "s"), vec!["http://ex/p1".to_owned()]);
     }
 
-    // ---- Gap 4: ENCODE_FOR_URI ---------------------------------------------
+    // ---- ENCODE_FOR_URI -----------------------------------------------------
 
     #[test]
     fn encode_for_uri_basic() {
@@ -6078,7 +6079,7 @@ mod tests {
         assert_eq!(lex(&ds, &expr), Some("a%20b%2Fc".to_owned()));
     }
 
-    // ---- Gap 4: hash functions --------------------------------------------
+    // ---- hash functions -------------------------------------------------
 
     const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
 
@@ -6301,7 +6302,7 @@ mod tests {
         }
     }
 
-    // ---- Gap 4: date/time component extraction ----------------------------
+    // ---- date/time component extraction --------------------------------
 
     #[test]
     fn year_month_day_over_datetime() {
@@ -6725,7 +6726,7 @@ mod tests {
         assert_eq!(bdt, XSD_TIME);
     }
 
-    // ---- Gap 4: NOW() with fixed ctx.now ----------------------------------
+    // ---- NOW() with fixed ctx.now -----------------------------------------
 
     #[test]
     fn now_returns_ctx_now() {
@@ -6789,7 +6790,7 @@ mod tests {
         assert_eq!(lex(&ds, &expr).as_deref(), Some("INF"));
     }
 
-    // ---- Gap 4: RAND() deterministic with fixed seed ----------------------
+    // ---- RAND() deterministic with fixed seed ------------------------------
 
     #[test]
     fn rand_deterministic_with_fixed_seed() {
@@ -6830,7 +6831,7 @@ mod tests {
         assert_ne!(v1, v2, "rand should differ across calls");
     }
 
-    // ---- Gap 4: UUID() well-formed urn:uuid: shape ------------------------
+    // ---- UUID() well-formed urn:uuid: shape --------------------------------
 
     #[test]
     fn uuid_is_well_formed_urn() {

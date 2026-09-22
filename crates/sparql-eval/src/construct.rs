@@ -1394,7 +1394,7 @@ mod tests {
         b.freeze().expect("freeze")
     }
 
-    /// GAP D1's regression guard: `instantiate_term`/`instantiate_predicate` must
+    /// Regression guard: `instantiate_term`/`instantiate_predicate` must
     /// resolve a template's column ordinals ONCE per template (before the
     /// `for row in &seq.rows` loop in `build_construct_graph`), never once per
     /// (row, position) pair. `VarSchema::index_of` is `O(columns)` below
@@ -1427,7 +1427,8 @@ mod tests {
             small_calls, large_calls,
             "index_of call count must be independent of solution-row count \
              (3 rows: {small_calls} calls, 300 rows: {large_calls} calls) — a \
-             per-row caller of index_of regressed GAP D1"
+             per-row caller of index_of has come back, so CONSTRUCT's cost \
+             now scales with the row count instead of staying constant per template"
         );
     }
 

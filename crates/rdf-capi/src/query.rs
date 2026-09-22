@@ -1147,10 +1147,10 @@ mod tests {
     }
 
     /// End-to-end: `purrdf_query_entailment_governed`'s `aggregate_namespace` parameter
-    /// reaches `MEDIAN` over bindings the RDFS closure itself produced — the reachability
-    /// gap F10 closes. Before this parameter existed, the entailment-aware C ABI lane
-    /// passed empty query options unconditionally, so no statistical aggregate could ever
-    /// be registered on it, unlike `purrdf_query_governed`.
+    /// reaches `MEDIAN` over bindings the RDFS closure itself produced. Before this
+    /// parameter existed, the entailment-aware C ABI lane passed empty query options
+    /// unconditionally, so no statistical aggregate could ever be registered on it,
+    /// unlike `purrdf_query_governed`.
     #[test]
     fn aggregate_namespace_computes_median_through_entailment_governed_query() {
         const NS: &str = "https://example.org/agg#";

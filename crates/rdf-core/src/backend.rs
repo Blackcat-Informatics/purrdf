@@ -114,7 +114,7 @@ pub trait RdfParserBackend {
 
 /// SPARQL operation request.
 ///
-/// `substitutions` carries variable **pre-bindings** (purrdf S5,  GAP-A):
+/// `substitutions` carries variable **pre-bindings** (purrdf S5):
 /// each `(name, value)` pre-binds the query variable `name` to `value` before
 /// evaluation, as if the `WHERE` had been joined with a single-row
 /// `VALUES { ?name value }`. This is the native replacement for oxigraph's

@@ -6,9 +6,9 @@
 //! The native [`NativeSparqlEngine`] is the SOLE SPARQL authority (the cutover
 //! proved native ≡ oxigraph). This maintainer-only
 //! binary captures the native engine's deterministic SPARQL outputs over OUR corpus
-//! (`queries/**` + `generated/queries/**`) and over the GAP-A `$this`-substitution
+//! (`queries/**` + `generated/queries/**`) and over the `$this`-substitution
 //! shapes, writing them as byte-stable golden files under
-//! `crates/sparql-conformance/tests/goldens/`. The Task-4 native gate then byte-diffs
+//! `crates/sparql-conformance/tests/goldens/`. The native goldens gate then byte-diffs
 //! the engine against these frozen goldens forever (native-vs-native = a regression
 //! gate).
 //!
@@ -61,12 +61,12 @@ fn main() {
     let goldens = goldens_root();
 
     // -----------------------------------------------------------------------
-    // Deliverable 1 — corpus goldens from the real merged ontology.
+    // Corpus goldens from the real merged ontology.
     // -----------------------------------------------------------------------
     let corpus_tally = capture_corpus(&goldens);
 
     // -----------------------------------------------------------------------
-    // Deliverable 2 — GAP-A substitution goldens (tiny inline dataset).
+    // Substitution goldens (tiny inline dataset).
     // -----------------------------------------------------------------------
     let subst_written = capture_substitution_goldens(&goldens);
 
@@ -242,11 +242,11 @@ fn solutions_golden(variables: &[String], rows: &[Vec<Option<TermValue>>]) -> St
 }
 
 // ---------------------------------------------------------------------------
-// Deliverable 2 — GAP-A substitution goldens.
+// Substitution goldens.
 // ---------------------------------------------------------------------------
 
 /// The fixed substitution dataset (mirrors `corpus_conformance.rs`'s substitution
-/// sub-gate). Written to `goldens/substitution/dataset.nt` once so the Task-4 native
+/// sub-gate). Written to `goldens/substitution/dataset.nt` once so the native goldens
 /// gate replays against the IDENTICAL data. The blank-node focus `_:bn` is captured as
 /// a literal `.nt` line; the gate must parse it back with a stable label.
 const SUBST_DATASET_NT: &str = concat!(
@@ -274,7 +274,7 @@ fn alice_focus() -> Vec<(String, TermValue)> {
     vec![("this".to_owned(), iri("http://ex/alice"))]
 }
 
-/// Capture the GAP-A `$this`-substitution shapes. Returns the count written.
+/// Capture the `$this`-substitution shapes. Returns the count written.
 fn capture_substitution_goldens(goldens: &Path) -> usize {
     let dir = goldens.join("substitution");
     std::fs::create_dir_all(&dir).expect("mkdir goldens/substitution");
@@ -366,7 +366,7 @@ fn capture_substitution_goldens(goldens: &Path) -> usize {
 }
 
 /// Serialize the `(variable, term)` bindings as deterministic `var=term-debug` lines
-/// (sorted) so the Task-4 gate can reconstruct the substitution natively.
+/// (sorted) so the native goldens gate can reconstruct the substitution natively.
 fn subst_lines(subst: &[(String, TermValue)]) -> String {
     let mut lines: Vec<String> = subst.iter().map(|(v, t)| format!("{v}={t:?}")).collect();
     lines.sort();

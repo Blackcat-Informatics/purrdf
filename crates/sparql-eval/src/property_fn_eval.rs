@@ -1804,8 +1804,8 @@ mod tests {
         );
     }
 
-    /// THE GAP-3 regression, at the registry-injection layer this module owns:
-    /// registering `PF_SPLIT` must not hijack the DIFFERENT, merely
+    /// The data-predicate-hijack regression, at the registry-injection layer this
+    /// module owns: registering `PF_SPLIT` must not hijack the DIFFERENT, merely
     /// prefix-sharing IRI `PF_SPLIT`+`x` into a call. `query_with_options_view` with
     /// only `property_functions` populated (unlike the test above) configures NO
     /// caller namespace — the only seam in
@@ -1907,7 +1907,7 @@ mod tests {
         assert_eq!(relation.calls(), vec!["bf".to_owned()]);
     }
 
-    /// THE GAP-4 regression: a call NESTED inside an earlier atom's own subtree (here,
+    /// The nested-call planning-window regression: a call NESTED inside an earlier atom's own subtree (here,
     /// a `UNION` arm's own one-call chain) must be planned against the bound set THAT
     /// ATOM was itself CHOSEN against — never the fully-accumulated set left behind
     /// once every atom in the enclosing chain has committed.

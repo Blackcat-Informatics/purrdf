@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Engine-side variable **pre-binding** (purrdf S6,  GAP-A).
+//! Engine-side variable **pre-binding** (purrdf S6).
 //!
 //! Bridges the engine's egress term model ([`TermValue`]) to the algebra's
 //! [`Query::substitute_variable`] rewrite. Each `(name, value)` of a
@@ -250,7 +250,7 @@ thread_local! {
 
 /// The [`Variable`] for `name`, interned per worker.
 ///
-/// GAP F4: every insert charges its estimated retained size — the key bytes plus
+/// Every insert charges its estimated retained size — the key bytes plus
 /// one `Variable`'s own payload — to [`crate::plan_memory::interner_memory_observer`],
 /// and a cap-triggered clear credits the whole table back, so this per-worker
 /// table is no longer memory a deployment's `CacheLimits` cannot see.
@@ -1319,7 +1319,7 @@ mod tests {
         ]
     }
 
-    /// GAP F3: **the pushability truth table, asserted at all four sites at once.**
+    /// **The pushability truth table, asserted at all four sites at once.**
     ///
     /// The four consumers of a pre-bound value each used to re-decide what a value
     /// may be used for, over their own subset of [`GroundTerm`] and with a catch-all
@@ -1411,7 +1411,7 @@ mod tests {
         }
     }
 
-    /// GAP F3: **a variable that is NOT pre-bound is untouched at every site.**
+    /// **A variable that is NOT pre-bound is untouched at every site.**
     ///
     /// The neighbour of the table above, and not a formality: three of the four sites
     /// now reach their decision through `ExprSubs::get`, so a lookup that answered
@@ -1451,9 +1451,10 @@ mod tests {
         );
     }
 
-    /// GAP F4: `interned_variable`'s per-worker table retains bytes that
-    /// nothing charged before this fix — `INTERNED_VARIABLE_CAP` bounded the
-    /// table's ENTRY count but not its bytes against the SAME `PlanMemoryStats`
+    /// `interned_variable`'s per-worker table retains bytes that must stay
+    /// charged against the observer for as long as the table holds them —
+    /// `INTERNED_VARIABLE_CAP` bounds the table's ENTRY count but not its
+    /// bytes against the SAME `PlanMemoryStats`
     /// a caller already reads to bound `PlanCache`'s retained plan bytes
     /// (`crate::plan_memory::interner_memory_observer`; see
     /// `crate::solution::tests::interning_schemas_moves_the_thread_local_memory_observer`

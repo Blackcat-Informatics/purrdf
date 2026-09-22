@@ -609,7 +609,7 @@ fn declaring_one_parameter_twice_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
-// GAP C4: the ID DOOR's refusal parity.
+// The ID DOOR's refusal parity.
 //
 // `PreparedExecution::bind_id` / `bind_named_id` bind a parameter to the dataset's
 // own term id instead of to an owned value, to skip the round trip in which an id

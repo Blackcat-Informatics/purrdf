@@ -11,7 +11,7 @@
 //! Both run the [`NativeSparqlEngine`] over the borrowed `Arc<RdfDataset>` — there is
 //! no oxigraph SPARQL engine and no materialized `Store`. Focus-node substitution
 //! uses [`Prebinding`] (the native replacement for oxigraph's
-//! `PreparedSparqlQuery::substitute_variable`,  GAP-A) — the borrowed-name
+//! `PreparedSparqlQuery::substitute_variable`) — the borrowed-name
 //! pre-binding list the evaluator's interned entry points take, so a validation
 //! does not re-allocate the shape's variable names once per focus node.
 
@@ -165,8 +165,8 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
-    // Pre-bind `$this` to THIS focus node (GAP-A substitution — the native
-    // replacement for oxigraph's per-focus `PreparedSparqlQuery::substitute_variable`).
+    // Pre-bind `$this` to THIS focus node (the native replacement for oxigraph's
+    // per-focus `PreparedSparqlQuery::substitute_variable`).
     // This MUST be per-focus substitution, not an unsubstituted run grouped by a free
     // `$this`: a constraint whose `$this` appears only inside a `FILTER NOT EXISTS`/
     // negation has no positive binding for `$this` when run unsubstituted, so the

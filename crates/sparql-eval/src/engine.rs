@@ -2514,7 +2514,7 @@ pub(crate) fn eval_diagnostic_code(
     e.diagnostic_code().unwrap_or(fallback)
 }
 
-/// Evaluate `prepared`, applying any pre-binding `substitutions` first (GAP-A).
+/// Evaluate `prepared`, applying any pre-binding `substitutions` first.
 ///
 /// When there are no substitutions the cached parse is evaluated directly (the hot
 /// path). Otherwise the cached parse is **cloned** and rewritten — the substitution
@@ -3363,7 +3363,7 @@ mod tests {
             .expect("query")
     }
 
-    // ── substitution / pre-binding (GAP-A) ────────────────────────────────
+    // ── substitution / pre-binding ─────────────────────────────────────────
 
     /// A dataset for substitution tests:
     ///   :a   :p  :x    (IRI subject)
@@ -3952,7 +3952,7 @@ mod tests {
         assert!(got[0].contains("http://ex/a"), "{got:?}");
     }
 
-    // ── GAP F3: the `GRAPH` name is the narrowest refusal, so it gets the pair ──
+    // ── the `GRAPH` name is the narrowest refusal, so it gets the pair ──
 
     /// Two NAMED graphs on one predicate with DIFFERENT objects, and nothing in the
     /// default graph.
@@ -4084,7 +4084,7 @@ mod tests {
         );
     }
 
-    // ── GAP C4: the id door and the value door are the same binding ────────────
+    // ── the id door and the value door are the same binding ────────────
 
     /// **Binding a parameter by the dataset's own term id substitutes the
     /// IDENTICAL plan as binding the same term by value — for every term kind, on
@@ -5348,7 +5348,7 @@ mod tests {
         );
     }
 
-    /// GAP 3 regression: the UPDATE path must thread the SAME `EvalCtx` wiring the
+    /// Regression guard: the UPDATE path must thread the SAME `EvalCtx` wiring the
     /// query path uses, so a `NOW()` bound inside a `DELETE/INSERT … WHERE` is the
     /// live wall clock — not some frozen/epoch default — mirroring
     /// `default_engine_now_is_current_wall_clock` but through `engine.update`.
@@ -5386,11 +5386,11 @@ mod tests {
         }
     }
 
-    /// GAP 3 regression: `heldIn` inside an UPDATE `WHERE` must see the engine's
+    /// Regression guard: `heldIn` inside an UPDATE `WHERE` must see the engine's
     /// configured [`StandpointPredicates`] table, the same as the query path
-    /// (`gmeow_namespace_and_predicate_table_flow_through_configuration`). Before the
-    /// fix, `engine::update` dropped the table on the floor and any `heldIn` in a
-    /// `DELETE/INSERT … WHERE` hard-errored even on a standpoint-configured engine.
+    /// (`gmeow_namespace_and_predicate_table_flow_through_configuration`). If
+    /// `engine::update` ever drops the table on the floor again, any `heldIn` in a
+    /// `DELETE/INSERT … WHERE` hard-errors even on a standpoint-configured engine.
     #[test]
     fn heldin_in_update_where_uses_configured_standpoint_predicates() {
         let ds = gmeow_standpoint_ds();
@@ -6099,7 +6099,7 @@ mod tests {
         }
     }
 
-    /// GAP-7 (registry fingerprint): two registries that agree on IRI, arity, and every
+    /// Registry fingerprint: two registries that agree on IRI, arity, and every
     /// declared mode — differing ONLY in volatility — must not share a plan-cache entry.
     ///
     /// Volatility is not read by the feasibility-ordering pass at all (it decides
@@ -6159,7 +6159,7 @@ mod tests {
         );
     }
 
-    /// GAP-7 (governed receipt): two relation implementations registered under the SAME
+    /// Governed receipt: two relation implementations registered under the SAME
     /// IRI, differing only in declared volatility, must produce DISTINGUISHABLE governed
     /// receipts and distinguishable explanations — never bytes that could be mistaken for
     /// the same execution.

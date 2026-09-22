@@ -297,7 +297,7 @@ impl VarSchema {
     /// and the crate has a test for it, so this is a real case and not a defensive
     /// one.
     ///
-    /// GAP F4: every insert charges its estimated retained size — the stored
+    /// Every insert charges its estimated retained size — the stored
     /// request's columns plus the layout's own — to
     /// [`crate::plan_memory::interner_memory_observer`], and a cap-triggered
     /// clear credits the whole table back, so this per-worker table is no longer
@@ -481,16 +481,16 @@ mod tests {
         }
     }
 
-    /// GAP E5: `INDEXED_ABOVE` only decides WHICH representation of the schema
+    /// `INDEXED_ABOVE` only decides WHICH representation of the schema
     /// answers `index_of` (a linear scan versus a hash index) — never WHAT the
     /// answer is. That equivalence holds only if `Variable`'s `Eq` agrees with
-    /// its `Hash`, and nothing tested that directly before this. Table-driven
-    /// over every width from 1 to 16 (straddling [`INDEXED_ABOVE`] on both
-    /// sides), each width run twice: once with `width` distinct columns, and
-    /// once with the FIRST column immediately repeated before the rest — the
-    /// `SELECT ?s ?s` shape [`VarSchema::interned`]'s doc comment flags as the
-    /// case that broke a debug assertion during this branch's development, and
-    /// the case [`VarSchema::push`]'s own dedup exists to handle.
+    /// its `Hash`, which this test asserts directly rather than leaving
+    /// implicit. Table-driven over every width from 1 to 16 (straddling
+    /// [`INDEXED_ABOVE`] on both sides), each width run twice: once with
+    /// `width` distinct columns, and once with the FIRST column immediately
+    /// repeated before the rest — the `SELECT ?s ?s` shape [`VarSchema::interned`]'s
+    /// doc comment names as the case a debug assertion catches, and the case
+    /// [`VarSchema::push`]'s own dedup exists to handle.
     #[test]
     fn index_of_agrees_across_the_threshold_for_every_width_1_to_16() {
         for width in 1..=16usize {
@@ -556,10 +556,9 @@ mod tests {
         assert_eq!(left.shared_columns(&right), vec![(0, 1), (2, 0)]);
     }
 
-    /// GAP E6: [`VarSchema::interned`] keys its memo by the REQUESTED column
+    /// [`VarSchema::interned`] keys its memo by the REQUESTED column
     /// list, not the resulting layout, specifically so a `SELECT ?s ?s` request
-    /// stays a cache hit (see that method's doc comment — the author found this
-    /// with a debug assertion during development). Nothing would fail before
+    /// stays a cache hit (see that method's doc comment). Nothing would fail before
     /// this test if the comparison silently reverted to comparing the stored
     /// layout's OWN columns instead of the request it was built from: a request
     /// for `[?s, ?s]` would still return a correct one-column layout, just
@@ -597,9 +596,10 @@ mod tests {
         assert_eq!(layout_ba.vars(), &[var("e6_b"), var("e6_a")]);
     }
 
-    /// GAP F4: `VarSchema::interned`'s per-worker table retains bytes that
-    /// nothing charged before this fix — `INTERNED_SCHEMA_CAP` bounded the
-    /// table's ENTRY count but not its bytes against the SAME `PlanMemoryStats`
+    /// `VarSchema::interned`'s per-worker table retains bytes that must stay
+    /// charged against the observer for as long as the table holds them —
+    /// `INTERNED_SCHEMA_CAP` bounds the table's ENTRY count but not its
+    /// bytes against the SAME `PlanMemoryStats`
     /// a caller already reads to bound `PlanCache`'s retained plan bytes
     /// ([`crate::plan_memory::interner_memory_observer`]). This is a MOVING
     /// assertion, not a smoke test: it first proves interning grows the

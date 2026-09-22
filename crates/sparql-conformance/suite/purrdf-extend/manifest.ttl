@@ -509,5 +509,5 @@
     mf:action <exists-scope-values-violation.rq> .
 
 :existsScopeProjectionViolation a mf:NegativeSyntaxTest ;
-    mf:name "SEP-0007 Part 3, gap R2: EXISTS { BIND(:e AS ?x) } inside a SELECT-list (expr AS ?v) projection target is a hard syntax error when ?x is already in scope on the row being filtered, even though the projection list is parsed before WHERE" ;
+    mf:name "SEP-0007 Part 3: EXISTS { BIND(:e AS ?x) } inside a SELECT-list (expr AS ?v) projection target is a hard syntax error when ?x is already in scope on the row being filtered, even though the projection list is parsed before WHERE" ;
     mf:action <exists-scope-projection-violation.rq> .
