@@ -114,6 +114,7 @@ mod path;
 pub mod path_relation;
 mod plan_cache;
 mod plan_memory;
+pub mod predicate_use;
 pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
@@ -175,6 +176,7 @@ pub use interned::{
 };
 pub use plan_cache::{CacheLimits, CacheStats};
 pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};
+pub use predicate_use::{PredicateUse, predicate_use};
 // The value-level entry points to the ORDER BY comparator and the built-in
 // aggregate accumulators, for a host that holds a bag of `TermValue`s (SHACL-AF's
 // `sh:min`/`sh:max`/`sh:sum`/`sh:orderby` node expressions are the motivating

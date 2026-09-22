@@ -2388,6 +2388,57 @@ ex:RootShape a sh:NodeShape ;
     /// shape tree the walk was given.
     ///
     /// [`ShapeWalk::class_slot`]: super::ShapeWalk::class_slot
+    /// A `sh:SPARQLFunction` body's footprint is the same however the extension
+    /// environment is configured, because it is TOP either way.
+    ///
+    /// This is the invariant that makes `footprint`'s `OPAQUE_QUERY_TEXT` for a
+    /// user-defined call CORRECT rather than merely cautious, and the one a future
+    /// "let's read the body and be precise" change would break. A footprint is
+    /// derived here, at plan time, from a `Shapes` value with no environment in
+    /// scope, and it is cached on a `PreparedShapes` and reused across validations
+    /// that may each install a different relation registry. A footprint that varied
+    /// with the environment would therefore be consumed under an environment it was
+    /// not derived under — a change-path analysis silently wrong for the validation
+    /// using it, which is the same load-time-versus-validation-time split that made
+    /// a load-parsed function body unable to reach a relation at all.
+    ///
+    /// The fixture's body names an IRI a host might well register as a relation. The
+    /// assertion is that this makes no difference: lowering takes no environment, so
+    /// there is no environment for the answer to depend on.
+    #[test]
+    fn a_function_body_s_footprint_does_not_depend_on_the_environment() {
+        let shapes = parse_shapes(
+            &format!(
+                r#"{PREFIXES}
+ex:isFlagged a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:node ; sh:nodeKind sh:IRI ] ;
+    sh:ask "ASK {{ ?node <http://example.org/rel/flagged> ?why }}" .
+
+ex:FlagShape a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [ ex:isFlagged ( sh:this ) ] .
+"#
+            ),
+            None,
+        )
+        .expect("the fixture parses");
+
+        let lowered = lower_shapes(shapes.node_shapes.iter());
+        let footprint = lowered.footprint();
+        assert_eq!(
+            footprint.opaque(),
+            Some(crate::footprint::OPAQUE_QUERY_TEXT),
+            "a body reachable through a user-defined call is TOP, which is the only \
+             answer correct under every environment at once",
+        );
+
+        // Lowering the SAME shapes again is the same answer, which is the whole
+        // content of "does not depend on the environment": there is no environment
+        // parameter to vary, so the derivation cannot see one.
+        let again = lower_shapes(shapes.node_shapes.iter());
+        assert_eq!(again.footprint().opaque(), footprint.opaque());
+    }
+
     #[test]
     fn class_catalog_and_lowered_plan_agree_on_every_class_iri() {
         let shapes = every_route_shapes();

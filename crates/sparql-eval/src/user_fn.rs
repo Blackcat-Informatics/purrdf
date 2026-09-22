@@ -64,6 +64,7 @@ use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
 };
 use crate::registry_id::{RegistryId, append_framed_part};
+use crate::witness::RelationWitness;
 
 /// The result form of a function body: a `sh:select` returns the first projected
 /// value of the first solution; a `sh:ask` returns an `xsd:boolean`.
@@ -252,6 +253,13 @@ pub type NativeFnBody =
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ExprFnCall<'a> {
+    /// Where a body that re-enters the evaluator deposits what the relations it
+    /// invoked attested — see [`ExprFnCall::record_relations`].
+    ///
+    /// Private, and written only through that method: a witness is evidence about
+    /// this call, so a body may ADD to it and must not be able to read, replace or
+    /// clear what another call recorded.
+    relations: &'a core::cell::RefCell<RelationWitness>,
     /// The call-position IRI the function was reached through.
     pub iri: &'a str,
     /// The already-evaluated argument values in call order; a `None` cell is an
@@ -300,6 +308,30 @@ pub struct ExprFnCall<'a> {
 /// per-solution error semantics.
 pub type ExprFnBody =
     Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+impl ExprFnCall<'_> {
+    /// Record what the relations this body invoked attested, so it reaches the
+    /// CALLING query's receipt.
+    ///
+    /// A body is free to re-enter the evaluator — that is what distinguishes this
+    /// seam from the native one, whose closure gets no context and cannot. But a
+    /// nested run produces its OWN governed outcome, and everything that outcome
+    /// learned about the relations behind it dies with it unless it is handed back
+    /// here. A relation that really served this query and told nobody is
+    /// indistinguishable from one that was never asked, which is the failure this
+    /// workspace's witness channel exists to prevent — and the SPARQL-bodied door
+    /// already closes it (`eval_user_function` merges its child's witness on both of
+    /// its exits). This is the same channel for the door that re-enters through a
+    /// fresh evaluation rather than through a child context.
+    ///
+    /// Additive, and order-free in the way a witness is: [`RelationWitness::merge`]
+    /// is commutative and associative, so a body making several nested runs may call
+    /// this once per run in any order. A body that never re-enters the evaluator
+    /// never calls it and pays nothing for its existence.
+    pub fn record_relations(&self, witness: RelationWitness) {
+        self.relations.borrow_mut().merge(witness);
+    }
+}
 
 /// A registered dataset-aware function: its closure body plus its declared arity.
 ///
@@ -654,6 +686,22 @@ impl UserFunctionRegistry {
     /// a SPARQL body, so neither has anything to bind.
     pub(crate) fn sparql_bodied(&self) -> impl Iterator<Item = (&String, &UserFunction)> {
         self.fns.iter()
+    }
+
+    /// Every SPARQL-bodied function's IRI and body TEXT, for a caller that wants to
+    /// know what a body says without evaluating it — a pre-flight report on which of
+    /// its predicate IRIs an environment would make calls of.
+    ///
+    /// Sorted by IRI, so a report over it is a pure function of the registry's
+    /// contents rather than of its insertion order.
+    pub fn sparql_bodied_texts(&self) -> Vec<(String, Arc<str>)> {
+        let mut out: Vec<(String, Arc<str>)> = self
+            .fns
+            .iter()
+            .map(|(iri, func)| (iri.clone(), Arc::clone(&func.body)))
+            .collect();
+        out.sort_by(|left, right| left.0.cmp(&right.0));
+        out
     }
 }
 
@@ -1404,7 +1452,7 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     func: &ExprFunction,
     iri: &str,
     args: &[Option<TermValue>],
-    ctx: &EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<TermValue>, EvalError> {
     if !func.arity.accepts(args.len()) {
         return Err(EvalError::function(format!(
@@ -1427,7 +1475,9 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
             crate::eval::MAX_UDF_DEPTH
         )));
     }
+    let relations = core::cell::RefCell::new(RelationWitness::default());
     let call = ExprFnCall {
+        relations: &relations,
         iri,
         args,
         focus_graph,
@@ -1436,12 +1486,24 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // The same `catch_unwind` contract the native path documents: a panicking host
     // closure must not abort a worker or surface nondeterministically, and the
     // message is fixed and payload-free so it does not depend on which thread ran.
-    match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
+    let result = match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
         Ok(inner_result) => inner_result,
         Err(_) => Err(EvalError::function(format!(
             "expression-bodied function <{iri}> panicked"
         ))),
+    };
+
+    // Whatever the body recorded reaches the caller's receipt, and it does so on
+    // EVERY exit — including the error and panic ones. A relation that served this
+    // query really served it; whether the body then failed to produce a value is a
+    // fact about the body, not about the index that answered. Dropping the
+    // attestation because the call errored would be the silent-drop this channel
+    // exists to prevent, arriving through the failure path instead of the happy one.
+    let witness = relations.into_inner();
+    if !witness.is_empty() {
+        ctx.absorb_worker_witnesses([witness]);
     }
+    result
 }
 
 #[cfg(test)]

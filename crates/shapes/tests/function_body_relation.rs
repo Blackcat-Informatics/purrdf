@@ -361,3 +361,276 @@ fn a_registered_iri_under_a_declared_namespace_still_reaches_its_relation() {
         "the verdict still turns on the relation's rows"
     );
 }
+
+// ── The pre-flight report ───────────────────────────────────────────────────────
+
+/// `Shapes::extension_usage` answers the question a silent verdict cannot: under
+/// THIS environment, did my relation IRI become a call or a data edge?
+///
+/// The three states are the same three the validation itself has, checked without
+/// running one — which is the point, because a validation that answers
+/// `conforms: true` looks identical whether the relation ran or was never asked.
+#[test]
+fn extension_usage_reports_whether_a_function_body_reaches_its_relation() {
+    let (relations, _) = registry();
+    let shapes = shapes(REL);
+
+    // Registered: the body's predicate is a CALL.
+    let wired = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("the fixture declarations read cleanly");
+    let usage = shapes.extension_usage(&wired);
+    assert!(
+        usage.reaches(REL),
+        "the registered relation is reached from the function body: {usage:?}"
+    );
+    assert!(
+        !usage.data().contains(REL),
+        "an IRI that became a call is not also data: {usage:?}"
+    );
+
+    // Nothing registered: the IDENTICAL shapes graph reports the identical IRI as
+    // an ordinary data edge. This is the answer a host debugging a silent
+    // `conforms: true` actually needs.
+    let bare = purrdf_sparql_eval::ExtensionEnv::empty();
+    let usage = shapes.extension_usage(bare);
+    assert!(
+        !usage.reaches(REL),
+        "with nothing registered nothing is reached: {usage:?}"
+    );
+    assert!(
+        usage.data().contains(REL),
+        "and the IRI is reported as the data edge it became: {usage:?}"
+    );
+}
+
+/// The report names the DECLARATION, not just the IRI — a shapes author with twenty
+/// functions needs to know which one.
+#[test]
+fn extension_usage_names_the_declaration_a_predicate_sits_in() {
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("the fixture declarations read cleanly");
+    let usage = shapes(REL).extension_usage(&env);
+
+    let site = format!("sh:SPARQLFunction <{EX}isFlagged>");
+    let used = usage
+        .site(&site)
+        .unwrap_or_else(|| panic!("the report names the function declaration; got {usage:?}"));
+    assert!(
+        used.calls.contains(REL),
+        "and says what that declaration's predicate became: {used:?}"
+    );
+}
+
+/// The prefix-vs-exact trap, reported rather than merely evaluated: registering
+/// `…/rel/flagged` must leave `…/rel/flaggedElsewhere` classified as data.
+#[test]
+fn extension_usage_does_not_claim_a_merely_same_prefixed_sibling() {
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("the fixture declarations read cleanly");
+    let usage = shapes(REL_SIBLING).extension_usage(&env);
+    assert!(
+        !usage.reaches(REL_SIBLING),
+        "a sibling sharing a registered IRI's prefix is not reached: {usage:?}"
+    );
+    assert!(usage.data().contains(REL_SIBLING));
+}
+
+// ── Positional neighbours ───────────────────────────────────────────────
+
+/// A shapes graph whose function body places the registered IRI somewhere that is
+/// NOT predicate position.
+///
+/// These are where a classification most plausibly over-refuses: an implementation
+/// that scanned for the IRI rather than reading the algebra would claim every one of
+/// them as a call, and an admission pass that did the same would refuse bodies that
+/// are perfectly ordinary SPARQL.
+fn shapes_with_body(body: &str) -> purrdf_shapes::shapes::Shapes {
+    let turtle = format!(
+        r#"
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix ex:  <{EX}> .
+
+ex:isFlagged
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:node ; sh:nodeKind sh:IRI ] ;
+    sh:ask """{body}""" .
+
+ex:FlagShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a, ex:b ;
+    sh:expression [ ex:isFlagged ( sh:this ) ] .
+"#
+    );
+    purrdf_shapes::engine::parse_shapes(&turtle, None).expect("parse shapes")
+}
+
+/// A registered relation IRI outside predicate position is ordinary RDF, and must
+/// stay so: it is not a call, it invokes nothing, and it is not refused.
+///
+/// Each body is executed, not merely parsed. A refusal here would be the mirror of
+/// the silent-drop defect — a working query broken with a diagnostic naming the
+/// wrong cause — and it is exactly the failure a scan-the-text implementation makes.
+#[test]
+fn a_registered_iri_outside_predicate_position_is_not_a_call() {
+    for (label, body) in [
+        ("subject position", format!("ASK {{ <{REL}> ?p ?o }}")),
+        ("object position", format!("ASK {{ ?s ?p <{REL}> }}")),
+        (
+            "inside VALUES",
+            format!("ASK {{ VALUES ?v {{ <{REL}> }} }}"),
+        ),
+        (
+            "a nested sub-SELECT's projection",
+            format!("ASK {{ {{ SELECT ?s WHERE {{ ?s ?p <{REL}> }} }} }}"),
+        ),
+        (
+            "inside a GRAPH block, in object position",
+            format!("ASK {{ GRAPH ?g {{ ?s ?p <{REL}> }} }}"),
+        ),
+        (
+            "an expression operand",
+            format!("ASK {{ ?s ?p ?o FILTER(?o = <{REL}>) }}"),
+        ),
+        (
+            "a property path, not a bare predicate",
+            format!("ASK {{ ?s <{REL}>* ?o }}"),
+        ),
+    ] {
+        let (relations, opens) = registry();
+        let shapes = shapes_with_body(&body);
+
+        let report = {
+            let _relations = enter_property_function_scope(relations);
+            validate_dataset(&data(), &shapes)
+        }
+        .unwrap_or_else(|error| {
+            panic!("{label}: an ordinary body must not be refused: {error}\n  body: {body}")
+        });
+
+        assert_eq!(
+            opens.load(Ordering::Relaxed),
+            0,
+            "{label}: the IRI is not in predicate position, so nothing may be invoked"
+        );
+        // The VERDICT is deliberately not asserted here, and the `VALUES` case is
+        // why: `ASK { VALUES ?v { <iri> } }` is TRUE, because a one-row `VALUES`
+        // block is a non-empty solution set. What each body answers is ordinary
+        // SPARQL semantics, which vary per body and are not what this test is about.
+        // The three claims that ARE about the seam are asserted instead: the body
+        // was not refused (above), nothing was invoked, and nothing is reported as a
+        // call.
+        let _ = reported(&report);
+
+        // And the pre-flight report agrees: not a call anywhere in the graph.
+        let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*registry().0).clone())
+            .expect("the fixture declarations read cleanly");
+        assert!(
+            !shapes.extension_usage(&env).reaches(REL),
+            "{label}: the usage report must not claim a call either"
+        );
+    }
+}
+
+// ── The door census ────────────────────────────────────────────────────
+
+/// EVERY construct that carries SPARQL text reaches the extension environment.
+///
+/// The defect this file pins was one door out of seven. The other six kept their
+/// query TEXT and were re-parsed by the engine against the environment in force, so
+/// they answered correctly; `sh:SPARQLFunction` alone froze algebra at load time and
+/// could not reach a relation at all. Nothing made that asymmetry visible — each
+/// door was correct or not on its own, and no test asked the question across all of
+/// them.
+///
+/// So this asks it. One shapes graph naming the registered relation from every
+/// SPARQL-bearing construct at once, and the pre-flight report has to see a call in
+/// each. A door added later that forgets the environment fails here rather than
+/// being discovered by whoever writes the query that should work and does not.
+#[test]
+fn every_sparql_bearing_construct_reaches_the_environment() {
+    let turtle = format!(
+        r#"
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix ex:     <{EX}> .
+@prefix sparql: <http://www.w3.org/ns/sparql#> .
+
+ex:isFlagged
+    a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:node ; sh:nodeKind sh:IRI ] ;
+    sh:ask """ASK {{ ?node <{REL}> ?why }}""" .
+
+ex:ByTargetType
+    a sh:SPARQLTargetType ;
+    sh:parameter [ sh:path ex:kind ] ;
+    sh:select """SELECT ?this WHERE {{ ?this <{REL}> ?kind }}""" .
+
+ex:CensusShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:target [
+        a sh:SPARQLTarget ;
+        sh:select """SELECT ?this WHERE {{ ?this <{REL}> ?why }}""" ;
+    ] ;
+    sh:sparql [
+        a sh:SPARQLConstraint ;
+        sh:select """SELECT $this ?value WHERE {{ $this <{REL}> ?value }}""" ;
+    ] ;
+    sh:rule [
+        a sh:SPARQLRule ;
+        sh:construct """CONSTRUCT {{ $this <{EX}out> ?why }} WHERE {{ $this <{REL}> ?why }}""" ;
+    ] ;
+    sh:expression [
+        sparql:equals (
+            [ sh:select """SELECT ?result WHERE {{ $this <{REL}> ?result }}""" ]
+            [ ex:isFlagged ( sh:this ) ]
+        )
+    ] .
+"#
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&turtle, None)
+        .unwrap_or_else(|error| panic!("the census fixture must load: {error}"));
+
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("the fixture declarations read cleanly");
+    let usage = shapes.extension_usage(&env);
+
+    // Every construct in the fixture is represented, named by its own declaration.
+    let sites: Vec<&str> = usage.sites().map(|(site, _)| site.as_str()).collect();
+    for expected in [
+        "sh:SPARQLFunction",
+        "sh:SPARQLTargetType",
+        "sh:target on",
+        "sh:sparql on",
+        "sh:rule on",
+        "sh:select node expression on",
+    ] {
+        assert!(
+            sites.iter().any(|site| site.starts_with(expected)),
+            "no site named {expected:?} in the census; the report covers {sites:?}"
+        );
+    }
+
+    // And every one of them reached the relation. A door that forgot the
+    // environment would report the IRI as data here.
+    for (site, used) in usage.sites() {
+        assert!(
+            used.calls.contains(REL),
+            "{site} did not reach the relation; it saw {used:?}"
+        );
+    }
+
+    // The control: with nothing registered, not one of them reaches it. This is
+    // what makes the assertions above attributable to the registration.
+    let bare = shapes.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    assert!(
+        !bare.reaches(REL),
+        "with nothing registered no door reaches the relation: {bare:?}"
+    );
+    assert!(
+        bare.data().contains(REL),
+        "and every door reports it as the data edge it became: {bare:?}"
+    );
+}

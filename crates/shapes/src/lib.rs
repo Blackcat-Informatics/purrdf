@@ -35,6 +35,7 @@ pub mod data;
 pub mod data_view;
 pub mod engine;
 pub mod expression;
+pub mod extension_usage;
 pub(crate) mod footprint;
 pub mod graphql;
 pub mod instance;

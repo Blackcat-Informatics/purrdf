@@ -32,10 +32,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
-    AggregateRegistry, BindingPattern, EvalError, ExtensionEnv, GovernedOutcome, GovernorState,
-    IndexGeneration, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, QueryGovernors, QueryOptions, TypeConstraint, UserFnBody,
-    UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
+    AggregateRegistry, BindingPattern, EvalError, ExprFnCall, ExtensionEnv, GovernedOutcome,
+    GovernorState, IndexGeneration, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions, TypeConstraint,
+    UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
 
 const EX: &str = "http://example.org/ns#";
@@ -282,4 +282,162 @@ fn a_sibling_iri_sharing_a_registered_prefix_stays_ordinary_data() {
         "the sibling is an ordinary predicate that matches nothing"
     );
     assert!(outcome.relations().witness.get(REL).is_none());
+}
+
+// ── The expression-bodied door ──────────────────────────────────────────────────
+
+/// An expression-bodied function whose body RE-ENTERS the evaluator, invoking the
+/// relation through a fresh governed run, reaches the calling query's receipt.
+///
+/// This door differs from the SPARQL-bodied one above in how it gets back into the
+/// evaluator: `eval_user_function` builds a CHILD context and merges its witness on
+/// return, while an expression body calls the engine again and produces its own,
+/// separate governed outcome. That outcome's evidence dies with it unless the body
+/// hands it back — so before `ExprFnCall::record_relations` existed, a relation
+/// invoked through this seam served the query and told nobody, which is
+/// indistinguishable from never having been asked.
+#[test]
+fn an_expression_body_s_relation_attests_on_the_calling_query_s_receipt() {
+    let (relations, opens) = relations();
+    let env = ExtensionEnv::over_relations(relations).expect("the declarations read cleanly");
+    let engine = NativeSparqlEngine::new();
+
+    // The body: a whole nested governed query over the focus graph, calling the
+    // relation. Its witness is handed back through the call rather than discarded.
+    let nested_env = ExtensionEnv::over_relations(relations_only(Arc::clone(&opens)))
+        .expect("the declarations read cleanly");
+    let body: purrdf_sparql_eval::ExprFnBody = Arc::new(move |call: &ExprFnCall<'_>| {
+        let bound = NativeSparqlEngine::new()
+            .bind_functions(UserFunctionRegistry::new(), &nested_env)
+            .expect("an empty registry has no body to bind");
+        let inner = NativeSparqlEngine::new();
+        let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
+        let outcome = inner
+            .query_governed_in_operation(
+                &**call.focus_graph,
+                SparqlRequest {
+                    query: &format!("SELECT ?w WHERE {{ <{EX}ada> <{REL}> ?w }}"),
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
+                    functions: &bound,
+                    env: &nested_env,
+                    ..QueryOptions::EMPTY
+                },
+                &state,
+            )
+            .map_err(|e| EvalError::function(e.to_string()))?;
+
+        // THE POINT OF THIS TEST: hand the nested run's evidence back.
+        call.record_relations(outcome.relations().witness.clone());
+
+        Ok(Some(TermValue::iri(format!("{EX}done"))))
+    });
+
+    let mut functions = UserFunctionRegistry::new();
+    functions.register_expr(FN_IRI, purrdf_sparql_eval::Arity::Exact(0), body);
+    let bound = engine
+        .bind_functions(functions, &env)
+        .expect("an expression-bodied function has no SPARQL body to bind");
+
+    let dataset = dataset();
+    let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
+    let outcome = engine
+        .query_governed_in_operation(
+            &*dataset,
+            SparqlRequest {
+                query: &format!("SELECT (<{FN_IRI}>() AS ?v) WHERE {{}}"),
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                functions: &bound,
+                env: &env,
+                focus_graph: Some(&dataset),
+                ..QueryOptions::EMPTY
+            },
+            &state,
+        )
+        .expect("a governed run of a valid query is an outcome, never an error");
+
+    assert!(
+        opens.load(Ordering::Relaxed) > 0,
+        "the nested run never reached the relation"
+    );
+    let attested = outcome
+        .relations()
+        .witness
+        .get(REL)
+        .expect("the relation the expression body invoked attests on the CALLER's receipt");
+    assert!(
+        attested
+            .generations
+            .contains(&IndexGeneration::declared(GENERATION)),
+        "the generation the nested run's cursor declared survives the call boundary: {:?}",
+        attested.generations
+    );
+}
+
+/// An expression body that never re-enters the evaluator records nothing, and the
+/// caller's receipt stays empty — the neighbouring case that shows the channel costs
+/// a body which does not use it exactly nothing.
+#[test]
+fn an_expression_body_that_invokes_no_relation_attests_nothing() {
+    let (relations, opens) = relations();
+    let env = ExtensionEnv::over_relations(relations).expect("the declarations read cleanly");
+    let engine = NativeSparqlEngine::new();
+
+    let body: purrdf_sparql_eval::ExprFnBody =
+        Arc::new(|_call: &ExprFnCall<'_>| Ok(Some(TermValue::iri(format!("{EX}done")))));
+    let mut functions = UserFunctionRegistry::new();
+    functions.register_expr(FN_IRI, purrdf_sparql_eval::Arity::Exact(0), body);
+    let bound = engine
+        .bind_functions(functions, &env)
+        .expect("an expression-bodied function has no SPARQL body to bind");
+
+    let dataset = dataset();
+    let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED));
+    let outcome = engine
+        .query_governed_in_operation(
+            &*dataset,
+            SparqlRequest {
+                query: &format!("SELECT (<{FN_IRI}>() AS ?v) WHERE {{}}"),
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions {
+                functions: &bound,
+                env: &env,
+                focus_graph: Some(&dataset),
+                ..QueryOptions::EMPTY
+            },
+            &state,
+        )
+        .expect("a governed run of a valid query is an outcome, never an error");
+
+    assert_eq!(opens.load(Ordering::Relaxed), 0);
+    assert!(
+        outcome.relations().witness.get(REL).is_none(),
+        "a body that invoked nothing attests nothing"
+    );
+}
+
+/// A second registry over the same relation, for the nested run to hold, SHARING
+/// `opens` with the outer fixture.
+///
+/// A fresh registry instance because the nested query prepares and evaluates against
+/// its own environment — but the same counter, because the assertion is that the
+/// nested run really invoked the relation, and a counter the nested run does not
+/// share would leave that unobservable.
+fn relations_only(opens: Arc<AtomicU64>) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        REL.to_owned(),
+        Arc::new(FlagRelation {
+            modes: [BindingPattern::from_code("ff")],
+            opens,
+        }),
+    );
+    registry
 }
