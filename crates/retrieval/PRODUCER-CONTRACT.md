@@ -34,8 +34,12 @@ A third property cuts across both and is stated once here rather than sixteen
 times. **A promise about rows nobody has pulled is verified exactly as far as the
 rows actually pulled reach, and no further.** A false declaration that no pulled
 row contradicts produces a wrong answer, and this layer does not dress that up as
-a proof. Reading a stream to its end is the only alternative, and it is the
-precise cost several of these declarations exist to avoid.
+a proof. The alternatives are reading a stream to its end, or *asking* it about
+one candidate where its registration licensed the question
+([A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them));
+the first is the precise cost several of these declarations exist to avoid, and
+the second is an observation, verified exactly as far as the rows that later
+contradict it.
 
 ## The obligations
 
@@ -56,6 +60,7 @@ precise cost several of these declarations exist to avoid.
 | [A13](#a13--attest-the-generation-of-the-snapshot-that-answered) | Attest the generation of the snapshot that answered | producer declares, layer carries |
 | [A14](#a14--declare-incompleteness-rather-than-refusing-or-faking-exhaustion) | Declare incompleteness rather than refusing or faking exhaustion | producer declares, layer refuses an unrecordable one |
 | [A15](#a15--declare-candidate-domains-and-never-name-a-candidate-outside-them) | Declare candidate domains, name each row's block, and never name a candidate outside them | both, per row |
+| [A16](#a16--declare-the-fidelity-of-the-rows-you-can-name) | Declare the fidelity of the rows you can name, on both axes, with evidence for any loss | producer declares, registration refuses an empty disclosure |
 
 [A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound),
 [A10](#a10--the-engine-pushed-ceiling-is-honoured-for-efficiency-only) and
@@ -482,8 +487,10 @@ The layer's own purchase — the middle one — is the depth probe.
 [`compile`] emits `LIMIT depth + 1`, so a
 unit whose producer still had rows past the planned depth hands back one more row
 than its stratum may contribute. That row is a **probe**: never emitted onto the
-stream, never ranked, never counted, present in no plan field, no identity and no
-resolution number. All it decides is
+stream, never ranked, present in no plan field and no identity, and counted in
+exactly one number — the rows a read materialized, which asks what the read cost
+rather than what the answer is made of, and which would understate the read by
+exactly this row if it left it out. All the probe *decides* is
 [`ProducerStatus::DepthReached`] versus
 [`ProducerStatus::Exhausted`]. Without it an
 executor could only ever say `Exhausted` — the one ending that names no
@@ -1064,15 +1071,21 @@ a vector index with neighbours, and neither holds any notion of a host's
 partition, so both leave the position unset and take their domains from the host
 unchanged.
 
-**The failure it prevents.** Without a declaration, "could this stream still name
-the candidate" is true of every open stream, so strata whose candidate sets do not
-overlap are read to their ends however small the caller's top-k — a top-ten over
-two million-row strata reads two million rows and grows a frontier to match.
-Weakening the finality test was not available: the engine has no random access, so
-the only way to learn that a stream does *not* name a candidate is to read it to
-its end, and certifying sooner without a declaration would emit a score missing a
-contribution and call it exact. Exact scores and a bounded read are jointly
-reachable only if fusion is told which candidates a stream can name.
+**The failure it prevents.** With nothing declared and nothing askable, "could
+this stream still name the candidate" is true of every open stream, so strata
+whose candidate sets do not overlap are read to their ends however small the
+caller's top-k — a top-ten over two million-row strata reads two million rows and
+grows a frontier to match. Weakening the finality test was not available: against
+a producer that will say nothing about its own candidates there is no random
+access, so the only way to learn that a stream does *not* name a candidate is to
+read it to its end, and certifying sooner while knowing nothing would emit a
+score missing a contribution and call it exact. Exact scores and a bounded read
+are jointly reachable only if fusion is told, or can ask, which candidates a
+stream can name. This obligation is the telling; the exclusion basis in
+[A8](#a8--capability-declarations-are-contracts-cardinality-declarations-are-estimates)
+is the asking, and it reaches the configuration this one cannot — two producers
+over one block whose results never overlap, where both declarations are true and
+neither settles a thing.
 
 **What it licenses, precisely.**
 The finality test inside [`FusionStream`] stays a **membership** question — a
@@ -1087,18 +1100,27 @@ stream declares `Unrestricted` therefore computes precisely what it computed bef
 the term existed — the same rows, the same scores, the same provenance, the same
 reading cost.
 
-**And it licenses a narrower depth, conditioned on `Unique`.** The declaration buys
-a second thing, one stage earlier and larger than the quantifier: where a request
-states a bound of `k`, every surviving stratum declares a block set, no two of those
-sets meet, **and every one of those strata declared
-[`DuplicatePolicy::Unique`]**, the planner records a per-stratum depth of `k` and
-the compiled unit is emitted at that `LIMIT`. The read itself is bounded, not merely
-the walk over a stream that was materialized in full. The `Unique` condition is not
-decoration: the merge argument counts ranks and reads the count as a count of
+**And it licenses a narrower depth, conditioned on `Unique`, and it is decided per
+stratum.** The declaration buys a second thing, one stage earlier and larger than
+the quantifier: where a request states a bound of `k`, a surviving stratum `s`
+declares a block set that meets no other surviving stratum's, **and `s` itself
+declared [`DuplicatePolicy::Unique`]**, the planner records a depth of `k` for `s`
+and the compiled unit is emitted at that `LIMIT`. The read itself is bounded, not
+merely the walk over a stream that was materialized in full. The `Unique` condition
+is not decoration: the merge argument counts ranks and reads the count as a count of
 candidates, which is true only of a stream that names an item once — see
-[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer). Drop `Unique` and the
-depth is the declared-or-measured bound it always was; no request is refused and no
-answer moves either way.
+[A5](#a5--duplicate-fan-in-is-collapsed-inside-the-producer).
+
+Read the conditions as being about `s`, because they are. A stratum that fails them
+takes no other stratum's narrowing with it: two strata sharing a block cost each
+other their prefixes and cost a third, disjoint stratum nothing, and a neighbour
+declaring `Allowed` cannot repeat a candidate it is not allowed to name, so how
+often it repeats its own is not a fact about `s`. The one declaration that still
+costs *everyone* a prefix is `Unrestricted` among two or more strata, and that is
+request-wide because the declaration is: "may name anything" is a statement about
+every stratum's candidates. Wherever a condition fails, that stratum's depth is the
+declared-or-measured bound it always was; no request is refused and no answer moves
+either way.
 
 **A single surviving stratum needs no domain declaration for that depth**, and the
 reason is what disjointness is a statement about: pairs. With one stratum there is no

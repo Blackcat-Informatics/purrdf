@@ -22,20 +22,38 @@
 //! zero leaves `U(x)` equal to `L(x)` while the stream carrying it can still
 //! name `x`.
 //!
-//! *Could* still name it is where a producer's own declaration enters. A stream
-//! that declared [`CandidateDomains::Within`] has promised its candidates lie in
-//! named blocks of the candidate universe, so a candidate outside those blocks
-//! is one it will never name — and waiting for it would be waiting forever. The
-//! membership test is therefore asked of the streams that can name `x` and
-//! skipped for the streams that provably cannot, which is a *smaller
+//! *Could* still name it is where the producer enters, and it may answer in two
+//! ways.
+//!
+//! **Declaratively.** A stream that declared [`CandidateDomains::Within`] has
+//! promised its candidates lie in named blocks of the candidate universe, so a
+//! candidate outside those blocks is one it will never name — and waiting for
+//! it would be waiting forever.
+//!
+//! **Observationally.** A stream that declared an [`ExclusionBasis`] can be
+//! *asked*, per candidate, whether that candidate is out of its reach
+//! ([`RankedStream::exclusion`]). An `Excluded` answer retires that stream's
+//! claim on that one candidate, which is the case the declaration structurally
+//! cannot reach: two producers over one block, both declaring the truth, whose
+//! results never overlap.
+//!
+//! The membership test is therefore asked of the streams that can name `x` and
+//! skipped for the streams that provably cannot — by promise or by answer, and
+//! the conjunction of the two is spelled exactly once — which is a *smaller
 //! quantifier*, not a weaker test: nothing about what a live stream owes a
 //! candidate changes. A stream that then names a candidate its declaration
-//! cannot reach is refused ([`ProtocolError::OutsideDeclaredDomain`]), and a
-//! fusion whose streams declare [`CandidateDomains::Unrestricted`] skips
-//! nothing and computes exactly what it computed before the term existed. What
-//! the licence buys is the reading: without it, strata whose candidate sets do
-//! not overlap are read to their ends however small the caller's top-k, because
-//! no confirmation is ever coming.
+//! cannot reach is refused ([`ProtocolError::OutsideDeclaredDomain`]); one that
+//! names a candidate it excluded broke an observation rather than a declaration
+//! and is refused as [`ProtocolError::ExclusionContradicted`], so the refusal
+//! blames the promise that was actually broken. A fusion whose streams declare
+//! [`CandidateDomains::Unrestricted`] and no basis skips nothing and computes
+//! exactly what it computed before either term existed. What the licence buys is
+//! the reading: with neither half available, strata whose candidate sets do not
+//! overlap are read to their ends however small the caller's top-k, because no
+//! confirmation is ever coming and nothing can be asked. With the observational
+//! half alone — domains undeclared, lookups answered — the read is not a drain:
+//! it stops where the fused threshold licenses it to, which is a property of the
+//! decay law and the weights and is flat in the streams' length.
 //!
 //! # The axiom under the licence, and where it is checked
 //!

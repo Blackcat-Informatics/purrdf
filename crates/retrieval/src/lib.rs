@@ -90,23 +90,44 @@
 //! [`ProtocolError::DuplicateItem`], naming the entity and the stratum, for
 //! however long the fusion runs.
 //!
-//! A [`CandidateDomains`] declaration is what makes a bounded read bounded in
-//! *rows pulled* as well as in rows returned. Without one, a candidate cannot
-//! certify until every open stream has named it, so strata whose candidates do
-//! not overlap are read to their ends however small the caller's top-k; with
-//! one, fusion skips exactly the streams that provably cannot name the
-//! candidate in hand. The scores do not move — the declaration changes how much
-//! is read, never what is returned — and a producer that names a candidate its
-//! declaration cannot reach is refused as
-//! [`ProtocolError::OutsideDeclaredDomain`] rather than quietly merged.
+//! What makes a bounded read bounded in *rows pulled* as well as in rows
+//! returned is what a producer will say about its own candidates. Told and
+//! asked nothing, a candidate cannot certify until every open stream has named
+//! it, so strata whose candidates do not overlap are read to their ends however
+//! small the caller's top-k. There are two ways out and a producer may offer
+//! either:
 //!
-//! The same declaration is read one stage earlier, by [`plan`], and there it
-//! bounds how much is *materialized* rather than how much of a materialized
-//! stream is walked. Over strata whose declared blocks are pairwise disjoint the
-//! recorded depth is the request's own bound, so the emitted `LIMIT` is that bound
-//! plus its probe row and the work is flat in the corpus. The two readings answer
-//! different questions — how deep the unit reads, and how far the fusion walks
-//! what it read — and neither changes an answer.
+//! * a [`CandidateDomains`] declaration — a promise about whole blocks, made
+//!   once at registration — and fusion skips exactly the streams that provably
+//!   cannot name the candidate in hand. It settles finality where the blocks
+//!   separate the producers, and not where two producers share a block and
+//!   merely happen not to overlap;
+//! * an [`ExclusionBasis`], which is permission to *ask*. Fusion puts one
+//!   candidate to the stream, once per blocking `(candidate, stream)` pair, and
+//!   reads [`ExclusionVerdict::Excluded`] as "this stream will never name it".
+//!   That is a measurement against the producer's own index rather than a
+//!   promise about rows nobody read, which is why it settles the case the
+//!   declaration cannot.
+//!
+//! The scores do not move under either — what a producer says changes how much
+//! is read, never what is returned. A producer that names a candidate its
+//! declaration cannot reach is refused as
+//! [`ProtocolError::OutsideDeclaredDomain`]; one that excludes a candidate and
+//! then names it broke an observation rather than a declaration and is refused
+//! as [`ProtocolError::ExclusionContradicted`], so the refusal blames the
+//! promise that was actually broken.
+//!
+//! The domain declaration is read one stage earlier as well, by [`plan`], and
+//! there it bounds how much is *materialized* rather than how much of a
+//! materialized stream is walked. The reading is **per stratum**: a stratum that
+//! declares [`DuplicatePolicy::Unique`] and whose blocks are disjoint from every
+//! other surviving stratum's records the request's own bound as its depth, so
+//! its emitted `LIMIT` is that bound plus its probe row and its work is flat in
+//! the corpus — whatever the strata beside it declared. A stratum that cannot
+//! narrow keeps the declared-or-measured bound it always had and takes no
+//! neighbour's prefix with it. The two readings answer different questions — how
+//! deep the unit reads, and how far the fusion walks what it read — and neither
+//! changes an answer.
 //!
 //! Neither declaration can put the same entity in an answer twice. That is the
 //! one property here that is not a producer's to negotiate: a fused answer's
@@ -134,8 +155,13 @@
 //! its stratum reads, and that probe row is what separates
 //! [`ProducerStatus::DepthReached`] from [`ProducerStatus::Exhausted`] — the
 //! difference between "the plan stopped me" and "this is all there is". The
-//! probe is a read and never a value: no plan field, identity or resolution
-//! number moves by one because of it. Where the row is past the registry's
+//! probe is a read and never a value: it is never emitted onto the stream,
+//! never ranked, and no plan field, identity or *arithmetic* of the answer
+//! moves by one because of it. It is counted in exactly one number, and that
+//! number is the one that asks what the read cost rather than what the answer
+//! is made of — [`StratumResolution::rows_materialised`], where excluding it
+//! would report a read as cheaper than it was by exactly the row that makes its
+//! ending observable. Where the row is past the registry's
 //! declared bound rather than merely past the depth, the producer contradicted
 //! its own declaration and the run is refused
 //! ([`ExecutionError::RowBoundBreached`]) rather than reported as either

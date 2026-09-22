@@ -146,9 +146,13 @@
 //! row is a **read, never a value**: [`execute`](crate::execute) emits at most
 //! `depth` rows onto the stream and uses the arrival of the `depth + 1`-th only to
 //! end the stream [`DepthReached`](crate::ProducerReceipt::DepthReached) instead of
-//! `Exhausted`. No plan field, no identity and no recorded resolution moves by
-//! one: [`PlannedResolution::requested_depth`] is the depth, and so is
-//! [`StratumUnit::depth()`].
+//! `Exhausted`. No plan field and no identity moves by one:
+//! [`PlannedResolution::requested_depth`] is the depth, and so is
+//! [`StratumUnit::depth()`]. The one number it does move is the one that asks
+//! what the read *cost* rather than what the answer is made of —
+//! [`StratumResolution::rows_materialised`](crate::StratumResolution), which
+//! counts the rows the evaluator handed back and would understate the read by
+//! exactly the row that makes its ending observable if it did not.
 //!
 //! # Every bound is *rendered* from the depth, and a caller's text is never certified
 //!

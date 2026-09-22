@@ -183,21 +183,29 @@ pub struct StreamContract {
     /// [`CandidateDomains::Unrestricted`] says "anything", which is the wider
     /// promise and the one every stream made before this term existed:
     /// [`FusionStream`](crate::FusionStream) then behaves exactly as it always
-    /// did. A [`CandidateDomains::Within`] declaration is what lets fusion
-    /// certify a candidate without first reading a stream that was never going
-    /// to name it — the drain that makes a top-ten answer over two disjoint
-    /// million-row strata read two million rows.
+    /// did on this term's account. A [`CandidateDomains::Within`] declaration is
+    /// one of the two ways fusion can certify a candidate without first reading
+    /// a stream that was never going to name it — the drain that makes a top-ten
+    /// answer over two disjoint million-row strata read two million rows. The
+    /// other is [`Self::exclusion`], so `Unrestricted` here does not on its own
+    /// mean the read drains: a producer that answers a lookup bounds it by
+    /// observation instead.
     ///
     /// # Why the consumer cannot derive this for itself
     ///
-    /// Because the input protocol has no random access. A
-    /// [`RankedStream`] offers `next` and `receipt`, so the only way to learn
-    /// that a stream does *not* hold a candidate is to read it to its end. A
-    /// consumer that certified earlier without a declaration would be emitting
-    /// a score that a still-open stream might have raised — a lower bound
-    /// presented as an exact value — so exact scores and a k-bounded read over
-    /// strata that do not overlap are jointly unachievable unless the producers
-    /// say which candidates they can name. They say it here.
+    /// Because a stream that says nothing about its own candidates offers no
+    /// random access. Against such a producer a [`RankedStream`] is `next` and
+    /// `receipt`, so the only way to learn that it does *not* hold a candidate
+    /// is to read it to its end. A consumer that certified earlier knowing
+    /// nothing would be emitting a score that a still-open stream might have
+    /// raised — a lower bound presented as an exact value — so exact scores and
+    /// a k-bounded read over strata that do not overlap are jointly unachievable
+    /// unless the producers say something. This is one of the two things they
+    /// can say, and [`Self::exclusion`] is the other: this promises about whole
+    /// blocks, once, and is read without asking; that is answered per candidate,
+    /// and reaches the case this cannot — two producers over one block whose
+    /// results never overlap, where both declarations are true and neither
+    /// settles anything.
     ///
     /// # It is verified over the rows pulled, and nowhere else
     ///

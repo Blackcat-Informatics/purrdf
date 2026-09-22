@@ -3,7 +3,12 @@
 
 //! The executor: each admitted unit runs independently through the evaluator.
 //!
-//! [`execute`] is the only stage that runs a query. It runs one unit per stratum
+//! [`execute`] is the only stage that runs a **ranked read**, and the only stage
+//! that compiles a query at all — including the one query it does not itself run,
+//! the per-candidate exclusion lookup it prepares and hands back inside the
+//! stream, which executes when the fusion stage asks (see
+//! [`RankedStream::exclusion`](crate::RankedStream::exclusion) and the borrow
+//! note on [`RankedStreamImpl`]). It runs one unit per stratum
 //! through `purrdf-sparql-eval` against **the caller's dataset**, with the
 //! caller's registry injected, and the query text is exactly the admitted
 //! emission. A unit that fails to parse or evaluate becomes that stratum's
@@ -135,7 +140,10 @@
 //! [`compile`](crate::compile) emits `LIMIT depth + 1`, so a unit whose producer
 //! still had rows past the planned depth hands back one more row than the
 //! stratum may contribute. That row is a **probe**: it is never emitted onto the
-//! stream, never ranked, and never counted anywhere. All it does is decide the
+//! stream, never ranked, and counted in exactly one place —
+//! [`RankedStreamImpl::rows_materialised`], which answers what the read cost
+//! rather than what the answer is made of, and which would understate the read by
+//! exactly this row if it left it out. What it decides is the
 //! stream's ending — [`StreamEnding::DepthReached`] when it arrived,
 //! [`StreamEnding::Exhausted`] when it did not. Without it an executor could
 //! only ever say `Exhausted`, which is the one ending that names no
@@ -1268,9 +1276,12 @@ type BoundedRead = (Vec<(u64, Term, RowBlock)>, StreamEnding, ProducerStatus);
 ///
 /// The unit was emitted one row deeper than `depth`, so a `depth + 1`-th row
 /// here means the read still had a row when the bound ran out. That row is
-/// dropped — it is a probe and never a value — and its only effect is the
-/// ending. Every other row keeps the rank [`rank_candidates`] gave it, so
-/// nothing is renumbered.
+/// dropped — it is a probe and never a value — and its only effect on the
+/// *answer* is the ending. It is still a row the read paid for, so it survives
+/// in [`RankedStreamImpl::rows_materialised`], which this function's caller sets
+/// from the rows the evaluator returned rather than from the rows it kept. Every
+/// other row keeps the rank [`rank_candidates`] gave it, so nothing is
+/// renumbered.
 ///
 /// The status returned is the mirror of the ending, so the terminal report and
 /// the stream's own receipt cannot say different things about the same read.
