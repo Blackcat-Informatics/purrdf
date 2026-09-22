@@ -67,9 +67,11 @@ fn parser_options() -> ParserOptions {
     }
 }
 
-/// An engine that recognizes the caller IRIs at parse time.
+/// An engine, unconfigured: parse-time recognition of the caller IRIs now lives on the
+/// [`ExtensionEnv`] every call passes through [`QueryOptions::env`] (see [`env_of`]),
+/// never on the engine itself.
 fn engine() -> NativeSparqlEngine {
-    NativeSparqlEngine::new().with_parser_options(parser_options())
+    NativeSparqlEngine::new()
 }
 
 /// A fixture IRI under [`EX`].
@@ -218,9 +220,17 @@ fn run(
     Ok(Answers { variables, rows })
 }
 
-/// The environment a fixture registry is interpreted in.
+/// The environment a fixture registry is interpreted in: [`parser_options`]'s exact-IRI
+/// declarations (the parse-time recognition [`engine`] used to carry) folded together
+/// with the fixture's relation registry, so an intentionally EMPTY registry (A5) still
+/// parses the caller IRI as a call rather than falling back to an ordinary triple pattern.
 fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
-    ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly")
+    ExtensionEnv::new(
+        parser_options(),
+        relations,
+        purrdf_sparql_eval::AggregateRegistry::EMPTY,
+    )
+    .expect("the fixture declarations read cleanly")
 }
 
 /// Evaluate `query`, requiring it to succeed.

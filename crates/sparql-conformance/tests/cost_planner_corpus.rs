@@ -23,6 +23,18 @@ use purrdf_sparql_eval::{
 const BASE: &str = "http://purrdf.test/manifest/";
 const EXT_NS: &str = "https://example.org/ext/";
 
+/// The parse-time namespace declarations both planner engines' queries are read
+/// under, shared with [`eval_case`]'s [`purrdf_sparql_eval::ExtensionEnv`] so the
+/// engine-level and per-call halves of the seam can never disagree about which
+/// predicates are calls.
+fn parser_options() -> ParserOptions {
+    ParserOptions {
+        extension_fn_namespaces: vec![EXT_NS.to_owned()],
+        property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
+        property_fn_iris: Vec::new(),
+    }
+}
+
 /// Build an engine with the requested planner mode. Both engines share the same
 /// parse-time configuration the conformance harness uses.
 fn make_engine(cost: bool) -> NativeSparqlEngine {
@@ -32,11 +44,6 @@ fn make_engine(cost: bool) -> NativeSparqlEngine {
         force_sequential: false,
     };
     NativeSparqlEngine::new()
-        .with_parser_options(ParserOptions {
-            extension_fn_namespaces: vec![EXT_NS.to_owned()],
-            property_fn_namespaces: vec![purrdf_sparql_conformance::run::REL_NS.to_owned()],
-            property_fn_iris: Vec::new(),
-        })
         .with_standpoint_predicates(StandpointPredicates::new(
             format!("{EXT_NS}accordingTo"),
             format!("{EXT_NS}sharpens"),
@@ -71,8 +78,10 @@ fn eval_case(
         registry.register_statistical_aggregates(namespace);
         registry
     });
-    // Both registries as the one environment the query text is read against.
-    let env = purrdf_sparql_eval::ExtensionEnv::over(
+    // The declared parser options AND both registries together, as the one
+    // environment the query text is read against.
+    let env = purrdf_sparql_eval::ExtensionEnv::new(
+        parser_options(),
         purrdf_sparql_conformance::run::harness_relations().clone(),
         aggregates
             .as_ref()

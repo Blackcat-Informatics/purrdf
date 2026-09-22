@@ -1042,12 +1042,21 @@ fn a_governed_update_where_charges_the_relation_and_trips_on_fuel() {
 /// evaluation), and this run supplies none.
 #[test]
 fn an_update_where_call_with_no_registry_hard_errors_precisely() {
-    let engine = NativeSparqlEngine::new().with_parser_options(options());
+    let env =
+        ExtensionEnv::over_options(options()).expect("environment over declared parser options");
+    let engine = NativeSparqlEngine::new();
     let mut ds = dataset();
     let before = ds.quad_count();
 
     let error = engine
-        .update(&mut ds, request(UPDATE_TEXT))
+        .update_with_options(
+            &mut ds,
+            request(UPDATE_TEXT),
+            QueryOptions {
+                env: &env,
+                ..QueryOptions::EMPTY
+            },
+        )
         .expect_err("a call with nothing to resolve against must not read the graph instead");
     assert_eq!(error.code, "native-sparql-property-function");
     assert!(

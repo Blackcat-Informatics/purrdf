@@ -429,17 +429,22 @@ fn custom_aggregate_arity_mismatch_is_refused_at_prepare_time_under_the_aggregat
 /// widened to swallow the property-function seam too.
 #[test]
 fn unregistered_property_function_still_reports_the_property_function_code() {
-    let engine = NativeSparqlEngine::new().with_parser_options(purrdf_sparql_eval::ParserOptions {
+    let env = ExtensionEnv::over_options(purrdf_sparql_eval::ParserOptions {
         extension_fn_namespaces: vec![],
         property_fn_namespaces: vec![format!("{EX}pf/")],
         property_fn_iris: Vec::new(),
-    });
+    })
+    .expect("environment over declared parser options");
+    let engine = NativeSparqlEngine::new();
     let ds = dataset();
     let error = engine
         .query_with_options_view(
             &*ds,
             request(&format!("SELECT ?s WHERE {{ ?s <{EX}pf/nope> ?v }}")),
-            QueryOptions::EMPTY,
+            QueryOptions {
+                env: &env,
+                ..QueryOptions::EMPTY
+            },
         )
         .expect_err("nothing is registered under the configured namespace");
     assert_eq!(

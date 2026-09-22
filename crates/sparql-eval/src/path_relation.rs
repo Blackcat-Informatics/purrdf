@@ -146,7 +146,7 @@
 //!     GraphMatch, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue,
 //! };
 //! use purrdf_sparql_eval::{
-//!     ExtensionEnv, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph, PathLimits,
+//!     ExtensionEnv, NativeSparqlEngine, PathDirection, PathGraph, PathLimits,
 //!     PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryOptions,
 //! };
 //!
@@ -184,22 +184,20 @@
 //! let mut registry = PropertyFunctionRegistry::new();
 //! registry.register(WALK.to_owned(), Arc::new(PathWitnessRelation::new(graph, limits)));
 //!
-//! // 6. Parse-time recognition. Without the IRI here the same text is an ordinary
-//! //    triple pattern reading the graph.
-//! let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions {
-//!     extension_fn_namespaces: Vec::new(),
-//!     property_fn_namespaces: Vec::new(),
-//!     property_fn_iris: vec![WALK.to_owned()],
-//! });
+//! // 6. The engine evaluates; it holds no parse configuration of its own. Which
+//! //    predicate IRIs are calls is decided by the environment in step 7, and by
+//! //    nothing else -- so there is no second answer to get out of step with.
+//! let engine = NativeSparqlEngine::new();
 //!
-//! // 7. Run.
 //! let query = format!(
 //!     "SELECT ?end ?len ?step ?node ?edge WHERE {{ \
 //!      <http://example.org/a> <{WALK}> ( ?end ?pathId ?len ?step ?node ?edge ) \
 //!      }} ORDER BY ?len ?step"
 //! );
-//! // The environment the query text is interpreted relative to: the parser learns
-//! // which predicate IRIs are calls from the very registry that will resolve them.
+//! // 7. The environment the query text is interpreted relative to: the parser learns
+//! //    which predicate IRIs are calls from the very registry that will resolve
+//! //    them, so recognition and resolution cannot disagree. Without the relation
+//! //    here the same text is an ordinary triple pattern reading the graph.
 //! let env = ExtensionEnv::over_relations(registry)?;
 //! let result = engine.query_with_options_view(
 //!     &*dataset,

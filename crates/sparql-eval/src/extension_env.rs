@@ -288,6 +288,30 @@ impl ExtensionEnv {
         Self::new(self.base.clone(), relations, self.aggregates.clone())
     }
 
+    /// An environment over declared parser options and nothing else: no relations,
+    /// no aggregates.
+    ///
+    /// This is the shape a host takes when it declares a NAMESPACE rather than
+    /// wiring an implementation — an extension-function namespace whose functions
+    /// the query spells directly, or a relation namespace under which an
+    /// unregistered IRI must be a hard error rather than an ordinary triple. There
+    /// is no registry to supply, and requiring an empty one just to declare a
+    /// namespace would make the common case read like the exceptional one.
+    ///
+    /// # Errors
+    ///
+    /// Never, in practice: the derivation can only fail through a registered
+    /// relation's or aggregate's declaration methods, and this environment has
+    /// neither. The `Result` is kept so that adding a registry to a call site is an
+    /// edit to one argument rather than a change of shape.
+    pub fn over_options(base: ParserOptions) -> Result<Self, EvalError> {
+        Self::new(
+            base,
+            PropertyFunctionRegistry::EMPTY,
+            AggregateRegistry::EMPTY,
+        )
+    }
+
     /// An environment over `aggregates` and nothing else: default parser options and
     /// no relations.
     ///

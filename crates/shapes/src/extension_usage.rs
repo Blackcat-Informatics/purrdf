@@ -68,6 +68,7 @@ impl core::fmt::Display for SparqlSite {
 #[derive(Clone, Debug, Default)]
 pub struct ExtensionUsage {
     sites: BTreeMap<SparqlSite, PredicateUse>,
+    unreadable: BTreeMap<SparqlSite, String>,
 }
 
 impl ExtensionUsage {
@@ -105,27 +106,69 @@ impl ExtensionUsage {
     }
 
     /// Whether `iri` would reach a relation anywhere in this shapes graph.
+    ///
+    /// Read [`Self::unreadable`] alongside this: a `false` from a graph with
+    /// unreadable sites means "not in the sites we could read", which is a weaker
+    /// claim than "not anywhere".
     #[must_use]
     pub fn reaches(&self, iri: &str) -> bool {
         self.sites.values().any(|used| used.calls.contains(iri))
+    }
+
+    /// The sites whose SPARQL text this environment could not parse, each with the
+    /// parser's own diagnostic, in site order.
+    ///
+    /// Non-empty means the shapes graph and the environment genuinely disagree, and
+    /// that validating under this environment will fail at these sites. The loader
+    /// accepted every one of them, so the disagreement is the environment's
+    /// declarations changing what the grammar accepts — a `CONSTRUCT` template
+    /// naming a declared relation IRI is the reachable case, because the parser
+    /// refuses a call in a template.
+    ///
+    /// Reported rather than skipped, and rather than collapsing the whole report
+    /// into one error: a host asking "what will my environment do to this graph?"
+    /// is better served by the complete picture with the broken sites named than by
+    /// the first failure and nothing else.
+    pub fn unreadable(&self) -> impl Iterator<Item = (&SparqlSite, &str)> {
+        self.unreadable
+            .iter()
+            .map(|(site, why)| (site, why.as_str()))
+    }
+
+    /// Whether every SPARQL text in the graph could be read under this environment.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.unreadable.is_empty()
     }
 
     /// Record one site, merging if the same label appears twice (two constraints on
     /// one shape, say). Merging rather than overwriting: a report that silently kept
     /// the last of two texts would under-report the graph.
     fn record(&mut self, site: String, text: &str, env: &ExtensionEnv) {
-        // A text that does not parse under this environment contributes nothing: the
-        // shapes loader already refused every unparsable body, so reaching this with
-        // one means the environment's own declarations changed what the grammar
-        // accepts — which is a question about the environment, not about usage, and
-        // one the validation itself will raise by name.
-        let Ok(query) = parse(text, env) else {
-            return;
-        };
-        let used = predicate_use(&query);
-        let entry = self.sites.entry(SparqlSite(site)).or_default();
-        entry.calls.extend(used.calls);
-        entry.data.extend(used.data);
+        // A text that does not parse under THIS environment is a real answer, not a
+        // nothing, and it is recorded rather than skipped.
+        //
+        // The shapes loader parsed every body blind, so a text that reaches here and
+        // fails did so BECAUSE of the environment's own declarations — the parser
+        // refuses a property-function call in a `CONSTRUCT` template, for instance,
+        // so a `sh:rule` whose template names a declared relation IRI loads fine and
+        // then cannot be read under the environment that declares it.
+        //
+        // Dropping the site made the report say the shape carries no SPARQL at all,
+        // which is indistinguishable from a shape that genuinely carries none — a
+        // silent answer from the one instrument that exists to end silent answers,
+        // and the same failure this module documents in its header.
+        match parse(text, env) {
+            Ok(query) => {
+                let used = predicate_use(&query);
+                let entry = self.sites.entry(SparqlSite(site)).or_default();
+                entry.calls.extend(used.calls);
+                entry.data.extend(used.data);
+            }
+            Err(why) => {
+                self.unreadable.insert(SparqlSite(site), why);
+            }
+        }
     }
 }
 

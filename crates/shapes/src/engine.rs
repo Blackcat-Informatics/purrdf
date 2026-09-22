@@ -1053,7 +1053,17 @@ fn evaluate_shape_focus_nodes(
     // re-installed per chunk — otherwise a `sh:select` body whose predicate is a property
     // function would resolve on the sequential path and fail to resolve on the parallel
     // one, which is a scheduling-dependent verdict.
+    //
+    // The declared parser options are snapshotted for exactly the same reason and are
+    // exactly as load-bearing. They decide which predicate IRIs are calls for a whole
+    // NAMESPACE, so a worker that rebuilt its environment without them would read every
+    // declared-but-unregistered IRI as an ordinary triple where the orchestrating thread
+    // hard-errors on it — the same scheduling-dependent verdict the paragraph above
+    // exists to prevent, one declaration wider. Both snapshots are taken together
+    // because they are two halves of one environment: re-installing either without the
+    // other reconstructs an environment that never existed on the calling thread.
     let relations = crate::sparql::current_property_functions();
+    let parser_options = crate::sparql::current_parser_options();
     crate::parallel::try_map_chunks(
         focus_nodes,
         || {
@@ -1063,6 +1073,9 @@ fn evaluate_shape_focus_nodes(
                     .clone()
                     .map(crate::sparql::enter_property_function_scope),
                 crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates)),
+                parser_options
+                    .clone()
+                    .map(crate::sparql::enter_parser_options_scope),
             )
         },
         |_scopes, out, focus| {
@@ -4295,6 +4308,161 @@ mod tests {
                 "user-function report drifted with {threads} workers and chunk size {chunk_size}"
             );
         }
+    }
+
+    /// A relation that records, on whichever thread it is invoked from, whether the
+    /// ambient declared parser options were in force there.
+    ///
+    /// This is the only deterministic way to observe the chunk fork's environment. An
+    /// outcome-level oracle cannot do it: rayon runs the orchestrating closure on a
+    /// pool thread that DOES carry the scope, so that thread steals chunks too, and a
+    /// single correctly-parsed chunk is enough to mask every wrongly-parsed one behind
+    /// an identical verdict. Asking the relation itself moves the question to the
+    /// thread that actually did the work.
+    #[derive(Debug)]
+    struct PfScopeProbe {
+        modes: [purrdf_sparql_eval::BindingPattern; 1],
+        /// Invocations that saw the declaration, and invocations that did not.
+        saw: Arc<std::sync::atomic::AtomicU64>,
+        missed: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl purrdf_sparql_eval::PropertyFunction for PfScopeProbe {
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+
+        fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            purrdf_sparql_eval::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &purrdf_sparql_eval::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+            let counter = if crate::sparql::current_parser_options().is_some() {
+                &self.saw
+            } else {
+                &self.missed
+            };
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Box::new(PfScopeProbeCursor))
+        }
+    }
+
+    struct PfScopeProbeCursor;
+
+    impl purrdf_sparql_eval::PfCursor for PfScopeProbeCursor {
+        fn next(
+            &mut self,
+        ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+            Ok(None)
+        }
+    }
+
+    /// Every chunk worker evaluates under the SAME declared parser options as the
+    /// thread that dispatched it.
+    ///
+    /// The chunk fork re-installs the ambient scopes on each worker because a
+    /// thread-local is invisible from a forked thread. The declared parser options are
+    /// one of those scopes and are exactly as load-bearing as the relation registry
+    /// beside them: they decide which predicate IRIs are calls for a whole NAMESPACE.
+    /// A worker that rebuilt its environment without them would read a
+    /// declared-but-unregistered IRI as an ordinary triple where the dispatching thread
+    /// hard-errors on it — a verdict decided by how rayon happened to chunk the focus
+    /// nodes.
+    ///
+    /// The assertion is on the WORKER's view rather than on the report, because the
+    /// report cannot see it: the orchestrating closure runs on a pool thread that
+    /// carries the scope, so it steals chunks that parse correctly and one such chunk
+    /// masks every incorrect one. A probe relation answers from the thread that did
+    /// the work.
+    ///
+    /// A `sh:sparql` body is used deliberately. A `sh:SPARQLFunction` body is bound
+    /// ONCE on the dispatching thread before any chunk exists, so it carries its
+    /// environment with it and could not exhibit this however the scopes were
+    /// installed.
+    #[test]
+    fn every_chunk_worker_sees_the_declared_parser_options() {
+        use std::fmt::Write as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let mut data_nt = String::new();
+        for index in 0..64 {
+            write!(
+                data_nt,
+                "<http://example.org/ns#item{index}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n\
+                 <http://example.org/ns#item{index}> <http://example.org/ns#key> \"k{index}\" .\n"
+            )
+            .expect("writing to a String cannot fail");
+        }
+        // `?k` is bound by the preceding triple, which is what makes the relation's
+        // declared `bf` access mode feasible: the planner orders the call after the
+        // pattern that binds its subject.
+        let shapes_ttl = format!(
+            r#"{PREFIXES}
+            ex:ProbeShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:sparql [
+                    sh:select "SELECT $this WHERE {{ $this <http://example.org/ns#key> ?k . ?k <http://example.org/rel/probe> ?why }}" ;
+                ] .
+            "#
+        );
+        let data = load_data_nt(&data_nt);
+        let shapes = load_shapes_ttl(&shapes_ttl);
+
+        let saw = Arc::new(AtomicU64::new(0));
+        let missed = Arc::new(AtomicU64::new(0));
+        let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::default();
+        registry.register(
+            "http://example.org/rel/probe",
+            Arc::new(PfScopeProbe {
+                modes: [purrdf_sparql_eval::BindingPattern::from_code("bf")],
+                saw: Arc::clone(&saw),
+                missed: Arc::clone(&missed),
+            }),
+        );
+        let registry = Arc::new(registry);
+
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test pool must build")
+            .install(|| {
+                let _relations =
+                    crate::sparql::enter_property_function_scope(Arc::clone(&registry));
+                let _options = crate::sparql::enter_parser_options_scope(Arc::new(
+                    purrdf_sparql_algebra::ParserOptions {
+                        property_fn_namespaces: vec!["http://example.org/rel/".to_owned()],
+                        ..purrdf_sparql_algebra::ParserOptions::default()
+                    },
+                ));
+                let _guard = crate::parallel::force_scheduler_for_test(true, 1);
+                validate_dataset(&data, &shapes).expect("the registered relation resolves");
+            });
+
+        assert!(
+            saw.load(Ordering::Relaxed) > 0,
+            "the probe relation must actually have been invoked, or this proves nothing"
+        );
+        assert_eq!(
+            missed.load(Ordering::Relaxed),
+            0,
+            "{} invocation(s) ran on a thread that had lost the declared parser options, \
+             against {} that kept them: a focus node's parse configuration must not \
+             depend on which worker drew it",
+            missed.load(Ordering::Relaxed),
+            saw.load(Ordering::Relaxed),
+        );
     }
 
     // ── custom aggregates: installability, correctness, and fork survival ──────

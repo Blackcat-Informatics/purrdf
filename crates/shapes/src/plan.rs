@@ -2432,11 +2432,39 @@ ex:FlagShape a sh:NodeShape ;
              answer correct under every environment at once",
         );
 
-        // Lowering the SAME shapes again is the same answer, which is the whole
-        // content of "does not depend on the environment": there is no environment
-        // parameter to vary, so the derivation cannot see one.
-        let again = lower_shapes(shapes.node_shapes.iter());
-        assert_eq!(again.footprint().opaque(), footprint.opaque());
+        // Now vary the thing the claim is about. The fixture's body names
+        // `<http://example.org/rel/flagged>`, so an environment that REGISTERS that
+        // IRI is precisely the environment under which the body means something
+        // different — a relation call rather than an ordinary triple pattern. If the
+        // walk ever started reading bound bodies, this is the input that would move
+        // the answer.
+        //
+        // Lowering the same shapes a second time under that registry and asserting
+        // the identical footprint is the falsifiable form of "does not depend on the
+        // environment". Re-lowering under no registry, as this used to do, compares a
+        // pure function against itself and cannot fail.
+        let registry = {
+            let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::default();
+            registry.register(
+                "http://example.org/rel/flagged",
+                Arc::new(
+                    purrdf_sparql_eval::MemoryRelation::new(1, 1, Vec::new())
+                        .expect("a relation over no rows is well-formed"),
+                ),
+            );
+            registry
+        };
+        let under_registry = {
+            let _scope = crate::sparql::enter_property_function_scope(Arc::new(registry));
+            lower_shapes(shapes.node_shapes.iter()).footprint().opaque()
+        };
+        assert_eq!(
+            under_registry,
+            footprint.opaque(),
+            "registering the IRI the body names must not move the footprint: lowering \
+             takes no environment, and a footprint cached on a PreparedShapes is reused \
+             across validations that each install a different one",
+        );
     }
 
     #[test]

@@ -243,7 +243,6 @@ fn answer_with_options(
     query: &str,
 ) -> Vec<Vec<String>> {
     let result = NativeSparqlEngine::new()
-        .with_parser_options(options)
         .query_with_options_view(
             dataset,
             SparqlRequest {
@@ -252,8 +251,12 @@ fn answer_with_options(
                 substitutions: &[],
             },
             QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
-                    .expect("the fixture declarations read cleanly"),
+                env: &ExtensionEnv::new(
+                    options,
+                    registry.clone(),
+                    purrdf_sparql_eval::AggregateRegistry::EMPTY,
+                )
+                .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -269,21 +272,23 @@ fn refusal(
     options: ParserOptions,
     query: &str,
 ) -> String {
-    let outcome = NativeSparqlEngine::new()
-        .with_parser_options(options)
-        .query_with_options_view(
-            dataset,
-            SparqlRequest {
-                query,
-                base_iri: None,
-                substitutions: &[],
-            },
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
-                    .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
-        );
+    let outcome = NativeSparqlEngine::new().query_with_options_view(
+        dataset,
+        SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        },
+        QueryOptions {
+            env: &ExtensionEnv::new(
+                options,
+                registry.clone(),
+                purrdf_sparql_eval::AggregateRegistry::EMPTY,
+            )
+            .expect("the fixture declarations read cleanly"),
+            ..QueryOptions::EMPTY
+        },
+    );
     match outcome {
         Err(diagnostic) => diagnostic.message,
         Ok(result) => panic!(

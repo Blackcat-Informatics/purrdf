@@ -313,7 +313,6 @@ fn run(
     query: &str,
 ) -> Result<Answer, String> {
     let result = NativeSparqlEngine::new()
-        .with_parser_options(options)
         .query_with_options_view(
             dataset,
             SparqlRequest {
@@ -322,8 +321,12 @@ fn run(
                 substitutions: &[],
             },
             QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
-                    .expect("the fixture declarations read cleanly"),
+                env: &ExtensionEnv::new(
+                    options,
+                    registry.clone(),
+                    purrdf_sparql_eval::AggregateRegistry::EMPTY,
+                )
+                .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

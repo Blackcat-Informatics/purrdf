@@ -14,11 +14,21 @@
 //! resolves no IRI, so no query's behaviour can depend on which empty registry it was
 //! interpreted against. There is one spelling of "nothing registered", not two.
 
-use purrdf_sparql_eval::{AggregateRegistry, ExtensionEnv, PropertyFunctionRegistry};
+use purrdf_sparql_eval::{
+    AggregateRegistry, ExtensionEnv, ParserOptions, PropertyFunctionRegistry,
+};
 use pyo3::PyResult;
 use pyo3::exceptions::PyValueError;
 
-/// The environment for a call carrying `relations` and `aggregates`.
+/// The environment for a call carrying `base` declarations, `relations` and
+/// `aggregates`.
+///
+/// `base` is the caller's `extension_namespaces` / `property_fn_namespaces` — the
+/// PREFIX declarations, as distinct from the EXACT IRIs the relation registry
+/// contributes. They belong here rather than on the engine because the environment
+/// is what decides how a SPARQL text is read; an engine that carried its own copy
+/// would be a second answer to that question, and the two would disagree the moment
+/// a caller set one and not the other.
 ///
 /// # Errors
 ///
@@ -26,10 +36,12 @@ use pyo3::exceptions::PyValueError;
 /// panic — deriving the environment reads every declaration, because that is how the
 /// parser learns which predicate IRIs are calls.
 pub(crate) fn extension_env(
+    base: ParserOptions,
     relations: Option<&PropertyFunctionRegistry>,
     aggregates: Option<&AggregateRegistry>,
 ) -> PyResult<ExtensionEnv> {
-    ExtensionEnv::over(
+    ExtensionEnv::new(
+        base,
         relations
             .cloned()
             .unwrap_or(PropertyFunctionRegistry::EMPTY),

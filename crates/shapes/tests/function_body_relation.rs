@@ -51,7 +51,7 @@ use purrdf_shapes::sparql::{enter_parser_options_scope, enter_property_function_
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
     BindingPattern, EvalError, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, Volatility,
+    PropertyFunctionRegistry, ServiceLevel, Volatility,
 };
 
 const EX: &str = "http://example.org/ns#";
@@ -197,11 +197,16 @@ fn reported(report: &ValidationReport) -> Vec<String> {
 /// verdict turns on the relation's rows.
 ///
 /// What the relation ATTESTED reaching the calling query's receipt is the other half
-/// of the contract, and it is pinned where the receipt actually exists — see
-/// `crates/sparql-eval/tests/function_body_relation_witness.rs`. The SHACL surface
-/// consumes the receipt internally (it refuses a verdict drawn from an index that
-/// declared itself not whole) rather than handing it back, so there is no receipt to
-/// assert on here.
+/// of the contract. It is pinned twice: against the receipt value itself in
+/// `crates/sparql-eval/tests/function_body_relation_witness.rs`, and on THIS surface
+/// by `an_incomplete_index_declared_from_a_function_body_refuses_the_verdict` below.
+///
+/// An earlier version of this comment claimed the SHACL surface consumes the receipt
+/// internally and so offers nothing to assert on. That was wrong, and it mattered:
+/// the consumption is itself observable, because the governed lane refuses a verdict
+/// drawn from an index a relation declared incomplete, and it names the relation when
+/// it does. A refusal naming an IRI only a function body ever mentioned is a direct
+/// reading of the attestation on the caller's receipt.
 #[test]
 fn a_function_body_reaches_a_registered_relation() {
     let (relations, opens) = registry();
@@ -546,10 +551,26 @@ fn a_registered_iri_outside_predicate_position_is_not_a_call() {
 ///
 /// So this asks it. One shapes graph naming the registered relation from every
 /// SPARQL-bearing construct at once, and the pre-flight report has to see a call in
-/// each. A door added later that forgets the environment fails here rather than
-/// being discovered by whoever writes the query that should work and does not.
+/// each. A construct added later that `extension_usage` forgets to walk fails here,
+/// rather than silently reporting nothing for a declaration a host asked about.
+///
+/// # What this does and does not prove
+///
+/// It grades the REPORT's coverage, not the evaluator's. The assertion is on
+/// `extension_usage`'s own parse, so a door that the report sees but that evaluated
+/// under a different configuration would still pass — and for a while exactly that
+/// was true, because the engine carried parse configuration of its own and only the
+/// function-body bind read the environment's.
+///
+/// That gap is now closed structurally rather than by this test: `prepare_for` takes
+/// an `ExtensionEnv` and nothing else, so there is no second configuration for a door
+/// to read, and the engine has no field to hold one. Execution-level evidence for the
+/// two doors where the difference was observable lives in
+/// `a_declared_namespace_reaches_a_sparql_constraint_body` and
+/// `a_declared_namespace_makes_an_unregistered_iri_under_it_a_hard_error`, which
+/// validate rather than re-parse.
 #[test]
-fn every_sparql_bearing_construct_reaches_the_environment() {
+fn extension_usage_walks_every_sparql_bearing_construct() {
     let turtle = format!(
         r#"
 @prefix sh:     <http://www.w3.org/ns/shacl#> .
@@ -632,5 +653,327 @@ ex:CensusShape
     assert!(
         bare.data().contains(REL),
         "and every door reports it as the data edge it became: {bare:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The sibling door: `sh:sparql`
+// ---------------------------------------------------------------------------
+
+/// The same predicate, in a `sh:sparql` CONSTRAINT rather than a function body.
+///
+/// A `sh:SPARQLFunction` body and a `sh:sparql` body are two spellings of "SPARQL
+/// text this shapes graph carries". Nothing about a host's declaration is specific to
+/// one of them, so a declaration that reaches one and not the other is not a feature
+/// of either construct — it is two different parse configurations wearing one name.
+fn sparql_constraint_shapes(predicate: &str) -> purrdf_shapes::shapes::Shapes {
+    let turtle = format!(
+        r#"
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix ex:  <{EX}> .
+
+ex:FlagShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a, ex:b ;
+    sh:sparql [
+        sh:select "SELECT $this WHERE {{ $this <{predicate}> ?why }}" ;
+    ] .
+"#
+    );
+    purrdf_shapes::engine::parse_shapes(&turtle, None).expect("parse shapes")
+}
+
+/// Validate a `sh:sparql` constraint with `relations` installed and `REL_NS` declared.
+fn validate_constraint_under_declared_namespace(
+    predicate: &str,
+    relations: Arc<PropertyFunctionRegistry>,
+) -> Result<ValidationReport, String> {
+    let _relations = enter_property_function_scope(relations);
+    let _options = enter_parser_options_scope(Arc::new(ParserOptions {
+        property_fn_namespaces: vec![REL_NS.to_owned()],
+        ..ParserOptions::default()
+    }));
+    validate_dataset(&data(), &sparql_constraint_shapes(predicate))
+}
+
+/// A declared namespace reaches a `sh:sparql` body, not only a `sh:SPARQLFunction`
+/// body.
+///
+/// This is the row that was silently wrong. The engine held its own base
+/// [`ParserOptions`] and every ordinary query parsed against THOSE, while the
+/// environment's declared options reached one door: the function-body bind. The
+/// thread-local SHACL engine is built with default options, so on this surface a
+/// declared relation namespace applied to `sh:SPARQLFunction` bodies and to nothing
+/// else. The identical IRI, in the identical host, under the identical declaration,
+/// hard-errored in one construct and conformed green in the other.
+///
+/// That is issue #348's own shape — a wired, named relation silently becoming a data
+/// edge under a green report — surviving at a sibling door, which is why the fix was
+/// to delete the engine's parse configuration rather than to add the environment to
+/// one more call.
+#[test]
+fn a_declared_namespace_reaches_a_sparql_constraint_body() {
+    let (relations, opens) = registry();
+    let error = validate_constraint_under_declared_namespace(REL_MISSING, relations)
+        .expect_err("an unregistered IRI under a declared relation namespace is refused");
+    assert!(
+        error.contains(REL_MISSING),
+        "the refusal names the offending IRI: {error}"
+    );
+    assert_eq!(
+        opens.load(Ordering::Relaxed),
+        0,
+        "nothing was invoked; the call could not be resolved at all"
+    );
+}
+
+/// The valid neighbour, and the control that proves the refusal above comes from the
+/// DECLARATION rather than from the constraint fixture: the identical body with
+/// nothing declared is an ordinary triple pattern and answers over the base graph.
+///
+/// It must SUCCEED. A refusal here would mean the fix had over-tightened `sh:sparql`
+/// into rejecting predicates that are simply data.
+#[test]
+fn without_the_declaration_the_same_constraint_body_is_ordinary_data() {
+    let (relations, opens) = registry();
+    let _relations = enter_property_function_scope(relations);
+    let report = validate_dataset(&data(), &sparql_constraint_shapes(REL_MISSING))
+        .expect("with nothing declared the predicate is an ordinary triple pattern");
+    assert_eq!(
+        opens.load(Ordering::Relaxed),
+        0,
+        "an ordinary predicate invokes no relation"
+    );
+    assert!(
+        report.conforms,
+        "no node carries that edge, so the SELECT returns no rows and nothing is \
+         reported: {:?}",
+        reported(&report)
+    );
+}
+
+/// And the third row: a REGISTERED IRI under the declared namespace resolves from a
+/// `sh:sparql` body and its rows decide the verdict.
+///
+/// The relation's single row names `ex:a`, a node no data triple distinguishes, so a
+/// report naming exactly `ex:a` is reachable only if the call resolved. Dropped, the
+/// body matches nothing and the report is empty.
+#[test]
+fn a_registered_iri_reaches_its_relation_from_a_sparql_constraint_body() {
+    let (relations, opens) = registry();
+    let report = validate_constraint_under_declared_namespace(REL, relations)
+        .expect("the registered relation resolves");
+    assert!(
+        opens.load(Ordering::Relaxed) > 0,
+        "the relation was opened from a sh:sparql body"
+    );
+    assert_eq!(
+        reported(&report),
+        vec![format!("<{EX}a>")],
+        "the relation's own row decided the verdict, and no data triple could have"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The attestation reaches the CALLER's receipt, observed on the SHACL surface
+// ---------------------------------------------------------------------------
+
+/// A relation that answers rows AND declares its index was not whole.
+#[derive(Debug)]
+struct PartialRelation {
+    modes: [BindingPattern; 1],
+    opens: Arc<AtomicU64>,
+}
+
+#[derive(Debug)]
+struct PartialCursor {
+    rows: std::vec::IntoIter<PfRow>,
+}
+
+impl PfCursor for PartialCursor {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        Ok(self.rows.next())
+    }
+
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::declared(GENERATION)
+    }
+
+    fn service_level(&self) -> ServiceLevel {
+        ServiceLevel::Incomplete {
+            reason: "shard-3 offline".to_owned(),
+        }
+    }
+}
+
+impl PropertyFunction for PartialRelation {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        PfArity::new(1, 1)
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+        1
+    }
+
+    fn open(
+        &self,
+        _args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.opens.fetch_add(1, Ordering::Relaxed);
+        let rows = vec![vec![
+            TermValue::Iri(format!("{EX}a")),
+            TermValue::Iri(format!("{EX}yes")),
+        ]];
+        Ok(Box::new(PartialCursor {
+            rows: rows.into_iter(),
+        }))
+    }
+}
+
+/// The witness crosses the function-body boundary onto the CALLER's governed receipt,
+/// observed through the SHACL surface rather than through the evaluator.
+///
+/// The relation is reachable ONLY from inside the `sh:SPARQLFunction` body — no other
+/// construct in the shapes graph mentions its IRI. It declares its index was not
+/// whole, and the governed lane refuses a conformance verdict drawn from such an
+/// index, naming the relation. So a refusal that names this IRI can only have been
+/// produced by an attestation that travelled out of the function-body child context
+/// and onto the receipt the caller's validation read.
+///
+/// If the witness were dropped at the boundary — the defect this branch exists to
+/// close, one layer up — the receipt would carry no incompleteness, the verdict would
+/// be computed anyway, and this validation would return a report instead of an error.
+#[test]
+fn an_incomplete_index_declared_from_a_function_body_refuses_the_verdict() {
+    let opens = Arc::new(AtomicU64::new(0));
+    let mut registry = PropertyFunctionRegistry::default();
+    registry.register(
+        REL,
+        Arc::new(PartialRelation {
+            modes: [BindingPattern::from_code("ff")],
+            opens: Arc::clone(&opens),
+        }),
+    );
+
+    let _relations = enter_property_function_scope(Arc::new(registry));
+    let error = purrdf_shapes::engine::validate_dataset_with_governors(
+        &data(),
+        &shapes(REL),
+        None,
+        &purrdf_sparql_eval::QueryGovernors::UNBOUNDED,
+    )
+    .expect_err("a verdict over an index declared not whole is refused");
+
+    assert!(
+        opens.load(Ordering::Relaxed) > 0,
+        "the relation must actually have been invoked from the function body"
+    );
+    assert!(
+        error.contains(REL),
+        "the refusal names the relation, which is the attestation being read off the \
+         caller's receipt: {error}"
+    );
+    assert!(
+        error.contains("shard-3 offline"),
+        "and it carries the relation's own reason, so what arrived is the attestation \
+         rather than a generic flag: {error}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A site this environment cannot read is reported, not deleted
+// ---------------------------------------------------------------------------
+
+/// A shapes graph whose rule names `REL` in the CONSTRUCT **template** rather than in
+/// the WHERE clause.
+///
+/// The parser refuses a property-function call in a template — a template writes
+/// triples, it does not read them, so there is nothing for a call to mean there. That
+/// refusal is what makes this fixture reach the arm: the loader parsed the rule blind
+/// and accepted it, and only an environment that recognizes `REL` turns the same text
+/// into something unreadable.
+fn shapes_with_relation_in_a_construct_template() -> purrdf_shapes::shapes::Shapes {
+    let turtle = format!(
+        r#"
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix ex:  <{EX}> .
+
+ex:RuleShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:rule [
+        a sh:SPARQLRule ;
+        sh:construct """CONSTRUCT {{ $this <{REL}> ?why }} WHERE {{ $this <{EX}seed> ?why }}""" ;
+    ] .
+"#
+    );
+    purrdf_shapes::engine::parse_shapes(&turtle, None).expect("the fixture loads blind")
+}
+
+/// A site the environment cannot read is REPORTED, with the parser's own reason.
+///
+/// Before this, the walk returned early on a parse failure and the site vanished from
+/// the report entirely — so a host asking "will my relation be reached here?" got a
+/// report in which the rule simply did not exist, indistinguishable from a shape that
+/// carries no SPARQL at all. That is a silent answer from the one instrument built to
+/// end silent answers.
+#[test]
+fn a_site_this_environment_cannot_read_is_reported_with_its_reason() {
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("environment over the registry");
+
+    let usage = shapes_with_relation_in_a_construct_template().extension_usage(&env);
+
+    assert!(
+        !usage.is_complete(),
+        "the environment cannot read this graph, and the report must say so"
+    );
+    let unreadable: Vec<_> = usage.unreadable().collect();
+    assert_eq!(
+        unreadable.len(),
+        1,
+        "exactly the one rule is unreadable: {unreadable:?}"
+    );
+    let (site, why) = unreadable[0];
+    assert!(
+        site.as_str().contains("sh:rule"),
+        "the report names WHICH declaration it could not read: {site}"
+    );
+    assert!(
+        !why.is_empty(),
+        "and carries the parser's own reason rather than a bare flag"
+    );
+}
+
+/// The valid neighbour: the SAME shapes graph under an environment that does not
+/// recognize the IRI reads completely, and the template's predicate is ordinary data.
+///
+/// This is what proves the report above is caused by the ENVIRONMENT rather than by a
+/// malformed fixture — and it must succeed, or the change has turned a readable
+/// shapes graph into an unreadable one.
+#[test]
+fn the_same_graph_under_an_empty_environment_reads_completely() {
+    let usage = shapes_with_relation_in_a_construct_template()
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+
+    assert!(
+        usage.is_complete(),
+        "nothing is registered, so the template predicate is an ordinary IRI and the \
+         rule parses: {:?}",
+        usage.unreadable().collect::<Vec<_>>()
+    );
+    assert!(
+        usage.calls().is_empty(),
+        "and no predicate in it became a call"
     );
 }

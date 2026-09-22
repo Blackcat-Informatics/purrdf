@@ -22,8 +22,8 @@ use super::io::{
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
     PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
-    materialize_entailment_outcome, materialize_outcome, materialize_results,
-    materialize_update_outcome, registry_over, run_governed,
+    engine_parser_options, materialize_entailment_outcome, materialize_outcome,
+    materialize_results, materialize_update_outcome, registry_over, run_governed,
 };
 use super::store::PyQuadIter;
 use super::term::{
@@ -315,6 +315,7 @@ impl PyMutableDataset {
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
                 .query_with_options_view(
@@ -325,7 +326,11 @@ impl PyMutableDataset {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
@@ -405,6 +410,7 @@ impl PyMutableDataset {
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
                 .query_governed(
@@ -415,7 +421,11 @@ impl PyMutableDataset {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -521,6 +531,7 @@ impl PyMutableDataset {
             } else {
                 ClosureRelations::rebuilt_by(&rebuild)
             };
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             let aggregates = build_aggregates(aggregate_namespace);
             query_with_entailment_governed(
@@ -533,7 +544,11 @@ impl PyMutableDataset {
                 },
                 plan.entailment(),
                 purrdf_sparql_eval::QueryOptions {
-                    env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
+                    env: &extension_env(
+                        parser_options,
+                        registry.as_ref(),
+                        aggregates.as_ref(),
+                    )?,
                     ..purrdf_sparql_eval::QueryOptions::EMPTY
                 },
                 &relations,
@@ -610,6 +625,7 @@ impl PyMutableDataset {
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let outcome = build_engine(config)
                 .update_governed(
                     &mut dataset,
@@ -619,7 +635,11 @@ impl PyMutableDataset {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -682,6 +702,7 @@ impl PyMutableDataset {
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
             let registry = build_relations(specs, &dataset)?;
             let aggregates = build_aggregates(aggregate_namespace);
+            let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             engine
                 .update_with_options(
@@ -692,7 +713,11 @@ impl PyMutableDataset {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
+                        env: &extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )

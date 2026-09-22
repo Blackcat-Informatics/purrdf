@@ -97,6 +97,43 @@ against an extension environment before evaluation begins, so that half of the r
 expression-position `Function::Custom` dispatch is still dynamic, while a SPARQL body's
 parse binding is static and carries the environment identity it was bound against.
 
+### The SPARQL engine holds the parse-time configuration for every query it runs
+
+**Was stated in** `crates/sparql-eval/src/engine.rs`, on `NativeSparqlEngine`'s
+`parser_options` field and its `with_parser_options` setter:
+
+> Parse-time configuration (the extension-function namespace set), applied to every
+> query and update this engine parses.
+
+**Why it was believed.** It was true when written, and it was the only home available:
+a `ParserOptions` had to live somewhere the parse could reach, and the engine is what
+performs the parse.
+
+**What changed.** An environment gained base options of its own, and for a while both
+existed. That is not a redundancy, it is a fork: `prepare_for` derived from the
+engine's field, so every ordinary query — every `sh:sparql` body, target, rule and
+node expression — read the engine's configuration, while the environment's reached
+exactly one door, the function-body bind. A host could declare a relation namespace,
+watch it hard-error an unregistered IRI inside a `sh:SPARQLFunction` body, and watch
+the identical IRI in a `sh:sparql` body on the same host silently become an ordinary
+triple pattern and conform green. Two parse configurations wearing one name, and the
+symptom was this repository's own silent-reclassification bug at a sibling door.
+
+Several hosts had already been bitten without anyone noticing: the conformance
+harness, the text search tests and the geo rewrite tests each set engine options AND
+built a separate environment, so the declaration they thought they had made was
+already being dropped.
+
+**The rule now.** The engine holds no parse configuration. `parser_options`,
+`with_parser_options` and `parser_options_for` are gone, and an `ExtensionEnv` is the
+only thing that says how a SPARQL text is read — on the query lane, the UPDATE lane,
+the function-body bind and the product identity alike. Deleting the field rather than
+leaving it unread is deliberate: a setter that silently stopped taking effect would be
+the same class of defect one level further down. Pinned by
+`function_body_relation::a_declared_namespace_reaches_a_sparql_constraint_body` with
+its two valid neighbours, and by
+`engine::tests::every_chunk_worker_sees_the_declared_parser_options`.
+
 ### A `sh:SPARQLFunction` body is opaque to the footprint walk because the walk does not read it
 
 **Was stated in** `crates/shapes/src/footprint.rs`:

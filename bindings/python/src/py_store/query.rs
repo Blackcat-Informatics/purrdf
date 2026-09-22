@@ -117,19 +117,38 @@ pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
         property_fn_namespaces,
         standpoint_predicates,
     } = config;
+    // The namespace declarations do NOT live here: they are parse configuration, and
+    // parse configuration lives on the extension environment. See
+    // [`engine_parser_options`], which is what every call site hands to
+    // [`extension_env`](super::env::extension_env).
+    let _ = (extension_namespaces, property_fn_namespaces);
     let mut engine = NativeSparqlEngine::new();
-    if extension_namespaces.is_some() || property_fn_namespaces.is_some() {
-        engine = engine.with_parser_options(ParserOptions {
-            extension_fn_namespaces: extension_namespaces.unwrap_or_default(),
-            property_fn_namespaces: property_fn_namespaces.unwrap_or_default(),
-            property_fn_iris: Vec::new(),
-        });
-    }
     if let Some((according_to, sharpens)) = standpoint_predicates {
         engine =
             engine.with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
     }
     engine
+}
+
+/// The caller's declared parse configuration, as [`ParserOptions`].
+///
+/// Split out of [`build_engine`] because it does not belong to the engine. A
+/// namespace declaration decides which predicate IRIs are calls and which function
+/// IRIs may be spelled, which is a property of the environment a query is read
+/// against, not of the machine that evaluates it. Every call site reads this and
+/// hands it to [`extension_env`](super::env::extension_env), so a Python caller's
+/// `extension_namespaces` / `property_fn_namespaces` reach the same parse the
+/// relations do.
+///
+/// [`ParserOptions::property_fn_iris`] is left empty on purpose: the exact-IRI
+/// recognition set is derived from the registry the call is evaluated under,
+/// one-to-one, so it cannot disagree with the relations actually injected.
+pub(super) fn engine_parser_options(config: &EngineConfig) -> ParserOptions {
+    ParserOptions {
+        extension_fn_namespaces: config.extension_namespaces.clone().unwrap_or_default(),
+        property_fn_namespaces: config.property_fn_namespaces.clone().unwrap_or_default(),
+        property_fn_iris: Vec::new(),
+    }
 }
 
 /// One caller-declared property-function relation, converted out of Python **before**
