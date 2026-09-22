@@ -1323,6 +1323,232 @@ fn every_sparql_surface_still_reports_its_violations_when_governed() {
 }
 
 // ---------------------------------------------------------------------------
+// 1c. The FALLBACK `&str` door a repeated parameter name still reaches
+// ---------------------------------------------------------------------------
+
+/// A custom `sh:ask` component whose ONE declared parameter is named
+/// `currentShape`.
+///
+/// `eval_ask_validator` always receives `Some(source_shape)` as its
+/// `current_shape` argument (`constraints.rs`'s dispatcher passes it on every
+/// call, unconditionally), so `push_shape_context_names` always pushes a
+/// `"currentShape"` entry onto the prepared-door parameter list. A component
+/// parameter whose SPARQL local name is also `currentShape` — legal, because
+/// `components.rs`'s `BANNED` list holds only `this`, `path`, `PATH` and
+/// `value` — collides with it, so `parameters_are_distinct` is false on EVERY
+/// run of this shape and `eval_ask_validator` routes every focus node down the
+/// `&str` door (`run_ask_with_shacl_prebinding_view`, `components.rs:406`)
+/// rather than the cached [`purrdf_shapes`]-internal handle the `sh:ask
+/// component` case in [`CASES`] measures. Not a contrivance: this is the exact
+/// reachable-in-production shape F3 names.
+///
+/// The ASK body deliberately does not reference `$currentShape` at all — the
+/// collision is in the PARAMETER NAME, not in what the query reads, and
+/// leaving it unread keeps this fixture's conformance criterion identical to
+/// the `sh:ask component` case's (`isLiteral($value)`), so the two cases
+/// differ in exactly one thing: which door each takes.
+///
+/// The property shape carrying the component is NAMED (`ex:AskFallbackProperty`)
+/// rather than a blank node, and its `ex:currentShape` triple points AT
+/// ITSELF. That is required, not decorative: the `&str` door's two
+/// `"currentShape"` seeds — one from this declared parameter's value, one from
+/// `push_shape_context`'s own `current_shape` (the property shape being
+/// evaluated) — must name the SAME term to be compatible. Two seeds naming
+/// DIFFERENT terms for one variable are the incompatible case
+/// `parameters_are_distinct`'s own doc comment describes, and the engine's
+/// defined answer for it is the EMPTY solution on every run — which would make
+/// this shape violate unconditionally and give this file nothing to measure a
+/// CONFORMING population over. Self-reference is what keeps the two seeds
+/// equal instead.
+const ASK_FALLBACK_SHAPES: &str = concat!(
+    "ex:AskFallbackComponent a sh:ConstraintComponent ;\n",
+    "    sh:parameter [ sh:path ex:currentShape ] ;\n",
+    "    sh:validator [ a sh:SPARQLAskValidator ;\n",
+    "        sh:ask \"ASK { FILTER(isLiteral($value)) }\" ] .\n",
+    "ex:AskFallbackShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
+    "    sh:property ex:AskFallbackProperty .\n",
+    "ex:AskFallbackProperty a sh:PropertyShape ; sh:path ex:name ;\n",
+    "    ex:currentShape ex:AskFallbackProperty .\n",
+);
+
+/// The allocations one conforming focus node costs [`ASK_FALLBACK_SHAPES`]'s
+/// lane, measured by
+/// `ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node`
+/// exactly as [`SparqlCase::per_focus_node`] is measured for the cases in
+/// [`CASES`] — same harness, same closed form, same two populations.
+///
+/// It sits well above [`CASES`]'s `114` for the prepared `sh:ask component`
+/// case: the `&str` door re-probes the plan cache by hashing the whole query
+/// text on every run, re-interns every parameter name, and rebuilds the
+/// pre-binding list from scratch per value node, none of which the prepared
+/// door still pays for. That gap is exactly what this pin makes visible where
+/// nothing did before.
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 212;
+
+/// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
+/// way [`Fixture::build`] builds each of [`CASES`]'s entries.
+///
+/// Kept standalone rather than folded into [`CASES`] for two reasons: the
+/// governed change path is orthogonal to which door a REPEATED NAME takes (the
+/// governed/ungoverned split is about `execute_governed_in_operation` versus
+/// `execute`, not about `parameters_are_distinct`), so this lane has no
+/// governed figure to pin; and [`CASES`]'s four `per_focus_node` figures are
+/// swept against five external prose sites by
+/// `every_registered_prose_site_quotes_the_measured_figures`, which a fifth
+/// `CASES` entry would pull this lane into without anything in this file
+/// asking it to.
+struct FallbackFixture {
+    /// The validator bound to [`Self::conforming`] and [`Self::violating`].
+    validator: PreparedValidator,
+    /// Focus nodes that satisfy the fallback shape, in construction order.
+    conforming: Vec<FocusId>,
+    /// Focus nodes that break the fallback shape.
+    violating: Vec<FocusId>,
+}
+
+impl FallbackFixture {
+    /// Build the dataset and the bound validator.
+    fn build(conforming: usize, violating: usize) -> Self {
+        let dataset = build_dataset(conforming, violating);
+        let mut ttl = String::from(PREFIXES);
+        ttl.push_str(ASK_FALLBACK_SHAPES);
+        let shapes = parse_shapes(&ttl, None)
+            .unwrap_or_else(|error| panic!("fallback lane: the shapes graph must parse: {error}"));
+        let validator = PreparedShapes::new(Arc::new(shapes))
+            .bind_shared_dataset(dataset)
+            .unwrap_or_else(|error| panic!("fallback lane: the fixture must bind: {error}"));
+        let resolve = |prefix: char, count: usize| -> Vec<FocusId> {
+            (0..count)
+                .map(|index| {
+                    let iri = format!("{NS}{prefix}{index}");
+                    validator
+                        .term_id(&NamedNode::new_unchecked(iri.clone()).into_term())
+                        .unwrap_or_else(|| panic!("focus {iri} must be interned"))
+                })
+                .collect()
+        };
+        Self {
+            conforming: resolve('c', conforming),
+            violating: resolve('v', violating),
+            validator,
+        }
+    }
+
+    /// Validate the first `focus_nodes` conforming ids, requiring the report to
+    /// conform.
+    fn validate_conforming(&self, focus_nodes: usize) -> ValidationReport {
+        let report = self
+            .validator
+            .validate_focus_node_ids(&self.conforming[..focus_nodes])
+            .unwrap_or_else(|error| {
+                panic!("fallback lane: the conforming set must validate: {error}")
+            });
+        assert!(
+            report.conforms,
+            "fallback lane: the conforming population must conform, or the allocation figure \
+             describes a workload that never reached the constraint ({} result(s), first: {:?})",
+            report.results.len(),
+            report.results.first().map(|r| r.message.clone()),
+        );
+        report
+    }
+
+    /// Validate every violating id, requiring the shape to really fire.
+    fn validate_violating(&self) -> ValidationReport {
+        let report = self
+            .validator
+            .validate_focus_node_ids(&self.violating)
+            .unwrap_or_else(|error| {
+                panic!("fallback lane: the violating set must validate: {error}")
+            });
+        assert!(
+            !report.conforms,
+            "fallback lane: the violating set must not conform"
+        );
+        assert_eq!(
+            report.results.len(),
+            self.violating.len(),
+            "fallback lane: each violating focus node must produce exactly one result"
+        );
+        report
+    }
+}
+
+/// [`warm_every_worker`]'s twin for [`FallbackFixture`] — same broadcast, same
+/// reason: the thread-local SPARQL engine's plan cache is per-worker, and the
+/// `&str` door still probes it by query text on every run.
+fn warm_every_worker_fallback(fixture: &FallbackFixture) {
+    for _ in 0..2 {
+        rayon::broadcast(|_| {
+            drop(fixture.validate_conforming(1));
+        });
+    }
+}
+
+/// **The fallback `&str` door a repeated parameter name routes to costs
+/// `CHANGE_PATH_CONSTANT + ASK_FALLBACK_PER_FOCUS_NODE * N` allocations too, at
+/// `N` and at `2N` — pinned here because, before this test, nothing measured
+/// it at all.**
+///
+/// F3: `prepare_execution` refuses a repeated parameter name, so every
+/// prepared call site asks `parameters_are_distinct` first and routes a
+/// repeated name back to this door. A custom component can produce one
+/// without any contrivance — see [`ASK_FALLBACK_SHAPES`] — so this lane is
+/// reachable in production, carries the pre-`PreparedExecution` per-focus-node
+/// cost, and until now had no allocation pin at all: a regression in it was as
+/// invisible as the governed lane's was before `1b` above closed that gap for
+/// the prepared door.
+///
+/// Same harness as the headline: [`measure_lock`] first, [`warm_every_worker_fallback`]
+/// outside the window, [`without_memo_verification`] bracketing the two
+/// [`measure_min`] calls, and an EXACT closed-form equality at both
+/// populations — no tolerance, for the same reason the headline gives.
+#[test]
+fn ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node() {
+    let _guard = measure_lock();
+    assert_parallel_path_is_reachable();
+
+    let fixture = FallbackFixture::build(focus_nodes(2), VIOLATIONS);
+
+    // Non-vacuity, outside the window: a validator that stopped evaluating
+    // would satisfy any allocation claim perfectly.
+    drop(fixture.validate_violating());
+
+    warm_every_worker_fallback(&fixture);
+    drop(fixture.validate_conforming(focus_nodes(1)));
+    drop(fixture.validate_conforming(focus_nodes(2)));
+
+    let (half_measured, full_measured) = without_memo_verification(|| {
+        let (half, half_measured) = measure_min(|| fixture.validate_conforming(focus_nodes(1)));
+        drop(half);
+        let (full, full_measured) = measure_min(|| fixture.validate_conforming(focus_nodes(2)));
+        drop(full);
+        (half_measured, full_measured)
+    });
+
+    let mut failures = String::new();
+    for (label, measured, population) in [
+        ("N", half_measured, FOCUS_NODES),
+        ("2N", full_measured, 2 * FOCUS_NODES),
+    ] {
+        let expected = CHANGE_PATH_CONSTANT + ASK_FALLBACK_PER_FOCUS_NODE * population;
+        if measured.allocations != expected {
+            let _ = writeln!(
+                failures,
+                "fallback lane at {label} = {population} conforming focus nodes: allocated {}, \
+                 not the pinned {CHANGE_PATH_CONSTANT} + {ASK_FALLBACK_PER_FOCUS_NODE} * \
+                 {population} = {expected}\n    {measured:?}",
+                measured.allocations,
+            );
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "the fallback lane's cost moved:\n{failures}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 2. The companion that makes the headline mean anything
 // ---------------------------------------------------------------------------
 

@@ -82,6 +82,22 @@ use crate::substitute::ParameterValue;
 /// neither the flag, this function, nor the check it gates exists, so the switch
 /// costs nothing there and cannot be mistaken for a knob a production caller might
 /// reach for.
+///
+/// # `pub`, not `pub(crate)`
+///
+/// Nothing in this crate's own `src/` calls this function; every caller is a test,
+/// and at least one of them cannot be granted access any narrower than `pub` at
+/// all. `crates/shapes/tests/sparql_path_alloc.rs` calls it directly
+/// (`purrdf_sparql_eval::set_memo_verification_enabled(false)`, broadcast to every
+/// worker) — that file belongs to the `purrdf-shapes` PACKAGE, a different crate
+/// entirely, so `pub(crate)` here would refuse it outright, not merely discourage
+/// it. This crate's own `tests/prepared_execution.rs` also calls it, and even
+/// though that file ships in the SAME package, `cargo` still compiles every file
+/// under `tests/` as an independent crate linking this one as an external
+/// dependency — `pub(crate)` does not reach across that boundary either, so this
+/// function would be unreachable from its closest caller too. `pub` is therefore
+/// the minimum visibility either caller can compile against, not a looser grant
+/// made for convenience.
 #[cfg(debug_assertions)]
 pub fn set_memo_verification_enabled(enabled: bool) {
     MEMO_VERIFICATION_ENABLED.with(|flag| flag.set(enabled));
@@ -372,6 +388,23 @@ impl PreparedExecution {
     /// claim only a reader of this can make, and
     /// `tests/prepared_execution.rs`'s
     /// `a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does` makes it.
+    ///
+    /// # `pub`, not `pub(crate)`
+    ///
+    /// That one caller is a Rust integration test — a file under this crate's own
+    /// `tests/`, which `cargo` compiles as its OWN crate, linking `purrdf-sparql-eval`
+    /// as an external dependency rather than as a module inside it. `pub(crate)`
+    /// grants visibility inside the defining crate; an integration test is outside it
+    /// by construction, so `pub(crate)` would make this UNREACHABLE from the one place
+    /// that reads it, not merely discouraged there. `pub` is therefore not a looser
+    /// grant made for convenience — it is the minimum visibility the test can compile
+    /// against at all. A future reader auditing this crate's public surface for items
+    /// with no production caller should read this section rather than re-litigate the
+    /// accessor as unexplained dead surface: the earlier removal of this method's two
+    /// test-only siblings (`plan()` and `bind_named_id`, see the commit that also
+    /// extended this doc block) turned on the SAME question, decided the opposite way,
+    /// for reasons specific to each — a redundant internal accessor and an unadopted
+    /// suggestion, respectively, neither of which applies here.
     #[must_use]
     pub fn retained_workspace_bytes(&self) -> usize {
         self.workspace.retained_bytes()

@@ -3051,4 +3051,171 @@ mod tests {
             named_term("http://example.org/Node")
         );
     }
+
+    // ── PlanConfiguration::still_current ─────────────────────────────────────
+
+    /// The relation IRI both environments below register. Held fixed across the
+    /// swap so the two environments differ ONLY in which registry instance answers
+    /// it, never in which predicate is a call at all.
+    const STILL_CURRENT_REL: &str = "http://example.org/still-current/flag";
+
+    /// A relation whose DECLARATION never varies — arity, mode, volatility are
+    /// identical for every instance — but whose one ROW does. Two registries built
+    /// from this describe themselves identically to a content-only fingerprint;
+    /// only the row tells them apart. That is deliberate: it is exactly the
+    /// environment-swap shape [`PlanConfiguration`]'s own documentation calls out,
+    /// and it is what makes this test depend on `still_current`'s `Arc::ptr_eq`
+    /// rather than on some other, coarser signal a broken predicate could ride on.
+    #[derive(Debug)]
+    struct FixedRowRelation {
+        modes: [purrdf_sparql_eval::BindingPattern; 1],
+        row: Vec<TermValue>,
+    }
+
+    #[derive(Debug)]
+    struct FixedRowCursor {
+        rows: std::vec::IntoIter<purrdf_sparql_eval::PfRow>,
+    }
+
+    impl purrdf_sparql_eval::PfCursor for FixedRowCursor {
+        fn next(
+            &mut self,
+        ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+            Ok(self.rows.next())
+        }
+
+        fn generation(&self) -> purrdf_sparql_eval::IndexGeneration {
+            purrdf_sparql_eval::IndexGeneration::declared("still-current-test@1")
+        }
+    }
+
+    impl purrdf_sparql_eval::PropertyFunction for FixedRowRelation {
+        fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+            purrdf_sparql_eval::Volatility::Stable
+        }
+
+        fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            purrdf_sparql_eval::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+            1
+        }
+
+        fn open(
+            &self,
+            _args: &purrdf_sparql_eval::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+            Ok(Box::new(FixedRowCursor {
+                rows: vec![self.row.clone()].into_iter(),
+            }))
+        }
+    }
+
+    /// A fresh registry declaring [`STILL_CURRENT_REL`] with one row naming
+    /// `flagged`. Each call returns a NEW `Arc`, so callers that want the SAME
+    /// environment across two runs must hold one `Arc` and clone it, not call this
+    /// twice — that distinction is exactly what `still_current`'s `Arc::ptr_eq`
+    /// tests.
+    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry> {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            STILL_CURRENT_REL.to_owned(),
+            Arc::new(FixedRowRelation {
+                modes: [purrdf_sparql_eval::BindingPattern::from_code("ff")],
+                row: vec![
+                    TermValue::Iri(flagged.to_owned()),
+                    TermValue::Iri("http://example.org/still-current/yes".to_owned()),
+                ],
+            }),
+        );
+        Arc::new(registry)
+    }
+
+    /// Run `ASK { ?this <STILL_CURRENT_REL> ?why }` with `?this` pre-bound to
+    /// `focus`, under `registry`, through the SAME prepared-handle door every SHACL
+    /// validator reaches a cached [`ShaclExecution`] through
+    /// ([`with_cached_execution`] → [`checkout_execution`] →
+    /// [`PlanConfiguration::still_current`]). Not a shortcut around the code under
+    /// test — the production call sites in `components.rs` and `rules.rs` differ
+    /// from this only in which parameters they declare.
+    fn still_current_ask(
+        registry: Arc<PropertyFunctionRegistry>,
+        focus: &str,
+    ) -> Result<bool, String> {
+        let _scope = enter_property_function_scope(registry);
+        let dataset = dataset_from_ntriples(&[]);
+        let query = format!("ASK {{ ?this <{STILL_CURRENT_REL}> ?why }}");
+        with_cached_execution(&query, &["this"], |execution| {
+            execution.bind(0, TermValue::Iri(focus.to_owned()))?;
+            run_bound_ask_with_shacl_prebinding_view(&dataset, execution)
+        })
+    }
+
+    /// **The soundness-critical predicate behind the prepared-handle cache,
+    /// exercised against a genuine environment swap on one worker.**
+    ///
+    /// `checkout_execution` caches one [`ShaclExecution`] per `(query text,
+    /// parameters)` per worker thread (see [`PREPARED_EXECUTIONS`]), and
+    /// [`PlanConfiguration::still_current`] is the only thing standing between a
+    /// worker that validates under one extension environment and, on the very next
+    /// call, under a different one, reusing the first environment's compiled plan
+    /// for the second's run. Before this test, `rg` finds exactly two references to
+    /// `still_current` in this crate: its definition and its one call site.
+    ///
+    /// The two environments register a relation built so a CONTENT-only comparison
+    /// could not tell them apart ([`FixedRowRelation`]: identical IRI, arity, mode,
+    /// volatility across both) — only the registered ROW differs, and only
+    /// `still_current`'s `Arc::ptr_eq` on the environment itself can catch the swap
+    /// before the wrong plan runs.
+    ///
+    /// The SAME query text runs four times on this one thread, alternating
+    /// environments: A, A (same environment, same registry `Arc`, so `still_current`
+    /// should report "current" and reuse the handle), B (a genuinely different
+    /// registry `Arc`, so `still_current` should report "stale" and re-prepare), and
+    /// A again (round-tripping back). Every answer is asserted, and each answer is a
+    /// MEMBERSHIP fact only the currently-installed registry could supply — a run
+    /// that silently kept the wrong plan would flip at least one of these from a
+    /// distinguishing answer to its opposite, never merely to "nothing changed".
+    #[test]
+    fn still_current_reprepares_across_an_environment_change_on_one_worker() {
+        let node_a = "http://example.org/still-current/a";
+        let node_b = "http://example.org/still-current/b";
+        let registry_a = still_current_registry(node_a);
+        let registry_b = still_current_registry(node_b);
+
+        // Environment A, checked for both candidate focus nodes.
+        assert!(
+            still_current_ask(Arc::clone(&registry_a), node_a).expect("environment A answers"),
+            "environment A's one row names `.../a`"
+        );
+        assert!(
+            !still_current_ask(Arc::clone(&registry_a), node_b).expect("environment A answers"),
+            "`.../b` is not the row environment A's relation names"
+        );
+
+        // Environment B: a DIFFERENT registry `Arc`, run on the SAME worker
+        // immediately after A — the exact alternation `still_current` exists to
+        // catch. A wrongly-reused handle here would still be running A's plan.
+        assert!(
+            !still_current_ask(Arc::clone(&registry_b), node_a).expect("environment B answers"),
+            "under environment B, `.../a` is no longer the flagged row"
+        );
+        assert!(
+            still_current_ask(Arc::clone(&registry_b), node_b).expect("environment B answers"),
+            "under environment B, the relation's one row now names `.../b`"
+        );
+
+        // And back to A, so the alternation is shown both ways rather than once.
+        assert!(
+            still_current_ask(Arc::clone(&registry_a), node_a)
+                .expect("environment A answers again"),
+            "swapping back to environment A must answer as environment A again"
+        );
+    }
 }
