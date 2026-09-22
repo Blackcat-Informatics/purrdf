@@ -260,6 +260,7 @@ pub(crate) fn substitute_message_templates(msg: &str, bindings: &[(String, Term)
 pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGraphSource>(
     dataset: &D,
     focus: &Term,
+    focus_id: Option<D::Id>,
     value_nodes: &[Term],
     validator: &ComponentValidator,
     bindings: &[(String, Term)],
@@ -383,7 +384,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
             // at checkout, so any slot this forgets is `None` and the engine refuses
             // the run rather than answering with whatever a previous focus node left
             // there.
-            execution.bind(0, focus.to_term_value())?;
+            crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
             let mut slot = VALUE_SLOT + 1;
             for (_, value) in bindings {
                 execution.bind(slot, value.to_term_value())?;
@@ -421,6 +422,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
 pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::FocusGraphSource>(
     dataset: &D,
     focus: &Term,
+    focus_id: Option<D::Id>,
     validator: &ComponentValidator,
     bindings: &[(String, Term)],
     component: &NamedNode,
@@ -526,7 +528,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
             &query,
             &names,
             |execution| {
-                execution.bind(0, focus.to_term_value())?;
+                crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
                 let mut slot = 1;
                 for (_, value) in bindings {
                     execution.bind(slot, value.to_term_value())?;

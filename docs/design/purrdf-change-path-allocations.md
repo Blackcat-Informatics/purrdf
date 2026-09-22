@@ -60,9 +60,9 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 52 |
-| custom `sh:ask` component | 118 |
-| custom `sh:select` component | 65 |
+| `sh:sparql` constraint | 51 |
+| custom `sh:ask` component | 114 |
+| custom `sh:select` component | 64 |
 | `sh:expression` function call | 127 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
@@ -74,9 +74,9 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 69 |
-| custom `sh:ask` component, governed | 142 |
-| custom `sh:select` component, governed | 82 |
+| `sh:sparql` constraint, governed | 68 |
+| custom `sh:ask` component, governed | 138 |
+| custom `sh:select` component, governed | 81 |
 | `sh:expression` function call, governed | 152 |
 
 Until that second table existed the governed lane's per-focus-node term was
@@ -108,7 +108,7 @@ and the slopes cannot be differenced. Figures are against the baseline of
 described in the next section moved them to 70 / 144 / 82 / 164, by emptying part
 of the term-materialization row and most of the rebuild cost inside the pushdown,
 seed and expression-walk rows. Two further reductions, described at the end of the
-same section, have since moved them again to 52 / 118 / 65 / 127.
+same section, have since moved them again to 51 / 114 / 64 / 127.
 
 Slices that nest are differenced against each other rather than summed, so no
 allocation is counted twice: an extra `apply_shacl_prebinding` contains an extra
@@ -372,8 +372,33 @@ EMPTIED between runs rather than dropped and regrown — capacity retained, cont
 not. That is worth exactly two allocations per evaluation context (a `Vec` and a
 `HashTable`, each growing once), so it is two on the surfaces that run one query
 per focus node and four on the two that run one per value node or per argument
-tuple: 52 / 118 / 65 / 127 ungoverned, 69 / 142 / 82 / 152 governed, which is
-where both stand now.
+tuple: 52 / 118 / 65 / 127 ungoverned, 69 / 142 / 82 / 152 governed.
+
+The tenth: `$this` crossed into the evaluator as an OWNED TERM. A SHACL target
+resolves its focus nodes as term ids, and the binding door took a `TermValue` —
+so every focus node paid to spell out a term the dataset already held, purely so
+the pre-binding rewrite could re-own the same bytes into the algebra and the BGP
+compiler could hash them back to the id they came from. A second binding door
+takes the id and the view that interprets it together, and resolves straight into
+the algebra term, which removes two materializations rather than one: the owned
+value once per binding, and the re-grounding of that value once per run. The
+per-surface saving therefore follows the number of runs per focus node, and the
+`sh:expression` call — whose argument terms are node-expression outputs and never
+had an id — does not move at all, which is what says the drop is this change and
+not something beneath it: 51 / 114 / 64 / 127 ungoverned, 68 / 138 / 81 / 152
+governed, which is where both stand now.
+
+An id is meaningful only against the dataset that minted it, so the door makes a
+cross-dataset binding impossible rather than merely refused: the id and the view
+are arguments of one call, the id is consumed inside it, and the slot keeps the
+RESOLVED term, which carries no dataset-local identity at all. A handle therefore
+never holds an id — which matters here, because the SHACL handle cache hands one
+worker's handle to validators over different datasets. The one remaining hazard is
+inside SHACL rather than inside the door: a validation that exposes its shapes
+graph under a named graph IRI runs its queries against a DIFFERENT view from the
+one target resolution addressed, and a Core id handed to that view is in range and
+denotes another term. Every wired site asks whether the two views share an id
+space and keeps the owned-term door when they do not.
 
 Emptying is the entire safety argument, and it is compiler-enforced. A
 `SolutionTerm::Computed` id is an index into that interner, so a table carried

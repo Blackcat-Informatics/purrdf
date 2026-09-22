@@ -58,7 +58,7 @@ use purrdf_sparql_algebra::{
 use crate::engine::ShaclPrebinding;
 use crate::substitute::{
     apply_probes, apply_shacl_probes, expression_from_ground, has_repeated_variable,
-    term_pattern_from_ground,
+    named_node_from_ground, term_pattern_from_ground,
 };
 
 /// The already-grounded pre-binding list both halves of the rewrite consume.
@@ -242,10 +242,10 @@ fn write_cell(cell: Cell<'_>, ground: &GroundTerm) {
                 .expect("an expression target is only recorded for an IRI or a literal");
         }
         Cell::GraphName(name) => {
-            let GroundTerm::NamedNode(node) = ground else {
-                panic!("a graph-name target is only recorded for an IRI");
-            };
-            *name = NamedNodePattern::NamedNode(node.clone());
+            *name = NamedNodePattern::NamedNode(
+                named_node_from_ground(ground)
+                    .expect("a graph-name target is only recorded for an IRI"),
+            );
         }
     }
 }

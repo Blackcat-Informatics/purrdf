@@ -36,11 +36,12 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{RdfDiagnostic, TermValue};
+use purrdf_core::{DatasetView, RdfDiagnostic, TermValue};
 use purrdf_sparql_algebra::{GroundTerm, Query, Variable};
 
 use crate::engine::{PreparedQuery, ShaclPrebinding};
 use crate::prebind_memo::{PrebindMemo, ValueShape};
+use crate::substitute::ParameterValue;
 
 /// Per-thread switch for `PreparedExecution::substituted`'s debug-only
 /// differential oracle (see the `#[cfg(debug_assertions)]` block inside it).
@@ -119,7 +120,11 @@ pub struct PreparedExecution {
     pub(crate) parameters: Box<[Variable]>,
     /// The current value of each parameter, positionally. `None` until bound;
     /// running with any parameter still `None` is refused rather than defaulted.
-    pub(crate) values: Vec<Option<TermValue>>,
+    ///
+    /// A [`ParameterValue`] rather than a bare [`TermValue`] because a slot may have
+    /// been filled through either door — see that type for what each one holds and
+    /// why the id door stores a resolved term rather than the id it was given.
+    pub(crate) values: Vec<Option<ParameterValue>>,
     /// This run's bindings as the rewrite consumes them, in a buffer this execution
     /// keeps. The list has the same length on every run and only its cells change,
     /// so refilling it costs nothing where a fresh `Vec` cost one allocation per run.
@@ -398,17 +403,73 @@ impl PreparedExecution {
     /// could reasonably answer for, so it is refused rather than ignored — the same
     /// rule the pre-binding rewrite applies to a value it cannot ground.
     pub fn bind(&mut self, slot: usize, value: TermValue) -> Result<(), RdfDiagnostic> {
-        let Some(cell) = self.values.get_mut(slot) else {
-            return Err(RdfDiagnostic::error(
-                "native-sparql-execution-parameter",
-                format!(
-                    "no parameter in slot {slot}: this execution declares {}",
-                    self.parameter_list()
-                ),
-            ));
-        };
-        *cell = Some(value);
-        Ok(())
+        self.write(slot, ParameterValue::Value(value))
+    }
+
+    /// Bind the parameter in `slot` to the term `dataset` interns at `id` — the **id
+    /// door**.
+    ///
+    /// The same binding as [`Self::bind`], reached by a caller that already holds the
+    /// dataset's own identity for the term instead of an owned spelling of it. A
+    /// SHACL focus node is exactly that caller: target resolution produces term ids,
+    /// and handing one to the value door meant materializing the term as a
+    /// [`TermValue`] purely so the pre-binding rewrite could re-own the same bytes
+    /// into the algebra and the BGP compiler could then hash them back to the id they
+    /// came from. This door resolves the id straight into the algebra term
+    /// (`crate::substitute::ground_term_from_id`), so that middle materialization —
+    /// one owned `String` per term component, per focus node — does not happen.
+    ///
+    /// It is an ADDITIONAL door, not a replacement: [`Self::bind`] is unchanged and
+    /// remains the door for a caller with a term and no dataset. The two agree by
+    /// construction, because they converge on the same [`GroundTerm`] before anything
+    /// reads them — `crates/sparql-eval/tests/prepared_execution.rs` pins that
+    /// agreement on the substituted plan itself rather than asserting it.
+    ///
+    /// # Cross-dataset binding
+    ///
+    /// A dataset-local id is meaningless against any other dataset: an id from one
+    /// view used against another is in range, resolves, and denotes a DIFFERENT term,
+    /// with nothing to say so. This door makes that **impossible rather than
+    /// refused**, and it does so structurally: the id and the view that interprets it
+    /// are arguments of ONE call, the id is consumed inside it, and what the slot
+    /// keeps afterwards is the resolved term — which carries no dataset-local
+    /// identity at all. A handle therefore never holds an id, so there is no later
+    /// moment at which an id could be paired with a dataset, and no way for a handle
+    /// reused across datasets (which the SHACL handle cache does) to reinterpret one.
+    /// `D::Id` is the view's OWN associated id type, so an id minted by a view of
+    /// another kind does not type-check either.
+    ///
+    /// What remains is the caller passing this call an id one view minted and a
+    /// different view of the same kind to read it with. That is
+    /// [`DatasetView::resolve`]'s own precondition, unchanged and not widened by this
+    /// door; the SHACL wiring satisfies it by construction, resolving against the
+    /// very view it then executes against and falling back to [`Self::bind`] wherever
+    /// the id space it holds is not the one the query will run in.
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] if `slot` is not a declared parameter — the identical
+    /// refusal, with the identical diagnostic code and message, that [`Self::bind`]
+    /// gives for the identical mistake — or if the term `dataset` holds at `id`
+    /// cannot become an algebra term (an IRI a [`NamedNode`](purrdf_sparql_algebra::NamedNode)
+    /// would refuse, a language tag this profile does not lex). That second refusal
+    /// arrives EARLIER than the value door's, which grounds at run time rather than
+    /// at bind time; it is the same judgement on the same components, made as soon as
+    /// there is something to judge.
+    pub fn bind_id<D: DatasetView>(
+        &mut self,
+        slot: usize,
+        dataset: &D,
+        id: D::Id,
+    ) -> Result<(), RdfDiagnostic> {
+        // The slot is checked BEFORE the id is resolved, so a caller who got the slot
+        // wrong reads the same diagnostic here as at the value door rather than a
+        // grounding failure from a term they never meant to bind.
+        if slot >= self.values.len() {
+            return Err(self.no_such_slot(slot));
+        }
+        let ground = crate::substitute::ground_term_from_id(dataset, id)?;
+        self.write(slot, ParameterValue::Ground(ground))
     }
 
     /// Bind the parameter called `name` to `value`.
@@ -420,17 +481,71 @@ impl PreparedExecution {
     /// value and answer a query nobody asked, which is the shape of a silent wrong
     /// answer rather than of a lenient API.
     pub fn bind_named(&mut self, name: &str, value: TermValue) -> Result<(), RdfDiagnostic> {
-        let Some(slot) = self.slot(name) else {
-            return Err(RdfDiagnostic::error(
+        let slot = self.declared_slot(name)?;
+        self.write(slot, ParameterValue::Value(value))
+    }
+
+    /// Bind the parameter called `name` to the term `dataset` interns at `id`.
+    ///
+    /// [`Self::bind_id`] by name, standing in the same relation to it that
+    /// [`Self::bind_named`] stands in to [`Self::bind`] — including the refusal: an
+    /// undeclared name is refused here with the identical diagnostic the value door
+    /// gives, and for the identical reason.
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] if no parameter of that name was declared, or if the term
+    /// `dataset` holds at `id` cannot become an algebra term. See [`Self::bind_id`].
+    pub fn bind_named_id<D: DatasetView>(
+        &mut self,
+        name: &str,
+        dataset: &D,
+        id: D::Id,
+    ) -> Result<(), RdfDiagnostic> {
+        let slot = self.declared_slot(name)?;
+        let ground = crate::substitute::ground_term_from_id(dataset, id)?;
+        self.write(slot, ParameterValue::Ground(ground))
+    }
+
+    /// Write `value` into `slot`, or refuse the slot.
+    ///
+    /// The single writing seam, so the two doors cannot grow two different notions of
+    /// what an out-of-range slot means. `bind_id` checks the slot separately BEFORE
+    /// resolving, for the ordering reason given there; this is what it checks against.
+    fn write(&mut self, slot: usize, value: ParameterValue) -> Result<(), RdfDiagnostic> {
+        let Some(cell) = self.values.get_mut(slot) else {
+            return Err(self.no_such_slot(slot));
+        };
+        *cell = Some(value);
+        Ok(())
+    }
+
+    /// The slot named `name`, or the undeclared-name refusal both name doors give.
+    ///
+    /// # Errors
+    ///
+    /// [`RdfDiagnostic`] if no parameter of that name was declared.
+    fn declared_slot(&self, name: &str) -> Result<usize, RdfDiagnostic> {
+        self.slot(name).ok_or_else(|| {
+            RdfDiagnostic::error(
                 "native-sparql-execution-parameter",
                 format!(
                     "no parameter named {name:?}: this execution declares {}",
                     self.parameter_list()
                 ),
-            ));
-        };
-        self.values[slot] = Some(value);
-        Ok(())
+            )
+        })
+    }
+
+    /// The out-of-range-slot refusal both slot doors give.
+    fn no_such_slot(&self, slot: usize) -> RdfDiagnostic {
+        RdfDiagnostic::error(
+            "native-sparql-execution-parameter",
+            format!(
+                "no parameter in slot {slot}: this execution declares {}",
+                self.parameter_list()
+            ),
+        )
     }
 
     /// Return every parameter to unbound.

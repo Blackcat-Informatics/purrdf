@@ -2410,9 +2410,19 @@ fn eval_constraint<'a, S: ResultSink>(
             // this arm materializes the focus node — beside a query evaluation
             // that dwarfs it, and only for shapes that carry a `sh:sparql`.
             let focus_term = focus_node.to_term(ds);
+            // The id door for `$this`, taken only when the view the query runs
+            // against is the very view the target resolution addressed. With a
+            // shapes graph exposed the two are different views and a Core id would
+            // be in range and WRONG there, so that configuration keeps the owned
+            // term it just materialized for the report anyway.
+            let focus_id = store
+                .sparql_view_shares_core_ids()
+                .then(|| focus_node.id())
+                .flatten();
             let produced = crate::sparql::eval_sparql_constraint_view(
                 store.sparql_view(),
                 &focus_term,
+                focus_id,
                 &query,
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 source_shape,
@@ -2650,10 +2660,17 @@ fn eval_constraint<'a, S: ResultSink>(
             // As `sh:sparql`: the validators speak owned terms, so the focus node
             // is materialized here, once, for a shape that declares one.
             let focus_term = focus_node.to_term(ds);
+            // As for `sh:sparql`: `$this` takes the id door when the run view and
+            // the resolution view are one view, and the owned term otherwise.
+            let focus_id = store
+                .sparql_view_shares_core_ids()
+                .then(|| focus_node.id())
+                .flatten();
             let produced = match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
                     dataset,
                     &focus_term,
+                    focus_id,
                     &value_terms,
                     validator,
                     bindings,
@@ -2668,6 +2685,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
                     dataset,
                     &focus_term,
+                    focus_id,
                     validator,
                     bindings,
                     component,

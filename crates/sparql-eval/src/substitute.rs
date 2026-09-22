@@ -26,7 +26,7 @@
 //! fork", for the three specific differences and why each is a deliberate design choice
 //! rather than an inconsistency.
 
-use purrdf_core::{RdfDiagnostic, RdfTextDirection, TermValue};
+use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::{
     AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm,
     GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, Query, TermPattern,
@@ -56,7 +56,45 @@ pub(crate) enum Prebindings<'a> {
     /// allocation a prepared execution exists to remove. Reading them side by side
     /// costs nothing, and the name never has to be re-interned because the
     /// [`Variable`] is already here.
-    Paired(&'a [Variable], &'a [Option<TermValue>]),
+    Paired(&'a [Variable], &'a [Option<ParameterValue>]),
+}
+
+/// What one parameter slot of a prepared execution currently holds.
+///
+/// Two variants because a parameter arrives through two doors, and the difference
+/// between them is exactly one round trip.
+///
+/// The value door — [`PreparedExecution::bind`](crate::PreparedExecution::bind) —
+/// takes a caller-owned [`TermValue`], which is what a caller holding a term and no
+/// dataset has. The id door —
+/// [`PreparedExecution::bind_id`](crate::PreparedExecution::bind_id) — takes the
+/// dataset's OWN id for a term it already interns, and [`ground_term_from_id`]
+/// resolves it straight into the algebra term the rewrite wants. Without that door a
+/// caller holding an id had to spell the term out as a `TermValue` (an owned `String`
+/// per component) purely so [`ground_term_from_value`] could allocate it a SECOND
+/// time into the algebra, and so `crate::bgp`'s `compile_term` could then hash it
+/// back to the very id the caller started from.
+///
+/// # Why the id is consumed at the door and never stored here
+///
+/// A dataset-local id means nothing without the view that minted it, and a handle
+/// outlives any one run: the SHACL handle cache hands one worker's handle to
+/// validators over DIFFERENT datasets. So a slot holding an id would be holding a
+/// number whose meaning depends on a dataset the slot does not name — an id from one
+/// view used against another is in range, resolves, and denotes the wrong term, with
+/// nothing anywhere saying so.
+///
+/// This variant therefore holds the RESOLVED algebra term, not the id. The id exists
+/// only inside [`PreparedExecution::bind_id`](crate::PreparedExecution::bind_id),
+/// where the dataset that is to interpret it is an argument of the same call, so
+/// there is no window in which an id could meet a different dataset. See that
+/// function for the full statement of what that does and does not rule out.
+#[derive(Clone, Debug)]
+pub(crate) enum ParameterValue {
+    /// A caller-owned term, carrying no dataset-local identity.
+    Value(TermValue),
+    /// The algebra term a dataset's own entry resolved to, already grounded.
+    Ground(GroundTerm),
 }
 
 impl<'a> Prebindings<'a> {
@@ -74,29 +112,56 @@ impl<'a> Prebindings<'a> {
         self.len() == 0
     }
 
-    /// The `index`-th `(name, value)` pair.
+    /// The `index`-th pre-binding's NAME.
     ///
-    /// Indexed rather than delegating to the two underlying iterators, because the
-    /// two shapes have different iterator TYPES and one function cannot return
-    /// both: the alternatives are a boxed trait object, which allocates on a path
-    /// that exists to stop allocating, or chaining two `Option`s of which exactly
-    /// one is always empty, which reads like a mistake. `Self` is `Copy`, so the
-    /// closure in [`Self::iter`] captures it by value and the match below folds to
-    /// a single branch.
+    /// Indexed rather than delegating to the three underlying iterators, because the
+    /// three shapes have different iterator TYPES and one function cannot return
+    /// them all: the alternatives are a boxed trait object, which allocates on a path
+    /// that exists to stop allocating, or chaining `Option`s of which exactly one is
+    /// ever non-empty, which reads like a mistake. `Self` is `Copy`, so the match
+    /// below folds to a single branch.
     ///
     /// # Panics
     ///
     /// If `index` is out of range, exactly as indexing the underlying slice would.
-    fn get(self, index: usize) -> (&'a str, &'a TermValue) {
+    fn name(self, index: usize) -> &'a str {
         match self {
-            Self::Owned(list) => (list[index].0.as_str(), &list[index].1),
-            Self::Borrowed(list) => (list[index].variable, &list[index].value),
-            Self::Paired(names, values) => (
-                names[index].as_str(),
-                values[index]
-                    .as_ref()
-                    .expect("a prepared execution refuses to run with a parameter unbound"),
-            ),
+            Self::Owned(list) => list[index].0.as_str(),
+            Self::Borrowed(list) => list[index].variable,
+            Self::Paired(names, _) => names[index].as_str(),
+        }
+    }
+
+    /// The `index`-th pre-binding's value, as the algebra term the rewrite consumes.
+    ///
+    /// The two doors converge HERE and nowhere earlier. A value-door binding is
+    /// grounded now, as it always was; an id-door binding was grounded at the door,
+    /// against the dataset that was an argument of the same call, and is cloned — a
+    /// refcount bump for an IRI or a literal — rather than spelled out as a
+    /// `TermValue` and grounded a second time.
+    ///
+    /// # Errors
+    ///
+    /// As [`ground_term_from_value`], and only for a value-door binding: an id-door
+    /// binding did its refusing at the door.
+    ///
+    /// # Panics
+    ///
+    /// If `index` is out of range, or if a prepared execution's slot is still
+    /// unbound — which
+    /// [`NativeSparqlEngine::execute`](crate::NativeSparqlEngine::execute) refuses
+    /// before it reaches this.
+    fn ground(self, index: usize) -> Result<GroundTerm, RdfDiagnostic> {
+        match self {
+            Self::Owned(list) => ground_term_from_value(&list[index].1),
+            Self::Borrowed(list) => ground_term_from_value(&list[index].value),
+            Self::Paired(_, values) => match values[index]
+                .as_ref()
+                .expect("a prepared execution refuses to run with a parameter unbound")
+            {
+                ParameterValue::Value(value) => ground_term_from_value(value),
+                ParameterValue::Ground(ground) => Ok(ground.clone()),
+            },
         }
     }
 
@@ -108,7 +173,7 @@ impl<'a> Prebindings<'a> {
     fn variable(self, index: usize) -> Variable {
         match self {
             Self::Paired(names, _) => names[index].clone(),
-            _ => interned_variable(self.get(index).0),
+            _ => interned_variable(self.name(index)),
         }
     }
 }
@@ -251,11 +316,8 @@ pub(crate) fn build_probes_into(
 ) -> Result<(), RdfDiagnostic> {
     probes.clear();
     for index in 0..substitutions.len() {
-        let (_, value) = substitutions.get(index);
-        probes.push((
-            substitutions.variable(index),
-            ground_term_from_value(value)?,
-        ));
+        let ground = substitutions.ground(index)?;
+        probes.push((substitutions.variable(index), ground));
     }
     Ok(())
 }
@@ -535,22 +597,109 @@ fn probe_term_pattern(
     }
 }
 
-/// The triple-pattern spelling of a ground pre-binding, or `None` for the one term
-/// kind a pattern position cannot carry.
+/// What a grounded pre-binding may be USED for — decided once, in one place.
 ///
-/// [`GroundTerm::BlankNode`] is that kind: a blank in a pattern is an anonymous
+/// # The defect this closes
+///
+/// The rewrite consumes a pre-bound value in four positions, and each of them used
+/// to re-decide this question over its OWN subset of [`GroundTerm`]:
+/// [`term_pattern_from_ground`] recursed through a quoted triple and refused a blank;
+/// [`expression_from_ground`] refused a blank AND a quoted triple;
+/// [`substitute_in_term_pattern`] admitted an IRI and a literal and fell through on
+/// everything else; [`named_node_from_ground`] — the `GRAPH`/`SERVICE` name — admitted
+/// an IRI alone. Three of the four spelled the refusal as a catch-all, so a
+/// [`GroundTerm`] variant added later COMPILED in three of them and was silently
+/// handled by whatever the catch-all beside it happened to say. That is the
+/// silent-drop shape and the over-refusal shape at once: a value admitted into a
+/// position nobody decided it belonged in, or refused from one it did.
+///
+/// [`Pushability::of`] is now the only place the classification is made, over a
+/// match that is exhaustive over [`GroundTerm`] **with no wildcard arm**. A new
+/// `GroundTerm` variant fails to compile there; a new CLASS of value — a new variant
+/// of this enum — fails to compile at every site that consumes one. The four cannot
+/// drift apart again, because there is no longer a place for them to drift from.
+///
+/// # Why each variant lands where it does
+///
+/// * [`Self::Iri`] — every position. An IRI denotes the same node in a matched
+///   triple-pattern position, in an expression, and as a graph name, so it is the one
+///   class with no position it is refused from.
+/// * [`Self::Literal`] — a matched pattern position and an expression, but never a
+///   `GRAPH`/`SERVICE` name: that position names a GRAPH, and a graph is named by an
+///   IRI. Substituting a literal there would not narrow the query, it would produce
+///   algebra the grammar has no spelling for.
+/// * [`Self::QuotedTriple`] — a matched pattern position ONLY, and then only
+///   component by component: an RDF 1.2 quoted triple has no constant
+///   [`Expression`] form to become (the algebra's expression constants are an IRI and
+///   a literal, and nothing else), so in every evaluated position it rides the
+///   `VALUES` seed instead. Its pattern form is built recursively, which is why a
+///   nested [`Self::SeedOnly`] anywhere inside it takes the WHOLE triple out of the
+///   pushdown rather than only that one position.
+/// * [`Self::SeedOnly`] — a blank node, and this is the load-bearing rule of the
+///   whole classification. **A blank node is seed-bound only and is never pushed into
+///   a pattern.** A blank node written into a query pattern is a NON-DISTINGUISHED
+///   VARIABLE (SPARQL 1.2 §4.1.4), not a request to match one particular dataset
+///   blank — so pushing one would WIDEN the match to every term in that position
+///   where every other class narrows it, turning a pre-binding into its own opposite.
+///   The consequence is that the pushed-constant set and the seed set are genuinely
+///   DIFFERENT sets: the seed carries every pre-binding, the pushdown carries only
+///   those the pattern can narrow on, and a blank-node focus node is bound by exactly
+///   one of the two halves. [`probe_term_pattern`] therefore records no probed index
+///   for one either, so no restoring `VALUES` is emitted for a column no leaf ever
+///   consumed.
+///
+/// # Why it borrows
+///
+/// The payload is the classified term itself, borrowed, so a site that has decided
+/// a value is admissible does not then re-destructure the [`GroundTerm`] to get at
+/// it — which would be the same decision made twice, in the same function, with
+/// nothing forcing the two spellings to agree.
+#[derive(Clone, Copy, Debug)]
+enum Pushability<'a> {
+    /// An IRI: admitted everywhere.
+    Iri(&'a NamedNode),
+    /// A literal: a matched pattern position and an expression, never a graph name.
+    Literal(&'a Literal),
+    /// A quoted triple: a matched pattern position, component-wise, and nothing else.
+    QuotedTriple(&'a GroundTriple),
+    /// A blank node: bound by the `VALUES` seed and by nothing else.
+    SeedOnly,
+}
+
+impl<'a> Pushability<'a> {
+    /// Classify one grounded pre-binding.
+    ///
+    /// Exhaustive over [`GroundTerm`] and deliberately wildcard-free: a variant added
+    /// to that enum must be decided about HERE, and the compiler is what says so.
+    fn of(ground: &'a GroundTerm) -> Self {
+        match ground {
+            GroundTerm::NamedNode(node) => Self::Iri(node),
+            GroundTerm::Literal(literal) => Self::Literal(literal),
+            GroundTerm::Triple(triple) => Self::QuotedTriple(triple.as_ref()),
+            GroundTerm::BlankNode(_) => Self::SeedOnly,
+        }
+    }
+}
+
+/// The triple-pattern spelling of a ground pre-binding, or `None` for a value
+/// [`Pushability`] keeps out of matched pattern positions.
+///
+/// [`Pushability::SeedOnly`] is that value — a blank in a pattern is an anonymous
 /// variable, so it would match everything rather than the pre-bound blank. See
-/// [`push_probe_constants`], "What is not pushed".
+/// [`push_probe_constants`], "What is not pushed", and [`Pushability`]'s own note on
+/// why the pushed set and the seed set differ. A [`Pushability::QuotedTriple`] is
+/// admitted here and nowhere else, and only if every one of its own positions is
+/// admitted too — which is what the `?`s below propagate.
 pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPattern> {
-    match ground {
-        GroundTerm::NamedNode(node) => Some(TermPattern::NamedNode(node.clone())),
-        GroundTerm::Literal(literal) => Some(TermPattern::Literal(literal.clone())),
-        GroundTerm::Triple(triple) => Some(TermPattern::Triple(Box::new(TriplePattern {
+    match Pushability::of(ground) {
+        Pushability::Iri(node) => Some(TermPattern::NamedNode(node.clone())),
+        Pushability::Literal(literal) => Some(TermPattern::Literal(literal.clone())),
+        Pushability::QuotedTriple(triple) => Some(TermPattern::Triple(Box::new(TriplePattern {
             subject: term_pattern_from_ground(&triple.subject)?,
             predicate: NamedNodePattern::NamedNode(triple.predicate.clone()),
             object: term_pattern_from_ground(&triple.object)?,
         }))),
-        GroundTerm::BlankNode(_) => None,
+        Pushability::SeedOnly => None,
     }
 }
 
@@ -598,11 +747,12 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
     // `NamedNode`, `Literal` and `Variable` are all `Arc<str>`-backed, so lifting one
     // out of a probe is a refcount bump; re-grounding it is a fresh allocation, once
     // per pre-bound value, per focus node.
-    let mut entries = Vec::with_capacity(probes.len());
-    for (variable, ground) in &probes {
-        entries.push((variable.clone(), expression_from_ground(ground)));
-    }
-    let expr_subs = ExprSubs(entries);
+    //
+    // Cloned rather than borrowed because `apply_probes` below CONSUMES the probe
+    // list — it moves each `(Variable, GroundTerm)` into the seed's `Values` row —
+    // and the walk that reads these runs after it, in that order, for the reason
+    // `apply_probes` gives.
+    let expr_subs = ExprSubs(probes.clone());
 
     let mut query = apply_probes(query, probes);
     map_patterns_in_query(&mut query, |pattern| {
@@ -631,19 +781,28 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 ///   borrow of the caller's request — which is what lets [`apply_shacl_probes`]
 ///   take its probes BY VALUE and hand them straight to [`apply_probes`].
 ///
-/// The `Option` is the variable's constant expression, or `None` for a blank-node
-/// or quoted-triple pre-binding, which has no expression form and rides the
-/// `VALUES` join instead. Its ABSENCE from the list means "not pre-bound at all",
-/// which is a different answer — [`substitute_in_expression`]'s `Bound` arm turns
-/// on exactly that distinction.
-struct ExprSubs(Vec<(Variable, Option<Expression>)>);
+/// The value each entry carries is the GROUNDED TERM, not a pre-computed constant
+/// expression. That is what lets the three consumers below — an expression position,
+/// a property-function argument and a `GRAPH` name — each ask [`Pushability`] what
+/// this particular position may do with it, instead of reading a decision some
+/// earlier conversion already made for one of the three and then re-deriving the
+/// other two from its leftovers. It costs nothing to carry: `NamedNode`, `Literal`
+/// and `Variable` are all `Arc<str>`-backed, so an entry is two refcount bumps,
+/// exactly as a lifted `Expression` was.
+///
+/// PRESENCE in the list means "pre-bound", which is a different question from "has a
+/// form this position can take" and must stay separable from it —
+/// [`substitute_in_expression`]'s `Bound` arm turns on exactly that distinction: a
+/// variable pre-bound to a blank node has no expression form at all and `BOUND()`
+/// must still say `true`.
+struct ExprSubs(Vec<(Variable, GroundTerm)>);
 
 impl ExprSubs {
     /// The entry for `name`, mirroring `HashMap::get`.
-    fn get(&self, name: &str) -> Option<&Option<Expression>> {
+    fn get(&self, name: &str) -> Option<&GroundTerm> {
         self.0
             .iter()
-            .find_map(|(key, expr)| (key.as_str() == name).then_some(expr))
+            .find_map(|(key, ground)| (key.as_str() == name).then_some(ground))
     }
 
     /// Whether `name` is pre-bound at all, mirroring `HashMap::contains_key`.
@@ -652,18 +811,34 @@ impl ExprSubs {
     }
 }
 
-/// Lift an already-grounded pre-binding into an [`Expression`] when it is an IRI or
-/// literal; `None` for a blank node or quoted triple, which has no expression form
-/// and rides the `VALUES` join instead.
+/// Lift an already-grounded pre-binding into an [`Expression`] when [`Pushability`]
+/// admits one there; `None` for a blank node or a quoted triple, neither of which has
+/// an expression form, both of which ride the `VALUES` join instead.
 ///
 /// Takes the [`GroundTerm`] rather than the [`TermValue`] it came from precisely so
 /// the conversion is not repeated: the probe list already holds it, and both
 /// `NamedNode` and `Literal` are `Arc<str>`-backed, so this clone allocates nothing.
 pub(crate) fn expression_from_ground(ground: &GroundTerm) -> Option<Expression> {
-    match ground {
-        GroundTerm::NamedNode(node) => Some(Expression::NamedNode(node.clone())),
-        GroundTerm::Literal(lit) => Some(Expression::Literal(lit.clone())),
-        GroundTerm::BlankNode(_) | GroundTerm::Triple(_) => None,
+    match Pushability::of(ground) {
+        Pushability::Iri(node) => Some(Expression::NamedNode(node.clone())),
+        Pushability::Literal(literal) => Some(Expression::Literal(literal.clone())),
+        Pushability::QuotedTriple(_) | Pushability::SeedOnly => None,
+    }
+}
+
+/// The IRI of a ground pre-binding, or `None` for every class [`Pushability`] keeps
+/// out of a `GRAPH`/`SERVICE` name position.
+///
+/// The narrowest of the four consumers: that position names a GRAPH, and only an IRI
+/// names one. [`substitute_in_named_node_pattern`] and
+/// [`crate::prebind_memo`]'s replay of the same position both ask THIS rather than
+/// each destructuring the term themselves, so the one place that decides is
+/// [`Pushability::of`] and the one place that reads the decision for this position is
+/// here.
+pub(crate) fn named_node_from_ground(ground: &GroundTerm) -> Option<NamedNode> {
+    match Pushability::of(ground) {
+        Pushability::Iri(node) => Some(node.clone()),
+        Pushability::Literal(_) | Pushability::QuotedTriple(_) | Pushability::SeedOnly => None,
     }
 }
 
@@ -780,36 +955,45 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs)
 /// Replace a pre-bound variable in a property-function argument position with its
 /// constant term.
 ///
-/// Only the IRI and literal cases substitute, matching
-/// [`expression_from_term_value`]: a blank-node or quoted-triple pre-binding has no
-/// constant expression form and rides the VALUES join instead. A non-variable argument
-/// is already a constant and passes through unchanged.
+/// This position writes a [`TermPattern`] but follows the EXPRESSION rule, not the
+/// matched-term rule, which is why [`Pushability::QuotedTriple`] is refused here and
+/// admitted by [`term_pattern_from_ground`]: a property function's arguments are
+/// invocation INPUTS, evaluated per row like a function call's, rather than terms
+/// matched against the graph. A value with no expression form therefore has nothing
+/// to be substituted with here and rides the `VALUES` join instead, exactly as in an
+/// ordinary expression position. A non-variable argument is already a constant and
+/// passes through unchanged.
 fn substitute_in_term_pattern(term: &mut TermPattern, expr_subs: &ExprSubs) {
     let TermPattern::Variable(var) = term else {
         return;
     };
-    let replacement = match expr_subs.get(var.as_str()) {
-        Some(Some(Expression::NamedNode(node))) => TermPattern::NamedNode(node.clone()),
-        Some(Some(Expression::Literal(literal))) => TermPattern::Literal(literal.clone()),
-        _ => return,
+    let Some(ground) = expr_subs.get(var.as_str()) else {
+        return;
+    };
+    // Wildcard-free over [`Pushability`], so a new class of value cannot slip through
+    // this position on the strength of a catch-all written for the old ones.
+    let replacement = match Pushability::of(ground) {
+        Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
+        Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
+        Pushability::QuotedTriple(_) | Pushability::SeedOnly => return,
     };
     *term = replacement;
 }
 
 /// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
+///
+/// The decision is [`named_node_from_ground`]'s, which is [`Pushability`]'s: a graph
+/// is named by an IRI, so every other class is left for the `VALUES` seed. (The
+/// earlier spelling asked `contains_key` and then re-asked `get`, which read as two
+/// tests and was one — presence is implied by a `Some` entry.)
 fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &ExprSubs) {
     let NamedNodePattern::Variable(var) = pattern else {
         return;
     };
-    let name = var.as_str();
-    let replacement = if expr_subs.contains_key(name)
-        && let Some(Some(Expression::NamedNode(node))) = expr_subs.get(name)
-    {
-        node.clone()
-    } else {
+    let Some(node) = expr_subs.get(var.as_str()).and_then(named_node_from_ground) else {
         return;
     };
-    *pattern = NamedNodePattern::NamedNode(replacement);
+    *pattern = NamedNodePattern::NamedNode(node);
 }
 
 /// Recursively substitute pre-bound variables into an [`Expression`].
@@ -818,7 +1002,11 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
     match expr {
         Expression::Variable(var) => {
             // Resolved before the assignment so `var`'s borrow of `*expr` has ended.
-            let replacement = expr_subs.get(var.as_str()).and_then(Clone::clone);
+            // `expression_from_ground` is the [`Pushability`] consumer for this
+            // position, and it is asked per OCCURRENCE rather than once per probe —
+            // which costs the same, because the answer it builds for the two classes
+            // that have one is a refcount bump on an `Arc<str>` either way.
+            let replacement = expr_subs.get(var.as_str()).and_then(expression_from_ground);
             if let Some(subst) = replacement {
                 *expr = subst;
             }
@@ -954,6 +1142,79 @@ fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic
     }
 }
 
+/// Convert a dataset's own term id straight to the algebra's [`GroundTerm`],
+/// without spelling the term out as a [`TermValue`] on the way.
+///
+/// # What this saves, and why it is not merely a shortcut
+///
+/// The value door's route from an interned term to the algebra is
+/// `TermId` → [`TermValue`] → [`GroundTerm`]: the first step owns a `String` per
+/// component (one for an IRI, up to three for a literal, a whole tree for a quoted
+/// triple), and the second immediately re-owns the same bytes into the `Arc<str>`
+/// the algebra holds — after which `crate::bgp`'s `compile_term` hashes the result
+/// back to the id it started from. This route drops the middle allocation entirely:
+/// [`DatasetView::resolve`] hands back a borrowed [`TermRef`], and the algebra term
+/// is built from that borrow. A caller with an id in hand pays ONE materialization
+/// instead of two.
+///
+/// It is a strictly narrower door, not a looser one: every component still goes
+/// through the same [`node`] and [`lang`] admission the value door uses, so a
+/// dataset holding a term the algebra would refuse is refused here identically
+/// rather than admitted because it came from "inside".
+///
+/// # Errors
+///
+/// As [`ground_term_from_value`]: an IRI a [`NamedNode`] would refuse, a language tag
+/// this profile does not lex, or a quoted triple whose predicate position is not an
+/// IRI.
+pub(crate) fn ground_term_from_id<D: DatasetView>(
+    dataset: &D,
+    id: D::Id,
+) -> Result<GroundTerm, RdfDiagnostic> {
+    match dataset.resolve(id) {
+        TermRef::Iri(iri) => Ok(GroundTerm::NamedNode(node(iri)?)),
+        // Qualified exactly as `ground_term_from_value` qualifies a `TermValue::Blank`,
+        // because the two doors must produce the same algebra term for the same
+        // dataset node — the algebra's `BlankNode` has one string slot, and the
+        // scope-qualified rendering is how every single-slot blank surface carries a
+        // `(label, scope)` pair.
+        TermRef::Blank { label, scope } => Ok(GroundTerm::BlankNode(BlankNode::new(
+            scope.qualify_label(label).into_owned(),
+        ))),
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                return Err(RdfDiagnostic::error(
+                    "native-sparql-subst-literal-datatype",
+                    "a literal's datatype must be an IRI".to_owned(),
+                ));
+            };
+            Ok(GroundTerm::Literal(literal_from_value(
+                lexical, datatype, language, direction,
+            )?))
+        }
+        TermRef::Triple { s, p, o } => {
+            let subject = ground_term_from_id(dataset, s)?;
+            let GroundTerm::NamedNode(predicate) = ground_term_from_id(dataset, p)? else {
+                return Err(RdfDiagnostic::error(
+                    "native-sparql-subst-triple-predicate",
+                    "a quoted-triple predicate must be an IRI".to_owned(),
+                ));
+            };
+            let object = ground_term_from_id(dataset, o)?;
+            Ok(GroundTerm::Triple(Box::new(GroundTriple {
+                subject,
+                predicate,
+                object,
+            })))
+        }
+    }
+}
+
 /// Build an algebra [`Literal`] from a value's components, choosing the plain /
 /// typed / lang / dir-lang constructor that matches its shape.
 ///
@@ -1020,6 +1281,175 @@ fn lang(tag: &str) -> Result<&str, RdfDiagnostic> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `http://www.w3.org/2001/XMLSchema#string`, for a plain literal fixture.
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+
+    /// The five ground values the classification distinguishes, as `(label, term)`.
+    ///
+    /// Five rather than four because [`GroundTerm::Triple`] splits: a quoted triple
+    /// every position of which is pushable behaves differently from one with a blank
+    /// node nested inside it, and that split is a property of the RECURSION in
+    /// [`term_pattern_from_ground`] rather than of [`Pushability`] itself. A table
+    /// that held only one quoted triple could not tell the two apart, and the nested
+    /// case is exactly where the blank-node rule has to survive a level of nesting.
+    fn ground_fixtures() -> Vec<(&'static str, GroundTerm)> {
+        let iri = || NamedNode::new_unchecked("http://example.org/i");
+        let literal = || Literal::new_typed("v", NamedNode::new_unchecked(XSD_STRING));
+        vec![
+            ("iri", GroundTerm::NamedNode(iri())),
+            ("literal", GroundTerm::Literal(literal())),
+            (
+                "quoted-triple",
+                GroundTerm::Triple(Box::new(GroundTriple {
+                    subject: GroundTerm::NamedNode(iri()),
+                    predicate: iri(),
+                    object: GroundTerm::Literal(literal()),
+                })),
+            ),
+            (
+                "quoted-triple-with-nested-blank",
+                GroundTerm::Triple(Box::new(GroundTriple {
+                    subject: GroundTerm::BlankNode(BlankNode::new("nested")),
+                    predicate: iri(),
+                    object: GroundTerm::Literal(literal()),
+                })),
+            ),
+            ("blank", GroundTerm::BlankNode(BlankNode::new("b"))),
+        ]
+    }
+
+    /// GAP F3: **the pushability truth table, asserted at all four sites at once.**
+    ///
+    /// The four consumers of a pre-bound value each used to re-decide what a value
+    /// may be used for, over their own subset of [`GroundTerm`] and with a catch-all
+    /// under three of the four. [`Pushability`] now decides once. This is the table
+    /// that says the four still accept and refuse EXACTLY what they accepted and
+    /// refused before that change — every site, every class, both answers, written
+    /// out rather than summarized, because a refactor of a refusal is precisely where
+    /// a quietly-widened or quietly-narrowed rule hides.
+    ///
+    /// Read the expectations as: `term` = the pushdown's matched-pattern position
+    /// ([`term_pattern_from_ground`]); `expr` = a constant expression
+    /// ([`expression_from_ground`]); `arg` = a property-function argument
+    /// ([`substitute_in_term_pattern`]); `graph` = a `GRAPH`/`SERVICE` name
+    /// ([`substitute_in_named_node_pattern`]).
+    #[test]
+    fn the_pushability_classifier_reproduces_every_site_s_decision() {
+        // (label, term, expr, arg, graph) — the behaviour BEFORE the classifier, read
+        // off the four original matches, and the behaviour required after it.
+        let expected: &[(&str, bool, bool, bool, bool)] = &[
+            ("iri", true, true, true, true),
+            ("literal", true, true, true, false),
+            // Pushed into a matched position component-wise; no expression form, and
+            // a property-function argument follows the expression rule.
+            ("quoted-triple", true, false, false, false),
+            // The nested blank takes the WHOLE triple out of the pushdown.
+            (
+                "quoted-triple-with-nested-blank",
+                false,
+                false,
+                false,
+                false,
+            ),
+            // The load-bearing row: a blank node is seed-bound and nothing else.
+            ("blank", false, false, false, false),
+        ];
+
+        let variable = Variable::new("v");
+        for (label, ground) in ground_fixtures() {
+            let row = expected
+                .iter()
+                .find(|(name, ..)| *name == label)
+                .unwrap_or_else(|| panic!("no expectation row for {label}"));
+            let (_, want_term, want_expr, want_arg, want_graph) = *row;
+
+            assert_eq!(
+                term_pattern_from_ground(&ground).is_some(),
+                want_term,
+                "term_pattern_from_ground({label})"
+            );
+            assert_eq!(
+                expression_from_ground(&ground).is_some(),
+                want_expr,
+                "expression_from_ground({label})"
+            );
+
+            let subs = ExprSubs(vec![(variable.clone(), ground)]);
+
+            let mut arg = TermPattern::Variable(variable.clone());
+            substitute_in_term_pattern(&mut arg, &subs);
+            assert_eq!(
+                !matches!(arg, TermPattern::Variable(_)),
+                want_arg,
+                "substitute_in_term_pattern({label})"
+            );
+
+            let mut name = NamedNodePattern::Variable(variable.clone());
+            substitute_in_named_node_pattern(&mut name, &subs);
+            assert_eq!(
+                matches!(name, NamedNodePattern::NamedNode(_)),
+                want_graph,
+                "substitute_in_named_node_pattern({label})"
+            );
+
+            // PRESENCE is a separate question from admissibility, and the `Bound`
+            // arm depends on the two staying separate: every class above is
+            // pre-bound, including the three no position can spell.
+            assert!(
+                subs.contains_key("v"),
+                "{label} is pre-bound whatever any position can do with it"
+            );
+            let mut bound = Expression::Bound(variable.clone());
+            substitute_in_expression(&mut bound, &subs);
+            assert_eq!(
+                bound,
+                true_literal(),
+                "BOUND(?v) must fold to true for {label}, which has no expression form \
+                 for three of these five classes and is bound in all five"
+            );
+        }
+    }
+
+    /// GAP F3: **a variable that is NOT pre-bound is untouched at every site.**
+    ///
+    /// The neighbour of the table above, and not a formality: three of the four sites
+    /// now reach their decision through `ExprSubs::get`, so a lookup that answered
+    /// `Some` for an absent name would substitute a value into a position for a
+    /// variable the caller never bound — the widening direction of the same bug. The
+    /// `Bound` arm is the one that can SEE the difference, so it is checked here too:
+    /// `BOUND(?other)` must stay `BOUND(?other)` rather than folding to `true`.
+    #[test]
+    fn an_unbound_variable_is_left_alone_at_every_site() {
+        let subs = ExprSubs(vec![(
+            Variable::new("v"),
+            GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/i")),
+        )]);
+        let other = Variable::new("other");
+
+        assert!(!subs.contains_key("other"));
+        assert!(subs.get("other").is_none());
+
+        let mut arg = TermPattern::Variable(other.clone());
+        substitute_in_term_pattern(&mut arg, &subs);
+        assert_eq!(arg, TermPattern::Variable(other.clone()));
+
+        let mut name = NamedNodePattern::Variable(other.clone());
+        substitute_in_named_node_pattern(&mut name, &subs);
+        assert_eq!(name, NamedNodePattern::Variable(other.clone()));
+
+        let mut expr = Expression::Variable(other.clone());
+        substitute_in_expression(&mut expr, &subs);
+        assert_eq!(expr, Expression::Variable(other.clone()));
+
+        let mut bound = Expression::Bound(other.clone());
+        substitute_in_expression(&mut bound, &subs);
+        assert_eq!(
+            bound,
+            Expression::Bound(other),
+            "an unbound variable's BOUND() must not fold"
+        );
+    }
 
     /// GAP F4: `interned_variable`'s per-worker table retains bytes that
     /// nothing charged before this fix — `INTERNED_VARIABLE_CAP` bounded the

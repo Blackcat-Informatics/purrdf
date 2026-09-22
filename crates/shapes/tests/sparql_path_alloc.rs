@@ -55,18 +55,54 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 52 | 1,277,672 | 3,518 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 118 | 16,156 | 7,460 |
-//! | custom `sh:select` component | 2,738 | 65 | 1,278,972 | 4,093 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 127 | 13,393 | 7,456 |
+//! | `sh:sparql` constraint | 2,695 | 51 | 1,277,672 | 3,119 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 114 | 16,156 | 6,555 |
+//! | custom `sh:select` component | 2,738 | 64 | 1,278,972 | 3,694 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 127 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
 //! cheaper, and the pins move with it.
 //!
-//! # The most recent drop: a prepared execution now retains its SCRATCH TABLES
+//! # The most recent drop: `$this` is bound by the dataset's own TERM ID
 //!
-//! The four surfaces most recently dropped by 2, 4, 2 and 4 allocations
+//! The four surfaces most recently dropped by **1, 4, 1 and 0** allocations
+//! respectively (from 52, 118, 65 and 127) when the focus-node binding stopped
+//! crossing into the evaluator as an owned term.
+//!
+//! A SHACL target resolves its focus nodes as term IDS — `FocusNode::Interned` —
+//! and the only binding door took a `TermValue`. So every focus node paid to spell
+//! out a term the dataset already held, purely so the pre-binding rewrite could
+//! re-own the same bytes into the algebra, after which the BGP compiler hashed the
+//! result back to the id it started from.
+//! `purrdf_sparql_eval::PreparedExecution::bind_id` takes the id and the view it
+//! belongs to together and resolves straight into the algebra term, so both of
+//! those materializations go: the owned `TermValue` once per BINDING, and the
+//! re-grounding of that value once per RUN (a prepared execution re-grounds its
+//! slots on every execution).
+//!
+//! The per-surface split follows the number of RUNS per focus node, which is why
+//! the drops are not equal: the `sh:ask` component runs one query per VALUE NODE
+//! and this fixture gives every focus node two of them, so it saves the
+//! re-grounding on each. The `sh:expression` call does not move at all, and it is
+//! the control that says these drops are the id door rather than something under
+//! it: its argument terms are node-expression OUTPUTS, which never had an id, so it
+//! keeps the owned-term door unchanged. The same reading was taken directly —
+//! routing every one of the three wired sites back through the owned-term door,
+//! with everything else on this revision in place, reproduces 52 / 118 / 65 / 127
+//! and 69 / 142 / 82 / 152 exactly.
+//!
+//! An id is meaningless against any other dataset, and a validation may expose its
+//! shapes graph under a named graph IRI — in which case the view the query RUNS
+//! against is a different view from the one the target resolution ADDRESSED, and a
+//! Core id handed to it is in range and denotes another term. The wiring asks
+//! `ShaclData::sparql_view_shares_core_ids` first and keeps the owned-term door
+//! whenever the answer is no, so the saving is taken exactly where it is sound and
+//! nowhere else.
+//!
+//! # The drop before that: a prepared execution retains its SCRATCH TABLES
+//!
+//! The four surfaces before that dropped by 2, 4, 2 and 4 allocations
 //! respectively (from 54, 122, 67 and 131) when a prepared execution started
 //! retaining its scratch interner across runs — emptied between them, but not
 //! given back — instead of letting a fresh one grow from zero on every focus
@@ -85,7 +121,7 @@
 //! There is no capacity there to keep. See
 //! `purrdf_sparql_eval`'s `execution::ExecutionWorkspace`.
 //!
-//! # The drop before that: a prepared execution retains its SUBSTITUTED plan
+//! # The drop two before that: a prepared execution retains its SUBSTITUTED plan
 //!
 //! The four surfaces dropped by 14, 22, 14 and 20 allocations
 //! respectively (from 68, 144, 81 and 151) when a prepared execution started
@@ -502,8 +538,8 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 52,
-        governed_per_focus_node: 69,
+        per_focus_node: 51,
+        governed_per_focus_node: 68,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -522,8 +558,8 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 118,
-        governed_per_focus_node: 142,
+        per_focus_node: 114,
+        governed_per_focus_node: 138,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -546,8 +582,8 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 65,
-        governed_per_focus_node: 82,
+        per_focus_node: 64,
+        governed_per_focus_node: 81,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -1569,24 +1605,24 @@ fn every_registered_prose_site_quotes_the_measured_figures() {
     // "before" figures and the byte counts describe one specific past
     // measurement and restate nothing asserted elsewhere.
     const OWN_TABLE_ROWS: [(&str, &str, &str, &str); 4] = [
-        ("`sh:sparql` constraint", "2,695", "1,277,672", "3,518"),
+        ("`sh:sparql` constraint", "2,695", "1,277,672", "3,119"),
         (
             "custom `sh:ask` component (2 value nodes)",
             "350",
             "16,156",
-            "7,460",
+            "6,555",
         ),
         (
             "custom `sh:select` component",
             "2,738",
             "1,278,972",
-            "4,093",
+            "3,694",
         ),
         (
             "SHACL-AF `sh:expression` call (2 tuples)",
             "236",
             "13,393",
-            "7,456",
+            "6,744",
         ),
     ];
     for (index, (label, before, bytes_before, bytes_after)) in OWN_TABLE_ROWS.iter().enumerate() {

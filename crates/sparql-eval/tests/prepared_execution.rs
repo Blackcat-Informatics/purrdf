@@ -609,6 +609,240 @@ fn declaring_one_parameter_twice_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
+// GAP C4: the ID DOOR's refusal parity.
+//
+// `PreparedExecution::bind_id` / `bind_named_id` bind a parameter to the dataset's
+// own term id instead of to an owned value, to skip the round trip in which an id
+// becomes a term, the term becomes algebra, and the algebra is hashed back to the
+// id. It is an ADDITIONAL door, not a replacement, and the thing an additional door
+// most easily gets wrong is not its answers but its REFUSALS: a second entry that
+// accepts what the first one refuses is a silent widening, and every refusal below
+// exists because accepting it would answer a question nobody asked.
+//
+// So each of the four refusals the value door has is executed through BOTH doors
+// and the two diagnostics compared, and each is paired with its neighbouring
+// accepted case — which must not merely succeed but ANSWER, over a fixture whose
+// subjects carry distinct objects, so "accepted" and "accepted and then silently
+// answered for the wrong subject" cannot be confused.
+// ---------------------------------------------------------------------------
+
+/// This fixture's id for `:s{i}`.
+///
+/// Through `term_id_by_value`, which is the only value→id door a `DatasetView`
+/// has, so the id handed to `bind_id` below is genuinely the dataset's and not a
+/// number the test invented.
+fn subject_id(ds: &RdfDataset, i: u32) -> purrdf_core::TermId {
+    ds.term_id_by_value(&iri(i))
+        .expect("the fixture interns every subject")
+}
+
+/// The `?o` values one prepared run answers, as debug strings.
+fn run_answers(
+    engine: &NativeSparqlEngine,
+    execution: &mut purrdf_sparql_eval::PreparedExecution,
+    ds: &RdfDataset,
+) -> Vec<String> {
+    engine
+        .execute(execution, ds, QueryOptions::EMPTY, |outcome| {
+            let InternedOutcome::Solutions(solutions) = outcome else {
+                panic!("expected solutions");
+            };
+            solutions
+                .rows()
+                .iter()
+                .map(|row| format!("{:?}", solutions.cell(row, 0)))
+                .collect::<Vec<_>>()
+        })
+        .expect("a bound execution must run")
+}
+
+#[test]
+fn the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does() {
+    let _guard = measure_lock();
+    let ds = dataset(4);
+    let engine = NativeSparqlEngine::new();
+    // Two parameters, one of which the query never mentions, so "bind one and run"
+    // is a state the engine has to refuse rather than a query that cannot parse.
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &["this", "other"], QueryOptions::EMPTY)
+        .expect("prepare");
+
+    // THE REFUSAL, reached through the id door: slot 1 is still `None`. Treating it
+    // as unrestricted would answer over every subject.
+    execution
+        .bind_id(0, &*ds, subject_id(&ds, 1))
+        .expect("the id door binds");
+    let through_id = engine
+        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |_| ())
+        .expect_err("an unbound parameter must be refused after an id-door bind");
+
+    // The same state reached through the value door refuses with the same words.
+    execution.unbind_all();
+    execution.bind(0, iri(1)).expect("the value door binds");
+    let through_value = engine
+        .execute(&mut execution, &*ds, QueryOptions::EMPTY, |_| ())
+        .expect_err("an unbound parameter must be refused after a value-door bind");
+    assert_eq!(
+        through_id.to_string(),
+        through_value.to_string(),
+        "the two doors must refuse an unbound parameter identically"
+    );
+
+    // THE NEIGHBOUR: bind the second slot through the id door too, and the run must
+    // ANSWER — for s1, whose object is o1 and nobody else's.
+    execution.unbind_all();
+    execution
+        .bind_id(0, &*ds, subject_id(&ds, 1))
+        .expect("the id door binds");
+    execution
+        .bind_id(1, &*ds, subject_id(&ds, 2))
+        .expect("the id door binds");
+    let answers = run_answers(&engine, &mut execution, &ds);
+    assert_eq!(answers.len(), 1, "one subject, one object: {answers:?}");
+    assert!(
+        answers[0].contains("http://example.org/o1"),
+        "the id door must answer for the subject it bound, not a neighbour: {answers:?}"
+    );
+}
+
+#[test]
+fn the_id_door_refuses_an_undeclared_name_exactly_as_the_value_door_does() {
+    let _guard = measure_lock();
+    let ds = dataset(4);
+    let engine = NativeSparqlEngine::new();
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+
+    let through_id = execution
+        .bind_named_id("absent", &*ds, subject_id(&ds, 0))
+        .expect_err("an undeclared parameter name must be refused by the id door");
+    let through_value = execution
+        .bind_named("absent", iri(0))
+        .expect_err("an undeclared parameter name must be refused by the value door");
+    assert_eq!(
+        through_id.to_string(),
+        through_value.to_string(),
+        "the two doors must refuse an undeclared name identically"
+    );
+    assert!(
+        through_id.to_string().contains("absent"),
+        "the diagnostic must name the parameter: {through_id}"
+    );
+
+    // THE NEIGHBOUR: the declared name binds through the id door and answers.
+    execution
+        .bind_named_id("this", &*ds, subject_id(&ds, 3))
+        .expect("a declared parameter must bind by name through the id door");
+    let answers = run_answers(&engine, &mut execution, &ds);
+    assert_eq!(answers.len(), 1, "one subject, one object: {answers:?}");
+    assert!(
+        answers[0].contains("http://example.org/o3"),
+        "the named id door must answer for s3: {answers:?}"
+    );
+}
+
+#[test]
+fn the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does() {
+    let _guard = measure_lock();
+    let ds = dataset(4);
+    let engine = NativeSparqlEngine::new();
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+
+    let through_id = execution
+        .bind_id(7, &*ds, subject_id(&ds, 0))
+        .expect_err("an out-of-range slot must be refused by the id door");
+    let through_value = execution
+        .bind(7, iri(0))
+        .expect_err("an out-of-range slot must be refused by the value door");
+    assert_eq!(
+        through_id.to_string(),
+        through_value.to_string(),
+        "the two doors must refuse an out-of-range slot identically"
+    );
+    assert!(through_id.to_string().contains('7'), "got {through_id}");
+
+    // THE NEIGHBOUR: the in-range slot binds through the id door and answers.
+    execution
+        .bind_id(0, &*ds, subject_id(&ds, 2))
+        .expect("the in-range slot must bind");
+    let answers = run_answers(&engine, &mut execution, &ds);
+    assert_eq!(answers.len(), 1, "one subject, one object: {answers:?}");
+    assert!(
+        answers[0].contains("http://example.org/o2"),
+        "the id door must answer for s2: {answers:?}"
+    );
+}
+
+#[test]
+fn a_duplicate_declaration_is_refused_before_either_door_exists() {
+    let _guard = measure_lock();
+    let ds = dataset(4);
+    let engine = NativeSparqlEngine::new();
+
+    // The fourth refusal is the one the two doors cannot differ on, and saying why
+    // is the point: a repeated parameter name is refused at PREPARATION, so there is
+    // no handle for either door to be called on. Parity here is structural rather
+    // than compared — there is exactly one refusal and it happens before any binding
+    // door exists.
+    let error = engine
+        .prepare_execution(QUERY, None, &["this", "this"], QueryOptions::EMPTY)
+        .expect_err("a repeated parameter has no single slot to bind");
+    assert!(error.to_string().contains("more than once"), "got {error}");
+
+    // THE NEIGHBOUR: distinct names prepare, and the id door then answers through
+    // the handle that refusal would have denied.
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &["this", "other"], QueryOptions::EMPTY)
+        .expect("distinct parameters must prepare");
+    execution
+        .bind_id(0, &*ds, subject_id(&ds, 0))
+        .expect("the id door binds");
+    execution
+        .bind_id(1, &*ds, subject_id(&ds, 1))
+        .expect("the id door binds");
+    let answers = run_answers(&engine, &mut execution, &ds);
+    assert_eq!(answers.len(), 1, "one subject, one object: {answers:?}");
+    assert!(
+        answers[0].contains("http://example.org/o0"),
+        "the id door must answer for s0: {answers:?}"
+    );
+}
+
+#[test]
+fn the_two_doors_are_interchangeable_within_one_execution() {
+    let _guard = measure_lock();
+    let ds = dataset(4);
+    let engine = NativeSparqlEngine::new();
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+
+    // The id door is ADDITIONAL, so one handle must take either door on any run and
+    // answer for whatever the LAST bind said — including when the doors alternate.
+    // A slot that remembered which door wrote it, or that kept an earlier door's
+    // value beside a later one's, would answer a stale subject here rather than
+    // fail, which is why each step reads the object rather than the row count.
+    for (step, expected) in [(0u32, "o0"), (1, "o1"), (2, "o2"), (3, "o3")] {
+        if step % 2 == 0 {
+            execution
+                .bind_id(0, &*ds, subject_id(&ds, step))
+                .expect("the id door binds");
+        } else {
+            execution.bind(0, iri(step)).expect("the value door binds");
+        }
+        let answers = run_answers(&engine, &mut execution, &ds);
+        assert_eq!(answers.len(), 1, "one subject, one object: {answers:?}");
+        assert!(
+            answers[0].contains(&format!("http://example.org/{expected}")),
+            "step {step} must answer {expected}: {answers:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // `execute` must refuse a plan/registry disagreement, exactly the way every
 // other governed and ungoverned entry that can observe one already does
 // (`query_prepared_view`, `query_prepared_fallible_view`,

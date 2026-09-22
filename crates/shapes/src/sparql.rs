@@ -132,9 +132,12 @@ pub fn eval_sparql_constraint(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
+    // No id: this door takes an owned focus term from a caller who never resolved
+    // one, so there is nothing to hand the id door. See [`bind_focus`].
     eval_sparql_constraint_view(
         dataset,
         focus,
+        None,
         select,
         component,
         source_shape,
@@ -146,10 +149,14 @@ pub fn eval_sparql_constraint(
 }
 
 /// Internal view-generic implementation of [`eval_sparql_constraint`].
+///
+/// `focus_id` is `dataset`'s own id for `focus` when the caller holds one in THIS
+/// view's id space, and `None` otherwise; [`bind_focus`] is what it reaches.
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
 pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     focus: &Term,
+    focus_id: Option<D::Id>,
     select: &str,
     component: &NamedNode,
     source_shape: &Term,
@@ -176,7 +183,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     // no single handle can span the focus set.
     let parameters = this_and_shape_context_names(shapes_graph_iri, current_shape);
     let bind = |execution: &mut ShaclExecution| {
-        execution.bind(0, focus.to_term_value())?;
+        bind_focus(execution, 0, dataset, focus, focus_id)?;
         bind_shape_context(execution, 1, shapes_graph_iri, current_shape)?;
         Ok(())
     };
@@ -994,6 +1001,35 @@ impl ShaclExecution {
         self.execution.bind(slot, value).map_err(|e| e.to_string())
     }
 
+    /// Bind the parameter in `slot` to the term `dataset` interns at `id`.
+    ///
+    /// The id door onto the same slot. A SHACL target resolves its focus nodes as
+    /// term ids, so every `$this` binding used to pay for a `Term` and then a
+    /// `TermValue` spelling of a term the dataset already holds — and the evaluator
+    /// then hashed that spelling back to the very id it started from. This hands the
+    /// id over instead.
+    ///
+    /// `dataset` must be the view this handle is about to be executed against, which
+    /// is what makes the id meaningful; see
+    /// [`purrdf_sparql_eval::PreparedExecution::bind_id`] for why that pairing cannot
+    /// be deferred and [`crate::data::ShaclData::sparql_view_shares_core_ids`] for the
+    /// one configuration in which a Core id must NOT be handed to it.
+    ///
+    /// # Errors
+    ///
+    /// `Err(String)` if `slot` is not a declared parameter — the identical refusal
+    /// [`Self::bind`] gives — or if the term at `id` cannot become an algebra term.
+    pub(crate) fn bind_id<D: DatasetView>(
+        &mut self,
+        slot: usize,
+        dataset: &D,
+        id: D::Id,
+    ) -> Result<(), String> {
+        self.execution
+            .bind_id(slot, dataset, id)
+            .map_err(|e| e.to_string())
+    }
+
     /// Prepare `query` with `parameters` under the registries in `scopes`.
     fn prepare(query: &str, parameters: &[&str], scopes: &AmbientScopes) -> Result<Self, String> {
         debug_assert!(
@@ -1017,6 +1053,38 @@ impl ShaclExecution {
             execution,
             prepared_under: scopes.plan_configuration(),
         })
+    }
+}
+
+/// Bind a focus node into `slot`: through the id door when this run's view is the
+/// one the id was resolved against, and through the owned-term door otherwise.
+///
+/// One function rather than a conditional at each of the three validator entry
+/// points, because the two doors must agree about what they bind and the cheapest
+/// way to make them agree is to have one place choose. `focus_id` is `Some` exactly
+/// when the caller holds an id in THIS view's id space — see
+/// [`crate::data::ShaclData::sparql_view_shares_core_ids`], which is what the callers
+/// ask before they fill it in.
+///
+/// The `None` arm is not a degraded path: a focus node that came from a
+/// `sh:target`/`sh:targetNode` term, or from a SHACL-AF node expression, never had an
+/// id, and the owned-term door is the correct and only door for it. What the two arms
+/// differ in is cost, not answer.
+///
+/// # Errors
+///
+/// `Err(String)` if `slot` is not a declared parameter, or if the focus node cannot
+/// become an algebra term.
+pub(crate) fn bind_focus<D: DatasetView>(
+    execution: &mut ShaclExecution,
+    slot: usize,
+    dataset: &D,
+    focus: &Term,
+    focus_id: Option<D::Id>,
+) -> Result<(), String> {
+    match focus_id {
+        Some(id) => execution.bind_id(slot, dataset, id),
+        None => execution.bind(slot, focus.to_term_value()),
     }
 }
 

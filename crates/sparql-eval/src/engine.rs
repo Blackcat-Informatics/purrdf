@@ -3952,6 +3952,285 @@ mod tests {
         assert!(got[0].contains("http://ex/a"), "{got:?}");
     }
 
+    // ── GAP F3: the `GRAPH` name is the narrowest refusal, so it gets the pair ──
+
+    /// Two NAMED graphs on one predicate with DIFFERENT objects, and nothing in the
+    /// default graph.
+    ///
+    /// Different objects are what let a `GRAPH ?g` answer name which graph it came
+    /// from, so the tests below read a term rather than a row count.
+    fn graph_name_ds() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let g1 = b.intern_iri("http://ex/g1");
+        let g2 = b.intern_iri("http://ex/g2");
+        let s = b.intern_iri("http://ex/s");
+        let p = b.intern_iri("http://ex/p");
+        let x = b.intern_iri("http://ex/x");
+        let y = b.intern_iri("http://ex/y");
+        let q = b.intern_iri("http://ex/q");
+        b.push_quad(s, p, x, Some(g1));
+        b.push_quad(s, p, y, Some(g2));
+        // One quad in the DEFAULT graph, so the query below can put a second
+        // operand beside its sub-`SELECT` — see [`GRAPH_NAME_QUERY`] for why that
+        // matters. Exactly one, so it multiplies the inner answer by one and the
+        // row count below reads the sub-`SELECT` alone.
+        b.push_quad(s, q, x, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// The `GRAPH ?g` is inside a sub-`SELECT` that does NOT project `?g`, and the
+    /// sub-`SELECT` sits BESIDE another operand.
+    ///
+    /// Both halves of that shape are load-bearing, and together they are what makes
+    /// the graph-name rewrite observable in the ANSWER rather than merely present in
+    /// the tree.
+    ///
+    /// The sub-`SELECT` is a separate scope, so the single-row `VALUES` seed the
+    /// rewrite also injects cannot correlate with the inner `?g`: it binds an outer
+    /// variable of the same name, compatible with every inner row. Only the SHACL
+    /// lane's expression-position walk reaches inside, which is divergence 1 in
+    /// `crate::enf`'s module doc.
+    ///
+    /// The second operand is what keeps the seed OUTSIDE. `map_core_pattern`
+    /// descends every single-child solution modifier, `Project` included, so a query
+    /// whose whole body is one sub-`SELECT` has its seed injected INSIDE it, where
+    /// the seed alone narrows the answer and this test would pass with the
+    /// substitution removed. A `Join` is a multi-child node and is therefore the
+    /// core: the seed wraps it, and `push_probes` does not descend a `Project`, so
+    /// nothing else reaches the inner scope either.
+    const GRAPH_NAME_QUERY: &str = "SELECT ?o WHERE { ?a <http://ex/q> ?b . \
+         { SELECT ?o WHERE { GRAPH ?g { ?s <http://ex/p> ?o } } } }";
+
+    /// [`GRAPH_NAME_QUERY`] with `?g` pre-bound to `value`, on the SHACL lane (the
+    /// only lane that rewrites a `GRAPH` name at all).
+    fn graph_name_answer(value: TermValue) -> Vec<String> {
+        let ds = graph_name_ds();
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_with_options_view(
+                &*ds,
+                SparqlRequest {
+                    query: GRAPH_NAME_QUERY,
+                    base_iri: None,
+                    substitutions: &[("g".to_owned(), value)],
+                },
+                QueryOptions {
+                    prebinding: ShaclPrebinding::Applied,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("the pre-binding must be groundable");
+        col0(result)
+    }
+
+    /// **A `GRAPH` name still takes an IRI, and still answers that graph.**
+    ///
+    /// The ACCEPTED half of the pair. `substitute_in_named_node_pattern` is the
+    /// narrowest of the four positions the pushability classifier serves — an IRI
+    /// and nothing else — which makes it the one where a refactor of the decision is
+    /// most likely to over-refuse, and over-refusal is invisible: the query simply
+    /// answers less, and nothing looks broken.
+    ///
+    /// So this reads the REAL ANSWER rather than merely asserting the rewrite fired.
+    /// The two graphs carry different objects, so `:x` could only have come from
+    /// `:g1` — an empty answer would mean the IRI stopped being substituted, and
+    /// `:y` would mean it was substituted with the wrong graph.
+    #[test]
+    fn a_graph_name_pre_bound_to_an_iri_is_substituted_and_answers_that_graph() {
+        let got = graph_name_answer(TermValue::Iri("http://ex/g1".to_owned()));
+        assert_eq!(
+            got.len(),
+            1,
+            "the substituted name pins the sub-SELECT to :g1, which holds one quad. \
+             TWO rows means the IRI was refused from a position that admits it, so \
+             the inner GRAPH stayed a variable and enumerated both graphs: {got:?}"
+        );
+        assert!(
+            got[0].contains("http://ex/x"),
+            "?o = :x, which only :g1 holds — :y would mean the wrong graph was named: \
+             {got:?}"
+        );
+    }
+
+    /// **A `GRAPH` name pre-bound to a LITERAL is still refused.**
+    ///
+    /// The REFUSED half of the same pair. A graph is named by an IRI, so a literal
+    /// has no business in this position: it rides the `VALUES` seed, where no named
+    /// graph is compatible with it, and the answer is empty.
+    ///
+    /// The literal's lexical form is deliberately `:g2`'s IRI, which is what makes
+    /// this test able to fail for the reason it states. Had the refusal been widened
+    /// to admit a literal by its lexical form, the query would name `:g2` and answer
+    /// `:y` — a DIFFERENT, non-empty answer — rather than staying empty the way a
+    /// literal that merely fails to match any graph does. Without that choice, "the
+    /// literal was refused" and "the literal was substituted and matched nothing"
+    /// would be the same observation.
+    #[test]
+    fn a_graph_name_pre_bound_to_a_literal_is_still_refused() {
+        let got = graph_name_answer(TermValue::typed_literal(
+            "http://ex/g2",
+            "http://www.w3.org/2001/XMLSchema#string",
+        ));
+        assert_eq!(
+            got.len(),
+            2,
+            "a literal names no graph, so the inner GRAPH stays a variable and \
+             enumerates BOTH of them: {got:?}"
+        );
+        assert!(
+            got.iter().any(|row| row.contains("http://ex/x"))
+                && got.iter().any(|row| row.contains("http://ex/y")),
+            "both graphs' objects must survive: {got:?}"
+        );
+    }
+
+    // ── GAP C4: the id door and the value door are the same binding ────────────
+
+    /// **Binding a parameter by the dataset's own term id substitutes the
+    /// IDENTICAL plan as binding the same term by value — for every term kind, on
+    /// both lanes.**
+    ///
+    /// The id door exists to skip a round trip, not to take a different route, so
+    /// "identical" is the whole claim and it is proved rather than asserted: two
+    /// handles over one query, one bound through each door, and their SUBSTITUTED
+    /// ALGEBRA compared node for node. Comparing answers would be far weaker — two
+    /// different trees can answer the same rows.
+    ///
+    /// Five term kinds because the two doors reach the algebra by different code:
+    /// the value door grounds a `TermValue`, the id door resolves a `TermRef`, and
+    /// they must agree on a blank node's scope qualification, on a literal's
+    /// datatype-id expansion, on a language tag, and on a quoted triple's recursion
+    /// — each of which is a separate arm in each of the two functions.
+    #[test]
+    fn the_id_door_and_the_value_door_substitute_the_identical_plan() {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/p");
+        let iri = b.intern_iri("http://ex/a");
+        let blank = b.intern_blank("bn", BlankScope::DEFAULT);
+        let plain = b.intern_literal(RdfLiteral::typed(
+            "hello",
+            "http://www.w3.org/2001/XMLSchema#string",
+        ));
+        let tagged = b.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
+        let quoted = b.intern_triple(iri, p, plain);
+        b.push_quad(iri, p, plain, None);
+        b.push_quad(blank, p, tagged, None);
+        // A quoted triple is an OBJECT: an asserted statement cannot have one as
+        // its subject, and the id only has to exist for the doors to resolve it.
+        b.push_quad(blank, p, quoted, None);
+        let ds = b.freeze().expect("freeze");
+
+        let engine = NativeSparqlEngine::new();
+        // A body that exercises every position the rewrite writes into: a matched
+        // triple-pattern position, an expression, a `BOUND()`, and — on the SHACL
+        // lane — a nested sub-SELECT the seed alone could not reach.
+        const QUERY: &str = "SELECT ?o WHERE { ?this <http://ex/p> ?o \
+                             FILTER(bound(?this) && ?this = ?this) }";
+
+        for (kind, id) in [
+            ("iri", iri),
+            ("blank", blank),
+            ("plain literal", plain),
+            ("language-tagged literal", tagged),
+            ("quoted triple", quoted),
+        ] {
+            let value = crate::scratch::term_id_to_value(&*ds, id);
+            let mut by_value = engine
+                .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                .expect("prepare");
+            let mut by_id = engine
+                .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                .expect("prepare");
+            by_value.bind(0, value).expect("the value door");
+            by_id.bind_id(0, &*ds, id).expect("the id door");
+
+            for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+                let from_value = by_value
+                    .substituted(lane)
+                    .expect("the value door grounds")
+                    .query()
+                    .clone();
+                let from_id = by_id
+                    .substituted(lane)
+                    .expect("the id door grounds")
+                    .query()
+                    .clone();
+                assert_eq!(
+                    from_value, from_id,
+                    "the id door and the value door must substitute the identical plan \
+                     for a {kind} on lane {lane:?}"
+                );
+            }
+
+            // Non-vacuity: the substituted plan is not the admitted plan, so the
+            // equality above is comparing two REWRITES rather than two copies of a
+            // tree neither door touched.
+            let rewritten = by_id
+                .substituted(ShaclPrebinding::None)
+                .expect("the id door grounds")
+                .query()
+                .clone();
+            assert_ne!(
+                &rewritten,
+                by_id.plan().query(),
+                "a {kind} pre-binding must actually rewrite the admitted plan"
+            );
+        }
+    }
+
+    /// **The two doors also answer the same rows, over a dataset where a wrong
+    /// binding would answer different ones.**
+    ///
+    /// The tree comparison above is the strong claim; this is the one that says the
+    /// tree is evaluated. Three subjects with three distinct objects, so a door that
+    /// resolved an id to the wrong term answers a neighbour's object rather than
+    /// failing.
+    #[test]
+    fn the_id_door_and_the_value_door_answer_the_same_rows() {
+        let ds = subst_ds();
+        let engine = NativeSparqlEngine::new();
+        const QUERY: &str = "SELECT ?o WHERE { ?this <http://ex/p> ?o }";
+
+        for (kind, value) in [
+            ("iri", TermValue::Iri("http://ex/a".to_owned())),
+            ("blank", TermValue::blank("bn")),
+        ] {
+            let id = ds
+                .term_id_by_value(&value)
+                .expect("the fixture interns this term");
+            let answer = |bind: &dyn Fn(&mut PreparedExecution) -> Result<(), RdfDiagnostic>| {
+                let mut execution = engine
+                    .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+                    .expect("prepare");
+                bind(&mut execution).expect("bind");
+                engine
+                    .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+                        let InternedOutcome::Solutions(solutions) = outcome else {
+                            panic!("expected solutions");
+                        };
+                        solutions
+                            .rows()
+                            .iter()
+                            .map(|row| format!("{:?}", solutions.cell(row, 0)))
+                            .collect::<Vec<_>>()
+                    })
+                    .expect("execute")
+            };
+            let from_value = answer(&|execution| execution.bind(0, value.clone()));
+            let from_id = answer(&|execution| execution.bind_id(0, &*ds, id));
+            assert_eq!(
+                from_value, from_id,
+                "the two doors must answer identically for a {kind}"
+            );
+            assert_eq!(
+                from_value.len(),
+                1,
+                "each fixture subject carries exactly one object, so an answer of any \
+                 other size means the pre-binding stopped narrowing ({kind})"
+            );
+        }
+    }
+
     #[test]
     fn shacl_prebinding_does_not_change_normal_query_path() {
         // The same query on the generic `query` path with no substitutions must
