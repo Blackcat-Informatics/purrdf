@@ -274,6 +274,244 @@ def test_declaring_one_parameter_twice_is_refused() -> None:
     assert prepared.parameters == ["this", "other"]
 
 
+def _rows(solutions: object) -> set[tuple[str, ...]]:
+    """Every row of `solutions`, as a tuple of term values — `_pairs` generalized to
+    an arbitrary column count.
+
+    `QuerySolution` has no `__iter__`/`__len__` of its own (only `__getitem__` by
+    name, `Variable`, or position), so the column count comes from `solutions`'
+    own `variables` rather than iterating a row directly.
+    """
+    width = len(solutions.variables)  # type: ignore[attr-defined]
+    return {
+        tuple(str(row[i].value) for i in range(width))  # type: ignore[union-attr]
+        for row in solutions
+    }
+
+
+YES = f"{EX}Yes"
+
+
+def test_prepare_parameter_reaches_inside_optional() -> None:
+    """(g) `?this` reaches an `OPTIONAL`, used ONLY inside its right arm.
+
+    Unlike `EXISTS`, `OPTIONAL`'s right arm keeps its own columns in the
+    `LeftJoin`'s output schema, so a parameter used only there still surfaces as an
+    ordinary column the top-level binding can join against — this is the "ordinary
+    correlation" the module doc promises, not a special case for `OPTIONAL`.
+
+    Fixture: one anchor row (independent of the parameter) and two DIFFERENT
+    `bonus` facts, one per candidate parameter value. A binding that reached inside
+    the `OPTIONAL` answers with exactly the bound person's bonus; a binding that
+    was silently dropped (leaving `?this` free inside the `OPTIONAL`) would let the
+    right arm match BOTH bonus facts freely, producing the OTHER person's bonus
+    too, regardless of which value was bound — the control row a dropped binding
+    cannot avoid answering.
+    """
+    store = purrdf.Store()
+    store.load(
+        f"<{EX}anchor> <{EX}isAnchor> <{YES}> .\n"
+        f"<{EX}alice> <{EX}bonus> <{EX}bonusA> .\n"
+        f"<{EX}bob> <{EX}bonus> <{EX}bonusB> .\n",
+        purrdf.RdfFormat.N_TRIPLES,
+    )
+    query = f"""
+    SELECT ?anchor ?bonus WHERE {{
+      ?anchor <{EX}isAnchor> <{YES}> .
+      OPTIONAL {{ ?this <{EX}bonus> ?bonus }}
+    }}
+    """
+    prepared = store.prepare(query, parameters=["this"])
+
+    rows_alice = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}alice")))
+    assert rows_alice == {(f"{EX}anchor", f"{EX}bonusA")}
+    assert (f"{EX}anchor", f"{EX}bonusB") not in rows_alice
+
+    rows_bob = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}bob")))
+    assert rows_bob == {(f"{EX}anchor", f"{EX}bonusB")}
+    assert (f"{EX}anchor", f"{EX}bonusA") not in rows_bob
+
+    # Parity: `Store.query` given `?this` as an ordinary substitution must agree.
+    direct_alice = _rows(
+        store.query(query, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}alice")})
+    )
+    assert direct_alice == rows_alice
+
+
+def test_prepare_parameter_reaches_inside_minus_and_respects_domain_disjointness() -> (
+    None
+):
+    """(h) `?this` reaches a `MINUS`'s right arm — and only when the fixture keeps
+    `MINUS`'s own domain-disjointness rule satisfied.
+
+    `MINUS`'s right arm shares no columns with its output (unlike `OPTIONAL`'s):
+    `Minus{Omega1, Omega2}` keeps only `Omega1`'s schema, and the SPARQL spec says a
+    row of `Omega1` survives whenever it shares NO variable with `Omega2` at all — a
+    `MINUS` whose right arm is disjoint from the left removes nothing, no matter
+    what it says. So a parameter can only ever restrict a genuine `MINUS` by being
+    the SAME variable on both arms; that is not a workaround, it is what "the
+    parameter reaches inside `MINUS`" has to mean here.
+
+    Fixture: `c1`/`c2` are owned by `alice`, `c3` by `bob`; `alice` alone is
+    blocked. A genuine `MINUS` (right arm shares `?this` with left) removes every
+    candidate owned by the bound value when, and only when, that value is blocked —
+    `this=alice` empties the answer, `this=bob` keeps `c3`, two DIFFERENT specific
+    answers a dropped binding could not produce (it would answer the same set
+    either way). The SAME parameter value run through a VACUOUS `MINUS` (right arm
+    uses `?owner`, not `?this` — no shared variable) removes nothing regardless,
+    which is the control that shows the genuine case is doing real work and not
+    just returning fewer rows by coincidence.
+    """
+    store = purrdf.Store()
+    store.load(
+        f"<{EX}c1> <{EX}ownedBy> <{EX}alice> .\n"
+        f"<{EX}c2> <{EX}ownedBy> <{EX}alice> .\n"
+        f"<{EX}c3> <{EX}ownedBy> <{EX}bob> .\n"
+        f"<{EX}alice> <{EX}blocked> <{YES}> .\n",
+        purrdf.RdfFormat.N_TRIPLES,
+    )
+    genuine = f"""
+    SELECT ?candidate WHERE {{
+      ?candidate <{EX}ownedBy> ?this .
+      MINUS {{ ?this <{EX}blocked> <{YES}> }}
+    }}
+    """
+    vacuous = f"""
+    SELECT ?candidate WHERE {{
+      ?candidate <{EX}ownedBy> ?owner .
+      MINUS {{ ?this <{EX}blocked> <{YES}> }}
+    }}
+    """
+    prepared_genuine = store.prepare(genuine, parameters=["this"])
+    prepared_vacuous = store.prepare(vacuous, parameters=["this"])
+
+    # Genuine MINUS: owner alice is blocked, so every candidate alice owns is
+    # removed — the answer is EMPTY, not merely smaller.
+    assert _rows(prepared_genuine.run(this=purrdf.NamedNode(f"{EX}alice"))) == set()
+    # The neighbour: owner bob is not blocked, so bob's candidate survives.
+    assert _rows(prepared_genuine.run(this=purrdf.NamedNode(f"{EX}bob"))) == {
+        (f"{EX}c3",)
+    }
+
+    # Vacuous MINUS: `?this` shares no variable with the left arm, so the SAME
+    # blocked value removes NOTHING — all three candidates answer, including the
+    # ones a genuine `MINUS` over the same value emptied out above.
+    assert _rows(prepared_vacuous.run(this=purrdf.NamedNode(f"{EX}alice"))) == {
+        (f"{EX}c1",),
+        (f"{EX}c2",),
+        (f"{EX}c3",),
+    }
+
+    # Parity: `Store.query` with the same value as an ordinary substitution agrees
+    # on the genuine case.
+    direct = _rows(
+        store.query(genuine, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}bob")})
+    )
+    assert direct == {(f"{EX}c3",)}
+
+
+def test_prepare_parameter_reaches_inside_exists() -> None:
+    """(i) `?this` reaches a `FILTER EXISTS`.
+
+    `EXISTS` is boolean-valued: none of its own pattern's variables ever become a
+    column of the surrounding row, so — unlike `OPTIONAL` — a parameter used ONLY
+    inside an `EXISTS` body has no row to correlate through at all; that is
+    ordinary SPARQL scoping, not something a pre-binding mechanism could fix. The
+    fixture below instead exercises exactly what "reaches inside EXISTS by ordinary
+    correlation" can mean: `?this` is ALSO bound by the surrounding pattern (as the
+    correlation key `?candidate` joins through), and the question is whether the
+    row's `?this`-value — the one the parameter supplied — is what `EXISTS` sees
+    when it runs, not some other, unconstrained occurrence.
+
+    Fixture: `alice` reports to `carol`, who IS verified; `bob` reports to `dave`,
+    who is NOT verified, but `carol`'s verification fact is still present in the
+    graph as a decoy. A binding that reached inside `EXISTS` answers `alice` for
+    `this=carol` and EMPTY for `this=dave` — bob is excluded precisely because his
+    manager fails the `EXISTS` check. A binding whose `EXISTS` reference to `?this`
+    were left free (silently dropped) would see `carol`'s verified fact regardless
+    of which manager the row actually named, and would wrongly answer `bob` too —
+    the decoy this fixture exists to catch.
+    """
+    store = purrdf.Store()
+    store.load(
+        f"<{EX}alice> <{EX}reportsTo> <{EX}carol> .\n"
+        f"<{EX}bob> <{EX}reportsTo> <{EX}dave> .\n"
+        f"<{EX}carol> <{EX}verified> <{YES}> .\n",
+        purrdf.RdfFormat.N_TRIPLES,
+    )
+    query = f"""
+    SELECT ?candidate WHERE {{
+      ?candidate <{EX}reportsTo> ?this .
+      FILTER EXISTS {{ ?this <{EX}verified> <{YES}> }}
+    }}
+    """
+    prepared = store.prepare(query, parameters=["this"])
+
+    assert _rows(prepared.run(this=purrdf.NamedNode(f"{EX}carol"))) == {(f"{EX}alice",)}
+    # The neighbour and the oracle in one: dave is not verified, so bob — whose
+    # OWN `reportsTo` fact is perfectly genuine — must still be excluded. A leaked,
+    # unconstrained `EXISTS` would answer `bob` here because `carol` (someone
+    # else's manager) is verified.
+    assert _rows(prepared.run(this=purrdf.NamedNode(f"{EX}dave"))) == set()
+
+    # Parity: `Store.query` given `?this` as an ordinary substitution agrees.
+    direct = _rows(
+        store.query(query, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}carol")})
+    )
+    assert direct == {(f"{EX}alice",)}
+
+
+def test_prepare_parameter_reaches_inside_a_sub_select() -> None:
+    """(j) `?this` reaches a sub-`SELECT`, used ONLY inside it — because the
+    sub-query PROJECTS it back out.
+
+    A sub-`SELECT` is a separate scope: a variable it does not project is a
+    DIFFERENT variable of the same name, invisible outside it (this is ordinary
+    SPARQL scoping, not a `purrdf`-specific rule). `?this` is projected here, so it
+    becomes a real column of the sub-query's own output, and the SAME top-level
+    join that ordinarily correlates a bound variable does the rest — no special
+    case is needed for a sub-`SELECT` any more than for `OPTIONAL`.
+
+    Fixture: `alice` leads `teamA`, `bob` leads `teamB`; `carol` is `teamA`'s
+    member, `dave` is `teamB`'s. The sub-`SELECT` resolves `?this`'s team; the
+    outer pattern joins that team to its member. `this=alice` must answer `carol`
+    only, `this=bob` must answer `dave` only — two DIFFERENT, specific answers. A
+    binding that failed to reach the sub-`SELECT` would leave `?this` free inside
+    it, so the sub-query would resolve BOTH teams regardless of the bound value,
+    and BOTH `carol` and `dave` would leak into every answer — the control this
+    fixture is built to catch.
+    """
+    store = purrdf.Store()
+    store.load(
+        f"<{EX}alice> <{EX}leads> <{EX}teamA> .\n"
+        f"<{EX}bob> <{EX}leads> <{EX}teamB> .\n"
+        f"<{EX}carol> <{EX}memberOfTeam> <{EX}teamA> .\n"
+        f"<{EX}dave> <{EX}memberOfTeam> <{EX}teamB> .\n",
+        purrdf.RdfFormat.N_TRIPLES,
+    )
+    query = f"""
+    SELECT ?member WHERE {{
+      ?member <{EX}memberOfTeam> ?team .
+      {{ SELECT ?this ?team WHERE {{ ?this <{EX}leads> ?team }} }}
+    }}
+    """
+    prepared = store.prepare(query, parameters=["this"])
+
+    rows_alice = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}alice")))
+    assert rows_alice == {(f"{EX}carol",)}
+    assert (f"{EX}dave",) not in rows_alice
+
+    rows_bob = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}bob")))
+    assert rows_bob == {(f"{EX}dave",)}
+    assert (f"{EX}carol",) not in rows_bob
+
+    # Parity: `Store.query` given `?this` as an ordinary substitution agrees.
+    direct = _rows(
+        store.query(query, substitutions={purrdf.Variable("this"): purrdf.NamedNode(f"{EX}alice")})
+    )
+    assert direct == rows_alice
+
+
 def test_a_prepared_query_reads_the_owning_store_fresh_on_every_run() -> None:
     """What `prepare` admits is the PLAN, not the data: a mutation made after
     `prepare` — even between two `run` calls on the SAME handle — must be visible to
