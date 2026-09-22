@@ -2020,6 +2020,81 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   the type that actually arrived, over two different arriving types, so a
   constant spelled into the message cannot satisfy it.
 
+### Added
+
+- **sparql-eval:** `NativeSparqlEngine::prepare_execution` returns a `PreparedExecution`: a
+  query parsed and admitted once, then bound and run many times without re-parsing or
+  re-admitting. `PreparedExecution::bind` sets a parameter by its declared slot index and
+  `bind_named` by its declared name; `NativeSparqlEngine::execute` runs the current bindings
+  against a dataset. A parameter reaches inside `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s
+  by ordinary correlation, the same as a `query` substitution. Running with a declared parameter
+  left unbound is refused, because treating it as unrestricted would silently widen the answer
+  to every subject; binding an undeclared name is refused; declaring one parameter twice is
+  refused. `bind`, `bind_named` and `execute` take `&mut PreparedExecution`, so the type system
+  rejects a program that would hand a re-entrant query body (a SHACL-AF `sh:expression` function
+  call, for example) the very tree an outer call is mid-evaluation over.
+
+- **python:** `Store.prepare(query, *, parameters=[...], ...)` returns a `PreparedQuery` whose
+  `run(**bindings)` binds every declared parameter by keyword and returns results exactly as
+  `Store.query` does. `prepare` accepts the same engine-configuration keywords `query` does —
+  `extension_namespaces`, `property_fn_namespaces`, `standpoint_predicates`, `relations`,
+  `relations_from_graph`, `path_relations` and `aggregate_namespace` — except `substitutions`,
+  whose role a prepared query's per-run parameter bindings now fill; the returned `PreparedQuery`
+  carries those registries, so every `run` evaluates under the same ones the plan was admitted
+  against. Each `run` re-reads the owning store's current contents rather than a snapshot taken
+  at prepare time, because what is prepared is the plan and not the data — the motivating caller
+  is a row-driven loop such as SHACL validation or a rule fixpoint, where the store changes
+  between runs. A `run` with a declared parameter left unbound is refused, binding an undeclared
+  name is refused, and declaring one parameter twice at `prepare` time is refused.
+
+### Changed
+
+- **BREAKING** **sparql-eval:** `PreparedQuery`'s parsed algebra, formerly the public mutable
+  field `query`, is now private. Read it through the new `PreparedQuery::query(&self) -> &Query`
+  accessor. Admission — the algebra soundness walk and the graph-depth guard — is plan-invariant
+  and now runs once when a query is prepared rather than being re-checked on every run, so there
+  is no longer a way to swap an admitted plan's algebra after the fact; supply the algebra you
+  want at construction, where it is admitted.
+
+### Fixed
+
+- **sparql-eval:** A prepared execution's `execute` skipped the check that a run's registries
+  (relations, aggregates) agree with the ones the plan was admitted under. Preparing under one
+  registry configuration and running under another used to evaluate silently — a registered
+  relation prepared with no registry in scope lowers to an ordinary triple pattern and answers
+  the empty bag with no error, and two registries can resolve one IRI to two different
+  accumulators of identical declared arity — and it is now refused.
+
+- **python:** `Store.prepare` ignored every one of the engine-configuration keywords `Store.query`
+  accepts, so a prepared query naming a registered relation had that relation silently lowered to
+  an ordinary triple pattern with no way for a caller to prevent it. `prepare` now takes and
+  honours the same configuration `query` does, as described above.
+
+- **python:** `PreparedQuery.run(**bindings)` used to leave every parameter not named in a given
+  call holding the value from the previous call, so a later call that omitted a parameter
+  silently reused it instead of being refused. Every slot is now returned to unbound before a
+  call's keyword bindings are applied, so a run is total in its own arguments and a parameter
+  omitted this call is refused regardless of what an earlier call supplied.
+
+### Performance
+
+Allocation count per focus node, from the deterministic counting allocator rather than timings,
+pinned as the exact slope of a closed form measured at two focus-node populations, across four
+SHACL surfaces: an `sh:sparql` constraint, a custom `sh:ask` component, a custom `sh:select`
+component, and an `sh:expression` function call.
+
+- The SHACL change path now runs each of those surfaces on a prepared execution instead of
+  re-parsing and re-admitting a query per focus node, and the substituted algebra a parameter
+  binding writes into is memoized and rewritten in place rather than rebuilt from scratch on
+  every run. Combined with retaining the evaluator's scratch interner across runs and deciding
+  once, rather than separately at each call site, what a pre-bound value may be used for, the
+  per-focus-node allocation cost fell from 96 / 214 / 116 / 194 to 51 / 114 / 64 / 127 across the
+  four surfaces respectively.
+
+- CONSTRUCT template instantiation and SPARQL Update's insert/delete/graph-slot templates
+  resolved every variable position by lookup again on every output row; the resolution now
+  happens once per template, ahead of the row loop.
+
 ## [2.0.2] - 2026-09-14
 
 ### Bug Fixes
