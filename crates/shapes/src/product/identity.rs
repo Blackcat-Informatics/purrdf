@@ -428,12 +428,25 @@ fn encode_vocab(vocab: Option<&BoxRoleVocab>) -> Vec<u8> {
 /// The lists are framed separately rather than concatenated, because the same string
 /// declared as an extension-function namespace and as a relation namespace configures
 /// two different seams.
+///
+/// The options are DESTRUCTURED rather than read field by field, and that is the
+/// load-bearing detail. This row exists to stop a product prepared under one parse
+/// configuration from restoring green under another, so a parse-affecting field added
+/// to `ParserOptions` later and not folded here would silently reopen exactly the hole
+/// the row was added to close — and nothing would fail. Destructuring makes the
+/// omission a compile error instead: a fourth field lands here as "missing structure
+/// field" before it can land in production as a wrong answer.
 fn encode_parser_options(options: &ParserOptions) -> Vec<u8> {
+    let ParserOptions {
+        extension_fn_namespaces,
+        property_fn_namespaces,
+        property_fn_iris,
+    } = options;
     let mut out = Vec::new();
     for (label, list) in [
-        ("extension-fn-namespaces", &options.extension_fn_namespaces),
-        ("property-fn-namespaces", &options.property_fn_namespaces),
-        ("property-fn-iris", &options.property_fn_iris),
+        ("extension-fn-namespaces", extension_fn_namespaces),
+        ("property-fn-namespaces", property_fn_namespaces),
+        ("property-fn-iris", property_fn_iris),
     ] {
         push_part(&mut out, label.as_bytes());
         let mut sorted: Vec<&str> = list.iter().map(String::as_str).collect();
