@@ -54,12 +54,13 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, DepthCause, DomainTag,
-    DuplicatePolicy, ExclusionVerdict, Fixed, FusedRow, FusionProfile, FusionResult, FusionTrailer,
-    Iri, PfAttestation, Plan, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
-    RankFidelity, RankedRow, RankedStream, RankedStreamAdapter, ReadAttempts, ReadBound,
-    RequestTerm, RetrievalRequest, RowBlock, Statistics, StratumUnit, StreamContract, Term, TopK,
-    compile, contribution_under, execute, fuse, plan, search, speculative_depth,
+    AdmissionEnvironment, CandidateDomains, CompiledRetrieval, CrossingRank, DecayRule, DepthCause,
+    DomainTag, DuplicatePolicy, ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile,
+    FusionResult, FusionTrailer, Iri, PfAttestation, Plan, PlanId, PlannedResolution,
+    ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream,
+    RankedStreamAdapter, ReadAttempts, ReadBound, RequestTerm, RetrievalRequest, RowBlock,
+    Statistics, StratumUnit, StreamContract, Term, TopK, compile, contribution_under, execute,
+    fuse, observed_resolution, plan, search, speculative_depth, threshold_at,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow,
@@ -81,13 +82,6 @@ const TOP_K: TopK = TopK::new(5);
 
 /// How many rows each producer holds, and the row bound each declares.
 const ROWS: u64 = 400;
-
-/// The deepest head rank [`crossing_rank_at`] will look for a crossing at.
-///
-/// Every decay rule this crate carries is non-increasing and reaches zero, so a
-/// non-zero lower bound always crosses; the ceiling exists so a profile that
-/// somehow does not crash the search rather than spinning.
-const CROSSING_SEARCH_CEILING: u64 = 10_000;
 
 fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
@@ -128,22 +122,24 @@ fn block_on<F: Future>(future: F) -> F::Output {
 // ---------------------------------------------------------------------------
 // 1a. The threshold-crossing derivation: one pure function, no executor.
 // ---------------------------------------------------------------------------
+//
+// The derivation itself is the LIBRARY's — `purrdf_retrieval::threshold_at` and
+// `purrdf_retrieval::crossing_rank_at` — and the three wrappers below only give
+// it this file's fixture spellings and unwrap its refusals. It was written here
+// first, and keeping a second copy of it here would mean every prediction below
+// was checked against the arithmetic of the test rather than against the
+// arithmetic a host can ask for at plan time.
 
 /// The sum of `weights`' contributions at one rank, under `decay`.
 ///
 /// **One arithmetic path.** Every term comes out of the crate's own
-/// [`contribution_under`]. The engine's contributions are truncated fixed point,
-/// so `w / (k + r)` recomputed in floating point disagrees with it at exactly
-/// the boundary this file is about — the rank where a doubled threshold ties a
-/// single lower bound instead of falling below it.
+/// [`contribution_under`], through the crate's own [`threshold_at`]. The
+/// engine's contributions are truncated fixed point, so `w / (k + r)`
+/// recomputed in floating point disagrees with it at exactly the boundary this
+/// file is about — the rank where a doubled threshold ties a single lower bound
+/// instead of falling below it.
 fn sum_at(decay: DecayRule, weights: &[Fixed], rank: u64) -> Fixed {
-    weights.iter().fold(Fixed::ZERO, |total, weight| {
-        let term =
-            contribution_under(decay, *weight, rank).expect("fixture contributions are in range");
-        total
-            .checked_add(term)
-            .expect("fixture threshold sums are in range")
-    })
+    threshold_at(decay, weights, rank).expect("fixture thresholds are in range")
 }
 
 /// The smallest head rank `r` at which a candidate sitting at `at_rank` in every
@@ -165,15 +161,26 @@ fn sum_at(decay: DecayRule, weights: &[Fixed], rank: u64) -> Fixed {
 /// so `naming ⊆ sharing` for every fixture here; the two are separate arguments
 /// because the gap between them is the whole phenomenon.
 fn crossing_rank_at(decay: DecayRule, naming: &[Fixed], at_rank: u64, sharing: &[Fixed]) -> u64 {
-    let lower = sum_at(decay, naming, at_rank);
-    (1..=CROSSING_SEARCH_CEILING)
-        .find(|rank| lower > sum_at(decay, sharing, *rank))
-        .expect("a non-increasing decay always falls below a positive lower bound")
+    crossed(purrdf_retrieval::crossing_rank_at(
+        decay, naming, at_rank, sharing,
+    ))
 }
 
 /// [`crossing_rank_at`] for the head of a stream: the candidate at rank one.
 fn crossing_rank(decay: DecayRule, naming: &[Fixed], sharing: &[Fixed]) -> u64 {
     crossing_rank_at(decay, naming, 1, sharing)
+}
+
+/// The rank a crossing this file expects to exist reports.
+///
+/// Every fixture here fuses at unit weights under a decay that reaches zero, so
+/// a positive lower bound always crosses and the saturating case is a defect in
+/// the derivation rather than a fixture the file admits.
+fn crossed(found: Result<CrossingRank, FusionError>) -> u64 {
+    found
+        .expect("fixture crossings are computable")
+        .rank()
+        .expect("a fixture lower bound always crosses inside the expressible range")
 }
 
 /// The decay rule every configuration in this file fuses under.
@@ -794,6 +801,30 @@ struct Measured {
     /// The fixture's own answer, so a run in which every verdict was `Excluded`
     /// is distinguishable from one in which the producers really answered.
     found_lookups: BTreeMap<Iri, u64>,
+    /// The read-work figure the **library** reports per stratum, cumulative over
+    /// every read this call took.
+    ///
+    /// The counterpart of [`Self::reads`], which is the fixture's own count taken
+    /// from inside the producer. The pair is what keeps either number from being
+    /// a self-report nothing checks: the producer counts the rows it handed out
+    /// and the trailer counts the rows the read returned, from opposite ends of
+    /// the same seam, and they are asserted equal.
+    reported_materialised: BTreeMap<Iri, Option<u64>>,
+    /// Adjacent ranks the fused score could not tell apart, per stratum, as the
+    /// trailer reports them.
+    collisions: BTreeMap<Iri, u64>,
+    /// What the plan surfaced about this configuration's resolution, before any
+    /// row was read — carried onto the measurement so a prediction and the
+    /// outcome it predicts can be compared in one place.
+    planned_resolution: BTreeMap<Iri, PlannedResolution>,
+    /// The observed resolution as a caller SEES it: the crate's own rendering of
+    /// the trailer's map, byte for byte.
+    ///
+    /// Kept beside the struct fields above rather than derived from them at the
+    /// assertion site, because a test that reads a field proves nothing about
+    /// what reaches a caller. A counter present in the struct and absent from
+    /// the text is exactly the failure the rendering exists to prevent.
+    rendered_resolution: String,
 }
 
 impl Measured {
@@ -1035,6 +1066,18 @@ fn measured(
             .zip(counters.iter())
             .map(|(stratum, counter)| (stratum, counter.lookups_found()))
             .collect(),
+        reported_materialised: trailer
+            .resolution
+            .iter()
+            .map(|(stratum, resolution)| (stratum.clone(), resolution.rows_materialised))
+            .collect(),
+        collisions: trailer
+            .resolution
+            .iter()
+            .map(|(stratum, resolution)| (stratum.clone(), resolution.collisions_observed))
+            .collect(),
+        planned_resolution: compiled.resolution.clone(),
+        rendered_resolution: observed_resolution(&trailer.resolution),
     }
 }
 
@@ -3035,5 +3078,616 @@ fn a_candidate_that_cannot_win_is_never_looked_up() {
         pairs_ceiling, 12,
         "the ceiling this is measured against, stated so the comparison above \
          is not a comparison with an unbounded number — {report}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. Keeping the cost visible: the counters, the prediction, and the text.
+// ---------------------------------------------------------------------------
+//
+// Every number this file measures is a cost, and a cost nobody can read is a
+// cost nobody pays attention to. The tests below are about the *reporting*
+// surface rather than about the engine: that each counter really moves with the
+// corpus rather than sitting at a constant, that the read-work figure counts the
+// read a fallback throws away, that a host can learn the crossing its own
+// declarations condemn it to before it runs anything, and that all of it reaches
+// the text a caller reads.
+//
+// Every one of them is a **two-run** assertion. A single run's counter is
+// satisfied by a counter that is always zero, always four hundred, or always
+// whatever the fixture happens to produce; only a pair of runs over the same
+// surface, differing in what the corpus costs, can tell a measurement from a
+// constant.
+
+/// The rows the fixture's own counters say a configuration's producer served,
+/// across every read of the run — the producer's side of the seam, against the
+/// trailer's.
+fn served_rows(measured: &Measured, stratum: &Iri) -> u64 {
+    measured.reads[stratum].iter().sum()
+}
+
+/// The read-work figure the trailer reports for `stratum`, with the absence
+/// refused: every configuration in this file runs through `execute`, and a
+/// stratum of such a run always has a read to count.
+fn reported_rows(measured: &Measured, stratum: &Iri) -> u64 {
+    measured.reported_materialised[stratum]
+        .expect("a stratum the executor read reports the rows its read returned")
+}
+
+/// The weights the two producers of a configuration declare, as the threshold
+/// derivation takes them.
+///
+/// Derived from the configuration's own two bits rather than read off the plan:
+/// a stratum's threshold is summed over the streams whose declared blocks meet
+/// its own, so two producers declaring one block share a threshold and two
+/// declaring different ones do not. This is the test's independent derivation of
+/// the set the planner surfaces, and the two are asserted equal.
+fn declared_sharing(config: Configuration) -> Vec<Fixed> {
+    match config.blocks {
+        Blocks::Distinct => vec![Fixed::ONE],
+        Blocks::Shared => vec![Fixed::ONE, Fixed::ONE],
+    }
+}
+
+/// The weights of the strata that named the deepest row of an answer, as the
+/// threshold derivation takes them. Every stratum in this file carries unit
+/// weight, so this is the count read off the answer.
+fn naming_weights(measured: &Measured) -> Vec<Fixed> {
+    vec![Fixed::ONE; measured.namers_of_deepest_row()]
+}
+
+/// **The two-run oracle for `ranks_pulled` and the read-work figure.**
+///
+/// Two configurations of the identical producers over the identical candidates,
+/// differing only in what the two of them *declared* about where their
+/// candidates lie. One answers inside the fourth rank; the other is condemned to
+/// drain. If either counter reported the same number for both, it would not be
+/// measuring the read — and every assertion in this file that rests on it would
+/// be resting on a constant.
+///
+/// The read-work figure is checked from **both ends of the seam**: the trailer's
+/// number against the fixture's own counter inside the producer, which counts
+/// rows as the cursor hands them out and knows nothing about trailers. A figure
+/// the engine reported from a value it had fabricated would agree with itself
+/// and disagree with this.
+#[test]
+fn the_ranks_and_the_read_work_both_move_between_a_cheap_run_and_a_corpus_cost_run() {
+    let dataset = common::empty_dataset();
+    let cheap = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
+    let costly = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let report = format!(
+        "cheap={} costly={}",
+        render(DISTINCT_BLOCKS_DISJOINT_RESULTS, &cheap),
+        render(SHARED_BLOCK_DISJOINT_RESULTS, &costly),
+    );
+
+    // The premise: the two runs return the identical answer, so nothing below
+    // is a difference in what was asked for.
+    assert_eq!(
+        cheap.answer(),
+        costly.answer(),
+        "the two configurations hold the identical candidates and must answer \
+         identically; only the cost of the answer is in question — {report}"
+    );
+
+    for stratum in strata() {
+        // (1) `ranks_pulled` moves, and neither end is zero — a counter stuck at
+        //     zero would satisfy an inequality against a non-zero one only in
+        //     one direction, and this pins both.
+        let cheap_ranks = cheap.ranks_pulled[&stratum];
+        let costly_ranks = costly.ranks_pulled[&stratum];
+        assert!(
+            cheap_ranks > 0 && costly_ranks > 0,
+            "stratum {stratum}: a run that pulled no rank measured nothing — {report}"
+        );
+        assert!(
+            cheap_ranks < costly_ranks,
+            "stratum {stratum}: `ranks_pulled` did not move with the corpus \
+             cost, so it is not measuring the read — {report}"
+        );
+
+        // (2) The read-work figure moves too, and by more than the ranks did:
+        //     the costly run paid for a discarded speculative read on top of the
+        //     drain, which is a cost `ranks_pulled` cannot show.
+        let cheap_rows = reported_rows(&cheap, &stratum);
+        let costly_rows = reported_rows(&costly, &stratum);
+        assert!(
+            cheap_rows > 0 && costly_rows > 0,
+            "stratum {stratum}: a read that returned no row is not a read this \
+             fixture takes — {report}"
+        );
+        assert!(
+            cheap_rows < costly_rows,
+            "stratum {stratum}: the read-work figure did not move with the \
+             corpus cost — {report}"
+        );
+
+        // (3) And it is the producer's own count, read from the other end of the
+        //     seam.
+        assert_eq!(
+            cheap_rows,
+            served_rows(&cheap, &stratum),
+            "stratum {stratum}: the trailer and the producer disagree about what \
+             the cheap run's read returned — {report}"
+        );
+        assert_eq!(
+            costly_rows,
+            served_rows(&costly, &stratum),
+            "stratum {stratum}: the trailer and the producer disagree about what \
+             the costly run's reads returned — {report}"
+        );
+    }
+
+    // And the number of reads, which is the other thing that moved.
+    assert_eq!(cheap.read_attempts, ReadAttempts::Once, "{report}");
+    assert_eq!(costly.read_attempts, ReadAttempts::Twice, "{report}");
+}
+
+/// **The read a fallback throws away is still on the bill.**
+///
+/// The drained control is the one configuration here that pays for two complete
+/// reads: a speculative one its ceiling cut and threw away, and the planned one
+/// the answer came from. `ranks_pulled` says four hundred either way, and so
+/// would a read-work figure that counted only the answering read — which is
+/// exactly the reporting failure this number exists to prevent, because the
+/// headline this branch claims is a reduction in materialised rows.
+///
+/// The neighbour is the control that keeps the sum honest: a configuration that
+/// read **once** must report that one read and not a sum of something. A figure
+/// that added blindly would pass the first half of this test and fail the
+/// second.
+#[test]
+fn the_read_work_figure_counts_the_read_the_fallback_discarded() {
+    let dataset = common::empty_dataset();
+    let twice = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let once = measure(SHARED_BLOCK_INTERSECTING_RESULTS, &dataset);
+    let report = format!(
+        "twice={} once={}",
+        render(SHARED_BLOCK_DISJOINT_RESULTS, &twice),
+        render(SHARED_BLOCK_INTERSECTING_RESULTS, &once),
+    );
+
+    assert_eq!(twice.read_attempts, ReadAttempts::Twice, "{report}");
+    assert_eq!(once.read_attempts, ReadAttempts::Once, "{report}");
+
+    for stratum in strata() {
+        // The two-read case: the figure is the sum of both reads, which is
+        // strictly more than the answering read alone.
+        let answering = twice.reads[&stratum]
+            .last()
+            .copied()
+            .expect("every producer served a read");
+        assert_eq!(
+            reported_rows(&twice, &stratum),
+            speculative_limit() + ROWS,
+            "stratum {stratum}: the discarded read is missing from the bill — {report}"
+        );
+        assert!(
+            reported_rows(&twice, &stratum) > answering,
+            "stratum {stratum}: a figure equal to the answering read would make \
+             the second read invisible — {report}"
+        );
+
+        // The one-read case: the figure is that read, and nothing was added to
+        // it.
+        assert_eq!(
+            reported_rows(&once, &stratum),
+            speculative_limit(),
+            "stratum {stratum}: a run that read once must report that read — {report}"
+        );
+        assert_eq!(
+            once.reads[&stratum].len(),
+            1,
+            "stratum {stratum}: and it really did read once — {report}"
+        );
+    }
+
+    // The two runs disagree, which is what makes the pair a measurement rather
+    // than a restatement of one number.
+    assert_ne!(
+        reported_rows(&twice, &strata()[0]),
+        reported_rows(&once, &strata()[0]),
+        "{report}"
+    );
+}
+
+/// **The two-run oracle for the exclusion-lookup counter.**
+///
+/// Both runs declare a membership basis, so neither is the vacuous zero case,
+/// and they still report different counts: one configuration's candidates are
+/// disjoint, so a verdict settles finality and the read stops early with lookups
+/// spread over the ranks it reached; the other's are shared, so every verdict is
+/// `Possible` and the only lookups made are the handful the threshold filter let
+/// through. A counter that reported the same number for both, or zero for both,
+/// would be measuring nothing.
+///
+/// The third run is the control that says the counter is not simply always
+/// non-zero: the identical configuration with the basis undeclared asks nothing,
+/// and reports it.
+#[test]
+fn the_exclusion_lookup_counter_moves_between_two_runs_that_both_ask() {
+    let dataset = common::empty_dataset();
+    let disjoint = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
+    let shared = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &dataset);
+    let silent = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let report = format!(
+        "disjoint={} shared={} silent={}",
+        render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &disjoint),
+        render_with_lookups(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &shared),
+        render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS, &silent),
+    );
+
+    assert!(
+        total(&disjoint.fused_lookups) > 0,
+        "the disjoint run asked nothing — {report}"
+    );
+    assert!(
+        total(&shared.fused_lookups) > 0,
+        "the shared run asked nothing — {report}"
+    );
+    assert_ne!(
+        total(&disjoint.fused_lookups),
+        total(&shared.fused_lookups),
+        "two runs that ask under different corpora report the same count, so \
+         the counter is not measuring the asking — {report}"
+    );
+    assert_eq!(
+        total(&silent.fused_lookups),
+        0,
+        "and a run whose producers declared no basis must report none — {report}"
+    );
+}
+
+/// **The prediction a host can read before it runs anything.**
+///
+/// The threshold-crossing derivation is the library's, and the plan surfaces it:
+/// [`PlannedResolution::crossing_rank_at`] answers it from the decay law and the
+/// weights of the strata whose declared blocks meet this one's, which is
+/// everything the derivation needs that is not a fact about rows. Nothing here
+/// is hardcoded — each expected value is recomputed in this test, from the
+/// configuration's own two bits, through the same library function — and the
+/// three configurations must yield three *different* answers, so a constant or a
+/// stub fails.
+///
+/// The second half is the one that makes the surface worth having: for every
+/// configuration whose read really reached the threshold gate, the surfaced
+/// prediction **equals** the rank fusion stopped at. For the one that never
+/// reaches it, it does not, and that is the honest reading of it: this bounds the
+/// threshold gate and says nothing about finality, so a configuration finality
+/// forbids from stopping drains past its own crossing.
+#[test]
+fn the_plan_surfaces_the_crossing_and_it_predicts_the_read_that_reaches_it() {
+    let dataset = common::empty_dataset();
+    let mut surfaced_values = Vec::new();
+
+    for config in [
+        DISTINCT_BLOCKS_DISJOINT_RESULTS,
+        SHARED_BLOCK_INTERSECTING_RESULTS,
+        SHARED_BLOCK_DISJOINT_RESULTS,
+    ] {
+        let measured = measure(config, &dataset);
+        let report = render(config, &measured);
+        let deepest = measured.deepest_emitted_rank();
+        let naming = naming_weights(&measured);
+        let sharing = declared_sharing(config);
+
+        for stratum in strata() {
+            let planned = measured
+                .planned_resolution
+                .get(&stratum)
+                .expect("the fixture profile weights every planned stratum");
+
+            // The set the planner derived from the declarations, against the set
+            // this test derives from the configuration's own two bits.
+            assert_eq!(
+                planned.sharing_weights,
+                sharing,
+                "{name}: the plan's sharing set is not the one the declarations \
+                 describe — {report}",
+                name = config.name
+            );
+
+            // The derivation, run here, against the derivation the plan
+            // surfaces. Both are the library's; what is under test is that the
+            // planner feeds it the right terms.
+            let predicted = crossing_rank_at(decay(), &naming, deepest, &sharing);
+            let surfaced = crossed(planned.crossing_rank_at(&naming, deepest));
+            assert_eq!(
+                predicted,
+                surfaced,
+                "{name}: the plan surfaced a crossing the derivation does not \
+                 give — {report}",
+                name = config.name
+            );
+
+            // And where the read reached the gate, it is the read.
+            let pulled = measured.ranks_pulled[&stratum];
+            let reached_the_gate = matches!(
+                measured.status[&stratum],
+                ProducerStatus::CeilingReached { .. }
+            );
+            if reached_the_gate {
+                assert_eq!(
+                    surfaced,
+                    pulled,
+                    "{name}: the run stopped at the threshold gate, so the \
+                     surfaced prediction must be the rank it stopped at — {report}",
+                    name = config.name
+                );
+            } else {
+                assert!(
+                    surfaced < pulled,
+                    "{name}: this configuration drains past its own crossing, \
+                     which is the whole reason finality is a separate gate — \
+                     {report}",
+                    name = config.name
+                );
+            }
+
+            surfaced_values.push(surfaced);
+        }
+    }
+
+    // Three configurations, three different surfaced values. A stub, a constant
+    // or a prediction that read only the profile would collapse these.
+    let distinct: BTreeSet<u64> = surfaced_values.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        3,
+        "the three configurations must be told apart by what the plan surfaces, \
+         and these are {surfaced_values:?}"
+    );
+}
+
+/// **The plan-time half, with nothing executed at all.**
+///
+/// The point of putting the crossing on the compiled plan is that a host learns
+/// what its declarations have committed it to *before* it pays for a read. So
+/// this test compiles and stops: no dataset is opened, no producer is called, no
+/// row exists. What it asks is the worst case — one namer, measured against every
+/// stratum that shares its blocks — and the two configurations answer with the
+/// two numbers the pure derivation at the top of this file already pins, which is
+/// where they are asserted as arithmetic rather than as declarations.
+#[test]
+fn a_host_learns_the_crossing_its_declarations_condemn_it_to_without_reading_a_row() {
+    let mut answers = Vec::new();
+    for config in [
+        DISTINCT_BLOCKS_DISJOINT_RESULTS,
+        SHARED_BLOCK_DISJOINT_RESULTS,
+    ] {
+        let (registry, _counters) = configured_registry(config);
+        let statistics = fixture_statistics();
+        let profile = fixture_profile();
+        let request = RetrievalRequest::bounded(request_terms(), TOP_K);
+        let env = AdmissionEnvironment {
+            registry: &registry,
+            statistics: &statistics,
+            fusion_profile: Some(&profile),
+        };
+        let planned = plan(&request, &registry, &statistics).expect("the fixture request plans");
+        let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
+
+        for stratum in strata() {
+            let resolution = compiled
+                .resolution
+                .get(&stratum)
+                .expect("the fixture profile weights every planned stratum");
+            answers.push(crossed(resolution.crossing_rank(&[Fixed::ONE])));
+        }
+    }
+
+    // One namer against its own head alone, and one namer against two sharers.
+    // Both are read from the derivation rather than written as literals; the
+    // literals live in the two pure tests at the top of this file, which is the
+    // one place they are claimed as arithmetic.
+    assert_eq!(
+        answers,
+        vec![
+            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE]),
+            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE]),
+            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE, Fixed::ONE]),
+            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE, Fixed::ONE]),
+        ],
+        "a declaration that shares a block condemns the read to outlast the \
+         smoothing constant, and the plan says so before anything runs"
+    );
+    assert_ne!(
+        answers[0], answers[2],
+        "if the two declarations predicted the same read there would be nothing \
+         for a host to learn here"
+    );
+}
+
+/// **Case C: a truthful `Exhausted` says nothing about what the answer cost.**
+///
+/// Three runs, five rows each. Two of them report the identical terminal status
+/// — `Exhausted`, and truthfully: both streams really did run out — and one of
+/// them cost a hundred times what the other did. The third reports a ceiling over
+/// a cheap read. From the statuses alone the first two are indistinguishable, and
+/// that is not a defect in the status: exhaustion is exactly what happened.
+///
+/// The counter is the only thing that tells them apart, which is the whole
+/// argument for keeping it in the observed resolution rather than treating it as
+/// diagnostics. The status and the counter are therefore asserted **as a pair**,
+/// in one test: a test that pinned the statuses in one place and the counts in
+/// another would let a change make an expensive answer look like a cheap one
+/// without failing anything.
+#[test]
+fn a_truthful_exhaustion_over_a_costly_answer_is_told_from_a_cheap_one_only_by_the_counter() {
+    let dataset = common::empty_dataset();
+    let drained = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let short = measure(SHARED_BLOCK_SHORT_STREAMS, &dataset);
+    let ceilinged = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
+    let report = format!(
+        "drained={} short={} ceilinged={}",
+        render(SHARED_BLOCK_DISJOINT_RESULTS, &drained),
+        render(SHARED_BLOCK_SHORT_STREAMS, &short),
+        render(DISTINCT_BLOCKS_DISJOINT_RESULTS, &ceilinged),
+    );
+
+    // Every one of them is a five-row answer, so the answer's size tells nobody
+    // anything either.
+    for measured in [&drained, &short, &ceilinged] {
+        assert_eq!(measured.rows.len(), 5, "{report}");
+    }
+
+    // The pair whose statuses agree. Asserted together — status and counter in
+    // one tuple — because that pairing IS the claim.
+    assert_eq!(
+        (
+            drained.both("the terminal status", &drained.status),
+            drained.both("the ranks pulled", &drained.ranks_pulled),
+        ),
+        (ProducerStatus::Exhausted { rows_emitted: ROWS }, ROWS),
+        "the drained run: a truthful exhaustion over a corpus-cost read — {report}"
+    );
+    assert_eq!(
+        (
+            short.both("the terminal status", &short.status),
+            short.both("the ranks pulled", &short.ranks_pulled),
+        ),
+        (
+            ProducerStatus::Exhausted {
+                rows_emitted: SHORT_ROWS
+            },
+            SHORT_ROWS
+        ),
+        "the short run: the same truthful exhaustion over a cheap read — {report}"
+    );
+
+    // The two statuses are the same KIND of ending, and the counters are two
+    // orders of magnitude apart. That is the case for keeping the counter
+    // prominent, stated as arithmetic.
+    assert!(
+        matches!(
+            drained.both("the terminal status", &drained.status),
+            ProducerStatus::Exhausted { .. }
+        ) && matches!(
+            short.both("the terminal status", &short.status),
+            ProducerStatus::Exhausted { .. }
+        ),
+        "both endings must be exhaustion, or this pair is told apart by \
+         something else — {report}"
+    );
+    assert!(
+        drained.both("the ranks pulled", &drained.ranks_pulled)
+            > 10 * short.both("the ranks pulled", &short.ranks_pulled),
+        "and the costly run must cost enough that a reader who ignored the \
+         counter would be badly wrong — {report}"
+    );
+
+    // And the ceiling over a cheap read, which is the other half of the pairing:
+    // a different status, a cheap counter, and the same five rows.
+    assert_eq!(
+        (
+            ceilinged.both("the terminal status", &ceilinged.status),
+            ceilinged.both("the ranks pulled", &ceilinged.ranks_pulled),
+        ),
+        (ceiling_at(4), 4),
+        "the ceilinged run: a bound the fusion itself imposed, over a cheap \
+         read — {report}"
+    );
+    assert_ne!(
+        drained.both("the ranks pulled", &drained.ranks_pulled),
+        ceilinged.both("the ranks pulled", &ceilinged.ranks_pulled),
+        "{report}"
+    );
+}
+
+/// **What a caller actually sees.**
+///
+/// The observed resolution is rendered by the crate, not by this test, and every
+/// counter has to be in the bytes: a counter that lives in a struct field and
+/// never reaches the text is a cost nobody reads. So the expected text is
+/// assembled here out of sources that are **not** the trailer — the profile's own
+/// separating depth, this file's threshold derivation, the fixture's counters
+/// inside the producers — and compared with the rendering byte for byte.
+///
+/// The configuration is the one whose producers answer lookups over a shared
+/// block, so the exclusion count in the text is non-zero; it reads exactly once,
+/// so the producer's own lookup counter and the engine's are counts of the same
+/// asking and either can stand in for the other.
+#[test]
+fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
+    let dataset = common::empty_dataset();
+    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &dataset);
+    let report = render_with_lookups(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &measured);
+
+    // The premise this rendering is worth asserting over: the run really asked.
+    assert_eq!(measured.read_attempts, ReadAttempts::Once, "{report}");
+    assert!(
+        total(&measured.served_lookups) > 0,
+        "a run that asked nothing would render a zero and prove nothing — {report}"
+    );
+
+    // Every term of the expected text, from a source that is not the trailer.
+    // The collision count is the one term that is a zero, and it is DERIVED
+    // rather than copied: this profile still separates adjacent ranks far past
+    // anything this run pulls, so no adjacent pair it read could have collided.
+    // (The oracle that shows the counter moves off zero is in `fusion.rs`, over
+    // a profile that collides inside the stream it fuses; there is no such
+    // profile here, and writing one would make this file about something else.)
+    let profile = fixture_profile();
+    for stratum in strata() {
+        assert!(
+            profile
+                .monotone_depth(&stratum)
+                .expect("the fixture profile weights every stratum")
+                .covers(measured.ranks_pulled[&stratum]),
+            "stratum {stratum}: this profile stops separating inside the read,              so the zero below would not be derivable — {report}"
+        );
+        assert_eq!(
+            measured.collisions[&stratum], 0,
+            "stratum {stratum}: the separation covers the read, so an observed              collision would contradict the law — {report}"
+        );
+    }
+    let deepest = measured.deepest_emitted_rank();
+    let predicted_ranks = crossing_rank_at(
+        decay(),
+        &naming_weights(&measured),
+        deepest,
+        &declared_sharing(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS),
+    );
+    let mut expected = String::new();
+    for stratum in strata() {
+        let separates_to = profile
+            .monotone_depth(&stratum)
+            .expect("the fixture profile weights every stratum")
+            .rank()
+            .map_or_else(|| "beyond-any-plan".to_owned(), |rank| rank.to_string());
+        expected.push_str(&format!(
+            "{stratum} separates_to={separates_to} ranks_pulled={predicted_ranks} \
+             collisions_observed=0 exclusion_lookups={lookups} \
+             rows_materialised={rows}\n",
+            lookups = measured.served_lookups[&stratum],
+            rows = served_rows(&measured, &stratum),
+        ));
+    }
+
+    assert_eq!(
+        measured.rendered_resolution, expected,
+        "the text a caller reads is not the cost this run paid — {report}"
+    );
+
+    // And the text really does carry a non-zero lookup count, rather than
+    // satisfying the comparison above with nothing but zeroes. One stratum here
+    // is asked and the other is not — the frontier asks the stream that has NOT
+    // named a candidate — so the claim is about the asked one, and the unasked
+    // one's honest zero is in the text beside it.
+    let asked = *measured
+        .served_lookups
+        .values()
+        .max()
+        .expect("both strata are measured");
+    assert!(
+        asked > 0,
+        "a rendering in which every lookup count is zero pins nothing about the \
+         counter this configuration exists to exercise — {report}"
+    );
+    assert!(
+        measured
+            .rendered_resolution
+            .contains(&format!("exclusion_lookups={asked} ")),
+        "the count the producers served is not in the text a caller reads — {report}"
     );
 }

@@ -774,7 +774,7 @@ fn a_depth_beyond_the_profiles_monotone_range_is_admitted_and_records_its_resolu
     let recorded = compiled
         .resolution
         .get(&stratum)
-        .copied()
+        .cloned()
         .expect("a weighted stratum's resolution is recorded");
     assert_eq!(
         recorded.separation,
@@ -1001,7 +1001,7 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     let recorded = coarse
         .resolution
         .get(&stratum)
-        .copied()
+        .cloned()
         .expect("a weighted stratum's resolution is recorded");
     assert!(
         !recorded.fully_separated(),
@@ -1052,7 +1052,7 @@ fn a_depth_past_the_weighted_profiles_own_range_reports_a_coarser_resolution() {
     let recorded = compiled
         .resolution
         .get(&stratum)
-        .copied()
+        .cloned()
         .expect("a weighted stratum's resolution is recorded");
     assert_eq!(recorded.separation, MonotoneDepth::SeparatesTo(monotone));
     assert_eq!(recorded.requested_depth, requested);

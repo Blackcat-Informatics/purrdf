@@ -1245,4 +1245,47 @@ pub trait RankedStream {
     fn attestation(&self) -> PfAttestation {
         PfAttestation::UNDECLARED
     }
+
+    /// How many rows the read behind this stream actually produced, when the
+    /// stream knows.
+    ///
+    /// **The work, beside the consumption.** Every other number a fusion reports
+    /// about a stratum counts what the *fusion* did with the stream:
+    /// [`StratumResolution::ranks_pulled`](crate::StratumResolution::ranks_pulled)
+    /// is how far down the ranking the answer needed to go, and it is the number
+    /// a narrowing is judged by. It is also, on its own, a measurement of the
+    /// counter the narrowing was built to lower. A plan whose depth the planner
+    /// could not narrow materialises its whole declared length and then hands
+    /// six ranks of it to a fusion that certifies immediately; `ranks_pulled`
+    /// says six, and the four hundred rows that were read to produce them are
+    /// invisible. This is that number.
+    ///
+    /// Counted in rows the producer's read returned, including the probe row an
+    /// emitted bound carries one past the depth — the probe is a row the read
+    /// paid for, and a figure that excluded it would report a read as cheaper
+    /// than it was by exactly the row that makes its ending observable.
+    ///
+    /// Read once by [`FusionStream::new`](crate::FusionStream::new), before any
+    /// row is pulled, for the reason [`attestation`](Self::attestation) is read
+    /// there: it is a fact about the read that produced the stream, true from
+    /// the instant the stream exists, and asking at the end would ask a stream a
+    /// bounded fusion may have stopped.
+    ///
+    /// # Why the default is `None` and not zero
+    ///
+    /// The default is `None`, for exactly the reason [`plan_id`](Self::plan_id)
+    /// defaults to `None`: a stream may honestly have no materialised read
+    /// behind it — a generator, a computation over its arguments, a hand-built
+    /// list of rows a test wrote — and "there is no read to count" is that
+    /// stream's true answer rather than a gap in it. Zero is not that answer.
+    /// Zero is a measurement, and a stream that reported it would be claiming
+    /// its read was free; the whole use of this number is comparing what a read
+    /// cost against what the fusion consumed, and a fabricated zero would make
+    /// every such comparison flattering.
+    ///
+    /// [`execute`](crate::execute) answers it for every stream it returns,
+    /// because it is the party that made the read.
+    fn rows_materialised(&self) -> Option<u64> {
+        None
+    }
 }

@@ -35,11 +35,25 @@
 //! emitting one would silently unbind a position that
 //! [`place`](crate::matching::place) just proved bound, and the invocation would
 //! be admitted against a mode it does not actually have.
+//!
+//! # The second thing this module writes
+//!
+//! [`observed_resolution`] renders a fused answer's per-stratum cost counters as
+//! text. It shares nothing with the codec above but the discipline: the output is
+//! a pure function of its input, in a fixed order, with no locale and no float
+//! formatting, so two renderings of one trailer are byte-identical. It lives here
+//! because this is where this crate writes text a caller reads, and a second
+//! module for one function would only make it easier to forget the rendering
+//! exists.
 
 use core::fmt::Write as _;
+use std::collections::BTreeMap;
 
 use purrdf_core::iri_escape::is_iriref_escape_required;
 use purrdf_core::{RdfTextDirection, TermValue};
+
+use crate::fusion_stream::StratumResolution;
+use crate::iri::Iri;
 
 /// `xsd:string`, the datatype a plain literal carries in the kernel's term
 /// model. Spelled here because the kernel's own constant is crate-private; it is
@@ -653,6 +667,63 @@ impl<'a> Cursor<'a> {
         self.position += 2 + width;
         Ok(resolved)
     }
+}
+
+/// Render a fused answer's **observed resolution** as text, one line per
+/// stratum.
+///
+/// # Why this exists at all, and why it is not behind a diagnostics gate
+///
+/// The observed resolution is the only place the price of an answer is written
+/// down. A five-row answer over a configuration whose declarations condemn it to
+/// a full drain reports a perfectly truthful
+/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — both streams really did
+/// run out — and from the status alone it is indistinguishable from a cheap
+/// answer over a small corpus. The counters are what tell those two apart:
+/// [`StratumResolution::ranks_pulled`] says the answer cost four hundred ranks
+/// per stratum, and [`StratumResolution::rows_materialised`] says what the reads
+/// behind them came to.
+///
+/// So every counter is rendered, every time, with no verbosity switch and no
+/// debug build to turn on. A cost a caller has to opt into seeing is a cost that
+/// goes unseen, and the failure this rendering exists to prevent is precisely
+/// the one where nothing looks wrong.
+///
+/// # The shape
+///
+/// One line per stratum, in ascending stratum order — the order the engine's own
+/// map carries, so the text is a pure function of the trailer. Each line is the
+/// stratum IRI followed by `name=value` for every counter, in a fixed order. A
+/// value a trailer does not carry is written as a word rather than as a number:
+/// `separates_to=beyond-any-plan` for a law that never stops separating inside
+/// an expressible depth, and `rows_materialised=unreported` for a stream with no
+/// materialised read behind it. Neither is spelled as a digit, because a
+/// saturation and an absence are not measurements and a caller that parsed them
+/// as one would be reading a number nobody took.
+pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> String {
+    let mut out = String::new();
+    for (stratum, measured) in resolution {
+        // `write!` into a `String` cannot fail; the `Result` is discarded here
+        // rather than unwrapped so a formatting error can never abort a caller's
+        // process over a report.
+        let _ = writeln!(
+            out,
+            "{stratum} separates_to={separates_to} ranks_pulled={ranks_pulled} \
+             collisions_observed={collisions_observed} exclusion_lookups={exclusion_lookups} \
+             rows_materialised={rows_materialised}",
+            separates_to = measured
+                .separation
+                .rank()
+                .map_or_else(|| "beyond-any-plan".to_owned(), |rank| rank.to_string()),
+            ranks_pulled = measured.ranks_pulled,
+            collisions_observed = measured.collisions_observed,
+            exclusion_lookups = measured.exclusion_lookups,
+            rows_materialised = measured
+                .rows_materialised
+                .map_or_else(|| "unreported".to_owned(), |rows| rows.to_string()),
+        );
+    }
+    out
 }
 
 #[cfg(test)]

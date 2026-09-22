@@ -2314,11 +2314,24 @@ class slice:
 #     #  "completeness_evidence": "a 10% sample of the corpus",
 #     #  "order": "faithful"}
 _Fidelity: TypeAlias = tuple[str | None, str | None]
+# The seventh position is `exclusion`, and it only ever takes a capability AWAY:
+# `None` (or an omitted position) takes whatever exclusion basis the relation
+# itself declares, and the string `"unavailable"` withdraws it, so this producer
+# is never asked whether it holds a candidate. There is no spelling that ASSERTS
+# a basis — what an exclusion answer is a fact about is a property of the index
+# behind the relation, and a host naming one would be putting a claim about the
+# producer's own universe into the producer's mouth. Declining runs the other way
+# and is always sound: a lookup nobody makes cannot make an answer wrong, only a
+# read longer. A host declines because asking costs a point query per candidate
+# whose fate a verdict could change, and over strata whose candidates overlap
+# heavily every verdict comes back "possible" and narrows nothing. Any other
+# string raises `ValueError` naming the producer.
 _TextProducerSpec: TypeAlias = (
     tuple[str, str, str]
     | tuple[str, str, str, list[str] | None]
     | tuple[str, str, str, list[str] | None, _Attestation]
     | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity]
+    | tuple[str, str, str, list[str] | None, _Attestation, _Fidelity, str | None]
 )
 
 class _PlanDocumentError(ValueError):
@@ -2622,10 +2635,31 @@ class retrieval:
     # `"observed_resolution"` is what the rows this run actually pulled did cost,
     # with an entry per weighted stratum a stream was fused for — including one
     # that yielded no rows, whose `"ranks_pulled"` is zero rather than absent:
-    # `"separates_to"`, the `"ranks_pulled"` reached, and the
-    # `"collisions_observed"`. The two legitimately disagree — a top-k that
-    # certified early never reaches its planned depth — and neither is a
-    # correction of the other.
+    # `"separates_to"`, the `"ranks_pulled"` reached, the
+    # `"collisions_observed"`, the `"exclusion_lookups"` spent and the
+    # `"rows_materialised"` the reads behind that stratum returned. The two
+    # resolutions legitimately disagree — a top-k that certified early never
+    # reaches its planned depth — and neither is a correction of the other.
+    #
+    # The last two are COST, and they are on the answer rather than behind a
+    # diagnostics switch. `"ranks_pulled"` is what the fusion consumed, and on
+    # its own it cannot tell an expensive answer from a cheap one: a five-row
+    # answer whose producers were drained four hundred rows deep reports a
+    # perfectly truthful `"exhausted"` status and nothing else here would say
+    # what it cost. `"exclusion_lookups"` counts the point queries the fusion
+    # spent settling finality — a different read of a different question, never
+    # added into the rank — and `"rows_materialised"` counts the rows the
+    # producers' reads returned, cumulative over EVERY read this call took. It
+    # is `None` only for a stream with no materialised read behind it, which is
+    # never one this module builds; the absence means "there is no read to
+    # count", never "the read was free".
+    #
+    # `"read_attempts"` is `1` or `2`: a run whose speculative read certified,
+    # or a speculative read some stratum's ceiling cut, discarded whole, and the
+    # planned read that replaced it. The rows, their order and every identity are
+    # the same either way — that is the soundness claim the fallback exists to
+    # keep — so this and `"rows_materialised"` are the only things that differ,
+    # and the discarded read's rows are in the second.
     #
     # `"statuses"` maps a stratum to its producer's own terminal status, and the
     # `"status"` string has exactly seven spellings. `"exhausted"` (with
@@ -2666,6 +2700,17 @@ class retrieval:
     # Rust surface with a bundle of its own. They are spelled and mapped here
     # regardless: the mapping is what makes a status a host DOES receive readable,
     # and the seven-way vocabulary is the engine's, not this binding's.
+    #
+    # `"domains"` maps a stratum to the candidate-domain declaration its stream
+    # fused under — `None` for the unrestricted promise, a list of tag IRIs for a
+    # restriction — and `"exclusion_bases"` maps it to what that stream declared
+    # its exclusion answers would be a fact about: `"unavailable"`, `"membership"`
+    # or `"search"`. The two answer one question by two means: a declaration says
+    # a stream will never name a candidate, a lookup observes it. Read
+    # `"exclusion_bases"` whenever `"exclusion_lookups"` is zero, because zero
+    # means two different things — nothing COULD be asked, or nothing NEEDED
+    # asking, since the frontier asks only about candidates a verdict could change
+    # the fate of.
     #
     # `"attestations"` maps a stratum to what the index behind its stream
     # attested, as `{"generation": str | None, "incomplete": str | None}`, read
@@ -2888,4 +2933,37 @@ class retrieval:
     @staticmethod
     def deepest_rank_within_width(
         weight_raw: int, k: int, max_width: int, *, decay: str
+    ) -> int | None: ...
+    # The head rank at which a candidate that has collected `naming_raw`'s
+    # contributions, at rank `at_rank` in each of them, first beats the threshold
+    # `sharing_raw`'s strata impose, under the rule `decay` names.
+    #
+    # The second half of the fused emission gate: while any stream is open a
+    # candidate is emittable only when its lower bound is STRICTLY above the
+    # threshold. `naming_raw` are the weights of the strata that named it;
+    # `sharing_raw` are the weights of the strata whose declarations admit its
+    # block, which is exactly what `"sharing_weights"` on a `compile` answer
+    # reports per stratum. A candidate every sharer named crosses at rank one; a
+    # candidate one of two equal sharers named is measured against twice its own
+    # weight, so under "reciprocal_rank" the head must outlast the smoothing
+    # constant.
+    #
+    # This is the plan-time question: it opens no store and reads no row, so a
+    # host learns what depth its OWN declarations have committed it to before it
+    # pays for anything. It bounds the threshold gate only — a candidate is also
+    # withheld while a stream that could still name it is open, and a
+    # configuration where that never resolves reads past this rank regardless.
+    #
+    # `None` when no rank a plan can express brings the threshold below the
+    # bound, rendered as a wall and never as an enormous rank. Weights are raw
+    # fixed-point units (`SCALE` is one whole unit); a non-positive weight, a `k`
+    # of zero, a rank of zero or an unknown `decay` raise `ValueError`.
+    @staticmethod
+    def crossing_rank_at(
+        naming_raw: list[int],
+        at_rank: int,
+        sharing_raw: list[int],
+        k: int,
+        *,
+        decay: str,
     ) -> int | None: ...

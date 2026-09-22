@@ -537,6 +537,35 @@ pub struct StratumResolution {
     /// [`ExclusionBasis::Unavailable`], which is every stratum of every fusion
     /// that ran before lookups existed.
     pub exclusion_lookups: u64,
+    /// How many rows the read behind this stratum's stream actually returned,
+    /// or `None` where the stream reports no read to count.
+    ///
+    /// **The cost, beside the consumption.** [`Self::ranks_pulled`] is what this
+    /// fusion *consumed*; this is what the producer's read *cost* to make. They
+    /// are routinely far apart and the gap is the whole subject: a plan whose
+    /// depth the planner could not narrow materialises its declared length
+    /// before the fusion pulls its first rank, and a top-k that certifies inside
+    /// the first handful of ranks leaves the rest read and unused. Reported
+    /// beside the rank rather than instead of it, because a narrowing judged by
+    /// `ranks_pulled` alone is judged by the counter it was built to lower.
+    ///
+    /// **Cumulative over the reads one call made.** [`search`](crate::search)
+    /// reads a bundle speculatively and, where some stratum's ceiling cut that
+    /// read, discards it whole and reads again at the planned depths. The
+    /// discarded read was still paid for, so its rows are added in here — which
+    /// makes this the one number on the answer that a fallback moves.
+    /// [`SearchResult::read_attempts`](crate::SearchResult::read_attempts) says
+    /// how many reads that was; this says what they came to. Every other field
+    /// of this struct describes the single read the answer was assembled from,
+    /// because they are facts about that read's arithmetic rather than about its
+    /// price.
+    ///
+    /// `None` is "this stream reports no read", not "this stream read nothing":
+    /// see
+    /// [`RankedStream::rows_materialised`](crate::RankedStream::rows_materialised)
+    /// for why a stream with no materialised read behind it says so rather than
+    /// answering zero.
+    pub rows_materialised: Option<u64>,
 }
 
 /// Where a row's true score lies, given what its producers declared.
@@ -921,6 +950,28 @@ pub struct FusionTrailer {
     /// report a producer that was never asked as one that promised to name
     /// anything.
     pub domains: BTreeMap<Iri, CandidateDomains>,
+    /// What each handed stream declared its exclusion answers would be a fact
+    /// about, keyed by its stratum.
+    ///
+    /// [`Self::domains`]' sibling, read from the same
+    /// [`RankedStream::contract`] in [`FusionStream::new`] before any row is
+    /// pulled, and in the trailer for the same reason: it is an input the answer
+    /// cannot otherwise be audited against. A declaration and a lookup settle
+    /// the *same* question — whether a stream that has not named a candidate
+    /// ever will — and they settle it by different means, so a reader asking why
+    /// a stratum stopped short needs to know which of the two was available to
+    /// it.
+    ///
+    /// It is specifically what disambiguates an
+    /// [`StratumResolution::exclusion_lookups`] of zero, which has two entirely
+    /// different meanings. Under [`ExclusionBasis::Unavailable`] it is "nothing
+    /// could be asked"; under a declared basis it is "nothing needed asking" —
+    /// the frontier asks only about candidates a verdict could change the fate
+    /// of. The count alone cannot tell those apart, and this map is where the
+    /// difference is.
+    ///
+    /// The key set matches [`Self::domains`]' for the reason given there.
+    pub exclusion_bases: BTreeMap<Iri, ExclusionBasis>,
     /// Whether the last row in the answer ties on score with a *settled* rival
     /// left outside it.
     ///
@@ -1674,6 +1725,15 @@ pub struct FusionStream<S: RankedStream> {
     /// would measure whatever that producer chose to count, and this number's
     /// whole use is comparing what the engine spent against the read it saved.
     exclusion_lookups: Vec<u64>,
+    /// What each handed stream said its read cost, read in [`Self::new`] before
+    /// a single row was pulled.
+    ///
+    /// Read first for the reason the attestations are: it is a fact about the
+    /// read that produced the stream, true from the instant the stream exists,
+    /// and asking at the end would ask a stream this fusion may itself have
+    /// stopped. Reported per stratum as
+    /// [`StratumResolution::rows_materialised`].
+    rows_materialised: Vec<Option<u64>>,
     /// The identity set of every stream that declared
     /// [`DuplicatePolicy::Allowed`], and `None` for every stream that declared
     /// [`DuplicatePolicy::Unique`].
@@ -1875,6 +1935,15 @@ impl<S: RankedStream> FusionStream<S> {
             .iter()
             .map(|(stratum, stream)| (stratum.clone(), stream.attestation()))
             .collect();
+        // Indexed by stream rather than keyed by stratum, exactly as the
+        // per-stream counters below are, and read here for the reason the
+        // attestations just were: it describes the read that produced the
+        // stream, so a stream this fusion stops still reports what its read
+        // cost. The trailer re-keys it by stratum at the end.
+        let rows_materialised: Vec<Option<u64>> = streams
+            .iter()
+            .map(|(_, stream)| stream.rows_materialised())
+            .collect();
         // The three per-stream invariants the interval arithmetic reads,
         // derived here because they are decided here. Each is a pure function of
         // facts this constructor has already pinned -- the declarations, the
@@ -1927,6 +1996,7 @@ impl<S: RankedStream> FusionStream<S> {
             exclusion_bases,
             exclusion_declared,
             exclusion_lookups: vec![0; count],
+            rows_materialised,
             seen_items,
             domains,
             fidelities,
@@ -2124,6 +2194,11 @@ impl<S: RankedStream> FusionStream<S> {
                             // held to counts only the rows it emitted in rank
                             // order.
                             exclusion_lookups: self.exclusion_lookups[index],
+                            // Read off the stream at construction, never
+                            // re-asked here: this fusion may have stopped the
+                            // stream, and a read's cost is not something a
+                            // consumer's stop can change.
+                            rows_materialised: self.rows_materialised[index],
                         },
                     )
                 })
@@ -2210,6 +2285,15 @@ impl<S: RankedStream> FusionStream<S> {
                 .iter()
                 .enumerate()
                 .map(|(index, (stratum, _))| (stratum.clone(), self.domains[index].clone()))
+                .collect(),
+            // The same pre-pull read, keyed the same way, for the reason the map
+            // above is: the two declarations answer one question by two means
+            // and a reader auditing a shortened read needs both.
+            exclusion_bases: self
+                .streams
+                .iter()
+                .enumerate()
+                .map(|(index, (stratum, _))| (stratum.clone(), self.exclusion_bases[index]))
                 .collect(),
             cut_on_a_tie: self.last_row_won_a_tie,
             // Computed here because every term of it is a fact of the fusion --

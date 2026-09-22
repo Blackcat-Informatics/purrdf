@@ -142,14 +142,30 @@
 //!
 //! It buys a **reading**, never an answer. A fused score is exact only when
 //! every stream that could still name a candidate has named it, and with no
-//! declaration "could still name it" is true of every open stream — so over
-//! strata whose candidate sets do not overlap, a top-ten drains both streams to
-//! their ends, because no confirmation is ever coming. A declaration lets the
-//! fusion skip the streams that *provably* cannot name a candidate and only
-//! those: the finality test does not get weaker, its quantifier gets smaller.
-//! The rows, the scores and the provenance are identical either way; what
-//! changes is how many ranks were pulled to reach them, which the answer reports
-//! under `"observed_resolution"` and `"statuses"`.
+//! declaration "could still name it" is true of every open stream. A declaration
+//! lets the fusion skip the streams that *provably* cannot name a candidate and
+//! only those: the finality test does not get weaker, its quantifier gets
+//! smaller. The rows, the scores and the provenance are identical either way;
+//! what changes is how many ranks were pulled to reach them, which the answer
+//! reports under `"observed_resolution"` and `"statuses"`.
+//!
+//! **What an undeclared read costs depends on a second thing, and it is not this
+//! one.** A declaration is how a consumer is TOLD that a stream will never name
+//! a candidate; an exclusion lookup is how it OBSERVES the same fact, by asking
+//! the producer about one candidate and being answered out of that producer's
+//! own index. The relations this surface builds answer such a lookup, so an
+//! undeclared read over strata whose candidates do not overlap no longer drains:
+//! it stops at the rank where the fused threshold falls below the leading
+//! candidates' bounds, which is a property of the fusion law rather than of the
+//! corpus size. What it costs instead is one point query per candidate whose
+//! fate a verdict could change, reported as `"exclusion_lookups"`.
+//!
+//! An undeclared read that CANNOT ask does still drain, and that is the shape a
+//! host reaches by declining the lookup (the seventh producer position, below).
+//! The three readings are therefore genuinely three: declared domains bound the
+//! read by promise, an undeclared read that may ask bounds it by observation, and
+//! an undeclared read that may not ask reads to the end of every stream. All
+//! three return the same rows and the same scores.
 //!
 //! `None` — or an omitted fourth element — is `Unrestricted`: "this producer may
 //! name anything", the honest value for a host that does not know how its
@@ -195,6 +211,30 @@
 //! the index was current, and never a certificate that it was whole. A spec that
 //! writes no attestation position declares exactly that silence, which is what
 //! every `text_producers` value declared before this position existed.
+//!
+//! # What a host may DECLINE, and why that is the only direction it travels
+//!
+//! A seventh element may follow the six above — `(stratum, predicate, graph,
+//! domains, (generation, incompleteness), (completeness, order), exclusion)` —
+//! and it is `None`, or the string `"unavailable"`. `None` (or an omitted
+//! position) takes whatever exclusion basis the relation itself declares, which
+//! is what every spec written before this position existed does.
+//! `"unavailable"` withdraws it: this producer will not be asked.
+//!
+//! There is deliberately no spelling that ASSERTS a basis. What an exclusion
+//! answer is a fact about is a property of the index and its dictionary, so a
+//! host naming one would be putting a claim about the producer's own universe
+//! into the producer's mouth — the same mistake a derived `domains` tag would
+//! be. Declining runs the other way and is always sound: a lookup nobody makes
+//! cannot make an answer wrong, only a read longer.
+//!
+//! A host declines for one reason, and it is a cost. Each lookup is a point
+//! query against the store, and over strata whose candidates overlap heavily
+//! every verdict comes back "possible" and narrows nothing — so a host that
+//! knows its corpus has that shape pays for asking and buys none of the read
+//! back. The answer reports which basis each stream actually fused under, under
+//! `"exclusion_bases"`, because an `"exclusion_lookups"` of zero means two
+//! different things: nothing COULD be asked, or nothing NEEDED asking.
 //!
 //! The two axes reach the answer differently, and only one of them is a
 //! shortfall:
@@ -343,15 +383,16 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 
 use crate::attestation::Attestation;
 use crate::retrieval::{
-    AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, DepthCause, Fixed,
-    FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution, ProducerDecision,
-    ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, ScoreExactness, ScoreInterval,
-    SearchResult, Statistics, Term, ToleratedDepth, TopK, UnservedReason,
+    AdmissionEnvironment, ClassWidth, CompiledRetrieval, CrossingRank, DecayRule, DepthCause,
+    Fixed, FusionProfile, Iri, Metric, Plan, PlanError, PlanId, PlannedResolution,
+    ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest,
+    ScoreExactness, ScoreInterval, SearchResult, Statistics, Term, ToleratedDepth, TopK,
+    UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
 use purrdf_sparql_eval::{
-    CandidateDomains, Completeness, DomainTag, IndexGeneration, OrderFidelity,
+    CandidateDomains, Completeness, DomainTag, ExclusionBasis, IndexGeneration, OrderFidelity,
     PropertyFunctionRegistry, RankFidelity, ServiceLevel,
 };
 
@@ -462,6 +503,26 @@ struct TextProducer {
     /// every row it should and ranks them as they were due. A host can be silent
     /// on one and explicit on the other.
     fidelity: RankFidelity,
+    /// Whether the host DECLINED this producer's exclusion lookup.
+    ///
+    /// The one position on this spec that only ever takes a capability away, and
+    /// that asymmetry is deliberate. The basis is the RELATION's to declare —
+    /// what an exclusion answer is a fact about is a property of the index and
+    /// its dictionary, and a host asserting one would be putting a claim about
+    /// the producer's own universe into the producer's mouth. Declining is the
+    /// other direction and is always sound: a lookup that is never made cannot
+    /// make an answer wrong, only a read longer.
+    ///
+    /// `false` — an omitted seventh element — takes the relation's own
+    /// declaration verbatim, which is the behaviour every spec had before this
+    /// position existed.
+    ///
+    /// A host declines for one reason, and it is a cost: each lookup is a point
+    /// query against the store, and over strata whose candidates overlap heavily
+    /// every verdict comes back "possible" and narrows nothing. A host that
+    /// knows its corpus has that shape pays for asking and buys nothing, and
+    /// this is where it says so.
+    decline_exclusion: bool,
 }
 
 /// The statistics provider the host supplied, as owned data.
@@ -689,9 +750,17 @@ fn build_registry(
         // ranked order. The wrapper delegates every one of those, so the
         // declaration would be identical either way; taking it from the relation
         // is what makes that true by construction rather than by inspection.
-        let declaration = relation
+        let mut declaration = relation
             .ranked_declaration(stratum, Some(producer.predicate.clone()), fidelity, domains)
             .map_err(|e| format!("text producer <{}>: {e}", producer.producer))?;
+        // The host's declination, applied to the relation's own declaration
+        // rather than replacing it. It travels in one direction only: a basis
+        // the relation declared is withdrawn, and a basis it did not declare
+        // cannot be conjured, so this line can make a read longer and can never
+        // make an answer wrong.
+        if producer.decline_exclusion {
+            declaration.exclusion = ExclusionBasis::Unavailable;
+        }
         registry.register_ranked(
             &producer.producer,
             producer.attestation.clone().wrap(Arc::new(relation)),
@@ -1154,7 +1223,8 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
 /// Collect the `text_producers` dict into the ordered declarations one call
 /// registers: `producer_iri -> (stratum_iri, predicate_iri, graph)`, or
 /// `producer_iri -> (stratum_iri, predicate_iri, graph, domains)`, or the same
-/// four followed by one `(generation, incompleteness)` attestation.
+/// four followed by one `(generation, incompleteness)` attestation, a
+/// `(completeness, order)` fidelity, and an `exclusion` position.
 ///
 /// The fourth element is the producer's candidate-domain declaration: `None`
 /// for the unrestricted promise, or a list of domain-tag IRIs. Omitting it
@@ -1174,11 +1244,23 @@ fn collect_request(request: &Bound<'_, PyAny>, top_k: usize) -> PyResult<Retriev
 /// that attests writes its `domains` position explicitly, and `None` there
 /// restricts nothing. The shape refusal spells all three accepted widths.
 ///
+/// # The seventh position only ever takes a capability AWAY
+///
+/// `exclusion` is `None` — or omitted — for "whatever this relation declares",
+/// and the string `"unavailable"` for "do not ask this producer". There is no
+/// spelling that *asserts* a basis, and that is the point: what an exclusion
+/// answer is a fact about is a property of the index behind the relation, so a
+/// host naming one would be putting a claim about the producer's own universe
+/// into the producer's mouth. Declining is the other direction and is always
+/// sound — a lookup nobody makes cannot make an answer wrong, only a read
+/// longer — so it is the only direction this position travels.
+///
 /// # Errors
 ///
 /// `TypeError` naming the accepted shapes when the value is not a sequence of
-/// three, four, five or six positions, or when the fifth is not a two-member
-/// sequence;
+/// three to seven positions, or when the fifth is not a two-member
+/// sequence; `ValueError` naming the producer when the seventh position is a
+/// string other than `"unavailable"`;
 /// `TypeError` naming the field when an attestation member is neither `str` nor
 /// `None`, or when a mandatory position is not a string; `ValueError` naming both
 /// producers and the stratum when two entries claim one stratum.
@@ -1192,18 +1274,25 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             PyTypeError::new_err(format!(
                 "text producer <{producer}>: the value is (stratum, predicate, graph), \
                  (stratum, predicate, graph, domains), (stratum, predicate, graph, domains, \
-                 (generation, incompleteness)), or (stratum, predicate, graph, domains, \
-                 (generation, incompleteness), (completeness, order)) — an attestation is the \
-                 fifth position, because a fourth-position sequence is already a `domains` list \
-                 and guessing between the two would report one back as the other; a fidelity is \
-                 the sixth, because it speaks about the producer's search rather than about the \
-                 index the attestation names"
+                 (generation, incompleteness)), (stratum, predicate, graph, domains, \
+                 (generation, incompleteness), (completeness, order)), or those six followed by \
+                 an `exclusion` position — an attestation is the fifth position, because a \
+                 fourth-position sequence is already a `domains` list and guessing between the \
+                 two would report one back as the other; a fidelity is the sixth, because it \
+                 speaks about the producer's search rather than about the index the attestation \
+                 names; and `exclusion` is the seventh, because it declines a capability the \
+                 relation declares rather than describing one"
             ))
         };
         let mut fields: Vec<Bound<'_, PyAny>> = value.extract().map_err(|_| shape())?;
         // Read off the tail first, deepest position first: the three mandatory
         // fields are destructured as an array, which consumes the vector, so every
         // optional position has to leave before that happens.
+        let exclusion = match fields.len() {
+            3..=6 => None,
+            7 => Some(fields.remove(6)),
+            _ => return Err(shape()),
+        };
         let fidelity = match fields.len() {
             3..=5 => None,
             6 => Some(fields.remove(5)),
@@ -1260,6 +1349,33 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             }
             _ => RankFidelity::EXACT,
         };
+        // Read as a DECLINATION and nothing else. `None` is "take the
+        // relation's own declaration", and the one accepted string withdraws
+        // the capability; anything else is refused by name rather than silently
+        // read as either, because a host that meant to decline and misspelled
+        // it would otherwise get the asking it was trying to avoid with no sign
+        // that its word went unread.
+        let decline_exclusion = match exclusion {
+            Some(value) if !value.is_none() => {
+                let spelled: String = value.extract().map_err(|_| {
+                    PyTypeError::new_err(format!(
+                        "text producer <{producer}>: `exclusion` is the string \"unavailable\", \
+                         or None to take whatever basis the relation itself declares"
+                    ))
+                })?;
+                if spelled != "unavailable" {
+                    return Err(PyValueError::new_err(format!(
+                        "text producer <{producer}>: `exclusion` is {spelled:?}, and the only \
+                         value this position takes is \"unavailable\" — it DECLINES the lookup \
+                         this relation declares, and there is no spelling that asserts one, \
+                         because what an exclusion answer is a fact about is a property of the \
+                         index rather than something a host can say on the producer's behalf"
+                    )));
+                }
+                true
+            }
+            _ => false,
+        };
         let graph =
             GraphSpec::parse(&producer, &field("graph", &graph)?).map_err(PyValueError::new_err)?;
         declared.push(TextProducer {
@@ -1269,6 +1385,7 @@ fn collect_producers(producers: &Bound<'_, PyDict>) -> PyResult<Vec<TextProducer
             domains,
             attestation,
             fidelity,
+            decline_exclusion,
             producer,
         });
     }
@@ -1699,6 +1816,21 @@ fn planned_resolution_dict<'py>(
         rendered.set_item("separates_to", entry.separation.rank())?;
         rendered.set_item("requested_depth", entry.requested_depth)?;
         rendered.set_item("fully_separated", entry.fully_separated())?;
+        // The weights of every stratum of this plan whose declared blocks meet
+        // this one's, this one's included, in raw fixed-point units and in
+        // ascending stratum order. It is the set the fusion's threshold is a
+        // maximum over, derived at the waist from the same declarations the
+        // fusion will read -- so a host can hand it straight to
+        // `retrieval.crossing_rank_at` and learn, before a row is read, what
+        // depth its own declarations have committed it to.
+        rendered.set_item(
+            "sharing_weights",
+            entry
+                .sharing_weights
+                .iter()
+                .map(|weight| weight.into_raw())
+                .collect::<Vec<_>>(),
+        )?;
         out.set_item(stratum.as_str(), rendered)?;
     }
     Ok(out)
@@ -2001,6 +2133,23 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     }
     out.set_item("domains", domains)?;
 
+    // The other half of the same question, keyed the same way. A domain
+    // declaration and an exclusion lookup both settle whether a stream that has
+    // not named a candidate ever will; the first settles it by promise and the
+    // second by observation, and a reader asking why a stratum stopped short
+    // needs to know which was available to it.
+    //
+    // It is specifically what disambiguates an `"exclusion_lookups"` of zero,
+    // which has two entirely different meanings: under `"unavailable"` nothing
+    // COULD be asked, and under a declared basis nothing NEEDED asking, because
+    // the frontier asks only about candidates a verdict could change the fate
+    // of. The count alone cannot tell those apart.
+    let bases = PyDict::new(py);
+    for (stratum, basis) in &result.trailer.exclusion_bases {
+        bases.set_item(stratum.as_str(), basis.as_str())?;
+    }
+    out.set_item("exclusion_bases", bases)?;
+
     // What each handed stream declared about the rows it can name, keyed like
     // "attestations" and "domains" beside it. This is where a consumer learns a
     // stratum was served approximately, and where that producer's own words
@@ -2071,10 +2220,42 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
         entry.set_item("separates_to", measured.separation.rank())?;
         entry.set_item("ranks_pulled", measured.ranks_pulled)?;
         entry.set_item("collisions_observed", measured.collisions_observed)?;
+        // The two cost counters, carried with no verbosity switch in front of
+        // them. `"ranks_pulled"` is what the fusion CONSUMED and it is the
+        // number a narrowing is judged by -- which is exactly why it cannot be
+        // the only one here: a five-row answer whose producers were read four
+        // hundred rows deep reports a perfectly truthful `"exhausted"` status
+        // and an unremarkable rank count, and nothing else on this dict would
+        // say what it cost.
+        //
+        // `"exclusion_lookups"` is the point queries this fusion spent settling
+        // finality -- a different read of a different question, never added
+        // into the rank above -- and `"rows_materialised"` is the rows the reads
+        // behind this stratum returned. The second is cumulative over every read
+        // the call took: a plan the planner could not narrow is read
+        // speculatively first and that read is discarded whole if some
+        // stratum's ceiling cut it, and the discarded rows were still paid for.
+        // `"read_attempts"` below says how many reads that was.
+        //
+        // `"rows_materialised"` is `None` only for a stream with no
+        // materialised read behind it, which no stream this surface builds is:
+        // an absence here is "there is no read to count" and never "the read was
+        // free".
+        entry.set_item("exclusion_lookups", measured.exclusion_lookups)?;
+        entry.set_item("rows_materialised", measured.rows_materialised)?;
         observed.set_item(stratum.as_str(), entry)?;
     }
     out.set_item("observed_resolution", observed)?;
     out.set_item("cut_on_a_tie", result.trailer.cut_on_a_tie)?;
+
+    // How many complete reads of the compiled bundle this answer cost: `1` for
+    // every run whose speculative read certified (and every run that had nothing
+    // to speculate about), `2` for a speculative read a stratum's ceiling cut,
+    // discarded whole, and the planned read that replaced it. It changes no
+    // answer -- the rows, their order and every identity are the same either way
+    // -- so it is the one thing on this dict that tells the two paths apart, and
+    // the rows the discarded read cost are in `"rows_materialised"` above.
+    out.set_item("read_attempts", u32::from(result.read_attempts.count()))?;
 
     out.set_item(
         "unserved_terms",
@@ -2403,11 +2584,25 @@ fn compile<'py>(
 /// zero, because a stream that yielded nothing was still pulled from: the same
 /// `"separates_to"` depth
 /// (`None` when this law never stops separating inside an expressible depth),
-/// the `"ranks_pulled"` this run reached, and the `"collisions_observed"` —
+/// the `"ranks_pulled"` this run reached, the `"collisions_observed"` —
 /// adjacent ranks the fused score could not tell apart, counted by observation
-/// rather than inferred. The two disagree whenever a top-k certified before
-/// reaching its planned depth, and that gap is the point: a depth a fusion never
-/// reached cost it nothing.
+/// rather than inferred — and the two cost counters, `"exclusion_lookups"` and
+/// `"rows_materialised"`. The two resolutions disagree whenever a top-k
+/// certified before reaching its planned depth, and that gap is the point: a
+/// depth a fusion never reached cost it nothing.
+///
+/// The cost counters are on this dict for the opposite reason, and they are not
+/// diagnostics. `"ranks_pulled"` is what the fusion consumed; a five-row answer
+/// that consumed four hundred ranks per stratum reports a truthful
+/// `"exhausted"` status that is indistinguishable, from the statuses alone, from
+/// a cheap answer over a small corpus. `"exclusion_lookups"` is the point
+/// queries this fusion spent settling finality — a different read of a different
+/// question, never folded into the rank — and `"rows_materialised"` is the rows
+/// the reads behind the stratum returned, cumulative over every read this call
+/// took. `"read_attempts"` on the answer says how many reads that was: `1`, or
+/// `2` where a speculative read was cut and discarded whole and the planned read
+/// replaced it. The answer is the same either way, so those two are the only
+/// things that say what it cost.
 ///
 /// Every `"statuses"` entry spells its own ending, and there are exactly seven
 /// spellings. `"exhausted"` (with `"rows_emitted"`) is the only one of the seven
@@ -2816,6 +3011,66 @@ fn deepest_rank_within_width(
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
+/// The head rank at which a candidate that has collected `naming_raw`'s
+/// contributions, at rank `at_rank` in each of them, first beats the threshold
+/// `sharing_raw`'s strata impose — **under the rule `decay` names**.
+///
+/// The fused emission gate has two halves and this is the second of them. While
+/// any stream is still open, a candidate is emittable only when its lower bound
+/// is STRICTLY above the threshold, and:
+///
+/// * `naming_raw` are the weights of the strata that named the candidate, so
+///   what it has already collected is their contributions at `at_rank`;
+/// * `sharing_raw` are the weights of the strata whose declarations admit the
+///   candidate's block, so the threshold is their contributions at the head
+///   rank — which is what `"sharing_weights"` on a `retrieval.compile` answer
+///   reports, per stratum, derived from the declarations rather than from any
+///   row.
+///
+/// A stratum that names a candidate also admits its block, so `naming_raw` is a
+/// sub-multiset of `sharing_raw` for every honest call; the two are separate
+/// arguments because the gap between them is the whole phenomenon. A candidate
+/// every sharing stratum named is bounded by exactly the streams it has already
+/// read and crosses at rank one; a candidate one of two equal sharers named is
+/// measured against twice its own weight, so under `"reciprocal_rank"` the head
+/// has to outlast the smoothing constant before the threshold falls far enough.
+///
+/// **This is what a host can ask before it runs anything.** It opens no store,
+/// reads no row and needs no corpus: with the weights a profile declares and the
+/// blocks its producers declare, it says what depth those declarations have
+/// committed the read to. A host learning at plan time that its own declarations
+/// condemn it to a read past the smoothing constant can change the declarations,
+/// which is the only thing that moves the number.
+///
+/// It bounds the THRESHOLD gate and says nothing about the other one. A
+/// candidate is also withheld while some stream that could still name it is
+/// open, and a configuration where that never resolves reads past this rank
+/// regardless — which is exactly what an exclusion lookup, or a domain
+/// declaration, is for.
+///
+/// The answer is `None` when no rank a plan can express brings the threshold
+/// below the candidate's bound, rendered the way every other wall on this
+/// surface is rather than as an enormous rank. Weights are in raw fixed-point
+/// units, where `retrieval.SCALE` is one whole unit; a non-positive one raises
+/// `ValueError`, because the search rests on a threshold that does not rise with
+/// the rank and a non-positive weight does not give one. A `k` of zero, a rank
+/// of zero and an unknown `decay` spelling raise `ValueError` too.
+#[pyfunction]
+#[pyo3(signature = (naming_raw, at_rank, sharing_raw, k, *, decay))]
+fn crossing_rank_at(
+    naming_raw: Vec<i128>,
+    at_rank: u64,
+    sharing_raw: Vec<i128>,
+    k: u32,
+    decay: &str,
+) -> PyResult<Option<u64>> {
+    let rule = decay_rule(decay, k).map_err(PyValueError::new_err)?;
+    let weights = |raw: Vec<i128>| raw.into_iter().map(Fixed::from_raw).collect::<Vec<_>>();
+    crate::retrieval::crossing_rank_at(rule, &weights(naming_raw), at_rank, &weights(sharing_raw))
+        .map(CrossingRank::rank)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
 /// Register the `purrdf-retrieval` surface on a Python module. Called by the
 /// unified `purrdf_native` cdylib to populate the `purrdf_native.retrieval`
 /// submodule.
@@ -2831,5 +3086,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(weight_for_depth, m)?)?;
     m.add_function(wrap_pyfunction!(class_width, m)?)?;
     m.add_function(wrap_pyfunction!(deepest_rank_within_width, m)?)?;
+    m.add_function(wrap_pyfunction!(crossing_rank_at, m)?)?;
     Ok(())
 }

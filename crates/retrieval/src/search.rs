@@ -553,8 +553,13 @@ where
     //     plan recorded, which is one complete governed run exactly as the
     //     attempt it replaces was. See this module's header.
     let (answer, read_attempts) = if cut_below_the_plan(&compiled, &attempt.trailer) {
-        let planned =
+        let mut planned =
             read_and_fuse(&compiled, registry, dataset, profile, ReadCeiling::Planned).await?;
+        // The rows of the discarded attempt are discarded as *evidence* and not
+        // as *cost*: they were read, and this is the one place both reads are
+        // known. Folding them in here is what keeps a fallback from being
+        // invisible in every number the answer carries but one.
+        carry_discarded_read_work(&attempt.trailer, &mut planned.trailer);
         (planned, ReadAttempts::Twice)
     } else {
         (attempt, ReadAttempts::Once)
@@ -576,6 +581,36 @@ where
         unweighted_strata: answer.unweighted_strata,
         read_attempts,
     })
+}
+
+/// Add the rows a discarded read materialised into the read-work figure of the
+/// read that replaced it.
+///
+/// The one field of a trailer this function touches, and the one field of a
+/// trailer that is about *price* rather than about the arithmetic of the answer.
+/// [`StratumResolution::ranks_pulled`], the collisions and the lookups all
+/// describe the single governed read the answer was assembled from — splicing a
+/// discarded attempt into any of them would describe a read that never happened
+/// — while [`StratumResolution::rows_materialised`] answers "what did this
+/// stratum cost this call", and this call paid for both reads.
+///
+/// A stratum the discarded attempt reports no figure for adds nothing, and a
+/// stratum the kept read reports no figure for stays silent: `None` is "no read
+/// to count", so a sum that turned it into a number would be inventing the
+/// measurement the absence exists to decline.
+fn carry_discarded_read_work(discarded: &FusionTrailer, kept: &mut FusionTrailer) {
+    for (stratum, resolution) in &mut kept.resolution {
+        let Some(spent) = discarded
+            .resolution
+            .get(stratum)
+            .and_then(|discarded| discarded.rows_materialised)
+        else {
+            continue;
+        };
+        resolution.rows_materialised = resolution
+            .rows_materialised
+            .map(|kept_rows| kept_rows.saturating_add(spent));
+    }
 }
 
 /// Whether any stratum of `trailer` ended at a rank shallower than the depth its
@@ -1001,5 +1036,11 @@ impl RankedStream for RankedStreamAdapter<'_> {
 
     fn attestation(&self) -> PfAttestation {
         self.attestation.clone()
+    }
+
+    /// Passed through from the executor's stream, which is the only party that
+    /// knows it: this bridge is handed rows, not a read.
+    fn rows_materialised(&self) -> Option<u64> {
+        Some(self.inner.rows_materialised())
     }
 }

@@ -122,6 +122,16 @@ struct MockStream {
     /// stream descends from no index at all, so the honest default is the
     /// undeclared attestation; the evidence fixtures state their own.
     attestation: PfAttestation,
+    /// Every item this stream's producer holds, for the fixtures that declare an
+    /// exclusion basis and therefore have to answer one honestly.
+    ///
+    /// `None` is the honest state for a scripted stream that declares
+    /// [`ExclusionBasis::Unavailable`]: there is no universe to answer out of,
+    /// and being asked is the disagreement `ExclusionUnavailable` names. `Some`
+    /// is the whole of what the producer can ever name, so a verdict is a set
+    /// membership test rather than a scan — which is what makes it a point
+    /// lookup and not a second ranking.
+    universe: Option<BTreeSet<Term>>,
 }
 
 impl Drop for MockStream {
@@ -141,7 +151,19 @@ impl MockStream {
             plan_id: None,
             contract: unique_items(),
             attestation: PfAttestation::UNDECLARED,
+            universe: None,
         }
+    }
+
+    /// The same producer, able to answer *do you hold this one* out of `items`.
+    ///
+    /// Paired with a contract declaring a basis, and never written without one:
+    /// a stream that can answer and does not say so is asked nothing, and a
+    /// stream that says so and cannot answer is a producer whose declaration is
+    /// a lie its author never wrote.
+    fn holding<I: IntoIterator<Item = Term>>(mut self, items: I) -> Self {
+        self.universe = Some(items.into_iter().collect());
+        self
     }
 
     fn tracked(steps: Vec<Step>, receipt: ProducerReceipt, counter: Arc<AtomicUsize>) -> Self {
@@ -209,8 +231,19 @@ impl RankedStream for MockStream {
     /// the disagreement [`ProtocolError::ExclusionUnavailable`] names rather
     /// than a question it could answer. Fusion never asks it; a hand-written
     /// caller that did would be told so.
-    async fn exclusion(&mut self, _candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
-        Err(ProtocolError::ExclusionUnavailable)
+    /// Answer out of this producer's own universe, where the fixture gave it
+    /// one, and refuse where it did not.
+    ///
+    /// The refusal is not a fallback: a producer that declared no basis is never
+    /// asked, so reaching it means a consumer asked a stream it was not licensed
+    /// to ask. Answering [`ExclusionVerdict::Possible`] there would be the
+    /// never-wrong, never-useful answer that hides exactly that defect.
+    async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        match self.universe.as_ref() {
+            None => Err(ProtocolError::ExclusionUnavailable),
+            Some(held) if held.contains(candidate) => Ok(ExclusionVerdict::Possible),
+            Some(_) => Ok(ExclusionVerdict::Excluded),
+        }
     }
 
     fn plan_id(&self) -> Option<PlanId> {
@@ -5603,9 +5636,25 @@ struct StratumSpec {
 /// measurement of the declaration rather than of three different fixtures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Declared {
-    /// Every stream may name anything: the promise every producer made before
-    /// the term existed, and the behaviour this engine had then.
+    /// Every stream may name anything, and none of them will answer a question
+    /// about it: the promise every producer made before the term existed, and
+    /// the behaviour this engine had then.
+    ///
+    /// **Both halves matter.** "Declared nothing" alone no longer entails a
+    /// drain — a producer that answers an exclusion lookup settles finality by
+    /// observation instead of by promise — so this variant withholds the lookup
+    /// as well, which is what makes it the reference a bounded read is measured
+    /// against. [`Declared::NothingButAnswering`] is the same silence with the
+    /// lookup available, and it reads very differently.
     Nothing,
+    /// Every stream may name anything, and every stream will answer *do you hold
+    /// this one* out of its own universe.
+    ///
+    /// The cell [`Declared::Nothing`] used to stand in for and no longer can. A
+    /// consumer here is told nothing and can nevertheless learn, one candidate
+    /// at a time, that a stream will never name it — so the read stops where the
+    /// fused threshold falls rather than at the end of the streams.
+    NothingButAnswering,
     /// Every stream names the union of every block in play. True, and useless:
     /// each stream's declaration meets every other's, so nothing may be
     /// skipped. It is the middle of the lattice and exists to separate "a
@@ -5661,8 +5710,13 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
                         // An unrestricted stream owes no per-row block and names
                         // none: this is the fixture as it was before blocks
                         // existed, which is what the differential compares
-                        // against.
-                        Declared::Nothing => row(rank, entry.weight, K, item),
+                        // against. The lookup axis does not change that — a
+                        // basis is a promise about the producer's universe, not
+                        // about any row — so both unrestricted variants emit the
+                        // identical rows.
+                        Declared::Nothing | Declared::NothingButAnswering => {
+                            row(rank, entry.weight, K, item)
+                        }
                         // A restricted stream backs its declaration row by row,
                         // with the block the item is really in.
                         Declared::TheUnion | Declared::ItsOwnBlocks => {
@@ -5673,19 +5727,31 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
                 .collect();
             let emitted = u64::try_from(steps.len()).expect("fixture row counts fit");
             let domains = match declared {
-                Declared::Nothing => CandidateDomains::Unrestricted,
+                Declared::Nothing | Declared::NothingButAnswering => CandidateDomains::Unrestricted,
                 Declared::TheUnion => within(&union),
                 Declared::ItsOwnBlocks => within(&entry.tags),
             };
-            (
-                stratum(entry.name),
-                MockStream::new(steps, exhausted(emitted)).declaring(StreamContract::new(
-                    DuplicatePolicy::Unique,
-                    RankFidelity::EXACT,
-                    domains,
-                    ExclusionBasis::Unavailable,
-                )),
-            )
+            let basis = match declared {
+                Declared::NothingButAnswering => ExclusionBasis::Membership,
+                _ => ExclusionBasis::Unavailable,
+            };
+            let stream = MockStream::new(steps, exhausted(emitted)).declaring(StreamContract::new(
+                DuplicatePolicy::Unique,
+                RankFidelity::EXACT,
+                domains,
+                basis,
+            ));
+            // A basis is a promise this fixture then has to keep: the universe
+            // handed over is exactly the items this stream's spec holds, so a
+            // verdict is a fact about the producer rather than a constant. A
+            // stream declaring no basis is handed none and is never asked.
+            let stream = match declared {
+                Declared::NothingButAnswering => {
+                    stream.holding(entry.items.iter().map(|item| Term::new(item.clone())))
+                }
+                _ => stream,
+            };
+            (stratum(entry.name), stream)
         })
         .collect()
 }
@@ -5869,13 +5935,25 @@ fn declared_domains_bound_the_reading_over_disjoint_strata() {
     );
 
     // And the counter-measurement, so the ceiling above is known to be doing
-    // work: without the declaration the identical streams drain completely.
+    // work: the identical streams, told nothing AND asked nothing, drain
+    // completely.
+    //
+    // Both halves of that condition are load-bearing and the second one used to
+    // be invisible here, because every mock in this file declared
+    // `ExclusionBasis::Unavailable` and no fixture exercised the alternative. A
+    // declaration is how a consumer is TOLD that a stream will never name a
+    // candidate; an exclusion lookup is how it OBSERVES the same fact. Withhold
+    // the declaration and leave the lookup available and there is no drain —
+    // `an_undeclared_read_that_may_ask_bounds_itself_where_the_threshold_falls`
+    // measures exactly that, over this same `case_a`. So "without the
+    // declaration the streams drain" is true only of a producer that answers no
+    // lookup, and this fixture is one by construction rather than by luck.
     let drained = fuse_spec(&case_a(), Declared::Nothing, bound);
     assert_eq!(
         ranks_pulled(&drained, "docs"),
         1_000,
-        "with no declaration there is nothing to license an early stop, and the \
-         drain is what this whole mechanism removes"
+        "with no declaration to license an early stop and no lookup to earn one, \
+         the drain is what this whole mechanism removes"
     );
     assert_eq!(ranks_pulled(&drained, "people"), 1_000);
     // And the status the drain produces, which is the other half of what the
@@ -5921,6 +5999,208 @@ fn declared_domains_bound_the_reading_over_disjoint_strata() {
             ranks_pulled(&cross, name)
         );
     }
+}
+
+/// **The condition the drain above rests on, exercised rather than assumed.**
+///
+/// `declared_domains_bound_the_reading_over_disjoint_strata` measures a bounded
+/// read against a drain, and its drain is produced by withholding the domain
+/// declaration. That is only half the reason it drains: every mock in this file
+/// also declares [`ExclusionBasis::Unavailable`], so the streams cannot be asked
+/// whether they hold a candidate and finality has nowhere else to come from. A
+/// claim that holds only because a fixture never exercised the alternative is
+/// not a claim about the engine.
+///
+/// So this is the alternative. The identical `case_a` streams, declaring the
+/// identical unrestricted domains, differing in exactly one term of their
+/// contract: they answer an exclusion lookup, honestly, out of their own
+/// universes. The read does not drain. It stops where the fused **threshold**
+/// licenses it to, which is a property of the decay law and the weights and is
+/// flat in the streams' length.
+///
+/// The rank is computed, never written down: `crossing_rank_at` is the crate's
+/// own derivation, handed the weights this fixture's profile declares. A literal
+/// here would go on passing if the law, the smoothing constant or the weights
+/// moved under it.
+///
+/// Nothing about the ANSWER moves. Three readings of one question — a drain, an
+/// observed stop, a declaration-bounded prefix — and one set of rows.
+#[test]
+fn an_undeclared_read_that_may_ask_bounds_itself_where_the_threshold_falls() {
+    let bound = TopK::new(5);
+    let spec = case_a();
+
+    let drained = fuse_spec(&spec, Declared::Nothing, bound);
+    let asking = fuse_spec(&spec, Declared::NothingButAnswering, bound);
+    let declared = fuse_spec(&spec, Declared::ItsOwnBlocks, bound);
+
+    // (0) One answer, three times. Whatever settles finality, it never settles
+    //     which rows come back.
+    let rows = |result: &FusionResult<Term>| -> Vec<(String, Fixed)> {
+        result
+            .rows
+            .iter()
+            .map(|row| (row.entity.as_str().to_owned(), row.score))
+            .collect()
+    };
+    assert_eq!(
+        rows(&asking),
+        rows(&drained),
+        "the lookup changed the answer"
+    );
+    assert_eq!(
+        rows(&declared),
+        rows(&drained),
+        "the declaration changed the answer"
+    );
+    assert_eq!(asking.rows.len(), 5);
+
+    // (1) The premise: the asking run really asked, and the drained run really
+    //     could not. Without this pair the comparison below could be about two
+    //     runs that both did nothing.
+    for name in ["docs", "people"] {
+        assert!(
+            lookups_made(&asking, name) > 0,
+            "{name} was never asked, so the shorter read below was not bought by \
+             observation"
+        );
+        assert_eq!(
+            lookups_made(&drained, name),
+            0,
+            "{name} declared no basis and must not have been asked"
+        );
+    }
+
+    // (2) The derivation, with no engine in it. Every candidate here lies in one
+    //     stratum's universe, so a candidate is named by ONE stratum; both
+    //     strata declare `Unrestricted`, so both admit every block and the
+    //     threshold is summed over both. That is the expensive crossing — a
+    //     lower bound measured against twice its own weight — and it is still a
+    //     small fraction of a thousand-row drain.
+    let deepest = asking
+        .rows
+        .iter()
+        .flat_map(|row| row.contributions.iter().map(|(_, rank, _)| *rank))
+        .max()
+        .expect("the fixture answer is not empty");
+    let namers = asking
+        .rows
+        .iter()
+        .find(|row| {
+            row.contributions
+                .iter()
+                .any(|(_, rank, _)| *rank == deepest)
+        })
+        .expect("the deepest rank belongs to some emitted row")
+        .contributions
+        .len();
+    let crossing = purrdf_retrieval::crossing_rank_at(
+        DecayRule::ReciprocalRank { k: K },
+        &vec![Fixed::ONE; namers],
+        deepest,
+        &[Fixed::ONE, Fixed::ONE],
+    )
+    .expect("the fixture crossing is computable")
+    .rank()
+    .expect("this law reaches zero, so a positive lower bound always crosses");
+
+    // The crossing has to sit strictly inside the streams, or the "stop" below
+    // would be an exhaustion wearing a threshold stop's name.
+    assert!(
+        crossing < 1_000,
+        "the crossing is {crossing} and the streams hold a thousand rows"
+    );
+
+    // (3) And the read stops there. The derivation asks where the threshold
+    //     falls with EVERY head at one rank and the engine pulls one stream at a
+    //     time, so at the moment it falls one head may be a pull behind; the
+    //     deepest read is the crossing exactly.
+    for name in ["docs", "people"] {
+        let pulled = ranks_pulled(&asking, name);
+        assert!(
+            crossing - 1 <= pulled && pulled <= crossing,
+            "{name} read {pulled} ranks; the threshold licenses a stop at {crossing}"
+        );
+    }
+    assert_eq!(
+        ranks_pulled(&asking, "docs").max(ranks_pulled(&asking, "people")),
+        crossing,
+        "the head that made the threshold fall sits exactly on the crossing"
+    );
+
+    // (4) Three distinct readings, in order, so no two cells of this grid have
+    //     collapsed into one. The drain is the streams' length, the observed
+    //     stop is the law's, and the declared prefix is the caller's bound plus
+    //     a head per stream.
+    for name in ["docs", "people"] {
+        let drain = ranks_pulled(&drained, name);
+        let observed = ranks_pulled(&asking, name);
+        let prefix = ranks_pulled(&declared, name);
+        assert_eq!(drain, 1_000, "{name}");
+        assert!(
+            drain > observed && observed > prefix,
+            "{name}: the drain, the observed stop and the declared prefix must be \
+             three distinct readings, and they are {drain}, {observed}, {prefix}"
+        );
+        assert!(prefix <= 7, "{name}: the declared prefix is 5 + 2");
+    }
+
+    // (5) And the statuses say which of the three each stream got, so a reader
+    //     is not left inferring it from the counter. The drained streams are the
+    //     only ones that ran out.
+    for name in ["docs", "people"] {
+        assert_eq!(
+            drained.trailer.statuses.get(&stratum(name)),
+            Some(&ProducerStatus::Exhausted {
+                rows_emitted: 1_000
+            }),
+            "{name} drained and says so"
+        );
+        assert!(
+            matches!(
+                asking.trailer.statuses.get(&stratum(name)),
+                Some(ProducerStatus::CeilingReached { .. })
+            ),
+            "{name} was stopped by the fusion, not by running out: {:?}",
+            asking.trailer.statuses.get(&stratum(name))
+        );
+    }
+
+    // (6) The basis each stream fused under is on the trailer, which is what
+    //     tells an exclusion count of zero apart from a stratum nobody needed to
+    //     ask. Both readings of zero occur in this very test.
+    for name in ["docs", "people"] {
+        assert_eq!(
+            drained.trailer.exclusion_bases.get(&stratum(name)),
+            Some(&ExclusionBasis::Unavailable),
+            "{name}"
+        );
+        assert_eq!(
+            asking.trailer.exclusion_bases.get(&stratum(name)),
+            Some(&ExclusionBasis::Membership),
+            "{name}"
+        );
+        assert_eq!(
+            declared.trailer.exclusion_bases.get(&stratum(name)),
+            Some(&ExclusionBasis::Unavailable),
+            "{name}"
+        );
+        assert_eq!(
+            lookups_made(&declared, name),
+            0,
+            "{name}: a declaration settles finality without asking"
+        );
+    }
+}
+
+/// The exclusion lookups one fusion made against one stratum.
+fn lookups_made(result: &FusionResult<Term>, name: &str) -> u64 {
+    result
+        .trailer
+        .resolution
+        .get(&stratum(name))
+        .expect("the fixture profile weights every fixture stratum")
+        .exclusion_lookups
 }
 
 // T6.2. A stream the bound stopped says so, and a stream that ran out says

@@ -820,7 +820,7 @@ fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
     let planned = result
         .planned_resolution
         .get(&iri(&ex("stratum/text")))
-        .copied()
+        .cloned()
         .expect("the weighted stratum's planned resolution is on the answer");
     assert_eq!(
         planned.requested_depth, 100,

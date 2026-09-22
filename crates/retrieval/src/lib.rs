@@ -434,8 +434,11 @@ pub use ranked_stream::{
     ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock,
     StreamContract,
 };
-pub use reciprocal_rank::{ClassWidth, MonotoneDepth, ToleratedDepth};
-pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
+pub use reciprocal_rank::{ClassWidth, CrossingRank, MonotoneDepth, ToleratedDepth};
+pub use reciprocal_rank::{
+    contribution, contribution_under, crossing_rank_at, threshold_at, weighted_contribution,
+};
+pub use render::observed_resolution;
 pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, ReadAttempts, SearchError, SearchResult, search};
 pub use statistics::Statistics;

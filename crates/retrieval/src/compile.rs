@@ -348,20 +348,25 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
-use purrdf_sparql_eval::{BindingPattern, PfDescriptor, RankedDeclaration, RegistryId};
+use purrdf_sparql_eval::{
+    BindingPattern, CandidateDomains, PfDescriptor, RankedDeclaration, RegistryId,
+};
+use purrdf_text::Fixed;
 
 use crate::admission::{
     AdmissionEnvironment, AdmissionError, BoundMode, MAX_READ_DEPTH, ProbedDepth, RowBound,
     Unprobeable, admit_plan,
 };
+use crate::error::FusionError;
 use crate::execute::ExecutionError;
 use crate::fuse::TopK;
+use crate::fusion_profile::DecayRule;
 use crate::id::PlanId;
 use crate::iri::Iri;
 use crate::matching::{Invocation, UnitArgument, render_slots};
 use crate::plan::{Plan, ProducerBinding};
 use crate::ranked_stream::StreamContract;
-use crate::reciprocal_rank::MonotoneDepth;
+use crate::reciprocal_rank::{CrossingRank, MonotoneDepth, crossing_rank_at};
 use crate::render::{self, RenderError};
 use crate::request::ReadBound;
 
@@ -1562,12 +1567,32 @@ impl CompiledRetrieval {
 /// numbers and let the caller decide, rather than refuse the plan. It is
 /// available here, at the waist, rather than only in the fused trailer, so a
 /// caller learns what a plan will cost *before* paying to execute it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlannedResolution {
     /// Where this profile stops separating adjacent ranks in this stratum.
     pub separation: MonotoneDepth,
     /// The per-stratum depth the plan recorded.
     pub requested_depth: u32,
+    /// The decay law the answer will be fused under, carried so the crossing
+    /// derivation below is a fact about *this* plan under *this* law rather than
+    /// one a caller has to re-supply the profile for.
+    pub decay: DecayRule,
+    /// The weights of every stratum of this bundle whose declared blocks meet
+    /// this one's, this stratum's own included, in ascending stratum order.
+    ///
+    /// This is the set the fusion engine's threshold is a maximum over, read
+    /// from the same declarations the engine will read: a candidate of this
+    /// stratum lies in one of this stratum's blocks, and the strata that can
+    /// still raise the threshold for that block are exactly the strata whose
+    /// [`CandidateDomains`](purrdf_sparql_eval::CandidateDomains) intersect it.
+    /// Ascending stratum order rather than sorted by value, so the list is a
+    /// pure function of the plan and two compilations of one plan cannot
+    /// disagree about it.
+    ///
+    /// Empty only for a stratum this plan gave a depth and no producer, which
+    /// emits no unit, contributes no stream and therefore has no declaration to
+    /// meet anyone else's.
+    pub sharing_weights: Vec<Fixed>,
 }
 
 impl PlannedResolution {
@@ -1580,8 +1605,56 @@ impl PlannedResolution {
     /// score. Ask [`FusionProfile::class_width`](crate::FusionProfile::class_width)
     /// how coarse that is.
     #[must_use]
-    pub const fn fully_separated(self) -> bool {
+    pub const fn fully_separated(&self) -> bool {
         self.separation.covers(self.requested_depth as u64)
+    }
+
+    /// The head rank at which a candidate of this stratum, sitting at `at_rank`
+    /// in each of the `naming` strata that named it, first beats the threshold
+    /// this stratum's sharers impose.
+    ///
+    /// A property of the law and the declarations, in exactly the sense
+    /// [`Self::separation`] is one, and independent of how deep any run reads —
+    /// which is why it is here, at the waist, rather than only in the trailer. A
+    /// host that asks it at plan time, with no rows read and no dataset open,
+    /// learns what its own declarations have committed it to: over strata whose
+    /// blocks do not meet, a head one rank past the deepest row of the answer is
+    /// enough, and over strata that share a block it is a rank past the profile's
+    /// smoothing constant. The second is a deep read the planner cannot narrow
+    /// and no fusion can shorten, and the only thing that moves it is the
+    /// declaration it was derived from.
+    ///
+    /// `naming` is the caller's, and it has to be: which strata actually named a
+    /// given candidate is a fact about rows, not about the plan, so the pessimism
+    /// is the caller's to choose. `&[own_weight]` is the worst case — one namer
+    /// measured against every sharer — and the weights of every sharer is the
+    /// best.
+    ///
+    /// This bounds the *threshold* gate only. A candidate must also be final,
+    /// and a configuration whose candidates never become final drains its
+    /// streams regardless of what this says; see [`CrossingRank`].
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`crossing_rank_at`] refuses: a non-positive weight in either
+    /// list, or a rank the decay rule cannot evaluate.
+    pub fn crossing_rank_at(
+        &self,
+        naming: &[Fixed],
+        at_rank: u64,
+    ) -> Result<CrossingRank, FusionError> {
+        crossing_rank_at(self.decay, naming, at_rank, &self.sharing_weights)
+    }
+
+    /// [`Self::crossing_rank_at`] for the head of a stream: a candidate at rank
+    /// one, which is the shallowest — and so the most favourable — position it
+    /// can be asked about.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::crossing_rank_at`] refuses.
+    pub fn crossing_rank(&self, naming: &[Fixed]) -> Result<CrossingRank, FusionError> {
+        self.crossing_rank_at(naming, 1)
     }
 }
 
@@ -1681,16 +1754,46 @@ pub fn compile(
     // stratum the profile does not weight contributes nothing to that fusion, so
     // a profile silent about it has nothing to report and gets no entry.
     let resolution = env.fusion_profile.map_or_else(BTreeMap::new, |profile| {
+        // The declarations the crossing derivation reads, taken off the units
+        // this call just emitted rather than off the registry a second time: a
+        // stratum contributes to a threshold only by contributing a stream, and
+        // a unit is exactly the evidence that it will. Ascending stratum order
+        // comes free with the sort above, which is what makes every weight list
+        // below a pure function of the plan.
+        let declared: Vec<(&Iri, &CandidateDomains)> = units
+            .iter()
+            .map(|unit| (&unit.stratum, &unit.contract.domains))
+            .collect();
         admitted
             .stratum_depths
             .iter()
             .filter_map(|(stratum, depth)| {
                 profile.monotone_depth(stratum).map(|separation| {
+                    // Every stratum whose declared blocks meet this one's, this
+                    // one included — a producer's declaration always meets
+                    // itself — and weighted, because an unweighted stratum
+                    // contributes nothing for a threshold to be a maximum of.
+                    // A stratum with no unit has no declaration here and meets
+                    // nobody, which is the honest empty answer rather than an
+                    // `Unrestricted` fabricated on its behalf.
+                    let mine = declared
+                        .iter()
+                        .find(|(named, _)| *named == stratum)
+                        .map(|(_, domains)| *domains);
+                    let sharing_weights = mine.map_or_else(Vec::new, |mine| {
+                        declared
+                            .iter()
+                            .filter(|(_, theirs)| mine.intersects(theirs))
+                            .filter_map(|(named, _)| profile.weight(named))
+                            .collect()
+                    });
                     (
                         stratum.clone(),
                         PlannedResolution {
                             separation,
                             requested_depth: depth.get(),
+                            decay: profile.decay(),
+                            sharing_weights,
                         },
                     )
                 })

@@ -569,6 +569,20 @@ pub struct RankedStreamImpl<'d> {
     /// around because a lookup that could not reach the dataset would have to
     /// answer from something else.
     exclusion: Option<Box<dyn ExclusionLookup + 'd>>,
+    /// How many rows the read that produced this stream really returned.
+    ///
+    /// Not `rows.len()` in general, and that is the point. The rows this stream
+    /// holds are what survived [`bound_to_depth`] — the depth's worth, with the
+    /// probe row taken off — while this counts what the evaluator handed back,
+    /// which is what the read actually cost. The two differ by the probe row on
+    /// every unit that got one, and by a great deal more on a unit whose
+    /// producer beat its depth.
+    ///
+    /// Set by [`Self::new`] to the rows it was handed, which is the honest
+    /// answer for a caller-assembled stream: those rows are the whole of the
+    /// read behind it. [`execute`] overrides it through
+    /// [`Self::with_materialised_rows`] with the number only it can know.
+    materialised: u64,
 }
 
 /// One stratum's prepared *do you hold this one* question, asked per candidate.
@@ -793,13 +807,43 @@ impl<'d> RankedStreamImpl<'d> {
     /// [`execute`] attaches the prepared lookup it compiled.
     #[must_use]
     pub fn new(rows: Vec<(u64, Term, RowBlock)>, ending: StreamEnding) -> Self {
+        // The rows in hand are the whole of the read behind a caller-assembled
+        // stream, so they are the honest read-work figure for one. A `usize`
+        // that does not fit a `u64` is a row count no machine produced; it is
+        // saturated rather than truncated, because a wrapped count would report
+        // an enormous read as a tiny one.
+        let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
         Self {
             rows: rows.into(),
             pulled: 0,
             exhausted: false,
             ending,
             exclusion: None,
+            materialised,
         }
+    }
+
+    /// Record how many rows the read that produced these rows really returned.
+    ///
+    /// A builder step rather than a parameter of [`new`](Self::new) for the
+    /// reason [`with_exclusion`](Self::with_exclusion) is: only the party that
+    /// ran the read knows the number, and the rows reach this type after the
+    /// depth has already been applied to them. A caller-assembled stream
+    /// attaches nothing and reports the rows it was handed.
+    #[must_use]
+    pub(crate) const fn with_materialised_rows(mut self, rows: u64) -> Self {
+        self.materialised = rows;
+        self
+    }
+
+    /// How many rows the read behind this stream returned.
+    ///
+    /// The number [`RankedStream::rows_materialised`](crate::RankedStream::rows_materialised)
+    /// carries into the fused trailer; see there for what it is for and why it
+    /// is not the ranks a fusion pulled.
+    #[must_use]
+    pub const fn rows_materialised(&self) -> u64 {
+        self.materialised
     }
 
     /// Attach the prepared exclusion lookup this stratum answers through.
@@ -1130,7 +1174,14 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
                             unit.reach_at(depth),
                             &unit.stratum,
                         )?;
-                        let mut stream = RankedStreamImpl::new(ranked, ending);
+                        // The read's own cost, taken from the evaluator's
+                        // answer rather than from the rows that survived the
+                        // depth: `bound_to_depth` has just taken the probe row
+                        // off, and a figure read after it would report every
+                        // bounded read as one row cheaper than it was.
+                        let materialised = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+                        let mut stream = RankedStreamImpl::new(ranked, ending)
+                            .with_materialised_rows(materialised);
                         if let Some(prepared) = exclusion {
                             stream = stream.with_exclusion(Box::new(DatasetExclusion {
                                 stratum: unit.stratum.clone(),
