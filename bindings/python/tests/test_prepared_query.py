@@ -285,7 +285,7 @@ def _rows(solutions: object) -> set[tuple[str, ...]]:
     width = len(solutions.variables)  # type: ignore[attr-defined]
     return {
         tuple(str(row[i].value) for i in range(width))  # type: ignore[union-attr]
-        for row in solutions
+        for row in solutions  # type: ignore[attr-defined]
     }
 
 
