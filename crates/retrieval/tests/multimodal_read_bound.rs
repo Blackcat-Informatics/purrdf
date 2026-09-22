@@ -25,6 +25,15 @@
 //! *final* while another stream sharing its block is still open — which is why
 //! that configuration drains, and the drain is pinned as a permanent control.
 //!
+//! Past those three sits the same ladder over configurations of two and three
+//! strata, asking a different question: the licence to read a prefix is granted
+//! **per stratum**, so one stratum of a request can narrow while another does not.
+//! Those tables assert a `(depth, cause)` pair per stratum rather than one number
+//! for the run, and each licensed configuration is then checked differentially —
+//! the answer over the narrowed prefixes against the answer the same configuration
+//! gives when every stratum reads its whole stream, row for row, score for score
+//! and order for order.
+//!
 //! Fixtures use `example.org` throughout; every block tag and stratum IRI below
 //! is fixture configuration, never a minted vocabulary.
 
@@ -37,11 +46,11 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusedRow,
-    FusionProfile, FusionResult, Iri, PfAttestation, PlanId, ProducerReceipt, ProducerStatus,
-    ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream, RankedStreamAdapter,
-    RequestTerm, RetrievalRequest, RowBlock, Statistics, StratumUnit, StreamContract, Term, TopK,
-    compile, contribution_under, execute, fuse, plan,
+    AdmissionEnvironment, CandidateDomains, DecayRule, DepthCause, DomainTag, DuplicatePolicy,
+    Fixed, FusedRow, FusionProfile, FusionResult, Iri, PfAttestation, PlanId, ProducerReceipt,
+    ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream,
+    RankedStreamAdapter, ReadBound, RequestTerm, RetrievalRequest, RowBlock, Statistics,
+    StratumUnit, StreamContract, Term, TopK, compile, contribution_under, execute, fuse, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
@@ -922,6 +931,521 @@ fn the_declaration_alone_moves_every_measured_number() {
         distinct.both("the terminal status", &distinct.status),
         shared.both("the terminal status", &shared.status),
         "and the declaration decides which ending the trailer reports"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 1c. The licence is per stratum: what it costs a stratum, and what it does not.
+// ---------------------------------------------------------------------------
+//
+// Everything in this section runs the same ladder the three configurations above
+// do, over the same four hundred rows, the same unit weights and the same bound of
+// five. What varies is only how many strata there are and what each of them
+// declares — so a depth that moved between two of these tables moved because one
+// declaration changed and nothing else did.
+
+/// One stratum of a declared configuration.
+///
+/// The name is the whole identity: it names the stratum IRI, the request
+/// predicate this stratum's producer answers, and the prefix its candidates are
+/// minted under. So distinct names mean distinct candidate sets, and every
+/// configuration below differs from every other only in `block` and `duplicates`.
+#[derive(Clone, Copy, Debug)]
+struct Declared {
+    name: &'static str,
+    /// The single block it declares, or `None` for
+    /// [`CandidateDomains::Unrestricted`]. One block, so the declaration entails
+    /// the block of every row and no producer owes a block column.
+    block: Option<&'static str>,
+    /// What it promises about naming one candidate twice.
+    duplicates: DuplicatePolicy,
+}
+
+impl Declared {
+    /// The domain declaration this stratum registers.
+    fn domains(self) -> CandidateDomains {
+        self.block.map_or(CandidateDomains::Unrestricted, |block| {
+            CandidateDomains::within([domain_tag(&format!("domain/{block}"))])
+        })
+    }
+
+    fn stratum(self) -> Iri {
+        iri(&ex(&format!("stratum/{name}", name = self.name)))
+    }
+}
+
+/// The registry for one declared configuration.
+fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    for entry in strata {
+        let arity = PfArity::new(1, 1);
+        let relation = CountingProducer {
+            arity,
+            mode: arity.all_free_mode(),
+            prefix: entry.name,
+            pulled: Arc::new(AtomicU64::new(0)),
+        };
+        registry.register_ranked(
+            ex(&format!("pf/{name}", name = entry.name)),
+            Arc::new(relation),
+            RankedDeclaration {
+                stratum: kernel_iri(entry.stratum().as_str()),
+                accepted_terms: accepted_terms(entry.name),
+                depth_placement: None,
+                candidate_position: 0,
+                duplicates: entry.duplicates,
+                fidelity: RankFidelity::EXACT,
+                domains: entry.domains(),
+                block_position: None,
+                mandatory: false,
+            },
+        );
+    }
+    registry
+}
+
+/// One request term per stratum, each naming that stratum's own predicate, so
+/// each producer receives exactly one term and every stratum survives placement.
+fn declared_terms(strata: &[Declared]) -> Vec<RequestTerm> {
+    strata
+        .iter()
+        .map(|entry| RequestTerm::Lexical {
+            text: "quick brown fox".to_owned(),
+            language: Some("en".to_owned()),
+            predicate: Some(iri(&ex(entry.name))),
+        })
+        .collect()
+}
+
+/// Statistics that narrow nothing: every stratum really holds the four hundred
+/// rows its producer declares, and no selectivity is measured.
+fn declared_statistics(strata: &[Declared]) -> FixtureStatistics {
+    let mut cardinalities = BTreeMap::new();
+    for entry in strata {
+        cardinalities.insert(entry.stratum(), ROWS);
+        cardinalities.insert(iri(&ex(entry.name)), ROWS);
+    }
+    FixtureStatistics { cardinalities }
+}
+
+fn declared_profile(strata: &[Declared]) -> FusionProfile {
+    let weights = strata
+        .iter()
+        .map(|entry| (entry.stratum(), Fixed::ONE))
+        .collect();
+    FusionProfile::with_decay(weights, decay()).expect("the fixture profile is valid")
+}
+
+/// What one run of a declared configuration is measured on.
+struct DeclaredRun {
+    /// The depth the planner recorded for each stratum.
+    depths: BTreeMap<Iri, u32>,
+    /// The cause the plan itself reports for each of those depths.
+    causes: BTreeMap<Iri, DepthCause>,
+    /// The answer, as the thing two runs have to agree on: rows, scores, order.
+    answer: Vec<(String, Fixed)>,
+}
+
+/// Run one declared configuration through `plan` → `compile` → `execute` → `fuse`
+/// under `bound`.
+fn run_declared(strata: &[Declared], bound: ReadBound, dataset: &RdfDataset) -> DeclaredRun {
+    let registry = declared_registry(strata);
+    let statistics = declared_statistics(strata);
+    let profile = declared_profile(strata);
+    let request = RetrievalRequest::from_terms(declared_terms(strata), bound);
+
+    let planned = plan(&request, &registry, &statistics).expect("the fixture request plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+    let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
+    let execution =
+        block_on(execute(&compiled, &registry, dataset)).expect("the fixture registry executes");
+
+    let mut streams = Vec::new();
+    for stream in execution.streams {
+        let plan_id = stream.plan_id;
+        let fused_bound = stream.fused_bound;
+        let attestation = stream.attestation.clone();
+        let adapter =
+            RankedStreamAdapter::new(stream.stream, stream.contract, &profile, &stream.stratum)
+                .expect("the fixture profile weights every executed stratum");
+        streams.push((
+            stream.stratum,
+            adapter
+                .with_plan_id(plan_id)
+                .with_fused_bound(fused_bound)
+                .with_attestation(attestation),
+        ));
+    }
+    let fused = block_on(fuse::<RankedStreamAdapter, Term>(
+        streams,
+        &profile,
+        compiled.fused_bound,
+    ))
+    .expect("the executed streams fuse");
+
+    DeclaredRun {
+        depths: planned
+            .stratum_depths
+            .iter()
+            .map(|(stratum, depth)| (stratum.clone(), *depth))
+            .collect(),
+        causes: strata
+            .iter()
+            .map(|entry| {
+                let stratum = entry.stratum();
+                let cause = planned
+                    .explain_depth(&stratum)
+                    .expect("a planned stratum explains its own depth");
+                (stratum, cause)
+            })
+            .collect(),
+        answer: fused
+            .rows
+            .iter()
+            .map(|row| (row.entity.as_str().to_owned(), row.score))
+            .collect(),
+    }
+}
+
+/// The depth a licensed stratum records: the request's own bound, read off the
+/// bound itself rather than restated as a literal beside it.
+fn licensed_depth() -> u32 {
+    u32::try_from(TOP_K.get()).expect("the fixture bound fits a recordable depth")
+}
+
+/// What a stratum the licence does not reach records: the registry's declaration,
+/// undisturbed.
+fn unlicensed_depth() -> u32 {
+    u32::try_from(ROWS).expect("the fixture row bound fits a recordable depth")
+}
+
+/// Assert one configuration's per-stratum `(depth, cause)`, named by stratum.
+///
+/// Per stratum and never "both", because the whole claim of this section is that
+/// two strata of one request can record two different depths.
+fn assert_depths(what: &str, run: &DeclaredRun, expected: &[(&Declared, u32, DepthCause)]) {
+    let measured: Vec<(String, u32, DepthCause)> = expected
+        .iter()
+        .map(|(entry, _, _)| {
+            let stratum = entry.stratum();
+            (
+                entry.name.to_owned(),
+                *run.depths
+                    .get(&stratum)
+                    .expect("a surviving stratum records a depth"),
+                *run.causes
+                    .get(&stratum)
+                    .expect("a surviving stratum explains its depth"),
+            )
+        })
+        .collect();
+    let wanted: Vec<(String, u32, DepthCause)> = expected
+        .iter()
+        .map(|(entry, depth, cause)| (entry.name.to_owned(), *depth, *cause))
+        .collect();
+    assert_eq!(measured, wanted, "{what}");
+}
+
+/// The top five rows of `run`'s answer.
+fn top_five(run: &DeclaredRun) -> Vec<(String, Fixed)> {
+    run.answer.iter().take(5).cloned().collect()
+}
+
+/// **The differential.** The answer the narrowed read produced, against the answer
+/// the same configuration produces when every stratum reads its whole stream.
+///
+/// The reference run states [`ReadBound::Complete`], which licenses no prefix at
+/// all, so every stratum records its declared four hundred and the fusion sees the
+/// entire stream. Its first five rows are the top five over the full streams; the
+/// bounded run's five rows are the top five over the narrowed prefixes. They are
+/// compared row for row, score for score and order for order — a narrowing that
+/// changed any of the three would be unsound, and nothing else in this file could
+/// catch it.
+fn assert_narrowing_changed_no_answer(what: &str, strata: &[Declared], dataset: &RdfDataset) {
+    let bounded = run_declared(strata, ReadBound::Bounded(TOP_K), dataset);
+    let complete = run_declared(strata, ReadBound::Complete, dataset);
+
+    // The reference really did read everything: if it had narrowed too, the two
+    // runs would agree for the uninteresting reason.
+    for entry in strata {
+        assert_eq!(
+            complete.depths.get(&entry.stratum()).copied(),
+            Some(unlicensed_depth()),
+            "{what}: the reference run must read the whole stream of {name}",
+            name = entry.name
+        );
+    }
+    // And the bounded run really did narrow something, or this compares two
+    // identical reads and proves nothing.
+    assert!(
+        strata
+            .iter()
+            .any(|entry| bounded.depths.get(&entry.stratum()).copied() == Some(licensed_depth())),
+        "{what}: no stratum narrowed, so this differential has nothing to test"
+    );
+
+    assert_eq!(
+        bounded.answer.len(),
+        5,
+        "{what}: the bound is what stopped the narrowed run"
+    );
+    assert_eq!(
+        bounded.answer,
+        top_five(&complete),
+        "{what}: the narrowed read returned a different answer than the full read"
+    );
+}
+
+/// **N1.** Three strata, pairwise-disjoint blocks, every one of them `Unique`.
+/// Every stratum is licensed, exactly as two disjoint strata always were.
+const N1: [Declared; 3] = [
+    Declared {
+        name: "alpha",
+        block: Some("alpha"),
+        duplicates: DuplicatePolicy::Unique,
+    },
+    Declared {
+        name: "beta",
+        block: Some("beta"),
+        duplicates: DuplicatePolicy::Unique,
+    },
+    Declared {
+        name: "gamma",
+        block: Some("gamma"),
+        duplicates: DuplicatePolicy::Unique,
+    },
+];
+
+/// **N2.** One stratum, restricting no block at all, `Unique`. There is no other
+/// stratum for it to share a candidate with, so it is licensed whatever it says
+/// about blocks.
+const N2: [Declared; 1] = [Declared {
+    name: "solo",
+    block: None,
+    duplicates: DuplicatePolicy::Unique,
+}];
+
+/// **N3.** Three strata: one whose block no other names, and a pair that share
+/// one. The disjoint stratum narrows; the pair do not.
+const N3: [Declared; 3] = [
+    Declared {
+        name: "apart",
+        block: Some("apart"),
+        duplicates: DuplicatePolicy::Unique,
+    },
+    Declared {
+        name: "together-one",
+        block: Some("together"),
+        duplicates: DuplicatePolicy::Unique,
+    },
+    Declared {
+        name: "together-two",
+        block: Some("together"),
+        duplicates: DuplicatePolicy::Unique,
+    },
+];
+
+/// **N4.** Two strata with disjoint blocks, one `Unique` and one `Allowed`. The
+/// `Unique` one narrows; the `Allowed` one does not.
+const N4: [Declared; 2] = [
+    Declared {
+        name: "unique-side",
+        block: Some("unique-side"),
+        duplicates: DuplicatePolicy::Unique,
+    },
+    Declared {
+        name: "allowed-side",
+        block: Some("allowed-side"),
+        duplicates: DuplicatePolicy::Allowed,
+    },
+];
+
+/// **The forbidden repair.** A stratum that shares a block with another stratum of
+/// the same request is never licensed a prefix, however the rest of the request is
+/// declared.
+///
+/// This names that one shape and no wider one. "Any configuration where some pair
+/// intersects licenses nothing" would be the wider claim, and it is exactly the
+/// over-refusal `N3` and `N4` exist to forbid: they *do* intersect somewhere, and
+/// a stratum outside the intersection is still licensed. What is pinned here is
+/// only that a stratum inside one reads its declaration.
+#[test]
+fn a_stratum_sharing_a_block_with_another_is_never_licensed() {
+    let dataset = common::empty_dataset();
+
+    // Two strata, one block: both are inside the intersection, so neither
+    // narrows. This is the two-producer control at the top of the file, restated
+    // over the general harness so the general harness is known to reproduce it.
+    let pair = [
+        Declared {
+            name: "shared-one",
+            block: Some("shared"),
+            duplicates: DuplicatePolicy::Unique,
+        },
+        Declared {
+            name: "shared-two",
+            block: Some("shared"),
+            duplicates: DuplicatePolicy::Unique,
+        },
+    ];
+    let run = run_declared(&pair, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "two strata sharing one block",
+        &run,
+        &[
+            (&pair[0], unlicensed_depth(), DepthCause::Declaration),
+            (&pair[1], unlicensed_depth(), DepthCause::Declaration),
+        ],
+    );
+
+    // The same, inside a request that also holds a stratum nobody shares with:
+    // the sharers are still unlicensed, and sharing is still the reason.
+    let run = run_declared(&N3, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "the sharing pair inside a three-stratum request",
+        &run,
+        &[
+            (&N3[1], unlicensed_depth(), DepthCause::Declaration),
+            (&N3[2], unlicensed_depth(), DepthCause::Declaration),
+        ],
+    );
+
+    // An `Unrestricted` declaration shares every block there is, so with a second
+    // stratum present it is inside every intersection — and so is the other
+    // stratum, whose own blocks it meets. Both read their declarations.
+    let unrestricted = [
+        Declared {
+            name: "restricted-side",
+            block: Some("restricted-side"),
+            duplicates: DuplicatePolicy::Unique,
+        },
+        Declared {
+            name: "anything",
+            block: None,
+            duplicates: DuplicatePolicy::Unique,
+        },
+    ];
+    let run = run_declared(&unrestricted, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "an unrestricted stratum shares every block, including its own neighbour's",
+        &run,
+        &[
+            (
+                &unrestricted[0],
+                unlicensed_depth(),
+                DepthCause::Declaration,
+            ),
+            (
+                &unrestricted[1],
+                unlicensed_depth(),
+                DepthCause::Declaration,
+            ),
+        ],
+    );
+}
+
+/// **N1.** Pairwise-disjoint blocks, every stratum `Unique`: every stratum is
+/// licensed the request's own bound, and the narrowing changes no answer.
+#[test]
+fn pairwise_disjoint_unique_strata_are_each_licensed_the_requests_bound() {
+    let dataset = common::empty_dataset();
+    let run = run_declared(&N1, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "three pairwise-disjoint unique strata",
+        &run,
+        &[
+            (&N1[0], licensed_depth(), DepthCause::LicensedPrefix),
+            (&N1[1], licensed_depth(), DepthCause::LicensedPrefix),
+            (&N1[2], licensed_depth(), DepthCause::LicensedPrefix),
+        ],
+    );
+    assert_narrowing_changed_no_answer("N1", &N1, &dataset);
+}
+
+/// **N2.** A single stratum restricting no block is licensed anyway: there is no
+/// second stratum for it to share a candidate with, so the premise disjointness
+/// supplies is what "one stratum" already means.
+#[test]
+fn a_single_unrestricted_unique_stratum_is_licensed_the_requests_bound() {
+    let dataset = common::empty_dataset();
+    let run = run_declared(&N2, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "one unrestricted unique stratum",
+        &run,
+        &[(&N2[0], licensed_depth(), DepthCause::LicensedPrefix)],
+    );
+    assert_narrowing_changed_no_answer("N2", &N2, &dataset);
+}
+
+/// **N3.** A stratum whose block no other stratum names narrows, even though two
+/// *other* strata of the same request share a block with each other.
+///
+/// The intersection those two make is an intersection about *their* candidates. It
+/// cannot let either of them name one of `apart`'s, because a candidate lies in
+/// exactly one block and `apart`'s is neither of theirs — so `apart`'s fused
+/// scores are still single terms and its own `Unique` prefix still holds every row
+/// of the answer it was going to supply.
+#[test]
+fn a_stratum_disjoint_from_a_sharing_pair_narrows_while_the_pair_does_not() {
+    let dataset = common::empty_dataset();
+    let run = run_declared(&N3, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "one disjoint stratum beside a sharing pair",
+        &run,
+        &[
+            (&N3[0], licensed_depth(), DepthCause::LicensedPrefix),
+            (&N3[1], unlicensed_depth(), DepthCause::Declaration),
+            (&N3[2], unlicensed_depth(), DepthCause::Declaration),
+        ],
+    );
+    assert_narrowing_changed_no_answer("N3", &N3, &dataset);
+}
+
+/// **N4.** A `Unique` stratum narrows beside an `Allowed` one whose blocks it does
+/// not meet.
+///
+/// The `Allowed` declaration says that stream's rows are not its candidates, which
+/// is a fact about the candidates *it* names. It names none of `unique-side`'s —
+/// their blocks do not meet — so it cannot cost `unique-side` a candidate out of
+/// its own five-row prefix. It costs itself its own prefix, and nothing else.
+#[test]
+fn a_unique_stratum_narrows_beside_a_disjoint_allowed_one() {
+    let dataset = common::empty_dataset();
+    let run = run_declared(&N4, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "a unique stratum beside a disjoint allowed one",
+        &run,
+        &[
+            (&N4[0], licensed_depth(), DepthCause::LicensedPrefix),
+            (&N4[1], unlicensed_depth(), DepthCause::Declaration),
+        ],
+    );
+    assert_narrowing_changed_no_answer("N4", &N4, &dataset);
+}
+
+/// **Anti-vacuity for the whole section.** A single `Allowed` stratum, alone in its
+/// request, is still not licensed — so `Allowed` is read as a property of the
+/// stratum that declares it and not merely ignored.
+///
+/// Without this, every assertion above would pass for a build that had dropped the
+/// duplicate-policy premise altogether.
+#[test]
+fn a_lone_allowed_stratum_is_not_licensed_by_being_alone() {
+    let dataset = common::empty_dataset();
+    let lone = [Declared {
+        name: "lone-allowed",
+        block: Some("lone-allowed"),
+        duplicates: DuplicatePolicy::Allowed,
+    }];
+    let run = run_declared(&lone, ReadBound::Bounded(TOP_K), &dataset);
+    assert_depths(
+        "one allowed stratum, alone",
+        &run,
+        &[(&lone[0], unlicensed_depth(), DepthCause::Declaration)],
     );
 }
 
