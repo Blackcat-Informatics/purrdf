@@ -521,11 +521,7 @@ impl PyStore {
                 },
                 plan.entailment(),
                 purrdf_sparql_eval::QueryOptions {
-                    env: &extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?,
+                    env: &extension_env(parser_options, registry.as_ref(), aggregates.as_ref())?,
                     ..purrdf_sparql_eval::QueryOptions::EMPTY
                 },
                 &relations,
