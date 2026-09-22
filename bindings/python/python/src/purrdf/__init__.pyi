@@ -605,8 +605,12 @@ class UpdateOutcome:
     def evidence(self) -> GovernorEvidence: ...
 
 # A SPARQL query parsed and admitted once, run many times with different bindings.
-# Built by `Store.prepare`. Holds a SNAPSHOT of the store taken when it was prepared;
-# a later mutation on that store is not visible to it.
+# Built by `Store.prepare`. What is prepared is the PLAN, not the data: the object
+# holds a reference to the store it was prepared against and re-reads its CURRENT
+# contents on every `run`, so a mutation made after `prepare` — including one made
+# between two `run` calls on the same handle — is visible to the next run. That is
+# what a rule fixpoint or an incremental SHACL revalidation needs, since both mutate
+# their store every round.
 #
 # Not thread-safe, and deliberately so: a run borrows this object uniquely, because a
 # query body can re-enter the evaluator and a handle reachable a second time while a
@@ -674,17 +678,24 @@ class Store:
     # `substitutions` entry, so a parameter reaches inside `OPTIONAL`, `MINUS`,
     # `EXISTS` and sub-`SELECT`s by ordinary correlation.
     #
-    # The returned `PreparedQuery` holds a SNAPSHOT of this store taken now; a later
-    # mutation is not visible to it, and it is not thread-safe — see `PreparedQuery`.
+    # The returned `PreparedQuery` holds a reference to THIS store and re-reads its
+    # current contents on every `run` rather than freezing a snapshot now, so a later
+    # mutation is visible to the next run. It is not thread-safe — see
+    # `PreparedQuery`.
     #
     # Engine configuration and relation/aggregate registration behave exactly as on
     # `query` below — `extension_namespaces`, `property_fn_namespaces`,
     # `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
     # and `aggregate_namespace` all admit the plan and are then CARRIED by the
     # returned `PreparedQuery`, so `PreparedQuery.run` evaluates under the SAME
-    # registries the plan was admitted under. `substitutions` has no seat here: a
-    # prepared query's whole point is that the values that change between runs
-    # arrive per-run through `parameters` / `PreparedQuery.run`'s bindings.
+    # registries the plan was admitted under. The two axes that read the store's own
+    # graph — `relations_from_graph`, which reads a table written in it, and
+    # `path_relations`, which traverses its edges — are REBUILT from each run's
+    # dataset and the plan re-admitted under them, so a relation's rows are as fresh
+    # as an ordinary triple pattern's and one answer is never assembled from two
+    # points in time. `substitutions` has no seat here: a prepared query's whole point
+    # is that the values that change between runs arrive per-run through `parameters`
+    # / `PreparedQuery.run`'s bindings.
     def prepare(
         self,
         query: str,

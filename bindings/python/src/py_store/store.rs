@@ -321,6 +321,17 @@ impl PyStore {
     /// than the one a plan was prepared against is refused, not silently answered
     /// short, exactly as [`query`](Self::query) would refuse it if asked to.
     ///
+    /// Two of those axes read the store's OWN GRAPH rather than a caller's constant:
+    /// `relations_from_graph` reads an `rdf:List` of `rdf:List`s written in the store,
+    /// and `path_relations` traverses the store's own edges. Their tables are
+    /// therefore rebuilt from each run's dataset and the plan re-admitted under the
+    /// rebuilt registry — see
+    /// [`GraphDerivedRelations`](super::prepared::GraphDerivedRelations) — so that
+    /// "the data is re-read on every run" holds for a relation's rows exactly as it
+    /// holds for an ordinary triple pattern, and one answer is never assembled from
+    /// two points in time. The other axes are caller-supplied constants and are
+    /// carried unchanged: re-deriving a constant is how a constant stops being one.
+    ///
     /// `substitutions` has no seat here, deliberately: a prepared query's whole point
     /// is that the values that change between runs arrive per-run through
     /// [`run`](super::prepared::PyPreparedQuery::run)'s parameter bindings, and a
@@ -374,6 +385,19 @@ impl PyStore {
         // this call admits the plan against is the one every later `run` evaluates
         // under — so it is derived once, here, and carried.
         let parser_options = engine_parser_options(&config);
+        // The relations whose ROWS come out of the store's own graph, kept as their
+        // SOURCE configuration for `run` to re-derive from the dataset it answers
+        // over. `None` when the caller registered none of them, which is the common
+        // case and rebuilds nothing. See `super::prepared::GraphDerivedRelations` for
+        // why a table read out of a graph cannot be built once and kept on a handle
+        // that re-reads its store every run.
+        let graph_derived = super::prepared::GraphDerivedRelations::for_specs(
+            &specs,
+            query,
+            &parameters,
+            &parser_options,
+            aggregate_namespace.as_ref(),
+        );
         // A cheap owning handle to THIS store, taken under the GIL, for `run` to
         // re-read on every call (see `Self::prepare`'s doc comment and
         // `super::prepared::PyPreparedQuery::store`) — distinct from `guard` below,
@@ -402,6 +426,7 @@ impl PyStore {
                 registry.as_ref(),
                 aggregates.as_ref(),
                 standpoint_for_run,
+                graph_derived,
             )
         });
         drop(guard);
