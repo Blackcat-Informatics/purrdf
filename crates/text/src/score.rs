@@ -496,7 +496,7 @@ impl PartialOrd for ByRank {
 /// Sorted by the same byte order the index's dictionary is sorted by, so "visit
 /// the query's terms in order" and "visit the dictionary in order" are the same
 /// traversal.
-fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
+pub(crate) fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
     let mut terms: Vec<&str> = needle.iter().map(String::as_str).collect();
     terms.sort_unstable();
     terms.dedup();

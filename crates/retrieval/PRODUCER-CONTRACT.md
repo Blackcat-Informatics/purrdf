@@ -383,12 +383,26 @@ An index-informed producer can therefore declare many modes precisely because it
 indices serve binding directions a scan cannot, and a relation that can serve
 everything declares exactly one all-free mode that subsumes every pattern of its
 arity. Neither shipped producer takes that latitude, and both are right not to:
-the lexical search relation declares exactly one mode (`fbffff`) and the
-nearest-neighbour relation exactly one (`fbbf`), because each has an input
-position it genuinely cannot enumerate — it retrieves documents for a needle and
-cannot enumerate needles for a document. Declaring narrowly is the honest move
-when the index really is directional. Declaring broadly is the honest move when it
-is not. Neither is a default.
+the lexical search relation's general mode is `fbffff` and the nearest-neighbour
+relation declares exactly one (`fbbf`), because each has an input position it
+genuinely cannot enumerate — it retrieves documents for a needle and cannot
+enumerate needles for a document. Declaring narrowly is the honest move when the
+index really is directional. Declaring broadly is the honest move when it is not.
+Neither is a default.
+
+The lexical search relation declares a *second* mode, `bbffff`, and it is worth
+reading for what it is not. It widens nothing — `fbffff` already subsumes it, so
+no call becomes feasible by its being there — and it is not a second spelling of
+the same promise. It states a different fact about the same call: that binding
+the document is a **point lookup**, with the row bound declared for it, which is
+the pair `register_ranked` reads before it admits an exclusion basis — the
+declared answer to *do you hold this candidate*, which fusion asks once per
+frontier candidate and must therefore never turn into a scan. Declare such a
+mode when the candidate-bound call really is a
+lookup, and do not declare one when it is a scan the engine's equality filter
+happens to narrow — see
+[A9](#a9--declare-the-honest-unfiltered-worst-case-for-the-row-bound) for why
+the bound beside it is the one you will be held to.
 
 Declaring several modes also decides which row bound your read is held to, because that
 bound is a function of the mode — see

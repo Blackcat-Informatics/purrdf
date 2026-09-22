@@ -866,10 +866,18 @@ impl TextIndex {
     ///
     /// This is what makes a bound document position a **partition** restriction
     /// rather than a per-row filter. A query that names a document is answered
-    /// by ranking the one, two or three partitions that subject actually appears
-    /// in instead of every partition the index holds — and because ranks are
+    /// over the one, two or three partitions that subject actually appears in
+    /// instead of every partition the index holds — and because ranks are
     /// per-partition, dropping the rest cannot change the rank of any row that
     /// survives.
+    ///
+    /// It is the whole of the narrowing for a relation whose rows are the
+    /// postings themselves. A relation whose rows are *ranked documents* narrows
+    /// further, because for it a partition is worth ranking only where the
+    /// subject's document in it holds a needle term at all: see
+    /// [`Self::term_frequency`], which decides that in one binary search per
+    /// term, and `TextSearchRelation::open`, which answers without ranking
+    /// anything where the answer is none.
     ///
     /// Empty for a subject the index holds no text for, which admits no
     /// partition and so retrieves nothing — the same answer a per-row filter
