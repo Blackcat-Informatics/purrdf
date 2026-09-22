@@ -803,7 +803,7 @@ async fn manual_composition(
     }
     unweighted_strata.sort();
 
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
+    let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
     let trailer = fused.trailer.completed_with(execution.statuses);

@@ -80,7 +80,8 @@
 //! claim otherwise.
 
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, DuplicatePolicy, PfAttestation, RankFidelity, RankedDeclaration,
+    CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, PfAttestation, RankFidelity,
+    RankedDeclaration,
 };
 use purrdf_text::Fixed;
 
@@ -209,6 +210,44 @@ pub struct StreamContract {
     /// false [`DuplicatePolicy::Unique`] is detected when the repeat is pulled,
     /// and not before.
     pub domains: CandidateDomains,
+    /// What the producer's answer to an **exclusion lookup** means, or
+    /// [`ExclusionBasis::Unavailable`] where it answers none.
+    ///
+    /// The one term of this contract that is not a promise about rows nobody has
+    /// read: it is permission to *ask*. [`Self::domains`] says which blocks of
+    /// the universe this producer can reach, which settles finality only where
+    /// the blocks separate the producers; this is how a consumer settles it
+    /// where they do not, by asking about one candidate and being answered from
+    /// the producer's own index.
+    ///
+    /// # Why the basis travels here and the verdict does not
+    ///
+    /// The basis is a standing declaration — true from registration, unchanged
+    /// by how deep anyone reads — so it belongs beside the three terms that are
+    /// already read once, before the first row. The verdict is a *measurement*,
+    /// taken per candidate against the dataset, and it arrives through
+    /// [`RankedStream::exclusion`] where its failures can fail the request that
+    /// asked for it.
+    ///
+    /// # It is believed as a basis and checked as an answer
+    ///
+    /// Nothing here can verify that a producer's `Membership` really is
+    /// membership. What is verified is the *agreement* between this channel and
+    /// the rows: a producer that excludes a candidate and then names it is
+    /// refused by name ([`ProtocolError::ExclusionContradicted`]), and a
+    /// producer that calls a candidate possible while its own declared domains
+    /// put that candidate out of reach is refused as the domain violation it is
+    /// ([`ProtocolError::OutsideDeclaredDomain`]).
+    ///
+    /// # Why there is no default here either
+    ///
+    /// [`ExclusionBasis::Unavailable`] looks like the safe default and is not
+    /// one to fabricate: it is the *narrow* answer, so defaulting to it would
+    /// silently discard a capability a producer really has, and defaulting to
+    /// either of the others would put a claim about a host's corpus in the mouth
+    /// of a producer that made none. Both directions are wrong, which is why the
+    /// term is positional in [`Self::new`] like its neighbours.
+    pub exclusion: ExclusionBasis,
 }
 
 impl StreamContract {
@@ -217,6 +256,7 @@ impl StreamContract {
     pub fn declared(declaration: &RankedDeclaration) -> Self {
         Self {
             duplicates: declaration.duplicates,
+            exclusion: declaration.exclusion,
             // Cloned, never rebuilt. The evidence inside is an `Arc<str>` the
             // producer authored, and a consumer reads those bytes rather than a
             // summary of them, so this hop must move the string itself — one
@@ -234,20 +274,28 @@ impl StreamContract {
     /// fidelity or does not compile.
     ///
     /// ```compile_fail
-    /// # use purrdf_retrieval::{StreamContract, DuplicatePolicy, CandidateDomains};
-    /// // The arity before the fidelity term existed. There is no overload and no
-    /// // default to fall back to.
-    /// let _ = StreamContract::new(DuplicatePolicy::Unique, CandidateDomains::Unrestricted);
-    /// ```
-    ///
-    /// ```
     /// # use purrdf_retrieval::{StreamContract, DuplicatePolicy, CandidateDomains, RankFidelity};
-    /// let contract = StreamContract::new(
+    /// // The arity before the exclusion term existed. There is no overload and
+    /// // no default to fall back to.
+    /// let _ = StreamContract::new(
     ///     DuplicatePolicy::Unique,
     ///     RankFidelity::EXACT,
     ///     CandidateDomains::Unrestricted,
     /// );
+    /// ```
+    ///
+    /// ```
+    /// # use purrdf_retrieval::{
+    /// #     StreamContract, DuplicatePolicy, CandidateDomains, RankFidelity, ExclusionBasis,
+    /// # };
+    /// let contract = StreamContract::new(
+    ///     DuplicatePolicy::Unique,
+    ///     RankFidelity::EXACT,
+    ///     CandidateDomains::Unrestricted,
+    ///     ExclusionBasis::Unavailable,
+    /// );
     /// assert_eq!(contract.fidelity, RankFidelity::EXACT);
+    /// assert_eq!(contract.exclusion, ExclusionBasis::Unavailable);
     /// ```
     ///
     /// The pair is the proof: the `compile_fail` block alone would pass for any
@@ -266,13 +314,49 @@ impl StreamContract {
         duplicates: DuplicatePolicy,
         fidelity: RankFidelity,
         domains: CandidateDomains,
+        exclusion: ExclusionBasis,
     ) -> Self {
         Self {
             duplicates,
             fidelity,
             domains,
+            exclusion,
         }
     }
+}
+
+/// What a producer says about one candidate when it is asked whether that
+/// candidate is out of its reach.
+///
+/// Two variants and a third outcome. The `Err` arm of
+/// [`RankedStream::exclusion`] is the third, and it is not a variant here on
+/// purpose: a lookup that *failed* has said nothing, and the one value a failure
+/// must never collapse into is [`Self::Possible`] — which reads as the safe,
+/// conservative answer while being indistinguishable from a working lookup that
+/// answered honestly. Such a collapse costs nothing that any test would notice:
+/// the answer stays correct, the read merely stops narrowing, and a dataset read
+/// that has been failing for months looks exactly like a corpus whose producers
+/// overlap. So the failure is a typed error that fails the fused request, and
+/// this enum has no arm for it to hide in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExclusionVerdict {
+    /// This producer will never name this candidate.
+    ///
+    /// What that *means* is [`StreamContract::exclusion`]'s basis: under
+    /// [`ExclusionBasis::Membership`] the candidate is not in the producer's
+    /// term universe at all, and under [`ExclusionBasis::Search`] the
+    /// producer's (complete) search did not find it. Either way a consumer may
+    /// stop waiting for this stream to name it — and if the stream names it
+    /// anyway, that is [`ProtocolError::ExclusionContradicted`] rather than a
+    /// quietly merged extra contribution.
+    Excluded,
+    /// This producer may still name this candidate.
+    ///
+    /// The honest answer whenever the producer cannot rule the candidate out,
+    /// and the answer a consumer already assumed before it asked — so a fusion
+    /// over producers that answer `Possible` to everything reads exactly what it
+    /// read before exclusion lookups existed, minus nothing.
+    Possible,
 }
 
 /// Which block of the candidate universe one row was drawn from, or an honest
@@ -896,6 +980,59 @@ pub enum ProtocolError {
         /// The arithmetic refusal, rendered.
         reason: String,
     },
+
+    /// A producer answered an exclusion lookup with
+    /// [`ExclusionVerdict::Excluded`] for a candidate and then emitted a row
+    /// naming it.
+    ///
+    /// The two statements cannot both be true, and this names the one that was
+    /// contradicted. It is deliberately **not**
+    /// [`Self::OutsideDeclaredDomain`]: that refusal blames a *declaration*
+    /// made once at registration about whole blocks of the universe, and
+    /// nothing about this producer's domains was broken — what was broken is an
+    /// observation it made about this one candidate, through a channel its
+    /// registration merely opened. Reporting it as a domain violation would
+    /// send a host to fix a `CandidateDomains` that is perfectly correct.
+    ///
+    /// It is refused rather than repaired because the repair is a wrong answer
+    /// either way. Merging the row would add a contribution to a candidate whose
+    /// score a consumer may already have certified as final *on the strength of
+    /// this producer's own word*; dropping it would silently discard a row the
+    /// producer emitted under the rank law.
+    #[error("stratum {stratum} excluded item {item} and then named it")]
+    ExclusionContradicted {
+        /// The candidate, in its canonical lexical form.
+        item: String,
+        /// The stratum whose producer contradicted itself.
+        stratum: String,
+    },
+
+    /// An exclusion lookup could not be performed at all.
+    ///
+    /// The third outcome [`ExclusionVerdict`] deliberately has no variant for:
+    /// the producer was asked and something failed — the dataset read, the
+    /// prepared plan, the producer's own row bound — so nothing is known about
+    /// this candidate. It fails the fused request, because the alternative is
+    /// reading a failed measurement as [`ExclusionVerdict::Possible`], which is
+    /// a swallowed error wearing the costume of a conservative answer.
+    #[error("exclusion lookup for stratum {stratum} failed: {reason}")]
+    ExclusionLookupFailed {
+        /// The stratum whose lookup failed.
+        stratum: String,
+        /// The underlying refusal, rendered.
+        reason: String,
+    },
+
+    /// A stream was asked for an exclusion verdict while declaring
+    /// [`ExclusionBasis::Unavailable`].
+    ///
+    /// Unreachable from this crate's own fusion engine, which asks only the
+    /// streams whose contract declared a basis. It is reachable from a stream a
+    /// caller assembled by hand whose contract and whose implementation of
+    /// [`RankedStream::exclusion`] disagree, and it is that disagreement — not a
+    /// fabricated [`ExclusionVerdict::Possible`] — that is reported.
+    #[error("stream was asked for an exclusion verdict but declares no exclusion basis")]
+    ExclusionUnavailable,
 }
 
 /// A producer's ranked rows, pulled one at a time.
@@ -971,6 +1108,49 @@ pub trait RankedStream {
     /// that costs a full drain and one that might be missing a contribution.
     /// A caller that means "anything" says so in one word.
     fn contract(&self) -> StreamContract;
+
+    /// Ask this producer whether `candidate` is out of its reach.
+    ///
+    /// The one channel in this protocol that carries a question *in*. Every
+    /// other method reports what the producer has already decided; this asks it
+    /// about one candidate the consumer names, and what the answer means is
+    /// [`StreamContract::exclusion`]'s basis.
+    ///
+    /// The candidate is named in the canonical term lexical rather than in
+    /// [`Self::Item`], because that is the only spelling the consumer still
+    /// holds. A fused frontier keys candidates by [`Term`] — `Item` is converted
+    /// on the way in and the original is dropped with the row — so an `Item`
+    /// parameter would oblige this layer to keep a second copy of every frontier
+    /// candidate for a question most fusions never ask. Round-tripping through
+    /// that lexical is exactly what [`Self::Item`]'s `Into<Term>` bound is for.
+    ///
+    /// # Called only where the contract says it may be
+    ///
+    /// [`FusionStream`](crate::FusionStream) asks this of a stream whose
+    /// contract declared a basis, and never of one that declared
+    /// [`ExclusionBasis::Unavailable`]. A producer that declared no basis may
+    /// therefore return [`ProtocolError::ExclusionUnavailable`] unconditionally,
+    /// and that is the honest body for it.
+    ///
+    /// # There is no default, and the reason is the one `contract` gives
+    ///
+    /// A default would have to be either [`ExclusionVerdict::Possible`] — this
+    /// layer answering a question about a host's corpus that only the producer
+    /// can answer, and answering it in the direction that is never wrong and
+    /// never useful — or an error, which would make every conforming
+    /// hand-written producer's declared basis a lie its author never wrote. The
+    /// declaration and the implementation belong to the same author, so both are
+    /// required of that author.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::ExclusionLookupFailed`] when the lookup itself failed,
+    /// and [`ProtocolError::ExclusionUnavailable`] when the producer answers no
+    /// such lookup. Neither is degraded to a verdict: a failed measurement
+    /// reported as [`ExclusionVerdict::Possible`] is a swallowed error that
+    /// leaves the answer correct and the read unbounded, which nothing
+    /// downstream could ever notice.
+    async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError>;
 
     /// The pinned plan these rows descend from, when the stream has one.
     ///

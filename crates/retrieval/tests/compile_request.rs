@@ -30,7 +30,7 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
-    EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
+    EvalError, ExclusionBasis, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
     PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankedDeclaration, RequestFacet,
     TermKind, TermPattern, TermPlacement, Volatility,
 };
@@ -195,6 +195,13 @@ struct Spec {
     /// producer whose rows are not its candidates, and it is one of the two shapes
     /// that cannot narrow a depth to a request's bound.
     duplicates: DuplicatePolicy,
+    /// What the producer's exclusion answers would be a fact about.
+    ///
+    /// [`ExclusionBasis::Unavailable`] is the fixture default because it is what
+    /// every producer here declares: an exclusion lookup needs a candidate-bound
+    /// mode with a point row bound, and these fixtures declare the all-free mode
+    /// and a row count of ten.
+    exclusion: ExclusionBasis,
 }
 
 impl Spec {
@@ -211,6 +218,7 @@ impl Spec {
             depth: None,
             obeys_depth: None,
             candidate: 0,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
             domains: CandidateDomains::Unrestricted,
             duplicates: DuplicatePolicy::Unique,
@@ -327,6 +335,7 @@ fn registry_of(specs: Vec<(&str, Spec)>) -> (PropertyFunctionRegistry, BTreeMap<
                 fidelity: RankFidelity::EXACT,
                 domains: spec.domains,
                 block_position: None,
+                exclusion: spec.exclusion,
                 mandatory: spec.mandatory,
             },
         );
@@ -481,7 +490,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 /// Read an executed stream the way a caller that stopped at `execute` reads it:
 /// one row at a time through the ranked-stream protocol, to exhaustion.
-fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
+fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
     // The block each row names is not what these assertions are about — every
     // producer here declares `Unrestricted` and so names none — so it is dropped

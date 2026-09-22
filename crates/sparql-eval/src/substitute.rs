@@ -29,8 +29,8 @@
 use purrdf_core::{RdfDiagnostic, RdfTextDirection, TermValue};
 use purrdf_sparql_algebra::{
     AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm,
-    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, Query, TermPattern,
-    TriplePattern, Variable,
+    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
+    Query, TermPattern, TriplePattern, Variable,
 };
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
@@ -299,6 +299,36 @@ fn push_probes(
                 path,
                 object: probe_term_pattern(object, probes, &mut probed),
             };
+            restore_probed_bindings(leaf, &probed, probes, at_core_root)
+        }
+        // A relation call is a leaf like the two above, and it is the leaf where
+        // the difference between an index probe and a scan is largest. Left alone, the
+        // call keeps the variable, the relation is invoked with that position
+        // FREE, and it generates every row it holds for the single-row `VALUES`
+        // seed to discard all but one of — which for a ranked producer is its
+        // whole index, once per pre-bound candidate. With the constant pushed in,
+        // the relation is invoked with the position BOUND and answers the one
+        // question that was asked.
+        //
+        // The access pattern can only get more bound, so nothing a prepare
+        // admitted becomes infeasible here: a declared mode subsumes an
+        // invocation when its bound positions are a SUBSET of the invocation's,
+        // and this rewrite only adds to that set.
+        GraphPattern::PropertyFunction(call) => {
+            let mut probed = Vec::new();
+            let leaf = GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: call.iri,
+                subject_args: call
+                    .subject_args
+                    .into_iter()
+                    .map(|argument| probe_term_pattern(argument, probes, &mut probed))
+                    .collect(),
+                object_args: call
+                    .object_args
+                    .into_iter()
+                    .map(|argument| probe_term_pattern(argument, probes, &mut probed))
+                    .collect(),
+            });
             restore_probed_bindings(leaf, &probed, probes, at_core_root)
         }
         GraphPattern::Join { left, right } => GraphPattern::Join {
@@ -707,7 +737,7 @@ fn substitute_in_graph_pattern(pattern: GraphPattern, expr_subs: &ExprSubs<'_>) 
         // with. IRI and literal values substitute; blank-node and quoted-triple values
         // pass through to the VALUES join, exactly as in expression positions.
         GraphPattern::PropertyFunction(call) => {
-            GraphPattern::PropertyFunction(purrdf_sparql_algebra::PropertyFunctionCall {
+            GraphPattern::PropertyFunction(PropertyFunctionCall {
                 iri: call.iri,
                 subject_args: call
                     .subject_args

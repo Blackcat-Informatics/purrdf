@@ -40,8 +40,9 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DuplicatePolicy, EvalError,
-    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    Volatility,
 };
 
 mod common;
@@ -306,6 +307,7 @@ fn registry(
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );
@@ -909,6 +911,7 @@ fn registry_declaring(
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );

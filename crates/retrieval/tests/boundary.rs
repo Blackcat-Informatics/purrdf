@@ -39,17 +39,17 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
-    DepthInputs, ExecutionError, ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult,
-    FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding,
-    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
-    RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm, RetrievalRequest, RowBlock,
-    ScoreExactness, SearchError, SearchResult, Statistics, StatisticsEntries, StatisticsSnapshot,
-    StratumUnit, StreamContract, StreamEnding, Term, TopK, UnitError, UnservedReason, UnservedTerm,
-    compile, contribution, execute, fuse, plan, search,
+    DepthInputs, ExclusionVerdict, ExecutionError, ExecutionResult, Fixed, FusionError,
+    FusionProfile, FusionResult, FusionStream, Iri, PfAttestation, Plan, PlanError, PlanId,
+    PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity,
+    RankedRow, RankedStream, RankedStreamAdapter, RankedStreamImpl, ReadBound, RequestTerm,
+    RetrievalRequest, RowBlock, ScoreExactness, SearchError, SearchResult, Statistics,
+    StatisticsEntries, StatisticsSnapshot, StratumUnit, StreamContract, StreamEnding, Term, TopK,
+    UnitError, UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, ExtensionEnv,
-    NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    AcceptedTerm, BindingPattern, DomainTag, DuplicatePolicy, EvalError, ExclusionBasis,
+    ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
     PropertyFunctionRegistry, QueryOptions, RankedDeclaration, RequestFacet, TermKind, TermPattern,
     TermPlacement, Volatility,
 };
@@ -146,6 +146,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory,
     }
 }
@@ -161,6 +162,7 @@ fn unique_items() -> StreamContract {
         DuplicatePolicy::Unique,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
     )
 }
 
@@ -422,6 +424,14 @@ impl RankedStream for ScriptedStream {
 
     fn contract(&self) -> StreamContract {
         unique_items()
+    }
+
+    /// This stream declares no exclusion basis, so being asked for a verdict is
+    /// the disagreement [`ProtocolError::ExclusionUnavailable`] names rather
+    /// than a question it could answer. Fusion never asks it; a hand-written
+    /// caller that did would be told so.
+    async fn exclusion(&mut self, _candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        Err(ProtocolError::ExclusionUnavailable)
     }
 }
 
@@ -1408,6 +1418,14 @@ impl RankedStream for LazyStream {
     fn contract(&self) -> StreamContract {
         unique_items()
     }
+
+    /// This stream declares no exclusion basis, so being asked for a verdict is
+    /// the disagreement [`ProtocolError::ExclusionUnavailable`] names rather
+    /// than a question it could answer. Fusion never asks it; a hand-written
+    /// caller that did would be told so.
+    async fn exclusion(&mut self, _candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        Err(ProtocolError::ExclusionUnavailable)
+    }
 }
 
 /// The three-stratum profile and streams the frontier fixtures share.
@@ -1823,11 +1841,11 @@ fn reporting_names_plan_and_profile() {
 // reason — the dataset is a caller-chosen type parameter, so the future's
 // `Send`-ness is the caller's to establish and is not required here.
 #[allow(clippy::future_not_send)]
-async fn execute_shape<D: purrdf_core::DatasetView + Sync>(
+async fn execute_shape<'d, D: purrdf_core::DatasetView + Sync>(
     compiled: &CompiledRetrieval,
     registry: &PropertyFunctionRegistry,
-    dataset: &D,
-) -> Result<ExecutionResult, ExecutionError> {
+    dataset: &'d D,
+) -> Result<ExecutionResult<'d>, ExecutionError> {
     execute(compiled, registry, dataset).await
 }
 
@@ -2075,8 +2093,10 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
                 .with_plan_id(stream.plan_id);
         streams.push((stream.stratum, adapter));
     }
-    let fused = block_on(fuse::<RankedStreamAdapter, Term>(streams, &profile, TOP_K))
-        .expect("the bridged streams fuse");
+    let fused = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
+        streams, &profile, TOP_K,
+    ))
+    .expect("the bridged streams fuse");
 
     assert_eq!(fused.rows.len(), 3, "every executed row reached the fusion");
     assert_eq!(
@@ -2124,7 +2144,14 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
 /// Plan, compile and execute one single-stratum fixture, returning the plan it
 /// was pinned to, its stratum, and the bridged stream — **untagged**, so each
 /// test below states for itself which plan the stream claims to descend from.
-fn executed_stream(suffix: &str, profile: &FusionProfile) -> (PlanId, Iri, RankedStreamAdapter) {
+// `'static` rather than an elided lifetime: the stream borrows the dataset it
+// was read from, and the fixture dataset is the shared empty one, so the borrow
+// outlives every caller — an elided lifetime here would have to pick one of the
+// two input references and would be describing the wrong thing.
+fn executed_stream(
+    suffix: &str,
+    profile: &FusionProfile,
+) -> (PlanId, Iri, RankedStreamAdapter<'static>) {
     let stratum_iri = ex(&format!("stratum/{suffix}"));
     let registry = single_registry(&stratum_iri, &ex(&format!("pf/{suffix}")), 10, 3);
     let stats = single_statistics(&stratum_iri, 10);
@@ -2166,7 +2193,7 @@ fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
     // — it is a real executed stream — so nothing about the rows can catch it.
     // The identity it carries is what does: one answer cannot descend from two
     // plans, and naming either one would be right about half the rows.
-    let error = block_on(fuse::<RankedStreamAdapter, Term>(
+    let error = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         vec![
             (left_stratum, left.with_plan_id(left_plan)),
             (right_stratum, right.with_plan_id(right_plan)),
@@ -2190,7 +2217,7 @@ fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
     // streams carried.
     let (_, left_stratum, left) = executed_stream("splice/left", &profile);
     let (_, right_stratum, right) = executed_stream("splice/right", &profile);
-    let agreed = block_on(fuse::<RankedStreamAdapter, Term>(
+    let agreed = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         vec![
             (left_stratum, left.with_plan_id(left_plan)),
             (right_stratum, right.with_plan_id(left_plan)),
@@ -2208,7 +2235,7 @@ fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
     // pinned plan rather than borrowing its neighbour's.
     let (_, left_stratum, left) = executed_stream("splice/left", &profile);
     let (_, right_stratum, right) = executed_stream("splice/right", &profile);
-    let mixed = block_on(fuse::<RankedStreamAdapter, Term>(
+    let mixed = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         vec![
             (left_stratum, left.with_plan_id(left_plan)),
             (right_stratum, right),
@@ -2297,11 +2324,12 @@ fn registry_within_one_block(
 /// Plan, compile and execute one single-block fixture for a request bounded at
 /// `top_k`, returning the recorded depth, the bound the bundle was compiled for,
 /// its stratum, and the bridged stream tagged with that bound.
+// `'static` for the reason [`executed_stream`] is.
 fn executed_stream_bounded(
     suffix: &str,
     profile: &FusionProfile,
     top_k: TopK,
-) -> (u32, TopK, Iri, RankedStreamAdapter) {
+) -> (u32, TopK, Iri, RankedStreamAdapter<'static>) {
     let stratum_iri = ex(&format!("stratum/{suffix}"));
     let registry = registry_within_one_block(&stratum_iri, &ex(&format!("pf/{suffix}")), 10, 3);
     let stats = single_statistics(&stratum_iri, 10);
@@ -2375,7 +2403,7 @@ fn fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name() {
          what the cut above rests on"
     );
 
-    let deeper = block_on(fuse::<RankedStreamAdapter, Term>(
+    let deeper = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         vec![(deeper_stratum, stream)],
         &profile,
         TopK::new(5),
@@ -2396,7 +2424,7 @@ fn fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name() {
     // carries would all be describing a different request.
     let (_, _, shallower_stratum, stream) =
         executed_stream_bounded("bound", &profile, TopK::new(2));
-    let shallower = block_on(fuse::<RankedStreamAdapter, Term>(
+    let shallower = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         vec![(shallower_stratum, stream)],
         &profile,
         TopK::new(1),
@@ -2416,7 +2444,7 @@ fn fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name() {
     // resumable seam unusable, which is the mirror failure of not checking at all.
     let (_, planned_bound, matched_stratum, stream) =
         executed_stream_bounded("bound", &profile, TopK::new(2));
-    let matched = block_on(fuse::<RankedStreamAdapter, Term>(
+    let matched = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         vec![(matched_stratum, stream)],
         &profile,
         planned_bound,

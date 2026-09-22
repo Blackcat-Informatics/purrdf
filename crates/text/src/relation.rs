@@ -44,9 +44,9 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
-    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, IndexGeneration, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, RankFidelity, RankedDeclaration, RequestFacet, TermKind,
-    TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis, IndexGeneration,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankFidelity, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -789,6 +789,12 @@ impl TextSearchRelation {
             // declares `CandidateDomains::Unrestricted`. See
             // `RankedDeclaration::block_position`.
             block_position: None,
+            // No exclusion lookup is offered here. This relation declares no
+            // access mode that binds the candidate with a point row bound, so
+            // the registry would refuse any other value — and a basis declared
+            // without the mode behind it would promise a lookup that becomes a
+            // scan. `Unavailable` is the true statement, not a placeholder.
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         })
     }

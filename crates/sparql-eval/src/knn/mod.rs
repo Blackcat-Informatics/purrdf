@@ -114,6 +114,7 @@ use crate::property_fn::{
 };
 use crate::user_fn::Volatility;
 
+use crate::property_fn::ExclusionBasis;
 pub use metric::{Bound, Bounded, Kernel, Ranked, Scalar, best, norm};
 
 /// The `?neighbour` position: the retrieved term.
@@ -940,6 +941,12 @@ impl EmbeddingKnnRelation {
             // `CandidateDomains::Unrestricted`; see
             // `RankedDeclaration::block_position`.
             block_position: None,
+            // No exclusion lookup is offered here. This relation declares no
+            // access mode that binds the candidate with a point row bound, so
+            // the registry would refuse any other value — and a basis declared
+            // without the mode behind it would promise a lookup that becomes a
+            // scan. `Unavailable` is the true statement, not a placeholder.
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         }
     }

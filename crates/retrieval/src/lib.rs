@@ -431,7 +431,8 @@ pub use plan::{
 };
 pub use planner::{depth_cause, depth_from, plan};
 pub use ranked_stream::{
-    ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock, StreamContract,
+    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock,
+    StreamContract,
 };
 pub use reciprocal_rank::{ClassWidth, MonotoneDepth, ToleratedDepth};
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
@@ -473,3 +474,9 @@ pub use purrdf_sparql_eval::{IndexGeneration, PfAttestation, ServiceLevel};
 // to learn that a score carries no finite bound at all. A consumer that can read
 // the verdict but cannot name the types in it has been handed half a seam.
 pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity};
+// What a producer's exclusion answer is a fact about. Re-exported for the same
+// reason the three above are: `StreamContract` carries one, a caller assembling
+// a stream of its own states it positionally, and a caller reading a producer's
+// declaration back off a registry must be able to name the type without
+// depending on the evaluator crate.
+pub use purrdf_sparql_eval::ExclusionBasis;

@@ -18,9 +18,9 @@ use purrdf_retrieval::{
     UnservedTerm, depth_cause, depth_from, plan,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory,
     }
 }
@@ -173,6 +174,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );
@@ -479,12 +481,12 @@ fn canonical_json(plan: &Plan) -> String {
 /// stage keys on, and a change that altered the identity while leaving the
 /// rendering alone would otherwise pass unnoticed.
 const MIXED_REQUEST_PLAN_ID: &str =
-    "a208c3b5fa55e6a374a2530c1368a652aa1d64edadedbb95c2caab8d9e37312b";
+    "f7969bcfcc632bf344d7e31bc888529a4d24a6ef01587cf7d6005b76ab0a0c88";
 
 /// The identity of the plan the lexical-request golden records, pinned for the
 /// reason [`MIXED_REQUEST_PLAN_ID`] is.
 const LEXICAL_REQUEST_PLAN_ID: &str =
-    "ae44005737dd7d7cbfc1c70b4c8df081d04e4247c9442f2078515c3f12e9b7ac";
+    "b660dba9e2dc9aaafe85e36551708893e6fb4394cb64c0f0b636624349961f28";
 
 /// A plan's content identity, with the per-process registry instance counter
 /// pinned exactly as [`canonical_json`] pins it.
@@ -722,6 +724,7 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );
@@ -846,6 +849,7 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );
@@ -1083,6 +1087,7 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );

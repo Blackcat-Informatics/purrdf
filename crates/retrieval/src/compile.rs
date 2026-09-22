@@ -487,7 +487,83 @@ impl RenderedQuery {
             emitted_limit(depth)
         )
     }
+
+    /// The whole text of this producer's **exclusion lookup**: the same call,
+    /// with the candidate position left as the one variable a caller binds per
+    /// lookup.
+    ///
+    /// This is the second query a capable stratum compiles to, and it is a
+    /// different question from the one [`Self::text`] asks. That one asks *give
+    /// me your best rows*; this one asks *do you hold this one*, and the answer
+    /// it needs is a row count rather than a ranking — so nothing here projects
+    /// a block, carries a depth the plan derived, or renders a rank.
+    ///
+    /// # Why the candidate is a variable and not a constant
+    ///
+    /// Because the text is prepared **once** per stratum and run once per
+    /// candidate, through the evaluator's substitution channel. A text with the
+    /// candidate spelled into it would be a fresh parse and a fresh feasibility
+    /// pass per lookup — the cost this whole mechanism exists to avoid paying in
+    /// rows. Substituting it instead lands a single-row `VALUES` seed on the
+    /// left of the call, which is exactly the shape the evaluator drives a
+    /// property-function call from, so the producer receives the candidate as a
+    /// **bound argument** rather than generating its rows and letting a join
+    /// filter them.
+    ///
+    /// # Why the bound is two rows
+    ///
+    /// A registered basis requires a candidate-bound mode whose declared row
+    /// bound is a point bound, so a conforming producer answers with nought or
+    /// one row. Asking for two is how a producer that answers with more is
+    /// *observed* rather than truncated into looking conforming — the same probe
+    /// row [`Self::text`]'s own bound carries, for the same reason.
+    ///
+    /// # The depth argument, where the producer takes one
+    ///
+    /// Rendered as one. A self-bounding producer is being asked about a single
+    /// candidate, so the deepest read that can answer the question is one row,
+    /// and handing it the plan's depth would ask a generator for a ranking
+    /// nobody is going to read.
+    fn exclusion_text(&self) -> String {
+        let subject_len = self.subject.len();
+        let render_at = |position: usize, argument: &UnitArgument| -> String {
+            if position == self.candidate {
+                return format!("?{CANDIDATE_NAME}");
+            }
+            match argument {
+                UnitArgument::Placed(text) => text.clone(),
+                UnitArgument::Depth { datatype } => render::typed_literal("1", datatype),
+            }
+        };
+        let subject_text = self
+            .subject
+            .iter()
+            .enumerate()
+            .map(|(position, argument)| render_at(position, argument))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let object_text = self
+            .object
+            .iter()
+            .enumerate()
+            .map(|(position, argument)| render_at(subject_len + position, argument))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(
+            "SELECT ?{CANDIDATE_NAME} WHERE {{ ( {subject_text} ) <{}> ( {object_text} ) }}\nLIMIT \
+             {EXCLUSION_LIMIT}",
+            self.producer
+        )
+    }
 }
+
+/// The row ceiling every exclusion lookup is read under.
+///
+/// One past the point bound a declared basis requires, so a producer that
+/// answers a candidate-bound call with more than one row is observed rather than
+/// silently truncated into looking like a conforming one. See
+/// [`RenderedQuery::exclusion_text`].
+pub(crate) const EXCLUSION_LIMIT: u64 = 2;
 
 /// How far a unit's read can reach, relative to the depth the unit records.
 ///
@@ -673,6 +749,32 @@ pub enum UnitError {
         depth: u32,
         /// The row bound the unit says the registry declared.
         declared: u64,
+    },
+
+    /// The unit runs a caller's own query text while declaring an exclusion
+    /// basis, and this layer cannot render the lookup that basis promises.
+    ///
+    /// An exclusion lookup is the caller's query asked a different question —
+    /// with the candidate bound instead of ranked — and that rewrite needs the
+    /// one fact a supplied text does not carry: which argument position the
+    /// candidate came from. This layer can compile such a lookup only out of the
+    /// parts [`compile`] itself placed.
+    ///
+    /// Refused rather than quietly dropped, because dropping it is the silent
+    /// half of the same defect: the contract would keep promising a lookup, the
+    /// fusion engine would keep asking for one, and every ask would come back a
+    /// failure at read time — a unit that cannot work, assembled without
+    /// complaint. A caller with its own text declares
+    /// [`ExclusionBasis::Unavailable`](purrdf_sparql_eval::ExclusionBasis),
+    /// which is exactly true of a stream this layer cannot look anything up in.
+    #[error(
+        "a stratum unit running a caller-supplied query cannot declare an exclusion basis of \
+         {basis}: an exclusion lookup is that query with the candidate bound, and which argument \
+         position the candidate came from is not a fact a supplied text carries"
+    )]
+    ExclusionNotRenderable {
+        /// The basis the unit's contract declared.
+        basis: &'static str,
     },
 
     /// The supplied text is not a SPARQL query: the parser
@@ -945,6 +1047,11 @@ impl StratumUnit {
         {
             return Err(UnitError::DepthBeyondDeclaration { depth, declared });
         }
+        if contract.exclusion.is_declared() {
+            return Err(UnitError::ExclusionNotRenderable {
+                basis: contract.exclusion.as_str(),
+            });
+        }
         let (body_at, dataset_at) = hoistable_clauses(&query)?;
         Ok(Self::assembled(
             stratum,
@@ -1108,6 +1215,34 @@ impl StratumUnit {
     /// depth unreachable rather than merely unlikely.
     pub(crate) const fn probed_depth(&self) -> ProbedDepth {
         self.depth
+    }
+
+    /// The text of this stratum's **exclusion lookup**, or `None` where this
+    /// stratum answers none.
+    ///
+    /// `None` in exactly two cases, and they are different facts that happen to
+    /// need the same answer here. A producer that declared
+    /// [`ExclusionBasis::Unavailable`](purrdf_sparql_eval::ExclusionBasis)
+    /// answers no such lookup, so there is nothing to render. A unit built
+    /// through [`Self::new`] runs a caller's own text, out of which this layer
+    /// cannot render a second query: it does not know which position the
+    /// candidate came from, and inventing one would be this layer writing a
+    /// query the caller never wrote and then reading its row count as the
+    /// caller's answer. That combination is refused at construction rather than
+    /// silently dropped here — see [`UnitError::ExclusionNotRenderable`].
+    ///
+    /// Derived rather than stored, for the reason [`Self::sparql`] is: the
+    /// exclusion text is a pure function of the parts this unit already holds,
+    /// and a stored copy would be a second place for the producer, the argument
+    /// slots and the candidate position to be written down.
+    pub(crate) fn exclusion_sparql(&self) -> Option<String> {
+        if !self.contract.exclusion.is_declared() {
+            return None;
+        }
+        match &self.query {
+            UnitQuery::Rendered(rendered) => Some(rendered.exclusion_text()),
+            UnitQuery::Supplied { .. } => None,
+        }
     }
 
     /// Whether a read of this unit taken to `depth` reaches one row past it.
@@ -1828,6 +1963,17 @@ fn emit_query(
     if candidate >= total || invocation.mode.is_bound(candidate) {
         // The registry validates that the candidate position exists and is never
         // a placement target, so this is a registry that moved under the plan.
+        //
+        // The refusal is about the STREAMING unit, and only about it. Binding the
+        // candidate is not forbidden as such — the exclusion lookup
+        // ([`RenderedQuery::exclusion_text`]) binds it deliberately, which is the
+        // whole of what makes it a lookup rather than a scan. What a streaming
+        // unit cannot do is project a ranking out of a position the invocation
+        // already filled with a request value: there would be no column left to
+        // read the candidate back from. The registry's own refusal at
+        // registration is the narrower one and stays narrower — it forbids the
+        // candidate position as a *placement* target, which is a statement about
+        // the declaration rather than about any one invocation.
         return Err(malformed(
             binding,
             "projects a candidate from a position that is not a free argument",

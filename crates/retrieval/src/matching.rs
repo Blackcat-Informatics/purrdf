@@ -810,9 +810,9 @@ mod tests {
     use crate::request::{Metric, RequestTerm};
     use purrdf_core::binding_pattern::BindingPattern;
     use purrdf_sparql_eval::{
-        AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, PfDescriptor, PfMode,
-        RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
-        Volatility,
+        AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, ExclusionBasis,
+        PfDescriptor, PfMode, RankFidelity, RankedDeclaration, RequestFacet, TermKind, TermPattern,
+        TermPlacement, Volatility,
     };
 
     fn ex(suffix: &str) -> String {
@@ -851,6 +851,7 @@ mod tests {
             fidelity: RankFidelity::EXACT,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         }
     }

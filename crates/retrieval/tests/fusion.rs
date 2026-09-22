@@ -16,16 +16,16 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, ClassWidth, Completeness, DecayRule, DomainTag,
-    DuplicatePolicy, EvidenceId, Fixed, FusedRow, FusionError, FusionProfile, FusionProfileId,
-    FusionResult, FusionStream, IndexGeneration, Iri, MonotoneDepth, OrderFidelity, PfAttestation,
-    PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow,
-    RankedStream, RankedStreamImpl, RequestTerm, RetrievalRequest, RowBlock, ScoreExactness,
-    ScoreInterval, ServiceLevel, Statistics, StreamContract, StreamEnding, Term, ToleratedDepth,
-    TopK, contribution, contribution_under,
+    DuplicatePolicy, EvidenceId, ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile,
+    FusionProfileId, FusionResult, FusionStream, IndexGeneration, Iri, MonotoneDepth,
+    OrderFidelity, PfAttestation, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
+    RankFidelity, RankedRow, RankedStream, RankedStreamImpl, RequestTerm, RetrievalRequest,
+    RowBlock, ScoreExactness, ScoreInterval, ServiceLevel, Statistics, StreamContract,
+    StreamEnding, Term, ToleratedDepth, TopK, contribution, contribution_under,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, MemoryRelation, PropertyFunctionRegistry, RankedDeclaration, TermKind,
-    TermPattern,
+    AcceptedTerm, ExclusionBasis, MemoryRelation, PropertyFunctionRegistry, RankedDeclaration,
+    TermKind, TermPattern,
 };
 
 const K: u32 = 60;
@@ -100,6 +100,7 @@ fn unique_items() -> StreamContract {
         DuplicatePolicy::Unique,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
     )
 }
 
@@ -202,6 +203,14 @@ impl RankedStream for MockStream {
 
     fn contract(&self) -> StreamContract {
         self.contract.clone()
+    }
+
+    /// This stream declares no exclusion basis, so being asked for a verdict is
+    /// the disagreement [`ProtocolError::ExclusionUnavailable`] names rather
+    /// than a question it could answer. Fusion never asks it; a hand-written
+    /// caller that did would be told so.
+    async fn exclusion(&mut self, _candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        Err(ProtocolError::ExclusionUnavailable)
     }
 
     fn plan_id(&self) -> Option<PlanId> {
@@ -2104,6 +2113,7 @@ fn allowed_duplicates() -> StreamContract {
         DuplicatePolicy::Allowed,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
     )
 }
 
@@ -2535,6 +2545,7 @@ fn no_fused_answer_ever_contains_one_entity_twice() {
                                         policy,
                                         RankFidelity::EXACT,
                                         CandidateDomains::Unrestricted,
+                                        ExclusionBasis::Unavailable,
                                     ),
                                 ),
                             )
@@ -5672,6 +5683,7 @@ fn spec_streams(spec: &[StratumSpec], declared: Declared) -> Vec<(Iri, MockStrea
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     domains,
+                    ExclusionBasis::Unavailable,
                 )),
             )
         })
@@ -6364,6 +6376,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
+                ExclusionBasis::Unavailable,
             )),
         ),
         (
@@ -6388,6 +6401,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
+                ExclusionBasis::Unavailable,
             )),
         ),
     ];
@@ -6432,6 +6446,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_DOCS]),
+                ExclusionBasis::Unavailable,
             )),
         ),
         (
@@ -6453,6 +6468,7 @@ fn a_stream_naming_a_candidate_outside_its_declared_domains_is_refused() {
                 DuplicatePolicy::Unique,
                 RankFidelity::EXACT,
                 within(&[DOMAIN_PEOPLE]),
+                ExclusionBasis::Unavailable,
             )),
         ),
     ];
@@ -6503,6 +6519,7 @@ fn a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses() {
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+            ExclusionBasis::Unavailable,
         )
     };
     let pair = |left_block: &'static str, right_block: &'static str| {
@@ -6590,6 +6607,7 @@ fn a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses(
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             within(&[DOMAIN_PEOPLE]),
+            ExclusionBasis::Unavailable,
         )
     };
     let pair = |volunteered: Step| {
@@ -6657,6 +6675,7 @@ fn a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block() {
             DuplicatePolicy::Allowed,
             RankFidelity::EXACT,
             within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+            ExclusionBasis::Unavailable,
         )
     };
     let stream = |second_block: &'static str| {
@@ -6772,6 +6791,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS]),
+                    ExclusionBasis::Unavailable,
                 ),
                 in_docs(),
             ),
@@ -6780,6 +6800,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS]),
+                    ExclusionBasis::Unavailable,
                 ),
                 in_docs(),
             ),
@@ -6802,6 +6823,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS]),
+                    ExclusionBasis::Unavailable,
                 ),
                 in_docs(),
             ),
@@ -6810,6 +6832,7 @@ fn two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise(
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     within(&[DOMAIN_DOCS, DOMAIN_PEOPLE]),
+                    ExclusionBasis::Unavailable,
                 ),
                 // The cross-cutting producer names two blocks and says which one
                 // THIS row came from, which is the whole point of a per-row
@@ -6882,6 +6905,7 @@ fn a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             within(&[DOMAIN_DOCS]),
+            ExclusionBasis::Unavailable,
         )
     };
 
@@ -7004,6 +7028,7 @@ fn lossy_contract() -> StreamContract {
             order: OrderFidelity::Faithful,
         },
         CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
     )
 }
 
@@ -7317,6 +7342,7 @@ fn perturbed_contract() -> StreamContract {
             },
         },
         CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
     )
 }
 
@@ -7417,6 +7443,7 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
                     DuplicatePolicy::Unique,
                     RankFidelity::EXACT,
                     docs,
+                    ExclusionBasis::Unavailable,
                 )),
             ),
             (
@@ -7436,6 +7463,7 @@ fn a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it() {
                         order: OrderFidelity::Faithful,
                     },
                     people,
+                    ExclusionBasis::Unavailable,
                 )),
             ),
         ],
@@ -8492,6 +8520,7 @@ fn registry_declaring_fidelity(
             fidelity,
             domains: CandidateDomains::Unrestricted,
             block_position: None,
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         },
     );

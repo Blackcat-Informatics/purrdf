@@ -102,8 +102,8 @@ use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, btree_map};
 
 use purrdf_sparql_eval::{
-    CandidateDomains, DomainTag, DuplicatePolicy, IndexGeneration, PfAttestation, RankFidelity,
-    ServiceLevel,
+    CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, IndexGeneration, PfAttestation,
+    RankFidelity, ServiceLevel,
 };
 use purrdf_text::Fixed;
 
@@ -112,7 +112,9 @@ use crate::error::FusionError;
 use crate::fusion_profile::FusionProfile;
 use crate::id::{EVIDENCE_VERSION, EvidenceId, PlanId};
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock};
+use crate::ranked_stream::{
+    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, RowBlock,
+};
 use crate::reciprocal_rank::MonotoneDepth;
 
 /// A candidate's identity in the frontier: its canonical term.
@@ -518,6 +520,23 @@ pub struct StratumResolution {
     /// by the tie-break's later keys instead — but a caller that needs its
     /// answer ordered by score alone has its answer here.
     pub collisions_observed: u64,
+    /// How many **exclusion lookups** this fusion made against this stratum.
+    ///
+    /// Its own field, beside [`Self::ranks_pulled`] and never folded into it,
+    /// because it counts a different read of a different query. `ranks_pulled`
+    /// is sorted access — how far down this producer's ranking the answer
+    /// needed to go — and the whole value of a trailer that reports it is that a
+    /// caller can compare it against the depth the plan recorded. A lookup is
+    /// random access: one prepared point query against the same producer,
+    /// answering *do you hold this one* rather than *what is next*. Adding them
+    /// together would report a stratum as having been read deeper than it was
+    /// and would break [`FusionStream::finish`]'s receipt check, which measures
+    /// the producer's own declared row count against the rows fusion pulled.
+    ///
+    /// Zero for every stratum whose producer declared
+    /// [`ExclusionBasis::Unavailable`], which is every stratum of every fusion
+    /// that ran before lookups existed.
+    pub exclusion_lookups: u64,
 }
 
 /// Where a row's true score lies, given what its producers declared.
@@ -1379,6 +1398,45 @@ struct CandidateState {
     /// stream declared over several blocks names a different one on different
     /// rows, so there is nothing per-stream to recompute it from.
     block: Option<Box<BlockWitness>>,
+    /// The streams this fusion has **asked** about this candidate, whatever they
+    /// answered.
+    ///
+    /// The budget's memory. A producer's answer about one candidate is a
+    /// standing fact — its term universe does not change while its own rows are
+    /// being read — so asking twice would be paying twice for one answer, and
+    /// the loop below revisits the same frontier candidate on every pass. With
+    /// this, each (candidate, stream) pair costs at most one lookup for the
+    /// whole read; without it the cost is that pair times the number of passes,
+    /// which is quadratic in exactly the configuration the mechanism exists to
+    /// make cheap.
+    ///
+    /// A superset of [`Self::excluded`] rather than a partition with it: the
+    /// answer and the fact that an answer was received are different questions,
+    /// and the second is what stops a second ask.
+    asked: BTreeSet<usize>,
+    /// The streams observed to exclude this candidate.
+    ///
+    /// The *observational* half of [`FusionStream::may_still_name`], beside the
+    /// declarative half [`FusionStream::could_name`] derives from the domains.
+    /// A stream in here has said, about this one candidate, that it will never
+    /// name it — which no declaration about blocks could say, and which is the
+    /// only evidence that settles finality where two producers declare the same
+    /// block and their results do not overlap.
+    ///
+    /// It is kept as evidence and not merely as a licence: a stream that names a
+    /// candidate it excluded is refused by name
+    /// ([`ProtocolError::ExclusionContradicted`]), and that refusal needs the
+    /// observation the certification was taken under.
+    ///
+    /// # What both sets cost, and when
+    ///
+    /// Nothing, for a fusion no producer declared a basis in: an empty
+    /// [`BTreeSet`] allocates on first insert and never before, and nothing
+    /// inserts into either where no stream is ever asked. The two pointers'
+    /// worth of inline width is paid per frontier candidate either way, which is
+    /// the same trade [`Self::block`] already makes and is measured by
+    /// `tests/fusion_frontier_alloc.rs`.
+    excluded: BTreeSet<usize>,
 }
 
 impl CandidateState {
@@ -1394,6 +1452,8 @@ impl CandidateState {
             contributions: Vec::new(),
             seen_streams: BTreeSet::new(),
             block: None,
+            asked: BTreeSet::new(),
+            excluded: BTreeSet::new(),
         }
     }
 
@@ -1441,6 +1501,20 @@ struct EmittedRecord {
     /// depending on how deep the caller happened to read, which is no invariant
     /// at all.
     block: Option<Box<BlockWitness>>,
+    /// The streams that excluded the candidate before it certified —
+    /// [`CandidateState::excluded`], moved out of the state being dropped rather
+    /// than rebuilt.
+    ///
+    /// Kept past the frontier for the reason `named_by` and `block` are, and the
+    /// reason is sharper here because certification may have **rested** on it: a
+    /// candidate is final when every open stream has either named it or cannot,
+    /// and an exclusion is one of the two ways a stream cannot. So a stream that
+    /// names this candidate afterwards has contradicted the very observation the
+    /// certification was taken under, and without this the engine would have no
+    /// record of that observation and would report the row as an invariant
+    /// violation of its own ([`FusionError::MalformedProfile`]) — blaming the
+    /// engine for a producer's self-contradiction, and naming no witness.
+    excluded: BTreeSet<usize>,
 }
 
 /// The lookup policy for [`FusionStream`]'s emitted map: the workspace's
@@ -1574,6 +1648,32 @@ pub struct FusionStream<S: RankedStream> {
     /// ranks this run could not separate — an observation, not the profile's
     /// a-priori bound.
     collisions_observed: Vec<u64>,
+    /// What every handed stream declared its exclusion answers would be a fact
+    /// about, read in [`Self::new`] before a single row was pulled.
+    ///
+    /// Held per stream for the reason `domains` is: the question *may I ask this
+    /// stream about a candidate* is shaped per stream and asked on every pass of
+    /// the row loop. Read once, because a basis is a standing declaration — true
+    /// from registration, unchanged by how deep this fusion reads — and asking
+    /// again later would be asking a stream a bounded stop may have left in a
+    /// state with nothing to say.
+    exclusion_bases: Vec<ExclusionBasis>,
+    /// Whether **any** stream declared a basis at all.
+    ///
+    /// The whole cost of this mechanism to a fusion that does not use it: one
+    /// bool test per pass of the row loop, and no frontier walk. Derived in
+    /// [`Self::new`] from `exclusion_bases`, which cannot change, rather than
+    /// re-scanned per pass — the same precomputation the degradation table makes,
+    /// for the same reason.
+    exclusion_declared: bool,
+    /// Per-stream count of exclusion lookups this fusion actually made.
+    ///
+    /// Reported by the trailer as
+    /// [`StratumResolution::exclusion_lookups`]. Counted here, by the engine
+    /// that asked, rather than read back off a producer: a producer's own count
+    /// would measure whatever that producer chose to count, and this number's
+    /// whole use is comparing what the engine spent against the read it saved.
+    exclusion_lookups: Vec<u64>,
     /// The identity set of every stream that declared
     /// [`DuplicatePolicy::Allowed`], and `None` for every stream that declared
     /// [`DuplicatePolicy::Unique`].
@@ -1749,6 +1849,19 @@ impl<S: RankedStream> FusionStream<S> {
             .iter()
             .map(|contract| contract.fidelity.clone())
             .collect();
+        // Read off the same one contract read the two above came from. The basis
+        // is the fourth term of that declaration and is taken here, before the
+        // first row, for the reason the domains are: it governs row one, and a
+        // declaration consulted later would be one that had not applied to the
+        // rows already merged under it.
+        let exclusion_bases: Vec<ExclusionBasis> = contracts
+            .iter()
+            .map(|contract| contract.exclusion)
+            .collect();
+        let exclusion_declared = exclusion_bases
+            .iter()
+            .copied()
+            .any(ExclusionBasis::is_declared);
         let domains: Vec<CandidateDomains> = contracts
             .into_iter()
             .map(|contract| contract.domains)
@@ -1811,6 +1924,9 @@ impl<S: RankedStream> FusionStream<S> {
             rows_pulled: vec![0; count],
             last_contribution: vec![None; count],
             collisions_observed: vec![0; count],
+            exclusion_bases,
+            exclusion_declared,
+            exclusion_lookups: vec![0; count],
             seen_items,
             domains,
             fidelities,
@@ -1845,6 +1961,14 @@ impl<S: RankedStream> FusionStream<S> {
         self.ensure_initialized().await?;
         loop {
             self.threshold = self.compute_threshold()?;
+            // After the threshold and before the certification pass, because the
+            // threshold is this phase's budget and certification is what the
+            // phase exists to make possible. The threshold itself is unaffected
+            // by what is learned here — it bounds an item *nobody* has named, and
+            // an exclusion is an observation about a candidate somebody has — so
+            // computing it first costs nothing and asking with it in hand is what
+            // keeps a candidate that cannot win from being looked up at all.
+            self.observe_exclusions().await?;
             if let Some(id) = self.select_emittable()? {
                 let state = self.frontier.remove(&id).ok_or_else(|| {
                     FusionError::MalformedProfile(
@@ -1879,12 +2003,21 @@ impl<S: RankedStream> FusionStream<S> {
                     mut contributions,
                     seen_streams,
                     block,
+                    asked: _,
+                    excluded,
                 } = state;
+                // `asked` is deliberately dropped with the frontier entry. It is
+                // the budget's memory — *have we already paid for this answer* —
+                // and a candidate that has left the frontier is never asked
+                // again, so keeping it would be keeping a counter nothing reads.
+                // `excluded` is the opposite: it is evidence a later row is
+                // measured against, so it travels.
                 self.emitted.record(
                     id.clone(),
                     EmittedRecord {
                         named_by: seen_streams,
                         block,
+                        excluded,
                     },
                 );
                 contributions.sort_by(|left, right| {
@@ -1985,6 +2118,12 @@ impl<S: RankedStream> FusionStream<S> {
                             // cannot underflow.
                             ranks_pulled: self.next_ranks[index] - 1,
                             collisions_observed: self.collisions_observed[index],
+                            // A separate counter, never added into the rank
+                            // above: a lookup is a point query and not a step
+                            // down the ranking, and the receipt this stratum is
+                            // held to counts only the rows it emitted in rank
+                            // order.
+                            exclusion_lookups: self.exclusion_lookups[index],
                         },
                     )
                 })
@@ -2642,8 +2781,193 @@ impl<S: RankedStream> FusionStream<S> {
     /// *domain* violation. Folding the two would report a stream that
     /// contradicted an observation as having broken its declaration, which
     /// blames the wrong promise and names the wrong witness.
+    ///
+    /// # The two halves, and why they are not the same fact
+    ///
+    /// The declarative half is [`Self::could_name`]: a promise about whole
+    /// blocks, made once at registration, true of every candidate in them. The
+    /// observational half is [`CandidateState::excluded`]: an answer about *this
+    /// one candidate*, measured against the producer's own index when the
+    /// consumer asked. A candidate can be inside every declared block and still
+    /// be one the producer will never name, which is exactly the configuration
+    /// the declarative half cannot settle — two producers over one block whose
+    /// results do not overlap — and exactly the one the observational half does.
+    ///
+    /// Both retire a stream's claim on this candidate and neither is stronger:
+    /// the licence is the conjunction, and a stream that fails either has
+    /// nothing left to add here.
     fn may_still_name(&self, index: usize, state: &CandidateState) -> bool {
-        self.could_name(index, &state.seen_streams)
+        self.could_name(index, &state.seen_streams) && !state.excluded.contains(&index)
+    }
+
+    /// Ask the streams that are blocking finality whether they will ever name
+    /// the candidates they are blocking.
+    ///
+    /// This is the one place [`CandidateState::excluded`] is written, and it runs
+    /// once per pass of [`Self::next`]'s loop, between the threshold and the
+    /// certification pass.
+    ///
+    /// # The three filters, and why each one is the honest place to stop
+    ///
+    /// * **A fusion nobody declared a basis in is not walked at all.** One bool
+    ///   test, decided in [`Self::new`], and the frontier is never touched — so
+    ///   an ordinary fusion pays exactly that for a mechanism it does not use.
+    /// * **A candidate that is already final is not asked.** There is nothing
+    ///   left for an answer to change: it is going to be compared against the
+    ///   threshold on this very pass.
+    /// * **A candidate that cannot win is not asked.** `U(x) <= T` says every
+    ///   stream that could still add to `x` cannot lift it past what an unseen
+    ///   item could score, so `x` is not going to be emitted before the streams
+    ///   move — and when they move, its ceiling moves with them and it is asked
+    ///   then. That is what makes the budget a *derivation* rather than a
+    ///   configured cap: nothing here has a number a caller could tune, and the
+    ///   set of candidates worth a lookup is exactly the set the threshold
+    ///   already describes.
+    ///
+    /// Within a candidate that survives all three, the streams asked are the ones
+    /// actually blocking it: open, not yet a namer, still licensed to name it,
+    /// and not already asked. The last of those is what bounds the whole phase —
+    /// one (candidate, stream) pair costs at most one lookup for the entire read,
+    /// so the budget is the frontier's width times the strata, never the number
+    /// of passes.
+    ///
+    /// # Why the asking is a second pass over a collected list
+    ///
+    /// Because the question is asked of a stream at `&mut` and decided from the
+    /// frontier at `&`, and doing both inside one walk would mean holding the
+    /// frontier borrowed across an `await`. The list is therefore built first,
+    /// the borrow released, and every answer recorded afterwards. Nothing else
+    /// runs in between: no row is pulled and no candidate is emitted, so a pair
+    /// selected on the evidence of this pass is still selected on the same
+    /// evidence when its answer comes back.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the producer's lookup refuses with, propagated
+    /// ([`ProtocolError::ExclusionLookupFailed`] and its neighbours), and
+    /// [`ProtocolError::OutsideDeclaredDomain`] for a verdict that contradicts
+    /// the producer's own domain declaration. A failure is never read as
+    /// [`ExclusionVerdict::Possible`]: the whole request fails, because a
+    /// lookup that silently stopped working is indistinguishable from a corpus
+    /// whose producers overlap, and nothing downstream could tell them apart.
+    async fn observe_exclusions(&mut self) -> Result<(), FusionError> {
+        if !self.exclusion_declared {
+            return Ok(());
+        }
+        // Built at `&self`, over facts this pass has already settled.
+        let mut wanted: Vec<(CandidateId, usize)> = Vec::new();
+        for (id, state) in &self.frontier {
+            if self.is_final(state) {
+                continue;
+            }
+            if self.upper_bound(state)? <= self.threshold {
+                continue;
+            }
+            for index in 0..self.streams.len() {
+                if !self.exclusion_bases[index].is_declared() {
+                    continue;
+                }
+                if self.heads[index].is_none() || state.seen_streams.contains(&index) {
+                    continue;
+                }
+                if state.asked.contains(&index) || !self.may_still_name(index, state) {
+                    continue;
+                }
+                wanted.push((id.clone(), index));
+            }
+        }
+        for (id, index) in wanted {
+            // Re-read at the moment of asking rather than trusting the selection
+            // pass. An earlier answer in this very loop can have settled the
+            // candidate — two streams blocking it, the first of them excluding it
+            // — and a lookup for a candidate nothing is waiting on is the one
+            // thing the budget above exists to prevent. Cheap, and it makes "a
+            // candidate that cannot win is never looked up" true when the ask
+            // happens rather than only when it was chosen.
+            let Some(state) = self.frontier.get(&id) else {
+                continue;
+            };
+            if self.is_final(state) || !self.may_still_name(index, state) {
+                continue;
+            }
+            let verdict = {
+                let (_, stream) = &mut self.streams[index];
+                stream.exclusion(&id).await
+            }?;
+            // Validated before anything is written, so a refused verdict leaves
+            // the frontier exactly as it found it — the discipline every other
+            // refusal in this engine keeps.
+            self.check_verdict_against_declaration(index, &id, verdict)?;
+            let Some(state) = self.frontier.get_mut(&id) else {
+                // Unreachable on this pass: nothing between the collection above
+                // and here removes a frontier entry. Answered as a no-op rather
+                // than an assertion, because the honest thing to do with an
+                // answer about a candidate nobody is waiting for is to drop it.
+                continue;
+            };
+            state.asked.insert(index);
+            if verdict == ExclusionVerdict::Excluded {
+                state.excluded.insert(index);
+            }
+            self.exclusion_lookups[index] += 1;
+        }
+        Ok(())
+    }
+
+    /// Hold one exclusion verdict against the declaration its producer made at
+    /// registration.
+    ///
+    /// The [`ProtocolError::ContributionMismatch`] pattern, applied to the one
+    /// operand pair that exists here: the verdict, and the blocks this producer
+    /// promised it could reach. Both are read, compared exactly, and a
+    /// disagreement refuses the fusion naming both sides. Nothing is repaired
+    /// and nothing is mutated before the refusal.
+    ///
+    /// # What can actually disagree
+    ///
+    /// [`ExclusionVerdict::Excluded`] can contradict nothing here — a producer
+    /// narrowing its own reach below what it promised is a producer keeping its
+    /// promise. The contradiction it *can* commit is committed later, by a row,
+    /// and is refused in [`Self::pull`] as
+    /// [`ProtocolError::ExclusionContradicted`].
+    ///
+    /// [`ExclusionVerdict::Possible`] is the claim that can be false on
+    /// arrival, and it is false in two ways. The producer's declared domains may
+    /// not meet `Dom(x)` at all — a promise it already broke by answering rather
+    /// than by emitting. Or the candidate may already be **placed**, by some
+    /// row, in a block this producer's [`CandidateDomains::Within`] does not
+    /// admit — which is stronger evidence than the declarations alone carry,
+    /// because a placement is a fact about the candidate that an unrestricted
+    /// namer can establish and no intersection of declarations would reveal.
+    /// Either way the producer has said it might name a candidate it promised
+    /// never to name, so it is the domain family that refuses it.
+    fn check_verdict_against_declaration(
+        &self,
+        index: usize,
+        id: &CandidateId,
+        verdict: ExclusionVerdict,
+    ) -> Result<(), FusionError> {
+        if verdict != ExclusionVerdict::Possible {
+            return Ok(());
+        }
+        let Some(state) = self.frontier.get(id) else {
+            return Ok(());
+        };
+        let declared_reach = self.could_name(index, &state.seen_streams);
+        let placed_reach = state.block.as_deref().is_none_or(|witness| {
+            matches!(&self.domains[index], CandidateDomains::Unrestricted)
+                || self.domains[index].admits(&witness.block)
+        });
+        if declared_reach && placed_reach {
+            return Ok(());
+        }
+        let named_by = self.domain_witness(&state.seen_streams, index);
+        Err(ProtocolError::OutsideDeclaredDomain {
+            item: id.as_str().to_owned(),
+            stratum: self.streams[index].0.as_str().to_owned(),
+            named_by,
+        }
+        .into())
     }
 
     /// Whether stream `index` could still name a candidate that the streams in
@@ -3338,6 +3662,22 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 .into());
             }
+            // The third way certification could have left this stream open and
+            // unseen, and the reason the impossibility arm below keeps its proof:
+            // this stream told the fusion, about this very candidate, that it
+            // would never name it, and the certification may have rested on
+            // exactly that. Ordered after the domain gate and before the
+            // invariant arm for the reason the domain gate is ordered before it —
+            // the honest report for this row names the producer's own
+            // self-contradiction, not an engine budget and not a declaration that
+            // was never broken.
+            if record.excluded.contains(&index) {
+                return Err(ProtocolError::ExclusionContradicted {
+                    item: head.item.as_str().to_owned(),
+                    stratum: stratum.as_str().to_owned(),
+                }
+                .into());
+            }
             return Err(FusionError::MalformedProfile(format!(
                 "stream {index} named candidate {} after it certified without having \
                  contributed to it, which certification forbids",
@@ -3378,6 +3718,22 @@ impl<S: RankedStream> FusionStream<S> {
                 item: head.item.as_str().to_owned(),
                 stratum: stratum.as_str().to_owned(),
                 named_by,
+            }
+            .into());
+        }
+        // The observational twin of the declaration check above, and a distinct
+        // refusal because it blames a distinct promise: nothing about this
+        // producer's domains has been broken, and sending its author to fix a
+        // `CandidateDomains` that is perfectly correct would be naming the wrong
+        // witness. What was broken is the answer this producer gave about this
+        // one candidate — an answer a still-frontier candidate may already have
+        // had its upper bound and its finality computed from.
+        if let Some(state) = existing
+            && state.excluded.contains(&index)
+        {
+            return Err(ProtocolError::ExclusionContradicted {
+                item: head.item.as_str().to_owned(),
+                stratum: stratum.as_str().to_owned(),
             }
             .into());
         }

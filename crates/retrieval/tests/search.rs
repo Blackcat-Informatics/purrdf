@@ -26,9 +26,9 @@ use purrdf_retrieval::{
     plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError, PfArgs,
-    PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration,
-    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DomainTag, DuplicatePolicy, EvalError,
+    ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -101,6 +101,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory,
     }
 }
@@ -435,7 +436,7 @@ async fn manual_composition(
     }
     unweighted_strata.sort();
 
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
+    let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .expect("the surviving streams fuse");
     let trailer = fused.trailer.completed_with(execution.statuses);

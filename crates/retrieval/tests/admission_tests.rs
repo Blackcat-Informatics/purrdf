@@ -24,9 +24,9 @@ use purrdf_retrieval::{
     execute,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -89,6 +89,7 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory,
     }
 }
@@ -2195,7 +2196,7 @@ fn a_stratum_no_surviving_producer_ranks_under_records_no_depth_at_all() {
 
 /// Read an executed stream the way a caller that stopped at `execute` reads it:
 /// one row at a time through the ranked-stream protocol, to exhaustion.
-fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
+fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
     // The block each row names is not what these assertions are about — every
     // producer here declares `Unrestricted` and so names none — so it is dropped
@@ -2208,7 +2209,9 @@ fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
     rows
 }
 
-fn rows_by_stratum(result: purrdf_retrieval::ExecutionResult) -> BTreeMap<Iri, Vec<(u64, Term)>> {
+fn rows_by_stratum(
+    result: purrdf_retrieval::ExecutionResult<'_>,
+) -> BTreeMap<Iri, Vec<(u64, Term)>> {
     result
         .streams
         .into_iter()
@@ -2402,6 +2405,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         fidelity: RankFidelity::EXACT,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory,
     }
 }

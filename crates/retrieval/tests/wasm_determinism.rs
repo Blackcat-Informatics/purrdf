@@ -87,10 +87,10 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, EVIDENCE_VERSION, EvidenceId, Fixed,
-    FusionProfile, IndexGeneration, Iri, PfAttestation, ProducerReceipt, ProducerStatus,
-    ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock, ScoreExactness, ServiceLevel,
-    StreamContract, Term, TopK, contribution, fuse,
+    CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, EVIDENCE_VERSION, EvidenceId,
+    ExclusionBasis, ExclusionVerdict, Fixed, FusionProfile, IndexGeneration, Iri, PfAttestation,
+    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
+    RowBlock, ScoreExactness, ServiceLevel, StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -186,6 +186,14 @@ impl RankedStream for ScriptedStream {
         self.contract.clone()
     }
 
+    /// This stream declares no exclusion basis, so being asked for a verdict is
+    /// the disagreement [`ProtocolError::ExclusionUnavailable`] names rather
+    /// than a question it could answer. Fusion never asks it; a hand-written
+    /// caller that did would be told so.
+    async fn exclusion(&mut self, _candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        Err(ProtocolError::ExclusionUnavailable)
+    }
+
     fn attestation(&self) -> PfAttestation {
         self.attestation.clone()
     }
@@ -198,6 +206,7 @@ fn unrestricted() -> StreamContract {
         DuplicatePolicy::Unique,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
     )
 }
 
@@ -518,6 +527,7 @@ fn scripted_in(candidates: &[&str], block: &str) -> ScriptedStream {
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             CandidateDomains::within([domain(block)]),
+            ExclusionBasis::Unavailable,
         ),
         attestation: PfAttestation::UNDECLARED,
     }

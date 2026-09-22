@@ -13,8 +13,8 @@
 use std::sync::Arc;
 
 use purrdf_retrieval::{
-    CandidateDomains, Completeness, DomainTag, DuplicatePolicy, OrderFidelity, RankFidelity,
-    StreamContract,
+    CandidateDomains, Completeness, DomainTag, DuplicatePolicy, ExclusionBasis, OrderFidelity,
+    RankFidelity, StreamContract,
 };
 use purrdf_sparql_eval::{RankedDeclaration, TermKind, TermPattern};
 
@@ -37,6 +37,7 @@ fn declaration(fidelity: RankFidelity) -> RankedDeclaration {
         fidelity,
         domains: CandidateDomains::Unrestricted,
         block_position: None,
+        exclusion: ExclusionBasis::Unavailable,
         mandatory: false,
     }
 }
@@ -127,6 +128,7 @@ fn a_hand_built_contract_states_the_same_three_terms() {
             order: OrderFidelity::Faithful,
         },
         CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
     );
     assert_eq!(
         contract,

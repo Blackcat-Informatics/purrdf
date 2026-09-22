@@ -55,16 +55,16 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, DepthCause, DomainTag,
-    DuplicatePolicy, Fixed, FusedRow, FusionProfile, FusionResult, FusionTrailer, Iri,
-    PfAttestation, Plan, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
+    DuplicatePolicy, ExclusionVerdict, Fixed, FusedRow, FusionProfile, FusionResult, FusionTrailer,
+    Iri, PfAttestation, Plan, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
     RankFidelity, RankedRow, RankedStream, RankedStreamAdapter, ReadAttempts, ReadBound,
     RequestTerm, RetrievalRequest, RowBlock, Statistics, StratumUnit, StreamContract, Term, TopK,
     compile, contribution_under, execute, fuse, plan, search, speculative_depth,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -270,6 +270,13 @@ struct Configuration {
     /// How many candidates each producer really holds, against the `ROWS` both
     /// of them declare.
     holds: u64,
+    /// What both producers declare their exclusion answers are a fact about.
+    ///
+    /// The fourth bit this file varies, and the only one that changes what a
+    /// producer can be *asked* rather than what it promised. Under
+    /// [`ExclusionBasis::Unavailable`] a configuration is the one this file
+    /// pinned before lookups existed, down to the byte.
+    exclusion: ExclusionBasis,
 }
 
 /// The control: different blocks, different candidates. The planner's merge
@@ -279,6 +286,7 @@ const DISTINCT_BLOCKS_DISJOINT_RESULTS: Configuration = Configuration {
     blocks: Blocks::Distinct,
     results: Results::Disjoint,
     holds: ROWS,
+    exclusion: ExclusionBasis::Unavailable,
 };
 
 /// One block, and both producers naming the same candidates.
@@ -287,6 +295,7 @@ const SHARED_BLOCK_INTERSECTING_RESULTS: Configuration = Configuration {
     blocks: Blocks::Shared,
     results: Results::Intersecting,
     holds: ROWS,
+    exclusion: ExclusionBasis::Unavailable,
 };
 
 /// One block, and candidates no two producers share — structurally the control,
@@ -296,6 +305,37 @@ const SHARED_BLOCK_DISJOINT_RESULTS: Configuration = Configuration {
     blocks: Blocks::Shared,
     results: Results::Disjoint,
     holds: ROWS,
+    exclusion: ExclusionBasis::Unavailable,
+};
+
+/// **The same configuration, with the producers answering exclusion lookups.**
+///
+/// Byte for byte [`SHARED_BLOCK_DISJOINT_RESULTS`] except that both producers
+/// declare [`ExclusionBasis::Membership`]: one block, four hundred rows each, no
+/// candidate named twice, the same weights and the same bound. The two are the
+/// differential pair this whole mechanism is measured by, and the only thing
+/// that differs between them is whether a consumer is allowed to *ask*.
+const SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS: Configuration = Configuration {
+    name: "shared_block_disjoint_results_with_lookups",
+    blocks: Blocks::Shared,
+    results: Results::Disjoint,
+    holds: ROWS,
+    exclusion: ExclusionBasis::Membership,
+};
+
+/// **Every verdict is `Possible`.** One block, both producers naming the
+/// identical four hundred candidates, and both answering exclusion lookups.
+///
+/// Byte for byte [`SHARED_BLOCK_INTERSECTING_RESULTS`] except for the declared
+/// basis. Every lookup finds its candidate, so no verdict ever narrows anything,
+/// and what is left to measure is the price of asking — which is what makes this
+/// the configuration the lookup budget is pinned in.
+const SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS: Configuration = Configuration {
+    name: "shared_block_intersecting_results_with_lookups",
+    blocks: Blocks::Shared,
+    results: Results::Intersecting,
+    holds: ROWS,
+    exclusion: ExclusionBasis::Membership,
 };
 
 /// **The short streams.** Structurally [`SHARED_BLOCK_DISJOINT_RESULTS`] — one
@@ -311,6 +351,7 @@ const SHARED_BLOCK_SHORT_STREAMS: Configuration = Configuration {
     blocks: Blocks::Shared,
     results: Results::Disjoint,
     holds: SHORT_ROWS,
+    exclusion: ExclusionBasis::Unavailable,
 };
 
 /// How many candidates [`SHARED_BLOCK_SHORT_STREAMS`]'s producers really hold.
@@ -352,27 +393,54 @@ const fn candidate_prefixes(results: Results) -> [&'static str; 2] {
 /// the whole question this file measures is which rows the *answer* rests on —
 /// so each read is counted separately and named by its position.
 #[derive(Debug, Default)]
-struct Reads(std::sync::Mutex<Vec<Arc<AtomicU64>>>);
+struct Reads {
+    ranked: std::sync::Mutex<Vec<Arc<AtomicU64>>>,
+    /// How many **candidate-bound** invocations the relation served, and how
+    /// many of those found the candidate.
+    ///
+    /// Kept apart from the ranked reads above rather than folded into them,
+    /// because they are different reads of different queries and this file's
+    /// whole subject is which rows an answer rests on. An exclusion lookup is a
+    /// point query that contributes no rank and no row to the answer; counted
+    /// into `ranked` it would make every `rows_materialised` assertion in this
+    /// file read the last lookup instead of the read that answered.
+    ///
+    /// The second number is what makes the fixture's own answers auditable: a
+    /// mock that said `Excluded` to everything would narrow every read and be
+    /// indistinguishable, from the outside, from one that answered honestly.
+    lookups: AtomicU64,
+    lookups_found: AtomicU64,
+}
 
 impl Reads {
-    /// Begin counting a new read, and hand back the counter it fills.
+    /// Begin counting a new ranked read, and hand back the counter it fills.
     fn begin(&self) -> Arc<AtomicU64> {
         let counter = Arc::new(AtomicU64::new(0));
-        self.0
+        self.ranked
             .lock()
             .expect("the fixture counters are never poisoned")
             .push(Arc::clone(&counter));
         counter
     }
 
-    /// The rows each read pulled, oldest first.
+    /// The rows each ranked read pulled, oldest first.
     fn rows(&self) -> Vec<u64> {
-        self.0
+        self.ranked
             .lock()
             .expect("the fixture counters are never poisoned")
             .iter()
             .map(|counter| counter.load(Ordering::SeqCst))
             .collect()
+    }
+
+    /// How many candidate-bound invocations this relation served.
+    fn lookups(&self) -> u64 {
+        self.lookups.load(Ordering::SeqCst)
+    }
+
+    /// How many of them found the candidate.
+    fn lookups_found(&self) -> u64 {
+        self.lookups_found.load(Ordering::SeqCst)
     }
 }
 
@@ -384,7 +452,15 @@ impl Reads {
 /// construction.
 struct CountingProducer {
     arity: PfArity,
-    mode: BindingPattern,
+    /// The access patterns this relation declares.
+    ///
+    /// Always the all-free mode, which subsumes every invocation of this arity.
+    /// A configuration whose producers declare an exclusion basis adds a second:
+    /// the candidate position bound, with a row bound of one. That pair is what
+    /// the registry checks a declared basis against, and it is also what makes
+    /// the two kinds of call distinguishable from inside the relation — a
+    /// candidate-bound call is the lookup, and there is nothing else it could be.
+    modes: Vec<BindingPattern>,
     prefix: &'static str,
     /// How many candidates the relation really holds.
     ///
@@ -406,11 +482,21 @@ impl PropertyFunction for CountingProducer {
     }
 
     fn modes(&self) -> &[BindingPattern] {
-        std::slice::from_ref(&self.mode)
+        &self.modes
     }
 
-    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
-        ROWS
+    /// `ROWS` for the ranking, one for a call that already names its candidate.
+    ///
+    /// The two numbers are two different promises about two different calls, and
+    /// the second is what a declared exclusion basis is admitted against: asking
+    /// *do you hold this one* can return this producer's row for that candidate
+    /// or nothing, and never a list.
+    fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        if mode.is_bound(CANDIDATE_POSITION) {
+            1
+        } else {
+            ROWS
+        }
     }
 
     fn open(
@@ -424,6 +510,30 @@ impl PropertyFunction for CountingProducer {
         // this crate's tests do.
         let bound: Vec<Option<TermValue>> =
             args.flattened().map(Option::<&TermValue>::cloned).collect();
+        // A bound candidate is the exclusion lookup and cannot be anything else:
+        // the ranking call projects the candidate, so it leaves that position
+        // free. The two are therefore counted apart, and the lookup answers from
+        // this relation's own term universe rather than by scanning.
+        if let Some(candidate) = bound[CANDIDATE_POSITION].clone() {
+            self.reads.lookups.fetch_add(1, Ordering::SeqCst);
+            let held = self.holds_candidate(&candidate);
+            if held {
+                self.reads.lookups_found.fetch_add(1, Ordering::SeqCst);
+            }
+            return Ok(Box::new(LookupCursor {
+                row: held.then(|| {
+                    bound
+                        .iter()
+                        .enumerate()
+                        .map(|(position, value)| {
+                            value.clone().unwrap_or_else(|| {
+                                TermValue::iri(format!("{}score{position:06}", ex(self.prefix)))
+                            })
+                        })
+                        .collect()
+                }),
+            }));
+        }
         Ok(Box::new(CountingCursor {
             prefix: self.prefix,
             emitted: 0,
@@ -431,6 +541,51 @@ impl PropertyFunction for CountingProducer {
             bound,
             pulled: self.reads.begin(),
         }))
+    }
+}
+
+/// The flattened argument position every producer in this file projects its
+/// candidate from, and therefore the position a lookup binds.
+const CANDIDATE_POSITION: usize = 0;
+
+impl CountingProducer {
+    /// Whether `candidate` is one of the candidates this relation holds.
+    ///
+    /// Read off the IRI rather than by scanning, which is what makes this a
+    /// membership answer: the relation mints `{prefix}entity{index:06}` for
+    /// every index below `holds`, so a term of that shape with an index in range
+    /// is one it holds and anything else is one it does not. A mock that scanned
+    /// instead would give the same answers and would not be a point lookup, and
+    /// the row bound it declares would be a promise it does not keep.
+    fn holds_candidate(&self, candidate: &TermValue) -> bool {
+        let TermValue::Iri(iri) = candidate else {
+            return false;
+        };
+        let prefix = format!("{}entity", ex(self.prefix));
+        let Some(index) = iri.as_str().strip_prefix(&prefix) else {
+            return false;
+        };
+        // The exact minted spelling, not merely a parseable one: the relation
+        // emits six zero-padded digits, so a term with any other shape is not a
+        // term it ever minted.
+        index.len() == INDEX_WIDTH
+            && index.bytes().all(|byte| byte.is_ascii_digit())
+            && index.parse::<u64>().is_ok_and(|index| index < self.holds)
+    }
+}
+
+/// The zero-padded width the fixture mints its candidate indexes at.
+const INDEX_WIDTH: usize = 6;
+
+/// The cursor behind a candidate-bound invocation: at most one row, decided
+/// before it is pulled.
+struct LookupCursor {
+    row: Option<PfRow>,
+}
+
+impl PfCursor for LookupCursor {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        Ok(self.row.take())
     }
 }
 
@@ -511,9 +666,21 @@ fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc
     let mut registry = PropertyFunctionRegistry::new();
     for (index, (predicate, stratum)) in ["title", "body"].into_iter().zip(strata()).enumerate() {
         let arity = PfArity::new(1, 1);
+        // The all-free mode always, and the candidate-bound point mode only
+        // where this configuration declares a basis. Declaring the second
+        // unconditionally would be a declaration three of this file's
+        // configurations do not need and would change the registry fingerprint
+        // every one of them is pinned through.
+        let mut modes = vec![arity.all_free_mode()];
+        if config.exclusion.is_declared() {
+            modes.push(BindingPattern::from_bound_positions(
+                arity.total(),
+                [CANDIDATE_POSITION],
+            ));
+        }
         let relation = CountingProducer {
             arity,
-            mode: arity.all_free_mode(),
+            modes,
             prefix: prefixes[index],
             holds: config.holds,
             reads: Arc::clone(&counters[index]),
@@ -532,6 +699,7 @@ fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc
                 // of every row and nothing is owed per row.
                 domains: CandidateDomains::within([blocks[index].clone()]),
                 block_position: None,
+                exclusion: config.exclusion,
                 mandatory: false,
             },
         );
@@ -612,6 +780,20 @@ struct Measured {
     rows: Vec<FusedRow>,
     /// How many complete reads of the bundle the answer cost.
     read_attempts: ReadAttempts,
+    /// Exclusion lookups the fusion engine says it made against each stratum.
+    fused_lookups: BTreeMap<Iri, u64>,
+    /// Candidate-bound invocations each relation says it served.
+    ///
+    /// The producer's own count, beside the engine's above. They are read from
+    /// opposite ends of the same seam, so a disagreement is a lookup that went
+    /// somewhere other than the producer it was aimed at — and the pair is what
+    /// keeps either number from being a self-report nothing checks.
+    served_lookups: BTreeMap<Iri, u64>,
+    /// How many of those found the candidate.
+    ///
+    /// The fixture's own answer, so a run in which every verdict was `Excluded`
+    /// is distinguishable from one in which the producers really answered.
+    found_lookups: BTreeMap<Iri, u64>,
 }
 
 impl Measured {
@@ -781,7 +963,7 @@ fn measure_at_planned_depth(config: Configuration, dataset: &RdfDataset) -> Meas
                 .with_attestation(attestation),
         ));
     }
-    let fused = block_on(fuse::<RankedStreamAdapter, Term>(
+    let fused = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         streams,
         &profile,
         compiled.fused_bound,
@@ -838,6 +1020,21 @@ fn measured(
         status: trailer.statuses.clone(),
         rows,
         read_attempts,
+        fused_lookups: trailer
+            .resolution
+            .iter()
+            .map(|(stratum, resolution)| (stratum.clone(), resolution.exclusion_lookups))
+            .collect(),
+        served_lookups: strata()
+            .into_iter()
+            .zip(counters.iter())
+            .map(|(stratum, counter)| (stratum, counter.lookups()))
+            .collect(),
+        found_lookups: strata()
+            .into_iter()
+            .zip(counters.iter())
+            .map(|(stratum, counter)| (stratum, counter.lookups_found()))
+            .collect(),
     }
 }
 
@@ -1490,7 +1687,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
         let arity = PfArity::new(1, 1);
         let relation = CountingProducer {
             arity,
-            mode: arity.all_free_mode(),
+            modes: vec![arity.all_free_mode()],
             prefix: entry.name,
             holds: ROWS,
             // Nothing in this section measures the read, only the depth the plan
@@ -1510,6 +1707,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
                 fidelity: RankFidelity::EXACT,
                 domains: entry.domains(),
                 block_position: None,
+                exclusion: ExclusionBasis::Unavailable,
                 mandatory: false,
             },
         );
@@ -1593,7 +1791,7 @@ fn run_declared(strata: &[Declared], bound: ReadBound, dataset: &RdfDataset) -> 
                 .with_attestation(attestation),
         ));
     }
-    let fused = block_on(fuse::<RankedStreamAdapter, Term>(
+    let fused = block_on(fuse::<RankedStreamAdapter<'_>, Term>(
         streams,
         &profile,
         compiled.fused_bound,
@@ -2051,6 +2249,15 @@ impl RankedStream for ScriptedStream {
         self.contract.clone()
     }
 
+    /// The certificate oracle's streams declare no exclusion basis, so being
+    /// asked for a verdict is the disagreement
+    /// [`ProtocolError::ExclusionUnavailable`] names rather than a question
+    /// they could answer. The oracle's whole question is what a fusion could
+    /// conclude from exactly these rows, and a verdict is not one of them.
+    async fn exclusion(&mut self, _candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        Err(ProtocolError::ExclusionUnavailable)
+    }
+
     fn plan_id(&self) -> Option<PlanId> {
         None
     }
@@ -2119,6 +2326,7 @@ fn cert_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedStre
                         CandidateDomains::within(entry.tags.iter().map(|tag| {
                             DomainTag::parse(tag).expect("generated block tags are valid IRIs")
                         })),
+                        ExclusionBasis::Unavailable,
                     ),
                 },
             )
@@ -2483,16 +2691,349 @@ fn the_finality_licence_is_spelled_once_and_enforcement_keeps_its_own() {
     );
     assert_eq!(
         SOURCE.matches("self.may_still_name(").count(),
-        3,
-        "finality, the upper bound and the score interval all take the licence, \
-         and a site that stopped taking it would be reading a different question"
+        5,
+        "finality, the upper bound and the score interval take the licence, and \
+         the exclusion-lookup phase takes it twice — once to choose which \
+         streams are blocking a candidate and once at the moment of asking, \
+         because an answer recorded earlier in the same phase can have settled \
+         the candidate in between. A site that stopped taking it would be \
+         reading a different question"
     );
     assert_eq!(
         SOURCE.matches("self.could_name(").count(),
-        3,
-        "the raw declaration predicate is read exactly three times: once by the \
-         licence, and twice by the two enforcement sites in `pull` that refuse a \
-         broken domain promise. A fourth reading is either a licence that \
-         bypassed `may_still_name` or an enforcement that should have"
+        4,
+        "the raw declaration predicate is read exactly four times: once by the \
+         licence, twice by the two enforcement sites in `pull` that refuse a \
+         broken domain promise, and once by the verdict check that refuses a \
+         producer calling a candidate possible when its own declared domains \
+         cannot reach it. All three of the latter are ENFORCEMENT — they blame a \
+         declaration — which is exactly why none of them may take the licence: a \
+         licence narrowed by an observation would report a broken observation as \
+         a broken declaration. A fifth reading is either a licence that bypassed \
+         `may_still_name` or an enforcement that should have"
+    );
+    assert_eq!(
+        SOURCE.matches("state.excluded.contains(").count(),
+        2,
+        "the observational half of the licence is read once by `may_still_name` \
+         and once by the frontier arm of `pull` that refuses a stream naming a \
+         candidate it excluded. The certified-candidate arm reads the emitted \
+         record's own copy instead, because a certified candidate no longer has \
+         a `CandidateState` to read"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4. The exclusion lookup: what asking buys, what it costs, and what it may not
+//    change.
+// ---------------------------------------------------------------------------
+//
+// `shared_block_disjoint_results` above is the permanent control, and the reason
+// it drains is stated there: a candidate the left stream named is not *final*
+// while the right stream — which declares the same block, and so could still
+// name it — is open. Nothing declarative can settle that. Both declarations are
+// true, and the thing that is false is a fact about the corpus that no promise
+// about blocks can express: the right stream will never name that candidate.
+//
+// An exclusion lookup converts "has not named it yet" into "will never name it"
+// by observation. The three tests below measure what that is worth, what it
+// costs, and what it does not touch.
+
+/// The value of the whole helper table for one configuration, rendered for a
+/// failure to read beside the numbers the rest of this file pins.
+fn render_with_lookups(config: Configuration, measured: &Measured) -> String {
+    format!(
+        "{base} fused_lookups={fused:?} served={served:?} found={found:?} attempts={attempts:?}",
+        base = render(config, measured),
+        fused = measured.fused_lookups,
+        served = measured.served_lookups,
+        found = measured.found_lookups,
+        attempts = measured.read_attempts,
+    )
+}
+
+/// The total over both strata of one per-stratum table.
+fn total(field: &BTreeMap<Iri, u64>) -> u64 {
+    field.values().sum()
+}
+
+/// **The control's finality problem, solved by observation.**
+///
+/// The configuration is [`SHARED_BLOCK_DISJOINT_RESULTS`] with one bit changed:
+/// both producers declare [`ExclusionBasis::Membership`]. Same block, same four
+/// hundred rows, same disjoint candidates, same weights, same bound.
+///
+/// The control reads four hundred ranks because nothing certifies until both
+/// streams run out. Here a candidate the left stream named is looked up against
+/// the right stream once, the right stream answers that its universe does not
+/// contain it, and the candidate becomes final — so the read stops where the
+/// **threshold** licenses it to, which is the gate the control never reached.
+///
+/// That rank is asserted against this file's own derivation rather than a
+/// literal: `crossing_rank_at` is the pure function with no executor in it, and
+/// the deepest rank the answer actually contains is read off the answer. Two
+/// streams share the block, so the threshold is summed over both and a
+/// single-named candidate has to outlast twice its own weight — the expensive
+/// crossing, and still a sixth of the drain.
+#[test]
+fn membership_lookups_stop_the_drain_where_the_threshold_licenses() {
+    let dataset = common::empty_dataset();
+    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
+    let control = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let report = render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &measured);
+
+    assert_eq!(measured.rows.len(), 5, "the answer is still five rows");
+
+    // The derivation, with no executor in it, and the rank it predicts. The
+    // deepest rank is read off the answer rather than written down, exactly as
+    // the three configurations above read theirs.
+    let deepest = measured.deepest_emitted_rank();
+    assert_eq!(
+        deepest, 3,
+        "the fifth row of an alternating answer — {report}"
+    );
+    let licensed = crossing_rank_at(decay(), &[Fixed::ONE], deepest, &[Fixed::ONE, Fixed::ONE]);
+    assert_eq!(
+        measured.both("the ranks pulled", &measured.ranks_pulled),
+        licensed,
+        "with finality settled by observation, the threshold is what stops the \
+         read — and it stops it exactly where the derivation says — {report}"
+    );
+
+    // And it is strictly less than the control's drain, which is the whole
+    // point. Stated against the control's own measured number rather than
+    // against the literal four hundred, so a change that moved both would still
+    // have to move this comparison.
+    let drained = control.both("the ranks pulled", &control.ranks_pulled);
+    assert_eq!(drained, ROWS, "the control still drains — {report}");
+    assert!(
+        measured.both("the ranks pulled", &measured.ranks_pulled) < drained,
+        "the licensed read must be strictly shallower than the drain it \
+         replaces — {report}"
+    );
+
+    // The lookups really happened, at both ends of the seam. The engine's count
+    // is the answering run's; the producer's is cumulative over every run this
+    // search took, so it can only be larger.
+    for stratum in strata() {
+        let fused = measured.fused_lookups[&stratum];
+        let served = measured.served_lookups[&stratum];
+        assert!(
+            fused > 0,
+            "stratum {stratum} was never asked, so nothing here was measured — {report}"
+        );
+        assert!(
+            served >= fused,
+            "the producer served fewer lookups than the engine says it made, so \
+             one of the two numbers is not about this seam — {report}"
+        );
+    }
+
+    // And the answers were real. These producers hold disjoint candidate sets,
+    // so an honest membership answer never finds a foreign candidate — which is
+    // exactly what a mock that said `Excluded` to everything would also show. The
+    // all-`Possible` twin below is the other half of that pair: there every
+    // lookup finds, so the two together show the fixture is answering from its
+    // own universe rather than from a constant.
+    assert_eq!(
+        total(&measured.found_lookups),
+        0,
+        "these producers share no candidate, so no lookup may find one — {report}"
+    );
+
+    // What the lookups did NOT cost: a single extra ranked row. The reads are
+    // the control's own two, byte for byte, so the hundred-odd point queries
+    // added nothing to the sorted access this file measures — which is what
+    // makes a lookup a lookup.
+    assert_eq!(
+        measured.both("the reads", &measured.reads),
+        control.both("the reads", &control.reads),
+        "an exclusion lookup is a point query and must add no ranked row — {report}"
+    );
+}
+
+/// **What the lookups do not buy here: a single read.**
+///
+/// The speculative read asks each stratum for the fused frontier and one probe
+/// row, and this configuration's answer needs sixty-six ranks of each — so the
+/// narrowed read is still cut and still discarded, exactly as it is in the
+/// control. Asserted rather than left unstated, because the mechanism looks like
+/// it should have removed the second read and did not, and a file that measured
+/// the improvement while going quiet about its limit would be reporting half a
+/// number.
+///
+/// The arithmetic is the file's own, and it is not close. The threshold gate for
+/// a candidate one of two sharers named first passes at rank sixty-three — that
+/// is `a_candidate_one_of_two_sharers_named_crosses_only_past_the_smoothing_constant`,
+/// asserted above with no executor in it — and the speculative depth is seven.
+/// No observation about a candidate can change that: the threshold bounds an item
+/// **nobody has named**, so it is summed over every open stream that admits the
+/// block whatever any of them said about any particular candidate. Removing this
+/// second read is a narrowing the *planner* would have to license, which is where
+/// the control's own note already points.
+#[test]
+fn the_lookups_do_not_narrow_the_speculative_read_and_the_arithmetic_says_why() {
+    let dataset = common::empty_dataset();
+    let measured = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
+    let report = render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &measured);
+
+    assert_eq!(
+        measured.read_attempts,
+        ReadAttempts::Twice,
+        "the answering read is still the planned one — {report}"
+    );
+    assert_eq!(
+        measured.both("the reads", &measured.reads),
+        vec![speculative_limit(), ROWS],
+        "the narrowed read this configuration still cannot keep, and then the \
+         read it always took — {report}"
+    );
+
+    // The gap, stated as the comparison rather than as a claim about it: the
+    // read that answers is an order of magnitude deeper than the read the
+    // speculation asked for, so no verdict could have brought it inside.
+    let answered_at = measured.both("the ranks pulled", &measured.ranks_pulled);
+    assert!(
+        answered_at > speculative_read_depth(),
+        "a fusion that certified inside the speculative depth would have kept \
+         that read; this one needs {answered_at} ranks of a {} rank read — {report}",
+        speculative_read_depth()
+    );
+    assert_eq!(
+        crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE, Fixed::ONE]),
+        63,
+        "and the shallowest rank at which even the FIRST row of this \
+         configuration can cross the threshold is already nine times the \
+         speculative depth — {report}"
+    );
+}
+
+/// **The differential, in one test so it cannot pass vacuously.**
+///
+/// Two registries differing in exactly one thing: whether the producers declare
+/// an exclusion basis. Three claims, and all three have to hold of the same pair
+/// of runs — the answer is identical, the declaring run really asked, and the
+/// declaring run really read less. Split across three tests, the first could
+/// pass over a mechanism that never ran and the third could pass over an answer
+/// that changed.
+#[test]
+fn the_declared_basis_alone_buys_a_shallower_read_of_the_same_answer() {
+    let dataset = common::empty_dataset();
+    let silent = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    let declaring = measure(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &dataset);
+    let report = format!(
+        "silent={} declaring={}",
+        render(SHARED_BLOCK_DISJOINT_RESULTS, &silent),
+        render_with_lookups(SHARED_BLOCK_DISJOINT_RESULTS_WITH_LOOKUPS, &declaring),
+    );
+
+    // (1) The answer is the same one — same entities, same scores, same order.
+    assert_eq!(
+        declaring.answer(),
+        silent.answer(),
+        "the two registries hold the identical candidates and must answer \
+         identically; only the cost of the answer is in question — {report}"
+    );
+
+    // (2) The declaring run really used the mechanism.
+    assert!(
+        total(&declaring.fused_lookups) > 0,
+        "the declaring run made no lookup, so nothing distinguishes it — {report}"
+    );
+    assert_eq!(
+        total(&silent.fused_lookups),
+        0,
+        "and the silent run made none, which is what makes the pair a \
+         difference of one bit — {report}"
+    );
+
+    // (3) And it read strictly less, in at least one stratum.
+    let narrowed = strata()
+        .into_iter()
+        .filter(|stratum| declaring.ranks_pulled[stratum] < silent.ranks_pulled[stratum])
+        .count();
+    assert!(
+        narrowed > 0,
+        "the declaring run read at least as deep as the silent one in every \
+         stratum, so the lookups bought nothing — {report}"
+    );
+}
+
+/// **The budget bites: a candidate that cannot win is never looked up.**
+///
+/// One block, both producers naming the identical candidates, and both
+/// answering lookups — so **every** verdict is `Possible` and no verdict ever
+/// narrows anything. What is left is the price of asking, and this is where it
+/// is pinned.
+///
+/// The bound is derived, not configured. A candidate enters the frontier only
+/// when some row names it, so at most `Σ ranks_pulled` candidates ever exist; a
+/// candidate is asked only of the streams that have not named it, so at most
+/// `strata - 1` per candidate; and each pair is asked **once** for the whole
+/// read, because an answer is a standing fact about a producer's universe rather
+/// than something that changes between passes. That last clause is the one worth
+/// a test: without it the count would be the pairs times the number of passes of
+/// the row loop, which is quadratic in exactly the configuration this mechanism
+/// exists to make cheap.
+#[test]
+fn a_candidate_that_cannot_win_is_never_looked_up() {
+    let dataset = common::empty_dataset();
+    let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &dataset);
+    let control = measure(SHARED_BLOCK_INTERSECTING_RESULTS, &dataset);
+    let report = render_with_lookups(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS, &measured);
+
+    // Every lookup found its candidate, so every verdict was `Possible`. This is
+    // the anti-vacuity half of the pair: the disjoint configuration above finds
+    // nothing, this one finds everything, and a fixture answering from a
+    // constant could not do both.
+    assert_eq!(
+        total(&measured.found_lookups),
+        total(&measured.served_lookups),
+        "both producers hold every candidate, so every lookup must find one — {report}"
+    );
+    assert!(
+        total(&measured.served_lookups) > 0,
+        "a configuration that asked nothing would satisfy the equality above \
+         vacuously — {report}"
+    );
+
+    // Nothing narrowed, which is the control this measurement needs: the read is
+    // the one the same configuration takes without lookups, rank for rank.
+    assert_eq!(
+        measured.ranks_pulled, control.ranks_pulled,
+        "no verdict narrowed anything here, so the read must be unchanged — {report}"
+    );
+    assert_eq!(
+        measured.answer(),
+        control.answer(),
+        "and so must the answer — {report}"
+    );
+
+    // The derived ceiling: one lookup per (frontier candidate, non-naming
+    // stream) pair, for the whole read.
+    let other_streams =
+        u64::try_from(strata().len() - 1).expect("the fixture stratum count fits a u64");
+    let pairs_ceiling = total(&measured.ranks_pulled) * other_streams;
+    assert!(
+        total(&measured.fused_lookups) <= pairs_ceiling,
+        "the lookup count must be bounded by the pairs, not by the passes: \
+         {} lookups against a ceiling of {pairs_ceiling} — {report}",
+        total(&measured.fused_lookups)
+    );
+
+    // And the exact count, pinned so a change that loosened the threshold filter
+    // has to move this literal in the same commit that earns it. Five, against a
+    // pair ceiling of twelve: the candidates a lookup would not have changed the
+    // fate of are the ones never asked about.
+    assert_eq!(
+        total(&measured.fused_lookups),
+        5,
+        "the measured price of asking, in a configuration where asking buys \
+         nothing — {report}"
+    );
+    assert_eq!(
+        pairs_ceiling, 12,
+        "the ceiling this is measured against, stated so the comparison above \
+         is not a comparison with an unbounded number — {report}"
     );
 }

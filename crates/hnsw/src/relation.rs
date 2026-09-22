@@ -66,8 +66,8 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
-    IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankFidelity, Ranked, RankedDeclaration,
+    ExclusionBasis, IndexGeneration, Kernel, KnnGuard, OrderFidelity, PfArgs, PfArity, PfCursor,
+    PfRow, PropertyFunction, PropertyFunctionRegistry, RankFidelity, Ranked, RankedDeclaration,
     RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
@@ -560,6 +560,12 @@ impl HnswRelation {
             // `CandidateDomains::Unrestricted`; see
             // `RankedDeclaration::block_position`.
             block_position: None,
+            // No exclusion lookup is offered here. This relation declares no
+            // access mode that binds the candidate with a point row bound, so
+            // the registry would refuse any other value — and a basis declared
+            // without the mode behind it would promise a lookup that becomes a
+            // scan. `Unavailable` is the true statement, not a placeholder.
+            exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
         }
     }

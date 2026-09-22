@@ -46,9 +46,10 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_retrieval::{
-    CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, Fixed, FusionProfile,
-    FusionStream, Iri, OrderFidelity, ProducerReceipt, ProtocolError, RankFidelity, RankedRow,
-    RankedStream, RowBlock, ScoreInterval, StreamContract, Term, contribution,
+    CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, ExclusionBasis,
+    ExclusionVerdict, Fixed, FusionProfile, FusionStream, Iri, OrderFidelity, ProducerReceipt,
+    ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock, ScoreInterval, StreamContract,
+    Term, contribution,
 };
 
 // ---------------------------------------------------------------------------
@@ -249,6 +250,7 @@ impl RankedStream for LazyStream {
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::Unrestricted,
+                ExclusionBasis::Unavailable,
             ),
             Some(block) => StreamContract::new(
                 DuplicatePolicy::Unique,
@@ -256,8 +258,17 @@ impl RankedStream for LazyStream {
                 CandidateDomains::within([
                     DomainTag::parse(BLOCKS[block]).expect("the fixture block tags are valid IRIs")
                 ]),
+                ExclusionBasis::Unavailable,
             ),
         }
+    }
+
+    /// This stream declares no exclusion basis, so being asked for a verdict is
+    /// the disagreement [`ProtocolError::ExclusionUnavailable`] names rather
+    /// than a question it could answer. Fusion never asks it; a hand-written
+    /// caller that did would be told so.
+    async fn exclusion(&mut self, _candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        Err(ProtocolError::ExclusionUnavailable)
     }
 }
 

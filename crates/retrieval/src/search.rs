@@ -247,7 +247,7 @@ use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
 use crate::ranked_stream::{
-    ProducerReceipt, ProtocolError, RankedRow, RankedStream, StreamContract,
+    ExclusionVerdict, ProducerReceipt, ProtocolError, RankedRow, RankedStream, StreamContract,
 };
 use crate::reciprocal_rank::contribution_under;
 use crate::request::RetrievalRequest;
@@ -647,7 +647,7 @@ where
         streams: executed,
         statuses,
     } = execution;
-    let mut streams: Vec<(Iri, RankedStreamAdapter)> = Vec::with_capacity(executed.len());
+    let mut streams: Vec<(Iri, RankedStreamAdapter<'_>)> = Vec::with_capacity(executed.len());
     let mut unweighted_strata: Vec<Iri> = Vec::new();
     for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
@@ -704,7 +704,7 @@ where
     //    bundle's bound, so `fuse` re-checks this call against it rather than
     //    taking it on trust.
     let fused_strata = streams.len();
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, compiled.fused_bound)
+    let fused = fuse::<RankedStreamAdapter<'_>, Term>(streams, profile, compiled.fused_bound)
         .await
         .map_err(SearchError::FusionError)?;
 
@@ -804,9 +804,9 @@ struct Attempt {
 /// [`ProtocolError::ContributionMismatch`]. Its terminal receipt is the
 /// executor's own, passed through unchanged.
 #[derive(Debug)]
-pub struct RankedStreamAdapter {
+pub struct RankedStreamAdapter<'d> {
     /// The executor's rows, in rank order.
-    inner: RankedStreamImpl,
+    inner: RankedStreamImpl<'d>,
     /// The contract the stratum's producer declared these rows under.
     contract: StreamContract,
     /// The profile's weight for this stream's stratum.
@@ -822,7 +822,7 @@ pub struct RankedStreamAdapter {
     attestation: PfAttestation,
 }
 
-impl RankedStreamAdapter {
+impl<'d> RankedStreamAdapter<'d> {
     /// Bridge `stream` for `stratum` under `profile`, reporting `contract`, or
     /// `None` when `profile` declares no weight for that stratum.
     ///
@@ -848,7 +848,7 @@ impl RankedStreamAdapter {
     /// names it in [`SearchResult::unweighted_strata`] and fuses the rest.
     #[must_use]
     pub fn new(
-        stream: RankedStreamImpl,
+        stream: RankedStreamImpl<'d>,
         contract: StreamContract,
         profile: &FusionProfile,
         stratum: &Iri,
@@ -930,7 +930,7 @@ impl RankedStreamAdapter {
     }
 }
 
-impl RankedStream for RankedStreamAdapter {
+impl RankedStream for RankedStreamAdapter<'_> {
     type Item = Term;
 
     async fn next(&mut self) -> Result<Option<RankedRow<Self::Item>>, ProtocolError> {
@@ -977,6 +977,18 @@ impl RankedStream for RankedStreamAdapter {
 
     fn contract(&self) -> StreamContract {
         self.contract.clone()
+    }
+
+    /// Passed through untouched, exactly as the receipt is.
+    ///
+    /// This bridge adds the contribution and nothing else. A verdict is a
+    /// measurement the executor's prepared lookup takes against the caller's
+    /// dataset, and a bridge that answered one — by defaulting, by caching, by
+    /// deriving one from the rows it has already seen — would be answering a
+    /// question about a host's corpus out of a rank it was handed. The same rule
+    /// that keeps it from inventing a contract keeps it from inventing this.
+    async fn exclusion(&mut self, candidate: &Term) -> Result<ExclusionVerdict, ProtocolError> {
+        self.inner.exclusion(candidate).await
     }
 
     fn plan_id(&self) -> Option<PlanId> {
