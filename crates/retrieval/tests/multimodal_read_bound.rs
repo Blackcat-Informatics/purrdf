@@ -17,6 +17,14 @@
 //! terminal status the trailer reports. They are asserted as exact literals,
 //! because a range would hide the very drift this file exists to detect.
 //!
+//! The third of those is the rows of the read the **answer came from**, and a run
+//! can take more than one: a plan the planner could not narrow is read
+//! speculatively first, at the fused frontier, and that read is discarded whole
+//! if some stratum's ceiling cut it. So every read is counted separately, the
+//! number of them is measured too, and the rows a discarded attempt cost are
+//! asserted where that cost is the subject rather than folded into the depth of
+//! the read that answered.
+//!
 //! Beside them sits a derivation with no executor in it: the rank at which a
 //! candidate's lower bound overtakes the fusion threshold, computed from the
 //! profile's own decay law through the crate's own `contribution_under`. It
@@ -46,11 +54,12 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DepthCause, DomainTag, DuplicatePolicy,
-    Fixed, FusedRow, FusionProfile, FusionResult, Iri, PfAttestation, PlanId, ProducerReceipt,
-    ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream,
-    RankedStreamAdapter, ReadBound, RequestTerm, RetrievalRequest, RowBlock, Statistics,
-    StratumUnit, StreamContract, Term, TopK, compile, contribution_under, execute, fuse, plan,
+    AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, DepthCause, DomainTag,
+    DuplicatePolicy, Fixed, FusedRow, FusionProfile, FusionResult, FusionTrailer, Iri,
+    PfAttestation, Plan, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
+    RankFidelity, RankedRow, RankedStream, RankedStreamAdapter, ReadAttempts, ReadBound,
+    RequestTerm, RetrievalRequest, RowBlock, Statistics, StratumUnit, StreamContract, Term, TopK,
+    compile, contribution_under, execute, fuse, plan, search, speculative_depth,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
@@ -258,6 +267,9 @@ struct Configuration {
     name: &'static str,
     blocks: Blocks,
     results: Results,
+    /// How many candidates each producer really holds, against the `ROWS` both
+    /// of them declare.
+    holds: u64,
 }
 
 /// The control: different blocks, different candidates. The planner's merge
@@ -266,6 +278,7 @@ const DISTINCT_BLOCKS_DISJOINT_RESULTS: Configuration = Configuration {
     name: "distinct_blocks_disjoint_results",
     blocks: Blocks::Distinct,
     results: Results::Disjoint,
+    holds: ROWS,
 };
 
 /// One block, and both producers naming the same candidates.
@@ -273,6 +286,7 @@ const SHARED_BLOCK_INTERSECTING_RESULTS: Configuration = Configuration {
     name: "shared_block_intersecting_results",
     blocks: Blocks::Shared,
     results: Results::Intersecting,
+    holds: ROWS,
 };
 
 /// One block, and candidates no two producers share — structurally the control,
@@ -281,7 +295,30 @@ const SHARED_BLOCK_DISJOINT_RESULTS: Configuration = Configuration {
     name: "shared_block_disjoint_results",
     blocks: Blocks::Shared,
     results: Results::Disjoint,
+    holds: ROWS,
 };
+
+/// **The short streams.** Structurally [`SHARED_BLOCK_DISJOINT_RESULTS`] — one
+/// block, no candidate named twice, the same declared four hundred rows and so
+/// the same planned depth — except that each producer really holds fewer
+/// candidates than the speculative read asks for.
+///
+/// It exists to separate two things a narrowed read can look like from the
+/// outside. Both configurations drain every row their relations hold; only one
+/// of them was *cut* doing it.
+const SHARED_BLOCK_SHORT_STREAMS: Configuration = Configuration {
+    name: "shared_block_short_streams",
+    blocks: Blocks::Shared,
+    results: Results::Disjoint,
+    holds: SHORT_ROWS,
+};
+
+/// How many candidates [`SHARED_BLOCK_SHORT_STREAMS`]'s producers really hold.
+///
+/// Below the speculative depth on purpose, and above nothing else: four rows per
+/// stream is eight candidates, which is more than the bound of five, so the
+/// answer is still a bounded answer rather than everything there was.
+const SHORT_ROWS: u64 = 4;
 
 /// The two strata, in the order the two producers are registered.
 fn strata() -> [Iri; 2] {
@@ -305,8 +342,42 @@ const fn candidate_prefixes(results: Results) -> [&'static str; 2] {
     }
 }
 
-/// A producer that mints `ROWS` candidates lazily under `prefix`, counting every
-/// row the executor actually takes from it.
+/// Every read one producer served, in the order the executor took them, each
+/// counting the rows that read really pulled out of the relation.
+///
+/// A list rather than one running total, because a run can take more than one
+/// read of the same relation: [`search`] attempts a narrowed read first and
+/// discards it whole if some stratum's ceiling cut it. Summed into a single
+/// counter those two reads would be indistinguishable from one deep read, and
+/// the whole question this file measures is which rows the *answer* rests on —
+/// so each read is counted separately and named by its position.
+#[derive(Debug, Default)]
+struct Reads(std::sync::Mutex<Vec<Arc<AtomicU64>>>);
+
+impl Reads {
+    /// Begin counting a new read, and hand back the counter it fills.
+    fn begin(&self) -> Arc<AtomicU64> {
+        let counter = Arc::new(AtomicU64::new(0));
+        self.0
+            .lock()
+            .expect("the fixture counters are never poisoned")
+            .push(Arc::clone(&counter));
+        counter
+    }
+
+    /// The rows each read pulled, oldest first.
+    fn rows(&self) -> Vec<u64> {
+        self.0
+            .lock()
+            .expect("the fixture counters are never poisoned")
+            .iter()
+            .map(|counter| counter.load(Ordering::SeqCst))
+            .collect()
+    }
+}
+
+/// A producer that mints candidates lazily under `prefix`, counting every row
+/// the executor actually takes from it, read by read.
 ///
 /// Lazy on purpose. Nothing is materialised in `open`, so the counter measures
 /// the read the emitted `LIMIT` licensed rather than the mock's own
@@ -315,7 +386,14 @@ struct CountingProducer {
     arity: PfArity,
     mode: BindingPattern,
     prefix: &'static str,
-    pulled: Arc<AtomicU64>,
+    /// How many candidates the relation really holds.
+    ///
+    /// Separate from the `ROWS` it *declares*, because a declaration is a
+    /// ceiling and a relation is allowed to hold fewer: a stream that runs out
+    /// inside a narrowed read is exhausted rather than cut, and telling those
+    /// two apart is the whole of what the fallback keys on.
+    holds: u64,
+    reads: Arc<Reads>,
 }
 
 impl PropertyFunction for CountingProducer {
@@ -349,8 +427,9 @@ impl PropertyFunction for CountingProducer {
         Ok(Box::new(CountingCursor {
             prefix: self.prefix,
             emitted: 0,
+            holds: self.holds,
             bound,
-            pulled: Arc::clone(&self.pulled),
+            pulled: self.reads.begin(),
         }))
     }
 }
@@ -359,13 +438,14 @@ impl PropertyFunction for CountingProducer {
 struct CountingCursor {
     prefix: &'static str,
     emitted: u64,
+    holds: u64,
     bound: Vec<Option<TermValue>>,
     pulled: Arc<AtomicU64>,
 }
 
 impl PfCursor for CountingCursor {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
-        if self.emitted >= ROWS {
+        if self.emitted >= self.holds {
             return Ok(None);
         }
         let index = self.emitted;
@@ -423,11 +503,11 @@ fn accepted_terms(predicate: &str) -> Vec<AcceptedTerm> {
     }]
 }
 
-/// The registry for one configuration, with both producers' pull counters.
-fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc<AtomicU64>; 2]) {
+/// The registry for one configuration, with both producers' read counters.
+fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
     let blocks = declared_blocks(config.blocks);
     let prefixes = candidate_prefixes(config.results);
-    let counters = [Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0))];
+    let counters = [Arc::new(Reads::default()), Arc::new(Reads::default())];
     let mut registry = PropertyFunctionRegistry::new();
     for (index, (predicate, stratum)) in ["title", "body"].into_iter().zip(strata()).enumerate() {
         let arity = PfArity::new(1, 1);
@@ -435,7 +515,8 @@ fn configured_registry(config: Configuration) -> (PropertyFunctionRegistry, [Arc
             arity,
             mode: arity.all_free_mode(),
             prefix: prefixes[index],
-            pulled: Arc::clone(&counters[index]),
+            holds: config.holds,
+            reads: Arc::clone(&counters[index]),
         };
         registry.register_ranked(
             ex(&format!("pf/{predicate}")),
@@ -518,19 +599,52 @@ fn emitted_limit(unit: &StratumUnit) -> u64 {
 struct Measured {
     /// The per-stratum depth the planner recorded.
     planned_depth: BTreeMap<Iri, u32>,
-    /// The `LIMIT` the compiler emitted for each unit.
+    /// The `LIMIT` the compiler emitted for each unit, from the depth above.
     emitted_limit: BTreeMap<Iri, u64>,
-    /// Rows the executor really took out of each relation.
-    rows_materialised: BTreeMap<Iri, u64>,
+    /// Rows the executor really took out of each relation, one entry per read,
+    /// oldest first.
+    reads: BTreeMap<Iri, Vec<u64>>,
     /// Ranks fusion really pulled off each stream.
     ranks_pulled: BTreeMap<Iri, u64>,
     /// What the trailer says stopped each stream.
     status: BTreeMap<Iri, ProducerStatus>,
     /// The answer itself, with each row's per-stratum rank.
     rows: Vec<FusedRow>,
+    /// How many complete reads of the bundle the answer cost.
+    read_attempts: ReadAttempts,
 }
 
 impl Measured {
+    /// Rows the executor took out of each relation **in the read this answer came
+    /// from**, which is the last read each producer served.
+    ///
+    /// The answering read and not the sum, because the sum answers a different
+    /// question. A run that narrowed and was cut discarded its narrowed read
+    /// entirely and read again; the rows of the discarded attempt are a cost,
+    /// counted in [`Self::reads`] and asserted where that cost is the subject,
+    /// but they are not rows the answer rests on and adding them into this number
+    /// would say the deep read got deeper.
+    fn rows_materialised(&self) -> BTreeMap<Iri, u64> {
+        self.reads
+            .iter()
+            .map(|(stratum, reads)| {
+                (
+                    stratum.clone(),
+                    *reads.last().expect("every producer served a read"),
+                )
+            })
+            .collect()
+    }
+
+    /// The answer, as the thing two reads of one configuration have to agree on:
+    /// the rows, their scores, and their order.
+    fn answer(&self) -> Vec<(String, Fixed)> {
+        self.rows
+            .iter()
+            .map(|row| (row.entity.as_str().to_owned(), row.score))
+            .collect()
+    }
+
     /// The value `field` carries for both strata, and a panic naming both when
     /// they disagree — every assertion in this file is about a number the two
     /// symmetric producers reach together.
@@ -578,13 +692,63 @@ impl Measured {
     }
 }
 
-/// Run one configuration through `plan` → `compile` → `execute` → `fuse`.
+/// Run one configuration through the whole ladder as a caller runs it, with
+/// `search`, and measure what that run cost.
 ///
-/// The stages are driven by hand rather than through `search` because three of
-/// the five measurements live between them: the depth is the plan's, the `LIMIT`
-/// is the compiled unit's, and the materialised rows are counted inside the
-/// relation while the executor is reading it.
+/// Two of the seven measurements are not on the answer `search` returns — the
+/// depth is the plan's and the `LIMIT` is the compiled unit's — so a plan and a
+/// bundle are built here as well, and read for those two numbers alone. Both
+/// stages are pure functions of the request, the registry and the statistics, so
+/// the plan read here is the plan `search` runs; and neither stage opens a
+/// relation, so nothing they do is counted by the producers' own read counters.
+///
+/// The rest is `search`'s: the rows fusion pulled, the statuses the trailer
+/// reports, and how many complete reads of the bundle the answer cost. Driving
+/// the stages by hand instead would measure a read this crate no longer takes —
+/// the whole subject of this file is which read `search` chooses.
 fn measure(config: Configuration, dataset: &RdfDataset) -> Measured {
+    let (registry, counters) = configured_registry(config);
+    let statistics = fixture_statistics();
+    let profile = fixture_profile();
+    let request = RetrievalRequest::bounded(request_terms(), TOP_K);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &statistics,
+        fusion_profile: Some(&profile),
+    };
+
+    let answer = block_on(search(
+        &request,
+        &registry,
+        &statistics,
+        dataset,
+        &env,
+        &profile,
+    ))
+    .expect("the fixture request searches");
+
+    let planned = plan(&request, &registry, &statistics).expect("the fixture request plans");
+    let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
+
+    measured(
+        &planned,
+        &compiled,
+        &counters,
+        &answer.trailer,
+        answer.rows,
+        answer.read_attempts,
+    )
+}
+
+/// Run one configuration at the depths its plan recorded, reading every stratum
+/// in full.
+///
+/// The reference the speculative path is checked against, and it is the hand-
+/// composed pipeline rather than a flag on `search`: `execute` reads each unit at
+/// its planned depth, which is the read this file pinned before any narrowing
+/// existed. A narrowing that changed an answer would show up as a disagreement
+/// between this and [`measure`], and nothing else in this file could catch it.
+fn measure_at_planned_depth(config: Configuration, dataset: &RdfDataset) -> Measured {
     let (registry, counters) = configured_registry(config);
     let statistics = fixture_statistics();
     let profile = fixture_profile();
@@ -597,12 +761,6 @@ fn measure(config: Configuration, dataset: &RdfDataset) -> Measured {
         fusion_profile: Some(&profile),
     };
     let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
-
-    let emitted_limit: BTreeMap<Iri, u64> = compiled
-        .units
-        .iter()
-        .map(|unit| (unit.stratum.clone(), emitted_limit(unit)))
-        .collect();
 
     let execution =
         block_on(execute(&compiled, &registry, dataset)).expect("the fixture registry executes");
@@ -631,29 +789,55 @@ fn measure(config: Configuration, dataset: &RdfDataset) -> Measured {
     .expect("the executed streams fuse");
     let trailer = fused.trailer.completed_with(execution.statuses);
 
-    let planned_depth = planned
-        .stratum_depths
-        .iter()
-        .map(|(stratum, depth)| (stratum.clone(), *depth))
-        .collect();
-    let rows_materialised = strata()
-        .into_iter()
-        .zip(counters.iter())
-        .map(|(stratum, counter)| (stratum, counter.load(Ordering::SeqCst)))
-        .collect();
-    let ranks_pulled = trailer
-        .resolution
-        .iter()
-        .map(|(stratum, resolution)| (stratum.clone(), resolution.ranks_pulled))
-        .collect();
+    measured(
+        &planned,
+        &compiled,
+        &counters,
+        &trailer,
+        fused.rows,
+        // One read, by construction: `execute` takes the planned depth and this
+        // function calls it once.
+        ReadAttempts::Once,
+    )
+}
 
+/// Assemble one run's measurements out of the stages that produced it.
+///
+/// One assembly for both paths, so the numbers the two are compared on are read
+/// off the same places by the same code — a second reading would be a second
+/// chance for the comparison to be about the harness.
+fn measured(
+    planned: &Plan,
+    compiled: &CompiledRetrieval,
+    counters: &[Arc<Reads>; 2],
+    trailer: &FusionTrailer,
+    rows: Vec<FusedRow>,
+    read_attempts: ReadAttempts,
+) -> Measured {
     Measured {
-        planned_depth,
-        emitted_limit,
-        rows_materialised,
-        ranks_pulled,
+        planned_depth: planned
+            .stratum_depths
+            .iter()
+            .map(|(stratum, depth)| (stratum.clone(), *depth))
+            .collect(),
+        emitted_limit: compiled
+            .units
+            .iter()
+            .map(|unit| (unit.stratum.clone(), emitted_limit(unit)))
+            .collect(),
+        reads: strata()
+            .into_iter()
+            .zip(counters.iter())
+            .map(|(stratum, counter)| (stratum, counter.rows()))
+            .collect(),
+        ranks_pulled: trailer
+            .resolution
+            .iter()
+            .map(|(stratum, resolution)| (stratum.clone(), resolution.ranks_pulled))
+            .collect(),
         status: trailer.statuses.clone(),
-        rows: fused.rows,
+        rows,
+        read_attempts,
     }
 }
 
@@ -666,10 +850,32 @@ fn render(config: Configuration, measured: &Measured) -> String {
         name = config.name,
         depth = measured.both("the planned depth", &measured.planned_depth),
         limit = measured.both("the emitted LIMIT", &measured.emitted_limit),
-        materialised = measured.both("the rows materialised", &measured.rows_materialised),
+        materialised = measured.both("the rows materialised", &measured.rows_materialised()),
         pulled = measured.both("the ranks pulled", &measured.ranks_pulled),
         status = measured.both("the terminal status", &measured.status),
     )
+}
+
+/// The depth a speculative read asks one stratum of this file's two-stratum
+/// configurations for.
+///
+/// Taken from the crate's own derivation rather than restated as a literal
+/// beside it: the number is *asserted* once, in
+/// [`the_speculative_depth_is_the_bound_plus_one_head_per_open_stream`], and
+/// every other use reads it from the same function the engine reads it from. A
+/// second literal here would go on passing if the derivation changed under it.
+fn speculative_read_depth() -> u64 {
+    u64::from(speculative_depth(
+        TOP_K,
+        strata().len(),
+        u32::try_from(ROWS).expect("the fixture row bound fits a recordable depth"),
+    ))
+}
+
+/// The rows a speculative read of one such stratum materialises: that depth, and
+/// the probe row every emitted bound carries one past it.
+fn speculative_limit() -> u64 {
+    speculative_read_depth() + 1
 }
 
 /// The status a fusion that stopped a live stream writes, at the contribution
@@ -743,12 +949,17 @@ fn distinct_blocks_disjoint_results_read_only_what_the_bound_needs() {
 ///
 /// Two strata sharing a block are not pairwise disjoint, so the planner's merge
 /// argument does not hold and the depth falls back to the declared four
-/// hundred. Fusion still stops at the sixth rank — every candidate collected
-/// from both streams that admit its block, so its lower bound is measured
-/// against exactly the streams it already read — but the executor has already
-/// materialised the whole relation by then.
+/// hundred. Fusion stops at the sixth rank all the same — every candidate
+/// collected from both streams that admit its block, so its lower bound is
+/// measured against exactly the streams it already read.
+///
+/// The depth the *plan* records is therefore four hundred and the rows the
+/// *read* takes are eight: the speculative read asks each stratum for the fused
+/// frontier and one probe row, the fusion certifies inside it, and the answer is
+/// that answer. Nothing was thrown away here, which is why the eight is the whole
+/// of what this configuration costs.
 #[test]
-fn shared_block_intersecting_results_read_the_whole_relation_to_answer_at_the_sixth_rank() {
+fn shared_block_intersecting_results_answer_at_the_sixth_rank_inside_the_speculative_read() {
     let dataset = common::empty_dataset();
     let measured = measure(SHARED_BLOCK_INTERSECTING_RESULTS, &dataset);
     let report = render(SHARED_BLOCK_INTERSECTING_RESULTS, &measured);
@@ -766,9 +977,16 @@ fn shared_block_intersecting_results_read_the_whole_relation_to_answer_at_the_si
         "and the emitted bound is that depth plus its probe row — {report}"
     );
     assert_eq!(
-        measured.both("the rows materialised", &measured.rows_materialised),
-        400,
-        "so the executor read every row the relation held — {report}"
+        measured.both("the rows materialised", &measured.rows_materialised()),
+        speculative_limit(),
+        "so the executor read the frontier and its probe row, not the \
+         declaration — {report}"
+    );
+    assert_eq!(
+        measured.read_attempts,
+        ReadAttempts::Once,
+        "and it read once: the narrowed read certified, so there was nothing to \
+         fall back from — {report}"
     );
     assert_eq!(
         measured.both("the ranks pulled", &measured.ranks_pulled),
@@ -783,13 +1001,15 @@ fn shared_block_intersecting_results_read_the_whole_relation_to_answer_at_the_si
 
     // The gap between the two numbers above is the measurement this
     // configuration exists to make, and it is stated as the subtraction rather
-    // than as a word: the executor's read is not bounded by what fusion
-    // consumed, and here it overshot by three hundred and ninety-four rows per
-    // stream.
+    // than as a word: the executor's read is still not bounded by what fusion
+    // consumed, and what bounds it now is the frontier rather than the
+    // declaration. Two rows — the seventh rank the frontier reaches for, which
+    // is the head that made the threshold fall, and the eighth that makes the
+    // ending observable.
     assert_eq!(
-        measured.both("the rows materialised", &measured.rows_materialised)
+        measured.both("the rows materialised", &measured.rows_materialised())
             - measured.both("the ranks pulled", &measured.ranks_pulled),
-        394,
+        2,
         "rows the executor materialised that fusion never asked for — {report}"
     );
 
@@ -825,6 +1045,13 @@ fn shared_block_intersecting_results_read_the_whole_relation_to_answer_at_the_si
 /// The four hundreds below are the evidence of what an improvement would be
 /// improving. They stay asserted exactly, so work that lowers them has to
 /// change this literal in the same commit that earns it.
+///
+/// They are also not the whole bill, and the last assertion says so: this is the
+/// one configuration whose speculative read is cut, so it pays the frontier once
+/// for a read it throws away and then pays the four hundred anyway. The
+/// narrowing does not make this configuration cheaper — it makes it very
+/// slightly dearer — and what would make it cheaper is a narrowing the *planner*
+/// can license, not a deeper read here.
 #[test]
 fn shared_block_disjoint_results_drain_both_streams_unbounded_control() {
     let dataset = common::empty_dataset();
@@ -843,7 +1070,7 @@ fn shared_block_disjoint_results_drain_both_streams_unbounded_control() {
         "and the emitted bound is that depth plus its probe row — {report}"
     );
     assert_eq!(
-        measured.both("the rows materialised", &measured.rows_materialised),
+        measured.both("the rows materialised", &measured.rows_materialised()),
         400,
         "the executor read every row the relation held — {report}"
     );
@@ -857,6 +1084,15 @@ fn shared_block_disjoint_results_drain_both_streams_unbounded_control() {
         measured.both("the terminal status", &measured.status),
         ProducerStatus::Exhausted { rows_emitted: ROWS },
         "a stream read to its end reports exhaustion, not a ceiling — {report}"
+    );
+    // And the whole bill, which the four hundred above is not: the speculative
+    // read came first, was cut, and was thrown away. Stated here so the cost of
+    // this configuration is not readable as one number smaller than it is.
+    assert_eq!(
+        measured.both("the reads", &measured.reads),
+        vec![speculative_limit(), ROWS],
+        "the narrowed read this configuration cannot keep, and then the read it \
+         always took — {report}"
     );
 
     // Why the threshold derivation does not apply here: the gate this run never
@@ -918,8 +1154,8 @@ fn the_declaration_alone_moves_every_measured_number() {
         "the declaration decides the emitted bound"
     );
     assert_ne!(
-        distinct.both("the rows materialised", &distinct.rows_materialised),
-        shared.both("the rows materialised", &shared.rows_materialised),
+        distinct.both("the rows materialised", &distinct.rows_materialised()),
+        shared.both("the rows materialised", &shared.rows_materialised()),
         "the declaration decides how much the executor reads"
     );
     assert_ne!(
@@ -932,6 +1168,279 @@ fn the_declaration_alone_moves_every_measured_number() {
         shared.both("the terminal status", &shared.status),
         "and the declaration decides which ending the trailer reports"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 1b'. The speculative read: what it asks for, when it is thrown away, and what
+//      it may never change.
+// ---------------------------------------------------------------------------
+//
+// A depth the planner could not narrow is a sound bound and a deep read. The
+// engine therefore reads the same bundle speculatively first — every stratum at
+// the fused frontier rather than at its planned depth — and keeps that read only
+// when the fusion certified inside it. The three assertions below are the three
+// things that has to be true of: the depth is derived and not chosen, the
+// fallback fires exactly where the narrowing failed, and no answer moves either
+// way.
+
+/// **The derivation, with no executor in it.** The speculative depth is `k` plus
+/// one unmerged head per stratum, capped by the depth the plan recorded.
+///
+/// Both halves are the same argument the fusion stage already makes. Certifying
+/// `k` rows means certifying the last of them, and the only thing that makes the
+/// threshold fall far enough to do so is one unread head on each stream still
+/// open — so `k + strata` is where a fusion the threshold can stop has stopped,
+/// and `crates/retrieval/tests/fusion.rs` asserts exactly that ceiling over
+/// pairwise-disjoint strata. The cap is the other half: the plan's depth is the
+/// deepest read that stratum was admitted for, and a frontier past it would be a
+/// read nothing had judged against the producer's declared row bound.
+#[test]
+fn the_speculative_depth_is_the_bound_plus_one_head_per_open_stream() {
+    // The frontier itself, below the cap, at three bounds and three widths.
+    assert_eq!(
+        speculative_depth(TopK::new(5), 2, 400),
+        7,
+        "five rows, and one unmerged head for each of two open streams"
+    );
+    assert_eq!(
+        speculative_depth(TopK::new(5), 3, 400),
+        8,
+        "a third stream is a third head to pay for, and nothing else"
+    );
+    assert_eq!(
+        speculative_depth(TopK::new(1), 1, 400),
+        2,
+        "one row over one stream still needs the head that certifies it"
+    );
+    assert_eq!(
+        speculative_depth(TopK::new(50), 2, 400),
+        52,
+        "the bound is the term that grows, and it grows one for one"
+    );
+
+    // And the cap: at it, past it, and one inside it.
+    assert_eq!(
+        speculative_depth(TopK::new(5), 2, 7),
+        7,
+        "a plan that recorded exactly the frontier is read to exactly the \
+         frontier, and nothing is narrowed"
+    );
+    assert_eq!(
+        speculative_depth(TopK::new(5), 2, 5),
+        5,
+        "a plan shallower than the frontier is the binding constraint: the \
+         speculative depth IS the planned depth, so no fallback can fire"
+    );
+    assert_eq!(
+        speculative_depth(TopK::new(5), 2, 6),
+        6,
+        "one rank inside the frontier, and the cap still wins"
+    );
+    assert_eq!(
+        speculative_depth(TopK::new(400), 2, 5),
+        5,
+        "a bound far past the plan's own depth narrows nothing and asks for \
+         nothing extra"
+    );
+
+    // Neither term can overflow into a deeper read than the plan admitted.
+    assert_eq!(
+        speculative_depth(TopK::new(usize::MAX), 2, 400),
+        400,
+        "a bound past what a depth can express saturates into the cap"
+    );
+    assert_eq!(
+        speculative_depth(TopK::new(5), usize::MAX, 400),
+        400,
+        "and so does a stratum count past it"
+    );
+
+    // The value this file's own two-stratum configurations are read at, tied to
+    // the fixtures rather than to a literal.
+    assert_eq!(
+        speculative_read_depth(),
+        7,
+        "the bound of five and the two producers of this file"
+    );
+    assert_eq!(
+        speculative_limit(),
+        8,
+        "and the read that depth licenses carries its probe row"
+    );
+}
+
+/// **The fallback fires exactly where the narrowing failed**, observed on the
+/// answer rather than inferred from a timing.
+///
+/// The three configurations differ in what their producers *declared*, and that
+/// is all — so which of them pays for a second read is a fact about the
+/// declaration, exactly as every other number in this file is.
+///
+/// * distinct blocks: the planner already narrowed this one to the bound itself,
+///   so the speculative depth is the planned depth and there is nothing to fall
+///   back from;
+/// * one block, both naming the same candidates: the plan is deep and the
+///   speculative read certifies inside it, which is the case the whole mechanism
+///   exists for;
+/// * one block, no candidate named twice: nothing is final while a stream sharing
+///   its block is open, so the fusion drains whatever it is given, the
+///   speculative read is cut, and it is discarded for the planned read.
+#[test]
+fn the_fallback_fires_for_the_configuration_the_narrowing_does_not_hold_in() {
+    let dataset = common::empty_dataset();
+
+    let distinct = measure(DISTINCT_BLOCKS_DISJOINT_RESULTS, &dataset);
+    assert_eq!(
+        distinct.read_attempts,
+        ReadAttempts::Once,
+        "a stratum the planner already narrowed has nothing left to speculate \
+         about — {}",
+        render(DISTINCT_BLOCKS_DISJOINT_RESULTS, &distinct)
+    );
+    assert_eq!(
+        distinct.both("the reads", &distinct.reads),
+        vec![6],
+        "and it took one read, at the depth the plan recorded plus its probe row"
+    );
+
+    let intersecting = measure(SHARED_BLOCK_INTERSECTING_RESULTS, &dataset);
+    assert_eq!(
+        intersecting.read_attempts,
+        ReadAttempts::Once,
+        "the speculative read certified, so it IS the answer — {}",
+        render(SHARED_BLOCK_INTERSECTING_RESULTS, &intersecting)
+    );
+    assert_eq!(
+        intersecting.both("the reads", &intersecting.reads),
+        vec![speculative_limit()],
+        "and the one read it took was the narrowed one"
+    );
+
+    let disjoint = measure(SHARED_BLOCK_DISJOINT_RESULTS, &dataset);
+    assert_eq!(
+        disjoint.read_attempts,
+        ReadAttempts::Twice,
+        "the speculative read was cut, so it was thrown away — {}",
+        render(SHARED_BLOCK_DISJOINT_RESULTS, &disjoint)
+    );
+    assert_eq!(
+        disjoint.both("the reads", &disjoint.reads),
+        vec![speculative_limit(), ROWS],
+        "two reads, in order: the narrowed one that was discarded, and the \
+         planned one the answer came from"
+    );
+    assert_eq!(
+        disjoint.both("the terminal status", &disjoint.status),
+        ProducerStatus::Exhausted { rows_emitted: ROWS },
+        "and the kept read is the read this configuration always took"
+    );
+}
+
+/// **A stream that ran out is not a stream that was cut.**
+///
+/// Structurally the drained control — one block, no candidate named twice, the
+/// same declared four hundred rows and so the same planned depth of four hundred
+/// — except that each relation really holds four candidates. The speculative read
+/// asks for eight and gets four, and four is every row there was.
+///
+/// Without this, "fall back whenever a narrowed read ended early" would pass
+/// every other test in this file while paying for a second read of a stratum that
+/// has already been read to its end — a re-read that cannot find one more row,
+/// over the configuration where re-reading is most expensive.
+#[test]
+fn a_stream_shorter_than_the_speculative_read_is_exhausted_and_is_not_re_read() {
+    let dataset = common::empty_dataset();
+    let measured = measure(SHARED_BLOCK_SHORT_STREAMS, &dataset);
+    let report = render(SHARED_BLOCK_SHORT_STREAMS, &measured);
+
+    // The premise: this configuration really is one the speculation narrows, so
+    // the exhaustion below is an exhaustion *inside* a narrowed read.
+    assert_eq!(
+        measured.both("the planned depth", &measured.planned_depth),
+        u32::try_from(ROWS).expect("the fixture row bound fits a recordable depth"),
+        "a shared block is not a disjoint pair, so the declaration stands as \
+         the depth — {report}"
+    );
+    assert!(
+        SHORT_ROWS < speculative_read_depth(),
+        "the relation must hold fewer rows than the speculative read asks for, \
+         or this test is about nothing"
+    );
+
+    assert_eq!(
+        measured.both("the terminal status", &measured.status),
+        ProducerStatus::Exhausted {
+            rows_emitted: SHORT_ROWS
+        },
+        "a stream that ran out reports exhaustion, not a depth — {report}"
+    );
+    assert_eq!(
+        measured.read_attempts,
+        ReadAttempts::Once,
+        "and an exhausted stream has nothing a deeper read could add — {report}"
+    );
+    assert_eq!(
+        measured.both("the reads", &measured.reads),
+        vec![SHORT_ROWS],
+        "so exactly one read happened, and it stopped where the rows did — \
+         {report}"
+    );
+    assert_eq!(
+        measured.both("the ranks pulled", &measured.ranks_pulled),
+        SHORT_ROWS,
+        "the fusion drained it, because no candidate is final while a stream \
+         sharing its block is open — {report}"
+    );
+}
+
+/// **The answer never moves.** Every configuration, read speculatively and read
+/// at the depths its plan recorded, row for row, score for score and order for
+/// order.
+///
+/// This is the whole soundness claim, and it is the one assertion in this file
+/// that would fail for a narrowing that saved a great deal and answered a
+/// slightly different question. The reference is the hand-composed pipeline over
+/// `execute`, which takes each unit's planned depth and is byte for byte the read
+/// this file measured before any speculation existed.
+#[test]
+fn the_speculative_read_returns_the_answer_the_planned_read_returns() {
+    let dataset = common::empty_dataset();
+    for config in [
+        DISTINCT_BLOCKS_DISJOINT_RESULTS,
+        SHARED_BLOCK_INTERSECTING_RESULTS,
+        SHARED_BLOCK_DISJOINT_RESULTS,
+        SHARED_BLOCK_SHORT_STREAMS,
+    ] {
+        let searched = measure(config, &dataset);
+        let full = measure_at_planned_depth(config, &dataset);
+
+        // The reference really did read in full, or the two agree for the
+        // uninteresting reason.
+        assert_eq!(
+            full.both("the rows materialised", &full.rows_materialised()),
+            full.both("the emitted LIMIT", &full.emitted_limit)
+                .min(config.holds),
+            "{name}: the reference must read to the depth the plan recorded",
+            name = config.name
+        );
+
+        assert_eq!(
+            searched.answer(),
+            full.answer(),
+            "{name}: the speculative read returned a different answer than the \
+             planned read\n  speculative: {a}\n  planned:     {b}",
+            name = config.name,
+            a = render(config, &searched),
+            b = render(config, &full)
+        );
+        assert_eq!(
+            searched.both("the terminal status", &searched.status),
+            full.both("the terminal status", &full.status),
+            "{name}: and it must report the same ending, because a narrowed read \
+             that certified certified under the same law",
+            name = config.name
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -983,7 +1492,11 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry {
             arity,
             mode: arity.all_free_mode(),
             prefix: entry.name,
-            pulled: Arc::new(AtomicU64::new(0)),
+            holds: ROWS,
+            // Nothing in this section measures the read, only the depth the plan
+            // recorded and the answer that came back, so these counts are
+            // collected and never read.
+            reads: Arc::new(Reads::default()),
         };
         registry.register_ranked(
             ex(&format!("pf/{name}", name = entry.name)),
@@ -1918,7 +2431,7 @@ fn the_measured_table_is_what_it_was() {
             ),
             format!(
                 "shared_block_intersecting_results: depth=400 limit=401 \
-                 materialised=400 ranks_pulled=6 status={:?}",
+                 materialised=8 ranks_pulled=6 status={:?}",
                 ceiling_at(6)
             ),
             format!(

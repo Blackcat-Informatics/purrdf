@@ -211,6 +211,24 @@
 //! over-refusal — the seam exists so that a host can drive this executor over a query
 //! of its own, and most such queries are perfectly good; what cannot be done honestly
 //! is certify a completeness claim from one.
+//!
+//! # A run may read less than the plan admitted, and that is an ending too
+//!
+//! [`execute_within`] takes a [`ReadCeiling`], and a narrower one shortens every
+//! stratum's read to the fused frontier rather than to its planned depth.
+//! Nothing above changes: the shallower depth is rendered into the same two
+//! bounds by the same arithmetic, the probe row past *it* decides the ending the
+//! same way, and the reach is derived from the depth that actually ran rather
+//! than from the one the plan recorded — so a producer bounded by its own
+//! declaration at the planned depth, and below it at a shallower one, is judged
+//! by the read that happened.
+//!
+//! What a ceiling therefore produces is an ordinary [`StreamEnding::DepthReached`]
+//! at a rank below the unit's planned depth, which is a fact a consumer can see
+//! and act on. That is the whole of this stage's part in it: reading less is
+//! honest as long as the report says so, and deciding whether an answer built on
+//! less is servable belongs to [`search`](crate::search), which discards such a
+//! run and reads again at the planned depths.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -222,7 +240,7 @@ use purrdf_sparql_eval::{
 };
 
 use crate::admission::BoundMode;
-use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, ReadReach};
+use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, ReadCeiling, ReadReach};
 use crate::fuse::TopK;
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
@@ -697,6 +715,52 @@ pub async fn execute<D: DatasetView + Sync>(
     registry: &PropertyFunctionRegistry,
     dataset: &D,
 ) -> Result<ExecutionResult, ExecutionError> {
+    execute_within(compiled, registry, dataset, ReadCeiling::Planned).await
+}
+
+/// Run every compiled unit as [`execute`] does, with each stratum's read bounded
+/// by `ceiling` rather than by its planned depth alone.
+///
+/// [`execute`] is this function at [`ReadCeiling::Planned`], and that is the read
+/// this bundle's depths describe. A shallower ceiling changes **one** thing: the
+/// depth each unit's text is rendered at, and therefore the depth its ending is
+/// judged against. Everything else is identical, and identical because it is the
+/// same code — one governed run per unit, one attestation read off its own
+/// witness, one ending decided by whether the probe row past the depth actually
+/// arrived.
+///
+/// That last part is what makes a narrowed read safe to *take*: a stratum the
+/// ceiling cut says so, as [`ProducerStatus::DepthReached`] at the rank it was
+/// cut at, so a caller comparing that rank with the unit's planned depth can see
+/// that the answer rests on less than the plan admitted. Nothing here decides
+/// what to do about it — [`search`](crate::search) discards such a run and reads
+/// again at the planned depth — because a run that is short is a fact, and what
+/// it is worth is the fuser's question rather than the executor's.
+///
+/// A unit running a caller's own text is read at its planned depth under every
+/// ceiling; see [`CompiledRetrieval::read_depth`].
+///
+/// # Errors
+///
+/// Exactly [`execute`]'s: [`ExecutionError::RegistryMismatch`],
+/// [`ExecutionError::UnitsNotAsAssembled`],
+/// [`ExecutionError::EnvironmentNotDerivable`],
+/// [`ExecutionError::InconsistentWitness`] and
+/// [`ExecutionError::RowBoundBreached`]. A ceiling adds no refusal of its own: it
+/// can only ask for fewer rows than a depth the waist already admitted.
+// The same three allowances [`execute`] carries, for the same reasons; this is
+// the body that function delegates to.
+#[allow(
+    clippy::unused_async,
+    clippy::unused_async_trait_impl,
+    clippy::future_not_send
+)]
+pub async fn execute_within<D: DatasetView + Sync>(
+    compiled: &CompiledRetrieval,
+    registry: &PropertyFunctionRegistry,
+    dataset: &D,
+    ceiling: ReadCeiling,
+) -> Result<ExecutionResult, ExecutionError> {
     if compiled.registry_id != registry.instance_id() {
         return Err(ExecutionError::RegistryMismatch {
             expected: compiled.registry_id,
@@ -741,8 +805,12 @@ pub async fn execute<D: DatasetView + Sync>(
         // than kept as a guard: the condition it guarded cannot reach a bundle.
         //
         // Rendered once and run once: the depth this loop reads the ending against
-        // is the depth that wrote the bound in this text.
-        let sparql = unit.sparql();
+        // is the depth that wrote the bound in this text. Under a narrower ceiling
+        // that is the ceiling's depth rather than the plan's, and it is taken from
+        // the bundle once, here, so the text, the reach and the rank the ending
+        // reports cannot be three readings of two different numbers.
+        let depth = compiled.read_depth(unit, ceiling);
+        let sparql = unit.sparql_at(depth);
         let prepared = match engine.prepare_query_with_options(&sparql, None, options()) {
             Ok(prepared) => prepared,
             Err(diagnostic) => {
@@ -796,10 +864,10 @@ pub async fn execute<D: DatasetView + Sync>(
                         // the extra row has already falsified.
                         let (ranked, ending, status) = bound_to_depth(
                             ranked,
-                            unit.depth(),
+                            depth.get(),
                             unit.declared_rows(),
                             unit.declared_mode(),
-                            unit.reach(),
+                            unit.reach_at(depth),
                             &unit.stratum,
                         )?;
                         streams.push(StratumStream {

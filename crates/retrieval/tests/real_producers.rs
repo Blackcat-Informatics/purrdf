@@ -45,9 +45,9 @@ use purrdf_core::{
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionError, FusionProfile, Iri,
-    OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter, RequestTerm, RetrievalRequest,
-    ScoreExactness, SearchError, SearchResult, Statistics, Term, TopK, compile, contribution,
-    execute, fuse, plan, search,
+    OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter, ReadAttempts, RequestTerm,
+    RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics, Term, TopK, compile,
+    contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace,
@@ -817,6 +817,13 @@ async fn manual_composition(
         planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
+        // One read, at the depths the plan recorded, because that is the read a
+        // caller composing `execute` by hand takes. `search` attempts a narrower
+        // one first and keeps it only when it certified, so a run that agrees with
+        // this composition on everything else must agree here too: either the
+        // narrowed read was the whole answer, or it was discarded and this very
+        // read replaced it.
+        read_attempts: ReadAttempts::Once,
     }
 }
 

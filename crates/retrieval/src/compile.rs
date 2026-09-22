@@ -542,6 +542,81 @@ fn read_reach(depth: u32, declared_rows: Option<u64>, query: &UnitQuery) -> Read
     }
 }
 
+/// How deep one **run** reads each stratum, relative to the depth its plan
+/// recorded.
+///
+/// A ceiling belongs to a run and never to the bundle: every unit still carries
+/// the depth the planner derived for it, [`StratumUnit::sparql`] still renders
+/// that depth, and nothing here rewrites a plan. What a ceiling decides is how
+/// much of each stratum one particular read of that bundle asks for, and it is
+/// therefore a parameter of [`execute_within`](crate::execute_within) rather
+/// than a field of anything.
+///
+/// There are two values because there are two reads. A narrowed read either
+/// certified — in which case it *is* the answer — or some stratum was cut by the
+/// narrowing, in which case the attempt is discarded whole and the planned read
+/// replaces it. Nothing is spliced, so there is no third state between them; see
+/// [`search`](crate::search)'s header for the whole argument.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadCeiling {
+    /// Every stratum reads to the depth its plan recorded: the full read, and
+    /// the only read that can be certified as the plan's own.
+    Planned,
+    /// Every stratum reads to the shallower of its planned depth and the
+    /// [`speculative_depth`] derived from the bundle's own fused bound and
+    /// stratum count.
+    Speculative,
+}
+
+/// The depth a speculative read asks one stratum for: the fused frontier, capped
+/// by the depth that stratum's plan recorded.
+///
+/// # Where the frontier comes from
+///
+/// It is the bound the fusion stage already measures itself against, restated
+/// one stage earlier. Certifying `k` rows means certifying the last of them, and
+/// the only thing that makes the threshold fall far enough to do so is an
+/// unmerged head on each stream that is still open — one rank per open stream,
+/// past the `k` ranks the answer itself is made of. So `k + strata` is the
+/// deepest rank a fusion that stops at its threshold ever pulls, and
+/// `crates/retrieval/tests/fusion.rs` asserts exactly that ceiling over
+/// pairwise-disjoint strata.
+///
+/// A read that stops there is therefore not a guess about the data: it is the
+/// depth at which a fusion the threshold can stop has already stopped. It *is* a
+/// guess about whether the threshold is what stops this fusion — finality can
+/// forbid the stop entirely, and then the narrowed read is cut and is thrown
+/// away rather than served.
+///
+/// # Why the cap, and why it is here rather than at the call site
+///
+/// The plan's depth is the deepest read this stratum was admitted for. A
+/// frontier past it would be a read nothing had judged against the registry's
+/// declared row bound, so the cap is part of the derivation rather than
+/// something a caller remembers to apply: below the cap the two arguments are
+/// the whole of the answer, and at or above it the planned depth is the answer
+/// and no narrowing happens at all.
+///
+/// A request that asked for the whole of every stratum narrows nothing, and
+/// falls out of the same two lines rather than out of a case for it:
+/// [`ReadBound::Complete`](crate::ReadBound::Complete) resolves
+/// [`CompiledRetrieval::fused_bound`] to the *sum* of the plan's depths, which is
+/// at least any one of them, so the cap binds everywhere.
+///
+/// Saturating throughout, and deliberately: `k + strata` past a `u32` is a
+/// frontier deeper than any admitted depth, so it caps to the planned depth and
+/// the stratum is simply read in full. A `planned_depth` of zero — which no
+/// admitted unit carries, because a depth of zero is what the admission waist
+/// refuses first ([`AdmissionError::ZeroDepth`]) — comes back as zero, which is
+/// refused again when the read's own depth is minted from it, and the planned
+/// depth stands.
+#[must_use]
+pub fn speculative_depth(bound: TopK, strata: usize, planned_depth: u32) -> u32 {
+    let k = u32::try_from(bound.get()).unwrap_or(u32::MAX);
+    let open = u32::try_from(strata).unwrap_or(u32::MAX);
+    k.saturating_add(open).min(planned_depth)
+}
+
 /// A set of facts no unit can describe a read with, and a text that is no read at all.
 ///
 /// Raised by [`StratumUnit::new`] and by nothing else: a unit [`compile`] emits
@@ -763,12 +838,6 @@ pub struct StratumUnit {
     /// Read through [`Self::declared_rows()`]; private because it is checked against
     /// [`Self::depth()`] — see this type's header.
     declared_rows: Option<u64>,
-    /// Whether this unit's read reaches one row past its own depth.
-    ///
-    /// Derived from the depth, the declaration and the query by [`read_reach`], never
-    /// supplied, and read by [`execute`](crate::execute) to tell an ending it can
-    /// observe from one it cannot.
-    reach: ReadReach,
     /// Which declared access mode [`Self::declared_rows`] was read at.
     ///
     /// Carried for the reason the count itself is: the count is a function of the mode,
@@ -930,8 +999,8 @@ impl StratumUnit {
         )
     }
 
-    /// The one place the fields are written, so the reach is derived exactly once.
-    fn assembled(
+    /// The one place the fields are written.
+    const fn assembled(
         stratum: Iri,
         query: UnitQuery,
         contract: StreamContract,
@@ -941,7 +1010,6 @@ impl StratumUnit {
     ) -> Self {
         Self {
             stratum,
-            reach: read_reach(depth.get(), declared_rows, &query),
             query,
             contract,
             depth,
@@ -970,13 +1038,37 @@ impl StratumUnit {
     /// header for what a saturated or caller-written bound cost.
     #[must_use]
     pub fn sparql(&self) -> String {
+        self.sparql_at(self.depth)
+    }
+
+    /// The whole text this unit runs when the read is taken to `depth` rather than
+    /// to the depth the plan recorded.
+    ///
+    /// [`Self::sparql`] is this function at the planned depth, and it stays the
+    /// public reading: the text a unit *describes* is the read its plan admitted,
+    /// and a caller asking a unit what it runs is asking about that.
+    ///
+    /// A shallower depth is not a second bound written beside the first. Both
+    /// numbers in the text are rendered from the one argument by exactly the
+    /// arithmetic [`Self::sparql`] renders them from the planned depth by, so a
+    /// narrowed read is the same query at a smaller number and never a query with
+    /// a bound of its own. It takes a [`ProbedDepth`] for that reason: the probe
+    /// row past a narrowed depth is what tells a read the narrowing cut from a
+    /// read that ran out, so a depth that cannot carry one cannot be read at
+    /// either.
+    ///
+    /// Not public. A caller that wants a shallower read states a shallower
+    /// [`ReadCeiling`] on the run; handing it a depth directly would be a second
+    /// place for the depth an ending is judged against to come from, which is the
+    /// hole this type's header describes.
+    pub(crate) fn sparql_at(&self, depth: ProbedDepth) -> String {
         match &self.query {
-            UnitQuery::Rendered(rendered) => rendered.text(self.depth, self.declared_rows),
+            UnitQuery::Rendered(rendered) => rendered.text(depth, self.declared_rows),
             UnitQuery::Supplied {
                 text,
                 body_at,
                 dataset_at,
-            } => supplied_text(text, *body_at, dataset_at.as_ref(), self.depth),
+            } => supplied_text(text, *body_at, dataset_at.as_ref(), depth),
         }
     }
 
@@ -1007,9 +1099,32 @@ impl StratumUnit {
         self.declared_rows
     }
 
-    /// Whether this unit's read reaches one row past its depth.
-    pub(crate) const fn reach(&self) -> ReadReach {
-        self.reach
+    /// The depth this unit's plan recorded, as the probed depth it was admitted
+    /// as.
+    ///
+    /// The same number [`Self::depth()`] reports, carrying the proof that its
+    /// probe row fits. Not public for the reason the field is not: nothing
+    /// outside this module can build one, and that is what makes an unprobeable
+    /// depth unreachable rather than merely unlikely.
+    pub(crate) const fn probed_depth(&self) -> ProbedDepth {
+        self.depth
+    }
+
+    /// Whether a read of this unit taken to `depth` reaches one row past it.
+    ///
+    /// Derived from the depth in hand rather than cached beside the planned one,
+    /// because the answer is a function of that depth: a producer that takes its
+    /// own depth as an argument is at its declared row bound at one depth and
+    /// below it at a shallower one, and a reach read off the planned depth would
+    /// describe a read that was not taken. [`execute`](crate::execute) asks with
+    /// exactly the depth it ran.
+    pub(crate) fn reach_at(&self, depth: ProbedDepth) -> ReadReach {
+        read_reach(depth.get(), self.declared_rows, &self.query)
+    }
+
+    /// Whether this unit's read reaches one row past its planned depth.
+    pub(crate) fn reach(&self) -> ReadReach {
+        self.reach_at(self.depth)
     }
 
     /// Which declared access mode [`Self::declared_rows`] was read at, for the refusal
@@ -1220,6 +1335,50 @@ impl CompiledRetrieval {
             }
         }
         Ok(())
+    }
+
+    /// How deep a run under `ceiling` reads `unit`.
+    ///
+    /// The one place a read's depth is decided, so the text that runs, the reach
+    /// its ending is read against and the rank that ending reports are all the
+    /// same number by construction rather than by three agreeing derivations.
+    ///
+    /// Under [`ReadCeiling::Planned`] that number is the unit's own recorded
+    /// depth, which is today's read unchanged. Under
+    /// [`ReadCeiling::Speculative`] it is [`speculative_depth`] over this
+    /// bundle's own fused bound and its own stratum count — read off the bundle
+    /// rather than passed in, because a frontier derived from some other
+    /// request's `k` would bound this one's read by a number nothing here
+    /// planned.
+    ///
+    /// Two stratum shapes are returned at the planned depth whatever the ceiling
+    /// says:
+    ///
+    /// * a unit running a caller's own text ([`ReadReach::Unknown`]). What that
+    ///   text bounds inside itself is not a fact this layer holds, so a narrowed
+    ///   read of it could not be told from a text that ran out — there is no
+    ///   observation to fall back *on*, and a narrowing nobody can detect is a
+    ///   silently shorter answer;
+    /// * a unit whose planned depth is already at or inside the frontier, where
+    ///   the cap in [`speculative_depth`] makes the two depths the same number
+    ///   and there is nothing to narrow.
+    ///
+    /// The depth is minted through [`ProbedDepth::checked`], so a frontier that
+    /// is zero or past the probing ceiling is refused exactly as a plan's own
+    /// depth would be, and the planned depth stands. Neither is reachable from a
+    /// bundle this crate compiled — `k` is at least one and the frontier is
+    /// capped by an already-probed depth — and the arm is the honest handling of
+    /// a `Result` rather than a claim that it can fire.
+    pub(crate) fn read_depth(&self, unit: &StratumUnit, ceiling: ReadCeiling) -> ProbedDepth {
+        let planned = unit.probed_depth();
+        match ceiling {
+            ReadCeiling::Planned => planned,
+            ReadCeiling::Speculative if unit.reach() == ReadReach::Unknown => planned,
+            ReadCeiling::Speculative => {
+                let narrowed = speculative_depth(self.fused_bound, self.units.len(), planned.get());
+                ProbedDepth::checked(narrowed).unwrap_or(planned)
+            }
+        }
     }
 }
 
