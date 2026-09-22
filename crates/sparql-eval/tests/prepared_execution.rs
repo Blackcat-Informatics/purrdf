@@ -15,10 +15,50 @@
 //! including one that regressed from zero to some larger number that then stayed
 //! flat — which is exactly the shape of regression an exact pin catches and a
 //! stability-only assertion cannot.
+//!
+//! # Which ledger the pins are read from, and why it is the per-thread one
+//!
+//! Every pinned figure here is a [`CurrentThreadWindow`] reading — the allocations
+//! made by the thread that opened it — and that is the choice
+//! `purrdf_alloc_probe` documents for a `cargo test` binary. The harness runs a
+//! binary's test functions on threads it spawns and retires while they run, and it
+//! formats each completion on its own thread as it arrives; a `WholeProcessWindow`
+//! charges all of that to whichever measured region happens to be open, so an exact
+//! pin over one passes or fails by scheduling luck. A mutex serializing this
+//! binary's test BODIES — which is what this file used to hold — cannot close that:
+//! the harness's own threads do not take it.
+//!
+//! That was not a theoretical hazard: read through the process-wide ledger these
+//! pins failed on roughly one run in twelve of this binary, at concurrency two and
+//! above and never at `--test-threads=1`, with the excess landing on any of the
+//! measured runs in any combination and ranging from +1 to +21. Read through the
+//! per-thread ledger over the same runs, the figure was 27 on every one of 240
+//! consecutive measurements. Nothing about the evaluator differed between the two
+//! readings; the process-wide figure was simply counting other threads.
+//!
+//! The per-thread ledger has a hazard of its own, and it is the mirror image: it
+//! cannot see a `rayon` worker, so a region that fanned out would be reported as
+//! nearly free. That hazard is ruled out by the FIXTURES rather than by prose —
+//! `purrdf_sparql_eval` takes its parallel path strictly above
+//! [`PARALLEL_MIN_ROWS`], and [`assert_stays_on_the_calling_thread`] refuses to
+//! report a figure from a fixture large enough to reach it.
+//!
+//! The whole-process ledger is not used here at all, and deliberately so. It was
+//! tried as a control — pair each pin with the cheapest whole-process reading over
+//! the same runs, on the argument that a quiet run charges the process exactly what
+//! it charges this thread — and the control itself failed on three runs in four
+//! hundred, every time with all five of its samples contaminated at once, while the
+//! pins beside it were exact on all four hundred. Harness contamination is bursty,
+//! not independent, so no sample count makes a statistical control deterministic. A
+//! flaky control is the same defect as a flaky pin.
+//!
+//! Because nothing here reads a process-global counter, nothing here needs to
+//! exclude a sibling test either: the tests in this binary carry no lock and run
+//! concurrently, each measuring only its own thread.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
-use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
 };
@@ -31,19 +71,53 @@ use purrdf_sparql_eval::{
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// Serializes every measured region in this binary.
+/// How many consecutive steady-state runs each pinned figure is read over.
 ///
-/// [`WholeProcessWindow`] reads one process-global ledger and `cargo test` runs test
-/// functions concurrently, so two measurements in flight at once would each report
-/// the union of both regions while appearing to report their own. Every test here
-/// takes it as its FIRST statement — a lock taken after even one allocation has
-/// already let that allocation land unguarded — and holds it for the whole body,
-/// which is why it is bound rather than dropped immediately.
-static MEASURE_LOCK: Mutex<()> = Mutex::new(());
+/// Five, where this file previously took three, and the two extra readings are not
+/// decoration. Not every accumulation is charged on every run: a collection that
+/// grows by doubling charges one allocation on its 1st, 2nd, 4th and 8th insert and
+/// nothing in between, so a window of three consecutive runs can land entirely
+/// inside a gap and read as flat. Five readings, all required to equal the same
+/// constant, cross a doubling boundary that three can straddle.
+const MEASURED_RUNS: usize = 5;
 
-/// Take [`MEASURE_LOCK`], absorbing poison.
-fn measure_lock() -> MutexGuard<'static, ()> {
-    MEASURE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+/// Mirrors `PARALLEL_MIN_ROWS` in `crates/sparql-eval/src/parallel.rs`.
+///
+/// That constant is `pub(crate)`, so an integration test cannot read it. It is
+/// mirrored rather than approximated for the reason
+/// `crates/shapes/tests/sparql_path_alloc.rs` mirrors its own threshold: the whole
+/// point of these fixtures is to sit on one known side of it, and
+/// [`assert_stays_on_the_calling_thread`] is what turns the mirror into a checked
+/// claim about the fixture rather than an assumption about the evaluator.
+///
+/// `purrdf_sparql_eval`'s `should_parallelize` is `work_items > PARALLEL_MIN_ROWS`,
+/// and that crate's own unit tests pin both sides of the boundary, so a fixture
+/// below this figure cannot reach a worker thread.
+const PARALLEL_MIN_ROWS: usize = 1_024;
+
+/// Refuse to report a per-thread allocation figure from a fixture the evaluator
+/// could fan out over.
+///
+/// [`CurrentThreadWindow`] counts the calling thread and nothing else, so a measured
+/// region that reached `rayon` would report the worker's share as free — a smaller
+/// number that reads as an improvement rather than as an error. Every pinned figure
+/// in this file therefore states, and checks, the precondition that makes the
+/// per-thread ledger the whole story: the fixture is small enough that no operator
+/// in the plan can be handed to a worker.
+///
+/// The quad count is the bound used because every intermediate these fixtures
+/// produce is a subset of a single scan over them — one focus node's single row for
+/// the prepared-execution query, eight rows for the two-pattern join — so a dataset
+/// under [`PARALLEL_MIN_ROWS`] quads cannot present an operator with more work items
+/// than that.
+fn assert_stays_on_the_calling_thread(ds: &RdfDataset) {
+    assert!(
+        ds.quad_count() < PARALLEL_MIN_ROWS,
+        "this fixture holds {} quads, at or above the {PARALLEL_MIN_ROWS} the evaluator \
+         parallelizes over; a per-thread allocation window cannot see a rayon worker, so a \
+         figure measured here would silently omit whatever ran off this thread",
+        ds.quad_count(),
+    );
 }
 
 /// Turn `PreparedExecution`'s memo differential oracle off for `operation`, then
@@ -83,10 +157,11 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// setup (a fresh solution buffer, the interned egress) is not free. What this pin
 /// claims is narrower and achievable — that the cost is a FIXED constant, independent
 /// of how many times the execution has already run — which is what
-/// `re_running_a_prepared_execution_costs_27_allocations` asserts against it, exactly
-/// at both `N` and `N+1`. If this ever moves, re-measure with `without_memo_verification`
-/// bracketing the window exactly as the test does, and update this constant to match:
-/// it is not a ceiling, it is the currently-measured marginal cost.
+/// `re_running_a_prepared_execution_costs_27_allocations` asserts against it, at every
+/// one of [`MEASURED_RUNS`] consecutive steady-state runs. If this ever moves,
+/// re-measure with `without_memo_verification` bracketing the window exactly as the
+/// test does, and update this constant to match: it is not a ceiling, it is the
+/// currently-measured marginal cost.
 const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 27;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
@@ -109,7 +184,6 @@ fn iri(i: u32) -> TermValue {
 
 #[test]
 fn a_prepared_execution_answers_each_binding_from_one_plan() {
-    let _guard = measure_lock();
     let ds = dataset(8);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
@@ -140,8 +214,8 @@ fn a_prepared_execution_answers_each_binding_from_one_plan() {
 
 #[test]
 fn re_running_a_prepared_execution_costs_27_allocations() {
-    let _guard = measure_lock();
     let ds = dataset(8);
+    assert_stays_on_the_calling_thread(&ds);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
         .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
@@ -149,7 +223,7 @@ fn re_running_a_prepared_execution_costs_27_allocations() {
 
     let mut run = |subject: u32| -> u64 {
         execution.bind(0, iri(subject)).expect("bind");
-        let window = WholeProcessWindow::open();
+        let window = CurrentThreadWindow::open();
         engine
             .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
@@ -161,25 +235,32 @@ fn re_running_a_prepared_execution_costs_27_allocations() {
         window.close().allocations
     };
 
-    // Warm every lazy on this thread with the exact call being measured.
+    // Warm-up, outside every pinned figure and with the exact call measured. Two
+    // runs, not one, and the two are not interchangeable: the FIRST is this
+    // handle's first sighting of its lane and value shapes (the ordinary rewrite,
+    // and the first touch of this thread's variable and column-layout interners),
+    // the SECOND is the second consecutive sighting, which is when
+    // `purrdf_sparql_eval::prebind_memo` BUILDS the retained tree and pays for the
+    // several extra rewrites that costs. Only from the third run on is the handle
+    // in the steady state the pin is stated over. Measured on the calling thread's
+    // ledger these three phases are 48, 73 and 27 allocations, deterministically,
+    // which is how the boundary was read rather than assumed.
     let _warm = (run(0), run(1));
 
-    // The measured window: the memo's differential oracle comes OFF here and only
+    // The measured runs: the memo's differential oracle comes OFF here and only
     // here — see [`without_memo_verification`] for why a debug build's own
     // correctness check would otherwise be exactly the allocation this pin is
     // trying to see past.
-    let (first, second, third) = without_memo_verification(|| (run(2), run(3), run(4)));
-    println!("prepared execution: {first}, {second}, {third} allocations per run");
+    let per_run: [u64; MEASURED_RUNS] =
+        without_memo_verification(|| [run(2), run(3), run(4), run(5), run(6)]);
+    println!("prepared execution: {per_run:?} allocations per run");
     assert_eq!(
-        (first, second, third),
-        (
-            PREPARED_EXECUTION_RUN_ALLOCATIONS,
-            PREPARED_EXECUTION_RUN_ALLOCATIONS,
-            PREPARED_EXECUTION_RUN_ALLOCATIONS
-        ),
-        "a prepared execution's per-run cost is pinned EXACTLY: a figure that moves — in \
-         either direction — between runs, or away from the pinned constant, means per-run \
-         state is accumulating or the evaluator's marginal cost has changed"
+        per_run, [PREPARED_EXECUTION_RUN_ALLOCATIONS; MEASURED_RUNS],
+        "a prepared execution's per-run cost is pinned EXACTLY: a figure that CLIMBS run over \
+         run is per-run state accumulating, and one that sits flat at a different magnitude \
+         is a changed marginal cost. Each figure is the calling thread's own ledger over one \
+         steady-state run, so it is a fact about the evaluator and not about what else the \
+         process was doing"
     );
 }
 
@@ -265,7 +346,6 @@ fn scratch_bytes_of_run(
 ///    observable only through the size, so the size is what this half reads.
 #[test]
 fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
-    let _guard = measure_lock();
     let ds = dataset(16);
     let engine = NativeSparqlEngine::new();
 
@@ -422,7 +502,6 @@ const PREPARED_PLAN_QUERY: &str = "SELECT ?o WHERE {\n  ?s <http://example.org/p
 /// became cheaper by answering less would fail here rather than read as a win.
 #[test]
 fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
-    let _guard = measure_lock();
     let mut b = RdfDatasetBuilder::new();
     let p = b.intern_iri("http://example.org/p");
     let q = b.intern_iri("http://example.org/q");
@@ -434,6 +513,7 @@ fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
         b.push_quad(s, q, r, None);
     }
     let ds = b.freeze().expect("freeze");
+    assert_stays_on_the_calling_thread(&ds);
 
     let engine = NativeSparqlEngine::new();
     let prepared = engine
@@ -441,7 +521,7 @@ fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
         .expect("the fixture query parses and is admitted");
 
     let run = || -> u64 {
-        let window = WholeProcessWindow::open();
+        let window = CurrentThreadWindow::open();
         let answer = engine
             .query_prepared(&ds, &prepared, &[], QueryOptions::EMPTY)
             .expect("the admitted plan evaluates");
@@ -459,24 +539,20 @@ fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
 
     // Warm every lazy on this thread with the exact call being measured.
     let _warm = (run(), run());
-    let (first, second, third) = (run(), run(), run());
-    println!("query_prepared: {first}, {second}, {third} allocations per call");
+    let per_call: [u64; MEASURED_RUNS] = [run(), run(), run(), run(), run()];
+    println!("query_prepared: {per_call:?} allocations per call");
     assert_eq!(
-        (first, second, third),
-        (
-            PREPARED_PLAN_CALL_ALLOCATIONS,
-            PREPARED_PLAN_CALL_ALLOCATIONS,
-            PREPARED_PLAN_CALL_ALLOCATIONS
-        ),
+        per_call, [PREPARED_PLAN_CALL_ALLOCATIONS; MEASURED_RUNS],
         "the per-call cost of evaluating an admitted plan is pinned EXACTLY: a figure that \
          moves — in either direction — means the per-call re-admission or the evaluator's \
-         marginal cost has changed"
+         marginal cost has changed. Each figure is the calling thread's own ledger over one \
+         call, so it is a fact about the evaluator and not about what else the process was \
+         doing"
     );
 }
 
 #[test]
 fn running_with_a_parameter_unbound_is_refused() {
-    let _guard = measure_lock();
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
@@ -509,7 +585,6 @@ fn running_with_a_parameter_unbound_is_refused() {
 
 #[test]
 fn unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value() {
-    let _guard = measure_lock();
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
@@ -565,7 +640,6 @@ fn unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_val
 
 #[test]
 fn binding_a_name_that_was_not_declared_is_refused() {
-    let _guard = measure_lock();
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
         .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
@@ -593,7 +667,6 @@ fn binding_a_name_that_was_not_declared_is_refused() {
 
 #[test]
 fn declaring_one_parameter_twice_is_refused() {
-    let _guard = measure_lock();
     let engine = NativeSparqlEngine::new();
     let error = engine
         .prepare_execution(QUERY, None, &["this", "this"], QueryOptions::EMPTY)
@@ -663,7 +736,6 @@ fn run_answers(
 
 #[test]
 fn the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does() {
-    let _guard = measure_lock();
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     // Two parameters, one of which the query never mentions, so "bind one and run"
@@ -712,7 +784,6 @@ fn the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does() {
 
 #[test]
 fn the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does() {
-    let _guard = measure_lock();
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
@@ -746,7 +817,6 @@ fn the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does() {
 
 #[test]
 fn a_duplicate_declaration_is_refused_before_either_door_exists() {
-    let _guard = measure_lock();
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
 
@@ -781,7 +851,6 @@ fn a_duplicate_declaration_is_refused_before_either_door_exists() {
 
 #[test]
 fn the_two_doors_are_interchangeable_within_one_execution() {
-    let _guard = measure_lock();
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
@@ -914,7 +983,6 @@ fn person_team_rows<D: purrdf_core::DatasetView + Sync>(
 #[test]
 fn executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers()
  {
-    let _guard = measure_lock();
     let engine = NativeSparqlEngine::new();
     let registry = relation_registry();
     let ds = relation_dataset();
@@ -1144,7 +1212,6 @@ fn total_cell<D: purrdf_core::DatasetView + Sync>(outcome: InternedOutcome<'_, '
 #[test]
 fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers()
  {
-    let _guard = measure_lock();
     let engine = NativeSparqlEngine::new();
     let registry_a = sum_registry();
     let registry_b = product_registry();
@@ -1205,8 +1272,14 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
 /// in allocation count — and if the dispatch were bypassed, they would not.
 #[test]
 fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
-    let _guard = measure_lock();
     let ds = dataset(8);
+    // Both closures below read the calling thread's ledger, so both need the same
+    // precondition every other figure in this file needs. The gap this test is
+    // written about is THREE allocations wide, which is narrower than the
+    // process-wide contamination routinely observed on this binary — reading it
+    // through a whole-process window would have made the comparison decide by
+    // scheduling luck.
+    assert_stays_on_the_calling_thread(&ds);
     let engine = NativeSparqlEngine::new();
 
     // A fresh handle every call: this execution never reaches a second sighting of
@@ -1217,7 +1290,7 @@ fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
             .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
             .expect("prepare");
         execution.bind(0, iri(subject)).expect("bind");
-        let window = WholeProcessWindow::open();
+        let window = CurrentThreadWindow::open();
         engine
             .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
@@ -1234,7 +1307,7 @@ fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
         .expect("prepare");
     let mut run_memoized = |subject: u32| -> u64 {
         memoized.bind(0, iri(subject)).expect("bind");
-        let window = WholeProcessWindow::open();
+        let window = CurrentThreadWindow::open();
         engine
             .execute(&mut memoized, &*ds, QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
@@ -1291,7 +1364,6 @@ fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
 /// with a neighbour's object rather than failing outright.
 #[test]
 fn a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle() {
-    let _guard = measure_lock();
     const NS: &str = "http://example.org/execution-blank#";
     let mut b = RdfDatasetBuilder::new();
     let p = b.intern_iri(&format!("{NS}p"));
@@ -1365,7 +1437,6 @@ fn a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle() {
 /// pre-binding list straight from the caller's substitutions with no such check.
 #[test]
 fn a_repeated_pre_bound_name_answers_the_empty_solution() {
-    let _guard = measure_lock();
     let ds = dataset(4);
     let engine = NativeSparqlEngine::new();
 
