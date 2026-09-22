@@ -977,3 +977,169 @@ fn the_same_graph_under_an_empty_environment_reads_completely() {
         "and no predicate in it became a call"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The remaining four doors, at EVALUATION level
+// ---------------------------------------------------------------------------
+
+/// Run `shapes_ttl` under `REL_NS` declared and the registry installed.
+///
+/// Returns the validation's own result, so a caller asserts on the refusal text or on
+/// the report rather than on a proxy.
+fn validate_ttl_under_declared_namespace(shapes_ttl: &str) -> Result<ValidationReport, String> {
+    let (relations, _) = registry();
+    let _relations = enter_property_function_scope(relations);
+    let _options = enter_parser_options_scope(Arc::new(ParserOptions {
+        property_fn_namespaces: vec![REL_NS.to_owned()],
+        ..ParserOptions::default()
+    }));
+    let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
+    validate_dataset(&data(), &shapes)
+}
+
+/// The same shapes graph with the registry installed but NOTHING declared.
+fn validate_ttl_undeclared(shapes_ttl: &str) -> Result<ValidationReport, String> {
+    let (relations, _) = registry();
+    let _relations = enter_property_function_scope(relations);
+    let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
+    validate_dataset(&data(), &shapes)
+}
+
+/// A `sh:SPARQLTarget` naming `predicate`.
+fn sparql_target_ttl(predicate: &str) -> String {
+    format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+
+ex:TargetShape
+    a sh:NodeShape ;
+    sh:target [ a sh:SPARQLTarget ; sh:select """SELECT ?this WHERE {{ ?this <{predicate}> ?why }}""" ] ;
+    sh:nodeKind sh:IRI .
+"#
+    )
+}
+
+/// A `sh:SPARQLTargetType` naming `predicate`.
+fn sparql_target_type_ttl(predicate: &str) -> String {
+    format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+
+ex:ByKind
+    a sh:SPARQLTargetType ;
+    sh:parameter [ sh:path ex:kind ] ;
+    sh:select """SELECT ?this WHERE {{ ?this <{predicate}> ?kind }}""" .
+
+ex:TargetTypeShape
+    a sh:NodeShape ;
+    sh:target [ a ex:ByKind ; ex:kind ex:any ] ;
+    sh:nodeKind sh:IRI .
+"#
+    )
+}
+
+/// A `sh:expression` whose `sh:select` node expression names `predicate`.
+fn expression_ttl(predicate: &str) -> String {
+    format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+
+ex:ExprShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a, ex:b ;
+    sh:expression [ sh:select """SELECT ?result WHERE {{ $this <{predicate}> ?result }}""" ] .
+"#
+    )
+}
+
+/// The four SPARQL-bearing doors the rest of this file does not reach at evaluation
+/// level each take a declared namespace, and each still answers without one.
+///
+/// `sh:sparql` and `sh:SPARQLFunction` are covered above. These are the other four,
+/// and they are covered HERE rather than through `extension_usage`, because the
+/// pre-flight report re-parses the text itself and so cannot observe a door whose
+/// EVALUATION reads a different configuration — which is exactly the defect this
+/// branch closed. A door proven only by the report is not proven.
+///
+/// Each is executed twice. Declared-and-unregistered must refuse and name the IRI;
+/// the undeclared neighbour must still SUCCEED, because a refusal there would mean
+/// the seam had over-tightened into rejecting ordinary data.
+#[test]
+fn every_remaining_door_takes_a_declared_namespace_and_still_answers_without_one() {
+    for (door, ttl) in [
+        ("sh:SPARQLTarget", sparql_target_ttl as fn(&str) -> String),
+        ("sh:SPARQLTargetType", sparql_target_type_ttl),
+        ("sh:expression/sh:select", expression_ttl),
+    ] {
+        let refused = validate_ttl_under_declared_namespace(&ttl(REL_MISSING))
+            .err()
+            .unwrap_or_else(|| {
+                panic!("{door}: a declared-but-unregistered relation IRI must be refused")
+            });
+        assert!(
+            refused.contains(REL_MISSING),
+            "{door}: the refusal must name the offending IRI: {refused}"
+        );
+
+        validate_ttl_undeclared(&ttl(REL_MISSING)).unwrap_or_else(|error| {
+            panic!("{door}: with nothing declared the same IRI is ordinary data: {error}")
+        });
+    }
+}
+
+/// `sh:rule` is the fourth, and it needs its own entry point.
+///
+/// `validate_dataset` does not execute rules at all — their production door is
+/// `rules::entail_dataset`. Asserting rule behaviour through the validator would look
+/// like coverage and grade nothing, so the rule is driven through the entry that
+/// actually runs it.
+#[test]
+fn a_sparql_rule_takes_a_declared_namespace_and_still_answers_without_one() {
+    let ttl = |predicate: &str| {
+        format!(
+            r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+
+ex:RuleShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:rule [
+        a sh:SPARQLRule ;
+        sh:construct """CONSTRUCT {{ $this <{EX}out> ?why }} WHERE {{ $this <{predicate}> ?why }}""" ;
+    ] .
+"#
+        )
+    };
+
+    let declared = {
+        let (relations, _) = registry();
+        let _relations = enter_property_function_scope(relations);
+        let _options = enter_parser_options_scope(Arc::new(ParserOptions {
+            property_fn_namespaces: vec![REL_NS.to_owned()],
+            ..ParserOptions::default()
+        }));
+        let shapes =
+            purrdf_shapes::engine::parse_shapes(&ttl(REL_MISSING), None).expect("fixture loads");
+        purrdf_shapes::rules::entail_dataset(&data(), &shapes)
+    };
+    let Err(refused) = declared else {
+        panic!("a declared-but-unregistered relation IRI must be refused in a rule body");
+    };
+    assert!(
+        refused.contains(REL_MISSING),
+        "the refusal must name the offending IRI: {refused}"
+    );
+
+    let undeclared = {
+        let (relations, _) = registry();
+        let _relations = enter_property_function_scope(relations);
+        let shapes =
+            purrdf_shapes::engine::parse_shapes(&ttl(REL_MISSING), None).expect("fixture loads");
+        purrdf_shapes::rules::entail_dataset(&data(), &shapes)
+    };
+    undeclared.expect("with nothing declared the same IRI is ordinary data and the rule runs");
+}
