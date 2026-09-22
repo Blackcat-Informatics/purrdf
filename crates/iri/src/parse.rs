@@ -132,6 +132,37 @@ pub fn parse_uri(s: &str) -> Result<Iri> {
     parse_inner(s, Mode::Uri)
 }
 
+/// Validate `s` as an **IRI** and report whether it carries a scheme, without
+/// building the owned [`Iri`].
+///
+/// Exactly `parse(s).map(|iri| iri.has_scheme())`, minus the copy of `s` that
+/// answer would have been read off and then dropped. Same grammar, same errors,
+/// same verdict — [`scan`] is the single body both run, so this cannot come to
+/// accept or reject anything [`parse`] does not.
+///
+/// This is for the caller that asks nothing but "is this acceptable, and is it
+/// absolute". A query algebra's soundness walk is the motivating one: it asks that
+/// of every IRI in the query, on every validation of the plan, and dropped a heap
+/// `String` per IRI to read one bit.
+///
+/// # Errors
+///
+/// Whatever [`parse`] returns for the same input.
+///
+/// # Examples
+///
+/// ```rust
+/// assert!(purrdf_iri::is_absolute("http://example.org/a")?);
+/// assert!(!purrdf_iri::is_absolute("/a/b")?);
+///
+/// // Rejection is unchanged: the grammar is the one `parse` runs.
+/// assert!(purrdf_iri::is_absolute("http://example.org/<bad>").is_err());
+/// # Ok::<(), purrdf_iri::IriError>(())
+/// ```
+pub fn is_absolute(s: &str) -> Result<bool> {
+    Ok(classify(s)? == IriForm::Absolute)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Iri,
@@ -640,6 +671,80 @@ fn find_first_of<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`is_absolute` is `parse(..).map(has_scheme)`, for every input.**
+    ///
+    /// The whole claim the non-owning entry point rests on is that it decides
+    /// EXACTLY what the owning one decides — same acceptance, same rejection, same
+    /// verdict — so it is asserted as that equivalence over a corpus that reaches
+    /// both answers and both failure modes, rather than as a list of expected
+    /// values a later grammar change could drift away from on one side only.
+    ///
+    /// The corpus deliberately pairs each rejected spelling with the accepted
+    /// neighbour it differs from by one construct: a scan that started refusing at
+    /// the wrong place would break the pair, not just the refusal.
+    #[test]
+    fn is_absolute_decides_exactly_what_parse_decides() {
+        const CORPUS: &[&str] = &[
+            // Absolute, and the relative neighbour of each.
+            "http://example.org/a/b?x=1#frag",
+            "//example.org/a/b?x=1#frag",
+            "urn:example:thing",
+            "example:thing",
+            "http://example.org/caf\u{e9}",
+            "/caf\u{e9}",
+            "file:///path",
+            "///path",
+            // Relative references that must stay relative rather than be read as
+            // schemes.
+            "a/b",
+            "./a:b",
+            "#frag",
+            "?q",
+            "",
+            // Rejected by the grammar on BOTH sides of the scheme question: a scan
+            // that stopped once it had seen a scheme would admit the first of
+            // these, and one that stopped at the first segment would admit the
+            // last.
+            "http://example.org/<bad>",
+            "<bad>",
+            "a:b/c",
+            "http://exa mple.org/",
+        ];
+        for input in CORPUS {
+            let owned = parse(input).map(|iri| iri.has_scheme());
+            let borrowed = is_absolute(input);
+            match (&owned, &borrowed) {
+                (Ok(owned), Ok(borrowed)) => assert_eq!(
+                    owned, borrowed,
+                    "{input:?}: `parse` says has_scheme = {owned}, `is_absolute` says {borrowed}"
+                ),
+                (Err(owned), Err(borrowed)) => assert_eq!(
+                    owned.to_string(),
+                    borrowed.to_string(),
+                    "{input:?}: the two entry points must fail with the SAME error, or one of \
+                     them is running a different grammar"
+                ),
+                _ => panic!(
+                    "{input:?}: one entry point accepted and the other refused — \
+                     parse: {owned:?}, is_absolute: {borrowed:?}"
+                ),
+            }
+        }
+        // Non-vacuity: the corpus must actually reach all three verdicts, or the
+        // equivalence above is asserted over a corpus that proves one of them.
+        let verdicts: Vec<Option<bool>> = CORPUS.iter().map(|s| is_absolute(s).ok()).collect();
+        for (wanted, label) in [
+            (Some(true), "an accepted ABSOLUTE reference"),
+            (Some(false), "an accepted RELATIVE reference"),
+            (None, "a REFUSED reference"),
+        ] {
+            assert!(
+                verdicts.contains(&wanted),
+                "the corpus never produces {label}, so the equivalence is untested there"
+            );
+        }
+    }
 
     #[test]
     fn swar_delimiter_scan_matches_first_scalar_hit() {

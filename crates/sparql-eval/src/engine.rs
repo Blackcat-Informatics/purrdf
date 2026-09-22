@@ -197,6 +197,31 @@ fn plan_payload_bytes(
         .saturating_add(aggregates_capacity)
 }
 
+/// Admit `query`: structurally valid, and feasibility ordered against the supplied
+/// registries.
+///
+/// # Why the evaluator's nesting guard is deliberately NOT here
+///
+/// [`crate::governor::soundness::validate_graph_pattern_depth`] refuses an algebra
+/// nested past `MAX_GRAPH_PATTERN_DEPTH`, and running it here would look like the
+/// obvious place: admission is once, and the plan is immutable afterwards. It is
+/// the wrong place, and the reason is an acceptance boundary this crate states and
+/// tests — `prepared_admission.rs`'s
+/// `parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance`.
+/// Preparation accepts **the parser's envelope**; the evaluator's narrower guard
+/// belongs to EXECUTION. A flat `OPTIONAL {} OPTIONAL {} …` spine uses two brace
+/// levels, is inside the parser's combinator budget, and lowers to a left-nested
+/// `LeftJoin` chain far deeper than the evaluator's limit: preparing it must
+/// succeed and evaluating it must return a typed diagnostic. Moving the guard here
+/// was tried and turned preparing that query — and one of this workspace's own
+/// generated corpus queries — into a refusal. That is over-refusal: nothing looks
+/// broken, a refusal reads as strictness, and a caller that only prepares a plan
+/// gets an error for a plan that was always legal to prepare.
+///
+/// The stack-safety backstop admission DOES need is already here and is a different,
+/// looser bound: [`purrdf_sparql_algebra::Query::validate`] refuses past
+/// `MAX_GRAPH_PATTERN_NODES + 8 * MAX_GRAPH_PATTERN_DEPTH` structural nodes,
+/// iteratively, before the recursive feasibility pass below descends the tree.
 fn admit_algebra(
     query: &Query,
     relations: &crate::property_fn::PropertyFunctionRegistry,
@@ -1962,7 +1987,7 @@ impl NativeSparqlEngine {
             options.aggregates,
         )?;
         // The whole admission check, run ONCE here rather than on every run of this
-        // execution: the two algebra soundness walks, the feasibility replanning walk,
+        // execution: the algebra soundness walk, the feasibility replanning walk,
         // and the agreement between this plan and `options`' registries. Nothing it
         // establishes can come undone — the plan behind the `Arc` is immutable and
         // unreachable for mutation, and a later run that supplied DIFFERENT registries
@@ -2076,17 +2101,31 @@ impl NativeSparqlEngine {
         check_prepared_registries_unchanged(&execution.prepared, options)?;
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
-        // The substituted plan, from the execution's own retained tree where it has
-        // one. Both lanes reach it through the same call, so which rewrite ran is a
-        // property of `options` in one place rather than of two call sites.
-        let substituted = execution.substituted(options.prebinding)?;
-        let outcome = evaluate_query(substituted.query(), &mut ctx).map_err(|e| {
-            RdfDiagnostic::error(
-                eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                e.to_string(),
-            )
-        })?;
-        Ok(visit(borrow_outcome(&outcome, &ctx)))
+        // This run's scratch interner comes from the execution's retained workspace
+        // rather than from the context's own lazy one — emptied by the previous run
+        // but still holding its tables. See `execution::ExecutionWorkspace`.
+        ctx.scratch = execution.check_out_workspace();
+        let evaluated = {
+            // The substituted plan, from the execution's own retained tree where it
+            // has one. Both lanes reach it through the same call, so which rewrite
+            // ran is a property of `options` in one place rather than of two call
+            // sites. Scoped so its borrow of `execution` ends before the workspace
+            // goes back.
+            match execution.substituted(options.prebinding) {
+                Ok(substituted) => evaluate_query(substituted.query(), &mut ctx).map_err(|e| {
+                    RdfDiagnostic::error(
+                        eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                        e.to_string(),
+                    )
+                }),
+                Err(refused) => Err(refused),
+            }
+        };
+        // `visit` runs BEFORE the workspace goes back, because the outcome it reads
+        // resolves `SolutionTerm::Computed` ids through this context's scratch.
+        let answer = evaluated.map(|outcome| visit(borrow_outcome(&outcome, &ctx)));
+        execution.check_in_workspace(&mut ctx.scratch);
+        answer
     }
 
     /// [`Self::execute`] under an operation budget: the governed twin, and the entry
@@ -2144,14 +2183,22 @@ impl NativeSparqlEngine {
             return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
         }
         let mut ctx = self.governed_ctx(dataset, None, state, options)?;
-        let substituted = execution.substituted(options.prebinding)?;
-        let evaluated = evaluate_query_evaluated(substituted.query(), &mut ctx).map_err(|e| {
-            RdfDiagnostic::error(
-                eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                e.to_string(),
-            )
-        })?;
-        Ok(
+        // The retained workspace, exactly as on the ungoverned twin — and taken
+        // here rather than inside `governed_ctx` so both lanes spell it at the same
+        // level, beside the `substituted` call whose borrow it has to sit outside.
+        ctx.scratch = execution.check_out_workspace();
+        let evaluated = match execution.substituted(options.prebinding) {
+            Ok(substituted) => {
+                evaluate_query_evaluated(substituted.query(), &mut ctx).map_err(|e| {
+                    RdfDiagnostic::error(
+                        eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                        e.to_string(),
+                    )
+                })
+            }
+            Err(refused) => Err(refused),
+        };
+        let answer = evaluated.map(|evaluated| {
             match resolve_governed(evaluated, &mut ctx, state, identity) {
                 GovernedResolution::Complete {
                     outcome,
@@ -2165,8 +2212,10 @@ impl NativeSparqlEngine {
                 GovernedResolution::Exhausted(exhausted) => {
                     InternedGoverned::BudgetExhausted(Box::new(exhausted))
                 }
-            },
-        )
+            }
+        });
+        execution.check_in_workspace(&mut ctx.scratch);
+        answer
     }
 
     /// [`Self::query_with_options_view`] on the **interned** egress: `visit` is
@@ -2682,7 +2731,7 @@ fn check_plan_matches_relations(
 ///
 /// # Why this is the whole check here, and would not be anywhere else
 ///
-/// [`check_plan_matches_relations`] does three things: two soundness walks over the
+/// [`check_plan_matches_relations`] does three things: a soundness walk over the
 /// algebra, a feasibility replanning walk, and a comparison of `options`' registry
 /// fingerprints against the plan's. The first two allocate a traversal stack each and
 /// grow it with the query, and on a prepared execution they are pure waste — they
@@ -2719,8 +2768,8 @@ fn check_plan_matches_relations(
 /// with the one the plan was admitted under; it carries none of `PreparedExecution`'s
 /// guarantee that no OTHER registry could have been supplied in between, because
 /// nothing stops the very next call on the same `&PreparedQuery` from naming a third
-/// registry entirely. So those entries must keep running the full check — the two
-/// soundness walks and the replanning walk, not just the fingerprint comparison —
+/// registry entirely. So those entries must keep running the full check — the
+/// soundness walk and the replanning walk, not just the fingerprint comparison —
 /// and do.
 ///
 /// # Errors
@@ -2759,27 +2808,38 @@ fn check_prepared_registries_unchanged(
     Ok(())
 }
 
-/// The **plan-only** half of [`check_plan_matches_relations`]: the two soundness
-/// walks over the algebra itself, which depend on nothing but the plan.
+/// The **plan-only** half of [`check_plan_matches_relations`]: the structural
+/// soundness walk over the algebra itself, which depends on nothing but the plan.
+///
+/// # The nesting guard that used to sit beside this walk is gone, not moved
+///
+/// [`crate::governor::soundness::validate_graph_pattern_depth`] ran here too, over
+/// `prepared.query` — and then ran AGAIN, per evaluation, inside
+/// [`crate::eval::prepare_query_context`]. Two walks of a tree whose answer cannot
+/// differ between them, one of which allocated and grew a traversal stack on every
+/// call of every `&PreparedQuery` entry.
+///
+/// Exactly one of the two could go, and it is this one, because the other is not a
+/// duplicate of it: `prepare_query_context` walks the tree actually being
+/// EVALUATED, which on a pre-binding run is the substituted tree — the admitted
+/// plan plus a seed `VALUES` and the join onto it, deeper than what this ever saw.
+/// Dropping THAT one would let an over-deep substituted tree reach the recursive
+/// evaluator.
+///
+/// Acceptance is unchanged by the removal, which is the property that matters:
+/// every entry that reached this walk goes on to evaluate, and evaluation still
+/// refuses the same trees with the same diagnostic. It is refused once instead of
+/// twice. It is deliberately NOT relocated to [`admit_algebra`] — see there for the
+/// acceptance boundary that forbids it.
 ///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] if the algebra is invalid (`native-sparql-algebra`) or nests
-/// past the evaluator's depth limit.
+/// An [`RdfDiagnostic`] if the algebra is invalid (`native-sparql-algebra`).
 fn check_plan_soundness(prepared: &PreparedQuery) -> Result<(), RdfDiagnostic> {
     prepared
         .query
         .validate()
-        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
-    // The evaluator's existing recursive-depth guard must precede the governor's
-    // survey and substitution cloning, which also traverse the plan recursively.
-    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(&prepared.query))
-        .map_err(|e| {
-            RdfDiagnostic::error(
-                eval_diagnostic_code(&e, "native-sparql-query-eval"),
-                e.to_string(),
-            )
-        })
+        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))
 }
 
 /// The **options-dependent** half of [`check_plan_matches_relations`]: the plan must
@@ -5515,6 +5575,192 @@ mod tests {
             )
             .is_err(),
             "plan identity must still refuse a genuinely different, non-empty registry"
+        );
+    }
+
+    /// `SELECT ?o WHERE { <http://ex/a> `predicate` ?o }` as caller-built algebra,
+    /// with `predicate` spelled verbatim and NOT checked on the way in.
+    ///
+    /// `NamedNode::new_unchecked` is the point: an algebra assembled by a compiler
+    /// rather than by the parser is exactly the input
+    /// [`purrdf_sparql_algebra::Query::validate`] exists to admit or refuse, so the
+    /// fixture has to be able to spell a predicate the parser could never produce.
+    fn select_over_predicate(predicate: &str) -> Query {
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, QueryDataset, TermPattern, TriplePattern, Variable,
+        };
+        let object = Variable::new("o");
+        Query::Select {
+            pattern: GraphPattern::Project {
+                inner: Box::new(GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://ex/a")),
+                        predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(predicate)),
+                        object: TermPattern::Variable(object.clone()),
+                    }],
+                }),
+                variables: vec![object],
+            },
+            dataset: QueryDataset::default(),
+            base_iri: None,
+            version: None,
+        }
+    }
+
+    /// **The IRI admission in `Query::validate` still refuses what it refused and
+    /// still accepts what it accepted — and the accepted one still answers.**
+    ///
+    /// `validate`'s IRI check stopped building an owned `purrdf_iri::Iri` per IRI in
+    /// the query and now asks `purrdf_iri::is_absolute`, which runs the identical
+    /// grammar over a borrow. That is an ALLOCATION change, and the way an
+    /// allocation change goes wrong is by quietly becoming a VALIDATION change — a
+    /// refusal that looks like strictness and is a bug. A test that only drove the
+    /// rejected case would pass just as happily if the new path refused everything.
+    ///
+    /// So three cases, and the middle one is the one that matters:
+    ///
+    /// 1. a **relative** predicate IRI — must still be refused, by name;
+    /// 2. the **neighbouring absolute** one, differing only by its scheme and
+    ///    authority — must still be admitted, and the admitted plan is then
+    ///    EVALUATED and its row inspected, so "admitted" cannot stand in for
+    ///    "admitted and then silently answered nothing";
+    /// 3. a **malformed** absolute one (`<` is not legal in a path) — must still be
+    ///    refused by the grammar rather than waved through, since a scan that
+    ///    stopped at the scheme would accept it.
+    #[test]
+    fn the_borrowed_iri_scan_refuses_and_accepts_exactly_what_the_owned_one_did() {
+        let relative =
+            PreparedQuery::rewritten(select_over_predicate("knows"), QueryOptions::EMPTY)
+                .expect_err("a relative predicate IRI is not evaluable algebra");
+        assert!(
+            relative
+                .to_string()
+                .contains("relative IRI in query algebra"),
+            "the relative case must still be refused BY NAME, not by some other \
+             failure that happens to be an error: {relative}"
+        );
+
+        let malformed = PreparedQuery::rewritten(
+            select_over_predicate("http://ex/<bad>"),
+            QueryOptions::EMPTY,
+        )
+        .expect_err("`<` is not a legal path character, scheme or no scheme");
+
+        // The neighbour that must still work, and must still ANSWER. The fixture's
+        // `:a :knows :b` is the row; a validator that had started over-refusing
+        // would fail at `expect`, and one that had started admitting-but-dropping
+        // would fail on the row.
+        let prepared = PreparedQuery::rewritten(
+            select_over_predicate("http://ex/knows"),
+            QueryOptions::EMPTY,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "the absolute neighbour of the refused predicate must still be \
+                 admitted — over-refusal is the mirror of the silent drop, and the \
+                 malformed case above ({malformed}) proves nothing on its own: {e}"
+            )
+        });
+        let answer = NativeSparqlEngine::new()
+            .query_prepared(&social(), &prepared, &[], QueryOptions::EMPTY)
+            .expect("the admitted plan evaluates");
+        let SparqlResult::Solutions { rows, .. } = answer else {
+            panic!("a SELECT answers with solutions, got {answer:?}");
+        };
+        assert_eq!(
+            rows.len(),
+            1,
+            "the accepted query must still produce its real answer — one `:a :knows :b` \
+             row — rather than merely being accepted: {rows:?}"
+        );
+    }
+
+    /// **Removing the per-call nesting walk moved no acceptance boundary: an
+    /// over-deep plan is still refused at evaluation, and the one node shallower is
+    /// still evaluated and still answers.**
+    ///
+    /// [`check_plan_soundness`] used to run
+    /// [`crate::governor::soundness::validate_graph_pattern_depth`] on every
+    /// evaluation of a `&PreparedQuery`, and [`crate::eval::prepare_query_context`]
+    /// ran it again inside that same evaluation. One of the two went. Removing a
+    /// refusal is where a refusal changes without anyone meaning it to, and it can
+    /// go wrong in both directions: the guard could stop firing at all (and a deep
+    /// tree would reach the recursive evaluator), or the surviving copy could fire
+    /// somewhere else.
+    ///
+    /// It can also go wrong at a boundary nobody was looking at, which is what
+    /// happened on the first attempt at this change. Relocating the walk to
+    /// [`admit_algebra`] passed every test in this module and turned PREPARING a
+    /// flat `OPTIONAL {} OPTIONAL {} …` spine into a refusal —
+    /// `prepared_admission.rs` states that spine as an acceptance the crate keeps,
+    /// and a whole generated corpus query stopped preparing with it. So this test
+    /// drives the boundary through the door that decides it, EVALUATION, and its
+    /// neighbouring case is checked for its answer rather than for merely not
+    /// erroring.
+    #[test]
+    fn removing_the_duplicate_nesting_walk_moved_no_acceptance_boundary() {
+        use purrdf_sparql_algebra::{
+            NamedNode, NamedNodePattern, QueryDataset, TermPattern, TriplePattern, Variable,
+        };
+        /// `depth` nested `Project`s over `:a :knows ?o`, projecting `?o` throughout.
+        fn nested(depth: usize) -> Query {
+            let object = Variable::new("o");
+            let mut pattern = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://ex/a")),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                        "http://ex/knows",
+                    )),
+                    object: TermPattern::Variable(object.clone()),
+                }],
+            };
+            for _ in 1..depth {
+                pattern = GraphPattern::Project {
+                    inner: Box::new(pattern),
+                    variables: vec![object.clone()],
+                };
+            }
+            Query::Select {
+                pattern,
+                dataset: QueryDataset::default(),
+                base_iri: None,
+                version: None,
+            }
+        }
+
+        let limit = purrdf_sparql_algebra::MAX_GRAPH_PATTERN_DEPTH;
+        let engine = NativeSparqlEngine::new();
+
+        // Both sides PREPARE: admission is the parser's envelope, which is looser
+        // than the evaluator's depth limit, and that is the boundary the first
+        // attempt at this change moved.
+        let over = PreparedQuery::rewritten(nested(limit + 1), QueryOptions::EMPTY)
+            .expect("preparation admits the parser's envelope, over-deep or not");
+        let at = PreparedQuery::rewritten(nested(limit), QueryOptions::EMPTY)
+            .expect("the documented limit itself prepares");
+
+        // The refusal is at EVALUATION, and it is still the nesting guard's own
+        // rather than some other failure that happens to reject the same tree.
+        let refused = engine
+            .query_prepared(&social(), &over, &[], QueryOptions::EMPTY)
+            .expect_err("one node past the documented limit is still refused");
+        assert_eq!(
+            refused.code, "native-sparql-graph-pattern-depth-exceeded",
+            "the refusal must still be the nesting guard's own: {refused}"
+        );
+
+        // The neighbour, at exactly the limit, still ANSWERS — which is the half a
+        // test that only drove the refusal would have passed without.
+        let answer = engine
+            .query_prepared(&social(), &at, &[], QueryOptions::EMPTY)
+            .expect("a plan at the limit must still evaluate");
+        let SparqlResult::Solutions { rows, .. } = answer else {
+            panic!("a SELECT answers with solutions, got {answer:?}");
+        };
+        assert_eq!(
+            rows.len(),
+            1,
+            "the admitted neighbour must still produce its real `:a :knows :b` row: {rows:?}"
         );
     }
 

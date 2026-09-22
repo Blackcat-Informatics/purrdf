@@ -4600,14 +4600,28 @@ _SPARQL_SURFACE_ROWS: tuple[tuple[str, str], ...] = (
     ("`sh:expression` function call", "sh:expression call"),
 )
 
+# The same four surfaces on the GOVERNED lane. The document spells each row with a
+# `, governed` suffix, which is not decoration: the two tables carry the same four
+# surfaces at different figures, and a row label shared between them would make each
+# pattern below match twice and check neither.
+_SPARQL_GOVERNED_ROWS: tuple[tuple[str, str], ...] = tuple(
+    (f"{row}, governed", case) for row, case in _SPARQL_SURFACE_ROWS
+)
 
-def load_sparql_surface_allocations() -> dict[str, int]:
+
+def load_sparql_surface_allocations(field: str = "per_focus_node") -> dict[str, int]:
     """Case name -> the allocations one conforming focus node costs that surface.
 
-    Read from the ``per_focus_node`` field of every ``SparqlCase`` in
+    Read from ``field`` on every ``SparqlCase`` in
     ``crates/shapes/tests/sparql_path_alloc.rs``'s ``CASES``, which the file asserts as
-    the slope of ``CHANGE_PATH_CONSTANT + per_focus_node * N`` over N and 2N focus
-    nodes. The design document restates the four numbers as a table.
+    the slope of a closed form over the focus population. ``per_focus_node`` is the
+    ungoverned lane's slope; ``governed_per_focus_node`` is the governed one's. The
+    design document restates each set as a table of its own.
+
+    The field is matched anchored at a line start so ``per_focus_node`` cannot also
+    match inside ``governed_per_focus_node`` and silently read the wrong lane's
+    figure into the other lane's table — which is exactly the shape of mistake this
+    gate exists to catch in prose.
     """
     text = _read(_SPARQL_PATH_TEST)
     rel = _SPARQL_PATH_TEST.relative_to(_REPO)
@@ -4620,11 +4634,11 @@ def load_sparql_surface_allocations() -> dict[str, int]:
     surfaces: dict[str, int] = {}
     for entry in block.group(1).split("SparqlCase {")[1:]:
         name = re.search(r'name: "([^"]+)",', entry)
-        cost = re.search(r"per_focus_node: (\d+),", entry)
+        cost = re.search(rf"\n *{field}: (\d+),", entry)
         if not name or not cost:
             raise SystemExit(
                 f"check-doc-claims: a `SparqlCase` in {rel} carries no `name` or no "
-                f"`per_focus_node`; the table row for it would be derived from nothing"
+                f"`{field}`; the table row for it would be derived from nothing"
             )
         surfaces[name.group(1)] = int(cost.group(1))
     if not surfaces:
@@ -4677,6 +4691,33 @@ def sparql_surface_table_claims(surfaces: dict[str, int]) -> list[Claim]:
             src,
         )
         for row, case in _SPARQL_SURFACE_ROWS
+        if case in surfaces
+    ]
+
+
+def sparql_governed_table_claims(surfaces: dict[str, int]) -> list[Claim]:
+    """The change-path document's GOVERNED per-focus-node table, row by row.
+
+    Checked beside the ungoverned table rather than instead of it. The governed lane
+    is a different entry in the evaluator over a different data view, so its figures
+    move independently — a document that restated one table's numbers under the
+    other's heading would read as consistent and be wrong about the lane a budgeted
+    host actually runs.
+    """
+    src = (
+        "the `governed_per_focus_node` field of each `SparqlCase` in "
+        "crates/shapes/tests/sparql_path_alloc.rs, asserted as the exact slope of the "
+        "governed closed form at three focus populations"
+    )
+    return [
+        Claim(
+            f"the {row} row of the governed per-focus-node table",
+            _CHANGE_PATH_DESIGN,
+            r"\| " + re.escape(row) + r" \| (?P<allocations>\d+) \|",
+            {"allocations": surfaces[case]},
+            src,
+        )
+        for row, case in _SPARQL_GOVERNED_ROWS
         if case in surfaces
     ]
 
@@ -6207,6 +6248,12 @@ def main(argv: list[str]) -> int:
     surfaces = load_sparql_surface_allocations()
     problems.extend(sparql_surface_coverage_claim(surfaces))
     checked += 1
+    # The governed lane's own slopes, read from the same cases. No second coverage arm:
+    # the two tables name the same four surfaces, so the arm above is already total over
+    # both, and `load_sparql_surface_allocations` refuses outright if a case carries no
+    # `governed_per_focus_node` — a surface measured on one lane and not the other cannot
+    # reach the rows below at all.
+    governed_surfaces = load_sparql_surface_allocations("governed_per_focus_node")
     decomposition_problems, decomposition_claims = change_path_decomposition_claims()
     problems.extend(decomposition_problems)
     # Two column identities per surface: the components against their total, and the
@@ -6231,6 +6278,7 @@ def main(argv: list[str]) -> int:
         + jsonld_lens_claims()
         + rdf12_canon_profile_claim(matrix)
         + sparql_surface_table_claims(surfaces)
+        + sparql_governed_table_claims(governed_surfaces)
         + product_alloc_prose_claims(load_product_alloc_report())
         + change_path_pin_claims(load_change_path_pins())
         + decomposition_claims

@@ -60,10 +60,31 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 54 |
-| custom `sh:ask` component | 122 |
-| custom `sh:select` component | 67 |
-| `sh:expression` function call | 131 |
+| `sh:sparql` constraint | 52 |
+| custom `sh:ask` component | 118 |
+| custom `sh:select` component | 65 |
+| `sh:expression` function call | 127 |
+
+That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
+the lane an incremental host with a budget runs, reached through
+`purrdf_shapes::engine::validate_change_with_governors`, which is a different
+entry in the evaluator (`execute_governed_in_operation`, with its relation-identity
+receipt and admission estimate per run, on the trip-aware channel) reading a
+delta-backed view whose pattern probe is type-erased:
+
+| surface | allocations per focus node, governed |
+|---|---:|
+| `sh:sparql` constraint, governed | 69 |
+| custom `sh:ask` component, governed | 142 |
+| custom `sh:select` component, governed | 82 |
+| `sh:expression` function call, governed | 152 |
+
+Until that second table existed the governed lane's per-focus-node term was
+measured by nothing at all, so a regression in it was invisible to every pin in
+the workspace. It is asserted in the same closed form and with the same absence of
+tolerance, at three focus populations rather than two — three, because at two
+sizes a per-doubling residual cannot be told apart from a one-off at the larger
+one, and this path has one.
 
 The term is flat in the size of the data graph, so it is the price of executing a
 query once per focus node, not a scan. That distinction matters: a scan would be
@@ -87,7 +108,7 @@ and the slopes cannot be differenced. Figures are against the baseline of
 described in the next section moved them to 70 / 144 / 82 / 164, by emptying part
 of the term-materialization row and most of the rebuild cost inside the pushdown,
 seed and expression-walk rows. Two further reductions, described at the end of the
-same section, have since moved them again to 54 / 122 / 67 / 131.
+same section, have since moved them again to 52 / 118 / 65 / 127.
 
 Slices that nest are differenced against each other rather than summed, so no
 allocation is counted twice: an extra `apply_shacl_prebinding` contains an extra
@@ -120,10 +141,48 @@ list is therefore already discharged.
 
 The **governed prelude** — the algebra re-validation, its dropped IRI `String`
 per IRI in the query, the duplicated plan-depth walk, and the relation-identity
-receipt — never runs here. `crates/shapes/src/sparql.rs` takes the governed lane
-only when an operation installs governors, and validating a focus set does not.
-That work is real and worth removing, but it is not part of this term and must
-not be credited against these figures.
+receipt — is no longer a per-focus-node term on EITHER lane, and the two halves
+of that sentence were settled separately.
+
+`crates/shapes/src/sparql.rs` takes the governed lane only when an operation
+installs governors, which is why the ungoverned figures above never carried it.
+But an operation that installs governors is not hypothetical —
+`validate_change_with_governors` is a production entry that does — so "not part of
+this term" was a statement about which table the work landed in, not about whether
+it ran. The governed table above is the measurement, and it shows the prelude is
+not there either: a prepared execution re-admits only its REGISTRIES per run
+(`check_prepared_registries_unchanged`), and the walks that depend on nothing but
+the plan are paid once at preparation.
+
+The two remaining pieces were removed rather than relocated, and the lane they
+were removed from is the one a bare `&PreparedQuery` reaches —
+`NativeSparqlEngine::query_prepared` and its governed twin, which must re-admit
+per call because the same admitted plan may legitimately be handed to calls naming
+different registries. The IRI re-validation stopped owning a copy of each IRI
+(`purrdf_iri::is_absolute` runs the identical grammar over a borrow), and the
+duplicated plan-depth walk was deleted rather than relocated: the same walk ran a
+second time inside the evaluation that followed it, over the SUBSTITUTED tree,
+which is the admitted plan plus a seed `VALUES` and the join onto it and so is the
+copy that must stay. Exactly one depth walk per evaluation remains, refusing the
+same trees with the same diagnostic — once instead of twice.
+
+The relocation was TRIED first and is recorded here because it is the more
+attractive of the two and it is wrong. Establishing the nesting fact at admission
+reads as obviously right — admission is once, and the plan is immutable afterwards
+— and it silently moved an acceptance boundary the crate states and tests:
+preparation accepts the PARSER's envelope, and the evaluator's narrower depth limit
+belongs to execution. A flat `OPTIONAL {} OPTIONAL {} …` spine sits inside the
+parser's budget at two brace levels and lowers to a `LeftJoin` chain far past the
+evaluator's limit, so preparing it must succeed and evaluating it must return a
+typed diagnostic. With the guard at admission, preparing it became an error — as
+did preparing one of this workspace's own generated corpus queries. Every test in
+the module holding the changed code still passed. Measured
+on `crates/sparql-eval/tests/prepared_execution.rs`'s `query_prepared` pin over a
+three-IRI query: **65 → 62 → 59** allocations per call, three for the IRI copies
+and three for the traversal stack, each half isolated by reverting one change and
+re-measuring. Neither moves the tables above, and that is the honest reading
+rather than a disappointment: the SHACL change path already reaches the evaluator
+through a handle, and a handle does not re-admit.
 
 The **evaluation context** allocates exactly once per execution, which the table
 confirms: one for the two surfaces that run a single query per focus node, two
@@ -305,7 +364,42 @@ actually move, and every hit checked, in debug builds, by replaying the run
 through the ordinary rewrite and comparing the two trees node for node, so a memo
 that would ever answer differently from the rewrite it stands in for is discarded
 and that run takes the ordinary path instead. That took the term to
-54 / 122 / 67 / 131, which is where it stands now.
+54 / 122 / 67 / 131.
+
+The ninth: the SCRATCH interner grew from empty on every focus node. A prepared
+execution's handle outlives its runs, so the tables a run grows can be kept and
+EMPTIED between runs rather than dropped and regrown — capacity retained, contents
+not. That is worth exactly two allocations per evaluation context (a `Vec` and a
+`HashTable`, each growing once), so it is two on the surfaces that run one query
+per focus node and four on the two that run one per value node or per argument
+tuple: 52 / 118 / 65 / 127 ungoverned, 69 / 142 / 82 / 152 governed, which is
+where both stand now.
+
+Emptying is the entire safety argument, and it is compiler-enforced. A
+`SolutionTerm::Computed` id is an index into that interner, so a table carried
+forward uncleared answers one focus node's id with another focus node's value —
+a silently wrong answer, not a visible failure. `ScratchInterner::clear` is
+therefore written as a destructuring `let` naming every field with no rest
+pattern, so a field added later and not cleared does not compile; the field that
+argument was actually needed for is `minted_bytes`, which looks like "only a
+counter" and is in fact what the `ScratchBytes` governor charges the difference of,
+so carrying it would move where a ceiling trips. Retained capacity is retained
+memory, so the workspace charges it to `PlanMemoryObserver` the way the per-worker
+interners do, and recharges only when it moves.
+
+The seven OTHER lazy per-evaluation tables on the evaluation context — the
+`BNODE(strExpr)` memo, three `EXISTS` caches, the regex cache, the constant-atom
+cache and the XSD parse cache — are deliberately NOT retained, and that is a
+measurement rather than a preference. Each is a `HashMap::default()`, which builds
+no table until its first insert, and none of them takes an insert on a query that
+does not use the feature it memoizes: pre-reserving all seven ADDS exactly seven
+allocations per evaluation context to the prepared-execution pin and ten to the
+per-focus-node figures above — seven for the tables and three more where a forked
+`FILTER` worker clones the three `EXISTS` caches, which is free while they are
+empty and is one allocation each once they are not. There is no capacity there to
+keep. A later change that gives one of them a per-run cost belongs in the
+workspace, and the exhaustive clear is what makes adding it without clearing it a
+compile error.
 
 One candidate was declined rather than taken. The single allocation left in
 constructing an evaluation context is the expression barrier's shared cell, and it

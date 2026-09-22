@@ -55,18 +55,39 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 54 | 1,277,672 | 3,518 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 122 | 16,156 | 7,460 |
-//! | custom `sh:select` component | 2,738 | 67 | 1,278,972 | 4,093 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 131 | 13,393 | 7,456 |
+//! | `sh:sparql` constraint | 2,695 | 52 | 1,277,672 | 3,518 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 118 | 16,156 | 7,460 |
+//! | custom `sh:select` component | 2,738 | 65 | 1,278,972 | 4,093 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 127 | 13,393 | 7,456 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
 //! cheaper, and the pins move with it.
 //!
-//! # The most recent drop: a prepared execution now retains its SUBSTITUTED plan
+//! # The most recent drop: a prepared execution now retains its SCRATCH TABLES
 //!
-//! The four surfaces most recently dropped by 14, 22, 14 and 20 allocations
+//! The four surfaces most recently dropped by 2, 4, 2 and 4 allocations
+//! respectively (from 54, 122, 67 and 131) when a prepared execution started
+//! retaining its scratch interner across runs — emptied between them, but not
+//! given back — instead of letting a fresh one grow from zero on every focus
+//! node. The saving is exactly two allocations per evaluation CONTEXT, a `Vec`
+//! and a `HashTable` each growing once, which is why the two surfaces that run a
+//! query per VALUE NODE (the `sh:ask` component) or per argument tuple (the
+//! `sh:expression` call) save four where the other two save two.
+//!
+//! Seven other lazy per-evaluation tables sit beside that interner on the
+//! evaluation context, and they are deliberately NOT retained: each is a
+//! `HashMap::default()`, which builds no table until its first insert, and none
+//! of them takes an insert on a query that does not use the feature it memoizes.
+//! Pre-reserving all seven ADDS ten allocations per focus node to the figures
+//! below — seven for the tables themselves and three more where a forked `FILTER`
+//! worker clones the three `EXISTS` caches, which is free while they are empty.
+//! There is no capacity there to keep. See
+//! `purrdf_sparql_eval`'s `execution::ExecutionWorkspace`.
+//!
+//! # The drop before that: a prepared execution retains its SUBSTITUTED plan
+//!
+//! The four surfaces dropped by 14, 22, 14 and 20 allocations
 //! respectively (from 68, 144, 81 and 151) when a prepared execution started
 //! retaining the REWRITTEN algebra across runs — `purrdf_sparql_eval::prebind_memo`
 //! — instead of only the admitted plan the rewrite starts from. Every run before
@@ -215,9 +236,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use purrdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
-use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
+use purrdf_shapes::engine::{
+    FocusId, GovernedValidation, PreparedShapes, PreparedValidator, parse_shapes,
+};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::term::NamedNode;
+use purrdf_sparql_eval::QueryGovernors;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -324,6 +348,57 @@ fn focus_nodes(multiple: u64) -> usize {
 /// this constant is pointing at the change path rather than at SPARQL.
 const CHANGE_PATH_CONSTANT: u64 = 6;
 
+/// What DOUBLING the governed focus population costs in reallocation, on top of the
+/// per-focus-node term.
+///
+/// THREE, and the same three — for the same reason — that
+/// `tests/change_path_alloc.rs` names for its change expansion: collections that
+/// grow by doubling because none of them can be sized in advance. It is a term in
+/// `log2(N)`, not in `N`, which is why [`GOVERNED_FOCUS_SIZES`] has three entries.
+/// At two sizes this residual is indistinguishable from a one-off at the larger
+/// one, and the first reading of this fixture was exactly that ambiguous: `N` fitted
+/// `entry + slope*N` and `2N` overshot it by 3.
+///
+/// The term is counted from [`FOCUS_NODES`] rather than from zero (see
+/// [`governed_alloc_model`]), so each case's entry figure is the allocation count of
+/// its smallest measured run minus its per-focus-node term — a number that was
+/// measured — instead of an extrapolation back to a population this fixture cannot
+/// run at, which is below the parallel threshold and so is different code.
+const GOVERNED_PER_DOUBLING: u64 = 3;
+
+/// The focus populations the governed closed form is asserted at.
+///
+/// Every one above [`PARALLEL_MIN_FOCUS_NODES`], so all three measure the same
+/// scheduler — which is why the series climbs from [`FOCUS_NODES`] rather than
+/// straddling it downward. Three points, so a per-doubling term and a per-focus-node
+/// one are separable.
+const GOVERNED_FOCUS_SIZES: [u64; 3] = [FOCUS_NODES, 2 * FOCUS_NODES, 4 * FOCUS_NODES];
+
+/// Every governed size is above the parallel threshold, checked when the file
+/// compiles.
+const _: () = assert!(
+    GOVERNED_FOCUS_SIZES[0] > PARALLEL_MIN_FOCUS_NODES,
+    "the smallest governed size must exceed the parallel threshold, or the closed form is \
+     fitted across two different schedulers"
+);
+
+/// `population` as a slice length.
+fn population_of(population: u64) -> usize {
+    usize::try_from(population).expect("the focus-node count fits a machine word")
+}
+
+/// `spec`'s pinned governed cost for `population` conforming focus nodes.
+///
+/// `governed_entry + governed_per_focus_node * N + GOVERNED_PER_DOUBLING *
+/// log2(N / FOCUS_NODES)`. Exact at every size in [`GOVERNED_FOCUS_SIZES`], with no
+/// tolerance.
+fn governed_alloc_model(spec: &SparqlCase, population: u64) -> u64 {
+    let doublings = u64::from(population.ilog2()) - u64::from(FOCUS_NODES.ilog2());
+    spec.governed_entry
+        + spec.governed_per_focus_node * population
+        + GOVERNED_PER_DOUBLING * doublings
+}
+
 /// How many violating focus nodes the fixture carries.
 ///
 /// Small and fixed: the violating branch exists to prove each shape really
@@ -364,6 +439,44 @@ struct SparqlCase {
     /// once per tuple of its cartesian product), so one shared number would either
     /// be wrong for three of them or be a bound loose enough to pin nothing.
     per_focus_node: u64,
+    /// The allocations one conforming focus node costs this surface on the
+    /// GOVERNED change path.
+    ///
+    /// A separate pin rather than a multiple of [`Self::per_focus_node`], because
+    /// the two measure different code over different data: the governed lane runs
+    /// `execute_governed_in_operation` (a relation-identity receipt and an
+    /// admission estimate per run, on the trip-aware evaluation channel) over a
+    /// DELTA-backed data view whose pattern probe is type-erased, against the
+    /// ungoverned lane's `execute` over a native dataset. A ratio between them
+    /// would be a number nothing computes and nothing checks.
+    governed_per_focus_node: u64,
+    /// What the governed change path costs this surface BEFORE its first focus
+    /// node, at [`FOCUS_NODES`].
+    ///
+    /// The three surfaces whose footprint is opaque measure exactly **29**, all
+    /// three, whatever their query text — which is the reading that says this is
+    /// the ENTRY's own cost (the `GovernorState`, the scope guard, the expansion's
+    /// return at the opacity check, and the evidence read back afterwards) and not
+    /// the query's. The one surface whose footprint is boundable measures **39**,
+    /// and it is the one taking the other lane: its expansion really walks the
+    /// change instead of returning at that check.
+    ///
+    /// Per case rather than shared for exactly that reason. A single number would
+    /// have to be wrong for one of the two lanes, and a number loose enough to
+    /// cover both would pin neither.
+    governed_entry: u64,
+    /// Whether this surface's change footprint can be BOUNDED.
+    ///
+    /// `false` for the three surfaces whose constraint reads through SPARQL query
+    /// text: nobody can bound what a query reads, and the footprint analysis says
+    /// so rather than guessing, so the governed change path falls back to a full
+    /// validation. `true` for the SHACL-AF `sh:expression` case, whose node
+    /// expression names its paths declaratively.
+    ///
+    /// Pinned per case rather than derived, because it decides WHICH LANE the
+    /// governed figure beside it was measured over, and a surface that silently
+    /// changed lanes would still report a number.
+    footprint_is_boundable: bool,
     /// How many results one VIOLATING focus node must produce.
     ///
     /// Also per case: the ASK component reports per failing value node, the others
@@ -389,7 +502,10 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 54,
+        per_focus_node: 52,
+        governed_per_focus_node: 69,
+        governed_entry: 29,
+        footprint_is_boundable: false,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -406,7 +522,10 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 122,
+        per_focus_node: 118,
+        governed_per_focus_node: 142,
+        governed_entry: 29,
+        footprint_is_boundable: false,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -427,7 +546,10 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 67,
+        per_focus_node: 65,
+        governed_per_focus_node: 82,
+        governed_entry: 29,
+        footprint_is_boundable: false,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -442,7 +564,10 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 131,
+        per_focus_node: 127,
+        governed_per_focus_node: 152,
+        governed_entry: 39,
+        footprint_is_boundable: true,
         results_per_violation: 1,
     },
 ];
@@ -480,6 +605,17 @@ struct Fixture {
 /// for the expression — which is what lets one violating population witness every
 /// case without four differently-broken fixtures.
 fn build_dataset(conforming: usize, violating: usize) -> Arc<RdfDataset> {
+    build_dataset_with_types(conforming, violating, true)
+}
+
+/// [`build_dataset`], with the option of leaving every `rdf:type ex:Focus` row OUT.
+///
+/// Without them the graph carries each focus node's `ex:name` values and nothing
+/// that makes it a TARGET, which is what the governed change fixture wants: it
+/// inserts those rows as the CHANGE, so the mutation is what brings the focus
+/// population into scope. See [`governed_fixture`] for why that shape is the one
+/// that measures all four surfaces rather than three.
+fn build_dataset_with_types(conforming: usize, violating: usize, types: bool) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
     let focus_class = builder.intern_iri(&format!("{NS}Focus"));
@@ -487,7 +623,9 @@ fn build_dataset(conforming: usize, violating: usize) -> Arc<RdfDataset> {
 
     for index in 0..conforming {
         let focus = builder.intern_iri(&format!("{NS}c{index}"));
-        builder.push_quad(focus, rdf_type, focus_class, None);
+        if types {
+            builder.push_quad(focus, rdf_type, focus_class, None);
+        }
         for label in [format!("item-{index}"), format!("item-alt-{index}")] {
             let literal = builder.intern_literal(RdfLiteral::simple(label));
             builder.push_quad(focus, name, literal, None);
@@ -495,7 +633,9 @@ fn build_dataset(conforming: usize, violating: usize) -> Arc<RdfDataset> {
     }
     for index in 0..violating {
         let focus = builder.intern_iri(&format!("{NS}v{index}"));
-        builder.push_quad(focus, rdf_type, focus_class, None);
+        if types {
+            builder.push_quad(focus, rdf_type, focus_class, None);
+        }
         let iri_value = builder.intern_iri(&format!("{NS}notALiteral{index}"));
         builder.push_quad(focus, name, iri_value, None);
     }
@@ -807,6 +947,346 @@ fn every_sparql_surface_costs_a_constant_per_conforming_focus_node() {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. The GOVERNED twin of the headline
+// ---------------------------------------------------------------------------
+
+/// The governed change-path entry's fixture: the snapshot it is bound to, and the
+/// validator bound to it.
+///
+/// A pair rather than a validator alone because
+/// [`purrdf_shapes::engine::validate_change_with_governors`] takes both and refuses
+/// a snapshot that is not the one the validator was bound to — by identity, not by
+/// value — so the two have to travel together.
+struct GovernedFixture {
+    /// The mutation snapshot the validator is bound to.
+    snapshot: Arc<purrdf::ir::DeltaDatasetView>,
+    /// The validator bound to [`Self::snapshot`].
+    validator: PreparedValidator,
+    /// How many conforming focus nodes the change brings into scope.
+    conforming: usize,
+    /// How many violating ones it brings with them.
+    violating: usize,
+}
+
+/// Build `case`'s shapes over a base graph of `conforming` focus nodes and
+/// `violating` ones, bound to a mutation that TYPES every one of them.
+///
+/// # Why the change is the type rows and not one unrelated row
+///
+/// The obvious fixture — a large base graph plus a single changed row — was tried
+/// first and it measures three of the four surfaces and silently skips the fourth.
+/// [`purrdf_shapes::engine::validate_change_with_governors`] does not take a focus
+/// set: it EXPANDS the change and validates what the expansion names. A shapes
+/// graph whose constraint reads through SPARQL query TEXT has an opaque footprint,
+/// so the expansion refuses to bound it and the entry falls back to a full
+/// validation — which is the whole population, and is what makes `sh:sparql`, the
+/// `sh:ask` component and the `sh:select` component measurable. The SHACL-AF
+/// `sh:expression` case has no query text in it: its footprint IS boundable, so a
+/// one-row change that reaches no focus node expands to the EMPTY set and the
+/// measurement reads the cost of validating nothing while still reporting a number.
+/// The scope assertion in [`GovernedFixture::validate`] is what caught that, and it
+/// stays there so the next fixture cannot lose the property quietly.
+///
+/// Inserting every focus node's `rdf:type ex:Focus` row as the CHANGE makes both
+/// lanes name the same population: the opaque cases fall back to the full
+/// validation of `N` focus nodes, and the boundable case's expansion answers those
+/// same `N`. It is also the realistic incremental shape — `N` focus nodes arriving
+/// at once — rather than an arrangement built to make a number come out.
+///
+/// The consequence is that the change GROWS with `N`, so the expansion's own cost
+/// is part of the per-focus-node slope on the boundable case. That is a real cost
+/// of the governed change path and it is charged to the surface it belongs to,
+/// which is why each case pins its own slope. What it is NOT is a per-focus-node
+/// term for the three opaque cases: their expansion returns before it reads a
+/// single changed row.
+///
+/// Every focus node keeps exactly TWO `ex:name` values, as in the ungoverned
+/// fixture, so the two files' figures describe the same workload through two
+/// different lanes.
+fn governed_fixture(case: usize, conforming: usize, violating: usize) -> GovernedFixture {
+    let name = CASES[case].name;
+    let base = build_dataset_with_types(conforming, violating, false);
+    let mut mutation = purrdf::MutableDataset::new(base);
+    for (prefix, count) in [('c', conforming), ('v', violating)] {
+        for index in 0..count {
+            assert!(
+                purrdf::DatasetMut::insert(
+                    &mut mutation,
+                    purrdf::QuadValues {
+                        s: purrdf::TermValue::iri(format!("{NS}{prefix}{index}")),
+                        p: purrdf::TermValue::iri(RDF_TYPE),
+                        o: purrdf::TermValue::iri(format!("{NS}Focus")),
+                        g: None,
+                    },
+                )
+                .unwrap_or_else(|error| panic!(
+                    "case {name}: the governed fixture's insert must apply: {error}"
+                )),
+                "case {name}: focus {prefix}{index}'s type row changed nothing, so the \
+                 change path is measured over a mutation that never happened"
+            );
+        }
+    }
+    let snapshot = Arc::new(
+        mutation
+            .snapshot_view()
+            .unwrap_or_else(|error| panic!("case {name}: the mutation must snapshot: {error}")),
+    );
+    let mut ttl = String::from(PREFIXES);
+    ttl.push_str(CASES[case].shapes);
+    let shapes = parse_shapes(&ttl, None)
+        .unwrap_or_else(|error| panic!("case {name}: the shapes graph must parse: {error}"));
+    let validator = PreparedShapes::new(Arc::new(shapes))
+        .bind_delta_with_shapes_graph(
+            Arc::clone(&snapshot),
+            None,
+            purrdf::ir::ViewLimits::default(),
+        )
+        .unwrap_or_else(|error| panic!("case {name}: the governed delta must bind: {error}"));
+    GovernedFixture {
+        snapshot,
+        validator,
+        conforming,
+        violating,
+    }
+}
+
+impl GovernedFixture {
+    /// Drive the governed change path once, requiring the whole population to be in
+    /// scope and the report to conform.
+    ///
+    /// Both requirements are non-vacuity guards on the figure this returns, and the
+    /// SCOPE check is the one a reader would not think to ask for. This entry point
+    /// picks its own focus set, so "how many focus nodes did that number describe?"
+    /// is a question about the run rather than about the call — and the answer
+    /// "none" reads exactly like a very cheap validation. An earlier version of this
+    /// fixture hit precisely that: the `sh:expression` case's footprint is
+    /// BOUNDABLE, and against a change that reached no focus node its expansion was
+    /// correct, empty, and silently measuring nothing.
+    ///
+    /// So the scope is checked two ways: it must be the lane this case's footprint
+    /// dictates ([`SparqlCase::footprint_is_boundable`]), and where that lane names
+    /// a count it must be the WHOLE population rather than a prefix of it.
+    fn validate(&self, case: usize) -> ValidationReport {
+        let name = CASES[case].name;
+        let governed = purrdf_shapes::engine::validate_change_with_governors(
+            &self.validator,
+            &self.snapshot,
+            &QueryGovernors::UNBOUNDED,
+        )
+        .unwrap_or_else(|error| panic!("case {name}: the governed change must validate: {error}"));
+        match governed.scope.focus_nodes() {
+            Some(named) => {
+                assert!(
+                    CASES[case].footprint_is_boundable,
+                    "case {name}: this surface's constraint reads through SPARQL query TEXT, \
+                     so its footprint is opaque and the governed change path must take the \
+                     FULL-validation fallback; a bounded scope means the footprint analysis \
+                     started claiming a bound it cannot have"
+                );
+                assert_eq!(
+                    named,
+                    self.conforming + self.violating,
+                    "case {name}: the expansion must name every focus node the change types, \
+                     or this figure describes a SHORTER population than the one it is \
+                     attributed to"
+                );
+            }
+            None => assert!(
+                !CASES[case].footprint_is_boundable,
+                "case {name}: this surface's footprint is boundable, so the expansion must \
+                 NAME its focus nodes; falling back to a full validation would measure the \
+                 whole graph through a lane this case does not take"
+            ),
+        }
+        let GovernedValidation::Complete { report, .. } = governed.outcome else {
+            panic!(
+                "case {name}: an UNBOUNDED budget must not trip, and a truncated run carries \
+                 no report to measure"
+            );
+        };
+        assert!(
+            report.conforms,
+            "case {name}: the governed population must conform, or the allocation figure \
+             describes a workload that never reached the constraint ({} result(s), first: {:?})",
+            report.results.len(),
+            report.results.first().map(|r| r.message.clone()),
+        );
+        report
+    }
+}
+
+/// Initialise the per-worker lazies for a GOVERNED case on every thread of the pool.
+///
+/// The governed twin of [`warm_every_worker`], and it exists for exactly the two
+/// reasons that one does — the thread-local SPARQL engine and its plan cache are
+/// warmed per worker, and a prepared execution's substituted-plan memo builds on
+/// the SECOND consecutive sighting of a lane and shape list, so one broadcast would
+/// leave every worker's build ahead of it and inside the measured window.
+///
+/// It cannot reuse [`warm_every_worker`] itself, and the difference is not
+/// cosmetic: that function warms by validating ONE focus node through the
+/// ungoverned entry, and the governed lane is a different code path in the engine
+/// (`execute_governed_in_operation` rather than `execute`) reading a different data
+/// view (a delta-backed one rather than a native dataset). Warming with the
+/// ungoverned lane would leave the governed lane's own first-touch costs inside the
+/// window. So this warms with the entry point it is about, on a fixture of the same
+/// SHAPE but a single focus node, which stays below [`PARALLEL_MIN_FOCUS_NODES`]
+/// and so runs serially on whichever worker the broadcast lands it on.
+fn warm_every_worker_governed(case: usize) {
+    let one = governed_fixture(case, 1, 0);
+    for _ in 0..2 {
+        rayon::broadcast(|_| {
+            drop(one.validate(case));
+        });
+    }
+}
+
+/// **The GOVERNED change path costs
+/// `governed_entry + governed_per_focus_node * N + GOVERNED_PER_DOUBLING *
+/// log2(N / FOCUS_NODES)` allocations, exactly, at every size in
+/// [`GOVERNED_FOCUS_SIZES`].**
+///
+/// The headline above pins the UNGOVERNED lane, and that left the governed one —
+/// the lane an incremental host with a budget actually runs — entirely unmeasured.
+/// The two are not the same code: installing governors sends every SHACL query
+/// through `execute_governed_in_operation` instead of `execute`, which adds a
+/// relation-identity receipt and an admission estimate per run and evaluates on the
+/// trip-aware channel, and the figures below are larger than the headline's for
+/// exactly that reason plus one more — a delta-backed data view type-erases its
+/// pattern probe (`crates/shapes/src/data_view.rs`), which a native dataset does
+/// not.
+///
+/// So a regression in the governed lane's per-focus-node term was invisible to
+/// every pin in this workspace. It is not now.
+///
+/// Pinned like the headline and for the same reasons: a closed form rather than a
+/// ratio, asserted as an exact equality with no tolerance, over the same
+/// [`measure_lock`], the same [`measure_min`], the same two-stage warm-up and the
+/// same [`without_memo_verification`] bracket.
+///
+/// Two structural differences, both forced by the entry point rather than chosen.
+///
+/// Each size needs its own FIXTURE rather than a slice of one.
+/// `validate_change_with_governors` picks its own focus set — it expands the change
+/// — so "validate N of them" is spelled by building a change that types N of them,
+/// not by handing a slice to an entry point that does not take one. See
+/// [`governed_fixture`].
+///
+/// And there are THREE sizes, not two, because two cannot tell a per-focus-node
+/// term from a per-doubling one. The first reading of this fixture came out as
+/// `C + slope*N` at `N` and `C + slope*2N + 3` at `2N`, and two points admit both
+/// readings of that residual 3: a doubling series, or a one-off at the larger size.
+/// A third size settles it by measurement rather than by assumption, exactly as
+/// `tests/change_path_alloc.rs` uses four change sizes so its per-row term "cannot
+/// be confused with" a doubling one.
+#[test]
+fn every_sparql_surface_costs_a_constant_per_governed_change_focus_node() {
+    let _guard = measure_lock();
+    assert_parallel_path_is_reachable();
+
+    let mut report = String::new();
+    let mut failures = String::new();
+    for (case, spec) in CASES.iter().enumerate() {
+        let name = spec.name;
+        // The warm-up's first stage is per CASE rather than per size: it reaches
+        // every worker with this case's query text and gives the substituted-plan
+        // memo its second, unmeasured sighting. See `warm_every_worker_governed`.
+        warm_every_worker_governed(case);
+        for population in GOVERNED_FOCUS_SIZES {
+            let fixture = governed_fixture(case, population_of(population), 0);
+            // The second stage, per SIZE and on the exact arguments measured:
+            // rayon's global pool at THIS fan-out width and the allocator's arenas
+            // at this working-set size are process-wide first-touch costs that the
+            // broadcast's single-focus-node runs do not exercise.
+            drop(fixture.validate(case));
+
+            let (_, measured) =
+                without_memo_verification(|| measure_min(|| fixture.validate(case)));
+
+            let expected = governed_alloc_model(spec, population);
+            let _ = writeln!(
+                report,
+                "  {name} at {population}: {} allocations, {} requested bytes",
+                measured.allocations, measured.requested_bytes,
+            );
+            if measured.allocations != expected {
+                let _ = writeln!(
+                    failures,
+                    "  {name} at {population} conforming focus nodes: allocated {}, not the \
+                     pinned {} + {} * {population} + {GOVERNED_PER_DOUBLING} * \
+                     log2({population}/{FOCUS_NODES}) = {expected}\n    {measured:?}",
+                    measured.allocations, spec.governed_entry, spec.governed_per_focus_node,
+                );
+            }
+        }
+    }
+    println!("governed change path, measured:\n{report}");
+    assert!(
+        failures.is_empty(),
+        "the GOVERNED SPARQL-bearing surfaces' cost moved:\n{failures}\nall measurements:\n{report}"
+    );
+}
+
+/// **Every surface still reports its violations through the GOVERNED change entry
+/// too.**
+///
+/// The governed twin of [`every_sparql_surface_still_reports_its_violations`], and
+/// the same argument: a constant-allocation claim about the governed lane is
+/// satisfied perfectly by a governed lane that stopped evaluating. The measured
+/// fixture above is all-conforming, so this is the only thing standing between that
+/// figure and a validator that answers `conforms` without running a query.
+#[test]
+fn every_sparql_surface_still_reports_its_violations_when_governed() {
+    let _guard = measure_lock();
+    let violating: Vec<String> = (0..VIOLATIONS).map(|i| format!("{NS}v{i}")).collect();
+
+    for (case, spec) in CASES.iter().enumerate() {
+        let fixture = governed_fixture(case, 2, VIOLATIONS);
+        let governed = purrdf_shapes::engine::validate_change_with_governors(
+            &fixture.validator,
+            &fixture.snapshot,
+            &QueryGovernors::UNBOUNDED,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "case {}: the governed violating change must validate: {error}",
+                spec.name
+            )
+        });
+        let GovernedValidation::Complete { report, .. } = governed.outcome else {
+            panic!("case {}: an UNBOUNDED budget must not trip", spec.name);
+        };
+        assert!(
+            !report.conforms,
+            "case {}: the violating set must not conform under governors either",
+            spec.name
+        );
+        assert_eq!(
+            report.results.len(),
+            VIOLATIONS * spec.results_per_violation,
+            "case {}: each of the {VIOLATIONS} violating focus nodes must produce {} result(s) \
+             under governors, exactly as it does without them",
+            spec.name,
+            spec.results_per_violation,
+        );
+        let mut reported: Vec<String> = report
+            .results
+            .iter()
+            .map(|result| result.focus_node.to_string())
+            .collect();
+        reported.sort_unstable();
+        reported.dedup();
+        let expected: Vec<String> = violating.iter().map(|iri| format!("<{iri}>")).collect();
+        assert_eq!(
+            reported, expected,
+            "case {}: every violating focus node must appear in the governed report",
+            spec.name
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 2. The companion that makes the headline mean anything
 // ---------------------------------------------------------------------------
 
@@ -975,8 +1455,8 @@ fn flattened(text: &str) -> String {
 /// * `crates/shapes/src/engine.rs` — the same two forms, on the rustdoc of
 ///   `validate_focus_nodes` and `validate_focus_node_ids`;
 /// * `docs/design/purrdf-change-path-allocations.md` — the per-focus-node
-///   table's four rows, the same four `scripts/check-doc-claims.py` checks
-///   independently;
+///   table's four rows AND the governed table's four, the same eight
+///   `scripts/check-doc-claims.py` checks independently;
 /// * this file's OWN module documentation — the `after` column of the
 ///   before/after table near the top of the file;
 /// * `crates/shapes/tests/change_path_alloc.rs` — its `SIBLING_FILE_COVERAGE`
@@ -1055,6 +1535,21 @@ fn every_registered_prose_site_quotes_the_measured_figures() {
             design_doc.contains(&row),
             "docs/design/purrdf-change-path-allocations.md no longer quotes the measured \
              figure for {label}.\n  expected row: {row}"
+        );
+        // The GOVERNED table beside it, swept here for the same reason the ungoverned
+        // one is: `scripts/check-doc-claims.py` reads these rows too, and a regression
+        // in that Python gate should not be the only thing standing between the
+        // document and these constants. The `, governed` suffix is load-bearing rather
+        // than decorative — the two tables name the same four surfaces at different
+        // figures, and a shared row label would let each sweep match the wrong table.
+        let governed_row = format!(
+            "| {label}, governed | {} |",
+            CASES[index].governed_per_focus_node
+        );
+        assert!(
+            design_doc.contains(&governed_row),
+            "docs/design/purrdf-change-path-allocations.md no longer quotes the measured \
+             GOVERNED figure for {label}.\n  expected row: {governed_row}"
         );
     }
 

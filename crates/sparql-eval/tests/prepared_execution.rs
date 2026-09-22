@@ -183,6 +183,297 @@ fn re_running_a_prepared_execution_costs_27_allocations() {
     );
 }
 
+/// A query that MINTS a term per row, so the retained scratch interner has
+/// something in it to leak.
+///
+/// `CONCAT` produces a value the dataset does not contain, which is exactly the
+/// case `SolutionTerm::Computed` exists for: it is written into the run's scratch
+/// table and read back out of it by index. A query whose every answer is already a
+/// dataset term would leave that table empty, and every assertion below about
+/// clearing it would hold vacuously.
+const MINTING_QUERY: &str =
+    "SELECT ?v WHERE { ?this <http://example.org/p> ?o . BIND(CONCAT(\"tag-\", STR(?o)) AS ?v) }";
+
+/// One run of `execution` bound to subject `i`, returning the `ScratchBytes` the
+/// governor charged it.
+///
+/// A FRESH [`purrdf_sparql_eval::GovernorState`] per run, deliberately: the charge
+/// site compares the interner's running minted total against what THIS state has
+/// already consumed, so a fresh state makes each run report its own minting rather
+/// than a difference against an earlier run's. That is what turns a carried-over
+/// `minted_bytes` into a visible number instead of a silent one.
+fn scratch_bytes_of_run(
+    engine: &NativeSparqlEngine,
+    execution: &mut purrdf_sparql_eval::PreparedExecution,
+    ds: &RdfDataset,
+    subject: u32,
+) -> u64 {
+    use purrdf_sparql_eval::{GovernorState, QueryGovernors, ResourceDimension};
+    execution.bind(0, iri(subject)).expect("bind");
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    let rows = engine
+        .execute_governed_in_operation(execution, ds, QueryOptions::EMPTY, &state, |outcome| {
+            let InternedOutcome::Solutions(solutions) = outcome else {
+                panic!("expected solutions");
+            };
+            solutions.len()
+        })
+        .expect("the metered run completes");
+    let purrdf_sparql_eval::InternedGoverned::Complete { value, .. } = rows else {
+        panic!("METERED engages every counter at a ceiling nothing reaches, so nothing trips");
+    };
+    assert_eq!(value, 1, "each subject answers exactly one row");
+    state
+        .evidence()
+        .consumed
+        .get(ResourceDimension::ScratchBytes)
+}
+
+/// **A handle's later run is observationally a FRESH handle's first run: the
+/// retained scratch interner is emptied between runs, values and counter alike.**
+///
+/// `PreparedExecution` keeps its scratch interner across runs and clears it rather
+/// than dropping it, which is the whole of `ExecutionWorkspace`. The failure mode
+/// of that design is not a crash: a table retained and not fully cleared carries
+/// one run's state into the next, and `ScratchInterner::clear` is written as a
+/// destructuring `let` precisely so a field cannot be forgotten. The compiler
+/// enforces that every field is NAMED. This enforces that clearing them is
+/// OBSERVABLE, which the compiler cannot.
+///
+/// Three halves, because the fields fail differently and a test of one proves
+/// nothing about the others. Each was confirmed to OBSERVE by breaking the clear it
+/// guards and watching this test redden — which is how the third came to exist: the
+/// first two both stayed green with the value tables left uncleared.
+///
+/// 1. **The answers.** Bindings run in sequence on ONE handle must answer exactly
+///    what FRESH handles answer, binding for binding. The control is the fresh
+///    handle — its interner has never held anything — and every treatment row is a
+///    different subject with a different minted value, so a run answering from a
+///    stale table answers the wrong string rather than an equal one.
+/// 2. **The counter.** `minted_bytes` looks like bookkeeping and is what
+///    `EvalCtx::charge_scratch_growth` charges the `ScratchBytes` ceiling from, so
+///    carrying it would make the Nth run report N runs' minting and trip a ceiling
+///    early. A reused handle's second run must charge exactly what a fresh handle's
+///    first run charges for the same binding — and that figure must be non-zero,
+///    or this half is measuring a query that mints nothing.
+/// 3. **The tables.** Leaving the value table uncleared is the one failure the
+///    first two halves CANNOT see, and it is worth saying why rather than leaving
+///    the gap: the interner de-duplicates by value, so a stale entry is found
+///    rather than misread and every answer stays right. What it breaks is the
+///    saving itself — the retained workspace grows by one run's values on every
+///    run, forever, which is the opposite of keeping a bounded capacity. That is
+///    observable only through the size, so the size is what this half reads.
+#[test]
+fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
+    let _guard = measure_lock();
+    let ds = dataset(16);
+    let engine = NativeSparqlEngine::new();
+
+    let answer_of = |execution: &mut purrdf_sparql_eval::PreparedExecution, subject: u32| {
+        execution.bind(0, iri(subject)).expect("bind");
+        engine
+            .execute(execution, &*ds, QueryOptions::EMPTY, |outcome| {
+                let InternedOutcome::Solutions(solutions) = outcome else {
+                    panic!("expected solutions");
+                };
+                assert_eq!(solutions.len(), 1, "exactly one row per subject");
+                let row = &solutions.rows()[0];
+                format!("{:?}", solutions.cell(row, 0).expect("bound cell"))
+            })
+            .expect("execute")
+    };
+
+    // 1. The answers.
+    let mut reused = engine
+        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+    let from_reused: Vec<String> = (0..8u32).map(|s| answer_of(&mut reused, s)).collect();
+    let from_fresh: Vec<String> = (0..8u32)
+        .map(|s| {
+            let mut once = engine
+                .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+                .expect("prepare");
+            answer_of(&mut once, s)
+        })
+        .collect();
+    assert_eq!(
+        from_reused, from_fresh,
+        "a handle's Nth run must answer what a fresh handle's first run answers; a \
+         difference here is one focus node's computed value surfacing in another's row"
+    );
+    // Non-vacuity: the eight answers must actually differ from one another, or a
+    // stale table could serve any of them and the comparison above would hold.
+    let mut distinct = from_reused.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        8,
+        "the eight bindings must mint eight DIFFERENT values, or a run answering from \
+         a stale table would be indistinguishable from one answering correctly: \
+         {from_reused:?}"
+    );
+
+    // 2. The counter.
+    let mut reused = engine
+        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+    let first = scratch_bytes_of_run(&engine, &mut reused, &ds, 0);
+    let second = scratch_bytes_of_run(&engine, &mut reused, &ds, 1);
+    let mut virgin = engine
+        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+    let control = scratch_bytes_of_run(&engine, &mut virgin, &ds, 1);
+    assert!(
+        first > 0,
+        "the fixture query must actually mint something, or this half is vacuous"
+    );
+    assert_eq!(
+        second, control,
+        "a reused handle's second run must charge the `ScratchBytes` governor exactly \
+         what a fresh handle's first run charges for the same binding; a larger figure \
+         is `minted_bytes` carried across the clear, which would trip a ceiling after \
+         N runs instead of on the run that earned it"
+    );
+    assert_eq!(
+        second, first,
+        "`o0` and `o1` are the same length, so the two bindings mint the same number of \
+         bytes; a difference means this half is reading something other than one run's \
+         minting"
+    );
+
+    // 3. The tables.
+    let mut reused = engine
+        .prepare_execution(MINTING_QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+    for subject in 0..8u32 {
+        drop(answer_of(&mut reused, subject));
+    }
+    let after_eight = reused.retained_workspace_bytes();
+    // Eight MORE runs, on eight subjects none of the first eight used, so every one
+    // of them mints a value the interner has never seen. A run repeating an earlier
+    // binding would be de-duplicated even by an uncleared table, and this half would
+    // hold for the wrong reason.
+    for subject in 8..16u32 {
+        drop(answer_of(&mut reused, subject));
+    }
+    let after_sixteen = reused.retained_workspace_bytes();
+    assert!(
+        after_eight > 0,
+        "the retained workspace must actually be holding tables, or this half is \
+         asserting that nothing does not grow"
+    );
+    assert_eq!(
+        after_eight, after_sixteen,
+        "the retained workspace must not grow with the NUMBER of runs: sixteen runs \
+         hold what eight hold. A larger figure is one run's values surviving into the \
+         next run's table — which still answers correctly, and grows without bound"
+    );
+}
+
+/// The exact per-call allocation cost of evaluating an already-admitted
+/// [`purrdf_sparql_eval::PreparedQuery`] through `query_prepared`.
+///
+/// This is the OTHER prepared door, and the one with a per-call re-admission on it:
+/// a bare `&PreparedQuery` may be handed to calls naming different registries, so
+/// `check_plan_matches_relations` runs on every call — a `Query::validate` walk and
+/// a feasibility replanning walk — where a `PreparedExecution` runs them once and
+/// carries the result ([`PREPARED_EXECUTION_RUN_ALLOCATIONS`] is that path).
+///
+/// It is pinned because it is where two reductions actually land, and neither one
+/// is visible on any other pin in this workspace:
+///
+/// * the nesting guard was DUPLICATED between that per-call check and the
+///   evaluation it precedes, so the per-call copy went (`engine::check_plan_soundness`);
+///   the surviving copy runs over the tree actually evaluated, refuses the same
+///   trees with the same diagnostic, and no longer allocates and grows a second
+///   traversal stack per call;
+/// * `Query::validate`'s IRI admission stopped building an owned `purrdf_iri::Iri`
+///   per IRI in the query and now asks `purrdf_iri::is_absolute`, which runs the
+///   identical grammar over a borrow — one heap `String` per IRI per call, gone.
+///
+/// Measured on this revision at **59**, against **65** before those two changes, over
+/// [`PREPARED_PLAN_QUERY`]'s three distinct IRIs — and the six decompose exactly,
+/// each half isolated by reverting one change at a time and re-measuring:
+///
+/// * 65 → 62 when the IRI admission stopped owning: **three**, one `String` per IRI
+///   occurrence in the algebra, which is why this fixture's query carries three
+///   distinct IRIs rather than one;
+/// * 62 → 59 when the duplicate nesting walk went: **three**, the traversal stack
+///   that second walk allocated and grew on every call.
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 59;
+
+/// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
+///
+/// Three DISTINCT IRIs, spelled out rather than prefixed, because the per-IRI term
+/// this pin exists to hold down is per IRI OCCURRENCE in the algebra: a one-IRI
+/// query would make that term and the constant beside it indistinguishable.
+const PREPARED_PLAN_QUERY: &str = "SELECT ?o WHERE {\n  ?s <http://example.org/p> ?o .\n  \
+     ?s <http://example.org/q> ?r .\n  FILTER(?r != <http://example.org/absent>)\n}";
+
+/// **Evaluating an admitted plan through `query_prepared` costs exactly
+/// [`PREPARED_PLAN_CALL_ALLOCATIONS`] allocations, on every call.**
+///
+/// An exact pin rather than a stability one, for the reason this file's module
+/// documentation gives: "run N and run N+1 cost the same" is satisfied at any
+/// magnitude, including one that regressed and then stayed flat.
+///
+/// The answer is checked inside the measured window on every call, so a plan that
+/// became cheaper by answering less would fail here rather than read as a win.
+#[test]
+fn evaluating_an_admitted_plan_costs_a_pinned_constant_per_call() {
+    let _guard = measure_lock();
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let q = b.intern_iri("http://example.org/q");
+    for i in 0..8u32 {
+        let s = b.intern_iri(&format!("http://example.org/s{i}"));
+        let o = b.intern_iri(&format!("http://example.org/o{i}"));
+        let r = b.intern_iri(&format!("http://example.org/r{i}"));
+        b.push_quad(s, p, o, None);
+        b.push_quad(s, q, r, None);
+    }
+    let ds = b.freeze().expect("freeze");
+
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query_with_options(PREPARED_PLAN_QUERY, None, QueryOptions::EMPTY)
+        .expect("the fixture query parses and is admitted");
+
+    let run = || -> u64 {
+        let window = WholeProcessWindow::open();
+        let answer = engine
+            .query_prepared(&ds, &prepared, &[], QueryOptions::EMPTY)
+            .expect("the admitted plan evaluates");
+        let allocations = window.close().allocations;
+        let SparqlResult::Solutions { rows, .. } = answer else {
+            panic!("a SELECT answers with solutions");
+        };
+        assert_eq!(
+            rows.len(),
+            8,
+            "every subject must still answer, or a cheaper figure is a smaller answer"
+        );
+        allocations
+    };
+
+    // Warm every lazy on this thread with the exact call being measured.
+    let _warm = (run(), run());
+    let (first, second, third) = (run(), run(), run());
+    println!("query_prepared: {first}, {second}, {third} allocations per call");
+    assert_eq!(
+        (first, second, third),
+        (
+            PREPARED_PLAN_CALL_ALLOCATIONS,
+            PREPARED_PLAN_CALL_ALLOCATIONS,
+            PREPARED_PLAN_CALL_ALLOCATIONS
+        ),
+        "the per-call cost of evaluating an admitted plan is pinned EXACTLY: a figure that \
+         moves — in either direction — means the per-call re-admission or the evaluator's \
+         marginal cost has changed"
+    );
+}
+
 #[test]
 fn running_with_a_parameter_unbound_is_refused() {
     let _guard = measure_lock();

@@ -130,6 +130,133 @@ pub struct PreparedExecution {
     /// The lane and value shapes of the most recent run that did not come from
     /// [`Self::memo`].
     pending: Option<PendingShape>,
+    /// The per-run tables this execution retains between runs, emptied but not
+    /// given back. See [`ExecutionWorkspace`].
+    workspace: ExecutionWorkspace,
+}
+
+/// The evaluation tables a prepared execution keeps across its runs: **emptied
+/// between runs, but not given back to the allocator**.
+///
+/// # What this is for
+///
+/// [`crate::eval::EvalCtx`] is built fresh for every run and dropped at the end of
+/// it, and everything lazy on it therefore grows from zero again on the next run.
+/// A handle that runs the same query once per focus node pays that growth once per
+/// focus node for tables whose SIZE is a property of the query rather than of the
+/// focus node. Holding them on the handle — which already outlives the run — and
+/// clearing them instead of dropping them keeps the capacity and pays the growth
+/// once.
+///
+/// # Why it holds ONE table and not seven
+///
+/// [`crate::eval::EvalCtx`] carries seven lazy per-evaluation maps beside the
+/// scratch interner — the `BNODE(strExpr)` memo, three `EXISTS` caches, the regex
+/// cache, the constant-atom cache and the XSD parse cache. Every one of them was
+/// measured before this type was written, and every one of them allocates
+/// **nothing** on the paths this workspace exists for: a `DetHashMap` is a
+/// `HashMap::default()`, which builds no table until its first insert, and none of
+/// those seven takes an insert on a query that does not use the feature it
+/// memoizes. Pre-reserving all seven adds exactly seven allocations per evaluation
+/// context to `crates/sparql-eval/tests/prepared_execution.rs`'s pin and ten to
+/// `crates/shapes/tests/sparql_path_alloc.rs`'s per-focus-node figures — seven for
+/// the tables themselves and three more where a forked `FILTER` worker clones the
+/// three `EXISTS` caches, which is free while they are empty and is one allocation
+/// each once they are not.
+///
+/// So retaining them would buy nothing and cost a clear. They are deliberately
+/// absent, and the reason is a measurement rather than an opinion. A later change
+/// that gives one of them a per-run cost belongs here, and the clear below is
+/// written so that adding it cannot be done without clearing it.
+///
+/// # Correctness
+///
+/// Everything here is FOCUS-NODE-DEPENDENT and must be cleared between runs — the
+/// scratch interner holds the values one run computed, and a `SolutionTerm::Computed`
+/// id is an index into it, so a table carried forward uncleared would answer one
+/// run's id with another run's value. That is a silently wrong answer, which is why
+/// [`crate::scratch::ScratchInterner::clear`] is written as a destructuring `let`
+/// over every field with no rest pattern: a field added and not cleared fails to
+/// compile.
+///
+/// Nothing here memoizes a pure function of the query, which is the only category
+/// that could legitimately be RETAINED rather than cleared. The plan-shaped memos
+/// this execution keeps — [`PreparedExecution::memo`] and the interned parameter
+/// names — are exactly that category and live outside this type, because their
+/// lifecycle is "build once and keep", not "clear every run".
+#[derive(Debug, Default)]
+struct ExecutionWorkspace {
+    /// The interner for terms a run computes. Cleared between runs; its tables are
+    /// kept.
+    scratch: crate::scratch::ScratchInterner,
+    /// This workspace's retained capacity, as charged to
+    /// [`crate::plan_memory::interner_memory_observer`].
+    ///
+    /// Retained capacity is retained memory, and a host that can read a plan's
+    /// bytes off [`crate::PlanMemoryObserver`] should be able to read these too —
+    /// otherwise this type's whole saving is memory that grew and became
+    /// invisible. Recharged only when the retained figure actually MOVES, which
+    /// after the first few runs it stops doing: re-charging on every run would put
+    /// a mutex acquisition on the hot path to restate a number that did not
+    /// change.
+    charge: crate::plan_memory::InternerCharge,
+    /// The bytes [`Self::charge`] currently stands for, so a recharge can be
+    /// skipped when the capacity has not moved.
+    charged_bytes: usize,
+}
+
+impl ExecutionWorkspace {
+    /// Hand this run the retained tables, leaving an empty pair behind.
+    ///
+    /// The placeholder costs nothing: a fresh [`crate::scratch::ScratchInterner`]
+    /// allocates no table until something is minted into it, which is the same
+    /// property that makes a run whose evaluation fails cost only its own capacity
+    /// rather than corrupting the next one's.
+    fn check_out(&mut self) -> crate::scratch::ScratchInterner {
+        std::mem::take(&mut self.scratch)
+    }
+
+    /// Take the tables back from a finished run, empty them, and re-charge the
+    /// capacity they kept.
+    ///
+    /// Destructured with no rest pattern, for the same reason
+    /// [`crate::scratch::ScratchInterner::clear`] is: this is the clearing seam, and
+    /// a table added to this type and not given a line here would be retained
+    /// across runs UNCLEARED — the one failure on this path that produces a wrong
+    /// answer rather than an error. It does not compile instead.
+    fn check_in(&mut self, used: &mut crate::scratch::ScratchInterner) {
+        let Self {
+            scratch,
+            charge,
+            charged_bytes,
+        } = self;
+        *scratch = std::mem::take(used);
+        scratch.clear();
+        let bytes = scratch.retained_capacity_bytes();
+        if bytes != *charged_bytes {
+            charge.clear();
+            if bytes > 0 {
+                charge.add(bytes);
+            }
+            *charged_bytes = bytes;
+        }
+    }
+
+    /// Every byte this workspace is retaining, across every table in it.
+    ///
+    /// Destructured for the third reason the clear is: a table added and left out
+    /// of this sum would be memory that grew and became invisible, which is the
+    /// failure the charge exists to prevent. `charge` and `charged_bytes` are the
+    /// accounting OF this sum rather than part of it, so they are named and
+    /// skipped rather than added.
+    fn retained_bytes(&self) -> usize {
+        let Self {
+            scratch,
+            charge: _,
+            charged_bytes: _,
+        } = self;
+        scratch.retained_capacity_bytes()
+    }
 }
 
 /// What the last un-memoized run looked like, and whether a memo for it was tried.
@@ -202,7 +329,44 @@ impl PreparedExecution {
             probes: Vec::new(),
             memo: None,
             pending: None,
+            workspace: ExecutionWorkspace::default(),
         }
+    }
+
+    /// Hand this run the retained evaluation tables. See [`ExecutionWorkspace`].
+    pub(crate) fn check_out_workspace(&mut self) -> crate::scratch::ScratchInterner {
+        self.workspace.check_out()
+    }
+
+    /// Take the retained evaluation tables back from a finished run and empty them.
+    ///
+    /// Called on the failing path too, not only the answering one: an evaluation
+    /// that errored still grew the tables, and giving that capacity back would make
+    /// a handle that sees an occasional failure pay the growth again every time.
+    pub(crate) fn check_in_workspace(&mut self, used: &mut crate::scratch::ScratchInterner) {
+        self.workspace.check_in(used);
+    }
+
+    /// The bytes this execution's retained evaluation tables are holding — the
+    /// capacity they keep between runs, not the values of any one run.
+    ///
+    /// The same figure charged to
+    /// [`PlanMemoryObserver`](crate::PlanMemoryObserver), readable per handle. A
+    /// host that pools executions is the caller this is for: the pool's footprint
+    /// is the sum of these, and it is a number that grew because the handle stopped
+    /// giving its tables back.
+    ///
+    /// It is also the one place the retention invariant is OBSERVABLE. Keeping the
+    /// tables while failing to empty them would still answer correctly — the
+    /// interner de-duplicates by value, so a stale entry is found rather than
+    /// misread — and would grow this figure without bound, one run's values at a
+    /// time. "The workspace does not grow with the number of runs" is therefore a
+    /// claim only a reader of this can make, and
+    /// `tests/prepared_execution.rs`'s
+    /// `a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does` makes it.
+    #[must_use]
+    pub fn retained_workspace_bytes(&self) -> usize {
+        self.workspace.retained_bytes()
     }
 
     /// The declared parameters, in declaration order.
@@ -354,6 +518,11 @@ impl PreparedExecution {
             probes,
             memo,
             pending,
+            // Named and ignored rather than covered by a `..` rest: the rewrite has
+            // no business in the run's evaluation tables, and spelling that out
+            // keeps this pattern exhaustive, so a field added later still has to be
+            // decided about here.
+            workspace: _,
         } = self;
         crate::substitute::build_probes_into(
             probes,
