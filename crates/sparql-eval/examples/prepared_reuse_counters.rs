@@ -77,13 +77,13 @@ fn main() {
     });
     measure("validate_algebra", &warm, || {
         for _ in 0..REPETITIONS {
-            black_box(&prepared.query).validate().unwrap();
+            black_box(prepared.query()).validate().unwrap();
         }
     });
     measure("prepare_compiler_algebra_including_clone", &cold, || {
         for _ in 0..REPETITIONS {
             black_box(
-                cold.prepare_algebra(prepared.query.clone(), QueryOptions::EMPTY)
+                cold.prepare_algebra(prepared.query().clone(), QueryOptions::EMPTY)
                     .unwrap(),
             );
         }

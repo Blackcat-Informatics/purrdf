@@ -61,8 +61,9 @@ mod prepared_fallible;
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
 pub struct PreparedQuery {
-    /// The parsed algebra.
-    pub query: Query,
+    /// The parsed algebra. Private — see [`Self::query`] for why, and for the
+    /// guarantee that privacy buys.
+    query: Query,
     /// The identity of the property-function registry this plan was parsed and
     /// feasibility-ordered against — empty when there was none.
     ///
@@ -96,10 +97,9 @@ impl PreparedQuery {
     /// reparses it. Pass the registries under which the rewrite will execute;
     /// their identities are retained with the admitted plan.
     ///
-    /// The public [`Self::query`] field remains mutable for compatibility.
-    /// Prepared execution revalidates its current contents before charging any
-    /// governor and refuses changes that need feasibility replanning. Call this
-    /// constructor again to admit and order such a changed query.
+    /// The admitted algebra is read-only after this returns — see [`Self::query`].
+    /// Call this constructor again to admit and order a changed query; there is no
+    /// way to edit one in place.
     ///
     /// # Errors
     ///
@@ -145,9 +145,27 @@ impl PreparedQuery {
         }
     }
 
-    /// Conservative current payload charge, including caller changes to the algebra.
-    /// Shared strings are charged per occurrence. Excludes allocator overhead,
-    /// the outer plan's `Arc` header, and shared accounting storage.
+    /// The admitted algebra.
+    ///
+    /// Read-only by construction: this plan's `relations` and `aggregates`
+    /// fingerprints were computed from — and its feasibility order was derived
+    /// against — exactly this tree, at admission time. An earlier revision of this
+    /// type exposed the field this returns as `pub query: Query`, so a caller could
+    /// overwrite it and produce a `PreparedQuery` whose algebra disagreed with its
+    /// own fingerprints or had never passed admission at all; every entry point
+    /// that accepts a `&PreparedQuery` had to defend against that by revalidating
+    /// in full on every call. Privatizing the field removes the forgery rather than
+    /// only detecting it: there is no longer a constructor or a setter that can
+    /// hand back a `PreparedQuery` whose fields disagree, so a caller holding one
+    /// holds a value that was admitted, in full, exactly once.
+    #[must_use]
+    pub fn query(&self) -> &Query {
+        &self.query
+    }
+
+    /// Conservative current payload charge for this admitted plan. Shared strings
+    /// are charged per occurrence. Excludes allocator overhead, the outer plan's
+    /// `Arc` header, and shared accounting storage.
     #[must_use]
     pub fn retained_size_bytes(&self) -> usize {
         plan_payload_bytes(
@@ -1980,6 +1998,58 @@ impl NativeSparqlEngine {
     /// `&mut execution` is what makes an execution already in flight unreachable —
     /// see [`crate::execution`] for why that is a guarantee rather than a limitation.
     ///
+    /// A `compile_fail` block alone passes for *any* error, including a typo, so the
+    /// pair below follows the precedent at [`crate::property_fn::RankFidelity`]: the
+    /// twin that differs only in the field under test — here, whether the nested
+    /// call reaches the SAME handle or a DIFFERENT one — is the half that shows the
+    /// handle is the reason the first one fails to compile.
+    ///
+    /// Re-entering the same handle from inside its own run is a borrow-check error:
+    ///
+    /// ```compile_fail,E0499
+    /// # use purrdf_core::RdfDatasetBuilder;
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let data = RdfDatasetBuilder::new().freeze().unwrap();
+    /// let mut execution = engine
+    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .unwrap();
+    /// engine
+    ///     .execute(&mut execution, &*data, QueryOptions::EMPTY, |_outcome| {
+    ///         // The SAME handle, borrowed again while the outer call above still
+    ///         // holds it: `cannot borrow `execution` as mutable more than once`.
+    ///         engine
+    ///             .execute(&mut execution, &*data, QueryOptions::EMPTY, |_| ())
+    ///             .unwrap();
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// — while the byte-identical twin, differing only in reaching a SECOND,
+    /// DISTINCT handle from the nested call, compiles and runs:
+    ///
+    /// ```
+    /// # use purrdf_core::RdfDatasetBuilder;
+    /// # use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    /// let engine = NativeSparqlEngine::new();
+    /// let data = RdfDatasetBuilder::new().freeze().unwrap();
+    /// let mut execution_a = engine
+    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .unwrap();
+    /// let mut execution_b = engine
+    ///     .prepare_execution("ASK {}", None, &[], QueryOptions::EMPTY)
+    ///     .unwrap();
+    /// engine
+    ///     .execute(&mut execution_a, &*data, QueryOptions::EMPTY, |_outcome| {
+    ///         // A DIFFERENT handle, borrowed while the outer call above holds
+    ///         // `execution_a`: two distinct borrows, so this is unremarkable.
+    ///         engine
+    ///             .execute(&mut execution_b, &*data, QueryOptions::EMPTY, |_| ())
+    ///             .unwrap();
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
     /// # Errors
     ///
     /// [`RdfDiagnostic`] if any parameter is still unbound, if `options` supplies a
@@ -2632,11 +2702,26 @@ fn check_plan_matches_relations(
 ///
 /// **This reasoning is available here and nowhere else in this file.** It rests
 /// entirely on `PreparedExecution`'s construction: its plan was parsed and admitted
-/// under the fingerprints it carries, and cannot afterwards be replaced. Every other
-/// entry takes a `&PreparedQuery` whose provenance it cannot know — a caller may
-/// assemble one by hand, prepare a trivial query and overwrite `PreparedQuery::query`
-/// with an algebra that was never parsed under the fingerprints beside it — so those
-/// entries must keep running the full check, and do.
+/// under the fingerprints it carries, [`PreparedQuery::query`] cannot be replaced
+/// afterwards (the field behind it is private — there is no setter), and
+/// `PreparedExecution` itself hands its plan out only behind a shared reference. So
+/// the fingerprints on the plan a run reaches are guaranteed to be the ones
+/// `prepare_execution` admitted it under, and a run that finds them still equal to
+/// `options`' fingerprints has re-derived exactly the fact `prepare_execution`
+/// already established.
+///
+/// Every OTHER entry takes a bare `&PreparedQuery` with no such tie: the same
+/// admitted plan is documented to be reusable across calls that name DIFFERENT
+/// registries (see [`PreparedQuery::relations`]), which is a deliberately supported
+/// pattern, not a hazard — a host that resolves its property functions once and
+/// then queries under several registry configurations relies on it. A fingerprint
+/// match at one of those calls says only that THIS call's registry happens to agree
+/// with the one the plan was admitted under; it carries none of `PreparedExecution`'s
+/// guarantee that no OTHER registry could have been supplied in between, because
+/// nothing stops the very next call on the same `&PreparedQuery` from naming a third
+/// registry entirely. So those entries must keep running the full check — the two
+/// soundness walks and the replanning walk, not just the fingerprint comparison —
+/// and do.
 ///
 /// # Errors
 ///

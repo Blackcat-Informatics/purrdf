@@ -395,7 +395,7 @@ pub fn query_with_entailment<D: DatasetView>(
     // `collect_query_bgp` is bound outside the match because the OWL-Direct plan BORROWS
     // it; it is computed for that mode alone.
     let pattern = match entailment {
-        QueryEntailment::OwlDirect => collect_query_bgp(&prepared_query.query),
+        QueryEntailment::OwlDirect => collect_query_bgp(prepared_query.query()),
         _ => Vec::new(),
     };
     // Populated only when the OWL-Direct lane answered through the COMBINED APPROACH
@@ -475,7 +475,7 @@ pub fn query_with_entailment<D: DatasetView>(
     let restricted = (!surrogates.is_empty())
         .then(|| {
             PreparedQuery::rewritten(
-                restrict_witness_bindings(&prepared_query.query, &surrogates),
+                restrict_witness_bindings(prepared_query.query(), &surrogates),
                 options,
             )
         })
@@ -716,7 +716,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     let prepared_query =
         engine.prepare_query_with_options(request.query, request.base_iri, options)?;
     let pattern = match entailment {
-        QueryEntailment::OwlDirect => collect_query_bgp(&prepared_query.query),
+        QueryEntailment::OwlDirect => collect_query_bgp(prepared_query.query()),
         _ => Vec::new(),
     };
     // The execution's stop signal, wearing the reasoner's trait. Built once and shared by
@@ -819,7 +819,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     let restricted = (!surrogates.is_empty())
         .then(|| {
             PreparedQuery::rewritten(
-                restrict_witness_bindings(&prepared_query.query, &surrogates),
+                restrict_witness_bindings(prepared_query.query(), &surrogates),
                 options,
             )
         })
@@ -2318,7 +2318,7 @@ mod tests {
     fn augmentation_only(ds: &Arc<RdfDataset>, query: &str) -> SparqlResult {
         let engine = NativeSparqlEngine::new();
         let prepared = engine.prepare_query(query, None).expect("parse");
-        let pattern = collect_query_bgp(&prepared.query);
+        let pattern = collect_query_bgp(prepared.query());
         let (closure, _) =
             purrdf_entail::materialize(ds, Materialization::OwlDirect(&pattern)).expect("augment");
         engine

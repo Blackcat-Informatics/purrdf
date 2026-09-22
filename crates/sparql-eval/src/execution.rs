@@ -360,7 +360,7 @@ impl PreparedExecution {
             crate::substitute::Prebindings::Paired(parameters, values),
         )?;
         if probes.is_empty() {
-            return Ok(Substituted::Retained(&prepared.query));
+            return Ok(Substituted::Retained(prepared.query()));
         }
         if let Some(memo) = memo.as_mut()
             && memo.matches(lane, probes)
@@ -388,7 +388,7 @@ impl PreparedExecution {
             #[cfg(debug_assertions)]
             if memo_verification_enabled() {
                 let fresh =
-                    crate::prebind_memo::rewrite(prepared.query.clone(), lane, probes.clone());
+                    crate::prebind_memo::rewrite(prepared.query().clone(), lane, probes.clone());
                 assert_eq!(
                     bound, &fresh,
                     "a prepared execution's memoized substituted plan disagrees with the \
@@ -413,7 +413,7 @@ impl PreparedExecution {
             // ANOTHER shape list is left alone — one memo per execution, so the other
             // shapes keep the ordinary rewrite rather than evicting a tree that is
             // answering for the shape this execution mostly sees.)
-            if let Some(built) = PrebindMemo::build(&prepared.query, lane, probes) {
+            if let Some(built) = PrebindMemo::build(prepared.query(), lane, probes) {
                 *pending = None;
                 return Ok(Substituted::Retained(memo.insert(built).query()));
             }
@@ -422,7 +422,7 @@ impl PreparedExecution {
             }
         }
         Ok(Substituted::Fresh(Box::new(crate::prebind_memo::rewrite(
-            prepared.query.clone(),
+            prepared.query().clone(),
             lane,
             probes.clone(),
         ))))

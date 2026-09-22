@@ -8,6 +8,13 @@
 //! `purrdf-shapes`' allocation suite, which means a change to the evaluator that
 //! regressed it would redden a different crate's test — or, if those fixtures ever
 //! drifted, nothing at all.
+//!
+//! [`PREPARED_EXECUTION_RUN_ALLOCATIONS`] is the pin: a memoized re-run's EXACT
+//! marginal cost, not merely its stability. A test that only asserted stability
+//! ("run N and run N+1 cost the same") would pass at any constant magnitude,
+//! including one that regressed from zero to some larger number that then stayed
+//! flat — which is exactly the shape of regression an exact pin catches and a
+//! stability-only assertion cannot.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -38,6 +45,49 @@ static MEASURE_LOCK: Mutex<()> = Mutex::new(());
 fn measure_lock() -> MutexGuard<'static, ()> {
     MEASURE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// Turn `PreparedExecution`'s memo differential oracle off for `operation`, then
+/// restore it — even if `operation` panics.
+///
+/// # Why this test needs it
+///
+/// `purrdf_sparql_eval::set_memo_verification_enabled` gates a debug-only oracle
+/// inside `PreparedExecution::substituted` that re-runs the FULL, un-memoized
+/// rewrite on every memo hit and compares it against the memo's answer — see that
+/// function's rustdoc in `crates/sparql-eval/src/execution.rs` for the full case.
+/// Its own cost — a whole clone-and-walk of the admitted algebra — IS the
+/// allocation the memo exists to remove, and `cargo test` always builds with
+/// `debug_assertions` on, so without turning it off, [`PREPARED_EXECUTION_RUN_ALLOCATIONS`]
+/// below would pin the oracle's cost rather than the memo's.
+///
+/// Unlike `crates/shapes/tests/sparql_path_alloc.rs`'s version of this helper,
+/// every test in this file runs on the calling thread alone — nothing here fans
+/// work out over `rayon` — so a plain `set_memo_verification_enabled` call
+/// reaches every thread this file's measurements ever run on, and no
+/// `rayon::broadcast` is needed to make the flag visible to a worker pool.
+fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
+    purrdf_sparql_eval::set_memo_verification_enabled(false);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
+    purrdf_sparql_eval::set_memo_verification_enabled(true);
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+/// The exact marginal allocation cost of one run of an already-warm, already-memoized
+/// [`purrdf_sparql_eval::PreparedExecution`] — a re-bind plus a memo-hit write of its
+/// cells, with the memo's differential oracle held off by [`without_memo_verification`].
+///
+/// Not zero: re-binding still writes a probe list and the evaluator's own per-call
+/// setup (a fresh solution buffer, the interned egress) is not free. What this pin
+/// claims is narrower and achievable — that the cost is a FIXED constant, independent
+/// of how many times the execution has already run — which is what
+/// `re_running_a_prepared_execution_costs_27_allocations` asserts against it, exactly
+/// at both `N` and `N+1`. If this ever moves, re-measure with `without_memo_verification`
+/// bracketing the window exactly as the test does, and update this constant to match:
+/// it is not a ceiling, it is the currently-measured marginal cost.
+const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 27;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
@@ -89,7 +139,7 @@ fn a_prepared_execution_answers_each_binding_from_one_plan() {
 }
 
 #[test]
-fn re_running_a_prepared_execution_costs_no_setup() {
+fn re_running_a_prepared_execution_costs_27_allocations() {
     let _guard = measure_lock();
     let ds = dataset(8);
     let engine = NativeSparqlEngine::new();
@@ -114,15 +164,22 @@ fn re_running_a_prepared_execution_costs_no_setup() {
     // Warm every lazy on this thread with the exact call being measured.
     let _warm = (run(0), run(1));
 
-    let first = run(2);
-    let second = run(3);
-    let third = run(4);
+    // The measured window: the memo's differential oracle comes OFF here and only
+    // here — see [`without_memo_verification`] for why a debug build's own
+    // correctness check would otherwise be exactly the allocation this pin is
+    // trying to see past.
+    let (first, second, third) = without_memo_verification(|| (run(2), run(3), run(4)));
     println!("prepared execution: {first}, {second}, {third} allocations per run");
     assert_eq!(
-        (first, second),
-        (second, third),
-        "a prepared execution's cost must not depend on how many times it has run; \
-         a figure that moves between runs means per-run state is accumulating"
+        (first, second, third),
+        (
+            PREPARED_EXECUTION_RUN_ALLOCATIONS,
+            PREPARED_EXECUTION_RUN_ALLOCATIONS,
+            PREPARED_EXECUTION_RUN_ALLOCATIONS
+        ),
+        "a prepared execution's per-run cost is pinned EXACTLY: a figure that moves — in \
+         either direction — between runs, or away from the pinned constant, means per-run \
+         state is accumulating or the evaluator's marginal cost has changed"
     );
 }
 

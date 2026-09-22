@@ -15,7 +15,7 @@ fn bench(c: &mut Criterion) {
     let prepared = engine.prepare_query(query, None).unwrap();
     let mut group = c.benchmark_group("prepared_admission");
     group.bench_function("validate_algebra", |b| {
-        b.iter(|| black_box(&prepared.query).validate().unwrap());
+        b.iter(|| black_box(prepared.query()).validate().unwrap());
     });
     group.bench_function("execute_prepared_minimal", |b| {
         b.iter(|| {
