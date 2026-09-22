@@ -86,6 +86,15 @@ pub fn predicate_use(query: &Query) -> PredicateUse {
 /// The two leaves that carry predicates are handled directly, because the visitor
 /// treats both as leaves: it exists to propagate truncation, and a BGP is where
 /// truncation originates rather than something it passes through.
+///
+/// # Expression-position patterns count
+///
+/// The visitor yields two part kinds, and BOTH carry patterns. Following only
+/// `Child` misses every pattern reachable only through an expression, and
+/// `FILTER EXISTS { ?s <rel> ?o }` is exactly that shape: the inner pattern arrives
+/// as `ExpressionPart::Exists`. A relation invoked only inside a `FILTER EXISTS`
+/// would then report `calls_nothing() == true` — the precise opposite of the fact
+/// this module exists to make visible, and a silent one.
 fn walk(pattern: &GraphPattern, out: &mut PredicateUse) {
     match pattern {
         GraphPattern::Bgp { patterns } => {
@@ -108,10 +117,13 @@ fn walk(pattern: &GraphPattern, out: &mut PredicateUse) {
         _ => {}
     }
 
+    use crate::governor::soundness::{PatternPart, visit_pattern_parts};
+
     let mut pending: Vec<&GraphPattern> = Vec::new();
-    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-        if let crate::governor::soundness::PatternPart::Child(child, _) = part {
-            pending.push(child);
+    visit_pattern_parts(pattern, &mut |part| {
+        match part {
+            PatternPart::Child(child, _) => pending.push(child),
+            PatternPart::Expression(expr) => collect_exists_patterns(expr, &mut pending),
         }
         // `false` keeps the visit going; this walk has no early exit.
         false
@@ -119,6 +131,29 @@ fn walk(pattern: &GraphPattern, out: &mut PredicateUse) {
     for child in pending {
         walk(child, out);
     }
+}
+
+/// Collect every pattern reachable through `expr` — the `EXISTS`/`NOT EXISTS` bodies,
+/// at any nesting depth.
+///
+/// Recursion again comes from the crate's own exhaustive expression visitor, for the
+/// same reason the pattern walk uses its counterpart: an expression variant added
+/// later fails to compile there rather than silently dropping a pattern here.
+fn collect_exists_patterns<'a>(
+    expr: &'a purrdf_sparql_algebra::Expression,
+    pending: &mut Vec<&'a GraphPattern>,
+) {
+    use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
+
+    visit_expression_parts(expr, &mut |part| {
+        match part {
+            ExpressionPart::Sub(inner) => collect_exists_patterns(inner, pending),
+            ExpressionPart::Exists(inner) => pending.push(inner),
+            // A named function is not a pattern and carries none.
+            ExpressionPart::Call(_) => {}
+        }
+        false
+    });
 }
 
 /// Record a triple-pattern predicate, when it is an IRI rather than a variable.
@@ -223,6 +258,52 @@ mod tests {
             used.data.is_empty(),
             "no IRI appeared in predicate position"
         );
+    }
+
+    /// A relation invoked ONLY inside `FILTER EXISTS` is still a call.
+    ///
+    /// The inner pattern is reachable only through the filter expression, not as a
+    /// child pattern, so a walk that followed children alone reported
+    /// `calls_nothing() == true` here -- the exact opposite of the fact this module
+    /// exists to surface, delivered silently. The module doc named FILTER-EXISTS
+    /// while no test exercised it.
+    #[test]
+    fn a_call_reachable_only_through_filter_exists_is_still_found() {
+        let text = format!(
+            "SELECT ?s WHERE {{ ?s a <http://example.org/T> \
+             FILTER EXISTS {{ ?s <{REL}> ?o }} }}"
+        );
+        let used = predicate_use(&parse(&text, &[REL]));
+        assert_eq!(
+            used.calls.iter().collect::<Vec<_>>(),
+            vec![REL],
+            "the relation is invoked inside the EXISTS body: {used:?}"
+        );
+    }
+
+    /// And `NOT EXISTS`, which the algebra spells as a negated `Exists`, so it is
+    /// reached one expression level deeper.
+    #[test]
+    fn a_call_inside_not_exists_is_found_too() {
+        let text = format!(
+            "SELECT ?s WHERE {{ ?s a <http://example.org/T> \
+             FILTER NOT EXISTS {{ ?s <{REL}> ?o }} }}"
+        );
+        let used = predicate_use(&parse(&text, &[REL]));
+        assert_eq!(used.calls.iter().collect::<Vec<_>>(), vec![REL]);
+    }
+
+    /// The valid neighbour: with nothing registered the same EXISTS body is ordinary
+    /// data, so the new recursion did not turn every EXISTS predicate into a call.
+    #[test]
+    fn an_unregistered_iri_inside_filter_exists_is_data() {
+        let text = format!(
+            "SELECT ?s WHERE {{ ?s a <http://example.org/T> \
+             FILTER EXISTS {{ ?s <{REL}> ?o }} }}"
+        );
+        let used = predicate_use(&parse(&text, &[]));
+        assert!(used.calls_nothing());
+        assert!(used.data.contains(REL), "it is reported, as data: {used:?}");
     }
 
     /// A property path names data, never a call: the parser lowers only a bare,

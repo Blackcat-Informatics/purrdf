@@ -422,9 +422,24 @@ fn encode_vocab(vocab: Option<&BoxRoleVocab>) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 /// The declared parser options, encoded for row 11.
 ///
-/// Each of the three lists is SORTED and deduplicated before framing: a declaration
-/// is a set of prefixes, so its order is not part of its meaning, and two callers who
-/// declared the same namespaces in a different order must open each other's products.
+/// The two RELATION lists are SORTED and deduplicated before framing: recognition
+/// there is order-independent — an IRI is a property function iff it prefix-matches
+/// `property_fn_namespaces` or exactly matches `property_fn_iris`, and nothing is
+/// stripped — so order is not part of their meaning, and two callers who declared the
+/// same namespaces in a different order must open each other's products.
+///
+/// `extension_fn_namespaces` is NOT sorted, and that asymmetry is deliberate. Its
+/// order is first-match-wins for prefix STRIPPING, so the order is part of the
+/// meaning: with `["http://example.org/a/", "http://example.org/a/b/"]` the IRI
+/// `http://example.org/a/b/f` strips to `b/f`, and with the two entries reversed it
+/// strips to `f` — two different function names for one IRI. Sorting them would
+/// encode both orders identically, so a product prepared under one would be admitted
+/// under the other and its restored preparation would resolve extension-function
+/// calls differently from the environment it was written for. That is precisely the
+/// silent-wrong-answer this row exists to refuse, so this list is folded in
+/// DECLARATION order, deduplicated keeping the first occurrence (a later duplicate
+/// can never win a first-match, so dropping it changes no parse).
+///
 /// The lists are framed separately rather than concatenated, because the same string
 /// declared as an extension-function namespace and as a relation namespace configures
 /// two different seams.
@@ -443,17 +458,25 @@ fn encode_parser_options(options: &ParserOptions) -> Vec<u8> {
         property_fn_iris,
     } = options;
     let mut out = Vec::new();
-    for (label, list) in [
-        ("extension-fn-namespaces", extension_fn_namespaces),
-        ("property-fn-namespaces", property_fn_namespaces),
-        ("property-fn-iris", property_fn_iris),
+    // `true` = this list's order is part of its meaning and is preserved.
+    for (label, list, ordered) in [
+        ("extension-fn-namespaces", extension_fn_namespaces, true),
+        ("property-fn-namespaces", property_fn_namespaces, false),
+        ("property-fn-iris", property_fn_iris, false),
     ] {
         push_part(&mut out, label.as_bytes());
-        let mut sorted: Vec<&str> = list.iter().map(String::as_str).collect();
-        sorted.sort_unstable();
-        sorted.dedup();
-        push_part(&mut out, &(sorted.len() as u64).to_be_bytes());
-        for value in sorted {
+        let mut values: Vec<&str> = list.iter().map(String::as_str).collect();
+        if ordered {
+            // Declaration order kept; only exact repeats dropped, first occurrence
+            // winning, because a later duplicate can never win a first-match.
+            let mut seen = std::collections::BTreeSet::new();
+            values.retain(|value| seen.insert(*value));
+        } else {
+            values.sort_unstable();
+            values.dedup();
+        }
+        push_part(&mut out, &(values.len() as u64).to_be_bytes());
+        for value in values {
             push_part(&mut out, value.as_bytes());
         }
     }

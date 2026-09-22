@@ -208,6 +208,13 @@ fn product_for(shapes: Shapes) -> Vec<u8> {
         .expect("the fixture is representable")
 }
 
+/// Write a product bound to the parse configuration (and registries) `host` declares.
+fn to_product_for_host(body: &str, host: &HostBindings<'_>) -> Vec<u8> {
+    PreparedShapes::new(Arc::new(shapes_of(body)))
+        .to_product_for_host(&ShapesProfile::CORE, host)
+        .expect("the fixture is representable")
+}
+
 /// Write a product for an already-parsed shapes graph that a host injected native
 /// functions or custom aggregates into, binding it to the build of those
 /// implementations.
@@ -2448,4 +2455,118 @@ proptest! {
         bytes[at] = bytes[at].wrapping_add(delta);
         outcome_is_total(&bytes);
     }
+}
+
+/// Two extension-function namespaces, in the two possible orders.
+///
+/// The pair is chosen so the order is OBSERVABLE: `.../a/` is a prefix of `.../a/b/`,
+/// and stripping is first-match-wins, so `http://example.org/a/b/f` becomes `b/f`
+/// under this order and `f` under the reverse. Two different function names for one
+/// IRI, decided by declaration order alone.
+static EXT_ORDER_FORWARD: std::sync::LazyLock<purrdf_shapes::product::ParserOptions> =
+    std::sync::LazyLock::new(|| purrdf_shapes::product::ParserOptions {
+        extension_fn_namespaces: vec![
+            "http://example.org/a/".to_owned(),
+            "http://example.org/a/b/".to_owned(),
+        ],
+        ..purrdf_shapes::product::ParserOptions::default()
+    });
+
+/// The same two namespaces, reversed.
+static EXT_ORDER_REVERSED: std::sync::LazyLock<purrdf_shapes::product::ParserOptions> =
+    std::sync::LazyLock::new(|| purrdf_shapes::product::ParserOptions {
+        extension_fn_namespaces: vec![
+            "http://example.org/a/b/".to_owned(),
+            "http://example.org/a/".to_owned(),
+        ],
+        ..purrdf_shapes::product::ParserOptions::default()
+    });
+
+/// Two relation namespaces, and the same two in the other order. Relation
+/// recognition is order-INDEPENDENT — an IRI is a call iff it prefix-matches any
+/// entry, and nothing is stripped — so these two must be the same configuration.
+static REL_ORDER_FORWARD: std::sync::LazyLock<purrdf_shapes::product::ParserOptions> =
+    std::sync::LazyLock::new(|| purrdf_shapes::product::ParserOptions {
+        property_fn_namespaces: vec![
+            "http://example.org/p/".to_owned(),
+            "http://example.org/q/".to_owned(),
+        ],
+        ..purrdf_shapes::product::ParserOptions::default()
+    });
+
+/// The same two relation namespaces, reversed.
+static REL_ORDER_REVERSED: std::sync::LazyLock<purrdf_shapes::product::ParserOptions> =
+    std::sync::LazyLock::new(|| purrdf_shapes::product::ParserOptions {
+        property_fn_namespaces: vec![
+            "http://example.org/q/".to_owned(),
+            "http://example.org/p/".to_owned(),
+        ],
+        ..purrdf_shapes::product::ParserOptions::default()
+    });
+
+/// Extension-function namespace ORDER is part of the parse configuration, and
+/// relation namespace order is not.
+///
+/// These two halves must disagree, and that asymmetry is the whole content of the
+/// test. `extension_fn_namespaces` is first-match-wins for prefix STRIPPING, so
+/// reversing it renames functions; folding it order-insensitively would encode both
+/// orders identically, admit a product written under one into a host running the
+/// other, and let the restored preparation resolve extension-function calls
+/// differently from the environment it was written for — the silent wrong answer this
+/// row exists to refuse.
+///
+/// `property_fn_namespaces` is a set: recognition is order-independent and nothing is
+/// stripped. Refusing on ITS order would be the mirror defect — an over-refusal that
+/// stops two hosts with identical configuration from opening each other's products.
+#[test]
+fn extension_namespace_order_is_configuration_and_relation_namespace_order_is_not() {
+    let functions = UserFunctionRegistry::new();
+    let aggregates = AggregateRegistry::new();
+    let relations = PropertyFunctionRegistry::new();
+
+    let written_ext = to_product_for_host(
+        PLAIN_SHAPES,
+        &HostBindings::new(&functions, &aggregates, &relations, &[], &EXT_ORDER_FORWARD),
+    );
+    let refused = admit_with(
+        &written_ext,
+        &HostBindings::new(
+            &functions,
+            &aggregates,
+            &relations,
+            &[],
+            &EXT_ORDER_REVERSED,
+        ),
+    )
+    .expect_err(
+        "reversing extension-function namespaces renames functions, so it is a different parse",
+    );
+    assert_eq!(refused.dimension(), ProductDimension::ParseConfiguration);
+
+    // The valid neighbour, in two directions. Same order: opens.
+    admit_with(
+        &written_ext,
+        &HostBindings::new(&functions, &aggregates, &relations, &[], &EXT_ORDER_FORWARD),
+    )
+    .expect("the order it was written under is the order it opens under");
+
+    // And relation-namespace order, which is NOT configuration: opens either way.
+    let written_rel = to_product_for_host(
+        PLAIN_SHAPES,
+        &HostBindings::new(&functions, &aggregates, &relations, &[], &REL_ORDER_FORWARD),
+    );
+    admit_with(
+        &written_rel,
+        &HostBindings::new(
+            &functions,
+            &aggregates,
+            &relations,
+            &[],
+            &REL_ORDER_REVERSED,
+        ),
+    )
+    .expect(
+        "relation recognition is order-independent, so the same two namespaces in either \
+         order are one configuration",
+    );
 }

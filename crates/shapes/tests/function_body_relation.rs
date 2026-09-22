@@ -1143,3 +1143,52 @@ ex:RuleShape
     };
     undeclared.expect("with nothing declared the same IRI is ordinary data and the rule runs");
 }
+
+/// A `sh:select` nested inside a `sh:union` operand is reported.
+///
+/// `walk_node_expr` used to end in a `_ => {}`, so every operand-bearing node
+/// expression that is not a `Call` — `sh:union`, `sh:if`, `sh:filterShape`,
+/// `shnex:flatMap`, a custom call — was skipped whole. A `sh:select` inside any of
+/// them contributed neither calls nor data, and the report said the graph reached no
+/// relation while the evaluator went on to invoke one.
+///
+/// That is the same silent under-report the swallowed parse error was, arriving by a
+/// different route: a report that answers confidently about a graph it did not finish
+/// reading.
+#[test]
+fn a_select_nested_in_a_union_operand_is_reported() {
+    let turtle = format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+
+ex:NestedShape
+    a sh:NodeShape ;
+    sh:targetNode ex:a ;
+    sh:expression [
+        sh:union (
+            [ sh:select """SELECT ?result WHERE {{ $this <{REL}> ?result }}""" ]
+            [ sh:select """SELECT ?result WHERE {{ $this <{EX}plain> ?result }}""" ]
+        )
+    ] .
+"#
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&turtle, None)
+        .unwrap_or_else(|error| panic!("the fixture must load: {error}"));
+
+    let (relations, _) = registry();
+    let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
+        .expect("environment over the registry");
+    let usage = shapes.extension_usage(&env);
+
+    assert!(
+        usage.reaches(REL),
+        "the relation is named by a sh:select inside a sh:union operand: {:?}",
+        usage.sites().collect::<Vec<_>>()
+    );
+    assert!(
+        usage.data().contains(&format!("{EX}plain").as_str()),
+        "and the sibling operand's ordinary predicate is reported as data: {:?}",
+        usage.data()
+    );
+}

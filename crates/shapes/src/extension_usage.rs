@@ -285,6 +285,69 @@ fn walk_node_expr(expr: &NodeExpr, owner: &str, usage: &mut ExtensionUsage, env:
                 walk_node_expr(arg, owner, usage, env);
             }
         }
-        _ => {}
+        // Every remaining OPERAND-bearing variant, because a `sh:select` can sit
+        // inside any of them. This used to end in a `_ => {}`, which silently
+        // dropped the whole `Union`/`If`/`Filter`/`FlatMap`/`CustomCall` family --
+        // a report that answered "this graph reaches no relation" about a graph it
+        // had not finished reading.
+        NodeExpr::Union(items) | NodeExpr::Intersection(items) | NodeExpr::Concat(items) => {
+            for item in items {
+                walk_node_expr(item, owner, usage, env);
+            }
+        }
+        NodeExpr::If { cond, then, els } => {
+            walk_node_expr(cond, owner, usage, env);
+            walk_node_expr(then, owner, usage, env);
+            walk_node_expr(els, owner, usage, env);
+        }
+        NodeExpr::Count { of, .. }
+        | NodeExpr::Distinct(of)
+        | NodeExpr::Min(of)
+        | NodeExpr::Max(of)
+        | NodeExpr::Sum(of)
+        | NodeExpr::Limit { of, .. }
+        | NodeExpr::Offset { of, .. }
+        | NodeExpr::Exists(of) => walk_node_expr(of, owner, usage, env),
+        NodeExpr::OrderBy { of, key, .. } => {
+            walk_node_expr(of, owner, usage, env);
+            walk_node_expr(key, owner, usage, env);
+        }
+        NodeExpr::Filter { nodes, .. }
+        | NodeExpr::FindFirst { nodes, .. }
+        | NodeExpr::MatchAll { nodes, .. } => walk_node_expr(nodes, owner, usage, env),
+        NodeExpr::Remove { nodes, remove } => {
+            walk_node_expr(nodes, owner, usage, env);
+            walk_node_expr(remove, owner, usage, env);
+        }
+        NodeExpr::FlatMap { nodes, map } => {
+            walk_node_expr(nodes, owner, usage, env);
+            walk_node_expr(map, owner, usage, env);
+        }
+        NodeExpr::PathValues { focus, .. } => walk_node_expr(focus, owner, usage, env),
+        NodeExpr::ConformsToShape { node, .. } => walk_node_expr(node, owner, usage, env),
+        NodeExpr::CustomCall { args, .. } => {
+            for (_, arg) in args {
+                walk_node_expr(arg, owner, usage, env);
+            }
+        }
+        // Leaves: no nested node expression, so nothing to walk. Spelled out rather
+        // than wildcarded so a variant added later lands here as a compile error --
+        // which is the property the `_ => {}` this replaced had thrown away.
+        //
+        // The SHAPE-valued fields of `Filter`, `FindFirst`, `MatchAll`,
+        // `ConformsToShape` and `NodesMatching` are deliberately NOT followed. A
+        // shape is reached by the shape walk, which records its own constraints
+        // under its own site label; following it from here would report one
+        // constraint twice, under two owners, and inflate the report rather than
+        // complete it.
+        NodeExpr::Constant(_)
+        | NodeExpr::This
+        | NodeExpr::Path(_)
+        | NodeExpr::Empty
+        | NodeExpr::Var(_)
+        | NodeExpr::Arg(_)
+        | NodeExpr::List(_)
+        | NodeExpr::InstancesOf(_)
+        | NodeExpr::NodesMatching(_) => {}
     }
 }

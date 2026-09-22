@@ -2388,6 +2388,83 @@ ex:RootShape a sh:NodeShape ;
     /// shape tree the walk was given.
     ///
     /// [`ShapeWalk::class_slot`]: super::ShapeWalk::class_slot
+    #[test]
+    fn class_catalog_and_lowered_plan_agree_on_every_class_iri() {
+        let shapes = every_route_shapes();
+        let lowered = lower_shapes(shapes.node_shapes.iter());
+
+        // Every route really is exercised, or the agreement below would be an
+        // agreement about a much smaller set than the one that matters.
+        let mut catalogued: Vec<&str> = lowered
+            .classes()
+            .entries()
+            .map(|(class, _)| class.as_str())
+            .collect();
+        catalogued.sort_unstable();
+        assert_eq!(
+            catalogued,
+            vec![
+                "http://example.org/ns#Conjunct",
+                "http://example.org/ns#Direct",
+                "http://example.org/ns#Negated",
+                "http://example.org/ns#Qualified",
+                "http://example.org/ns#Reified",
+                "http://example.org/ns#Selected",
+                "http://example.org/ns#Target",
+            ],
+            "the fixture no longer reaches every route the walk covers, so this test agrees \
+             about less than it claims to"
+        );
+
+        // The slot side: every term the walk recorded for a CLASS constraint names
+        // an IRI the catalog also holds, at a position inside the binding row.
+        let mut slotted: Vec<&str> = Vec::new();
+        collect_class_slots(&lowered, &mut slotted);
+        slotted.sort_unstable();
+        slotted.dedup();
+        assert_eq!(
+            slotted,
+            vec![
+                "http://example.org/ns#Conjunct",
+                "http://example.org/ns#Direct",
+                "http://example.org/ns#Negated",
+                "http://example.org/ns#Qualified",
+                "http://example.org/ns#Reified",
+                "http://example.org/ns#Selected",
+            ],
+            "every class a CONSTRAINT names must have a slot; `ex:Target` is named only by a \
+             `sh:targetClass`, which target resolution answers from the catalog by IRI and never \
+             from a slot, so it is the one catalogued class with no slot and its absence here is \
+             the shape of the two resolvers' division of labour"
+        );
+        for class in &slotted {
+            let position = lowered
+                .classes()
+                .position(&NamedNode::new_unchecked(*class))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the lowered plan resolves <{class}> but the class catalog has never \
+                         heard of it, so the two resolvers disagree"
+                    )
+                });
+            assert!(
+                position < lowered.classes().len(),
+                "<{class}> sits at position {position} of a {}-slot binding row",
+                lowered.classes().len()
+            );
+        }
+
+        // …and the catalog side: a class in the catalog that no route reaches would
+        // be a catalog the walk did not derive.
+        for (class, _) in lowered.classes().entries() {
+            assert!(
+                catalogued.contains(&class.as_str()),
+                "the catalog holds <{}>, which the shape tree does not reach",
+                class.as_str()
+            );
+        }
+    }
+
     /// A `sh:SPARQLFunction` body's footprint is the same however the extension
     /// environment is configured, because it is TOP either way.
     ///
@@ -2465,83 +2542,6 @@ ex:FlagShape a sh:NodeShape ;
              takes no environment, and a footprint cached on a PreparedShapes is reused \
              across validations that each install a different one",
         );
-    }
-
-    #[test]
-    fn class_catalog_and_lowered_plan_agree_on_every_class_iri() {
-        let shapes = every_route_shapes();
-        let lowered = lower_shapes(shapes.node_shapes.iter());
-
-        // Every route really is exercised, or the agreement below would be an
-        // agreement about a much smaller set than the one that matters.
-        let mut catalogued: Vec<&str> = lowered
-            .classes()
-            .entries()
-            .map(|(class, _)| class.as_str())
-            .collect();
-        catalogued.sort_unstable();
-        assert_eq!(
-            catalogued,
-            vec![
-                "http://example.org/ns#Conjunct",
-                "http://example.org/ns#Direct",
-                "http://example.org/ns#Negated",
-                "http://example.org/ns#Qualified",
-                "http://example.org/ns#Reified",
-                "http://example.org/ns#Selected",
-                "http://example.org/ns#Target",
-            ],
-            "the fixture no longer reaches every route the walk covers, so this test agrees \
-             about less than it claims to"
-        );
-
-        // The slot side: every term the walk recorded for a CLASS constraint names
-        // an IRI the catalog also holds, at a position inside the binding row.
-        let mut slotted: Vec<&str> = Vec::new();
-        collect_class_slots(&lowered, &mut slotted);
-        slotted.sort_unstable();
-        slotted.dedup();
-        assert_eq!(
-            slotted,
-            vec![
-                "http://example.org/ns#Conjunct",
-                "http://example.org/ns#Direct",
-                "http://example.org/ns#Negated",
-                "http://example.org/ns#Qualified",
-                "http://example.org/ns#Reified",
-                "http://example.org/ns#Selected",
-            ],
-            "every class a CONSTRAINT names must have a slot; `ex:Target` is named only by a \
-             `sh:targetClass`, which target resolution answers from the catalog by IRI and never \
-             from a slot, so it is the one catalogued class with no slot and its absence here is \
-             the shape of the two resolvers' division of labour"
-        );
-        for class in &slotted {
-            let position = lowered
-                .classes()
-                .position(&NamedNode::new_unchecked(*class))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "the lowered plan resolves <{class}> but the class catalog has never \
-                         heard of it, so the two resolvers disagree"
-                    )
-                });
-            assert!(
-                position < lowered.classes().len(),
-                "<{class}> sits at position {position} of a {}-slot binding row",
-                lowered.classes().len()
-            );
-        }
-
-        // …and the catalog side: a class in the catalog that no route reaches would
-        // be a catalog the walk did not derive.
-        for (class, _) in lowered.classes().entries() {
-            assert!(
-                catalogued.contains(&class.as_str()),
-                "the catalog holds <{}>, which the shape tree does not reach",
-                class.as_str()
-            );
-        }
     }
 
     /// Every class IRI a `LoweredConstraint::Class` names, read back out of the
