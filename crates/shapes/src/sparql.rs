@@ -914,8 +914,30 @@ impl AmbientScopes {
 /// cheaply comparable, and the `Arc` is held here, so the pointer cannot be an
 /// address a freed allocation has since handed to something else. Identity is
 /// conservative in the safe direction — two structurally equal registries at
-/// different addresses re-prepare, which costs one preparation and answers
-/// identically.
+/// different addresses re-prepare, and answer identically.
+///
+/// # What that costs, measured
+///
+/// One preparation per CHANGE of configuration, not one in total, because
+/// [`PREPARED_EXECUTIONS`] holds a single handle per (query text, parameter list)
+/// and a re-preparation replaces whatever was there. Two validations that share a
+/// query text and carry different registry `Arc`s therefore re-parse and re-admit
+/// that query on every alternation between them, and the replaced handle takes any
+/// per-run state it had accumulated with it — including
+/// `purrdf_sparql_eval`'s prebind memo, which is rebuilt from scratch afterwards.
+/// Every `PreparedShapes` binding carries its own aggregate-registry `Arc`, so
+/// "different registry `Arc`s" is the norm between two validators rather than an
+/// unusual configuration.
+///
+/// Batched use never notices: a validation runs its query once per focus node, so
+/// one re-preparation at a validator boundary amortizes over that validator's whole
+/// focus set. What pays the full price is per-run alternation between two
+/// configurations on one worker — two validators live at once, as a `sh:sparql`
+/// body that re-enters validation produces. The cost there is a re-parse and
+/// re-admission per run, which is strictly larger than the memo state it also
+/// discards; a cache that kept one handle per configuration rather than one per
+/// query text would close both, at the price of holding more caller registries
+/// alive than the one this holds today.
 struct PlanConfiguration {
     /// The property-function registry in scope when the plan was admitted.
     relations: Option<Arc<PropertyFunctionRegistry>>,

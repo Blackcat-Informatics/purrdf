@@ -2435,8 +2435,8 @@ type SiblingCoverageEntry = (
 /// This is a recorded COST, not a permanent exemption, but the cost has been
 /// decomposed against the historical baseline term of 96/214/116/194 — the
 /// figure this surface measured before the reductions recorded in
-/// `tests/sparql_path_alloc.rs`'s module documentation, which moved it to the
-/// current 70/144/82/164 — and it is not one
+/// `tests/sparql_path_alloc.rs`'s module documentation, which have since moved it
+/// to the current 54/122/67/131 — and it is not one
 /// thing. Per focus node the pre-binding rewrite — the algebra clone, the term
 /// materialization, the pushdown, the seed and the expression walk together — is
 /// 27% to 51% of the charge depending on the surface, and the algebra clone

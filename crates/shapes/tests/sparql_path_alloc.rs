@@ -55,17 +55,50 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 68 | 1,277,672 | 4,878 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 144 | 16,156 | 10,548 |
-//! | custom `sh:select` component | 2,738 | 81 | 1,278,972 | 5,693 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 151 | 13,393 | 10,309 |
+//! | `sh:sparql` constraint | 2,695 | 54 | 1,277,672 | 3,518 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 122 | 16,156 | 7,460 |
+//! | custom `sh:select` component | 2,738 | 67 | 1,278,972 | 4,093 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 131 | 13,393 | 7,456 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
 //! cheaper, and the pins move with it.
 //!
-//! The four surfaces last dropped by 2, 0, 1 and 13 allocations respectively (from
-//! 70, 144, 82 and 164) when SHACL stopped reaching the evaluator through query
+//! # The most recent drop: a prepared execution now retains its SUBSTITUTED plan
+//!
+//! The four surfaces most recently dropped by 14, 22, 14 and 20 allocations
+//! respectively (from 68, 144, 81 and 151) when a prepared execution started
+//! retaining the REWRITTEN algebra across runs — `purrdf_sparql_eval::prebind_memo`
+//! — instead of only the admitted plan the rewrite starts from. Every run before
+//! this cloned the admitted algebra and walked it again to push each pre-bound
+//! constant into the patterns that carry it; a [`PrebindMemo`](
+//! purrdf_sparql_eval::execution) instead writes each run's values directly into
+//! the cells of a tree built once, so a run costs a handful of refcount bumps
+//! where it used to cost a whole clone-and-walk.
+//!
+//! Measuring this required a second change alongside it, not a testing nicety: the
+//! memo carries a differential oracle (`PreparedExecution::substituted`, gated
+//! `#[cfg(debug_assertions)]`) that re-runs the very rewrite the memo exists to
+//! avoid on every hit, to prove the memo never answers differently from it. `cargo
+//! test` always builds with `debug_assertions` on, so without a way to turn that
+//! check off, this file would have measured the oracle's cost instead of the
+//! memo's — indistinguishable from the memo saving nothing at all. So this file
+//! brackets its measured window with
+//! `purrdf_sparql_eval::set_memo_verification_enabled(false)`, broadcast to every
+//! `rayon` worker (see [`without_memo_verification`]) and restored immediately
+//! after; every OTHER debug test in the workspace, and every call these figures
+//! don't bracket, still runs the oracle. An instrumented run of this same fixture
+//! confirmed the shape the numbers imply: inside the measured window every one of
+//! `sh:sparql`'s 11,520 calls into `substituted` (`REPETITIONS` × (`N` + `2N`)) was
+//! a memo HIT — building happens once per case, entirely inside
+//! [`warm_every_worker`]'s second broadcast, ahead of the window — so the whole
+//! marginal drop is the avoided oracle recompute, at 10–14 allocations per hit
+//! across the four surfaces (the `sh:ask` and `sh:expression` figures divide their
+//! drop by two, because those two surfaces call `substituted` twice per focus
+//! node).
+//!
+//! The four surfaces before that dropped by 2, 0, 1 and 13 allocations respectively
+//! (from 70, 144, 82 and 164) when SHACL stopped reaching the evaluator through query
 //! TEXT. Every one of these surfaces runs the same query over and over, changing
 //! only the terms pre-bound into it, so each surface now holds a prepared execution
 //! — parsed and admitted once, its parameter names interned once, its bindings
@@ -356,7 +389,7 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 68,
+        per_focus_node: 54,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -373,7 +406,7 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 144,
+        per_focus_node: 122,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -394,7 +427,7 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 81,
+        per_focus_node: 67,
         results_per_violation: 1,
     },
     SparqlCase {
@@ -409,7 +442,7 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 151,
+        per_focus_node: 131,
         results_per_violation: 1,
     },
 ];
@@ -585,10 +618,74 @@ impl Fixture {
 ///
 /// This is not a tolerance. It changes which threads are warm BEFORE the window
 /// opens; it does not change, soften, or exclude anything counted once it is open.
+///
+/// # The second broadcast, and the race it closes
+///
+/// A prepared execution's substituted-plan memo (`purrdf_sparql_eval::prebind_memo`)
+/// builds on the SECOND consecutive sighting of one lane and value-shape list — so
+/// one broadcast call leaves every worker on its FIRST sighting only, with the
+/// build (several extra rewrites, charged once) still ahead of it. Left there, that
+/// build is the SAME kind of race this function already exists to close: it lands
+/// on whichever worker a later chunked pass happens to schedule its SECOND focus
+/// node onto, and `rayon`'s work-stealing does not guarantee that is every worker
+/// before the window opens — an unlucky schedule at the smaller `N` size left a
+/// straggler's build inside the MEASURED region often enough to redden this file's
+/// headline assertion nondeterministically. Calling [`rayon::broadcast`] a second
+/// time gives every worker its second, consecutive, UNMEASURED sighting, so the
+/// build happens here or not at all.
 fn warm_every_worker(fixture: &Fixture, case: usize) {
-    rayon::broadcast(|_| {
-        drop(fixture.validate_conforming(case, 1));
-    });
+    for _ in 0..2 {
+        rayon::broadcast(|_| {
+            drop(fixture.validate_conforming(case, 1));
+        });
+    }
+}
+
+/// Turn `PreparedExecution`'s memo differential oracle off on every worker, run
+/// `operation`, then turn it back on — even if `operation` panics.
+///
+/// # Why the harness needs this at all
+///
+/// `purrdf_sparql_eval::set_memo_verification_enabled` exists because the oracle it
+/// gates re-runs the FULL, un-memoized rewrite on every memo hit and compares it
+/// against the memo's answer, so the oracle's own cost — a whole clone-and-walk of
+/// the admitted algebra — is exactly the allocation `PrebindMemo` exists to remove.
+/// `cargo test` always builds with `debug_assertions` on, so without this the
+/// figures pinned below would measure the oracle, not the memo, and the memo's
+/// saving would never show up in the one instrument built to see it. See that
+/// function's rustdoc in `crates/sparql-eval/src/execution.rs` for the full case.
+///
+/// # Why a second `rayon::broadcast`, not the flag alone
+///
+/// The flag is a thread-local: setting it on the calling (test) thread does nothing
+/// for the pool workers the parallel validation path actually runs on. This reuses
+/// exactly the mechanism [`warm_every_worker`] already uses to reach every worker
+/// deterministically before a window opens — a `rayon::broadcast` call runs its
+/// closure once on every thread in the pool, so no worker is left with the oracle
+/// on (or, afterwards, left with it off) by chance of which workers a chunked pass
+/// happened to schedule onto.
+///
+/// # Scope: exactly this window, exactly these workers
+///
+/// The flag is restored with a second broadcast before returning, including on a
+/// panicking `operation` (`std::panic::catch_unwind` plus a resume), so a failing
+/// assertion inside `operation` cannot leave a later, unrelated test's oracle
+/// silently disabled. Nothing outside the broadcasts is touched: a thread that is
+/// never a worker in this pool (there is only one process-wide `rayon` pool, so
+/// that means no other thread at all) never sees the flag change.
+fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
+    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    // `AssertUnwindSafe`, not a real `UnwindSafe` bound: `operation` only reads the
+    // fixture (validation takes `&self`) and this function never inspects any state
+    // `operation` touched after a panic, it only resumes the payload unchanged — the
+    // hazard `UnwindSafe` exists to flag (observing a value a panic left
+    // half-written) does not apply to a caller that never looks.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
+    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// Refuse to report a figure from a run where the parallel path cannot be taken.
@@ -656,12 +753,19 @@ fn every_sparql_surface_costs_a_constant_per_conforming_focus_node() {
         drop(fixture.validate_conforming(case, focus_nodes(1)));
         drop(fixture.validate_conforming(case, focus_nodes(2)));
 
-        let (half, half_measured) =
-            measure_min(|| fixture.validate_conforming(case, focus_nodes(1)));
-        drop(half);
-        let (full, full_measured) =
-            measure_min(|| fixture.validate_conforming(case, focus_nodes(2)));
-        drop(full);
+        // The measured window itself: the memo's differential oracle comes OFF here
+        // and only here, on every worker, via `without_memo_verification` — see that
+        // function for why a debug build's own correctness check would otherwise be
+        // exactly the allocation these figures are trying to see past.
+        let (half_measured, full_measured) = without_memo_verification(|| {
+            let (half, half_measured) =
+                measure_min(|| fixture.validate_conforming(case, focus_nodes(1)));
+            drop(half);
+            let (full, full_measured) =
+                measure_min(|| fixture.validate_conforming(case, focus_nodes(2)));
+            drop(full);
+            (half_measured, full_measured)
+        });
 
         let name = spec.name;
         let (n, two_n) = (half_measured.allocations, full_measured.allocations);
@@ -848,24 +952,55 @@ fn flattened(text: &str) -> String {
         .join(" ")
 }
 
-/// **Every prose site that quotes these figures quotes the CURRENT ones.**
+/// **Every prose site this guard knows about quotes the CURRENT figures.**
 ///
 /// The four constants below are assertion-bearing: a stale one fails loudly. The
 /// SENTENCES that quote them are not — nothing anywhere re-reads them, so a
 /// reduction that moved the constants and forgot a README would leave the crate
 /// stating a number it no longer measures. That is not hypothetical: an
 /// unqualified version of this claim shipped false once already, and the figures
-/// moved six times in the change that added this test.
+/// moved six times in the change that added this test — and a version of it
+/// covering only two of the six sites below shipped a SECOND time, when
+/// `docs/design/purrdf-change-path-allocations.md` drifted for two more
+/// reductions before a *different* gate (`scripts/check-doc-claims.py`) caught
+/// it, one that this test never read.
 ///
-/// So the claims are checked against the constants rather than against a reader's
-/// memory. Whitespace and comment markers are flattened first, because the same
+/// So every prose site known to restate these four numbers is read here and
+/// checked against the constants rather than against a reader's memory. Five
+/// sites, not "every" one — the name says what this test actually sweeps rather
+/// than promising a guarantee it cannot keep for a sixth site nobody has
+/// registered yet:
+///
+/// * `crates/shapes/README.md` — the long and short prose forms;
+/// * `crates/shapes/src/engine.rs` — the same two forms, on the rustdoc of
+///   `validate_focus_nodes` and `validate_focus_node_ids`;
+/// * `docs/design/purrdf-change-path-allocations.md` — the per-focus-node
+///   table's four rows, the same four `scripts/check-doc-claims.py` checks
+///   independently;
+/// * this file's OWN module documentation — the `after` column of the
+///   before/after table near the top of the file;
+/// * `crates/shapes/tests/change_path_alloc.rs` — its `SIBLING_FILE_COVERAGE`
+///   doc comment restates these as "the current" figure, in the same sentence
+///   as the HISTORICAL baseline (96/214/116/194) the decomposition in the
+///   design document was taken against. Only the "current" restatement is a
+///   live claim; the historical baseline is a fixed label for a past
+///   measurement and must not be swept as though it tracked a constant it no
+///   longer describes. Distinguished explicitly below, not by the two numbers
+///   simply never colliding.
+///
+/// Whitespace and comment markers are flattened first, because the same
 /// sentence is wrapped differently in Markdown and in rustdoc.
 #[test]
-fn every_claim_about_these_figures_quotes_the_measured_ones() {
+fn every_registered_prose_site_quotes_the_measured_figures() {
     let _guard = measure_lock();
 
     let readme = flattened(include_str!("../README.md"));
     let rustdoc = flattened(include_str!("../src/engine.rs"));
+    let design_doc = flattened(include_str!(
+        "../../../docs/design/purrdf-change-path-allocations.md"
+    ));
+    let own_module_doc = flattened(include_str!("sparql_path_alloc.rs"));
+    let change_path_alloc = flattened(include_str!("change_path_alloc.rs"));
 
     // The long form, spelled identically in the crate README and in
     // `validate_focus_nodes`' rustdoc.
@@ -902,6 +1037,100 @@ fn every_claim_about_these_figures_quotes_the_measured_ones() {
         rustdoc.contains(&short),
         "validate_focus_node_ids' rustdoc no longer quotes the measured figures.\n  \
          expected: {short}"
+    );
+
+    // The design document's per-focus-node table, row by row — the same four
+    // rows `scripts/check-doc-claims.py` checks, read here too so a regression in
+    // that Python gate is not the only thing standing between the document and
+    // these constants.
+    const DESIGN_DOC_ROWS: [&str; 4] = [
+        "`sh:sparql` constraint",
+        "custom `sh:ask` component",
+        "custom `sh:select` component",
+        "`sh:expression` function call",
+    ];
+    for (index, label) in DESIGN_DOC_ROWS.iter().enumerate() {
+        let row = format!("| {label} | {} |", CASES[index].per_focus_node);
+        assert!(
+            design_doc.contains(&row),
+            "docs/design/purrdf-change-path-allocations.md no longer quotes the measured \
+             figure for {label}.\n  expected row: {row}"
+        );
+    }
+
+    // `crates/shapes/tests/conformance_memo.rs` was a sixth site here and is no
+    // longer one. It quoted the `sh:sparql` figure to justify an ALLOCATION
+    // inequality between its two arms, and that oracle has been retired: an
+    // allocation total is a sum every layer beneath the SHACL conformance memo also
+    // moves, and it inverted once a lower layer (`PreparedExecution`'s prebind memo)
+    // landed under it while the conformance memo was still firing. That file now
+    // counts how many times the inner shape's constraint is EVALUATED, which is the
+    // quantity the memo changes and the only one it changes, so it restates no
+    // figure from this file and nothing there can drift against these constants.
+
+    // This file's own module documentation states an "after" figure per surface,
+    // beside a frozen "before" figure and two frozen byte counts from the same
+    // historical run. Only the live "after" allocation count is checked here; the
+    // "before" figures and the byte counts describe one specific past
+    // measurement and restate nothing asserted elsewhere.
+    const OWN_TABLE_ROWS: [(&str, &str, &str, &str); 4] = [
+        ("`sh:sparql` constraint", "2,695", "1,277,672", "3,518"),
+        (
+            "custom `sh:ask` component (2 value nodes)",
+            "350",
+            "16,156",
+            "7,460",
+        ),
+        (
+            "custom `sh:select` component",
+            "2,738",
+            "1,278,972",
+            "4,093",
+        ),
+        (
+            "SHACL-AF `sh:expression` call (2 tuples)",
+            "236",
+            "13,393",
+            "7,456",
+        ),
+    ];
+    for (index, (label, before, bytes_before, bytes_after)) in OWN_TABLE_ROWS.iter().enumerate() {
+        let row = format!(
+            "| {label} | {before} | {} | {bytes_before} | {bytes_after} |",
+            CASES[index].per_focus_node
+        );
+        assert!(
+            own_module_doc.contains(&row),
+            "this file's own module documentation no longer quotes its measured \"after\" \
+             figure for {label}.\n  expected row: {row}"
+        );
+    }
+
+    // `change_path_alloc.rs` restates these four as "the current" figure inside
+    // `SIBLING_FILE_COVERAGE`'s doc comment, explicitly distinct from the
+    // HISTORICAL baseline (96/214/116/194) the same sentence names — that
+    // baseline is a fixed label for the measurement the decomposition in
+    // `docs/design/purrdf-change-path-allocations.md` was taken against, not a
+    // live constant, and must not be swept here.
+    let sibling_claim = format!(
+        "the current {}/{}/{}/{}",
+        CASES[0].per_focus_node,
+        CASES[1].per_focus_node,
+        CASES[2].per_focus_node,
+        CASES[3].per_focus_node,
+    );
+    assert!(
+        change_path_alloc.contains(&sibling_claim),
+        "crates/shapes/tests/change_path_alloc.rs's `SIBLING_FILE_COVERAGE` doc comment no \
+         longer quotes the measured figures as \"the current\" ones.\n  expected: \
+         {sibling_claim}"
+    );
+    assert!(
+        change_path_alloc.contains("historical baseline term of 96/214/116/194"),
+        "crates/shapes/tests/change_path_alloc.rs no longer labels 96/214/116/194 as the \
+         historical baseline; if that sentence moved, this guard's distinction between the \
+         live figure and the historical one needs to move with it rather than start silently \
+         matching the wrong number"
     );
 }
 

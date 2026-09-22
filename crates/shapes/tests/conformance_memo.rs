@@ -29,95 +29,113 @@
 //!   site and can share an answer with nothing — so both asks run.
 //!
 //! Both graphs validate the same data, both must produce the same report, and the
-//! named one must allocate strictly less.
+//! named one must evaluate the inner shape's constraint exactly ONCE where the
+//! inline one evaluates it twice.
 //!
-//! # Why the inner shape is SPARQL-backed, and why that is not incidental
+//! # The oracle: the constraint counts its own evaluations
 //!
-//! An allocation count can only see a skipped traversal that would have
-//! allocated, and on this revision a CONFORMING SHACL Core traversal allocates
-//! nothing: that is the whole result `tests/change_path_alloc.rs` pins, where
-//! thirty-nine constraint and path cases validate thousands of conforming focus
-//! nodes for six allocations in total. A memo that skips such a traversal saves
-//! real work and saves ZERO allocations, so an allocation instrument pointed at a
-//! Core inner shape reads equal whether the memo fires or is deleted outright.
-//! Measured: with the inner shape spelled `sh:property [ sh:path ex:count ;
-//! sh:equals ex:limit ]`, both arms cost exactly 5 — and the memo was confirmed
-//! by instrumentation to be HITTING in that fixture. That measurement proves
-//! nothing, and a test resting on it cannot fail for the reason it states.
+//! The quantity asserted below is **how many times the inner shape's constraint
+//! actually ran**, counted by the constraint itself. [`INNER_CONSTRAINT`] is a
+//! `sh:sparql` SELECT whose single triple pattern reaches [`ASKED_IRI`], a
+//! host-registered RELATION ([`AskCountingRelation`]) whose `open` increments
+//! [`ASKS`]. A relation's sole free-free invocation is opened exactly once per
+//! evaluation of the query that names it, so [`ASKS`] is a count of constraint
+//! evaluations and of nothing else. The cursor yields NO rows, which is what makes
+//! the constraint CONFORM: the SELECT returns the empty bag and reports no
+//! violation while having run in full.
 //!
-//! [`INNER_CONSTRAINT`] is therefore a `sh:sparql` SELECT, which is the one class
-//! of constraint in this crate whose conforming evaluation has a real, pinned
-//! per-focus-node cost — 70 allocations for exactly this surface, per
-//! `tests/sparql_path_alloc.rs`. Skipping one of those is an event an allocation
-//! count can see, and the figures below are the size of one query evaluation
-//! rather than of a rounding difference.
+//! This is the quantity the conformance memo changes, and it is the ONLY quantity
+//! it changes. That matters because the obvious alternative instrument — count the
+//! allocations of one `validate_focus_node_ids` call and require the named arm to
+//! be lower — measures a sum that every layer beneath the memo also moves, and so
+//! cannot state what this file claims.
 //!
-//! # What the window may contain, and why it matters here
+//! That is not a hypothetical. This file DID assert an allocation inequality, and
+//! it inverted when a lower layer — the prebind memo a `PreparedExecution` keeps
+//! for its substituted algebra — landed underneath it. The conformance memo was
+//! still firing perfectly throughout; what moved was that the prebind memo builds
+//! its retained tree on the second consecutive run of one value shape, a one-time
+//! cost that amortizes over the runs after it, and the two arms interleave such
+//! that the named arm's build landed INSIDE its measured window while the inline
+//! arm's had already been paid outside its own. An allocation total could not tell
+//! those two facts apart, because it is one number for two independent caches.
 //!
-//! The two shapes graphs are DIFFERENT DOCUMENTS. The named one declares one
-//! shared shape and the inline one declares two inner ones, so they do not parse
-//! to the same number of `Shape` values and they do not cost the same to parse or
-//! to lower. A measurement that opened its window around a whole
-//! `data + shapes → report` call would therefore be satisfied by the PARSE alone:
-//! the named arm would read lower than the inline arm with the memo ripped out
-//! entirely, and the assertion would be unfalsifiable in exactly the way this file
-//! exists to prevent.
+//! The figures that retired it, for the record — a fixed label for one past
+//! measurement, not a live claim, and deliberately restating no constant this
+//! workspace pins elsewhere: named 147 against inline 133 with both layers live,
+//! and named 72 against inline 137 with the prebind layer held uniform, a margin
+//! of one whole `sh:sparql` evaluation. The prebind build accounted for the whole
+//! inversion at +75 allocations, paid once.
 //!
-//! So every parse, every lowering and every dataset binding happens OUTSIDE the
-//! window. Both arms are prepared up front over ONE shared
-//! [`purrdf::RdfDataset`], both mint a [`FocusId`] for the same focus node, and
-//! the measured region is one [`PreparedValidator::validate_focus_node_ids`]
-//! call per arm. What is left inside the window is the traversal and nothing
-//! else, which is the only thing the memo can act on.
+//! A count of constraint evaluations has no such coupling. Make the rewrite cheaper,
+//! make the plan cache warmer, add or remove a memo below this one: the named arm
+//! still asks once and the inline arm still asks twice, and the figures below do not
+//! move. The only thing that moves them is the thing this file is about.
 //!
-//! # The figures, and the proof they can move
+//! # Why the fixture's two arms are a control and a treatment
 //!
-//! Measured on this revision: the named arm costs **98** allocations and the
-//! inline arm **187**. Disabling the memo — forcing the `MemoKey` construction in
-//! `purrdf_shapes`' `constraints` module to `None`, so every ask recomputes and
-//! nothing is ever recorded — moves the named arm to **191**, leaves the inline
-//! arm at 187, and turns the assertion below red. The margin is one `sh:sparql`
-//! evaluation, which is exactly what a memo hit skips.
-//!
-//! The counts are compared, not pinned, so a cheaper query interface moves both
-//! arms without touching this file. What the assertion states is the INEQUALITY,
-//! because the claim is that one ask happened instead of two.
+//! The inline arm is the control, and it is asserted at **2** rather than merely
+//! "more than the named arm". A fixture whose control reads the same as its
+//! treatment cannot distinguish "the memo was honoured" from "the constraint was
+//! silently never reached at all" — a body whose predicate stopped resolving to
+//! [`ASKED_IRI`] (which makes it an ordinary triple pattern over a graph that has
+//! no such triple, so the query still conforms and nothing looks broken), or a
+//! target that never selected the focus node, would leave both arms at 0 and
+//! satisfy any inequality between them. Two exact figures, 1 and 2, are falsifiable
+//! in both directions: a memo that stops firing takes the named arm to 2, and an
+//! oracle that stops observing takes both to 0.
 //!
 //! # The instrument
 //!
-//! [`WholeProcessWindow`] reads one PROCESS-GLOBAL ledger, so a sibling test
-//! allocating concurrently would land its traffic inside an open window.
-//! [`MEASURE_LOCK`] serializes every test in this binary, and
+//! [`ASKS`] is one PROCESS-GLOBAL counter, so a sibling test validating
+//! concurrently would add its own asks to a reading in flight. [`MEASURE_LOCK`]
+//! serializes every test in this binary, and
 //! [`every_test_in_this_binary_takes_the_measure_lock_first`] enforces that by
 //! reading this file's own source: a future test added here without the lock
 //! must fail loudly and name itself rather than show up as an occasional,
 //! unattributed shift in the figures below.
 //!
 //! One focus node is far below `crate::parallel::PARALLEL_MIN_FOCUS_NODES`, so
-//! both arms stay on the serial path and neither `rayon`'s job injector nor the
-//! `regex` crate's contended cache pool — the two third-party residuals
-//! `tests/change_path_alloc.rs` documents — is on the route. The figures here are
-//! therefore exact rather than floored over repetitions.
+//! both arms stay on the serial path, which is also why one thread-local
+//! `enter_property_function_scope` reaches every evaluation this test performs.
 //!
 //! Every IRI is under `example.org`: PurRDF mints no vocabulary IRIs.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use purrdf::RdfDataset;
-use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_shapes::engine::{FocusId, PreparedShapes, PreparedValidator, parse_shapes};
+use purrdf_shapes::sparql::enter_property_function_scope;
 use purrdf_shapes::term::NamedNode;
 use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
-
-#[global_allocator]
-static GLOBAL: CountingAllocator = CountingAllocator;
+use purrdf_sparql_eval::{
+    BindingPattern, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    PropertyFunctionRegistry, ServiceLevel, Volatility,
+};
 
 /// Serializes every measured region in this binary.
 ///
-/// [`WholeProcessWindow`] reads one process-global ledger and `cargo test` runs
-/// test functions concurrently, so two measurements in flight at once would each
-/// report the union of both regions while appearing to report their own.
+/// [`ASKS`] is one process-global counter and `cargo test` runs test functions
+/// concurrently, so two readings in flight at once would each report the union of
+/// both regions while appearing to report their own.
 static MEASURE_LOCK: Mutex<()> = Mutex::new(());
+
+/// How many times the inner shape's constraint has been evaluated since the last
+/// [`take_asks`].
+///
+/// Process-global rather than thread-local because a registered relation is held
+/// as `Arc<dyn PropertyFunction>` and is therefore `Send + Sync` by that seam's own
+/// signature — the evaluator may in principle open it from a `rayon` worker, and a
+/// thread-local would then silently read zero. [`MEASURE_LOCK`] is what keeps two
+/// readings from overlapping.
+static ASKS: AtomicUsize = AtomicUsize::new(0);
+
+/// The relation IRI the inner constraint's body reaches to record that it ran.
+///
+/// PurRDF mints no vocabulary: without [`counting_relations`] registering it, the
+/// same predicate is an ordinary triple pattern.
+const ASKED_IRI: &str = "http://example.org/purrdf/memo#asked";
 
 /// Take [`MEASURE_LOCK`], absorbing poison.
 ///
@@ -127,6 +145,90 @@ static MEASURE_LOCK: Mutex<()> = Mutex::new(());
 /// left half-written.
 fn measure_lock() -> MutexGuard<'static, ()> {
     MEASURE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Reset [`ASKS`] to zero and return what it held.
+fn take_asks() -> usize {
+    ASKS.swap(0, Ordering::SeqCst)
+}
+
+/// The relation [`INNER_CONSTRAINT`]'s body reaches, and the whole of the oracle:
+/// opening it records one evaluation of that constraint.
+///
+/// A host-registered RELATION rather than a host-registered scalar function,
+/// because the scalar seam is not reachable from here: the engine installs the
+/// shapes graph's own `sh:SPARQLFunction` registry around every validation
+/// (`enter_function_scope` in `crate::engine`), which shadows any registry a caller
+/// installed, whereas the property-function scope is READ from the caller
+/// (`current_property_functions`) and so passes through. Both positions are free,
+/// because `$this` is pre-bound by substitution and the evaluation-order analysis
+/// does not see that as a binding.
+#[derive(Debug)]
+struct AskCountingRelation {
+    /// The one calling pattern this relation admits.
+    modes: [BindingPattern; 1],
+}
+
+/// [`AskCountingRelation`]'s cursor: no rows, which is what makes the constraint
+/// CONFORM while still having run.
+#[derive(Debug)]
+struct EmptyCursor;
+
+impl PfCursor for EmptyCursor {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        Ok(None)
+    }
+
+    fn service_level(&self) -> ServiceLevel {
+        ServiceLevel::Undeclared
+    }
+}
+
+impl PropertyFunction for AskCountingRelation {
+    /// [`Volatility::Volatile`], which is the truthful declaration and not a tuning
+    /// choice: [`Self::open`] mutates state that changes between calls within one
+    /// query, which is exactly what that variant means. Declaring
+    /// [`Volatility::Stable`] would assert the opposite and license an evaluator to
+    /// treat two invocations as interchangeable — which is precisely the licence an
+    /// oracle that COUNTS invocations must not hand out.
+    fn volatility(&self) -> Volatility {
+        Volatility::Volatile
+    }
+
+    fn arity(&self) -> PfArity {
+        PfArity::new(1, 1)
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+        1
+    }
+
+    /// One invocation of the relation, which is one evaluation of the constraint
+    /// whose body names it.
+    fn open(
+        &self,
+        _args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ASKS.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(EmptyCursor))
+    }
+}
+
+/// A registry carrying the one relation [`INNER_CONSTRAINT`] reaches.
+fn counting_relations() -> Arc<PropertyFunctionRegistry> {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        ASKED_IRI.to_owned(),
+        Arc::new(AskCountingRelation {
+            modes: [BindingPattern::from_code("ff")],
+        }),
+    );
+    Arc::new(registry)
 }
 
 /// The data graph: one focus node whose two paths lead to the SAME value node,
@@ -146,16 +248,15 @@ const DATA: &str = concat!(
 /// The one constraint the inner shape carries, spelled identically wherever it
 /// appears.
 ///
-/// A conforming focus node produces the empty solution bag — `ex:count` is a
-/// literal, so the `FILTER` admits nothing — which is the CONFORMING evaluation
-/// whose cost this file relies on being non-zero. The predicate is spelled as an
-/// absolute IRI so no `sh:prefixes` declaration stands between the reader and
-/// what the query matches.
+/// Its one triple pattern reaches [`ASKED_IRI`], the host-registered relation that
+/// records the evaluation and yields no rows. A conforming focus node therefore
+/// produces the empty solution bag while still having run the query. The predicate
+/// is spelled as an absolute IRI so no `sh:prefixes` declaration stands between the
+/// reader and what the query matches.
 const INNER_CONSTRAINT: &str = concat!(
     "sh:sparql [ a sh:SPARQLConstraint ; sh:select \"\"\"\n",
     "    SELECT $this WHERE {\n",
-    "      $this <http://example.org/purrdf/memo#count> ?n .\n",
-    "      FILTER(!isLiteral(?n))\n",
+    "      $this <http://example.org/purrdf/memo#asked> ?n .\n",
     "    }\"\"\" ]",
 );
 
@@ -203,7 +304,7 @@ fn inline_shapes() -> String {
 /// `Arc<RdfDataset>` twice yields two identities, and each arm must be driven with
 /// its own.
 struct Arm {
-    /// The prepared validator, built entirely outside any measurement window.
+    /// The prepared validator.
     validator: PreparedValidator,
     /// The single focus node, in this binding's id space.
     focus: Vec<FocusId>,
@@ -227,46 +328,41 @@ impl Arm {
         }
     }
 
-    /// Validate the focus node, requiring conformance, and return how many
-    /// allocations the VALIDATION made.
+    /// Validate the focus node, requiring conformance, and return how many times the
+    /// inner shape's constraint was EVALUATED while doing so.
     ///
-    /// The measurement is taken after a warm-up run with the same arguments: the
-    /// class-membership index, the thread-local SPARQL plan cache and the
-    /// allocator's own arenas are first-touch lazies, and charging them to
-    /// whichever call ran first would make the comparison a statement about
-    /// start-up. The plan cache matters most here — the inline arm has two
-    /// anonymous inner shapes and so two query bodies to compile, and an
-    /// unwarmed window would charge it for that compilation on top of the second
-    /// evaluation this file is trying to see. Preparation is not in the window at
-    /// all — see this file's header for why that is the whole point.
-    fn allocations_to_validate(&self, label: &str) -> u64 {
-        let run = || {
-            let report = self
-                .validator
-                .validate_focus_node_ids(&self.focus)
-                .unwrap_or_else(|error| panic!("{label}: the fixture must validate: {error}"));
-            assert!(
-                report.conforms && report.results.is_empty(),
-                "{label}: the fixture must CONFORM, or the figure below describes a workload that \
-                 never reached the inner shape ({} result(s))",
-                report.results.len()
-            );
-        };
-        run();
-        let window = WholeProcessWindow::open();
-        run();
-        window.close().allocations
+    /// [`ASKS`] is reset immediately before the call, so nothing any earlier
+    /// validation asked is charged here. No warm-up run is needed or wanted: a count
+    /// of constraint evaluations has no first-touch term to warm away — the
+    /// class-membership index, the plan cache and every memo underneath change how
+    /// much each evaluation COSTS and not how many of them happen — and a warm-up
+    /// would only double the figure this returns.
+    fn asks_to_validate(&self, label: &str) -> usize {
+        let _discarded = take_asks();
+        let report = self
+            .validator
+            .validate_focus_node_ids(&self.focus)
+            .unwrap_or_else(|error| panic!("{label}: the fixture must validate: {error}"));
+        let asks = take_asks();
+        assert!(
+            report.conforms && report.results.is_empty(),
+            "{label}: the fixture must CONFORM, or the figure below describes a workload that \
+             never reached the inner shape ({} result(s))",
+            report.results.len()
+        );
+        asks
     }
 }
 
-/// **The two spellings mean the same thing, and the memoizable one costs less.**
+/// **The two spellings mean the same thing, and the memoizable one is asked once.**
 ///
-/// The equality half is what makes the inequality half safe to assert: a memo
-/// that returned a wrong answer would make the two reports disagree, and a memo
-/// that never fired would make the two costs equal.
+/// The equality half is what makes the count half safe to assert: a memo that
+/// returned a wrong answer would make the two reports disagree, and a memo that
+/// never fired would make the two counts equal.
 #[test]
 fn a_named_inner_shape_is_evaluated_once_for_a_shared_value_node() {
     let _guard = measure_lock();
+    let _relations = enter_property_function_scope(counting_relations());
     let data = parse_ntriples_to_dataset(DATA).unwrap_or_else(|errors| {
         panic!("the fixture data graph must parse: {}", errors.join("\n"))
     });
@@ -291,15 +387,30 @@ fn a_named_inner_shape_is_evaluated_once_for_a_shared_value_node() {
         "the two spellings state the same constraints and must reach the same verdict"
     );
 
-    let named = named_arm.allocations_to_validate("named");
-    let inline = inline_arm.allocations_to_validate("inline");
-    assert!(
-        named < inline,
-        "naming the inner shape at both sites must let the second site reuse the first site's \
-         conformance answer, so it must allocate strictly less than spelling the shape out twice \
-         ({named} vs {inline}). Both arms were PREPARED outside the window, so the only thing \
-         left inside it is the traversal: a figure that is not lower means the second site ran \
-         the inner shape's query again, which is the conformance memo not firing."
+    let named = named_arm.asks_to_validate("named");
+    let inline = inline_arm.asks_to_validate("inline");
+
+    // THE CONTROL, asserted first and asserted exactly: two anonymous inner shapes
+    // are two different shapes, so each site's ask runs. A reading of 0 here would
+    // mean the constraint never ran at all — an unresolved function IRI, a target
+    // that selected nothing — and would satisfy any mere inequality between the two
+    // arms while proving nothing about a memo.
+    assert_eq!(
+        inline, 2,
+        "spelling the inner shape out twice as anonymous shapes gives each site its own \
+         shape, so the constraint must be evaluated once per site — twice. A reading of 0 \
+         means the constraint never ran and this file is measuring nothing; any other \
+         reading means the fixture no longer asks once per site."
+    );
+
+    // THE TREATMENT: one named shape reached from both sites, one ask.
+    assert_eq!(
+        named, 1,
+        "naming the inner shape at both sites must let the second site reuse the first \
+         site's conformance answer, so the constraint must be evaluated exactly ONCE for \
+         the value node both paths lead to (got {named}, against {inline} for the same \
+         constraint spelled out twice). A reading of {inline} means the second site ran the \
+         inner shape's query again, which is the conformance memo not firing."
     );
 }
 
@@ -317,12 +428,12 @@ fn is_test_attr(attrs: &[syn::Attribute]) -> bool {
 /// Whether `block`'s FIRST statement is a `let` binding whose initializer is a
 /// call to `measure_lock()`.
 ///
-/// Not "somewhere in the body": [`WholeProcessWindow`] reads one process-global
-/// ledger for the whole test, so a lock taken after even one allocation has
-/// already let that allocation land unguarded. It must also be a `let` binding
-/// and not a bare `measure_lock();` statement — the returned [`MutexGuard`] is a
-/// temporary that drops at the end of a bare statement, which releases the lock
-/// immediately rather than holding it for the test.
+/// Not "somewhere in the body": [`ASKS`] is one process-global counter for the
+/// whole test, so a lock taken after even one ask has already let that ask land
+/// unguarded. It must also be a `let` binding and not a bare `measure_lock();`
+/// statement — the returned [`MutexGuard`] is a temporary that drops at the end of
+/// a bare statement, which releases the lock immediately rather than holding it for
+/// the test.
 fn first_statement_holds_measure_lock(block: &syn::Block) -> bool {
     let Some(syn::Stmt::Local(local)) = block.stmts.first() else {
         return false;
@@ -360,15 +471,14 @@ impl<'ast> syn::visit::Visit<'ast> for TestFns {
 /// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
 /// statement of its body.**
 ///
-/// This file's own documentation states that rule; this is what enforces it. A
-/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
-/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
-/// allocates without holding the lock — whether or not it takes a measurement of
-/// its own — can land its traffic inside a sibling test's open window and shift a
-/// measured figure nondeterministically. A future test that omits the lock is
-/// exactly the contamination source this file must rule out, so it fails loudly
-/// and names itself rather than showing up as an occasional, unattributed shift
-/// in someone else's figure.
+/// This file's own documentation states that rule; this is what enforces it.
+/// [`ASKS`] is one process-global counter, and `cargo test` runs a binary's test
+/// functions CONCURRENTLY, so a test that validates without holding the lock —
+/// whether or not it takes a reading of its own — can land its asks inside a
+/// sibling test's reading and shift a measured figure nondeterministically. A
+/// future test that omits the lock is exactly the contamination source this file
+/// must rule out, so it fails loudly and names itself rather than showing up as an
+/// occasional, unattributed shift in the figures below.
 ///
 /// A source scan rather than a runtime check: nothing observable at runtime
 /// distinguishes "this test forgot to take the lock" from "this test never needed
@@ -398,7 +508,7 @@ fn every_test_in_this_binary_takes_the_measure_lock_first() {
     assert!(
         offenders.is_empty(),
         "these #[test] functions do not take MEASURE_LOCK as the first statement of their body, \
-         so they can allocate concurrently with another test's WholeProcessWindow and silently \
+         so they can validate concurrently with another test's reading of ASKS and silently \
          shift its figure: {offenders:?}"
     );
 }

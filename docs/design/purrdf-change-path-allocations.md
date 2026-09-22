@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 70 |
-| custom `sh:ask` component | 144 |
-| custom `sh:select` component | 82 |
-| `sh:expression` function call | 164 |
+| `sh:sparql` constraint | 54 |
+| custom `sh:ask` component | 122 |
+| custom `sh:select` component | 67 |
+| `sh:expression` function call | 131 |
 
 The term is flat in the size of the data graph, so it is the price of executing a
 query once per focus node, not a scan. That distinction matters: a scan would be
@@ -84,9 +84,10 @@ evaluated algebra held byte-identical. Truncation was rejected as a method:
 removing a slice changes which query runs, so the evaluation term moves with it
 and the slopes cannot be differenced. Figures are against the baseline of
 96 / 214 / 116 / 194 that held when the decomposition was taken; the reductions
-described in the next section have since moved them to 70 / 144 / 82 / 164, by
-emptying part of the term-materialization row and most of the rebuild cost inside
-the pushdown, seed and expression-walk rows.
+described in the next section moved them to 70 / 144 / 82 / 164, by emptying part
+of the term-materialization row and most of the rebuild cost inside the pushdown,
+seed and expression-walk rows. Two further reductions, described at the end of the
+same section, have since moved them again to 54 / 122 / 67 / 131.
 
 Slices that nest are differenced against each other rather than summed, so no
 allocation is counted twice: an extra `apply_shacl_prebinding` contains an extra
@@ -151,20 +152,38 @@ Carrying an identity through the pre-binding interface, taken to its theoretical
 maximum, removes the whole pre-binding row. That leaves 59, 104, 67 and 142
 allocations per focus node. The goal of no growth term is unreachable from that
 path — not narrowly, but by a factor of one and a half to two and a half on the
-residual alone, because nothing in the pre-binding path can reach the evaluator's
-per-execution cost.
+residual alone, because nothing in the pre-binding path, taken alone, can reach
+the evaluator's per-execution cost. That bounds identity-carrying pre-binding
+specifically; it does not bound every mechanism that could stand in for it, and
+the paragraph below is where a different one reached past it.
 
-The contained version of that change also does not exist. The pushdown's boundary
-is a function of the query and the **names** of the pre-bound variables, both
-constant across focus nodes, so the shape could in principle be decided once and
-the values bound later. But "decided once, bound later" needs a placeholder in the
-algebra, and the algebra's ground term is deliberately dataset-independent —
-correctly so, since it is the cell type of a `VALUES` block and has 181 references
-across four crates. Every remaining spelling either re-derives the
-right-arm-of-`OPTIONAL`-and-`MINUS` boundary in two further places, which is the
-change most likely to introduce a silent soundness difference, or needs a
+At the time this section was first written, the contained version of that change
+did not exist either. The pushdown's boundary is a function of the query and the
+**names** of the pre-bound variables, both constant across focus nodes, so the
+shape could in principle be decided once and the values bound later. But "decided
+once, bound later" needs a placeholder in the algebra, and the algebra's ground
+term is deliberately dataset-independent — correctly so, since it is the cell type
+of a `VALUES` block and has 181 references across four crates. The two spellings
+then known both re-derive where the boundary sits: either the
+right-arm-of-`OPTIONAL`-and-`MINUS` rule in two further places, which is the
+change most likely to introduce a silent soundness difference, or a
 sentinel-marking scheme plus a second plan cache plus a side table threaded
 through four subsystems — for a ceiling that is still 59 / 104 / 67 / 142.
+
+A third spelling avoids re-deriving the boundary at all, which is why it carries
+neither hazard the paragraph above named. `crates/sparql-eval/src/prebind_memo.rs`
+is that spelling, and the eighth reduction below is its numbers: it decides the
+substituted shape once by **observing** the real rewrite rather than
+reimplementing its rule, and never believes the observation — every hit is
+replayed through the ordinary rewrite in debug builds and compared node for node,
+so a memo that would ever answer differently from the rewrite it stands in for is
+discarded, and that run takes the ordinary path instead of a silently wrong one.
+Because it retains the whole substituted tree rather than only the pre-binding
+row, it is not bounded by this section's ceiling at all — that ceiling assumed the
+evaluator still mints a fresh tree every focus node, which a retained tree does
+not do. `sh:sparql`, `sh:select` and `sh:expression` now sit at or below
+59 / 104 / 67 / 142, one of the three exactly at it, and only `sh:ask` remains
+above, by 18 allocations, which the next section's numbers explain.
 
 ## What was taken, and what is left
 
@@ -258,6 +277,36 @@ is legal, the crate has a test for it, and a one-column layout does not equal th
 two-column request it answered. A debug assertion written on the assumption that
 projected lists are duplicate-free found that test within one run.
 
+The seventh: a prepared execution stopped reaching the evaluator through query
+**text**. Two algebra soundness walks (`validate`, a graph-pattern depth check)
+and a replanning walk against the run's registries were keyed to the *run* rather
+than to the *plan*; a prepared execution — parsed and admitted once, checked out
+of a per-worker table keyed by query text and parameter list — now pays them once
+at preparation, the replanning walk returns immediately once neither side supplies
+a registry, and `$PATH` substitution now returns `Cow` so two pass-through cases —
+a node shape, and a property shape whose query does not mention the placeholder —
+stop copying the whole query text per focus node. `sh:ask` is unchanged by this
+one: its validator had already hoisted its pre-binding list out of the value-node
+loop, so what this removed there is matched by what it added, a parameter-name
+list per focus node. The other three move. That took the term to
+68 / 144 / 81 / 151.
+
+The eighth: a prepared execution still cloned the admitted algebra and rewrote it
+on every run — the whole pre-binding rewrite this section has been reducing, paid
+in full on every focus node regardless, because caching the PLAN is not caching
+the SUBSTITUTED plan. `crates/sparql-eval/src/prebind_memo.rs` is the artifact
+named in the section above, "Why an id-native pre-binding does not reach zero": a
+`PrebindMemo` holds the rewritten query and the positions in it a caller-supplied
+value occupies, so a run whose values have shapes the memo has already seen
+writes those values into a tree built once, at a handful of refcount bumps,
+instead of cloning and rewriting the admitted algebra again. It is never believed
+on trust — built by observing which cells a handful of differencing rewrites
+actually move, and every hit checked, in debug builds, by replaying the run
+through the ordinary rewrite and comparing the two trees node for node, so a memo
+that would ever answer differently from the rewrite it stands in for is discarded
+and that run takes the ordinary path instead. That took the term to
+54 / 122 / 67 / 131, which is where it stands now.
+
 One candidate was declined rather than taken. The single allocation left in
 constructing an evaluation context is the expression barrier's shared cell, and it
 is load-bearing: workers forked for a parallel evaluation clone it, and the
@@ -267,16 +316,17 @@ optional and allocating only when governed would convert a documented, deliberat
 ungoverned fallback into a silently dropped truncation. One allocation per query
 is the cheaper side of that trade.
 
-What remains belongs to `purrdf-sparql-eval` rather than to the validator, and the
-decomposition above says which part. Not the plan-cache probe, which is already
-free on a hit, and not the evaluation context, which allocates exactly once. What
-is left is the **tree minted for one focus node and dropped at the end of it**: the
-rewrite that builds it, the seed `VALUES` node it plants, the join onto that node,
-and the `VarSchema` every `Project` and `Bgp` rebuilds because the node it belongs
-to is a fresh heap temporary rather than a stable one. Those are one problem, not
-five, and the shape that answers it is a reusable execution artifact — the
-substituted shape decided once per query and per pre-bound variable name, with only
-the values written per focus node.
+What was left after the sixth belonged to `purrdf-sparql-eval` rather than to the
+validator, and the decomposition above said which part. Not the plan-cache probe,
+already free on a hit, and not the evaluation context, which allocates exactly
+once. What remained was the **tree minted for one focus node and dropped at the
+end of it**: the rewrite that builds it, the seed `VALUES` node it plants, the
+join onto that node, and the `VarSchema` every `Project` and `Bgp` rebuilds
+because the node it belongs to is a fresh heap temporary rather than a stable one.
+Those were one problem, not five, and the eighth reduction above is the shape
+that answers it: a reusable execution artifact, the substituted shape decided once
+per query and per pre-bound variable-name set, with only the values written per
+focus node.
 
 ## The sibling walk does not carry the same scan, and its leaves stay untouched
 

@@ -1952,14 +1952,13 @@ impl NativeSparqlEngine {
         // same refusal a first run would have produced, raised earlier; see
         // [`check_prepared_registries_unchanged`].
         check_plan_matches_relations(&prepared, options)?;
-        Ok(PreparedExecution {
+        Ok(PreparedExecution::new(
             prepared,
-            parameters: parameters
+            parameters
                 .iter()
                 .map(|name| crate::substitute::interned_variable(name))
                 .collect(),
-            values: vec![None; parameters.len()],
-        })
+        ))
     }
 
     /// Run `execution` against `dataset` with its current bindings.
@@ -1969,8 +1968,8 @@ impl NativeSparqlEngine {
     /// passing them costs no list to build. It still checks the ONE thing prepare
     /// could not have fixed in advance: that `options` names the SAME
     /// property-function and custom-aggregate registries
-    /// [`Self::prepare_execution`] admitted the plan against (see
-    /// [`check_plan_matches_relations`]). `execution` and `options` are supplied by
+    /// [`Self::prepare_execution`] admitted the plan against (see the internal
+    /// `check_plan_matches_relations`). `execution` and `options` are supplied by
     /// two different calls, so nothing else stops a caller from preparing under one
     /// registry and running under another; without this check that disagreement
     /// would evaluate silently rather than refuse, because a plan prepared with no
@@ -2005,17 +2004,18 @@ impl NativeSparqlEngine {
             ));
         }
         check_prepared_registries_unchanged(&execution.prepared, options)?;
-        let prepared = Arc::clone(&execution.prepared);
         let ctx = self.eval_ctx(dataset);
         let mut ctx = apply_query_options(ctx, options)?;
-        let outcome = match options.prebinding {
-            ShaclPrebinding::Applied => {
-                evaluate_with_shacl_prebinding(&prepared, execution.prebindings(), &mut ctx)?
-            }
-            ShaclPrebinding::None => {
-                evaluate_with_substitutions(&prepared, execution.prebindings(), &mut ctx)?
-            }
-        };
+        // The substituted plan, from the execution's own retained tree where it has
+        // one. Both lanes reach it through the same call, so which rewrite ran is a
+        // property of `options` in one place rather than of two call sites.
+        let substituted = execution.substituted(options.prebinding)?;
+        let outcome = evaluate_query(substituted.query(), &mut ctx).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                e.to_string(),
+            )
+        })?;
         Ok(visit(borrow_outcome(&outcome, &ctx)))
     }
 
@@ -2074,16 +2074,13 @@ impl NativeSparqlEngine {
             return refused.map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
         }
         let mut ctx = self.governed_ctx(dataset, None, state, options)?;
-        let evaluated = match options.prebinding {
-            ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
-                &prepared,
-                execution.prebindings(),
-                &mut ctx,
-            )?,
-            ShaclPrebinding::None => {
-                evaluate_governed_with_substitutions(&prepared, execution.prebindings(), &mut ctx)?
-            }
-        };
+        let substituted = execution.substituted(options.prebinding)?;
+        let evaluated = evaluate_query_evaluated(substituted.query(), &mut ctx).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                e.to_string(),
+            )
+        })?;
         Ok(
             match resolve_governed(evaluated, &mut ctx, state, identity) {
                 GovernedResolution::Complete {

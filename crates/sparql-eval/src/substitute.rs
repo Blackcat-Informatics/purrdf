@@ -74,11 +74,6 @@ impl<'a> Prebindings<'a> {
         self.len() == 0
     }
 
-    /// The `(name, value)` pairs, names borrowed in both shapes.
-    pub(crate) fn iter(self) -> impl Iterator<Item = (&'a str, &'a TermValue)> {
-        (0..self.len()).map(move |index| self.get(index))
-    }
-
     /// The `index`-th `(name, value)` pair.
     ///
     /// Indexed rather than delegating to the two underlying iterators, because the
@@ -216,6 +211,29 @@ fn build_probes(
     substitutions: Prebindings<'_>,
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
     let mut probes = Vec::with_capacity(substitutions.len());
+    build_probes_into(&mut probes, substitutions)?;
+    Ok(probes)
+}
+
+/// [`build_probes`], into a buffer the caller keeps.
+///
+/// A [`PreparedExecution`](crate::PreparedExecution) runs the same query over and
+/// over, so the probe list has the same LENGTH every time and only its cells change.
+/// Filling a retained buffer therefore costs no allocation at all after the first
+/// run, where `build_probes`' fresh `Vec` charged one per run — on a path whose whole
+/// purpose is to stop allocating per run.
+///
+/// # Errors
+///
+/// As [`build_probes`]: a datatype IRI that is not a valid IRI, or a language tag the
+/// concrete syntaxes would not have lexed. The buffer is cleared before the first
+/// value is grounded, so a refused pre-binding leaves no earlier run's terms behind
+/// for a caller that ignores the error to read.
+pub(crate) fn build_probes_into(
+    probes: &mut Vec<(Variable, GroundTerm)>,
+    substitutions: Prebindings<'_>,
+) -> Result<(), RdfDiagnostic> {
+    probes.clear();
     for index in 0..substitutions.len() {
         let (_, value) = substitutions.get(index);
         probes.push((
@@ -223,12 +241,12 @@ fn build_probes(
             ground_term_from_value(value)?,
         ));
     }
-    Ok(probes)
+    Ok(())
 }
 
 /// [`apply_substitutions`]'s rewrite, over probes that are already grounded and
 /// already known to be non-empty.
-fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     // ONE seed carrying every pre-binding, not one seed per pre-binding.
     //
     // `Query::substitute_variable` joins a single-row `VALUES` binding ONE variable
@@ -295,7 +313,7 @@ fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
 /// names (`$this`, `$value`, `$shapesGraph`, `$currentShape`, the component's
 /// parameters), and a hash set over it would cost an allocation per focus node to
 /// avoid a comparison that never runs more than a few times.
-fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
+pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
     probes
         .iter()
         .enumerate()
@@ -507,7 +525,7 @@ fn probe_term_pattern(
 /// [`GroundTerm::BlankNode`] is that kind: a blank in a pattern is an anonymous
 /// variable, so it would match everything rather than the pre-bound blank. See
 /// [`push_probe_constants`], "What is not pushed".
-fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPattern> {
+pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPattern> {
     match ground {
         GroundTerm::NamedNode(node) => Some(TermPattern::NamedNode(node.clone())),
         GroundTerm::Literal(literal) => Some(TermPattern::Literal(literal.clone())),
@@ -547,15 +565,26 @@ pub(crate) fn apply_shacl_prebinding(
         // of the algebra to change nothing in it.
         return Ok(query);
     }
+    Ok(apply_shacl_probes(query, probes))
+}
 
+/// [`apply_shacl_prebinding`]'s rewrite, over probes that are already grounded and
+/// already known to be non-empty.
+///
+/// Split out for the same reason [`apply_probes`] is: a
+/// [`PreparedExecution`](crate::PreparedExecution) grounds its bindings into a
+/// retained buffer rather than through a [`Prebindings`] list, and
+/// [`crate::prebind_memo`] has to be able to run EXACTLY this rewrite — not a second
+/// spelling of it — to check a memo against it.
+pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     // The expression-position constants come from the SAME grounded values the seed
     // is about to carry, not from a second conversion of the same `TermValue`s.
     // `NamedNode`, `Literal` and `Variable` are all `Arc<str>`-backed, so lifting one
     // out of a probe is a refcount bump; re-grounding it is a fresh allocation, once
     // per pre-bound value, per focus node.
     let mut entries = Vec::with_capacity(probes.len());
-    for ((name, _), (_, ground)) in substitutions.iter().zip(probes.iter()) {
-        entries.push((name, expression_from_ground(ground)));
+    for (variable, ground) in &probes {
+        entries.push((variable.clone(), expression_from_ground(ground)));
     }
     let expr_subs = ExprSubs(entries);
 
@@ -563,11 +592,11 @@ pub(crate) fn apply_shacl_prebinding(
     map_patterns_in_query(&mut query, |pattern| {
         substitute_in_graph_pattern(pattern, &expr_subs);
     });
-    Ok(query)
+    query
 }
 
 /// What each pre-bound variable becomes in an EXPRESSION position, keyed by the
-/// variable's borrowed name.
+/// pre-bound [`Variable`] itself.
 ///
 /// An association list scanned linearly, deliberately, where this was a
 /// `HashMap<String, _>`. Two reasons, and the second is the one that matters:
@@ -580,26 +609,30 @@ pub(crate) fn apply_shacl_prebinding(
 ///   key, so every entry cloned a name that came in borrowed and was already
 ///   allocated inside the loaded shapes graph — the same per-focus-node copy of
 ///   shape text [`Prebinding`](crate::interned::Prebinding) exists to stop paying
-///   for, reintroduced one layer down.
+///   for, reintroduced one layer down. A [`Variable`] key keeps that property
+///   without borrowing: it is `Arc<str>`-backed, so the key is a refcount bump on
+///   the name the probe list already holds, and the list is then free of any
+///   borrow of the caller's request — which is what lets [`apply_shacl_probes`]
+///   take its probes BY VALUE and hand them straight to [`apply_probes`].
 ///
 /// The `Option` is the variable's constant expression, or `None` for a blank-node
 /// or quoted-triple pre-binding, which has no expression form and rides the
 /// `VALUES` join instead. Its ABSENCE from the list means "not pre-bound at all",
 /// which is a different answer — [`substitute_in_expression`]'s `Bound` arm turns
 /// on exactly that distinction.
-struct ExprSubs<'a>(Vec<(&'a str, Option<Expression>)>);
+struct ExprSubs(Vec<(Variable, Option<Expression>)>);
 
-impl ExprSubs<'_> {
+impl ExprSubs {
     /// The entry for `name`, mirroring `HashMap::get`.
     fn get(&self, name: &str) -> Option<&Option<Expression>> {
         self.0
             .iter()
-            .find_map(|(key, expr)| (*key == name).then_some(expr))
+            .find_map(|(key, expr)| (key.as_str() == name).then_some(expr))
     }
 
     /// Whether `name` is pre-bound at all, mirroring `HashMap::contains_key`.
     fn contains_key(&self, name: &str) -> bool {
-        self.0.iter().any(|(key, _)| *key == name)
+        self.0.iter().any(|(key, _)| key.as_str() == name)
     }
 }
 
@@ -610,7 +643,7 @@ impl ExprSubs<'_> {
 /// Takes the [`GroundTerm`] rather than the [`TermValue`] it came from precisely so
 /// the conversion is not repeated: the probe list already holds it, and both
 /// `NamedNode` and `Literal` are `Arc<str>`-backed, so this clone allocates nothing.
-fn expression_from_ground(ground: &GroundTerm) -> Option<Expression> {
+pub(crate) fn expression_from_ground(ground: &GroundTerm) -> Option<Expression> {
     match ground {
         GroundTerm::NamedNode(node) => Some(Expression::NamedNode(node.clone())),
         GroundTerm::Literal(lit) => Some(Expression::Literal(lit.clone())),
@@ -630,7 +663,7 @@ fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
 }
 
 /// Recursively substitute pre-bound variables into a [`GraphPattern`].
-fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs<'_>) {
+fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs) {
     // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
     // compile here rather than silently pass through unsubstituted.
     match pattern {
@@ -735,7 +768,7 @@ fn substitute_in_graph_pattern(pattern: &mut GraphPattern, expr_subs: &ExprSubs<
 /// [`expression_from_term_value`]: a blank-node or quoted-triple pre-binding has no
 /// constant expression form and rides the VALUES join instead. A non-variable argument
 /// is already a constant and passes through unchanged.
-fn substitute_in_term_pattern(term: &mut TermPattern, expr_subs: &ExprSubs<'_>) {
+fn substitute_in_term_pattern(term: &mut TermPattern, expr_subs: &ExprSubs) {
     let TermPattern::Variable(var) = term else {
         return;
     };
@@ -748,7 +781,7 @@ fn substitute_in_term_pattern(term: &mut TermPattern, expr_subs: &ExprSubs<'_>) 
 }
 
 /// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
-fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &ExprSubs<'_>) {
+fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &ExprSubs) {
     let NamedNodePattern::Variable(var) = pattern else {
         return;
     };
@@ -764,7 +797,7 @@ fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &
 }
 
 /// Recursively substitute pre-bound variables into an [`Expression`].
-fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs<'_>) {
+fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
     // Wildcard-free on purpose, for the same reason the graph-pattern walk is.
     match expr {
         Expression::Variable(var) => {
@@ -828,7 +861,7 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs<'_>) {
 }
 
 /// Substitute inside an [`OrderExpression`] sort key.
-fn substitute_in_order_expression(order: &mut OrderExpression, expr_subs: &ExprSubs<'_>) {
+fn substitute_in_order_expression(order: &mut OrderExpression, expr_subs: &ExprSubs) {
     match order {
         OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
             substitute_in_expression(expr, expr_subs);
@@ -837,10 +870,7 @@ fn substitute_in_order_expression(order: &mut OrderExpression, expr_subs: &ExprS
 }
 
 /// Substitute inside a [`GROUP BY`][`AggregateExpression`] aggregate.
-fn substitute_in_aggregate(
-    agg: AggregateExpression,
-    expr_subs: &ExprSubs<'_>,
-) -> AggregateExpression {
+fn substitute_in_aggregate(agg: AggregateExpression, expr_subs: &ExprSubs) -> AggregateExpression {
     let (function, mut args, scalarvals, mut order_by, distinct) = agg.into_parts();
     for arg in &mut args {
         substitute_in_expression(arg, expr_subs);

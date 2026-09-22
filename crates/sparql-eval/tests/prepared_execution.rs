@@ -12,7 +12,9 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_core::{
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
+};
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
     InternedOutcome, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
@@ -628,4 +630,231 @@ fn executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_bu
         .execute(&mut matched, &*ds, with_aggregates(&registry_a), total_cell)
         .expect("the SAME registry instance must be accepted at execution");
     assert_eq!(total, 15, "1 + 2 + 2 + 10, never the PRODUCT's 40");
+}
+
+// ---------------------------------------------------------------------------
+// The prebind memo: `PreparedExecution::substituted` retains a rewritten tree
+// after the SECOND consecutive sighting of one lane and value-shape list, and
+// every run after that writes into it instead of rewriting a fresh one — see
+// `purrdf_sparql_eval`'s `prebind_memo` module. The tests below observe the memo
+// itself, not merely the answers it produces: "the third run answers correctly"
+// is satisfied equally well by a handle that silently rebuilds the tree every
+// time and happens to get it right, which is exactly the failure this path's own
+// design note warns against.
+// ---------------------------------------------------------------------------
+
+/// **The memo's reuse is observable by its COST, not just its answer.**
+///
+/// A handle that dispatches to the memo on its third-and-later runs pays for one
+/// rewrite (the several extra ones `PrebindMemo::build` performs, on the second
+/// sighting) and then writes cells — refcount bumps — on every run after. A
+/// handle that silently kept taking the ordinary rewrite on every run, whatever
+/// `substituted` claims, clones the whole admitted algebra and reallocates every
+/// visited node each time. So a memoized run and a run that can never build one
+/// (a brand-new handle every time, so it is always a first sighting) must differ
+/// in allocation count — and if the dispatch were bypassed, they would not.
+#[test]
+fn the_third_run_costs_measurably_less_because_the_memo_is_reused() {
+    let _guard = measure_lock();
+    let ds = dataset(8);
+    let engine = NativeSparqlEngine::new();
+
+    // A fresh handle every call: this execution never reaches a second sighting of
+    // anything, so `substituted` always takes the ordinary rewrite. Preparing is
+    // outside the window; only bind + execute is measured.
+    let run_never_memoized = |subject: u32| -> u64 {
+        let mut execution = engine
+            .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+            .expect("prepare");
+        execution.bind(0, iri(subject)).expect("bind");
+        let window = WholeProcessWindow::open();
+        engine
+            .execute(&mut execution, &*ds, QueryOptions::EMPTY, |outcome| {
+                let InternedOutcome::Solutions(solutions) = outcome else {
+                    panic!("expected solutions");
+                };
+                assert_eq!(solutions.len(), 1);
+            })
+            .expect("execute");
+        window.close().allocations
+    };
+
+    let mut memoized = engine
+        .prepare_execution(QUERY, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+    let mut run_memoized = |subject: u32| -> u64 {
+        memoized.bind(0, iri(subject)).expect("bind");
+        let window = WholeProcessWindow::open();
+        engine
+            .execute(&mut memoized, &*ds, QueryOptions::EMPTY, |outcome| {
+                let InternedOutcome::Solutions(solutions) = outcome else {
+                    panic!("expected solutions");
+                };
+                assert_eq!(solutions.len(), 1);
+            })
+            .expect("execute");
+        window.close().allocations
+    };
+
+    // Warm-up, outside every window: the plan cache, the pre-binding-name
+    // interner and the allocator's arenas are first-touch lazies. This is also
+    // `memoized`'s first sighting (ordinary rewrite).
+    let _ = run_never_memoized(0);
+    let _ = run_memoized(0);
+    // `memoized`'s second consecutive sighting: the run that BUILDS the memo,
+    // which costs several extra rewrites and is never the figure to compare
+    // against.
+    let _ = run_memoized(1);
+
+    // Measured. `never_memoized` is a first sighting every time, by construction;
+    // `memoized` is now on its third-and-later sightings, which hit the retained
+    // tree.
+    let never_a = run_never_memoized(2);
+    let never_b = run_never_memoized(3);
+    let memo_a = run_memoized(2);
+    let memo_b = run_memoized(3);
+
+    println!("never memoized: {never_a}, {never_b}; memoized (reused): {memo_a}, {memo_b}");
+    assert_eq!(
+        memo_a, memo_b,
+        "a memo hit's cost must be stable across runs, exactly as the ordinary path is"
+    );
+    assert!(
+        memo_a < never_a && memo_a < never_b,
+        "a memoized run must cost strictly less than a run that can never build a memo, \
+         or the dispatch is silently taking the ordinary rewrite on every run and reuse is \
+         not actually happening: memoized = {memo_a}, never memoized = {never_a}/{never_b}"
+    );
+}
+
+/// **A blank-node focus node and an IRI focus node, through the SAME handle,
+/// alternated enough to build a memo for one shape and then cross the other.**
+///
+/// `term_pattern_from_ground` (`crates/sparql-eval/src/substitute.rs`) refuses a
+/// blank-node value, so a blank focus node is bound by the `VALUES` seed alone
+/// while an IRI one is ALSO pushed into the leaf pattern — two different trees.
+/// This drives one execution IRI, IRI (builds a memo for the IRI shape), blank (a
+/// different shape: the ordinary rewrite, the IRI memo left alone), IRI again
+/// (the memo is still there and still correct), blank again — and checks every
+/// answer. Two IRI subjects and two blank subjects with DIFFERING objects are the
+/// observing oracle: a handle that corrupted across the shape switch would answer
+/// with a neighbour's object rather than failing outright.
+#[test]
+fn a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle() {
+    let _guard = measure_lock();
+    const NS: &str = "http://example.org/execution-blank#";
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri(&format!("{NS}p"));
+    let iri_s0 = b.intern_iri(&format!("{NS}iri0"));
+    let iri_s1 = b.intern_iri(&format!("{NS}iri1"));
+    let blank_s0 = b.intern_blank("blank0", purrdf_core::BlankScope::DEFAULT);
+    let blank_s1 = b.intern_blank("blank1", purrdf_core::BlankScope::DEFAULT);
+    let o_iri0 = b.intern_iri(&format!("{NS}o-iri0"));
+    let o_iri1 = b.intern_iri(&format!("{NS}o-iri1"));
+    let o_blank0 = b.intern_iri(&format!("{NS}o-blank0"));
+    let o_blank1 = b.intern_iri(&format!("{NS}o-blank1"));
+    b.push_quad(iri_s0, p, o_iri0, None);
+    b.push_quad(iri_s1, p, o_iri1, None);
+    b.push_quad(blank_s0, p, o_blank0, None);
+    b.push_quad(blank_s1, p, o_blank1, None);
+    let ds = b.freeze().expect("freeze");
+
+    let engine = NativeSparqlEngine::new();
+    let query = format!("SELECT ?o WHERE {{ ?this <{NS}p> ?o }}");
+    let mut execution = engine
+        .prepare_execution(&query, None, &["this"], QueryOptions::EMPTY)
+        .expect("prepare");
+
+    let run = |execution: &mut purrdf_sparql_eval::PreparedExecution, this: TermValue| -> String {
+        execution.bind(0, this).expect("bind");
+        engine
+            .execute(execution, &*ds, QueryOptions::EMPTY, |outcome| {
+                let InternedOutcome::Solutions(solutions) = outcome else {
+                    panic!("expected solutions");
+                };
+                assert_eq!(solutions.len(), 1, "exactly one row per focus node");
+                let row = &solutions.rows()[0];
+                format!("{:?}", solutions.cell(row, 0).expect("bound cell"))
+            })
+            .expect("execute")
+    };
+
+    let this_iri = |n: u32| TermValue::iri(format!("{NS}iri{n}"));
+    let this_blank = |n: u32| TermValue::blank(format!("blank{n}"));
+
+    // IRI, IRI: builds the memo for the IRI shape.
+    let answer = run(&mut execution, this_iri(0));
+    assert!(answer.contains("o-iri0"), "got {answer}");
+    let answer = run(&mut execution, this_iri(1));
+    assert!(answer.contains("o-iri1"), "got {answer}");
+
+    // A BLANK focus node: a different shape, so the ordinary rewrite runs and the
+    // IRI memo is left untouched.
+    let answer = run(&mut execution, this_blank(0));
+    assert!(answer.contains("o-blank0"), "got {answer}");
+
+    // Back to IRI: the memo built two runs ago is still there and still correct.
+    let answer = run(&mut execution, this_iri(0));
+    assert!(answer.contains("o-iri0"), "got {answer}");
+
+    // The second blank focus node.
+    let answer = run(&mut execution, this_blank(1));
+    assert!(answer.contains("o-blank1"), "got {answer}");
+}
+
+/// **A repeated pre-bound name is not an error: it is the documented empty
+/// solution.**
+///
+/// Two seeds binding the SAME variable to two DIFFERENT terms are incompatible —
+/// see `apply_probes`' doc comment in `crates/sparql-eval/src/substitute.rs` — so
+/// the query answers zero rows rather than being refused or silently answering as
+/// if only one binding had been supplied. This is not reachable through
+/// `PreparedExecution` (`prepare_execution` refuses a repeated PARAMETER
+/// declaration outright — see `declaring_one_parameter_twice_is_refused` above),
+/// so it is exercised on the ordinary `SparqlEngine::query` door, which builds its
+/// pre-binding list straight from the caller's substitutions with no such check.
+#[test]
+fn a_repeated_pre_bound_name_answers_the_empty_solution() {
+    let _guard = measure_lock();
+    let ds = dataset(4);
+    let engine = NativeSparqlEngine::new();
+
+    let repeated = [("this".to_owned(), iri(0)), ("this".to_owned(), iri(1))];
+    let result = engine
+        .query(
+            &ds,
+            SparqlRequest {
+                query: QUERY,
+                base_iri: None,
+                substitutions: &repeated,
+            },
+        )
+        .expect("a repeated pre-bound name is a defined answer, not a refusal");
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("expected a solution sequence");
+    };
+    assert!(
+        rows.is_empty(),
+        "two incompatible bindings for the same variable must answer the empty solution, \
+         got {rows:?}"
+    );
+
+    // The neighbour: a SINGLE pre-binding (no repeat) over the same query and
+    // dataset still answers normally, so the emptiness above is about the REPEAT
+    // and not about the subject being individually unanswerable.
+    let single = [("this".to_owned(), iri(0))];
+    let result = engine
+        .query(
+            &ds,
+            SparqlRequest {
+                query: QUERY,
+                base_iri: None,
+                substitutions: &single,
+            },
+        )
+        .expect("a single pre-binding must still answer");
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("expected a solution sequence");
+    };
+    assert_eq!(rows.len(), 1, "one subject bound once must answer one row");
 }
