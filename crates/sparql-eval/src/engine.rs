@@ -2733,7 +2733,8 @@ fn check_plan_matches_relations(
 ///
 /// [`check_plan_matches_relations`] does three things: a soundness walk over the
 /// algebra, a feasibility replanning walk, and a comparison of `options`' registry
-/// fingerprints against the plan's. The first two allocate a traversal stack each and
+/// fingerprints against the ones the prepared query carries. The first two allocate a
+/// traversal stack each and
 /// grow it with the query, and on a prepared execution they are pure waste — they
 /// re-derive per run a fact that was established before the first run and cannot have
 /// come undone. `prepare_execution` runs all three, once; a
