@@ -135,6 +135,77 @@ impl Drop for PlanCharge {
     }
 }
 
+/// The [`PlanMemoryObserver`] one worker's per-thread template/layout interner
+/// tables charge into — `crate::substitute::INTERNED_VARIABLES` and
+/// `crate::solution::INTERNED_SCHEMAS`.
+///
+/// Thread-local, matching the tables it serves: both are per-worker state with
+/// no staleness dimension (see their own doc comments — `NativeSparqlEngine`
+/// itself is held in a thread-local by every parallel caller, so per-worker is
+/// what an engine-owned observer would have given anyway). GAP F4 was that this
+/// memory — bounded individually per table by
+/// `INTERNED_VARIABLE_CAP`/`INTERNED_SCHEMA_CAP` — was invisible to the SAME
+/// [`PlanMemoryStats`] a caller already reads to bound one worker's
+/// [`crate::PlanCache`], so a deployment's `CacheLimits` could look satisfied
+/// while this memory grew unbounded beside it. Returns a cheap `Arc` clone of the
+/// calling thread's observer, not a fresh one — every caller on one thread reads
+/// and charges the SAME totals.
+pub(crate) fn interner_memory_observer() -> PlanMemoryObserver {
+    thread_local! {
+        static OBSERVER: PlanMemoryObserver = PlanMemoryObserver::default();
+    }
+    OBSERVER.with(Clone::clone)
+}
+
+/// Bulk-cleared thread-local interner charge tracking.
+///
+/// `crate::substitute::INTERNED_VARIABLES` and `crate::solution::INTERNED_SCHEMAS`
+/// both clear their whole table in one shot on reaching their cap, rather than
+/// evicting entry-by-entry (see their own doc comments: both memoize a pure
+/// function, so losing the table costs one reconstruction, never a wrong
+/// answer). This tracks that same granularity — one running byte total, charged
+/// against [`interner_memory_observer`] and recharged on every insert — rather
+/// than one [`PlanCharge`] (and its `Mutex` lock) per entry, which a table that
+/// only ever grows-then-clears has no use for.
+#[derive(Debug, Default)]
+pub(crate) struct InternerCharge {
+    bytes: usize,
+    charge: Option<PlanCharge>,
+}
+
+impl InternerCharge {
+    /// An unfunded charge: the const-constructible zero state, so a
+    /// `thread_local!` table can still initialize without an allocation until
+    /// its first insert — matching the tables' own "never allocates a table until
+    /// used" invariant.
+    pub(crate) const fn new() -> Self {
+        Self {
+            bytes: 0,
+            charge: None,
+        }
+    }
+
+    /// Charge `delta` additional bytes — one freshly-inserted entry's estimated
+    /// size — recharging [`interner_memory_observer`] with the new running total.
+    /// The old charge (if any) is dropped, crediting its bytes back, in the same
+    /// statement the new one is retained, so the observer never double-counts nor
+    /// under-counts between the two.
+    pub(crate) fn add(&mut self, delta: usize) {
+        self.bytes = self.bytes.saturating_add(delta);
+        let observer = interner_memory_observer();
+        let charge = PlanCharge::new(&observer, self.bytes);
+        charge.retain();
+        self.charge = Some(charge);
+    }
+
+    /// Credit every byte charged so far back to the observer — call exactly when
+    /// the table itself is bulk-cleared.
+    pub(crate) fn clear(&mut self) {
+        self.bytes = 0;
+        self.charge = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PlanCharge, PlanMemoryObserver};

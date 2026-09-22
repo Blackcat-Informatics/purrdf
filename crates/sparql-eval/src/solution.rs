@@ -55,10 +55,44 @@ pub struct VarSchema {
 ///
 /// The threshold is not a tolerance. Above it the index is built and is
 /// authoritative, so a wide schema keeps its O(1) lookup; this only decides which
-/// representation answers, never what the answer is. Nothing reads `index_of` inside
-/// a per-ROW loop — every caller resolves a column once per node — so the scan is
-/// not on a quadratic path.
+/// representation answers, never what the answer is.
+///
+/// Below the threshold `index_of` is O(columns), so a caller MUST NOT call it
+/// once per (row, position) pair — that turns a per-template cost into a
+/// per-solution one. This is an invariant callers are responsible for, not one
+/// this type enforces: `crate::construct` and `crate::update` resolve every
+/// template position's ordinal ONCE per template, before the `for row in
+/// &seq.rows` loop, into a `TermOrdinal`/`QuadOrdinal` tree
+/// (`crate::template::resolve_term`/`resolve_triple`) that `instantiate_term`/
+/// `instantiate_predicate` then read per row instead of calling `index_of`
+/// again — see those modules' `index_of_call_count`-guarded tests, which fail if
+/// a future caller reintroduces `index_of` into a row loop.
 const INDEXED_ABOVE: usize = 8;
+
+// Test-only: counts calls to `VarSchema::index_of`, process-wide. A guard against
+// a per-ROW caller of `index_of` regressing silently: a caller that resolves
+// ordinals once per template makes this counter's per-run delta independent of
+// solution-row count, while a caller that calls `index_of` once per (row,
+// position) makes it scale with row count. See
+// `crate::construct::tests::index_of_is_not_called_per_construct_row` and
+// `crate::update::tests::index_of_is_not_called_per_update_row`.
+#[cfg(test)]
+thread_local! {
+    static INDEX_OF_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+impl VarSchema {
+    /// Reset [`INDEX_OF_CALLS`] to zero.
+    pub(crate) fn reset_index_of_calls() {
+        INDEX_OF_CALLS.with(|c| c.set(0));
+    }
+
+    /// The number of `index_of` calls since the last [`Self::reset_index_of_calls`].
+    pub(crate) fn index_of_call_count() -> u64 {
+        INDEX_OF_CALLS.with(std::cell::Cell::get)
+    }
+}
 
 impl VarSchema {
     /// An empty schema (zero columns) — the schema of the identity table `Z`.
@@ -102,6 +136,8 @@ impl VarSchema {
     /// The column ordinal of `var`, if it is in the schema.
     #[inline]
     pub fn index_of(&self, var: &Variable) -> Option<usize> {
+        #[cfg(test)]
+        INDEX_OF_CALLS.with(|c| c.set(c.get() + 1));
         if self.index.is_empty() {
             self.cols.iter().position(|col| col == var)
         } else {
@@ -226,8 +262,10 @@ thread_local! {
     /// A `hashbrown::HashTable` rather than a `HashMap` so the probe can hash the
     /// caller's BORROWED slice and compare against the stored layout's columns —
     /// owning a key to look one up would be the allocation this exists to remove.
-    static INTERNED_SCHEMAS: std::cell::RefCell<InternedLayouts> =
-        const { std::cell::RefCell::new(hashbrown::HashTable::new()) };
+    static INTERNED_SCHEMAS: std::cell::RefCell<(InternedLayouts, crate::plan_memory::InternerCharge)> =
+        const {
+            std::cell::RefCell::new((hashbrown::HashTable::new(), crate::plan_memory::InternerCharge::new()))
+        };
 }
 
 /// The hash of a column layout, as [`INTERNED_SCHEMAS`] keys it.
@@ -258,20 +296,34 @@ impl VarSchema {
     /// of a permanent miss that re-inserts on every call. `SELECT ?s ?s` is legal
     /// and the crate has a test for it, so this is a real case and not a defensive
     /// one.
+    ///
+    /// GAP F4: every insert charges its estimated retained size — the stored
+    /// request's columns plus the layout's own — to
+    /// [`crate::plan_memory::interner_memory_observer`], and a cap-triggered
+    /// clear credits the whole table back, so this per-worker table is no longer
+    /// memory a deployment's `CacheLimits` cannot see.
     pub fn interned(vars: &[Variable]) -> Arc<Self> {
         let hash = layout_hash(vars);
         INTERNED_SCHEMAS.with(|table| {
             let mut table = table.borrow_mut();
+            let (table, charge) = &mut *table;
             if let Some((_, schema)) = table.find(hash, |(key, _)| &**key == vars) {
                 return Arc::clone(schema);
             }
             if table.len() >= INTERNED_SCHEMA_CAP {
                 table.clear();
+                charge.clear();
             }
             let schema = Arc::new(Self::from_vars(vars.iter().cloned()));
+            let bytes = size_of::<Box<[Variable]>>()
+                .saturating_add(vars.len().saturating_mul(size_of::<Variable>()))
+                .saturating_add(size_of::<Arc<Self>>())
+                .saturating_add(size_of::<Self>())
+                .saturating_add(schema.vars().len().saturating_mul(size_of::<Variable>()));
             table.insert_unique(hash, (Box::from(vars), Arc::clone(&schema)), |(key, _)| {
                 layout_hash(key)
             });
+            charge.add(bytes);
             schema
         })
     }
@@ -382,6 +434,80 @@ mod tests {
         }
     }
 
+    /// Push `vars` one at a time and, after EVERY push, assert every DISTINCT
+    /// column pushed so far still resolves to the ordinal it was assigned. A
+    /// repeated variable in `vars` does not grow `distinct_seen` (mirroring
+    /// [`VarSchema::push`]'s own dedup), so this doubles as the duplicate-column
+    /// case when `vars` repeats an entry — e.g. `SELECT ?s ?s`.
+    ///
+    /// Checking after every push means every assertion runs against whichever
+    /// representation the schema holds at that width — scan below
+    /// [`INDEXED_ABOVE`], hash index above it — so a `vars` list that starts
+    /// below the threshold and ends above it exercises [`VarSchema::index_of`]
+    /// on BOTH sides for the identical schema instance, including for a column
+    /// whose ordinal was assigned before the index existed.
+    fn check_index_of_agrees(vars: Vec<Variable>) {
+        let mut schema = VarSchema::new();
+        let mut distinct_seen: Vec<Variable> = Vec::new();
+        for v in vars {
+            let before_len = schema.len();
+            let ordinal = schema.push(v.clone());
+            if schema.len() > before_len {
+                distinct_seen.push(v.clone());
+            }
+            assert!(
+                schema.len() <= INDEXED_ABOVE || !schema.index.is_empty(),
+                "a schema wider than the threshold must have built its index"
+            );
+            assert!(
+                schema.len() > INDEXED_ABOVE || schema.index.is_empty(),
+                "a schema at or below the threshold must not have allocated an index"
+            );
+            assert_eq!(
+                schema.index_of(&v),
+                Some(ordinal),
+                "the just-pushed column {} did not resolve to its own ordinal",
+                v.as_str()
+            );
+            for (expected_ordinal, seen) in distinct_seen.iter().enumerate() {
+                assert_eq!(
+                    schema.index_of(seen),
+                    Some(expected_ordinal),
+                    "column {} moved at width {}",
+                    seen.as_str(),
+                    schema.len()
+                );
+            }
+        }
+    }
+
+    /// GAP E5: `INDEXED_ABOVE` only decides WHICH representation of the schema
+    /// answers `index_of` (a linear scan versus a hash index) — never WHAT the
+    /// answer is. That equivalence holds only if `Variable`'s `Eq` agrees with
+    /// its `Hash`, and nothing tested that directly before this. Table-driven
+    /// over every width from 1 to 16 (straddling [`INDEXED_ABOVE`] on both
+    /// sides), each width run twice: once with `width` distinct columns, and
+    /// once with the FIRST column immediately repeated before the rest — the
+    /// `SELECT ?s ?s` shape [`VarSchema::interned`]'s doc comment flags as the
+    /// case that broke a debug assertion during this branch's development, and
+    /// the case [`VarSchema::push`]'s own dedup exists to handle.
+    #[test]
+    fn index_of_agrees_across_the_threshold_for_every_width_1_to_16() {
+        for width in 1..=16usize {
+            let distinct: Vec<Variable> = (0..width).map(|i| var(&format!("v{i}"))).collect();
+
+            // Plain case: `width` distinct columns, no duplicates.
+            check_index_of_agrees(distinct.clone());
+
+            // Duplicate case: the first column pushed twice in a row before the
+            // rest — `SELECT ?s ?s, ...` — which must still end up with exactly
+            // `width` columns and the same ordinals as the plain case.
+            let mut with_dup = vec![distinct[0].clone(), distinct[0].clone()];
+            with_dup.extend(distinct.into_iter().skip(1));
+            check_index_of_agrees(with_dup);
+        }
+    }
+
     /// A repeated variable is still deduplicated once the index is authoritative.
     #[test]
     fn schema_dedups_above_the_index_threshold() {
@@ -428,6 +554,94 @@ mod tests {
         let right = VarSchema::from_vars([var("c"), var("a")]);
         // shared in LEFT order: a(0)~right1, c(2)~right0.
         assert_eq!(left.shared_columns(&right), vec![(0, 1), (2, 0)]);
+    }
+
+    /// GAP E6: [`VarSchema::interned`] keys its memo by the REQUESTED column
+    /// list, not the resulting layout, specifically so a `SELECT ?s ?s` request
+    /// stays a cache hit (see that method's doc comment — the author found this
+    /// with a debug assertion during development). Nothing would fail before
+    /// this test if the comparison silently reverted to comparing the stored
+    /// layout's OWN columns instead of the request it was built from: a request
+    /// for `[?s, ?s]` would still return a correct one-column layout, just
+    /// without ever hitting the memo, so the bug would be invisible to every
+    /// test that only checks the answer. This locks both directions: a repeated
+    /// identical request returns the IDENTICAL `Arc` (proving the memo — not
+    /// just the answer — is shared), and swapping two columns' order returns a
+    /// DIFFERENT `Arc` with different column order (the control proving the key
+    /// is order-sensitive, not a set that would conflate `[?a, ?b]` with
+    /// `[?b, ?a]`).
+    #[test]
+    fn interned_key_is_the_request_not_a_set_of_the_result() {
+        let dup = [var("e6_s"), var("e6_s")];
+        let first = VarSchema::interned(&dup);
+        let second = VarSchema::interned(&dup);
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "a repeated `SELECT ?s ?s` request must hit the same memo entry twice"
+        );
+        assert_eq!(
+            first.vars(),
+            &[var("e6_s")],
+            "the duplicate must still collapse to one column"
+        );
+
+        let ab = [var("e6_a"), var("e6_b")];
+        let ba = [var("e6_b"), var("e6_a")];
+        let layout_ab = VarSchema::interned(&ab);
+        let layout_ba = VarSchema::interned(&ba);
+        assert!(
+            !Arc::ptr_eq(&layout_ab, &layout_ba),
+            "[?a, ?b] and [?b, ?a] are different column orders and must not share a layout"
+        );
+        assert_eq!(layout_ab.vars(), &[var("e6_a"), var("e6_b")]);
+        assert_eq!(layout_ba.vars(), &[var("e6_b"), var("e6_a")]);
+    }
+
+    /// GAP F4: `VarSchema::interned`'s per-worker table retains bytes that
+    /// nothing charged before this fix — `INTERNED_SCHEMA_CAP` bounded the
+    /// table's ENTRY count but not its bytes against the SAME `PlanMemoryStats`
+    /// a caller already reads to bound `PlanCache`'s retained plan bytes
+    /// ([`crate::plan_memory::interner_memory_observer`]). This is a MOVING
+    /// assertion, not a smoke test: it first proves interning grows the
+    /// observer's total, then interns several `INTERNED_SCHEMA_CAP` MULTIPLES
+    /// worth of distinct layouts (several full clear cycles) and asserts the
+    /// total stays bounded to roughly one table's worth of entries rather than
+    /// the far larger number ever inserted — the property that only holds if
+    /// the cap-triggered clear actually credits the observer back down each
+    /// cycle.
+    #[test]
+    fn interning_schemas_moves_the_thread_local_memory_observer() {
+        let observer = crate::plan_memory::interner_memory_observer();
+        let before = observer.stats().retained_bytes;
+
+        for i in 0..8 {
+            let _ = VarSchema::interned(&[var(&format!("f4_schema_grow_{i}"))]);
+        }
+        let after_growth = observer.stats().retained_bytes;
+        let grown = after_growth.saturating_sub(before);
+        assert!(
+            grown > 0,
+            "inserting new layouts must grow the observer's retained bytes \
+             (before: {before}, after growth: {after_growth})"
+        );
+        let per_entry = (grown / 8).max(1);
+
+        let cycles = 3;
+        let total_inserted = INTERNED_SCHEMA_CAP * cycles;
+        for i in 0..total_inserted {
+            let _ = VarSchema::interned(&[var(&format!("f4_schema_fill_{i}"))]);
+        }
+        let after_fill = observer.stats().retained_bytes;
+        // Generous (2x) bound on ONE table's worth of entries: without
+        // credit-on-clear, `total_inserted` (three full tables) would instead be
+        // charged in full.
+        let bound = per_entry.saturating_mul(INTERNED_SCHEMA_CAP * 2);
+        assert!(
+            after_fill <= bound,
+            "a cap-triggered clear must keep the observer's total bounded to \
+             roughly one table's worth of entries, not the {total_inserted} \
+             layouts ever inserted (after fill: {after_fill}, bound: {bound})"
+        );
     }
 
     #[test]

@@ -14,8 +14,19 @@ use std::hint::black_box;
 
 const QUERY: &str = "SELECT ?s ?value WHERE { ?s <http://example.org/p> ?value } ORDER BY ?s";
 
-/// The same query with the subject left as a parameter a prepared execution binds.
-const PARAMETERIZED: &str = "SELECT ?value WHERE { ?s <http://example.org/p> ?value }";
+/// The IDENTICAL text to [`QUERY`] — same `SELECT` list, same `ORDER BY` — used
+/// for [`NativeSparqlEngine::prepare_execution`] with `?s` declared a
+/// parameter. The only axis that then differs between `execute_prepared_parameterized`
+/// and `execute_warm_text` below is HOW `?s` is bound: a prepared execution
+/// grounds it via [`PreparedExecution::bind`] before evaluation (so the `WHERE`
+/// matches exactly the one row that subject names), while `execute_warm_text`
+/// leaves it to the `WHERE` clause to match from the graph (all 64 rows, then
+/// sorted). A prior revision gave this arm a different `SELECT` list and no
+/// `ORDER BY`, which additionally varied the query SHAPE (one fewer projected
+/// column, no sort) on top of the binding difference the arm exists to show —
+/// making the two arms measure different queries, not just different binding
+/// strategies. Keeping the text identical removes that confound.
+const PARAMETERIZED: &str = QUERY;
 
 fn bench(c: &mut Criterion) {
     let mut builder = RdfDatasetBuilder::new();
@@ -53,7 +64,10 @@ fn bench(c: &mut Criterion) {
         });
     });
     // Build once, bind and run many: the shape a caller running one query per row
-    // has. Report-only, like every arm here — nothing in this file asserts a
+    // has. Directly comparable to `execute_warm_text` below — see [`PARAMETERIZED`]'s
+    // doc comment — because the two run the IDENTICAL query text and differ only
+    // in whether `?s` is a bound parameter or a `WHERE`-matched variable.
+    // Report-only, like every arm here — nothing in this file asserts a
     // threshold, and a figure from it is evidence for a reader rather than a gate.
     let mut execution = engine
         .prepare_execution(PARAMETERIZED, None, &["s"], QueryOptions::EMPTY)

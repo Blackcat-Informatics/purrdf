@@ -34,12 +34,92 @@
 //! across a snapshot→mutable boundary (the UPDATE round-trip).
 
 use purrdf_core::{BlankScope, DatasetView, TermValue};
-use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
+use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
 
 use crate::DetHashMap;
 use crate::convert::{literal_to_value, named_node_to_value};
 use crate::eval::EvalCtx;
 use crate::solution::{Solution, VarSchema};
+
+/// A template term's column ordinal, precomputed ONCE per template against a fixed
+/// [`VarSchema`] and then walked lock-step with the [`TermPattern`] it mirrors —
+/// same device as `crate::modifier::eval_project`'s `src: Vec<Option<usize>>`, one
+/// layer down, for the RECURSIVE shape an RDF 1.2 quoted-triple template position
+/// needs.
+///
+/// [`VarSchema::index_of`] is `O(columns)` below `INDEXED_ABOVE` (see that
+/// constant's doc comment) — sound for the *node-at-a-time* callers it was
+/// designed for, but `instantiate_term`/`instantiate_predicate` are the innermost
+/// step of `CONSTRUCT`'s and UPDATE's `for row in &seq.rows` loops
+/// ([`crate::construct::build_construct_graph`],
+/// [`crate::update::delete_insert`]): calling `index_of` from inside that loop
+/// would pay `rows × positions × columns` string comparisons for what the schema
+/// is a plan constant across. Resolving into a `TermOrdinal` tree before the row
+/// loop starts pays the scan once per template position, not once per row.
+pub(crate) enum TermOrdinal {
+    /// A position with no variable of its own: `NamedNode`, `Literal`, or
+    /// `BlankNode`. Nothing to resolve.
+    Ground,
+    /// A `Variable` position's column, resolved once: `Some(ordinal)` if `schema`
+    /// carries the column, `None` if it does not — a row can never bind it, exactly
+    /// as an `index_of` miss would report.
+    Variable(Option<usize>),
+    /// A nested quoted-triple-term position, resolved recursively.
+    Triple(Box<TripleOrdinal>),
+}
+
+/// [`TermOrdinal`]'s per-triple grouping — the ordinals of one
+/// [`TriplePattern`]'s three positions, mirroring its shape.
+pub(crate) struct TripleOrdinal {
+    pub(crate) subject: TermOrdinal,
+    pub(crate) predicate: PredicateOrdinal,
+    pub(crate) object: TermOrdinal,
+}
+
+/// The predicate-position twin of [`TermOrdinal`]: a predicate can never be a
+/// blank node or a quoted-triple term, so it has only the two [`TermOrdinal`]
+/// cases that apply to it.
+pub(crate) enum PredicateOrdinal {
+    /// A ground `NamedNode` predicate.
+    Ground,
+    /// A `Variable` predicate's column, resolved once.
+    Variable(Option<usize>),
+}
+
+/// Resolve one [`TriplePattern`]'s three positions against `schema`, recursing
+/// into nested quoted-triple terms. Called ONCE per template quad, before the
+/// row loop — see [`TermOrdinal`]'s doc comment for why.
+pub(crate) fn resolve_triple(tp: &TriplePattern, schema: &VarSchema) -> TripleOrdinal {
+    TripleOrdinal {
+        subject: resolve_term(&tp.subject, schema),
+        predicate: resolve_predicate(&tp.predicate, schema),
+        object: resolve_term(&tp.object, schema),
+    }
+}
+
+/// Resolve one [`TermPattern`] position against `schema`, recursing into a nested
+/// quoted-triple term. See [`TermOrdinal`]'s doc comment.
+pub(crate) fn resolve_term(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+    match term {
+        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {
+            TermOrdinal::Ground
+        }
+        TermPattern::Variable(v) => TermOrdinal::Variable(schema.index_of(v)),
+        TermPattern::Triple(t) => TermOrdinal::Triple(Box::new(resolve_triple(t, schema))),
+    }
+}
+
+/// Resolve one [`NamedNodePattern`] predicate position against `schema`. See
+/// [`TermOrdinal`]'s doc comment.
+pub(crate) fn resolve_predicate(
+    pattern: &NamedNodePattern,
+    schema: &VarSchema,
+) -> PredicateOrdinal {
+    match pattern {
+        NamedNodePattern::NamedNode(_) => PredicateOrdinal::Ground,
+        NamedNodePattern::Variable(v) => PredicateOrdinal::Variable(schema.index_of(v)),
+    }
+}
 
 /// SPARQL §16.2 positional validity: an instantiated triple is **ill-formed** — and
 /// the caller SKIPS it rather than erroring — when it is not a legal RDF 1.2
@@ -138,26 +218,47 @@ pub(crate) fn instantiate_ground_term(
 }
 
 /// Instantiate a subject/object template term. `None` = an unbound variable.
+///
+/// `ordinal` is `term`'s [`TermOrdinal`], resolved once per template against the
+/// row's schema — see that type's doc comment. The two trees are walked in lock
+/// step; `debug_assert!`s guard the invariant that `ordinal` was actually resolved
+/// from `term` (a mismatch cannot arise from any caller in this crate, since every
+/// `TermOrdinal` a caller holds was built by [`resolve_term`]/[`resolve_triple`]
+/// from the exact pattern it is later paired with).
 pub(crate) fn instantiate_term<D: DatasetView + Sync>(
     term: &TermPattern,
+    ordinal: &TermOrdinal,
     row: &Solution<D::Id>,
-    schema: &VarSchema,
     blanks: &mut DetHashMap<String, String>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Option<TermValue> {
     match term {
         TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
         TermPattern::Literal(l) => Some(literal_to_value(l)),
-        TermPattern::Variable(v) => {
-            let term = schema.index_of(v).and_then(|c| row[c])?;
+        TermPattern::Variable(_) => {
+            let TermOrdinal::Variable(ord) = ordinal else {
+                debug_assert!(
+                    false,
+                    "TermOrdinal must mirror the TermPattern it was resolved from"
+                );
+                return None;
+            };
+            let term = ord.and_then(|c| row[c])?;
             Some(ctx.scratch.value_of(ctx.dataset, term))
         }
         TermPattern::BlankNode(b) => Some(fresh_blank(b.as_str(), blanks, ctx)),
         TermPattern::Triple(t) => {
             // RDF 1.2 quoted-triple term in the template: instantiate recursively.
-            let s = instantiate_term(&t.subject, row, schema, blanks, ctx)?;
-            let p = instantiate_predicate(&t.predicate, row, schema, ctx)?;
-            let o = instantiate_term(&t.object, row, schema, blanks, ctx)?;
+            let TermOrdinal::Triple(to) = ordinal else {
+                debug_assert!(
+                    false,
+                    "TermOrdinal must mirror the TermPattern it was resolved from"
+                );
+                return None;
+            };
+            let s = instantiate_term(&t.subject, &to.subject, row, blanks, ctx)?;
+            let p = instantiate_predicate(&t.predicate, &to.predicate, row, ctx)?;
+            let o = instantiate_term(&t.object, &to.object, row, blanks, ctx)?;
             Some(TermValue::Triple {
                 s: Box::new(s),
                 p: Box::new(p),
@@ -168,16 +269,26 @@ pub(crate) fn instantiate_term<D: DatasetView + Sync>(
 }
 
 /// Instantiate a predicate template position. `None` = an unbound variable.
+///
+/// `ordinal` is `predicate`'s [`PredicateOrdinal`], resolved once per template —
+/// see [`instantiate_term`] and [`TermOrdinal`]'s doc comments.
 pub(crate) fn instantiate_predicate<D: DatasetView + Sync>(
     predicate: &NamedNodePattern,
+    ordinal: &PredicateOrdinal,
     row: &Solution<D::Id>,
-    schema: &VarSchema,
     ctx: &EvalCtx<'_, D>,
 ) -> Option<TermValue> {
     match predicate {
         NamedNodePattern::NamedNode(n) => Some(named_node_to_value(n)),
-        NamedNodePattern::Variable(v) => {
-            let term = schema.index_of(v).and_then(|c| row[c])?;
+        NamedNodePattern::Variable(_) => {
+            let PredicateOrdinal::Variable(ord) = ordinal else {
+                debug_assert!(
+                    false,
+                    "PredicateOrdinal must mirror the NamedNodePattern it was resolved from"
+                );
+                return None;
+            };
+            let term = ord.and_then(|c| row[c])?;
             Some(ctx.scratch.value_of(ctx.dataset, term))
         }
     }

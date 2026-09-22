@@ -174,22 +174,38 @@ thread_local! {
     /// `crate::parallel`'s sequencing flag it is per-worker state with no staleness
     /// dimension: a name maps to one `Variable` forever, and nothing about a dataset
     /// or a plan is captured in it.
-    static INTERNED_VARIABLES: std::cell::RefCell<crate::DetHashMap<Box<str>, Variable>> =
-        std::cell::RefCell::new(crate::DetHashMap::default());
+    static INTERNED_VARIABLES: std::cell::RefCell<(
+        crate::DetHashMap<Box<str>, Variable>,
+        crate::plan_memory::InternerCharge,
+    )> = std::cell::RefCell::new((
+        crate::DetHashMap::default(),
+        crate::plan_memory::InternerCharge::new(),
+    ));
 }
 
 /// The [`Variable`] for `name`, interned per worker.
+///
+/// GAP F4: every insert charges its estimated retained size — the key bytes plus
+/// one `Variable`'s own payload — to [`crate::plan_memory::interner_memory_observer`],
+/// and a cap-triggered clear credits the whole table back, so this per-worker
+/// table is no longer memory a deployment's `CacheLimits` cannot see.
 pub(crate) fn interned_variable(name: &str) -> Variable {
     INTERNED_VARIABLES.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if let Some(var) = cache.get(name) {
+        let (entries, charge) = &mut *cache;
+        if let Some(var) = entries.get(name) {
             return var.clone();
         }
-        if cache.len() >= INTERNED_VARIABLE_CAP {
-            cache.clear();
+        if entries.len() >= INTERNED_VARIABLE_CAP {
+            entries.clear();
+            charge.clear();
         }
         let var = Variable::new(name);
-        cache.insert(Box::from(name), var.clone());
+        let bytes = size_of::<Box<str>>()
+            .saturating_add(name.len())
+            .saturating_add(size_of::<Variable>());
+        entries.insert(Box::from(name), var.clone());
+        charge.add(bytes);
         var
     })
 }
@@ -998,5 +1014,58 @@ fn lang(tag: &str) -> Result<&str, RdfDiagnostic> {
                 code = error.diagnostic_code()
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// GAP F4: `interned_variable`'s per-worker table retains bytes that
+    /// nothing charged before this fix — `INTERNED_VARIABLE_CAP` bounded the
+    /// table's ENTRY count but not its bytes against the SAME `PlanMemoryStats`
+    /// a caller already reads to bound `PlanCache`'s retained plan bytes
+    /// (`crate::plan_memory::interner_memory_observer`; see
+    /// `crate::solution::tests::interning_schemas_moves_the_thread_local_memory_observer`
+    /// for the layout-table twin of this test). This is a MOVING assertion, not
+    /// a smoke test: it first proves interning grows the observer's total, then
+    /// interns several `INTERNED_VARIABLE_CAP` MULTIPLES worth of distinct
+    /// names (several full clear cycles) and asserts the total stays bounded to
+    /// roughly one table's worth of entries rather than the far larger number
+    /// ever inserted — the property that only holds if the cap-triggered clear
+    /// actually credits the observer back down each cycle.
+    #[test]
+    fn interning_variables_moves_the_thread_local_memory_observer() {
+        let observer = crate::plan_memory::interner_memory_observer();
+        let before = observer.stats().retained_bytes;
+
+        for i in 0..8 {
+            let _ = interned_variable(&format!("f4_var_grow_{i}"));
+        }
+        let after_growth = observer.stats().retained_bytes;
+        let grown = after_growth.saturating_sub(before);
+        assert!(
+            grown > 0,
+            "interning new names must grow the observer's retained bytes \
+             (before: {before}, after growth: {after_growth})"
+        );
+        let per_entry = (grown / 8).max(1);
+
+        let cycles = 3;
+        let total_inserted = INTERNED_VARIABLE_CAP * cycles;
+        for i in 0..total_inserted {
+            let _ = interned_variable(&format!("f4_var_fill_{i}"));
+        }
+        let after_fill = observer.stats().retained_bytes;
+        // Generous (2x) bound on ONE table's worth of entries: without
+        // credit-on-clear, `total_inserted` (three full tables) would instead be
+        // charged in full.
+        let bound = per_entry.saturating_mul(INTERNED_VARIABLE_CAP * 2);
+        assert!(
+            after_fill <= bound,
+            "a cap-triggered clear must keep the observer's total bounded to \
+             roughly one table's worth of entries, not the {total_inserted} names \
+             ever inserted (after fill: {after_fill}, bound: {bound})"
+        );
     }
 }
