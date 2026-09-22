@@ -146,8 +146,8 @@
 //!     GraphMatch, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue,
 //! };
 //! use purrdf_sparql_eval::{
-//!     NativeSparqlEngine, ParserOptions, PathDirection, PathGraph, PathLimits, PathStep,
-//!     PathWitnessRelation, PropertyFunctionRegistry, QueryOptions,
+//!     ExtensionEnv, NativeSparqlEngine, ParserOptions, PathDirection, PathGraph, PathLimits,
+//!     PathStep, PathWitnessRelation, PropertyFunctionRegistry, QueryOptions,
 //! };
 //!
 //! // The caller's IRI for this relation. PurRDF mints none.
@@ -198,10 +198,13 @@
 //!      <http://example.org/a> <{WALK}> ( ?end ?pathId ?len ?step ?node ?edge ) \
 //!      }} ORDER BY ?len ?step"
 //! );
+//! // The environment the query text is interpreted relative to: the parser learns
+//! // which predicate IRIs are calls from the very registry that will resolve them.
+//! let env = ExtensionEnv::over_relations(registry)?;
 //! let result = engine.query_with_options_view(
 //!     &*dataset,
 //!     SparqlRequest { query: &query, base_iri: None, substitutions: &[] },
-//!     QueryOptions { property_functions: &registry, ..QueryOptions::EMPTY },
+//!     QueryOptions { env: &env, ..QueryOptions::EMPTY },
 //! )?;
 //!
 //! // Propagated, not `unreachable!`. This example is meant to be copied, and a host that

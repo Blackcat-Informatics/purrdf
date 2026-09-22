@@ -30,9 +30,9 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DepthPlacement, DomainTag, DuplicatePolicy,
-    EvalError, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, QueryOptions, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement, Volatility,
+    EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -509,7 +509,8 @@ fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Optio
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

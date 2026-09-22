@@ -29,8 +29,8 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    IndexGeneration, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions,
+    ExtensionEnv, IndexGeneration, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
+    QueryGovernors, QueryOptions,
 };
 use purrdf_text::{
     Fixed, GraphSelector, RankingField, RankingProfile, TextIndex, TextIndexConfig,
@@ -218,7 +218,8 @@ fn answer(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -251,7 +252,8 @@ fn answer_with_options(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -277,7 +279,8 @@ fn refusal(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         );
@@ -857,7 +860,8 @@ fn attested_generations(
             query,
             None,
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -868,7 +872,8 @@ fn attested_generations(
             &prepared,
             &[],
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
             &QueryGovernors::UNBOUNDED,

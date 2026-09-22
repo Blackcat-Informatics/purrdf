@@ -3420,7 +3420,8 @@ mod tests {
                 &*ds,
                 request(),
                 QueryOptions {
-                    property_functions: &registry,
+                    env: &crate::extension_env::ExtensionEnv::over_relations(registry)
+                        .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -3489,7 +3490,8 @@ mod tests {
                     query,
                     None,
                     QueryOptions {
-                        property_functions: registry,
+                        env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                            .expect("the fixture declarations read cleanly"),
                         ..QueryOptions::EMPTY
                     },
                 )
@@ -3643,7 +3645,8 @@ mod tests {
                 query,
                 None,
                 QueryOptions {
-                    aggregates: &registry,
+                    env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
+                        .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -3732,8 +3735,12 @@ mod tests {
                 query,
                 None,
                 QueryOptions {
-                    property_functions: &relations,
-                    aggregates: &aggregates,
+                    env: &crate::extension_env::ExtensionEnv::new(
+                        ParserOptions::default(),
+                        relations.clone(),
+                        aggregates.clone(),
+                    )
+                    .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -3774,8 +3781,12 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryOptions {
-                    property_functions: &relations,
-                    aggregates: &aggregates,
+                    env: &crate::extension_env::ExtensionEnv::new(
+                        ParserOptions::default(),
+                        relations,
+                        aggregates,
+                    )
+                    .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -3808,7 +3819,8 @@ mod tests {
                 query,
                 None,
                 QueryOptions {
-                    aggregates: &aggregates,
+                    env: &crate::extension_env::ExtensionEnv::over_aggregates(aggregates)
+                        .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -3839,7 +3851,8 @@ mod tests {
                 query,
                 None,
                 QueryOptions {
-                    property_functions: &relations,
+                    env: &crate::extension_env::ExtensionEnv::over_relations(relations)
+                        .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
             )
@@ -4927,8 +4940,12 @@ mod tests {
             check_plan_matches_relations(
                 &prepared,
                 QueryOptions {
-                    property_functions: &fresh_relations,
-                    aggregates: &fresh_aggregates,
+                    env: &crate::extension_env::ExtensionEnv::new(
+                        ParserOptions::default(),
+                        fresh_relations,
+                        fresh_aggregates,
+                    )
+                    .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 }
             )
@@ -4948,7 +4965,10 @@ mod tests {
             check_plan_matches_relations(
                 &prepared,
                 QueryOptions {
-                    property_functions: &real_relations,
+                    env: &crate::extension_env::ExtensionEnv::over_relations(
+                        real_relations.clone()
+                    )
+                    .expect("the fixture declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 }
             )
@@ -5106,7 +5126,8 @@ mod tests {
                     &ds,
                     request(),
                     QueryOptions {
-                        property_functions: registry,
+                        env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                            .expect("the fixture declarations read cleanly"),
                         ..QueryOptions::EMPTY
                     },
                     &QueryGovernors::METERED,
@@ -5136,7 +5157,8 @@ mod tests {
                     &query,
                     None,
                     QueryOptions {
-                        property_functions: registry,
+                        env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                            .expect("the fixture declarations read cleanly"),
                         ..QueryOptions::EMPTY
                     },
                 )

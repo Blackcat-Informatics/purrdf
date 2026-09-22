@@ -616,10 +616,19 @@ pub fn run(
             // fixtures happen to spell no `REL_NS` predicate today, but the registry
             // costs nothing to carry and keeps the two branches from silently
             // disagreeing about which predicates are calls.
-            let empty_aggregates = purrdf_sparql_eval::AggregateRegistry::EMPTY;
+            // Both registries together, as the one environment the text is read
+            // against — which is also what keeps the two branches below from
+            // disagreeing about which predicates are calls.
+            let env = purrdf_sparql_eval::ExtensionEnv::over(
+                harness_relations().clone(),
+                aggregates.as_ref().map_or_else(
+                    || purrdf_sparql_eval::AggregateRegistry::EMPTY,
+                    Clone::clone,
+                ),
+            )
+            .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))?;
             let options = QueryOptions {
-                property_functions: harness_relations(),
-                aggregates: aggregates.as_ref().unwrap_or(&empty_aggregates),
+                env: &env,
                 ..QueryOptions::EMPTY
             };
             let result = match remote {

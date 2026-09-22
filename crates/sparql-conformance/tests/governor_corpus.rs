@@ -1157,7 +1157,8 @@ fn observe(
                 &dataset,
                 request,
                 QueryOptions {
-                    property_functions: &registry,
+                    env: &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
+                        .expect("the harness declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
                 &configured.governors,
@@ -1171,7 +1172,8 @@ fn observe(
                 &dataset,
                 request,
                 QueryOptions {
-                    aggregates: &registry,
+                    env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
+                        .expect("the harness declarations read cleanly"),
                     ..QueryOptions::EMPTY
                 },
                 &configured.governors,
@@ -1283,7 +1285,8 @@ fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
             &query,
             None,
             QueryOptions {
-                property_functions: &registry,
+                env: &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
+                    .expect("the harness declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )
@@ -1325,7 +1328,8 @@ fn charge_decomposition_custom_aggregate(case: &Case) -> String {
             &query,
             None,
             QueryOptions {
-                aggregates: &registry,
+                env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
+                    .expect("the harness declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

@@ -175,6 +175,11 @@ fn registry() -> ExtensionEnv {
     ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")
 }
 
+/// The environment a fixture registry is interpreted in.
+fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv {
+    ExtensionEnv::over_aggregates(aggregates).expect("the fixture declarations read cleanly")
+}
+
 fn with_aggregates(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
         env,
@@ -465,8 +470,8 @@ fn the_canonical_empty_registry_and_a_freshly_built_empty_registry_answer_identi
     let ds = dataset();
     let query = format!("SELECT ?s WHERE {{ ?s <{EX}val> ?v }} ORDER BY ?s");
     let canonical_empty_options = QueryOptions::EMPTY;
-    let fresh_empty_registry = AggregateRegistry::new();
-    let fresh_empty_options = with_aggregates(&fresh_empty_registry);
+    let fresh_empty_env = env_of(AggregateRegistry::new());
+    let fresh_empty_options = with_aggregates(&fresh_empty_env);
 
     let via_canonical = run(&ds, &query, canonical_empty_options);
     let via_fresh = run(&ds, &query, fresh_empty_options);
@@ -951,10 +956,11 @@ impl CustomAggregate for ZeroArityAggregate {
 #[test]
 fn zero_arity_custom_aggregate_cannot_be_constructed_and_therefore_never_row_counts() {
     const ZERO_ARITY_IRI: &str = "http://example.org/agg#zeroArity";
-    let mut reg = registry();
-    reg.register(ZERO_ARITY_IRI, Arc::new(ZeroArityAggregate));
+    let mut declarations = AggregateRegistry::new();
+    declarations.register(ZERO_ARITY_IRI, Arc::new(ZeroArityAggregate));
     // The registry itself is untroubled by the zero-arity declaration.
-    assert!(reg.resolve(ZERO_ARITY_IRI).is_some());
+    assert!(declarations.resolve(ZERO_ARITY_IRI).is_some());
+    let reg = env_of(declarations);
 
     // The SPARQL surface refuses `AGG(<iri>)` with no positional arguments —
     // this is `crates/sparql-algebra`'s own `agg_call_requires_at_least_one_argument`
@@ -1089,11 +1095,16 @@ fn a_plan_prepared_under_one_registry_refuses_to_execute_under_a_different_regis
     let query = format!("SELECT (AGG(<{SUM_IRI}>, ?v) AS ?total) WHERE {{ ?s <{EX}val> ?v }}");
 
     let prepared = engine
-        .prepare_query_with_options(&query, None, with_aggregates(&registry_a))
+        .prepare_query_with_options(&query, None, with_aggregates(&env_of(registry_a.clone())))
         .expect("registry A admits and prepares the call");
 
     let error = engine
-        .query_prepared_view(&*ds, &prepared, &[], with_aggregates(&registry_b))
+        .query_prepared_view(
+            &*ds,
+            &prepared,
+            &[],
+            with_aggregates(&env_of(registry_b.clone())),
+        )
         .expect_err(
             "a plan prepared under registry A must be REFUSED under registry B, never silently \
              executed against B's different accumulator",

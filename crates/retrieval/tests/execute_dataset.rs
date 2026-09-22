@@ -32,9 +32,10 @@ use purrdf_retrieval::{
     plan, search,
 };
 use purrdf_sparql_eval::{
-    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, ExtensionEnv, NativeSparqlEngine,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    Volatility,
 };
 
 const K: u32 = 60;
@@ -1775,7 +1776,8 @@ fn whole_query(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

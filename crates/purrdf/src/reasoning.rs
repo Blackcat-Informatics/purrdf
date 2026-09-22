@@ -456,11 +456,21 @@ pub fn query_with_entailment<D: DatasetView>(
     // correct — a plan carries the identity of the registry it was prepared against, and a
     // registry built here is a different instance than the one `options` arrived with.
     let rebound = relations_over_closure(relations, &prepared, &surrogates)?;
-    let options = match rebound.as_ref() {
-        Some(registry) => QueryOptions {
-            property_functions: registry,
-            ..options
-        },
+    // The swap replaces the RELATION table only. Everything else the caller
+    // configured — its declared parser namespaces, its aggregate registry — is
+    // carried through, because an environment that had forgotten a declared
+    // namespace would read a prefixed relation IRI as an ordinary data triple.
+    let rebound_env = match rebound.as_ref() {
+        Some(registry) => Some(options.env.with_relations(registry.clone()).map_err(|e| {
+            ReasoningError::Query(RdfDiagnostic::error(
+                "native-sparql-property-function",
+                e.to_string(),
+            ))
+        })?),
+        None => None,
+    };
+    let options = match rebound_env.as_ref() {
+        Some(env) => QueryOptions { env, ..options },
         None => options,
     };
     let prepared_query = if rebound.is_some() {
@@ -801,11 +811,21 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     // Materialize, THEN register — the same order, and for the same reason, as the
     // ungoverned lane's. See `relations_over_closure`.
     let rebound = relations_over_closure(relations, &prepared, &surrogates)?;
-    let options = match rebound.as_ref() {
-        Some(registry) => QueryOptions {
-            property_functions: registry,
-            ..options
-        },
+    // The swap replaces the RELATION table only. Everything else the caller
+    // configured — its declared parser namespaces, its aggregate registry — is
+    // carried through, because an environment that had forgotten a declared
+    // namespace would read a prefixed relation IRI as an ordinary data triple.
+    let rebound_env = match rebound.as_ref() {
+        Some(registry) => Some(options.env.with_relations(registry.clone()).map_err(|e| {
+            ReasoningError::Query(RdfDiagnostic::error(
+                "native-sparql-property-function",
+                e.to_string(),
+            ))
+        })?),
+        None => None,
+    };
+    let options = match rebound_env.as_ref() {
+        Some(env) => QueryOptions { env, ..options },
         None => options,
     };
     let prepared_query = if rebound.is_some() {
@@ -2008,7 +2028,8 @@ mod tests {
             },
             QueryEntailment::Rdfs,
             QueryOptions {
-                aggregates: &registry,
+                env: &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
             &ClosureRelations::NONE,

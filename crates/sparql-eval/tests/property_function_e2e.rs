@@ -314,7 +314,7 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
                 substitutions: &[],
             },
             QueryOptions {
-                env: &registry,
+                env: &env_of(registry),
                 ..QueryOptions::EMPTY
             },
         )
@@ -448,6 +448,11 @@ fn request(query: &str) -> SparqlRequest<'_> {
 }
 
 /// The options a host with relations in scope hands a governed entry.
+/// The environment a fixture registry is interpreted in.
+fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
+    ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly")
+}
+
 fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
     QueryOptions {
         env,
@@ -602,7 +607,7 @@ fn a_governed_entry_refuses_a_declared_huge_relation_on_a_small_cell_ceiling() {
         .query_governed(
             &dataset(),
             request(GOVERNED_QUERY),
-            with_relations(&registry),
+            with_relations(&env_of(registry)),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(8),
         )
         .expect("a refusal is an outcome, never an error");
@@ -885,7 +890,7 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
     // The reproduction only means what it claims if the two registries' DECLARED
     // metadata is byte-identical for this IRI — confirm that first.
     assert_eq!(
-        registry_a.describe().expect("no panic"),
+        registry_a.relations().describe().expect("no panic"),
         registry_b.describe().expect("no panic"),
         "the two registries must declare identically for this to be a meaningful \
          reproduction of the declaration-only fingerprint gap"
@@ -897,7 +902,12 @@ fn a_plan_prepared_under_one_relation_registry_refuses_to_execute_under_a_differ
         .expect("registry A admits and lowers the predicate to a call");
 
     let error = engine
-        .query_prepared(&dataset, &prepared, &[], with_relations(&registry_b))
+        .query_prepared(
+            &dataset,
+            &prepared,
+            &[],
+            with_relations(&env_of(registry_b)),
+        )
         .expect_err(
             "a plan prepared under registry A must be REFUSED under registry B, never silently \
              executed against B's different relation",

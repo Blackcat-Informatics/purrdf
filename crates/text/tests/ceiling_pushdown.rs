@@ -27,7 +27,7 @@ use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    EvalError, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PropertyFunction,
+    EvalError, ExtensionEnv, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PropertyFunction,
     PropertyFunctionRegistry, QueryOptions, Volatility,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
@@ -208,7 +208,8 @@ fn drive(dataset: &RdfDataset, query: &str) -> (Vec<Vec<String>>, Vec<Option<u64
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: &relations,
+                env: &ExtensionEnv::over_relations(relations.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

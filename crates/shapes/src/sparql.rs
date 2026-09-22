@@ -809,43 +809,15 @@ impl Drop for FunctionScope {
 /// A message if a registered relation's or aggregate's declaration methods panic.
 pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
     thread_local! {
-        /// The environment last built, alongside the exact registry handles it was
-        /// built from.
-        ///
-        /// Memoized because `run_query_view` asks once per query and a SHACL
-        /// validation issues one query per focus node, while the ambient registries
-        /// change once per validation at most. Building an environment clones both
-        /// registries' maps and derives the parse configuration; doing that per
-        /// focus node would put a per-node cost on the exact path the plan cache's
-        /// reusable key buffer exists to keep allocation-free.
-        ///
-        /// Keyed by `Arc::ptr_eq` on the installed handles rather than by a content
-        /// comparison, and that is sound precisely BECAUSE the memo holds the `Arc`s:
-        /// a live strong reference keeps each allocation alive, so the addresses
-        /// cannot be recycled underneath the comparison while the entry is cached —
-        /// which is the hazard that makes pointer identity unusable in general.
-        static CACHED_ENV: RefCell<Option<(
-            Option<Arc<PropertyFunctionRegistry>>,
-            Option<Arc<AggregateRegistry>>,
-            Arc<ExtensionEnv>,
-        )>> = const { RefCell::new(None) };
-    }
-
-    fn same<T>(left: Option<&Arc<T>>, right: Option<&Arc<T>>) -> bool {
-        match (left, right) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        }
+        static CACHED_ENV: RefCell<Option<CachedEnv>> = const { RefCell::new(None) };
     }
 
     let relations = current_property_functions();
     let aggregates = current_aggregates();
     let hit = CACHED_ENV.with(|slot| {
-        slot.borrow().as_ref().and_then(|(r, a, env)| {
-            (same(r.as_ref(), relations.as_ref()) && same(a.as_ref(), aggregates.as_ref()))
-                .then(|| Arc::clone(env))
-        })
+        slot.borrow()
+            .as_ref()
+            .and_then(|cached| cached.matching(relations.as_ref(), aggregates.as_ref()))
     });
     if let Some(env) = hit {
         return Ok(env);
@@ -869,9 +841,53 @@ pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
         .map_err(|e| format!("extension environment: {e}"))?,
     );
     CACHED_ENV.with(|slot| {
-        *slot.borrow_mut() = Some((relations, aggregates, Arc::clone(&env)));
+        *slot.borrow_mut() = Some(CachedEnv {
+            relations,
+            aggregates,
+            env: Arc::clone(&env),
+        });
     });
     Ok(env)
+}
+
+/// The environment [`current_env`] last built, alongside the exact registry handles
+/// it was built from.
+///
+/// Memoized because [`run_query_view`] asks once per query and a SHACL validation
+/// issues one query per focus node, while the ambient registries change once per
+/// validation at most. Building an environment clones both registries' maps and
+/// derives the parse configuration; doing that per focus node would put a per-node
+/// cost on the exact path the plan cache's reusable key buffer exists to keep
+/// allocation-free.
+struct CachedEnv {
+    relations: Option<Arc<PropertyFunctionRegistry>>,
+    aggregates: Option<Arc<AggregateRegistry>>,
+    env: Arc<ExtensionEnv>,
+}
+
+impl CachedEnv {
+    /// This entry's environment, if it was built from exactly these two handles.
+    ///
+    /// Compared by [`Arc::ptr_eq`] rather than by content, and that is sound
+    /// precisely BECAUSE the entry holds the `Arc`s: a live strong reference keeps
+    /// each allocation alive, so an address cannot be recycled underneath the
+    /// comparison while the entry is cached — which is the hazard that makes pointer
+    /// identity unusable in general.
+    fn matching(
+        &self,
+        relations: Option<&Arc<PropertyFunctionRegistry>>,
+        aggregates: Option<&Arc<AggregateRegistry>>,
+    ) -> Option<Arc<ExtensionEnv>> {
+        fn same<T>(left: Option<&Arc<T>>, right: Option<&Arc<T>>) -> bool {
+            match (left, right) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+        }
+        (same(self.relations.as_ref(), relations) && same(self.aggregates.as_ref(), aggregates))
+            .then(|| Arc::clone(&self.env))
+    }
 }
 
 /// Bind `functions`' SPARQL bodies against the extension environment currently in

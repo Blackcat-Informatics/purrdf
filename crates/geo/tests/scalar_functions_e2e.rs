@@ -52,7 +52,7 @@ use purrdf_geo::geom::Crs;
 use purrdf_geo::vocab::{GeoVocab, GeoVocabBuilder};
 use purrdf_geo::{GeoTerm, functions};
 use purrdf_sparql_algebra::ParserOptions;
-use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
+use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, UserFunctionRegistry};
 
 // ---------------------------------------------------------------------------
 // The caller's vocabulary — a fixture, never a default
@@ -212,9 +212,12 @@ fn geojson(lexical: &str) -> String {
 /// parse-time declaration, and a default that silently changed would otherwise
 /// go unnoticed.
 fn run(query: &str) -> Result<Vec<Vec<Option<TermValue>>>, String> {
-    let registry = registry();
-    let result = NativeSparqlEngine::new()
-        .with_parser_options(ParserOptions::default())
+    let engine = NativeSparqlEngine::new().with_parser_options(ParserOptions::default());
+    // Native closures: binding reads nothing, and the evaluator takes only the bound form.
+    let registry = engine
+        .bind_functions(registry(), ExtensionEnv::empty())
+        .expect("a native-only registry has no body to bind");
+    let result = engine
         .query_with_options_view(
             &*dataset(),
             SparqlRequest {

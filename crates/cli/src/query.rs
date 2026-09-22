@@ -129,7 +129,7 @@ use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 use purrdf_sparql_eval::{
-    AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
+    AggregateRegistry, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     PropertyFunctionRegistry, QueryExplanation, QueryGovernors, QueryOptions as EngineQueryOptions,
 };
 use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, SparqlResultsFormat};
@@ -214,8 +214,7 @@ impl<'a> RelationSpecs<'a> {
             self.query,
             self.base,
             EngineQueryOptions {
-                aggregates: aggregates.unwrap_or(&AggregateRegistry::EMPTY),
-                property_functions: &registry,
+                env: &engine_env(aggregates, Some(&registry))?,
                 ..EngineQueryOptions::EMPTY
             },
         )?;
@@ -223,22 +222,30 @@ impl<'a> RelationSpecs<'a> {
     }
 }
 
-/// The canonical empty aggregate registry, as a `static` rather than a temporary: the
-/// options this module builds outlive the expression that builds them, and a
-/// `HashMap`-backed registry's drop glue blocks Rust's rvalue static promotion for a
-/// reference that must live that long. (`crate::update` states the same reason.)
-static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
-/// The canonical empty property-function registry; see [`EMPTY_AGGREGATES`].
-static EMPTY_RELATIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
+/// The extension environment a lane runs under, given what its two registries
+/// resolved to.
+///
+/// Returned by value rather than as borrowed options: an environment owns the
+/// derived parse configuration and both registry fingerprints, so it has to live
+/// somewhere the options can borrow from. The caller binds it, then builds its
+/// options from `&env`.
+fn engine_env(
+    aggregates: Option<&AggregateRegistry>,
+    relations: Option<&PropertyFunctionRegistry>,
+) -> Result<ExtensionEnv, CliError> {
+    ExtensionEnv::over(
+        relations
+            .cloned()
+            .unwrap_or(PropertyFunctionRegistry::EMPTY),
+        aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
+    )
+    .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))
+}
 
-/// The evaluation options a lane runs under, given what its two registries resolved to.
-fn engine_options<'a>(
-    aggregates: Option<&'a AggregateRegistry>,
-    relations: Option<&'a PropertyFunctionRegistry>,
-) -> EngineQueryOptions<'a> {
+/// The evaluation options a lane runs under, over an environment the caller holds.
+fn engine_options(env: &ExtensionEnv) -> EngineQueryOptions<'_> {
     EngineQueryOptions {
-        aggregates: aggregates.unwrap_or(&EMPTY_AGGREGATES),
-        property_functions: relations.unwrap_or(&EMPTY_RELATIONS),
+        env,
         ..EngineQueryOptions::EMPTY
     }
 }
@@ -250,7 +257,8 @@ impl ViewOp for QueryOp<'_> {
         let (relations, prepared) =
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
-        let options = engine_options(self.aggregates, relations.as_ref());
+        let env = engine_env(self.aggregates, relations.as_ref())?;
+        let options = engine_options(&env);
         Ok(self.engine.query_prepared_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -357,7 +365,8 @@ impl ViewOp for GovernedQueryOp<'_> {
         // being evaluated was parsed against — `aggregates` from `run` below, and
         // `property_functions` from the re-prepare `prepare_against` just did over this
         // view — which is what the engine's plan/registry identity check demands.
-        let options = engine_options(self.aggregates, relations.as_ref());
+        let env = engine_env(self.aggregates, relations.as_ref())?;
+        let options = engine_options(&env);
         Ok(self.engine.query_prepared_governed_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -400,7 +409,8 @@ impl ViewOp for ExplainOp<'_> {
         // rendered `relations` block therefore lists exactly what `--path-relation`
         // registered.
         let relations = path_relation::build_registry(view, self.relations.specs)?;
-        let options = engine_options(self.aggregates, relations.as_ref());
+        let env = engine_env(self.aggregates, relations.as_ref())?;
+        let options = engine_options(&env);
         Ok(self
             .engine
             .explain_query_with_options_view(view, self.query, self.base, options)?)
@@ -742,7 +752,7 @@ impl ViewOp for EntailedQueryOp<'_> {
             self.base,
             self.plan,
             self.governors,
-            engine_options(self.aggregates, admitted.as_ref()),
+            engine_options(&engine_env(self.aggregates, admitted.as_ref())?),
             &relations,
             self.report_target,
         )
@@ -873,7 +883,7 @@ pub(crate) fn run(
         options.query,
         options.base,
         EngineQueryOptions {
-            aggregates: aggregates.as_ref().unwrap_or(&AggregateRegistry::EMPTY),
+            env: &engine_env(aggregates.as_ref(), None)?,
             ..EngineQueryOptions::EMPTY
         },
     )?;

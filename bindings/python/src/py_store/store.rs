@@ -14,6 +14,7 @@
 //! `_store_capsule` hands `purrdf_shapes` / `purrdf_validate` a stable
 //! `Arc<RdfDataset>` snapshot under the `c"purrdf-validation-dataset"` capsule name.
 
+use super::env::extension_env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -267,12 +268,7 @@ impl PyStore {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
@@ -385,12 +381,7 @@ impl PyStore {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -519,12 +510,7 @@ impl PyStore {
                 },
                 plan.entailment(),
                 purrdf_sparql_eval::QueryOptions {
-                    property_functions: registry
-                        .as_ref()
-                        .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                    aggregates: aggregates
-                        .as_ref()
-                        .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                    env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                     ..purrdf_sparql_eval::QueryOptions::EMPTY
                 },
                 &relations,
@@ -595,12 +581,7 @@ impl PyStore {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
@@ -698,12 +679,7 @@ impl PyStore {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,

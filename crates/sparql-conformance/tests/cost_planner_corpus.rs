@@ -71,10 +71,16 @@ fn eval_case(
         registry.register_statistical_aggregates(namespace);
         registry
     });
-    let empty_aggregates = AggregateRegistry::EMPTY;
+    // Both registries as the one environment the query text is read against.
+    let env = purrdf_sparql_eval::ExtensionEnv::over(
+        purrdf_sparql_conformance::run::harness_relations().clone(),
+        aggregates
+            .as_ref()
+            .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+    )
+    .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions {
-        property_functions: purrdf_sparql_conformance::run::harness_relations(),
-        aggregates: aggregates.as_ref().unwrap_or(&empty_aggregates),
+        env: &env,
         ..QueryOptions::EMPTY
     };
     let result = match remote {

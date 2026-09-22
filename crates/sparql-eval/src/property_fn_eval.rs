@@ -1023,7 +1023,8 @@ mod tests {
                     substitutions: &[],
                 },
                 crate::engine::QueryOptions {
-                    property_functions: registry,
+                    env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                        .expect("the fixture declarations read cleanly"),
                     ..crate::engine::QueryOptions::EMPTY
                 },
             )
@@ -2137,7 +2138,8 @@ mod tests {
                     substitutions: &[],
                 },
                 crate::QueryOptions {
-                    property_functions: registry,
+                    env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                        .expect("the fixture declarations read cleanly"),
                     ..crate::QueryOptions::EMPTY
                 },
                 &state,
@@ -2362,7 +2364,8 @@ mod tests {
                     &*dataset,
                     request(&query),
                     crate::engine::QueryOptions {
-                        property_functions: registry,
+                        env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
+                            .expect("the fixture declarations read cleanly"),
                         ..crate::engine::QueryOptions::EMPTY
                     },
                 )

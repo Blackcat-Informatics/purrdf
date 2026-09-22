@@ -52,7 +52,9 @@ use purrdf_geo::relation::{GeoIndex, GeoIndexConfig, GraphSelector, register};
 use purrdf_geo::vocab::{GeoVocab, GeoVocabBuilder};
 use purrdf_geo::{GeoTerm, RelationFamily};
 use purrdf_sparql_algebra::ParserOptions;
-use purrdf_sparql_eval::{NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
+use purrdf_sparql_eval::{
+    ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
 
 // ---------------------------------------------------------------------------
 // The caller's vocabulary — a fixture, never a default
@@ -320,7 +322,8 @@ fn run(
                 substitutions: &[],
             },
             QueryOptions {
-                property_functions: registry,
+                env: &ExtensionEnv::over_relations(registry.clone())
+                    .expect("the fixture declarations read cleanly"),
                 ..QueryOptions::EMPTY
             },
         )

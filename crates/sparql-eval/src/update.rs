@@ -1810,7 +1810,8 @@ mod tests {
         // for the query-path twin this mirrors.
         let registry = crate::property_fn::PropertyFunctionRegistry::new();
         let options = QueryOptions {
-            property_functions: &registry,
+            env: &crate::extension_env::ExtensionEnv::over_relations(registry)
+                .expect("the fixture declarations read cleanly"),
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {
@@ -1845,7 +1846,8 @@ mod tests {
         let mut registry = crate::agg_fn::AggregateRegistry::new();
         registry.register_statistical_aggregates("http://ex/agg#");
         let options = QueryOptions {
-            aggregates: &registry,
+            env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
+                .expect("the fixture declarations read cleanly"),
             ..QueryOptions::EMPTY
         };
         let cfg = UpdateEvalConfig {

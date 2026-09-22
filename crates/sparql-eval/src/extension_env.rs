@@ -249,6 +249,45 @@ impl ExtensionEnv {
         Self::new(EMPTY_PARSER_OPTIONS, relations, AggregateRegistry::EMPTY)
     }
 
+    /// An environment over both registries, under default parser options.
+    ///
+    /// The shape a host wiring both seams wants, without having to name
+    /// [`ParserOptions`] to say "the default ones" — which is most hosts, since
+    /// declaring a namespace is the deliberate exception rather than the rule.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError`] if a registered relation's or aggregate's declaration methods
+    /// panic.
+    pub fn over(
+        relations: PropertyFunctionRegistry,
+        aggregates: AggregateRegistry,
+    ) -> Result<Self, EvalError> {
+        Self::new(EMPTY_PARSER_OPTIONS, relations, aggregates)
+    }
+
+    /// This environment with its relation registry replaced, and everything else —
+    /// the caller's declared parser options and the aggregate registry — carried
+    /// through unchanged.
+    ///
+    /// For a caller that must swap the relation table mid-flight without losing the
+    /// rest of the configuration. The entailment lanes do exactly this: a
+    /// dataset-derived relation has to be re-derived over the materialized closure
+    /// that is about to be queried, so the walk and the surrounding patterns read one
+    /// dataset rather than two.
+    ///
+    /// Rebuilding from scratch instead would silently drop the caller's declared
+    /// namespaces — and an environment that has forgotten a declared namespace reads
+    /// a prefixed relation IRI as an ordinary data triple, which is the exact
+    /// silent-wrong-answer shape this type exists to prevent.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError`] if a registered relation's declaration methods panic.
+    pub fn with_relations(&self, relations: PropertyFunctionRegistry) -> Result<Self, EvalError> {
+        Self::new(self.base.clone(), relations, self.aggregates.clone())
+    }
+
     /// An environment over `aggregates` and nothing else: default parser options and
     /// no relations.
     ///

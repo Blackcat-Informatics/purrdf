@@ -183,7 +183,8 @@ fn rewritten_calls_share_registry_and_arity_admission() {
         "http://example.org/relation",
         Arc::new(MemoryRelation::new(1, 1, vec![]).unwrap()),
     );
-    let env = registry;
+    let env =
+        ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
     let options = QueryOptions {
         env: &env,
         ..QueryOptions::EMPTY

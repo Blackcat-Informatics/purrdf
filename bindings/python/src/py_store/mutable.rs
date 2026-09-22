@@ -7,6 +7,7 @@
 //! This adapter keeps Python on that COW surface; query / update run on the native
 //! `NativeSparqlEngine` over a frozen snapshot ( — no oxigraph).
 
+use super::env::extension_env;
 use std::sync::Arc;
 
 use purrdf_core::ir::{MutableDataset, QuadValues};
@@ -324,12 +325,7 @@ impl PyMutableDataset {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )
@@ -419,12 +415,7 @@ impl PyMutableDataset {
                         substitutions: &subs,
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -542,12 +533,7 @@ impl PyMutableDataset {
                 },
                 plan.entailment(),
                 purrdf_sparql_eval::QueryOptions {
-                    property_functions: registry
-                        .as_ref()
-                        .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                    aggregates: aggregates
-                        .as_ref()
-                        .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                    env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                     ..purrdf_sparql_eval::QueryOptions::EMPTY
                 },
                 &relations,
@@ -633,12 +619,7 @@ impl PyMutableDataset {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                     governors,
@@ -711,12 +692,7 @@ impl PyMutableDataset {
                         substitutions: &[],
                     },
                     purrdf_sparql_eval::QueryOptions {
-                        property_functions: registry
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY),
-                        aggregates: aggregates
-                            .as_ref()
-                            .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
+                        env: &extension_env(registry.as_ref(), aggregates.as_ref())?,
                         ..purrdf_sparql_eval::QueryOptions::EMPTY
                     },
                 )

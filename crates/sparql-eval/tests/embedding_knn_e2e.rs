@@ -234,7 +234,7 @@ fn rows_of(result: &SparqlResult) -> Vec<Vec<String>> {
 /// Answer `query` against `relations`, ungoverned.
 fn answer(query: &str, env: &ExtensionEnv) -> SparqlResult {
     NativeSparqlEngine::new()
-        .query_with_options_view(&*dataset(), request(query), with_relations(relations))
+        .query_with_options_view(&*dataset(), request(query), with_relations(env))
         .expect("the call resolves and evaluates")
 }
 
@@ -337,7 +337,7 @@ fn the_answer_is_byte_identical_across_two_independently_built_artifacts() {
 
     let render = |env: &ExtensionEnv| {
         purrdf_sparql_results::to_json(
-            &answer(QUERY, relations),
+            &answer(QUERY, env),
             &purrdf_sparql_results::ResultProvenance::default(),
             None,
         )
@@ -465,7 +465,7 @@ fn the_search_charge_follows_the_space_size_rather_than_the_rows_returned() {
     let engine = NativeSparqlEngine::new();
     let measure = |env: &ExtensionEnv| {
         let explanation = engine
-            .explain_query_with_options(&dataset(), one_row, None, with_relations(relations))
+            .explain_query_with_options(&dataset(), one_row, None, with_relations(env))
             .expect("explain");
         let at = |point: ChargePoint| -> u64 {
             explanation
@@ -627,6 +627,9 @@ fn the_k_returned_are_the_true_k_nearest_of_a_crowded_space() {
         ))),
     );
 
+    let relations =
+        ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
+
     // The seed, and the oracle: every candidate scored by hand under the declared
     // squared-Euclidean metric, then fully sorted by (distance, name). Names order the
     // same way row numbers do here — the fixture's names are distinct and the tie-break
@@ -780,6 +783,8 @@ fn one_artifact_under_one_binding_attests_one_generation() {
         SPACE_IRI,
         Arc::new(EmbeddingKnnRelation::new(Arc::new(right))),
     );
+    let relations =
+        ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
     let engine = NativeSparqlEngine::new();
     let prepared = engine
         .prepare_query_with_options(QUERY, None, with_relations(&relations))
