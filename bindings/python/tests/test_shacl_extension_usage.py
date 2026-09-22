@@ -154,9 +154,11 @@ ex:Outer
 
     usage = shapes.extension_usage(relation_iris=[REL])
 
-    # Cutting the cycle must not cost the report the constraint the cycle passes
-    # through: a guard that bailed out too eagerly would still terminate and would
-    # silently drop this, which is the under-report the surface exists to end.
+    # A sanity check, not a second oracle. It cannot catch an over-eager guard: the
+    # parser hoists the anonymous shape into the top-level shape list, so its
+    # constraint is reported whether or not the traversal enters the cycle. The
+    # over-cut direction is pinned on the Rust side by fixtures checked against their
+    # own absence; what THIS test grades is that the call returns at all.
     assert any(
         REL in used["calls"] for used in usage["sites"].values()
     ), f"the constraint inside the cycle is still reported: {usage['sites']}"

@@ -233,14 +233,30 @@ impl Shapes {
 /// it and the Python surface simply dies. One guard for the whole walk is what makes
 /// the cycle visible at the point it closes.
 ///
-/// Both stacks are STACKS, not visited sets: an entry is removed on the way out, so a
-/// shape or function reached twice from disjoint branches is still walked both times
-/// and the report stays complete. Only a cycle is cut.
+/// # The two halves are deliberately NOT the same shape
+///
+/// `fns` is a STACK: an entry is removed on the way out. It has to be, because a
+/// function body's site label embeds the owner it was reached through
+/// (`{owner} via <iri>`), so the same function called from two disjoint branches
+/// produces two DIFFERENT sites and dropping the second is a silent under-report.
+/// `a_function_called_from_two_branches_is_walked_both_times` fails if this becomes a
+/// visited set.
+///
+/// `shapes` is a VISITED SET: an entry is never removed. A shape's contents are
+/// recorded under the shape's OWN id, never the caller's, so visiting one twice
+/// merges into the same entry and contributes nothing the first visit did not. Re-walking
+/// it is therefore pure cost — and on a graph where several expressions filter through
+/// one shared shape, cost that compounds with depth. Cutting on first visit is not an
+/// approximation here; it is the same report for strictly less work.
+///
+/// Spelling them alike would mean one of them is wrong: a stack for shapes buys
+/// re-walks nobody can observe, and a visited set for functions loses sites.
 #[derive(Default)]
 struct InFlight {
     /// Custom-function IRIs whose `sh:bodyExpression` is currently being walked.
+    /// Removed on the way out — see the type docs.
     fns: std::collections::BTreeSet<String>,
-    /// Shape ids currently being walked.
+    /// Shape ids already walked. Never removed — see the type docs.
     shapes: std::collections::BTreeSet<String>,
 }
 
@@ -253,8 +269,10 @@ fn walk_shape(
 ) {
     let id = shape.id.to_string();
     if !flight.shapes.insert(id.clone()) {
-        // Already in flight: this edge closes a cycle. Everything this shape carries
-        // is being recorded by the visit that is still on the stack above us.
+        // Already walked. Its constraints are recorded under its own id, so a second
+        // visit would merge into the identical entry -- the same report, for the cost
+        // of walking the whole subtree again. This also cuts the shape-to-expression
+        // cycle a `sh:filterShape` can close.
         return;
     }
 
@@ -273,7 +291,6 @@ fn walk_shape(
     for property in &shape.property_shapes {
         walk_property(property, usage, env, flight);
     }
-    flight.shapes.remove(&id);
 }
 
 /// Record every SPARQL text one property shape and its descendants carry.

@@ -1335,13 +1335,15 @@ fn a_cycle_between_a_function_body_and_a_shape_terminates() {
 ex:recur
     a sh:ListParameterExpressionFunction ;
     rdfs:subClassOf sh:ListParameterExpression ;
-    sh:bodyExpression [ sh:filterShape ex:Inner ; sh:nodes sh:this ] ;
+    sh:bodyExpression [
+        sh:filterShape [
+            a sh:NodeShape ;
+            sh:expression [ ex:recur ( sh:this ) ] ;
+            sh:sparql [ a sh:SPARQLConstraint ; sh:select """SELECT $this ?v WHERE {{ $this <{REL}> ?v }}""" ] ;
+        ] ;
+        sh:nodes sh:this ;
+    ] ;
     sh:parameter [ a sh:Parameter ; sh:path shnex:arg0 ; sh:nodeKind sh:IRI ] .
-
-ex:Inner
-    a sh:NodeShape ;
-    sh:expression [ ex:recur ( sh:this ) ] ;
-    sh:sparql [ a sh:SPARQLConstraint ; sh:select """SELECT $this ?v WHERE {{ $this <{REL}> ?v }}""" ] .
 
 ex:Outer
     a sh:NodeShape ;
@@ -1358,10 +1360,21 @@ ex:Outer
 
     let usage = shapes.extension_usage(&env);
 
-    // Terminating is the oracle. Cutting the cycle must not cost the report the
-    // constraint the cycle passes through, so the relation inside `ex:Inner` is still
-    // named -- a guard that returned early too eagerly would pass the first assertion
-    // and silently fail this one.
+    // TERMINATION is this test's oracle, and its only one. A stack overflow aborts
+    // rather than unwinding, so reaching the line below is the verdict; with the
+    // guard scoped per-expression instead of per-walk this dies with SIGABRT.
+    //
+    // The assertion that follows is a SANITY check, not a second oracle, and the
+    // distinction is worth stating because an earlier version of this comment got it
+    // wrong. It claimed to catch a guard that cut too eagerly. It cannot: the parser
+    // hoists the anonymous shape into `Shapes::node_shapes`, so the top-level loop
+    // reports its constraint whether or not the traversal ever enters the cycle --
+    // the assertion passes with the whole mechanism under test removed.
+    //
+    // The over-cut direction is genuinely pinned elsewhere, by fixtures that were
+    // checked against their own absence:
+    //   * shapes   -- `an_inline_filter_shape_s_sparql_is_reported_like_a_named_one_s`
+    //   * functions -- `a_function_called_from_two_branches_is_walked_both_times`
     assert!(
         usage.reaches(REL),
         "the constraint inside the cycle is still reported: {:?}",
