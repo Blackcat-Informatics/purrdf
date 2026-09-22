@@ -845,7 +845,7 @@ impl PreparedShapes {
     /// not prepared against them. This says what the product WAS prepared against, so
     /// the restore check has something true to compare.
     ///
-    /// The same `host` value goes to [`ShapesProduct::admit`] on the restore side.
+    /// The same `host` value goes to [`ShapesProductView::admit`] on the restore side.
     /// That symmetry is the point: one value states the environment on both sides of
     /// the boundary, so a writer and a reader cannot describe it differently.
     ///

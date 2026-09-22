@@ -826,8 +826,8 @@ impl Drop for FunctionScope {
 /// admitted against, with this crate's base parser options.
 ///
 /// An absent scope and the canonical empty registry are the same value here for the
-/// same reason they are the same value in [`run_query_view`]'s options — there is
-/// one spelling of "nothing registered", not two.
+/// same reason they are the same value in `run_query_view`'s options (this crate's
+/// internal query seam) — there is one spelling of "nothing registered", not two.
 ///
 /// # Errors
 ///

@@ -710,7 +710,8 @@ impl UserFunctionRegistry {
 /// # Why this is a separate type rather than a flag
 ///
 /// The evaluator accepts only this type. That is the whole mechanism: an unbound
-/// registry cannot reach [`eval_user_function`] at all, so there is no
+/// registry cannot reach `eval_user_function` (the crate-internal evaluator) at
+/// all, so there is no
 /// missing-body arm to write, no "not bound yet" error to raise, and no runtime
 /// check to forget. A state that cannot be represented cannot be mishandled, and
 /// refusing it at runtime would have been the weaker structure â it would still

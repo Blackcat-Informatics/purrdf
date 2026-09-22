@@ -64,7 +64,7 @@
 //! buffer exists precisely so that a cache hit allocates nothing. Hoisting the
 //! derivation to the environment makes the hit path what it was built to be.
 //!
-//! # Two identity tiers, exactly as [`crate::registry_id`] defines them
+//! # Two identity tiers, exactly as [`RegistryId`] defines them
 //!
 //! [`ExtensionEnv::id`] is the instance tier: a process-lifetime counter answering
 //! "is this the same live environment the thing in my hand was bound against?". It
@@ -363,8 +363,8 @@ impl ExtensionEnv {
     ///
     /// This is what a per-call check compares, because a call happens once per row
     /// per call site and a content digest is a walk plus a hash. Never persist it;
-    /// see [`crate::registry_id`] for why a counter read back in another process
-    /// carries no information.
+    /// see [`RegistryId`] for why a counter read back in another process carries no
+    /// information.
     #[must_use]
     pub fn id(&self) -> RegistryId {
         self.id

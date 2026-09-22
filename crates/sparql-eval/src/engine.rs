@@ -357,7 +357,8 @@ impl PlanCache {
     }
 
     /// [`Self::prepare_with_relations`] against an already-derived
-    /// [`ExtensionEnv`], which is the same request with nothing recomputed.
+    /// [`ExtensionEnv`](crate::extension_env::ExtensionEnv), which is the same
+    /// request with nothing recomputed.
     ///
     /// The environment derived its effective [`ParserOptions`] and both
     /// instance-tier registry fingerprints once, at construction. The

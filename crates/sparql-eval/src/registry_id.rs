@@ -108,7 +108,7 @@ impl RegistryId {
     /// [`AggregateRegistry::EMPTY`](crate::agg_fn::AggregateRegistry::EMPTY) and
     /// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY).
     ///
-    /// Reserved: [`fresh`](Self::fresh) starts its counter at `1` and only ever
+    /// Reserved: `fresh` (crate-internal) starts its counter at `1` and only ever
     /// increments, so `0` is never minted by it and can never collide with a real,
     /// constructed registry's id.
     ///
@@ -123,7 +123,7 @@ impl RegistryId {
     /// its id, which predates this constant. Giving `EMPTY` a distinguishing id
     /// of its own would claim a distinction the rest of this crate does not
     /// honor anywhere.
-    pub(crate) const EMPTY: Self = Self(0);
+    pub const EMPTY: Self = Self(0);
 
     /// This identity's fingerprint encoding — an explicit, `Display`-independent
     /// rendering (a bare decimal `u64`) folded into a registry's content
